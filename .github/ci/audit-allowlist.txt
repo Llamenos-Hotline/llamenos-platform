@@ -59,24 +59,11 @@ GHSA-fx2h-pf6j-xcff  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodod
 GHSA-28wg-ghj8-5hjv  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — nanoid 5.x (@scalar/hono-api-reference prod dep, docs UI ids) — no attacker-controlled size argument; flat overrides cannot express a per-major floor — tracked in #1583
 GHSA-xwg4-73v4-xw9w  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — nanoid 5.x — same path and reasoning — tracked in #1583
 
-# --- extract-zip: webdriverio browser-download path — NO UPSTREAM FIX ---
-# Both advisories cover `<= 2.0.1` with no patched version, and npm `latest` IS
-# 2.0.1 — the newest release is the vulnerable one, so no floor can be written.
-# Reachability: webdriverio's browser/driver download unzip path (Android E2E
-# tooling). The symlink traversal needs an attacker-supplied archive; the only
-# archives extracted here are browser binaries fetched over HTTPS from Chrome
-# for Testing. Dev/test tooling, never in a request path.
-GHSA-jmr9-qjv8-65gv  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — extract-zip (webdriverio devDependency) — no upstream fix exists (npm latest 2.0.1 is itself in range); archives are HTTPS browser binaries, not untrusted input — tracked in #1583
-GHSA-7pqw-9j4j-h8q3  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — extract-zip — same path and reasoning — tracked in #1583
-
-# --- deepmerge-ts: webdriverio config merging — fix is a major outside its range ---
-# The fix is 8.0.0, a major. Every consumer (@wdio/config, @wdio/runner,
-# @wdio/utils, webdriver — all 9.27.0) declares `^7.0.3`, so forcing it would put
-# an untested deepmerge-ts under WebdriverIO's core config merging. That is a
-# deliberate decision on the test harness, not a free bump.
-# Reachability: stack exhaustion when merging recursive object graphs. The only
-# objects merged are WebdriverIO capability/config objects authored in this repo.
-GHSA-ggr8-5vv4-36mx  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — deepmerge-ts (webdriverio devDependency config merging) — fix is a major outside every wdio consumer's ^7.0.3 range; merges only repo-authored config objects — tracked in #1583
+# extract-zip (GHSA-jmr9-qjv8-65gv, GHSA-7pqw-9j4j-h8q3) and deepmerge-ts
+# (GHSA-ggr8-5vv4-36mx) entries REMOVED 2026-10-10 (#1769): webdriverio 9 → 10
+# moves @puppeteer/browsers to ^3.2.1 (extract-zip path gone, replaced by
+# modern-tar) and @wdio/utils to ^10 which declares deepmerge-ts ^8.0.0 —
+# both advisories are cleared by the resolved tree, not suppressed.
 
 # --- http-cache-semantics: astro (marketing site build, site/) — NO UPSTREAM FIX ---
 # GHSA-ch52-4w7c-c8xp covers `http-cache-semantics` through 4.2.0 and the

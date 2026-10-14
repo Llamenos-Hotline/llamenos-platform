@@ -14,10 +14,29 @@
  * text (or the engine) is a new URL — nothing goes stale in the PBX's media
  * cache. The signature restricts synthesis to text the worker itself chose;
  * without it this would be an open speech-synthesis endpoint.
+ *
+ * A prompt's URL carries its text, and three places record that URL: the
+ * request log when the PBX fetches it, the sip-bridge's log when a prompt fails
+ * to play, and Asterisk's media cache, which keys each entry (a file plus an
+ * astdb row, on disk, never evicted) on it. That is harmless for menu text.
+ * A voice CAPTCHA's digits are the answer to the challenge, so they are never
+ * in a URL (#1352): each digit is a clip of its own, named by a keyed hash
+ * (ivrMediaKeyedName) that only the worker can map back to a digit.
+ *
+ * So what the PBX's media cache holds for the CAPTCHA is ten digit clips per
+ * language and engine build — the same ten for every call, under names that
+ * reveal nothing. It never holds a challenge. A clip or token per challenge
+ * would instead be a new cache entry per call that nothing evicts: ARI cannot
+ * delete from Asterisk's media cache, so "evict it with the challenge" is not
+ * available to the app. Anyone who reads the PBX's cache or logs learns only
+ * the order in which opaque clips were played; mapping a clip to its digit
+ * takes the secret, or listening to it — and the names change with every
+ * engine build.
  */
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
-import { signIvrMediaPath, verifyIvrMediaPath } from '../../lib/ivr-media-url'
+import { ivrMediaKeyedName, signIvrMediaPath, verifyIvrMediaPath } from '../../lib/ivr-media-url'
+import { timingSafeCompare } from '../../lib/timing-safe'
 import type { SpeechUrlBuilder } from '../../telephony/adapter'
 import { createLogger } from '../../lib/logger'
 import { toIvrWav } from './audio'
@@ -40,10 +59,21 @@ const DEFAULT_CACHE_BYTES = 32 * 1024 * 1024
 const base64UrlEncode = (text: string) => Buffer.from(text, 'utf8').toString('base64url')
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/
 const TAG_PATTERN = /^[0-9a-f]{12}$/
+const CAPTCHA_DIGITS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
+const TEXT_CLIP_PATH = new RegExp(`^${IVR_SPEECH_PATH_PREFIX}/([^/]+)/([^/]+)/([^/]+)\\.wav$`)
+const DIGIT_CLIP_PATH = new RegExp(`^${IVR_SPEECH_PATH_PREFIX}/([^/]+)/([^/]+)/digit/([0-9a-f]{64})\\.wav$`)
 
-/** Content hash of a clip: the cache key, and the ETag it is served with */
+/** Content hash of a clip: the cache key, and the ETag a text clip is served with */
 function clipKey(tag: string, locale: string, text: string): string {
   return bytesToHex(sha256(utf8ToBytes(`${tag}\n${locale}\n${text}`)))
+}
+
+/**
+ * A CAPTCHA digit clip's name: its URL, its ETag (which Asterisk also keeps in
+ * astdb) — never the unkeyed clipKey, which anyone could compute for ten digits.
+ */
+function captchaDigitName(hmacSecret: string, tag: string, locale: string, digit: string): string {
+  return ivrMediaKeyedName(hmacSecret, `captcha-digit\n${tag}\n${locale}\n${digit}`)
 }
 
 export interface GeneratedSpeech {
@@ -83,7 +113,7 @@ export class IvrSpeechService {
    */
   async urlBuilder(origin: string): Promise<SpeechUrlBuilder> {
     const tag = await this.engineTag()
-    return (text, locale) => {
+    const mint = (locale: string, text: string, clip: string) => {
       const voice = espeakVoiceFor(locale)
       if (!voice) {
         throw new Error(`Generated speech has no voice for '${locale}' — resolve it with speechLanguageFor() first`)
@@ -93,9 +123,18 @@ export class IvrSpeechService {
       this.synthesizeCached(clipKey(tag, locale, text), text, voice).catch((err) => {
         logger.error('Generated speech failed: this prompt will be silent', { locale, err })
       })
-      const path = `${IVR_SPEECH_PATH_PREFIX}/${tag}/${locale}/${base64UrlEncode(text)}.wav`
+      const path = `${IVR_SPEECH_PATH_PREFIX}/${tag}/${locale}/${clip}.wav`
       return `${origin}${signIvrMediaPath(this.hmacSecret, path)}`
     }
+    const text = (text: string, locale: string) => mint(locale, text, base64UrlEncode(text))
+    return Object.assign(text, {
+      captchaDigit: (digit: string, locale: string) => {
+        if (!(CAPTCHA_DIGITS as readonly string[]).includes(digit)) {
+          throw new Error('A CAPTCHA digit clip speaks exactly one digit, 0-9')
+        }
+        return mint(locale, digit, `digit/${captchaDigitName(this.hmacSecret, tag, locale, digit)}`)
+      },
+    })
   }
 
   /**
@@ -106,7 +145,17 @@ export class IvrSpeechService {
   async audioFor(pathname: string, query: URLSearchParams): Promise<GeneratedSpeech | null> {
     // Verify before anything else is done with the request.
     if (!verifyIvrMediaPath(this.hmacSecret, pathname, query, { requireExpiry: false })) return null
-    const match = new RegExp(`^${IVR_SPEECH_PATH_PREFIX}/([^/]+)/([^/]+)/([^/]+)\\.wav$`).exec(pathname)
+    const digitClip = DIGIT_CLIP_PATH.exec(pathname)
+    if (digitClip) {
+      const [, tag, locale, name] = digitClip
+      const voice = espeakVoiceFor(locale)
+      if (!TAG_PATTERN.test(tag) || !voice) return null
+      const digit = CAPTCHA_DIGITS.find((d) => timingSafeCompare(name, captchaDigitName(this.hmacSecret, tag, locale, d)))
+      if (!digit) return null
+      const wav = await this.synthesizeCached(clipKey(tag, locale, digit), digit, voice)
+      return { wav, etag: name }
+    }
+    const match = TEXT_CLIP_PATH.exec(pathname)
     if (!match) return null
     const [, tag, locale, encoded] = match
     const voice = espeakVoiceFor(locale)

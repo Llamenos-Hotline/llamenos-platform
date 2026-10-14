@@ -13,8 +13,13 @@
  */
 
 import { eq, and, lte, sql, desc } from 'drizzle-orm'
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { LABEL_CONTACT_ID, LABEL_MESSAGE } from '@shared/crypto-labels'
 import type { Database } from '../../db'
 import { signalMessageQueue } from '../../db/schema'
+import { serverDecrypt, serverEncrypt } from '../../lib/crypto'
 import { createLogger } from '../../lib/logger'
 
 const logger = createLogger('signal-queue')
@@ -48,9 +53,44 @@ const DEFAULT_RATE_LIMIT_PER_MINUTE = 3
 /** Base delay for exponential backoff: 30 seconds */
 const BACKOFF_BASE_MS = 30_000
 
+/** Default retention for completed and dead-letter queue rows. */
+export const DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS = 30
+
+/** Purge at least daily; queue delivery itself is drained more frequently. */
+export const SIGNAL_QUEUE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+const MAX_SIGNAL_QUEUE_RETENTION_DAYS = 3650
+
+export function parseSignalQueueRetentionDays(value?: string): number {
+  if (value === undefined || value.trim() === '') return DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS
+
+  const days = Number(value)
+  if (!Number.isSafeInteger(days) || days < 1 || days > MAX_SIGNAL_QUEUE_RETENTION_DAYS) {
+    throw new Error(
+      `SIGNAL_QUEUE_RETENTION_DAYS must be an integer from 1 to ${MAX_SIGNAL_QUEUE_RETENTION_DAYS}`,
+    )
+  }
+  return days
+}
+
+/** HMAC-SHA-256 keyed by the server secret and domain-separated for contact identifiers. */
+export function hashSignalQueueRecipientIdentifier(recipientIdentifier: string, hmacSecret: string): string {
+  const key = hexToBytes(hmacSecret)
+  return bytesToHex(hmac(sha256, key, utf8ToBytes(`${LABEL_CONTACT_ID}${recipientIdentifier}`)))
+}
+
+function encryptQueueValue(value: string, label: string, hmacSecret: string): string {
+  return bytesToHex(serverEncrypt(utf8ToBytes(value), label, hexToBytes(hmacSecret)))
+}
+
+function decryptQueueValue(value: string, label: string, hmacSecret: string): string {
+  return new TextDecoder().decode(serverDecrypt(hexToBytes(value), label, hexToBytes(hmacSecret)))
+}
+
 export class SignalMessageQueue {
   constructor(
     private readonly db: Database,
+    private readonly hmacSecret: string,
     private readonly maxRetries: number = DEFAULT_MAX_RETRIES,
     private readonly rateLimitPerMinute: number = DEFAULT_RATE_LIMIT_PER_MINUTE,
   ) {}
@@ -67,8 +107,13 @@ export class SignalMessageQueue {
       id,
       hubId: params.hubId,
       conversationId: params.conversationId,
-      recipientIdentifier: params.recipientIdentifier,
-      body: params.body,
+      recipientIdentifierHash: hashSignalQueueRecipientIdentifier(params.recipientIdentifier, this.hmacSecret),
+      recipientIdentifierCiphertext: encryptQueueValue(
+        params.recipientIdentifier,
+        LABEL_CONTACT_ID,
+        this.hmacSecret,
+      ),
+      encryptedBody: encryptQueueValue(params.body, LABEL_MESSAGE, this.hmacSecret),
       mediaUrl: params.mediaUrl ?? null,
       mediaType: params.mediaType ?? null,
       idempotencyKey: params.idempotencyKey ?? null,
@@ -98,15 +143,15 @@ export class SignalMessageQueue {
     mediaType: string | null
     retryCount: number
   }>> {
-    const now = new Date()
+    const now = new Date().toISOString()
 
     // Atomic CTE: SELECT with FOR UPDATE SKIP LOCKED (limited), then UPDATE only those rows
     const claimed = await this.db.execute<{
       id: string
       hub_id: string
       conversation_id: string
-      recipient_identifier: string
-      body: string
+      recipient_identifier_ciphertext: string
+      encrypted_body: string
       media_url: string | null
       media_type: string | null
       retry_count: number
@@ -124,16 +169,20 @@ export class SignalMessageQueue {
       SET status = 'processing', updated_at = ${now}
       FROM batch
       WHERE q.id = batch.id
-      RETURNING q.id, q.hub_id, q.conversation_id, q.recipient_identifier,
-                q.body, q.media_url, q.media_type, q.retry_count
+      RETURNING q.id, q.hub_id, q.conversation_id, q.recipient_identifier_ciphertext,
+                q.encrypted_body, q.media_url, q.media_type, q.retry_count
     `)
 
     return [...claimed].map(row => ({
       id: row.id,
       hubId: row.hub_id,
       conversationId: row.conversation_id,
-      recipientIdentifier: row.recipient_identifier,
-      body: row.body,
+      recipientIdentifier: decryptQueueValue(
+        row.recipient_identifier_ciphertext,
+        LABEL_CONTACT_ID,
+        this.hmacSecret,
+      ),
+      body: decryptQueueValue(row.encrypted_body, LABEL_MESSAGE, this.hmacSecret),
       mediaUrl: row.media_url,
       mediaType: row.media_type,
       retryCount: row.retry_count,
@@ -206,7 +255,10 @@ export class SignalMessageQueue {
       .from(signalMessageQueue)
       .where(
         and(
-          eq(signalMessageQueue.recipientIdentifier, recipientIdentifier),
+          eq(
+            signalMessageQueue.recipientIdentifierHash,
+            hashSignalQueueRecipientIdentifier(recipientIdentifier, this.hmacSecret),
+          ),
           eq(signalMessageQueue.status, 'sent'),
           sql`${signalMessageQueue.updatedAt} > ${oneMinuteAgo}`,
         ),
@@ -258,12 +310,12 @@ export class SignalMessageQueue {
       conditions.push(eq(signalMessageQueue.hubId, hubId))
     }
 
-    return this.db
+    const rows = await this.db
       .select({
         id: signalMessageQueue.id,
         conversationId: signalMessageQueue.conversationId,
-        recipientIdentifier: signalMessageQueue.recipientIdentifier,
-        body: signalMessageQueue.body,
+        recipientIdentifierCiphertext: signalMessageQueue.recipientIdentifierCiphertext,
+        encryptedBody: signalMessageQueue.encryptedBody,
         lastError: signalMessageQueue.lastError,
         retryCount: signalMessageQueue.retryCount,
         createdAt: signalMessageQueue.createdAt,
@@ -272,6 +324,16 @@ export class SignalMessageQueue {
       .where(and(...conditions))
       .orderBy(desc(signalMessageQueue.createdAt))
       .limit(limit)
+
+    return rows.map((row) => ({
+      id: row.id,
+      conversationId: row.conversationId,
+      recipientIdentifier: decryptQueueValue(row.recipientIdentifierCiphertext, LABEL_CONTACT_ID, this.hmacSecret),
+      body: decryptQueueValue(row.encryptedBody, LABEL_MESSAGE, this.hmacSecret),
+      lastError: row.lastError,
+      retryCount: row.retryCount,
+      createdAt: row.createdAt,
+    }))
   }
 
   /**
@@ -300,7 +362,7 @@ export class SignalMessageQueue {
   /**
    * Clean up old sent/dead messages older than the specified age.
    */
-  async cleanup(olderThanDays: number = 30): Promise<number> {
+  async cleanup(olderThanDays: number = DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS): Promise<number> {
     const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000)
 
     const deleted = await this.db

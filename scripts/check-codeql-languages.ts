@@ -16,8 +16,11 @@
  *   1. The `analyze` matrix, resolved through ALIASES, is exactly
  *      REQUIRED_IDENTIFIERS resolved the same way — nothing missing, nothing
  *      extra — and `init` analyses `${{ matrix.language }}`, not a literal.
- *   2. `analyze` has no `if:`, and the workflow triggers on push,
- *      pull_request, merge_group and schedule, so no event quietly skips it.
+ *   2. `analyze` has no `if:` — or exactly the one allowlisted below
+ *      (`ANALYZE_IF_ALLOWLIST`, #1817: skip the required legs on the knope
+ *      release PR, whose version-bump diff has no code to analyse) — and the
+ *      workflow triggers on push, pull_request, merge_group and schedule, so
+ *      no event quietly skips it.
  *   3. The `codeql` rollup needs `analyze`, runs `if: always()`, and is named
  *      literally `CodeQL` — the required context — on every event. On
  *      merge_group it is the only `CodeQL` check-run; on pull_request it sits
@@ -69,6 +72,20 @@ const REQUIRED_TRIGGERS = ['push', 'pull_request', 'merge_group', 'schedule'] as
 const MERGE_BLOCKING_EVENTS = ['pull_request', 'merge_group'] as const
 /** Default setup's check-runs are `Analyze (<language>)`; ours must never share one. */
 const DEFAULT_SETUP_JOB_NAME_PREFIX = 'analyze ('
+
+/**
+ * The only `if:` the required `analyze` job may carry (#1817): skip the legs
+ * on the knope release PR (head branch `release`). Its diff is version
+ * strings and a changelog — no code — yet every merge to main regenerated it
+ * and re-ran all five legs (~8 min each) against that diff, 6 times on
+ * 2026-10-11. Analysis still runs on the push to main the release merge
+ * itself produces, so main never loses coverage; the PR keeps its required
+ * `CodeQL` context because the rollup job names this skip and passes on it.
+ * Any other condition here is the defect point 2 above exists to catch.
+ */
+const ANALYZE_IF_ALLOWLIST: readonly string[] = [
+  "github.event_name != 'pull_request' || github.head_ref != 'release'",
+]
 
 /**
  * Every identifier default setup's configuration listed, exactly as
@@ -333,8 +350,8 @@ function main(): void {
   if (!analyze) {
     violations.push(`no \`${REQUIRED_JOB}\` job — the required CodeQL legs are gone`)
   } else {
-    if (analyze.if !== undefined) {
-      violations.push(`\`${REQUIRED_JOB}\` has an \`if:\` (${String(analyze.if)}) — required legs must run on every event`)
+    if (analyze.if !== undefined && !ANALYZE_IF_ALLOWLIST.includes(String(analyze.if).trim())) {
+      violations.push(`\`${REQUIRED_JOB}\` has an \`if:\` (${String(analyze.if)}) — required legs must run on every event; the only exemption is the #1817 release-PR skip in ANALYZE_IF_ALLOWLIST`)
     }
 
     const init = initSteps(analyze)

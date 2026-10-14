@@ -80,7 +80,9 @@ services:
   # (templates/env/asterisk.j2), the single source shared with asterisk's
   # ari_credentials config above.
   sip-bridge:
-    image: {{ llamenos_app_image }}-sip-bridge
+    # Resolved and PROVEN to exist by tasks/main.yml before this file is
+    # written — see llamenos_sip_bridge_image in defaults/main.yml (#1697).
+    image: {{ _sip_bridge_image }}
     restart: unless-stopped
     env_file:
       - .env.asterisk

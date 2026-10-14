@@ -4,9 +4,9 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { useTheme } from '@/lib/theme'
-import { isValidSeedHex, hasStoredKey } from '@/lib/platform'
+import { isValidSeedHex, hasStoredKey, verifyBackupCredential } from '@/lib/platform'
 import { isSafeRelativePath } from '@/lib/redirect-guard'
-import { readBackupFile, restoreFromBackupWithPin, restoreFromBackupWithRecoveryKey } from '@/lib/backup'
+import { readBackupFile } from '@/lib/backup'
 import * as keyManager from '@/lib/key-manager'
 import { isWebAuthnAvailable } from '@/lib/webauthn'
 import { DemoAccountPicker } from '@/components/demo-account-picker'
@@ -53,7 +53,9 @@ function LoginPage() {
   const [recoveryPin, setRecoveryPin] = useState('')
   const [recoveryKey, setRecoveryKey] = useState('')
   const [recoveryStep, setRecoveryStep] = useState<'upload' | 'decrypt' | 'newpin'>('upload')
-  const [recoveredSeedHex, setRecoveredSeedHex] = useState('')
+  // The credential that opened the backup. The recovered seed is NOT held here:
+  // Rust decrypts straight into CryptoState, so it never enters the webview.
+  const [verifiedCredential, setVerifiedCredential] = useState<{ value: string; isRecoveryKey: boolean } | null>(null)
   const [newPin1, setNewPin1] = useState('')
   const [newPin2, setNewPin2] = useState('')
   const [newPinStep, setNewPinStep] = useState<'create' | 'confirm'>('create')
@@ -155,24 +157,26 @@ function LoginPage() {
     if (!backupFile) return
     setValidationError('')
 
-    let seedResult: string | null = null
+    // Verify the credential now, in Rust, so a mistyped recovery key is
+    // reported on the step where it was entered rather than later. Nothing is
+    // restored yet and no key material comes back.
+    const candidates: Array<{ value: string; isRecoveryKey: boolean }> = []
+    if (recoveryKey.trim()) candidates.push({ value: recoveryKey.trim(), isRecoveryKey: true })
+    if (recoveryPin.trim()) candidates.push({ value: recoveryPin.trim(), isRecoveryKey: false })
 
-    // Try recovery key first if provided
-    if (recoveryKey.trim()) {
-      seedResult = await restoreFromBackupWithRecoveryKey(backupFile, recoveryKey.trim())
-    }
-    // Try PIN if recovery key didn't work
-    if (!seedResult && recoveryPin.trim()) {
-      seedResult = await restoreFromBackupWithPin(backupFile, recoveryPin.trim())
-    }
-
-    if (!seedResult) {
-      setValidationError(t('auth.decryptFailed', { defaultValue: 'Failed to decrypt backup. Check your PIN or recovery key.' }))
-      return
+    const backupJson = JSON.stringify(backupFile)
+    for (const candidate of candidates) {
+      try {
+        await verifyBackupCredential(backupJson, candidate.value, candidate.isRecoveryKey)
+        setVerifiedCredential(candidate)
+        setRecoveryStep('newpin')
+        return
+      } catch {
+        // Wrong credential for this block — try the other one, if any.
+      }
     }
 
-    setRecoveredSeedHex(seedResult)
-    setRecoveryStep('newpin')
+    setValidationError(t('auth.decryptFailed'))
   }
 
   async function handleNewPinComplete(pin: string) {
@@ -191,14 +195,24 @@ function LoginPage() {
         setNewPin2('')
         return
       }
-      // Import the recovered key with the new PIN
+      // Restore the key under the new PIN. Rust opens the backup and loads the
+      // seed into CryptoState directly; only the re-encrypted blob comes back.
+      if (!backupFile || !verifiedCredential) {
+        setValidationError(t('auth.invalidBackup'))
+        return
+      }
       try {
-        const pubkeyHex = await keyManager.importKey(recoveredSeedHex, pin)
+        const pubkeyHex = await keyManager.restoreFromBackup(
+          JSON.stringify(backupFile),
+          verifiedCredential.value,
+          verifiedCredential.isRecoveryKey,
+          pin,
+        )
         // Key is now in CryptoState — use loginAfterKeyLoaded (not signIn, which would re-import)
         await loginAfterKeyLoaded(pubkeyHex)
         navigate({ to: '/' })
-      } catch {
-        setValidationError(t('common.error'))
+      } catch (err) {
+        setValidationError(err instanceof Error ? err.message : t('common.error'))
       }
     }
   }
@@ -415,7 +429,7 @@ function LoginPage() {
                         <span className="text-muted-foreground">{t('auth.dropOrChoose', { defaultValue: 'Drop a backup file or click to browse' })}</span>
                       )}
                     </span>
-                    <input ref={fileInputRef} type="file" accept=".json" onChange={handleFileSelect} className="hidden" />
+                    <input data-testid="backup-file-input" ref={fileInputRef} type="file" accept=".json" onChange={handleFileSelect} className="hidden" />
                   </div>
                 </div>
               )}
@@ -426,6 +440,7 @@ function LoginPage() {
                   <div className="space-y-2">
                     <Label>{t('recovery.enterRecoveryKey', { defaultValue: 'Recovery Key' })}</Label>
                     <Input
+                      data-testid="recovery-key-input"
                       value={recoveryKey}
                       onChange={e => setRecoveryKey(e.target.value)}
                       placeholder="XXXX-XXXX-XXXX-..."
@@ -442,17 +457,22 @@ function LoginPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>{t('pin.enterPin', { defaultValue: 'PIN' })}</Label>
+                    {/* No maxLength and no numeric inputMode: a credential is a
+                        PIN of 8+ digits OR a passphrase of 8+ characters
+                        (keyManager.isValidPin), so capping at 8 silently
+                        truncated every longer passphrase into one that could
+                        never open the backup, and a numeric keypad is the wrong
+                        keyboard for half the credentials this field accepts. */}
                     <Input
+                      data-testid="recovery-pin-input"
                       type="password"
-                      inputMode="numeric"
                       value={recoveryPin}
                       onChange={e => setRecoveryPin(e.target.value)}
                       placeholder="••••••••"
-                      maxLength={8}
                       autoComplete="off"
                     />
                   </div>
-                  <Button onClick={handleBackupDecrypt} className="w-full" disabled={!recoveryKey.trim() && !recoveryPin.trim()}>
+                  <Button data-testid="decrypt-backup-btn" onClick={handleBackupDecrypt} className="w-full" disabled={!recoveryKey.trim() && !recoveryPin.trim()}>
                     {t('recovery.decrypt', { defaultValue: 'Decrypt' })}
                   </Button>
                 </div>

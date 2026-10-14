@@ -91,6 +91,113 @@
     proto: udp
     comment: "Asterisk RTP (llamenos-asterisk)"
 
+# ─── The sip-bridge image: resolved, then PROVEN to exist ──────────────────
+#
+# Issue #1697. This role used to declare a `sip-bridge` service whose image was
+# derived by string suffix and never obtained by anything. On a real deploy the
+# service was present in the rendered compose file and NO CONTAINER EXISTED —
+# `docker compose up` answered `manifest unknown` for it. A declared service
+# with an unobtainable image routes exactly as many calls as no service at all,
+# which is the symptom issue #1119 describes and #1485 closed.
+#
+# These three tasks run BEFORE the compose file is templated, on purpose. The
+# role either proves the image can be obtained, or it fails and writes no
+# compose file — so "declared" and "startable" can no longer disagree. Failing
+# loudly is deliberate over silently omitting the service: an omitted bridge
+# reproduces #1119 quietly, which is how this survived in the first place.
+- name: Resolve the sip-bridge image reference
+  ansible.builtin.set_fact:
+    _sip_bridge_image: >-
+      {{ llamenos_sip_bridge_image
+         if (llamenos_sip_bridge_image | default('') | length > 0)
+         else _sip_bridge_derived }}
+  vars:
+    # `-sip-bridge` goes on the REPOSITORY, before the tag — which is how
+    # .github/workflows/docker.yml publishes it (`user/llamenos-sip-bridge`
+    # tagged `1.2.3`), and not how the old template derived it
+    # (`user/llamenos:1.2.3-sip-bridge`, which nothing has ever pushed).
+    #
+    # `@` is excluded from every character class, so a digest-pinned
+    # llamenos_app_image matches nothing and regex_replace returns it
+    # unchanged — detected by the assert below rather than silently producing a
+    # ref that cannot exist. A sibling image's digest is not derivable.
+    _sip_bridge_derived: >-
+      {{ llamenos_app_image | default('')
+         | regex_replace('^(.*/)?([^/:@]+)(:[^/:@]+)?$', '\1\2-sip-bridge\3')
+         | trim }}
+
+- name: Check whether the sip-bridge image is already on the host
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - "{{ _sip_bridge_image }}"
+  register: _sip_bridge_local
+  changed_when: false
+  failed_when: false
+
+# Honours the operator's pull policy, exactly as roles/llamenos-app does. A
+# host following the documented `docker save | ssh ... docker load` path sets
+# `never`, and must not have a pull attempted against a registry that has no
+# such image.
+- name: Pull the sip-bridge image when it is absent and the pull policy allows
+  ansible.builtin.command:
+    argv:
+      - docker
+      - pull
+      - "{{ _sip_bridge_image }}"
+  register: _sip_bridge_pull
+  changed_when: _sip_bridge_pull.rc == 0
+  failed_when: false
+  when:
+    - _sip_bridge_local.rc != 0
+    - (llamenos_app_image_pull_policy | default('missing')) != 'never'
+
+- name: Assert the sip-bridge image exists before the service is declared
+  ansible.builtin.assert:
+    that:
+      - _sip_bridge_image != llamenos_app_image
+      - (_sip_bridge_local.rc == 0) or ((_sip_bridge_pull.rc | default(1)) == 0)
+    fail_msg: |
+      The sip-bridge image is not on this host and could not be pulled, so this
+      role will NOT declare a sip-bridge service it cannot start (issue #1697).
+
+        resolved ref : {{ _sip_bridge_image }}
+        from         : {{ 'llamenos_sip_bridge_image (set explicitly)'
+                          if (llamenos_sip_bridge_image | default('') | length > 0)
+                          else 'derived from llamenos_app_image = ' ~ llamenos_app_image }}
+        on the host  : {{ 'present' if _sip_bridge_local.rc == 0 else 'absent' }}
+        pull         : {{ 'not attempted (llamenos_app_image_pull_policy is never)'
+                          if (llamenos_app_image_pull_policy | default('missing')) == 'never'
+                          else 'failed — ' ~ (_sip_bridge_pull.stderr | default('(not attempted)')) }}
+
+      {% if _sip_bridge_image == llamenos_app_image %}
+      The reference could not be DERIVED. llamenos_app_image is digest-pinned,
+      and one image's digest says nothing about a sibling's. Set
+      llamenos_sip_bridge_image explicitly.
+      {% endif %}
+
+      Supply the image by whichever route this deployment uses for the app
+      image — the bridge is obtained the same way, never a different one:
+
+        * Docker Hub release path: .github/workflows/docker.yml publishes
+          <user>/llamenos-sip-bridge:<version> beside <user>/llamenos:<version>.
+          Point llamenos_app_image at the app image and this is derived.
+
+        * docker save | ssh ... docker load (the documented self-host path):
+          build it from source and side-load it next to the app image —
+              docker build -t {{ _sip_bridge_image }} ./sip-bridge
+              docker save {{ _sip_bridge_image }} | ssh <host> sudo docker load
+          deploy/docker/docker-compose.yml builds this same context.
+
+        * private or local registry: push both refs, or set
+          llamenos_sip_bridge_image to the bridge's own reference.
+
+      Set llamenos_asterisk_enabled: false if this host should not run
+      self-hosted telephony at all.
+    success_msg: "sip-bridge image: {{ _sip_bridge_image }} ({{ 'already on the host' if _sip_bridge_local.rc == 0 else 'pulled' }})"
+
 - name: Template asterisk compose file
   ansible.builtin.template:
     src: compose/asterisk.j2
@@ -109,10 +216,16 @@
     mode: "0600"
   notify: Restart asterisk service
 
+# `pull: always` here ignored llamenos_app_image_pull_policy entirely. A
+# deployment following the documented `docker save | ssh ... docker load` path
+# sets `never` precisely because its images are side-loaded rather than hosted,
+# and a forced pull then fails on an image that is already present locally —
+# so the role could not start a bridge the operator had supplied correctly.
+# Matches roles/llamenos-app and roles/llamenos, which both honour the policy.
 - name: Pull asterisk images
   community.docker.docker_compose_v2:
     project_src: "{{ app_dir }}/services/asterisk"
-    pull: always
+    pull: "{{ llamenos_app_image_pull_policy | default('missing') }}"
     state: present
     recreate: never
 

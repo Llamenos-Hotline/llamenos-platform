@@ -62,6 +62,21 @@ services:
     #
     # No --no-auth and no --lt-cred-mech: an open relay is abuse infrastructure,
     # and this one is reachable from the internet by design.
+    #
+    # --listening-ip/--relay-ip are pinned explicitly. Without them coturn
+    # enumerates every host interface — each docker bridge included — logs
+    # "NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED", and may source the RTCP
+    # component of an allocation from an address its relay candidate never
+    # named, which an ICE peer is entitled to reject (#1689: one-way/absent
+    # audio on a call that connected). The loopback listener exists so the
+    # healthcheck below (a STUN binding request against 127.0.0.1) and
+    # in-container turnutils still work; --relay-ip is explicit, so no relay
+    # candidate is ever allocated on loopback.
+    #
+    # --log-file=stdout: coturn's default log target is a /var/tmp file (the
+    # tmpfs above), which the json-file driver — and the smoke check that greps
+    # `docker compose logs` for the NO EXPLICIT RELAY ADDRESS warning — would
+    # never see. stdout is also where an operator looks first.
     command: >
       --realm={{ turn_realm }}
       --fingerprint
@@ -70,17 +85,23 @@ services:
       --listening-port={{ turn_port }}
       --min-port={{ turn_relay_min_port }}
       --max-port={{ turn_relay_max_port }}
+      --listening-ip={{ turn_listening_ip }}
+      --relay-ip={{ turn_relay_ip }}
+{% if turn_listening_ip != '127.0.0.1' %}
+      --listening-ip=127.0.0.1
+{% endif %}
 {% if (turn_external_ip | default('')) | length > 0 %}
       --external-ip={{ turn_external_ip }}
 {% endif %}
       --no-tls
       --no-dtls
       --no-cli
+      --log-file=stdout
+    # A STUN Binding request, which coturn answers UNAUTHENTICATED even in
+    # --use-auth-secret mode (only a TURN allocation needs the credential). So
+    # unlike a process probe this proves the listener actually answers. A dead
+    # listener never replies, so the probe hangs and the timeout fails it.
     healthcheck:
-      # A STUN Binding request, which coturn answers UNAUTHENTICATED even in
-      # --use-auth-secret mode (only a TURN allocation needs the credential). So
-      # unlike a process probe this proves the listener actually answers. A dead
-      # listener never replies, so the probe hangs and the timeout fails it.
       test: ["CMD-SHELL", "turnutils_stunclient -p {{ turn_port }} 127.0.0.1 2>&1 | grep -q 'reflexive addr'"]
       interval: 30s
       timeout: 10s

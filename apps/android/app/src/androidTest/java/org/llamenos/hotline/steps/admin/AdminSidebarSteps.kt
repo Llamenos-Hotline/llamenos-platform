@@ -130,12 +130,20 @@ class AdminSidebarSteps : BaseSteps() {
 
     @Then("I should see the call settings section content")
     fun iShouldSeeTheCallSettingsSectionContent() {
-        assertAnyTagDisplayed("ring-timeout-slider")
+        assertAnyTagDisplayed(
+            "queue-timeout-slider",
+            "voicemail-max-slider",
+            "call-settings-save-button",
+        )
     }
 
     @Then("I should see spam protection section content")
     fun iShouldSeeSpamProtectionSectionContent() {
-        assertAnyTagDisplayed("max-calls-per-hour-slider")
+        assertAnyTagDisplayed(
+            "rate-limit-toggle",
+            "max-calls-per-minute-slider",
+            "block-duration-slider",
+        )
     }
 
     @Then("I should see transcription section content")

@@ -80,6 +80,7 @@ const services: Services = createServices(db, {
     DEV_ROUTES_ENABLED: process.env.DEV_ROUTES_ENABLED || undefined,
     DEV_RESET_SECRET: process.env.DEV_RESET_SECRET || undefined,
     E2E_TEST_SECRET: process.env.E2E_TEST_SECRET || undefined,
+    SIGNAL_QUEUE_RETENTION_DAYS: process.env.SIGNAL_QUEUE_RETENTION_DAYS || undefined,
   },
 })
 console.log('[llamenos] Services initialized')

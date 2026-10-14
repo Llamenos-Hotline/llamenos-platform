@@ -26,6 +26,18 @@ export type RolesWorld = {
   reporterNsec: string
 }
 
+/** Backup restore scenarios (packages/test-specs/.../auth/backup-restore.feature). */
+export type BackupWorld = {
+  /** Recovery key displayed to the user when the backup was written. */
+  recoveryKey: string
+  /** PIN the backup was written under. */
+  pin: string
+  /** Signing pubkey of the device key the backup was made from. */
+  pubkeyHex: string
+  /** Path of the backup file on disk, for the file input. */
+  filePath: string
+}
+
 export type CasesWorld = {
   createdCaseTitle: string
   lastCreatedRecordId: string
@@ -87,6 +99,7 @@ export const test = base.extend<
     adminWorld: AdminWorld
     rolesWorld: RolesWorld
     casesWorld: CasesWorld
+    backupWorld: BackupWorld
     conversationWorld: ConversationWorld
     sasWorld: SasWorld
   },
@@ -177,6 +190,9 @@ export const test = base.extend<
       triageReportTypeId: '', triageReportId: '',
       lastSuggestions: [],
     })
+  },
+  backupWorld: async ({}, use) => {
+    await use({ recoveryKey: '', pin: '', pubkeyHex: '', filePath: '' })
   },
   conversationWorld: async ({}, use) => {
     await use({})

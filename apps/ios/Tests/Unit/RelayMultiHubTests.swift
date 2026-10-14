@@ -179,7 +179,7 @@ final class RelayMultiHubTests: XCTestCase {
         try api.configure(hubURLString: "https://hub.example.org")
 
         RelayStubURLProtocol.reset([
-            "/api/shifts/my-status": #"{"onShift":true,"activeCallCount":1}"#,
+            "/api/hubs/hub-A/shifts/my-status": #"{"onShift":true,"activeCallCount":1}"#,
             "/api/hubs/hub-A/calls/active": #"{"calls":[]}"#,
             "/api/hubs/hub-B/calls/active":
                 #"{"calls":[{"id":"call-b","startedAt":"2026-09-26T10:00:00.000Z","status":"ringing","callerLast4":"4321"}]}"#,

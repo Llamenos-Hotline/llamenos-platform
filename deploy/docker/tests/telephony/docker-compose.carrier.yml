@@ -56,6 +56,9 @@ services:
       - "SIP_REGISTRAR_SECRET=${SIP_REGISTRAR_SECRET:-}"
       - TURN_HOST=${TURN_HOST:-}
       - TURN_SECRET=${TURN_SECRET:-}
+      - SIP_TLS_CA_FILE=/var/lib/llamenos/sip-tls/kamailio.pem
+    volumes:
+      - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
     ports:
       - "127.0.0.1:${E2E_WORKER_PORT:-3931}:3000"
     depends_on:
@@ -76,9 +79,9 @@ services:
       # The test provisions the trunk to this host through the app, and the
       # trunk's `identify` resolves it then.
       # Asterisk >= 22.10.0 is required: older builds silently turn
-  # `dtls_verify = fingerprint` into chain verification and kill every
-  # DTLS-SRTP call. See deploy/docker/docker-compose.yml and #1687.
-  sip-carrier:
+      # `dtls_verify = fingerprint` into chain verification and kill every
+      # DTLS-SRTP call. See deploy/docker/docker-compose.yml and #1687.
+      sip-carrier:
         condition: service_started
 
   sip-carrier:
