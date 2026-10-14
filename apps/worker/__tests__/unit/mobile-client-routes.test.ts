@@ -214,9 +214,6 @@ function distinct(sites: CallSite[]): Map<string, string> {
  */
 const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
   iOS: {
-    // #1723 — the iOS call settings screen, fixed in its own pull request.
-    'PUT /api/settings/call': '#1723',
-
     // #1701 — iOS admin screens against routes that do not exist. The members
     // and invite endpoints live under /api/users and /api/invites.
     'GET /api/identity/members': '#1701',
