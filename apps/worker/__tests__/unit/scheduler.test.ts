@@ -57,7 +57,11 @@ import { startAuditChainVerifyWorker, stopAuditChainVerifyWorker } from '@worker
 import { startErasureExpiryWorker, stopErasureExpiryWorker } from '@worker/lib/erasure-expiry-worker'
 import { startReEncryptionWorker, stopReEncryptionWorker } from '@worker/lib/re-encryption-worker'
 import { startPeriodicCleanupWorker, stopPeriodicCleanupWorker } from '@worker/lib/periodic-cleanup-worker'
-import { startSignalQueueDrainWorker, stopSignalQueueDrainWorker } from '@worker/lib/signal-queue-drain-worker'
+import {
+  createSignalQueueDrainOpts,
+  startSignalQueueDrainWorker,
+  stopSignalQueueDrainWorker,
+} from '@worker/lib/signal-queue-drain-worker'
 
 /**
  * Every worker the scheduler owns, with the dependency whose absence used to
@@ -176,6 +180,20 @@ describe('TaskScheduler', () => {
       }
       await call.resolveSignalAdapter()
       expect(resolveAdapter).toHaveBeenCalledWith('signal')
+    })
+
+    it('passes the encryption secret and configured queue retention to the drain worker', () => {
+      const { db } = createMockDb()
+      const scheduler = new TaskScheduler(db as never, 'a'.repeat(64), 14)
+
+      scheduler.start(deps())
+
+      expect(createSignalQueueDrainOpts).toHaveBeenCalledWith(
+        db,
+        expect.any(Function),
+        'a'.repeat(64),
+        14,
+      )
     })
   })
 

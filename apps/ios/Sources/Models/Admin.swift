@@ -296,16 +296,6 @@ struct CreateReportCategoryRequest: Encodable, Sendable {
 // provider-setup screens show. See #1724.
 
 // MARK: - Client Call Settings
-// Client-only: generated `CallSettings` has different fields (maxDuration: Double, etc.).
-
-/// Call routing configuration from the API (client-side model).
-/// Named `ClientCallSettings` to avoid conflict with generated `CallSettings`.
-struct ClientCallSettings: Codable, Sendable {
-    var ringTimeout: Int
-    var maxDuration: Int
-    var parallelRingCount: Int
-}
-
 // The IVR, transcription and spam screens used to each carry a hand-written
 // `Client*` struct here. Every one of them named fields the server does not
 // have — `ClientIvrLanguages.languages` as a `[String: Bool]` map against the

@@ -214,9 +214,6 @@ function distinct(sites: CallSite[]): Map<string, string> {
  */
 const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
   iOS: {
-    // #1723 — the iOS call settings screen, fixed in its own pull request.
-    'PUT /api/settings/call': '#1723',
-
     // #1701 — iOS admin screens against routes that do not exist. The members
     // and invite endpoints live under /api/users and /api/invites.
     'GET /api/identity/members': '#1701',
@@ -224,8 +221,8 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     'POST /api/identity/invite': '#1701',
     'GET /api/recovery-group/shares/my': '#1701',
 
-    // Also #1701, found by this test rather than by reading the client. All
-    // three are live 404s on a real backend.
+    // Also #1701, found by this test rather than by reading the client. Both
+    // are live 404s on a real backend.
     [`PATCH /api/identity/${PARAM}/role`]: '#1701',
     [`POST /api/conversations/${PARAM}/read`]: '#1701',
   },

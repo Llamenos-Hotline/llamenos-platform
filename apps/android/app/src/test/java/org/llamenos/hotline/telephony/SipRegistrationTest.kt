@@ -51,6 +51,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.hub.HubRepository
+import org.llamenos.hotline.mockPushRegistrationManager
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.hotline.ui.dashboard.DashboardViewModel
@@ -659,6 +660,7 @@ class SipRegistrationTest {
             shiftClockRepository,
             sipRegistrar,
             mockk<HubRepository>(relaxed = true),
+            mockPushRegistrationManager(),
         )
     }
 

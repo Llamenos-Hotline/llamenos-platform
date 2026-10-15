@@ -438,6 +438,49 @@ final class CryptoService: @unchecked Sendable {
         return result
     }
 
+    // MARK: - Record Data Encryption (HPKE)
+
+    /// Encrypt record data (case summary or fields) for multiple readers under
+    /// a domain label (`LABEL_CASE_SUMMARY` / `LABEL_CASE_FIELDS`).
+    ///
+    /// Records used to ride `encryptNote` (`LABEL_NOTE_KEY`) here while every
+    /// reader opened them as `LABEL_MESSAGE`, so no client could open what
+    /// another — or even iOS itself — had sealed (#1025). The label is an
+    /// explicit parameter so seal and open sites name the same constant.
+    ///
+    /// Envelopes come back in wire form (`enc`/`ct` hex, per PROTOCOL §2.3/§2.4).
+    func encryptRecordData(jsonPayload: String, readerPubkeys: [String], label: String) throws -> (ciphertextHex: String, envelopes: [RecipientEnvelope]) {
+        guard let encPubkey = encryptionPubkeyHex else { throw CryptoServiceError.noKeyLoaded }
+        let allReaders = Array(Set([encPubkey] + readerPubkeys))
+        let plaintextHex = jsonPayload.data(using: .utf8)!.map { String(format: "%02x", $0) }.joined()
+        let result = try ffiMobileSymmetricEncrypt(plaintextHex: plaintextHex, aadHex: try contentAad(label))
+        let ciphertextHex = result[0]
+        let keyHex = result[1]
+        var envelopes: [RecipientEnvelope] = []
+        for pubkey in allReaders {
+            let hpkeEnv = try ffiMobileHpkeSealKey(keyHex: keyHex, recipientPubkeyHex: pubkey, label: label, aadHex: try keyWrapAad(label))
+            let wire = try toWireEnvelope(hpkeEnv)
+            envelopes.append(RecipientEnvelope(ct: wire.ct, enc: wire.enc, pubkey: pubkey))
+        }
+        return (ciphertextHex, envelopes)
+    }
+
+    /// Decrypt record data sealed under `label` (`LABEL_CASE_SUMMARY` /
+    /// `LABEL_CASE_FIELDS`). The envelope's `labelId` is derived from `label`
+    /// inside `toFfiEnvelope` — callers never transcribe one, so open can never
+    /// claim a different label than the envelope carries (the #1025 failure
+    /// mode, where a hand-written `labelId: 0` met `expectedLabel: message`).
+    func decryptRecordData(ciphertextHex: String, enc: String, ct: String, label: String) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        let ffiEnvelope = try toFfiEnvelope(label: label, enc: enc, ct: ct)
+        let keyHex = try ffiMobileHpkeOpenKey(envelope: ffiEnvelope, expectedLabel: label, aadHex: try keyWrapAad(label))
+        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex, aadHex: try contentAad(label))
+        guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
+            throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted record data")
+        }
+        return result
+    }
+
     /// Generate 32 random bytes as hex (for content keys, etc.).
     func randomBytesHex() -> String {
         ffiMobileRandomBytesHex()

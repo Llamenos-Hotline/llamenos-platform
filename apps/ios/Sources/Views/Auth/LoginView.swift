@@ -2,9 +2,11 @@ import SwiftUI
 
 // MARK: - LoginView
 
-/// Initial login screen. Provides a hub URL text field and two paths:
+/// Initial login screen. Provides a hub URL text field and identity creation:
 /// - "Create New Identity" → generates device keys with PIN encryption
-/// - "Link Device" → QR code scan for device linking via ECDH
+/// Device linking is not offered in the pilot build — it reported success
+/// without importing any key material (#1028); it returns with the unified
+/// provisioning protocol tracked in #1027.
 struct LoginView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router

@@ -3,7 +3,7 @@
  *
  * Tests counter/gauge/histogram metric recording and domain-specific helpers.
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 
 // Need to get access to the in-memory state. The module exports functions
 // but uses module-level state, so we test behavior through the helpers.

@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DISPATCH_SCRIPT } from './paths.js'
-import { checkDispatchDependency } from './dependency.js'
+import { checkDispatchDependency, gitFactsFor } from './dependency.js'
+import { fleetRuntimeRoot } from './provenance.js'
 import { fleetBranchFor } from './ci.js'
 import type { Lane, EngineId } from './config.js'
 import type { WorkItem } from './source.js'
@@ -564,6 +565,12 @@ export interface LaunchOutcomeInput {
    *  `branch`/`worktree` are read from here as a fallback. */
   seed: Record<string, string> | undefined
   depCommit: string | undefined
+  /** The fleet runtime checkout's own HEAD commit (issue #1801) — without
+   *  it a worker's behaviour cannot be attributed to a runtime revision
+   *  after the fact, which is exactly the forensics the drift incident
+   *  needed and lacked. Cheap to read (no fetch — this records what RAN,
+   *  not what origin/main now holds; drift detection is doctor/tick's job). */
+  rtCommit: string | undefined
   /** The worker's raw log text, if one exists — passed in rather than read
    *  here so this function stays a pure decision, not a file read. */
   workerLog: string | undefined
@@ -590,12 +597,14 @@ export function resolveLaunchOutcome(input: LaunchOutcomeInput): DispatchResult 
   const rawStatus = input.status?.['status'] ?? 'DISPATCHED' // never observed a status file: treat as never-started
   let outcome = statusToOutcome(rawStatus)
 
-  // Record the dependency's HEAD commit in the note so a run's behaviour can
-  // always be traced back to the exact version of dispatch-one.sh that
+  // Record the dependency's HEAD commit AND the fleet runtime's own HEAD
+  // commit in the note, so a run's behaviour can always be traced back to
+  // the exact revisions of dispatch-one.sh and of the orchestrator that
   // produced it — the version pin this repo cannot otherwise express for a
-  // dependency it does not vendor (see dependency.ts).
+  // dependency it does not vendor (see dependency.ts), and the forensics
+  // issue #1801's drift incident needed and lacked.
   const workerNote = input.status?.['notes']
-  let note = `dep:${input.depCommit ?? 'unknown'}${workerNote ? ` ${workerNote}` : ''}`
+  let note = `dep:${input.depCommit ?? 'unknown'} rt:${input.rtCommit ?? 'unknown'}${workerNote ? ` ${workerNote}` : ''}`
 
   if (input.launchError !== undefined) {
     // Issue #870: logged for a human, NEVER used to override `outcome` — see
@@ -713,6 +722,7 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
     status,
     seed,
     depCommit: dep.commit,
+    rtCommit: gitFactsFor(fleetRuntimeRoot()).commit,
     workerLog: readWorkerLog(req.name),
   })
 }

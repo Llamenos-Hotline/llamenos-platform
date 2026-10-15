@@ -44,7 +44,11 @@ const SECRET_SENDERS = [
   'tests/db-identity.ts',
   'tests/simulation-helpers.ts',
   'tests/bootstrap.spec.ts',
-  'tests/screenshots.spec.ts',
+  // tests/screenshots.spec.ts is deliberately absent: #1854 moved its message
+  // seeding onto the configured backend, so it no longer sends the dev-surface
+  // secret at all. Re-adding it here would require an unused import of
+  // devSurfaceSecret purely to satisfy this list — a file that does not send
+  // the secret has nothing for this rail to check.
   'tests/steps/backend/error-disclosure.steps.ts',
   'tests/steps/backend/network-security.steps.ts',
   'tests/steps/backend/push-hub-dispatch.steps.ts',

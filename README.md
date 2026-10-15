@@ -302,7 +302,7 @@ site/              # Marketing site (Astro, Cloudflare Pages)
 
 ## CI/CD
 
-Every push to `main` triggers the CI pipeline:
+Every pull request is gated by the CI pipeline on its merge group before it can land on `main` (the full suite does not re-run post-merge — the merge queue already validated the identical tree):
 
 1. **Build & validate** — typecheck, Vite build (with Tauri IPC mocks), esbuild, site build
 2. **E2E tests** — Playwright against CF Workers and Docker Compose

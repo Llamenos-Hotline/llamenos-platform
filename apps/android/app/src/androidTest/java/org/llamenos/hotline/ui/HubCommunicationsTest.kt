@@ -374,7 +374,7 @@ class HubCommunicationsTest {
         composeRule.waitForIdle()
 
         // Should now show the channel checklist
-        composeRule.onNodeWithTag("channel-checklist").assertIsDisplayed()
+        composeRule.onNodeWithTag("onboarding-channel-checklist").assertIsDisplayed()
     }
 
     @Test
@@ -398,7 +398,7 @@ class HubCommunicationsTest {
         composeRule.onNodeWithTag("template-from-scratch").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("channel-checklist").assertIsDisplayed()
+        composeRule.onNodeWithTag("onboarding-channel-checklist").assertIsDisplayed()
     }
 
     @Test
@@ -427,13 +427,18 @@ class HubCommunicationsTest {
             )
         }
 
-        composeRule.onNodeWithTag("channel-checklist").assertIsDisplayed()
+        composeRule.onNodeWithTag("onboarding-channel-checklist").assertIsDisplayed()
         composeRule.onNodeWithTag("onboarding-next-provider").assertIsDisplayed()
         composeRule.onNodeWithTag("onboarding-next-provider").assertIsEnabled()
     }
 
     @Test
-    fun onboardingFlow_nextButtonDisabledWhileCompletingStep() {
+    fun onboardingFlow_nextButtonAcceptsTapWhileCompletingStep() {
+        // A previous step's request may still be in flight when the user (or a
+        // test) taps Next — the tap must be accepted and queued, not dropped
+        // (#1820: a swallowed tap on the final step left the sheet open).
+        var completedStep: String? = null
+
         composeRule.setContent {
             HubOnboardingFlow(
                 onboardingState = HubOnboardingState(
@@ -451,14 +456,18 @@ class HubCommunicationsTest {
                 channels = sampleChannels,
                 onSelectTemplate = {},
                 onToggleChannel = { _, _ -> },
-                onCompleteStep = { _, _ -> },
+                onCompleteStep = { step, _ -> completedStep = step },
                 onNavigateToProviderSetup = {},
                 onNavigateToPhoneNumbers = {},
                 onDismiss = {},
             )
         }
 
-        composeRule.onNodeWithTag("onboarding-next-provider").assertIsNotEnabled()
+        composeRule.onNodeWithTag("onboarding-next-provider").assertIsEnabled()
+        composeRule.onNodeWithTag("onboarding-next-provider").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals("channel_selection", completedStep)
     }
 
     @Test
@@ -471,7 +480,7 @@ class HubCommunicationsTest {
                         voice = false, sms = false, email = false,
                         signal = false, whatsapp = false, telegram = false, rcs = false,
                     ),
-                    currentStep = "summary",
+                    currentStep = "channel_setup",
                     completedSteps = listOf(
                         "template_selection",
                         "channel_selection",
@@ -508,7 +517,7 @@ class HubCommunicationsTest {
                         voice = false, sms = false, email = false,
                         signal = false, whatsapp = false, telegram = false, rcs = false,
                     ),
-                    currentStep = "summary",
+                    currentStep = "channel_setup",
                     completedSteps = listOf(
                         "template_selection",
                         "channel_selection",
@@ -532,9 +541,7 @@ class HubCommunicationsTest {
         composeRule.onNodeWithTag("onboarding-complete").performClick()
         composeRule.waitForIdle()
 
-        assert(completedStep == "summary") {
-            "Expected 'summary' but got '$completedStep'"
-        }
+        assertEquals("channel_setup", completedStep)
     }
 
     @Test

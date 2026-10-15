@@ -16,4 +16,12 @@ ExecStart=%h/.local/bin/llamenos-fleet tick
 # breakers all exit cleanly on purpose, so systemd must not treat a quiet night
 # as a fault and back off.
 SuccessExitStatus=0
-TimeoutStartSec=7200
+# Sized as: tick.ts's MAX_PASS_LIVE_DISPATCH_START_MS (60min — no NEW live
+# dispatch starts past it) + one worst-case in-flight item (90min worker +
+# poll grace + two verify/review rounds) + headroom. The 7200s this replaced
+# never accounted for the review loop: a single heavy item could overrun it,
+# and two items overran it every time — systemd SIGKILLed the pass
+# mid-pipeline and orphaned the worker (2026-10-11: two consecutive kills,
+# no tick completing for 2h). The two bounds are one invariant; change them
+# together.
+TimeoutStartSec=14400

@@ -393,6 +393,13 @@
       "when": 1791276445901,
       "tag": "0055_concurrency_unique_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1791851692587,
+      "tag": "0056_secure_signal_queue",
+      "breakpoints": true
     }
   ]
 }

@@ -3,9 +3,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
-import { validateInvite, redeemInvite } from '@/lib/api'
-import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
-import { isValidPin } from '@/lib/key-manager'
+import { validateInvite, redeemInvite, appendSigchainLink, distributePukEnvelopes, encodePukEnvelopeWire, getMyDevices } from '@/lib/api'
+import { ensureDeviceRegistered } from '@/lib/device-registration'
+import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, getDevicePubkeys, pukCreateFromState, sigchainCreateLinkFromState, type GenerateAndLoadResult } from '@/lib/platform'
+import { isValidPin, markUnlocked } from '@/lib/key-manager'
 import { downloadBackupFile, type BackupFile } from '@/lib/backup'
 import { useToast } from '@/lib/toast'
 import { setLanguage } from '@/lib/i18n'
@@ -75,34 +76,59 @@ function OnboardingPage() {
   }, [])
 
   // Validate invite on initial mount only (ref survives re-renders but not re-mounts)
+  const [errorRetryable, setErrorRetryable] = useState(false)
   const validatingRef = useRef(false)
-  useEffect(() => {
-    // Skip if already validated or currently validating
-    if (validatingRef.current || step !== 'loading') return
-    validatingRef.current = true
 
+  const runValidation = useCallback(() => {
     if (!inviteCode) {
+      setErrorRetryable(false)
       setStep('error')
       setErrorMsg(t('onboarding.noCode'))
       return
     }
     validateInvite(inviteCode).then(result => {
-      if (result.valid) {
+      if (result.outcome === 'valid') {
         setInviteData({ name: result.name, roleIds: result.roleIds || ['role-volunteer'] })
         setStep('welcome')
-      } else {
+      } else if (result.outcome === 'invalid') {
+        setErrorRetryable(false)
         setStep('error')
         setErrorMsg(
           result.error === 'expired' ? t('onboarding.expired') :
           result.error === 'already_used' ? t('onboarding.alreadyUsed') :
           t('onboarding.invalidCode')
         )
+      } else {
+        // Rate limit, server error, or network failure (#1712) — transient,
+        // so the screen offers a retry instead of a terminal verdict.
+        setErrorRetryable(true)
+        setStep('error')
+        setErrorMsg(
+          result.retryAfterSeconds
+            ? t('onboarding.rateLimitedRetry', { seconds: result.retryAfterSeconds })
+            : t('onboarding.validationUnavailable')
+        )
       }
     }).catch(() => {
+      // validateInvite already converts network failures into `retryable`;
+      // this arm is purely defensive.
+      setErrorRetryable(true)
       setStep('error')
-      setErrorMsg(t('onboarding.invalidCode'))
+      setErrorMsg(t('onboarding.validationUnavailable'))
     })
-  }, [inviteCode])
+  }, [inviteCode, t])
+
+  useEffect(() => {
+    // Skip if already validated or currently validating
+    if (validatingRef.current || step !== 'loading') return
+    validatingRef.current = true
+    runValidation()
+  }, [inviteCode, step, runValidation])
+
+  function handleRetryValidation() {
+    validatingRef.current = false
+    setStep('loading')
+  }
 
   function handlePinComplete(enteredPin: string) {
     if (pinStep === 'create') {
@@ -144,6 +170,49 @@ function OnboardingPage() {
       const tokenJson = await createNoncelessAuthToken(Date.now(), 'POST', '/api/invites/redeem')
       const parsed = JSON.parse(tokenJson) as { timestamp: number; token: string }
       await redeemInvite(inviteCode, result.publicKey, parsed.timestamp, parsed.token)
+
+      // The user now exists server-side and the device key is loaded in
+      // CryptoState, so authenticated requests can be signed. Mark the key
+      // manager unlocked here (loginAfterKeyLoaded would do it later, but the
+      // identity writes below need auth headers first).
+      markUnlocked(result.publicKey)
+
+      // M2 (#1050): every fresh identity starts with a sigchain genesis link
+      // and a PUK. Both are created in Rust — the device key and the PUK seed
+      // never enter the webview — and only their public/signed products are
+      // posted. The genesis payload shape (`user_init`, seq 1, prevHash null)
+      // is fixed by the crate verifier (packages/crypto/src/sigchain.rs) and
+      // re-validated server-side on append.
+      const deviceState = await getDevicePubkeys()
+      if (!deviceState) throw new Error('Device not unlocked')
+
+      const genesisPayload = JSON.stringify({ type: 'user_init', deviceId: deviceState.deviceId })
+      const genesisLink = await sigchainCreateLinkFromState(
+        crypto.randomUUID(),
+        1,
+        null,
+        new Date().toISOString(),
+        genesisPayload,
+      )
+      await appendSigchainLink(result.publicKey, genesisLink, 'genesis')
+
+      // The PUK envelope table is FK'd to the server device registry, and
+      // /puk/envelopes/:deviceId reads by that registry id — so the device
+      // must be registered first and the envelope keyed by the id the server
+      // assigned, not the CryptoState device id (which stays the wrap AAD).
+      await ensureDeviceRegistered()
+      const myDevices = await getMyDevices()
+      const serverDevice = myDevices.find((d) => d.ed25519Pubkey === deviceState.signingPubkeyHex)
+      if (!serverDevice) throw new Error('Device registration not visible after POST /devices/register')
+
+      const puk = await pukCreateFromState()
+      await distributePukEnvelopes([
+        {
+          deviceId: serverDevice.id,
+          generation: puk.pukState.generation,
+          envelope: encodePukEnvelopeWire(puk.envelope),
+        },
+      ])
 
       // Generate recovery key (shown to user instead of device key)
       const rk = await generateRecoveryKey()
@@ -207,10 +276,15 @@ function OnboardingPage() {
               <AlertTriangle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
             </div>
             <CardTitle>{t('onboarding.errorTitle')}</CardTitle>
-            <CardDescription>{errorMsg}</CardDescription>
+            <CardDescription data-testid="onboarding-error-message">{errorMsg}</CardDescription>
           </CardHeader>
-          <CardContent className="text-center">
-            <Button variant="outline" onClick={() => navigate({ to: '/login' })}>
+          <CardContent className="flex flex-col gap-2 text-center">
+            {errorRetryable && (
+              <Button data-testid="onboarding-retry" onClick={handleRetryValidation}>
+                {t('common.retry')}
+              </Button>
+            )}
+            <Button variant="outline" data-testid="onboarding-go-to-login" onClick={() => navigate({ to: '/login' })}>
               {t('onboarding.goToLogin')}
             </Button>
           </CardContent>
@@ -231,7 +305,7 @@ function OnboardingPage() {
               <div className="mx-auto mb-3">
                 <LogoMark size="xl" />
               </div>
-              <CardTitle className="text-2xl">
+              <CardTitle className="text-2xl" data-testid="onboarding-welcome-title">
                 {t('onboarding.welcomeTitle', { name: hotlineName })}
               </CardTitle>
               <CardDescription>
@@ -273,7 +347,7 @@ function OnboardingPage() {
                 </div>
               </div>
 
-              <Button onClick={() => setStep('pin')} className="w-full" size="lg">
+              <Button data-testid="onboarding-get-started" onClick={() => setStep('pin')} className="w-full" size="lg">
                 {t('onboarding.getStarted')}
                 <ArrowRight className="h-4 w-4" />
               </Button>
@@ -372,7 +446,7 @@ function OnboardingPage() {
               </div>
 
               {/* Download backup */}
-              <Button variant="outline" onClick={downloadBackup} className="w-full">
+              <Button data-testid="onboarding-download-backup" variant="outline" onClick={downloadBackup} className="w-full">
                 <Download className="h-4 w-4" />
                 {t('onboarding.downloadBackup')}
               </Button>
@@ -392,6 +466,7 @@ function OnboardingPage() {
               <label className="flex items-start gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
+                  data-testid="onboarding-backup-acknowledge"
                   checked={backupAcknowledged}
                   onChange={e => setBackupAcknowledged(e.target.checked)}
                   className="mt-0.5 h-4 w-4 rounded border-input accent-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -400,6 +475,7 @@ function OnboardingPage() {
               </label>
 
               <Button
+                data-testid="onboarding-continue"
                 onClick={handleComplete}
                 className="w-full"
                 size="lg"

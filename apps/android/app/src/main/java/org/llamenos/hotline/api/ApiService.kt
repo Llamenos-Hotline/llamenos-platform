@@ -28,6 +28,7 @@ import org.llamenos.hotline.model.RecoveryLivenessRequest
 import org.llamenos.hotline.model.RecoverySessionStatus
 import org.llamenos.hotline.model.RecoveryVerifyRequest
 import org.llamenos.hotline.model.RecoveryVerifyResponse
+import org.llamenos.hotline.model.VoipTokenRequest
 import org.llamenos.hotline.service.OfflineQueue
 import org.llamenos.hotline.telephony.SipConnectionParams
 import org.llamenos.protocol.HubKeyEnvelopeResponse
@@ -355,6 +356,16 @@ class ApiService @Inject constructor(
      */
     suspend fun clearPushEndpoint(pushToken: String): Unit =
         requestNoContent("DELETE", "/api/devices/push-token", ClearPushTokenRequest(pushToken))
+
+    /**
+     * Register this device's VoIP call-wake token on the backend.
+     * On Android the token is the same UnifiedPush endpoint URL sent as
+     * [RegisterDeviceRequest.pushToken] — the incoming-call ring path reads
+     * only `voipToken`, so an endpoint registered solely via
+     * [registerPushEndpoint] can never ring the phone (#955).
+     */
+    suspend fun registerVoipToken(body: VoipTokenRequest): Unit =
+        requestNoContent("POST", "/api/devices/voip-token", body)
 
     /**
      * Fetch the E2EE key envelope for a specific hub.
