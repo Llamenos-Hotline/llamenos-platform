@@ -4,6 +4,7 @@ import { useAuth } from '@/lib/auth'
 import { useNoteSheet } from '@/lib/note-sheet-context'
 import { useDraft } from '@/lib/use-draft'
 import { encryptNote } from '@/lib/platform'
+import { adminHpkeRecipient } from '@/lib/admin-recipient'
 
 import { createNote, updateNote, getCallHistory, getCustomFields, type CallRecord } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
@@ -88,7 +89,16 @@ export function NoteSheet() {
       }
       // V2 per-note ephemeral key encryption (forward secrecy)
       const authorPub = publicKey
-      const adminPub = adminDecryptionPubkey || authorPub
+      // No admin recipient means no admin can ever read this note. The old
+      // `adminDecryptionPubkey || authorPub` wrapped it twice to the author
+      // instead, which saved, showed as saved, and left admins locked out with
+      // no error at either end (#1468). Refusing is the lesser loss: the text
+      // is still in the editor and the operator gets a reason.
+      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+      if (!adminPub) {
+        toast(t('notes.noAdminRecipient'), 'error')
+        return
+      }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
 
       if (mode === 'edit' && editNoteId) {
