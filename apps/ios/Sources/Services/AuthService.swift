@@ -174,7 +174,7 @@ final class AuthService {
     // MARK: - Logout / Reset
 
     /// Completely remove all stored identity data. This is destructive — the user
-    /// must generate new device keys or link from another device.
+    /// must create a new identity afterwards (device linking is not offered, #1028).
     func logout() {
         cryptoService.lock()
         keychainService.delete(key: KeychainKey.encryptedKeys)
