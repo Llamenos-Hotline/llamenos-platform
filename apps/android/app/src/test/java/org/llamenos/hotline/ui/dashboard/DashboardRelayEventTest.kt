@@ -29,6 +29,7 @@ import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.hotline.telephony.SipRegistrar
+import org.llamenos.hotline.mockPushRegistrationManager
 
 /**
  * Regression tests for #1016 defect 2: relay events from a NON-active hub must
@@ -82,6 +83,7 @@ class DashboardRelayEventTest {
             ShiftClockRepository(mockk(relaxed = true)),
             mockk<SipRegistrar>(relaxed = true),
             mockk<HubRepository>(relaxed = true),
+            mockPushRegistrationManager(),
         )
     }
 

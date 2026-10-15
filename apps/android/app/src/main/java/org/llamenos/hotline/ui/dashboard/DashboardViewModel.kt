@@ -27,6 +27,8 @@ import org.llamenos.hotline.model.ActiveCallsResponse
 import org.llamenos.hotline.model.AuthMeEventKeysResponse
 import org.llamenos.hotline.model.BanRequest
 import org.llamenos.hotline.model.LlamenosEvent
+import org.llamenos.hotline.model.MeResponse
+import org.llamenos.hotline.service.PushRegistrationManager
 import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.MyStatusResponse
@@ -49,6 +51,8 @@ data class DashboardUiState(
     val isRefreshing: Boolean = false,
     val isClockingInOut: Boolean = false,
     val isTogglingBreak: Boolean = false,
+    /** No UnifiedPush distributor installed — calls can never wake this device. */
+    val pushDistributorMissing: Boolean = false,
     @StringRes val errorRes: Int? = null,
 )
 
@@ -70,6 +74,7 @@ class DashboardViewModel @Inject constructor(
     private val shiftClockRepository: ShiftClockRepository,
     private val sipRegistrar: SipRegistrar,
     private val hubRepository: HubRepository,
+    private val pushRegistrationManager: PushRegistrationManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -127,6 +132,17 @@ class DashboardViewModel @Inject constructor(
         }
             .onEach { startedAt ->
                 _uiState.update { it.copy(isOnShift = startedAt != null, shiftStartedAt = startedAt) }
+            }
+            .launchIn(viewModelScope)
+
+        pushRegistrationManager.distributorState
+            .onEach { state ->
+                _uiState.update {
+                    it.copy(
+                        pushDistributorMissing =
+                            state == PushRegistrationManager.DistributorState.NO_DISTRIBUTOR,
+                    )
+                }
             }
             .launchIn(viewModelScope)
     }
@@ -435,6 +451,11 @@ class DashboardViewModel @Inject constructor(
      */
     fun dismissError() {
         _uiState.update { it.copy(errorRes = null) }
+    }
+
+    /** Retry distributor selection after the user installs a distributor (ntfy). */
+    fun retryPushRegistration() {
+        pushRegistrationManager.ensureRegistered()
     }
 
     override fun onCleared() {
