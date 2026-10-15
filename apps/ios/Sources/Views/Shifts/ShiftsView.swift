@@ -22,11 +22,35 @@ struct ShiftsView: View {
             }
             .navigationTitle(NSLocalizedString("shifts_title", comment: "Shifts"))
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                if canManageShifts {
+                    ToolbarItem(placement: .primaryAction) {
+                        NavigationLink {
+                            ShiftAdminView()
+                        } label: {
+                            Label(
+                                NSLocalizedString("shifts_manage", comment: "Manage"),
+                                systemImage: "gearshape.fill"
+                            )
+                        }
+                        .accessibilityIdentifier("shifts-admin-link")
+                    }
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { vm.showAvailabilitySheet },
+                set: { vm.showAvailabilitySheet = $0 }
+            )) {
+                AvailabilityBlockSheet(viewModel: vm)
+            }
             .refreshable {
                 await vm.refresh()
             }
             .task(id: hubContext.activeHubId) {
                 await vm.loadShifts()
+                if appState.hasPermission("shifts:set-availability") {
+                    await vm.loadAvailabilityBlocks()
+                }
             }
             .alert(
                 NSLocalizedString("shifts_clock_out_title", comment: "End Shift?"),
@@ -208,6 +232,7 @@ struct ShiftsView: View {
                                                 .strokeBorder(shiftDay.isToday ? Color.brandPrimary.opacity(0.3) : Color.brandBorder, lineWidth: 1)
                                         )
                                 )
+                                .accessibilityIdentifier("shift-day-\(shiftDay.id)")
 
                             if shiftDay.isToday {
                                 Text(NSLocalizedString("shifts_today", comment: "Today"))
@@ -225,13 +250,86 @@ struct ShiftsView: View {
                             .font(.brand(.caption))
                             .foregroundStyle(Color.brandMutedForeground)
                         }
+                        // Keep the day label's own identifier: without this the
+                        // header's identifier is pushed onto every child.
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("weekly-schedule-header")
                     }
-                    .accessibilityIdentifier("shift-day-\(shiftDay.id)")
+                    // No identifier on the Section itself: a List applies a Section's
+                    // identifier to every row, overwriting the rows' own (the Sign Up
+                    // buttons' `signup-shift-*` among them). The day is identified by
+                    // its header label above.
                 }
+            }
+
+            // My availability blocks (volunteer self-service). Blocked dates are
+            // excluded from routing, so volunteers manage them where they manage
+            // their shift. Desktop shows this as the Availability tab.
+            if appState.hasPermission("shifts:set-availability") {
+                availabilitySection(vm: vm)
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    // MARK: - Availability Section
+
+    @ViewBuilder
+    private func availabilitySection(vm: ShiftsViewModel) -> some View {
+        Section {
+            if vm.myAvailabilityBlocks.isEmpty && !vm.isLoadingAvailability {
+                Text(NSLocalizedString("shifts_availability_empty", comment: "No availability blocks"))
+                    .font(.brand(.caption))
+                    .foregroundStyle(Color.brandMutedForeground)
+                    .accessibilityIdentifier("availability-empty-state")
+            } else {
+                ForEach(vm.myAvailabilityBlocks) { block in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(block.startDate) – \(block.endDate)")
+                                .font(.brand(.body))
+                                .foregroundStyle(Color.brandForeground)
+                            if let reason = block.encryptedReason, !reason.isEmpty {
+                                Text(reason)
+                                    .font(.brand(.caption))
+                                    .foregroundStyle(Color.brandMutedForeground)
+                            }
+                        }
+                        Spacer()
+                        Button {
+                            Task { await vm.deleteAvailabilityBlock(id: block.id) }
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(Color.brandDestructive)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("availability-delete-\(block.id)")
+                    }
+                    // Keep the delete button's own identifier: without this the row's
+                    // identifier is pushed onto every child, the button included.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("availability-block-row-\(block.id)")
+                }
+            }
+
+            Button {
+                vm.showAvailabilitySheet = true
+            } label: {
+                Label(
+                    NSLocalizedString("shifts_availability_create", comment: "Add Availability Block"),
+                    systemImage: "calendar.badge.plus"
+                )
+                .font(.brand(.subheadline))
+                .foregroundStyle(Color.brandPrimary)
+            }
+            .accessibilityIdentifier("availability-add-button")
+        } header: {
+            // The section is identified by its header, not by an identifier on the
+            // Section: a List applies a Section's identifier to every row, which
+            // overwrote `availability-add-button` and the block rows' identifiers.
+            Text(NSLocalizedString("shifts_availability_title", comment: "Availability"))
+                .accessibilityIdentifier("availability-section")
+        }
     }
 
     // MARK: - Shift Row
@@ -282,10 +380,23 @@ struct ShiftsView: View {
                 .accessibilityIdentifier("signup-shift-\(shift.id)")
             }
         }
+        // Keep the Sign Up button's own identifier: without this the row's
+        // identifier is pushed onto every child, the button included.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("shift-card-\(shift.id)")
     }
 
     // MARK: - Loading State
+
+    /// Whether any shift-admin surface is reachable. The Manage entry mirrors
+    /// desktop's admin-only tabs: visible when the user holds at least one of
+    /// the shift administration permissions for the active hub.
+    private var canManageShifts: Bool {
+        appState.hasPermission("shifts:manage-ring-groups")
+            || appState.hasPermission("shifts:manage-overrides")
+            || appState.hasPermission("shifts:approve-requests")
+            || appState.hasPermission("shifts:manage-fallback")
+    }
 
     private var loadingState: some View {
         VStack(spacing: 16) {
