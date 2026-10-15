@@ -299,11 +299,11 @@ jobs:
       #   12 GiB disk guard on the Mac. The fixture is deliberately NOT named
       #   ios-e2e-*: the operator sweep reaps those, so this one persists and
       #   the next run reuses it.
-      # - The device type is found by ITERATING iPhone types until `simctl
-      #   create` accepts one. A regex + `head -1` once picked iPhone-18-Pro
-      #   against the iOS 26.5 runtime and simctl refused ("Incompatible
-      #   device", 403): types newer than the installed runtime are listed
-      #   and unusable.
+      # - The device type is found by ITERATING iPhone types (simctl lists
+      #   them newest first) until `simctl create` accepts one. A regex +
+      #   `head -1` once picked iPhone-18-Pro against the iOS 26.5 runtime
+      #   and simctl refused ("Incompatible device", 403): types newer than
+      #   the installed runtime are listed and unusable.
       # - Every refusal is logged, and exhausting the list fails the step with
       #   simctl's own stderr. A create that fails silently would leave the
       #   job dying later with a misleading message.
@@ -341,15 +341,15 @@ jobs:
           TYPES=$(xcrun simctl list devicetypes -j | python3 -c "
           import json, sys
           ts = [t['identifier'] for t in json.load(sys.stdin)['devicetypes']
-                if t.get('productFamily') == 'iPhone' or t.get('name', '').startswith('iPhone')]
+                if t.get('name', '').startswith('iPhone')]
           if not ts: sys.exit('simctl lists no iPhone device types')
-          for t in reversed(ts):
+          for t in ts:
               print(t)
           ")
           NAME="llamenos-build-fixture"
           ERR="$RUNNER_TEMP/simctl-create.err"
           UDID=""
-          REFUSALS=""
+          REASON=""
           for TYPE in $TYPES; do
             if UDID=$(xcrun simctl create "$NAME" "$TYPE" "$RUNTIME" 2>"$ERR"); then
               echo "Created simulator: $NAME ($UDID) from $TYPE on $RUNTIME"
@@ -358,11 +358,9 @@ jobs:
             UDID=""
             REASON=$(tr '\n' ' ' < "$ERR")
             echo "simctl refused $TYPE on $RUNTIME: $REASON"
-            REFUSALS="${REFUSALS}  ${TYPE}: ${REASON}"$'\n'
           done
           if [ -z "$UDID" ]; then
-            echo "::error::could not create an iPhone simulator on $RUNTIME; simctl refused every iPhone device type:"
-            printf '%s' "$REFUSALS"
+            echo "::error::could not create an iPhone simulator on $RUNTIME; simctl refused every iPhone device type (last refusal: $REASON)"
             exit 1
           fi
 
