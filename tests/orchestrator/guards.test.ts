@@ -338,7 +338,7 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
    * added the OPERATOR-invoked `llamenos-fleet review-and-merge <pr>`
    * command, which is a human running a named command against a named PR —
    * a different act from the autonomous tick loop deciding to arm
-   * auto-merge on its own. Its one real, `--squash --delete-branch` merge is
+   * auto-merge on its own. Its one real, `--squash` merge is
    * reached only after `runReviewAndMerge` has independently re-verified
    * every required check (including a fresh `fleet/review`) is green on an
    * unmoved head (`evaluateMergeReadiness`) — GitHub is still what actually
@@ -378,8 +378,17 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
     expect(realMerges).toHaveLength(1)
     expect(realMerges[0]?.file, 'a real (squash) gh pr merge exists outside review-and-merge.ts')
       .toBe(REVIEW_AND_MERGE_FILE)
-    expect(realMerges[0]?.call, 'the real merge in review-and-merge.ts must delete the branch too')
-      .toContain("'--delete-branch'")
+    // No `gh pr merge` may carry `--delete-branch`. This rail used to require
+    // the opposite, and that inversion IS #1804: `gh` refuses the flag when the
+    // target branch has a merge queue ("Cannot use `-d` or `--delete-branch`
+    // when merge queue enabled"), so every arming call failed and the fleet
+    // merged nothing unattended while still reviewing and verifying correctly.
+    // Branch hygiene is the repository's `delete_branch_on_merge` setting's
+    // job, not a flag this process passes.
+    for (const call of [...arms, ...disarms, ...realMerges.map((m) => m.call)]) {
+      expect(call, 'gh pr merge must not pass --delete-branch — a merge queue refuses it')
+        .not.toContain("'--delete-branch'")
+    }
   })
 
   /**

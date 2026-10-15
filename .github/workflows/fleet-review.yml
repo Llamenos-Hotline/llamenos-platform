@@ -1206,6 +1206,15 @@ jobs:
             exit 1
           }
 
+          # Fail closed on a typo rather than allowing reviewPrimaryEngine()
+          # to silently select kimi for every value other than "claude".
+          # Escape the value so a malformed repo variable stays one log line.
+          printf -v primary_setting_display '%q' "$FLEET_REVIEW_PRIMARY"
+          case "$FLEET_REVIEW_PRIMARY" in
+            kimi|claude) ;;
+            *) fail "engine-misconfigured" "FLEET_REVIEW_PRIMARY is unsupported: $primary_setting_display (expected kimi or claude)" ;;
+          esac
+
           # degraded() — the fallback engine is unhealthy but the PRIMARY
           # answered, so the review runs and the PR is not failed (#1767
           # ask 3: an unhealthy fallback is the gate's own problem, not this
@@ -1344,7 +1353,7 @@ jobs:
           fb_model="$(printf '%s' "$fb_json" | jq -r '.model')"
           if [ "$fb_model" = "null" ]; then fb_model=""; fi
           if [ "$fb_engine" != "$fb_want" ] || [ -z "$fb_binary" ] || [ "$fb_binary" = "null" ]; then
-            fail "engine-misconfigured" "reviewerInvocationFor resolved the fallback ($fb_want) to something else: $fb_json"$'\n'"$fb_err"
+            fail "engine-misconfigured" "reviewerInvocationFor resolved fallback $fb_want to something else (FLEET_REVIEW_PRIMARY=$primary_setting_display, primary=$rev_engine): $fb_json"$'\n'"$fb_err"
           fi
           # claude requires a tier and the shared function always provides
           # one; an empty model here is the #1767 bug shape itself, so refuse
@@ -1952,14 +1961,20 @@ jobs:
       # needs its reasoning on the PR — two real reviews ran on #1117 and
       # left `pulls/1117/reviews` and `issues/1117/comments` both empty,
       # with the findings readable only via `gh run view --log`.
+      # Named by run_id alone (no run_attempt): a partial re-run that only
+      # reruns `publish-reviews` (this job already succeeded) must let that
+      # job find the SAME artifact name attempt-1 produced. `overwrite: true`
+      # covers the other case — a FULL re-run, where this job runs again and
+      # would otherwise collide with attempt-1's artifact under this name.
       - name: Upload the review report for publishing
         if: always() && github.event_name != 'merge_group'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: fleet-review-report-${{ github.run_id }}
           path: ${{ runner.temp }}/review-report
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
       # `if: always()` is load-bearing, not defensive: the review step exits
       # non-zero on a FAIL, and a substantive FAIL is exactly what #1158
@@ -2383,7 +2398,7 @@ jobs:
           FLEET_REVIEW_COMMENT_TOKEN: ${{ secrets.FLEET_REVIEW_COMMENT_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          ARTIFACT: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT: fleet-review-report-${{ github.run_id }}
           PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event.inputs.pr_number }}
           REVIEW_RESULT: ${{ needs.fleet-review.result }}
           CLEAR_LABELS: ${{ needs.fleet-review.outputs.clear_labels }}

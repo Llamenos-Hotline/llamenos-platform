@@ -1,6 +1,166 @@
 import tseslint from 'typescript-eslint'
 import noInlineApiShape from './scripts/eslint-rules/no-inline-api-shape.js'
 
+/**
+ * no-plaintext-in-encrypted-field (#1506) — a value that is legible at the
+ * assignment site may not be written to a field whose name claims it is
+ * encrypted.
+ *
+ * `ring_groups.encrypted_name` and `shifts.encrypted_name` hold raw user
+ * input (`encryptedName: nameInput.trim()`), while the same field name on
+ * platform roles holds a real HPKE envelope
+ * (`encryptedName: JSON.stringify(nameEnvelope)`). A column named
+ * `encrypted_*` that may or may not be encrypted is worse than an honest
+ * plaintext column: every reader — human, migration, crypto-shred coverage
+ * analysis — is actively misled.
+ *
+ * The rule cannot prove a value IS an envelope, so it flags the assignments
+ * that provably are NOT:
+ *
+ *   - a non-empty string literal     `encryptedName: 'Morning Team'`
+ *   - any template literal
+ *   - a call that is not a seal/serialise path:
+ *       allowed:  JSON.stringify(...)                  (envelope serialisation)
+ *                 encrypt* / seal* / wrap* / hpke*(...) (sealing helpers)
+ *                 z.*(...)                              (zod schema declarations)
+ *                 drizzle column builders (text/jsonb…) (db schema declarations)
+ *       flagged:  nameInput.trim(), btoa(...), textToHex(...), String(...)
+ *
+ * Pass-throughs are allowed: identifiers, member expressions
+ * (`encrypted.encryptedContent`, `group.encryptedName`), `??` / `?:` whose
+ * branches are all allowed, and empty-string placeholders.
+ *
+ * Known pre-#1506 violations are downgraded to `warn` in the debt block below —
+ * remove each entry as the client lanes adopt `encryptHubField`
+ * (src/client/lib/platform.ts) for these fields. Test files are exempt: their
+ * fixtures construct fake envelope strings deliberately. Kotlin/Swift writes
+ * are out of ESLint's reach entirely — the same class of guard has to come
+ * from the mobile lanes' own tooling.
+ */
+
+/** Drizzle pg-core column builders — declarations, not value assignments. */
+const DRIZZLE_BUILDERS = new Set([
+  'text', 'varchar', 'char', 'jsonb', 'json', 'integer', 'bigint', 'smallint',
+  'boolean', 'timestamp', 'date', 'time', 'uuid', 'numeric', 'decimal', 'real',
+  'doublePrecision', 'serial', 'bigserial', 'smallserial', 'interval', 'bytea',
+  'pgEnum', 'primaryKey', 'index', 'uniqueIndex', 'check', 'foreignKey',
+])
+
+/** Sealing/serialising call names — a value produced by one is not legible here. */
+const SEAL_CALL = /encrypt|seal|wrap|hpke/i
+
+/** Walk member/call chains to the identifier the whole expression hangs off. */
+function rootIdentifier(node) {
+  let current = node
+  while (current) {
+    if (current.type === 'Identifier') return current.name
+    if (current.type === 'MemberExpression') { current = current.object; continue }
+    if (current.type === 'CallExpression') { current = current.callee; continue }
+    return null
+  }
+  return null
+}
+
+/** Outermost function name being invoked, if statically visible. */
+function calleeName(node) {
+  const callee = node.callee
+  if (callee.type === 'Identifier') return callee.name
+  if (callee.type === 'MemberExpression' && callee.property.type === 'Identifier') {
+    return callee.property.name
+  }
+  return null
+}
+
+function isJsonStringify(node) {
+  const callee = node.callee
+  return (
+    callee.type === 'MemberExpression' &&
+    callee.object.type === 'Identifier' && callee.object.name === 'JSON' &&
+    callee.property.type === 'Identifier' && callee.property.name === 'stringify'
+  )
+}
+
+function isAllowedCall(node) {
+  if (isJsonStringify(node)) return true
+  const root = rootIdentifier(node.callee)
+  if (root === 'z' || (root && DRIZZLE_BUILDERS.has(root))) return true
+  const name = calleeName(node)
+  return name !== null && SEAL_CALL.test(name)
+}
+
+/** Returns the offending sub-expression if provably legible, else null. */
+function legibleExpression(node) {
+  switch (node.type) {
+    case 'Literal':
+      return typeof node.value === 'string' && node.value.length > 0 ? node : null
+    case 'TemplateLiteral':
+      return node
+    case 'CallExpression':
+      return isAllowedCall(node) ? null : node
+    case 'AwaitExpression':
+    case 'TSAsExpression':
+    case 'TSTypeAssertion':
+    case 'TSNonNullExpression':
+      return legibleExpression(node.argument ?? node.expression)
+    case 'LogicalExpression':
+      return legibleExpression(node.left) ?? legibleExpression(node.right)
+    case 'ConditionalExpression':
+      return legibleExpression(node.consequent) ?? legibleExpression(node.alternate)
+    default:
+      return null
+  }
+}
+
+function encryptedKeyName(key) {
+  if (key.type === 'Identifier') return /^encrypted([A-Z_])/.test(key.name) ? key.name : null
+  if (key.type === 'Literal' && typeof key.value === 'string') {
+    return /^encrypted([A-Z_])/.test(key.value) ? key.value : null
+  }
+  return null
+}
+
+/** @type {import('eslint').Rule.RuleModule} */
+const noPlaintextInEncryptedField = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow provably-plaintext values (literals, .trim() of user input, btoa, …) ' +
+        'assigned to encrypted* fields — see issue #1506.',
+      recommended: true,
+    },
+    schema: [],
+    messages: {
+      plaintext:
+        "'{{name}}' is assigned a value that is legible right here — it is not an envelope. " +
+        'A field named encrypted_* must hold the output of a seal/encrypt path ' +
+        '(e.g. encryptHubField / hpkeSeal, serialised with JSON.stringify), never user ' +
+        'input. See issue #1506.',
+    },
+  },
+  create(context) {
+    return {
+      Property(node) {
+        const name = encryptedKeyName(node.key)
+        if (!name) return
+        const offender = legibleExpression(node.value)
+        if (offender) {
+          context.report({ node: offender, messageId: 'plaintext', data: { name } })
+        }
+      },
+    }
+  },
+}
+
+// Flat config refuses to redefine a plugin across blocks, so every `local/`
+// rule hangs off this one shared object.
+const localPlugin = {
+  rules: {
+    'no-inline-api-shape': noInlineApiShape,
+    'no-plaintext-in-encrypted-field': noPlaintextInEncryptedField,
+  },
+}
+
 export default tseslint.config(
   { ignores: ['dist/', '.features-gen/', 'packages/protocol/generated/'] },
   ...tseslint.configs.recommended,
@@ -73,7 +233,7 @@ export default tseslint.config(
   // scripts/api-schema-binding/report.md cannot keep spreading by copy-paste from a neighbour.
   {
     files: ['src/client/lib/api/**/*.ts'],
-    plugins: { local: { rules: { 'no-inline-api-shape': noInlineApiShape } } },
+    plugins: { local: localPlugin },
     rules: {
       'local/no-inline-api-shape': 'error',
     },
@@ -133,6 +293,54 @@ export default tseslint.config(
     ],
     rules: {
       'local/no-inline-api-shape': 'warn',
+    },
+  },
+  // encrypted-means-encrypted rail (#1506): a value that is legible at the
+  // assignment site (string literal, `.trim()` of user input, `btoa(...)`) may
+  // not be written to an `encrypted*` field anywhere in the TS surface. Test
+  // trees are exempt — their fixtures deliberately construct fake envelope
+  // strings, and the rule cannot tell a fake envelope from a real one.
+  {
+    files: ['**/*.ts', '**/*.tsx'],
+    ignores: [
+      '**/__tests__/**',
+      '**/*.test.ts',
+      '**/*.spec.ts',
+      '**/*.wdio.ts',
+      'tests/**',
+      'packages/test-specs/**',
+    ],
+    plugins: { local: localPlugin },
+    rules: {
+      'local/no-plaintext-in-encrypted-field': 'error',
+    },
+  },
+  // Pre-existing #1506 debt, downgraded to `warn` — not disabled — so lint
+  // stays informative without blocking unrelated PRs on a cleanup that is not
+  // theirs. Remove each file as it is fixed:
+  //   ring-groups-panel.tsx / shifts.tsx — the defect itself: raw user input
+  //     into ring_groups.encrypted_name / shifts.encrypted_name. Fixed when the
+  //     desktop lane routes these through encryptHubField (hub-key path, same
+  //     as tags/teams).
+  //   demo.ts — demo seed data; demo mode removal is in flight (#1651).
+  //   dev.ts — dev-surface BDD seeds (`btoa('BDD Test Shift')`); the backend
+  //     lane owns this file and re-seeds through envelopes when the wire fix
+  //     lands.
+  //   firehose.ts — trims an already-encrypted pass-through value, not
+  //     plaintext introduction.
+  //   hub-shred-targets.ts — column→clear-value directive maps
+  //     (`encrypted_metadata: "'[]'::jsonb"`), not payloads.
+  {
+    files: [
+      'src/client/components/shifts/ring-groups-panel.tsx',
+      'src/client/routes/shifts.tsx',
+      'src/client/lib/api/demo.ts',
+      'apps/worker/routes/dev.ts',
+      'apps/worker/routes/firehose.ts',
+      'apps/worker/services/hub-shred-targets.ts',
+    ],
+    rules: {
+      'local/no-plaintext-in-encrypted-field': 'warn',
     },
   },
 )

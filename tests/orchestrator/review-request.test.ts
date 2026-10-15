@@ -3,6 +3,7 @@ import {
   requestReviewAtOpen,
   reviewRequestCandidates,
   isAuthorCollision,
+  prApiNumber,
   type ReviewRequestAtOpenDeps,
   type ReviewRequestPrFacts,
 } from '../../orchestrator/src/review-request.js'
@@ -301,6 +302,61 @@ describe('isAuthorCollision', () => {
 
   it('does not recognise an unrelated 422', () => {
     expect(isAuthorCollision(new Error('gh: Validation Failed (HTTP 422)'))).toBe(false)
+  })
+})
+
+describe('prApiNumber — the shape every dep call needs', () => {
+  it('passes a bare number through', () => {
+    expect(prApiNumber('1818')).toBe('1818')
+  })
+
+  it('extracts the number from the pinned repo’s pull URL — the shape the worker’s status file actually carries', () => {
+    expect(prApiNumber('https://github.com/Llamenos-Hotline/llamenos-platform/pull/1818')).toBe('1818')
+  })
+
+  it('tolerates trailing URL parts and case-folded owner/repo, as GitHub itself compares them', () => {
+    expect(prApiNumber('https://github.com/llamenos-hotline/LLAMENOS-PLATFORM/pull/42/files')).toBe('42')
+  })
+
+  it('rejects a pull URL for ANY other repository — mapping it onto the pinned repo’s api path would act on the wrong PR', () => {
+    expect(prApiNumber('https://github.com/someone-else/other-repo/pull/1818')).toBeUndefined()
+  })
+
+  it('rejects shapes that are neither a number nor a pull URL', () => {
+    expect(prApiNumber('fleet/shared/1760')).toBeUndefined()
+    expect(prApiNumber('https://github.com/Llamenos-Hotline/llamenos-platform/issues/1818')).toBeUndefined()
+  })
+})
+
+describe('requestReviewAtOpen — a PR handed over as a full URL (#1760’s live failure)', () => {
+  // fleet.log 2026-10-11, PR #1818: the URL went straight into
+  // `repos/<repo>/pulls/<pr>` and gh failed with `unsupported protocol
+  // scheme ""` — the read "failed", the module refused to guess, and no
+  // review was ever requested. The deps below see exactly what the live
+  // api-path builders receive.
+  it('normalises the URL to the number before ANY dep call', async () => {
+    const seen: string[] = []
+    const deps: ReviewRequestAtOpenDeps = {
+      readPr: async (pr) => { seen.push(pr); return { author: 'a-human', requestedReviewers: [] } },
+      countReviewRequestedEvents: async (pr) => { seen.push(pr); return seen.length > 2 ? 1 : 0 },
+      postRequestedReviewer: async (pr) => { seen.push(pr) },
+      deleteRequestedReviewer: async (pr) => { seen.push(pr) },
+      log: () => {},
+    }
+    const out = await requestReviewAtOpen(
+      { pr: 'https://github.com/Llamenos-Hotline/llamenos-platform/pull/1818', headRefName: BRANCH, branchMismatch: undefined },
+      deps,
+    )
+    expect(out.kind).toBe('requested')
+    expect(seen.length).toBeGreaterThan(0)
+    expect(new Set(seen)).toEqual(new Set(['1818']))
+  })
+
+  it('fails closed — never guessing an api path — on a shape it cannot normalise', async () => {
+    const { deps, calls } = fakeDeps({})
+    const out = await requestReviewAtOpen({ ...input, pr: 'not-a-pr-at-all' }, deps)
+    expect(out.kind).toBe('failed')
+    expect(calls).toEqual([])
   })
 })
 

@@ -110,6 +110,14 @@ test.describe('Active hub resolution on a multi-hub server', () => {
       .poll(() => page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null), { timeout: Timeouts.AUTH })
       .toBe(volunteerHubId)
 
+    // The active-hub value is set before the dashboard's asynchronous queries
+    // finish. Wait for a response to one of those requests before inspecting
+    // the response listener's snapshot; under parallel load it may still be
+    // empty immediately after the hub value changes.
+    await expect
+      .poll(() => hubRequests(traffic, volunteerHubId), { timeout: Timeouts.API })
+      .not.toEqual([])
+
     // Not one request may have been scoped to a hub the volunteer is not in.
     // This is the assertion that fails on the unfixed client: it sent sixteen.
     expect(

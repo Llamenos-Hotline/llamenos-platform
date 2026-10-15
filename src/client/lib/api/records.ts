@@ -174,8 +174,16 @@ export async function notifyContacts(params: NotifyContactParams): Promise<{ res
   })
 }
 
+/**
+ * Who may read each tier of a record, per the server.
+ *
+ * Two forms, matching the two protocol endpoints: pass `recordId` for an
+ * existing record (the server reads its `assignedTo` and hub itself), or
+ * `entityTypeId` plus the intended `assignedTo` for a record not yet created.
+ * Every returned string is an X25519 device encryption key.
+ */
 export async function getRecordEnvelopeRecipients(params: {
-  entityTypeId: string
+  entityTypeId?: string
   assignedTo?: string[]
   recordId?: string
 }) {
@@ -185,6 +193,9 @@ export async function getRecordEnvelopeRecipients(params: {
       fields: string[]
       pii: string[]
     }>(hp(`/records/${params.recordId}/envelope-recipients`))
+  }
+  if (!params.entityTypeId) {
+    throw new Error('getRecordEnvelopeRecipients: pass recordId or entityTypeId')
   }
   const qs = new URLSearchParams({ entityTypeId: params.entityTypeId })
   if (params.assignedTo?.length) qs.set('assignedTo', params.assignedTo.join(','))

@@ -165,11 +165,11 @@ struct HelpView: View {
             )
             faqItem(
                 question: NSLocalizedString("help_faq_gs_q2", comment: "What is a device key?"),
-                answer: NSLocalizedString("help_faq_gs_a2", comment: "Your device key is your signing key — like a password that proves your identity. It's generated on your device and never sent to the server. Use Device Link to securely authorize additional devices.")
+                answer: NSLocalizedString("help_faq_gs_a2", comment: "Your device key is your secret signing key — like a password that proves your identity. It's generated on your device and never sent to the server. Back it up securely; if you lose it, you'll need a new identity.")
             )
             faqItem(
                 question: NSLocalizedString("help_faq_gs_q3", comment: "Can I use multiple devices?"),
-                answer: NSLocalizedString("help_faq_gs_a3", comment: "Yes. Use the Device Link feature in Settings to securely transfer your identity to another device using a QR code and encrypted key exchange.")
+                answer: NSLocalizedString("help_faq_gs_a3", comment: "Not yet. This release supports one device per identity — multi-device linking is planned for a future update. For now, sign in on the device where you created your identity.")
             )
         } header: {
             Label {

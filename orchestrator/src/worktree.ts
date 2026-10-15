@@ -193,7 +193,14 @@ export async function salvageUncommittedWork(worktree: string, branchHint: strin
   const salvageBranch = `salvage/${branchHint}-${Date.now()}`
   await run('git', ['-C', worktree, 'checkout', '-b', salvageBranch])
   await run('git', ['-C', worktree, 'add', '-A'])
-  await run('git', ['-C', worktree, 'commit', '-m', `salvage: uncommitted work from ${branchHint}`])
+  // `--no-verify`: this commit is data preservation, not a quality gate — a
+  // human reviews the salvage branch before any of it merges. Running the
+  // repo's lefthook pre-commit hooks here makes salvage IMPOSSIBLE precisely
+  // in the states it exists for: 2026-10-11, issue #1684 — the runtime
+  // worktree's hook environment could not even start vitest or eslint
+  // (system node predates `util.styleText`), every salvage commit failed,
+  // and the lane stayed wedged on real work, pass after pass.
+  await run('git', ['-C', worktree, 'commit', '--no-verify', '-m', `salvage: uncommitted work from ${branchHint}`])
   await run('git', ['-C', worktree, 'push', '-u', 'origin', salvageBranch])
   return { salvaged: true, branch: salvageBranch }
 }
