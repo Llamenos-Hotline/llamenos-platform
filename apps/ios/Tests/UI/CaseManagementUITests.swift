@@ -169,13 +169,28 @@ final class CaseManagementUITests: BaseUITest {
         ) == .completed
     }
 
+    private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval = 15) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "isEnabled == true"),
+                object: element
+            )],
+            timeout: timeout
+        ) == .completed
+    }
+
     /// Create a case through the create-case sheet and wait for the sheet to close.
     private func createCase(title: String, entityTypeName: String) {
         // `case-new-btn` is a toolbar Button — query the button itself, not its
-        // container, and wait for it: it only renders once CMS state and entity
-        // types have loaded over the API.
+        // container. It is present from the first toolbar resolution and starts
+        // disabled, becoming enabled once CMS state and entity types have loaded
+        // over the API, so wait on `isEnabled` rather than on existence.
         let newCase = app.buttons["case-new-btn"]
-        XCTAssertTrue(newCase.waitForExistence(timeout: 15), "New Case should be offered once case management is on")
+        XCTAssertTrue(newCase.waitForExistence(timeout: 15), "New Case should be present in the Cases toolbar")
+        XCTAssertTrue(
+            waitForEnabled(newCase),
+            "New Case should be offered once case management is on"
+        )
         newCase.tap()
 
         let sheet = find("create-case-sheet")
@@ -731,7 +746,8 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Closing the case detail returns to the list.
     func testCaseDetailCloseReturnsToList() {
-        given("I am authenticated as admin with API") {
+        given("case management is enabled and I am authenticated as admin with API") {
+            configureCaseManagementWithTwoTypes()
             launchAsAdminWithAPI()
         }
         when("I open a case detail and tap the close button") {
@@ -745,11 +761,12 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("I should be back on the case list") {
             // After closing the detail sheet, the case list should be visible again
+            // Case management is enabled by this test's own Given, so
+            // `cms-not-enabled` is not an acceptable outcome here.
             let found = anyElementExists([
                 "case-list",
                 "case-empty-state",
                 "case-type-tabs",
-                "cms-not-enabled",
             ], timeout: 5)
             XCTAssertTrue(
                 found,
