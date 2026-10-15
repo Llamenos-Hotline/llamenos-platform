@@ -178,7 +178,7 @@ struct CaseListView: View {
                             statusDef: vm.statusDef(for: record),
                             decryptedTitle: vm.decryptedTitle(for: record.id)
                         )
-                        .accessibilityIdentifier("case-card-\(record.id)")
+                        .accessibilityIdentifier("case-list-row-\(record.id)")
                         .onTapGesture {
                             Task { await vm.selectRecord(record) }
                         }
@@ -513,6 +513,7 @@ private struct CreateCaseSheet: View {
                                     }
                                     Text(et.label)
                                 }
+                                .accessibilityIdentifier("case-type-option-\(et.name)")
                                 .tag(et.id)
                             }
                         }
