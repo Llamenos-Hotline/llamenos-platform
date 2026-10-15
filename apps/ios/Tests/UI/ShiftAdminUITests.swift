@@ -31,21 +31,27 @@ final class ShiftAdminUITests: BaseUITest {
         return pubkey
     }
 
-    /// Poll a server-state predicate until it holds or the deadline passes.
+    /// Wait until a server-state predicate holds, failing after `timeout`.
     /// UI mutations complete asynchronously, so a single immediate read races
-    /// the write; polling bounds the wait without a fixed sleep.
+    /// the write. XCTWaiter re-evaluates the predicate while it spins the run
+    /// loop, so the wait ends on the condition rather than on a fixed sleep.
     private func waitForServerState(
         timeout: TimeInterval = 15,
         file: StaticString = #filePath,
         line: UInt = #line,
-        _ predicate: () -> Bool
+        _ predicate: @escaping () -> Bool
     ) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if predicate() { return }
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-        XCTAssertTrue(predicate(), "Server state did not reach the expected value within \(timeout)s", file: file, line: line)
+        let reached = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in predicate() },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [reached], timeout: timeout),
+            .completed,
+            "Server state did not reach the expected value within \(timeout)s",
+            file: file,
+            line: line
+        )
     }
 
     private func jsonObject(_ data: Data?, _ key: String, file: StaticString = #filePath, line: UInt = #line) -> [[String: Any]] {
@@ -85,8 +91,11 @@ final class ShiftAdminUITests: BaseUITest {
             )
         }
         and("my volunteer self-service availability section is present") {
+            // The section sits below the seven weekday sections, and a List only
+            // instantiates rows near the viewport — it does not exist until it
+            // is scrolled to.
             XCTAssertTrue(
-                find("availability-section").waitForExistence(timeout: 10),
+                scrollToFind("availability-section", maxSwipes: 8, timeout: 10).exists,
                 "Volunteers keep the availability self-service section (shifts:set-availability)"
             )
         }

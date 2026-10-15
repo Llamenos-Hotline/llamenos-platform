@@ -115,13 +115,18 @@ struct RingGroupDetailView: View {
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("ring-group-remove-member-\(member.pubkey)")
                     }
+                    // Keep the remove button's own identifier: without this the row's
+                    // identifier is pushed onto every child, the button included.
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("ring-group-member-\(member.pubkey)")
                 }
             }
         } header: {
+            // On the header, not the Section: a List applies a Section's
+            // identifier to every row, overwriting the member rows' own.
             Text(NSLocalizedString("shifts_ring_groups_members", comment: "Members"))
+                .accessibilityIdentifier("ring-group-detail-members")
         }
-        .accessibilityIdentifier("ring-group-detail-members")
     }
 
     // MARK: - Add Members
@@ -157,6 +162,10 @@ struct RingGroupDetailView: View {
                             Image(systemName: "plus.circle")
                                 .foregroundStyle(Color.brandPrimary)
                         }
+                        // A .plain button is only hit-testable where it draws;
+                        // without this the Spacer gap in the middle of the row
+                        // swallows the tap and no member is ever added.
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("ring-group-add-member-\(user.pubkey)")

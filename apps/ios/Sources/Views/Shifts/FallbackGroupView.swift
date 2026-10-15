@@ -67,6 +67,10 @@ struct FallbackGroupView: View {
                                         .foregroundStyle(Color.brandMutedForeground)
                                 }
                             }
+                            // A .plain button is only hit-testable where it draws;
+                            // without this the Spacer gap in the middle of the row
+                            // swallows the tap and the toggle never fires.
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(viewModel.isSaving)
@@ -74,9 +78,11 @@ struct FallbackGroupView: View {
                     }
                 }
             } header: {
+                // On the header, not the Section: a List applies a Section's
+                // identifier to every row, overwriting `fallback-user-row-*`.
                 Text(NSLocalizedString("shifts_users", comment: "Volunteers"))
+                    .accessibilityIdentifier("fallback-member-list")
             }
-            .accessibilityIdentifier("fallback-member-list")
         }
         .listStyle(.insetGrouped)
         .navigationTitle(NSLocalizedString("shifts_fallback_group", comment: "Fallback Group"))

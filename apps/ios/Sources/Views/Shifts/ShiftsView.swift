@@ -232,6 +232,7 @@ struct ShiftsView: View {
                                                 .strokeBorder(shiftDay.isToday ? Color.brandPrimary.opacity(0.3) : Color.brandBorder, lineWidth: 1)
                                         )
                                 )
+                                .accessibilityIdentifier("shift-day-\(shiftDay.id)")
 
                             if shiftDay.isToday {
                                 Text(NSLocalizedString("shifts_today", comment: "Today"))
@@ -249,9 +250,15 @@ struct ShiftsView: View {
                             .font(.brand(.caption))
                             .foregroundStyle(Color.brandMutedForeground)
                         }
+                        // Keep the day label's own identifier: without this the
+                        // header's identifier is pushed onto every child.
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("weekly-schedule-header")
                     }
-                    .accessibilityIdentifier("shift-day-\(shiftDay.id)")
+                    // No identifier on the Section itself: a List applies a Section's
+                    // identifier to every row, overwriting the rows' own (the Sign Up
+                    // buttons' `signup-shift-*` among them). The day is identified by
+                    // its header label above.
                 }
             }
 
@@ -298,6 +305,9 @@ struct ShiftsView: View {
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("availability-delete-\(block.id)")
                     }
+                    // Keep the delete button's own identifier: without this the row's
+                    // identifier is pushed onto every child, the button included.
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("availability-block-row-\(block.id)")
                 }
             }
@@ -314,9 +324,12 @@ struct ShiftsView: View {
             }
             .accessibilityIdentifier("availability-add-button")
         } header: {
+            // The section is identified by its header, not by an identifier on the
+            // Section: a List applies a Section's identifier to every row, which
+            // overwrote `availability-add-button` and the block rows' identifiers.
             Text(NSLocalizedString("shifts_availability_title", comment: "Availability"))
+                .accessibilityIdentifier("availability-section")
         }
-        .accessibilityIdentifier("availability-section")
     }
 
     // MARK: - Shift Row
@@ -367,6 +380,9 @@ struct ShiftsView: View {
                 .accessibilityIdentifier("signup-shift-\(shift.id)")
             }
         }
+        // Keep the Sign Up button's own identifier: without this the row's
+        // identifier is pushed onto every child, the button included.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("shift-card-\(shift.id)")
     }
 

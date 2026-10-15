@@ -115,6 +115,9 @@ struct ShiftRequestsView: View {
                 .accessibilityIdentifier("request-reject-\(request.id)")
             }
         }
+        // Keep the approve/reject buttons' own identifiers: without this the row's
+        // identifier is pushed onto every child, the buttons included.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("request-row-\(request.id)")
     }
 }

@@ -27,6 +27,9 @@ struct ShiftOverridesView: View {
             overridesSection
         }
         .listStyle(.insetGrouped)
+        // On the List, not the overrides Section: a List applies a Section's
+        // identifier to every row, overwriting the rows' own.
+        .accessibilityIdentifier("override-list")
         .navigationTitle(NSLocalizedString("shifts_overrides_title", comment: "Shift Overrides"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -117,7 +120,6 @@ struct ShiftOverridesView: View {
                 }
             }
         }
-        .accessibilityIdentifier("override-list")
     }
 
     private func overrideRow(_ override: Override) -> some View {
@@ -161,6 +163,9 @@ struct ShiftOverridesView: View {
             .buttonStyle(.borderless)
             .accessibilityIdentifier("override-delete-\(override.id)")
         }
+        // Keep the delete button's own identifier: without this the row's
+        // identifier is pushed onto every child, the button included.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("override-row-\(override.id)")
     }
 }
@@ -244,6 +249,9 @@ struct OverrideCreateSheet: View {
                                                 .foregroundStyle(Color.brandPrimary)
                                         }
                                     }
+                                    // A .plain button is only hit-testable where it draws;
+                                    // without this the Spacer gap swallows the tap.
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("override-substitute-\(user.pubkey)")
