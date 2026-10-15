@@ -173,11 +173,7 @@ class AdminSidebarSteps : BaseSteps() {
         val before = SimulationClient.getSpamSettings()
         val target = if (before.maxCallsPerMinute != SPAM_PROBE_A) SPAM_PROBE_A else SPAM_PROBE_B
         try {
-            setSliderValue(
-                tag = "max-calls-per-minute-slider",
-                fraction = (target - 1).toFloat() / 99f,
-                expectedValue = target.toFloat(),
-            )
+            setSliderValue("max-calls-per-minute-slider", target.toFloat())
             clickSave("spam-settings-save-button")
             SimulationClient.awaitServerState(
                 what = "maxCallsPerMinute=$target saved through the spam protection section",
@@ -219,18 +215,24 @@ class AdminSidebarSteps : BaseSteps() {
      */
     private fun setSliderSeconds(tag: String, seconds: Int) {
         require((seconds - 30) % CALL_GRID_SECONDS == 0) { "$seconds is off the 15s grid" }
-        setSliderValue(tag, (seconds - 30).toFloat() / 270f, seconds.toFloat())
+        setSliderValue(tag, seconds.toFloat())
     }
 
-    private fun setSliderValue(tag: String, fraction: Float, expectedValue: Float) {
+    /**
+     * Drive a slider to [value] and read it back. Material3's `SetProgress`
+     * takes an ABSOLUTE value in the slider's `valueRange` (not a 0..1
+     * fraction) and coerces out-of-range input to the range, so [value] is
+     * passed through unscaled.
+     */
+    private fun setSliderValue(tag: String, value: Float) {
         waitForNode(tag, timeoutMillis = 10_000)
         onNodeWithTag(tag).performScrollTo()
-        onNodeWithTag(tag).performSemanticsAction(SemanticsActions.SetProgress) { it(fraction) }
+        onNodeWithTag(tag).performSemanticsAction(SemanticsActions.SetProgress) { it(value) }
         composeRule.waitForIdle()
         val info = onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
-        check(abs(info.current - expectedValue) < 0.5f) {
-            "'$tag' sits at ${info.current} after being driven to $expectedValue — " +
-                "the section's controls are not taking input"
+        check(abs(info.current - value) < 0.5f) {
+            "'$tag' reads ${info.current} after SetProgress($value); " +
+                "expected $value, actual ${info.current}, valueRange ${info.range}, steps ${info.steps}"
         }
     }
 
