@@ -40,14 +40,19 @@ struct CaseListView: View {
             .navigationTitle(NSLocalizedString("cases_title", comment: "Cases"))
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    if vm.cmsEnabled == true && !vm.entityTypes.isEmpty {
-                        Button {
-                            vm.showCreateSheet = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityIdentifier("case-new-btn")
+                    // The Button renders unconditionally so the toolbar item exists
+                    // from the first toolbar resolution. `cmsEnabled` is nil until
+                    // the CMS/entity-type responses land, and SwiftUI does not
+                    // reliably rebuild a ToolbarItem whose body flips EmptyView ->
+                    // Button afterwards, so a conditional body loses the button
+                    // entirely whenever the API answers after that first pass.
+                    Button {
+                        vm.showCreateSheet = true
+                    } label: {
+                        Image(systemName: "plus")
                     }
+                    .disabled(!(vm.cmsEnabled == true && !vm.entityTypes.isEmpty))
+                    .accessibilityIdentifier("case-new-btn")
                 }
                 ToolbarItem(placement: .secondaryAction) {
                     Menu {
@@ -120,9 +125,9 @@ struct CaseListView: View {
             title: NSLocalizedString("cases_not_enabled", comment: "Case management is not enabled"),
             message: appState.isAdmin
                 ? NSLocalizedString("cases_enable_hint_admin", comment: "Enable case management and apply a template in Hub Settings.")
-                : NSLocalizedString("cases_not_enabled_hint", comment: "An admin needs to enable case management.")
+                : NSLocalizedString("cases_not_enabled_hint", comment: "An admin needs to enable case management."),
+            accessibilityID: "cms-not-enabled"
         )
-        .accessibilityIdentifier("cms-not-enabled")
     }
 
     // MARK: - Empty State
@@ -138,9 +143,9 @@ struct CaseListView: View {
                 vm.showCreateSheet = true
             },
             actionLabel: vm.entityTypes.isEmpty ? nil : NSLocalizedString("cases_new", comment: "New Case"),
-            actionAccessibilityID: "case-empty-create-btn"
+            actionAccessibilityID: "case-empty-create-btn",
+            accessibilityID: "case-empty-state"
         )
-        .accessibilityIdentifier("case-empty-state")
     }
 
     // MARK: - Case List Content
