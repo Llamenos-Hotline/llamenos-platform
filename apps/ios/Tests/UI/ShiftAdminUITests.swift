@@ -14,18 +14,32 @@ final class ShiftAdminUITests: BaseUITest {
 
     // MARK: - Server State Helpers
 
-    /// The pubkey the app registered for this launch ("iOS UI Test Admin" or
-    /// "iOS UI Test Volunteer" — registerTestIdentity in AppState).
-    private func appUserPubkey(named name: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+    /// Pubkeys of the hub members registered under `name`.
+    private func memberPubkeys(named name: String, file: StaticString = #filePath, line: UInt = #line) -> Set<String> {
         guard let data = TestAdminAPI.send("GET", "/api/hubs/\(testHubId)/users", baseURL: testHubURL, file: file, line: line),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let users = json["users"] as? [[String: Any]] else {
             XCTFail("Could not read hub members", file: file, line: line)
-            return ""
+            return []
         }
-        guard let match = users.first(where: { $0["name"] as? String == name }),
-              let pubkey = match["pubkey"] as? String else {
-            XCTFail("App user '\(name)' not found in hub members", file: file, line: line)
+        return Set(users.filter { $0["name"] as? String == name }.compactMap { $0["pubkey"] as? String })
+    }
+
+    /// Launch as admin and return the pubkey this launch registered.
+    ///
+    /// Every launch registers a fresh identity under the same name
+    /// ("iOS UI Test Admin" — registerTestIdentity in AppState) into the class's
+    /// shared hub, so by the second test the name matches several members and
+    /// says nothing about which one is this launch. This launch's identity is
+    /// the one member that did not exist before it — the pubkey the server
+    /// stamps on the app's own requests (join requests, availability blocks).
+    private func launchAsAdminReturningPubkey(file: StaticString = #filePath, line: UInt = #line) -> String {
+        let name = "iOS UI Test Admin"
+        let before = memberPubkeys(named: name, file: file, line: line)
+        launchAsAdminWithAPI()
+        let registered = memberPubkeys(named: name, file: file, line: line).subtracting(before)
+        guard registered.count == 1, let pubkey = registered.first else {
+            XCTFail("Expected this launch to register exactly one '\(name)' member, found \(registered.count)", file: file, line: line)
             return ""
         }
         return pubkey
@@ -179,8 +193,7 @@ final class ShiftAdminUITests: BaseUITest {
                 return
             }
             groupId = id
-            launchAsAdminWithAPI()
-            appPubkey = appUserPubkey(named: "iOS UI Test Admin")
+            appPubkey = launchAsAdminReturningPubkey()
         }
         when("I add myself to the group through the UI") {
             navigateToShifts()
@@ -215,8 +228,7 @@ final class ShiftAdminUITests: BaseUITest {
         var appPubkey = ""
 
         given("I am an admin with an empty fallback group") {
-            launchAsAdminWithAPI()
-            appPubkey = appUserPubkey(named: "iOS UI Test Admin")
+            appPubkey = launchAsAdminReturningPubkey()
         }
         when("I add myself to the fallback group through the UI") {
             navigateToShifts()
@@ -310,8 +322,7 @@ final class ShiftAdminUITests: BaseUITest {
                 return
             }
             shiftId = id
-            launchAsAdminWithAPI()
-            appPubkey = appUserPubkey(named: "iOS UI Test Admin")
+            appPubkey = launchAsAdminReturningPubkey()
         }
         when("I request to join the shift and approve the request as admin") {
             navigateToShifts()
@@ -353,8 +364,7 @@ final class ShiftAdminUITests: BaseUITest {
         var appPubkey = ""
 
         given("I am an admin on the Shifts tab") {
-            launchAsAdminWithAPI()
-            appPubkey = appUserPubkey(named: "iOS UI Test Admin")
+            appPubkey = launchAsAdminReturningPubkey()
             navigateToShifts()
         }
         when("I mark myself unavailable for today") {
