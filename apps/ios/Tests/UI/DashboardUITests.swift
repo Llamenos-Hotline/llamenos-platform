@@ -82,13 +82,15 @@ final class DashboardUITests: BaseUITest {
             // Already on dashboard
         }
         then("the shift status card should show a status label") {
-            let shiftCard = find("shift-status-card")
-            guard shiftCard.waitForExistence(timeout: 10) else {
-                XCTFail("Shift status card should exist")
-                return
-            }
-            // Should have some text indicating shift state
-            XCTAssertTrue(true, "Shift status card is displayed")
+            XCTAssertTrue(
+                find("shift-status-card").waitForExistence(timeout: 10),
+                "Shift status card should exist"
+            )
+            // A freshly authenticated volunteer has not clocked in.
+            let status = find("shift-status-text")
+            XCTAssertTrue(status.waitForExistence(timeout: 5), "The card should carry a status label")
+            XCTAssertEqual(status.label, "Off Shift", "A volunteer who has not clocked in is off shift")
+            XCTAssertFalse(find("shift-elapsed-timer").exists, "There is no elapsed timer off shift")
         }
     }
 

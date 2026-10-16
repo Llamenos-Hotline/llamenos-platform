@@ -18,96 +18,89 @@ final class AdminFlowUITests: BaseUITest {
     func testSettingsHasAdminSection() {
         navigateToSettings()
 
-        // Admin panel link should be visible for admin users
-        let adminLink = find("settings-admin-link")
-        if adminLink.waitForExistence(timeout: 10) {
-            XCTAssertTrue(true, "Admin panel link exists in settings for admin users")
-        }
-        // If the admin section is not visible, the user might not have admin role
-        // in the test configuration, which is acceptable
+        let adminLink = scrollToFind("settings-admin-link", maxSwipes: 5, timeout: 10)
+        XCTAssertTrue(adminLink.exists, "Admin panel link should exist in settings for admin users")
     }
 
     func testAdminPanelOpens() {
-        navigateToSettings()
+        // navigateToAdminPanel fails the test if the link or the panel is missing.
+        navigateToAdminPanel()
 
-        let adminLink = find("settings-admin-link")
-        guard adminLink.waitForExistence(timeout: 10) else {
-            // Not an admin — skip test
-            return
-        }
-        adminLink.tap()
-
-        // Admin tab view should appear
-        let adminTabView = find("admin-tab-view")
         XCTAssertTrue(
-            adminTabView.waitForExistence(timeout: 5),
-            "Admin tab view should appear when tapping admin panel"
-        )
-
-        // Navigation list items should exist
-        let volunteersLink = find("admin-volunteers")
-        XCTAssertTrue(
-            volunteersLink.waitForExistence(timeout: 5),
+            find("admin-volunteers").waitForExistence(timeout: 5),
             "Admin panel should show navigation items"
         )
     }
 
     // MARK: - Volunteers Tab
 
-    func testVolunteersTabShowsContent() {
+    /// Put a named volunteer in the class hub through the real admin API.
+    private func seedVolunteer(named name: String) {
+        let pubkey = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        TestAdminAPI.send(
+            "POST", "/api/users",
+            ["pubkey": pubkey, "name": name, "phone": "", "roleIds": ["role-volunteer"]],
+            baseURL: testHubURL
+        )
+        TestAdminAPI.send(
+            "POST", "/api/hubs/\(testHubId)/members",
+            ["pubkey": pubkey, "roleIds": ["role-volunteer"]],
+            baseURL: testHubURL
+        )
+    }
+
+    /// Open one screen of the admin panel, failing the test if its link is missing.
+    private func openAdminScreen(_ linkIdentifier: String) {
         navigateToAdminPanel()
+        let link = scrollToFind(linkIdentifier, maxSwipes: 3, timeout: 5)
+        XCTAssertTrue(link.exists, "Admin panel should offer '\(linkIdentifier)'")
+        link.tap()
+    }
 
-        // Tap Volunteers link
-        let volunteersLink = find("admin-volunteers")
-        guard volunteersLink.waitForExistence(timeout: 5) else { return }
-        volunteersLink.tap()
+    /// Needs the admin screens to read the members the server actually mounts: until
+    /// the iOS client stops calling `/api/identity/members` (404, #1701/#1046) the
+    /// list never loads and this fails on the empty state.
+    func testVolunteersTabShowsContent() {
+        let name = "Seeded volunteer \(UUID().uuidString.prefix(8))"
+        seedVolunteer(named: name)
 
-        // Volunteers list, empty state, or loading should appear
-        let found = anyElementExists([
-            "volunteers-list", "volunteers-empty-state", "volunteers-loading",
-        ])
-        XCTAssertTrue(found, "Volunteers view should show list, empty state, or loading")
+        openAdminScreen("admin-volunteers")
+
+        XCTAssertTrue(
+            find("volunteers-list").waitForExistence(timeout: 15),
+            "A hub with members should show the volunteers list, not the empty state"
+        )
+        XCTAssertTrue(
+            app.staticTexts[name].waitForExistence(timeout: 5),
+            "The seeded volunteer should be listed by name"
+        )
     }
 
     func testVolunteerSearchExists() {
-        navigateToAdminPanel()
+        openAdminScreen("admin-volunteers")
 
-        // Tap Volunteers link
-        let volunteersLink = find("admin-volunteers")
-        guard volunteersLink.waitForExistence(timeout: 5) else { return }
-        volunteersLink.tap()
-
-        // Wait for content
-        _ = anyElementExists(["volunteers-list", "volunteers-empty-state", "volunteers-loading"])
-
-        // Search bar should be accessible
-        XCTAssertTrue(true, "Volunteers tab loaded successfully")
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10), "The volunteers screen should have a search field")
+        search.tap()
+        search.typeText("alice")
+        XCTAssertEqual(
+            search.value as? String, "alice",
+            "The search field should accept the query that filters the list"
+        )
     }
 
     // MARK: - Ban List Tab
 
     func testBanListTabShowsContent() {
-        navigateToAdminPanel()
+        openAdminScreen("admin-bans")
 
-        // Tap Bans link
-        let bansLink = find("admin-bans")
-        guard bansLink.waitForExistence(timeout: 5) else { return }
-        bansLink.tap()
-
-        // Ban list, empty state, or loading should appear
-        let found = anyElementExists([
-            "ban-list", "bans-empty-state", "bans-loading",
-        ])
-        XCTAssertTrue(found, "Ban list view should show list, empty state, or loading")
+        // Settled: a list or the empty state, never still loading.
+        let found = anyElementExists(["ban-list", "bans-empty-state"])
+        XCTAssertTrue(found, "Ban list view should show list or empty state")
     }
 
     func testAddBanEnablesSubmissionAfterEnteringAnIdentifier() {
-        navigateToAdminPanel()
-
-        // Tap Bans link
-        let bansLink = find("admin-bans")
-        guard bansLink.waitForExistence(timeout: 5) else { return }
-        bansLink.tap()
+        openAdminScreen("admin-bans")
 
         // The identifier belongs to a SwiftUI toolbar Button. Query the button
         // itself so tapping it exercises the action rather than its container.
@@ -126,47 +119,26 @@ final class AdminFlowUITests: BaseUITest {
     // MARK: - Audit Log Tab
 
     func testAuditLogTabShowsContent() {
-        navigateToAdminPanel()
+        openAdminScreen("admin-audit-log")
 
-        // Tap Audit Log link
-        let auditLink = find("admin-audit-log")
-        guard auditLink.waitForExistence(timeout: 5) else { return }
-        auditLink.tap()
-
-        // Audit log list, empty state, or loading should appear
-        let found = anyElementExists([
-            "audit-log-list", "audit-empty-state", "audit-loading",
-        ])
-        XCTAssertTrue(found, "Audit log view should show list, empty state, or loading")
+        let found = anyElementExists(["audit-log-list", "audit-empty-state"])
+        XCTAssertTrue(found, "Audit log view should show list or empty state")
     }
 
     // MARK: - Invites Tab
 
     func testInvitesTabShowsContent() {
-        navigateToAdminPanel()
+        openAdminScreen("admin-invites")
 
-        // Tap Invites link
-        let invitesLink = find("admin-invites")
-        guard invitesLink.waitForExistence(timeout: 5) else { return }
-        invitesLink.tap()
-
-        // Invites list, empty state, or loading should appear
-        let found = anyElementExists([
-            "invites-list", "invites-empty-state", "invites-loading",
-        ])
-        XCTAssertTrue(found, "Invites view should show list, empty state, or loading")
+        let found = anyElementExists(["invites-list", "invites-empty-state"])
+        XCTAssertTrue(found, "Invites view should show list or empty state")
     }
 
     func testCreateInviteButtonExists() {
-        navigateToAdminPanel()
-
-        // Tap Invites link
-        let invitesLink = find("admin-invites")
-        guard invitesLink.waitForExistence(timeout: 5) else { return }
-        invitesLink.tap()
+        openAdminScreen("admin-invites")
 
         // Wait for content
-        _ = anyElementExists(["invites-list", "invites-empty-state", "invites-loading"])
+        _ = anyElementExists(["invites-list", "invites-empty-state"])
 
         // Create invite button should exist
         let found = anyElementExists(["create-invite-button", "create-first-invite"], timeout: 5)
