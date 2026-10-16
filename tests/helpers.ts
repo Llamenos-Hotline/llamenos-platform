@@ -544,11 +544,21 @@ export async function resetTestState(request: APIRequestContext) {
 }
 
 /**
- * Mock /api/config to include a hub, ensuring currentHubId is set in ConfigProvider.
- * Must be called BEFORE loginAsAdmin() since login loads the page which fetches config.
+ * Pin the app to one known hub.
+ *
+ * The active hub comes from the AUTHENTICATED `GET /api/hubs` — the user's own
+ * memberships — so that is what gets mocked (#1708). `/api/config` is mocked
+ * alongside it for the rest of the pre-login payload; it carries no hub roster
+ * any more (#1710).
+ *
+ * Must be called BEFORE loginAsAdmin(), since login loads the page.
  * Tests that depend on hub-scoped routes (hub-communications, etc.) need this.
  */
 export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promise<void> {
+  const hub = {
+    id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active',
+    createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  }
   await page.route('**/api/config', async (route) => {
     await route.fulfill({
       status: 200,
@@ -561,13 +571,23 @@ export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promi
         demoMode: false,
         demoResetSchedule: null,
         needsBootstrap: false,
-        hubs: [{ id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active', createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
-        defaultHubId: hubId,
         serverPubkey: 'bfaca2c5f99ed9d65db5f522a68820c458ae9ccfe00327c64bc66ccde06e5703',
         wsRelayUrl: '/ws',
         apiVersion: 1,
         minApiVersion: 1,
       }),
+    })
+  })
+  // Membership, not the instance roster: this is what decides the active hub.
+  await page.route('**/api/hubs', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue()
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ hubs: [hub] }),
     })
   })
 }

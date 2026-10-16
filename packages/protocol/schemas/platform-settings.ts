@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { forPatch } from './patch'
 
 export const featureFlagsSchema = z.object({
   mlsEnabled: z.boolean().optional().default(false),
@@ -38,11 +39,11 @@ export const platformSettingsSchema = z.object({
 export type PlatformSettings = z.infer<typeof platformSettingsSchema>
 
 export const updatePlatformSettingsBodySchema = z.object({
-  featureFlags: featureFlagsSchema.partial().optional(),
-  branding: brandingSchema.partial().optional(),
-  sessionPolicy: sessionPolicySchema.partial().optional(),
-  erasurePlatformFloor: erasurePlatformFloorSchema.partial().optional(),
-  retentionPurge: retentionPurgeScheduleSchema.partial().optional(),
+  featureFlags: forPatch(featureFlagsSchema).optional(),
+  branding: forPatch(brandingSchema).optional(),
+  sessionPolicy: forPatch(sessionPolicySchema).optional(),
+  erasurePlatformFloor: forPatch(erasurePlatformFloorSchema).optional(),
+  retentionPurge: forPatch(retentionPurgeScheduleSchema).optional(),
 })
 
 export const platformSettingsResponseSchema = z.object({

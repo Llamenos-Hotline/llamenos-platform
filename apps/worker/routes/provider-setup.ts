@@ -819,6 +819,11 @@ providerSetup.post('/signal/register',
         phoneNumber: body.phoneNumber,
         method: body.method ?? 'sms',
         hubId,
+        // Forward the dev-surface secret as presented, never a decision. The
+        // service checks it against the host's own (lib/dev-surfaces.ts), which
+        // refuses `production` before reading any secret at all — see
+        // SignalRegistrationService.syntheticBridge (#1623).
+        harnessSecret: c.req.header('X-Test-Secret'),
       })
       return c.json(registration)
     } catch (err) {
@@ -850,7 +855,10 @@ providerSetup.get('/signal/status',
 
     try {
       if (registrationId) {
-        const registration = await services.signalRegistration.checkStatus(registrationId)
+        const registration = await services.signalRegistration.checkStatus(
+          registrationId,
+          c.req.header('X-Test-Secret'),
+        )
         return c.json(registration)
       }
 
@@ -898,6 +906,7 @@ providerSetup.post('/signal/verify',
       const registration = await services.signalRegistration.verifyCode({
         registrationId: body.registrationId,
         code: body.code,
+        harnessSecret: c.req.header('X-Test-Secret'),
       })
       return c.json(registration)
     } catch (err) {
@@ -932,7 +941,7 @@ providerSetup.delete('/signal/unregister',
     }
 
     try {
-      await services.signalRegistration.unregister(registrationId)
+      await services.signalRegistration.unregister(registrationId, c.req.header('X-Test-Secret'))
       return c.json({ ok: true })
     } catch (err) {
       return handleSignalError(err, c)

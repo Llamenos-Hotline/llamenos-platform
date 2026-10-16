@@ -19,6 +19,40 @@ interface HealthResult {
   checks: Record<string, CheckResult>
 }
 
+/**
+ * A dependency whose configuration is MISSING, reported as a failing check
+ * rather than left out of the response.
+ *
+ * Every one of these checks used to return `null` when its configuration
+ * variable was unset, and `runChecks` then dropped the key entirely. An
+ * unconfigured dependency was therefore indistinguishable, in the response,
+ * from one that had never been asked about — and the overall `status` stayed
+ * `ok`, so the absence read as success.
+ *
+ * That is not hypothetical. On a deployed host `SIP_BRIDGE_URL` went
+ * unrendered, `checkSipBridge` returned null, and `/api/health/ready` answered
+ * 200 with THREE checks and `"status":"ok"` where it should have carried four
+ * and `sipBridge: failing`. Nothing anywhere said the call path was dead,
+ * because the probe that would have said so had removed itself.
+ *
+ * So: a probe can no longer omit itself. A missing variable is a `failing`
+ * check naming the variable. Whether that failure matters is a question about
+ * the DEPLOYMENT, not about the app — a hotline that never deployed Signal is
+ * not broken — and the deployment is where it is answered: the smoke check
+ * reads these values back and applies its own fatal/advisory ruling per
+ * dependency (deploy/ansible/playbooks/smoke-check.yml). What the app owes it
+ * is a complete report. See issue #1636.
+ *
+ * Readiness GATING is unchanged (#1418): only postgres, storage and relay can
+ * make this instance unable to serve, so only they turn the response 503. An
+ * unconfigured optional integration is reported and does not 503 — it must
+ * not, or every deployment without the `signal` profile would be permanently
+ * `unhealthy` to its orchestrator.
+ */
+function unconfigured(variable: string, consequence: string): CheckResult {
+  return { status: 'failing', detail: `${variable} is not set — ${consequence}` }
+}
+
 async function checkPostgres(): Promise<CheckResult> {
   const t0 = Date.now()
   try {
@@ -32,9 +66,17 @@ async function checkPostgres(): Promise<CheckResult> {
   }
 }
 
-async function checkStorage(env: Record<string, unknown>): Promise<CheckResult | null> {
-  const endpoint = env.STORAGE_ENDPOINT as string | undefined
-  if (!endpoint) return null  // Not configured — skip (optional in CI/test environments)
+// The same resolution lib/storage-manager.ts uses, so this check probes the
+// endpoint the app will ACTUALLY read and write — including the default it
+// falls back to. Reporting "not configured" for an unset STORAGE_ENDPOINT
+// would be a different lie from the one being fixed here: the app does not
+// stop using storage when the variable is absent, it uses localhost.
+const STORAGE_ENDPOINT_DEFAULT = 'http://localhost:9000'
+
+async function checkStorage(env: Record<string, unknown>): Promise<CheckResult> {
+  const configured = env.STORAGE_ENDPOINT as string | undefined
+  const endpoint = configured || STORAGE_ENDPOINT_DEFAULT
+  const where = configured ? '' : ` (STORAGE_ENDPOINT unset — probed the default ${STORAGE_ENDPOINT_DEFAULT})`
   const t0 = Date.now()
   try {
     // RustFS returns 403 on unauthenticated paths — this still proves reachability.
@@ -42,23 +84,30 @@ async function checkStorage(env: Record<string, unknown>): Promise<CheckResult |
     const url = `${endpoint.replace(/\/$/, '')}/`
     const res = await safeFetch(url, { timeoutMs: 5_000, ssrfGuard: false })
     if (res.ok || res.status === 403) return { status: 'ok', latencyMs: Date.now() - t0 }
-    return { status: 'failing', latencyMs: Date.now() - t0, detail: `HTTP ${res.status}` }
+    return { status: 'failing', latencyMs: Date.now() - t0, detail: `HTTP ${res.status}${where}` }
   } catch (err) {
-    return { status: 'failing', latencyMs: Date.now() - t0, detail: err instanceof Error ? err.message : 'Unreachable' }
+    return { status: 'failing', latencyMs: Date.now() - t0, detail: `${err instanceof Error ? err.message : 'Unreachable'}${where}` }
   }
 }
 
-async function checkRelay(env: Record<string, unknown>): Promise<CheckResult | null> {
+async function checkRelay(env: Record<string, unknown>): Promise<CheckResult> {
   // Native WebSocket relay is in-process — if the server is running, the relay is running.
   // Only requires SERVER_SECRET to be set (used for relay auth key derivation).
   const serverSecret = env.SERVER_SECRET
-  if (!serverSecret) return null  // Not configured — skip (relay disabled)
+  if (!serverSecret) {
+    return unconfigured('SERVER_SECRET', 'the relay cannot derive its auth keys, so no client receives a live event')
+  }
   return { status: 'ok' }
 }
 
-async function checkSipBridge(env: Record<string, unknown>): Promise<CheckResult | null> {
+async function checkSipBridge(env: Record<string, unknown>): Promise<CheckResult> {
   const bridgeUrl = env.SIP_BRIDGE_URL as string | undefined
-  if (!bridgeUrl) return null  // Not configured — skip
+  if (!bridgeUrl) {
+    // The measured instance of the omission this file used to allow: this
+    // exact variable went unrendered on a deployed host and the check vanished
+    // from the response instead of reporting the dead call path.
+    return unconfigured('SIP_BRIDGE_URL', 'no self-hosted SIP bridge is reachable, so a call cannot route to a volunteer')
+  }
   const t0 = Date.now()
   try {
     const res = await safeFetch(`${bridgeUrl.replace(/\/$/, '')}/health`, { timeoutMs: 5_000, ssrfGuard: false })
@@ -69,9 +118,11 @@ async function checkSipBridge(env: Record<string, unknown>): Promise<CheckResult
   }
 }
 
-async function checkSignalNotifier(env: Record<string, unknown>): Promise<CheckResult | null> {
+async function checkSignalNotifier(env: Record<string, unknown>): Promise<CheckResult> {
   const notifierUrl = (env.SIGNAL_NOTIFIER_URL ?? env.NOTIFIER_URL) as string | undefined
-  if (!notifierUrl) return null  // Not configured — skip
+  if (!notifierUrl) {
+    return unconfigured('SIGNAL_NOTIFIER_URL', 'Signal notifications are unavailable')
+  }
   const t0 = Date.now()
   try {
     const res = await safeFetch(`${notifierUrl.replace(/\/$/, '')}/health`, { timeoutMs: 5_000, ssrfGuard: false })
@@ -95,11 +146,10 @@ async function runChecks(env: Record<string, unknown>): Promise<HealthResult> {
     checkSignalNotifier(env),
   ])
 
-  const checks: Record<string, CheckResult> = { postgres }
-  if (storage !== null) checks.storage = storage
-  if (relay !== null) checks.relay = relay
-  if (sipBridge !== null) checks.sipBridge = sipBridge
-  if (signalNotifier !== null) checks.signalNotifier = signalNotifier
+  // Every check, unconditionally. No `if (x !== null)` — that conditional IS
+  // the defect: it let a probe delete itself from its own report, and an
+  // absent measurement then read as a healthy one. See `unconfigured` above.
+  const checks: Record<string, CheckResult> = { postgres, storage, relay, sipBridge, signalNotifier }
 
   // Readiness answers one question: can this instance serve traffic? Only
   // dependencies that make the answer "no" may gate it.

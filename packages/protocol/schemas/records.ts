@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { recipientEnvelopeSchema, paginationSchema } from './common'
+import { forPatch } from './patch'
 
 // --- Record (stored in CaseDO) ---
 
@@ -70,7 +71,7 @@ export type CreateRecordBody = z.input<typeof createRecordBodySchema>
 
 // --- Update record body (partial, with optional status change interaction metadata) ---
 
-export const updateRecordBodySchema = createRecordBodySchema.partial().extend({
+export const updateRecordBodySchema = forPatch(createRecordBodySchema).extend({
   // Status change interaction metadata (Epic 323) — when statusHash changes,
   // these fields let the client provide encrypted content for the auto-created
   // status_change interaction in the case timeline.

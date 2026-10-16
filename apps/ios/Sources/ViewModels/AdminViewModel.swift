@@ -168,10 +168,25 @@ final class AdminViewModel {
 
     // MARK: - Telephony Settings State
 
-    /// Current telephony configuration.
-    var telephonySettings: TelephonySettings = TelephonySettings(
-        provider: "twilio", accountSid: "", authToken: "", phoneNumber: ""
-    )
+    /// The telephony provider screen's editable state.
+    ///
+    /// Held as separate fields rather than as a generated `TelephonyProvider`
+    /// because that struct's properties are `let` and because the read and the
+    /// write use two different shapes: `GET /api/settings/telephony-provider`
+    /// answers `telephonyProviderSchema` (`TelephonyProvider`), while the write
+    /// is `POST /api/provider-setup/configure` taking
+    /// `configureProviderRequestSchema` (`ConfigureProviderRequest`), which
+    /// carries the credentials as a `[String: String]` so the server can
+    /// encrypt them at rest. Both are converted at the wire boundary and
+    /// neither is re-described here.
+    ///
+    /// This replaces a hand-written `TelephonySettings { provider, accountSid,
+    /// authToken, phoneNumber }` sent to `GET`/`PUT /api/settings/telephony` —
+    /// a path the server has never mounted, 404 on both verbs. See #1724.
+    var telephonyProvider: SharedProviderType = .twilio
+    var telephonyAccountSid: String = ""
+    var telephonyAuthToken: String = ""
+    var telephonyPhoneNumber: String = ""
 
     /// Whether telephony settings are loading.
     var isLoadingTelephony: Bool = false
@@ -181,10 +196,31 @@ final class AdminViewModel {
 
     // MARK: - Call Settings State
 
-    /// Current call routing configuration.
-    var callSettings: ClientCallSettings = ClientCallSettings(
-        ringTimeout: 30, maxDuration: 60, parallelRingCount: 5
-    )
+    /// The server's call settings are exactly two values, both in seconds and
+    /// both clamped to 30...300 server-side — `callSettingsSchema` in
+    /// `packages/protocol/schemas/settings.ts`, surfaced to Swift as the
+    /// generated `CallSettings`. They are held here as two `Int`s because the
+    /// generated struct's fields are `let` and optional: this is the screen's
+    /// editable state, converted to and from `CallSettings` at the wire
+    /// boundary and never a second description of the wire shape.
+    ///
+    /// They replace a hand-written `ClientCallSettings { ringTimeout,
+    /// maxDuration, parallelRingCount }`, which named three settings the server
+    /// has never had. `GET /api/settings/call` could not decode into it, so the
+    /// screen showed hardcoded defaults behind an error banner, and the save
+    /// went to `PUT /api/settings/call` — a route that does not exist, answering
+    /// 404 on every attempt. See #1717.
+    var queueTimeoutSeconds: Int = AdminViewModel.defaultQueueTimeoutSeconds
+    var voicemailMaxSeconds: Int = AdminViewModel.defaultVoicemailMaxSeconds
+
+    /// Shown when the server has not stored a value yet; the same defaults the
+    /// server's own settings service falls back to.
+    static let defaultQueueTimeoutSeconds = 90
+    static let defaultVoicemailMaxSeconds = 120
+
+    /// The range both sliders span, matching the server's clamp. A value
+    /// outside it is rejected by `callSettingsSchema` before it is stored.
+    static let callSecondsRange: ClosedRange<Double> = 30...300
 
     /// Whether call settings are loading.
     var isLoadingCallSettings: Bool = false
@@ -194,8 +230,17 @@ final class AdminViewModel {
 
     // MARK: - IVR Languages State
 
-    /// Current IVR language configuration (language code → enabled).
-    var ivrLanguages: [String: Bool] = [:]
+    /// The IVR languages the hub offers, in the order callers hear them — which
+    /// is the whole of `ivrLanguagesSchema` (`{ enabledLanguages: [String] }`,
+    /// generated as `IvrLanguages`). Position is meaningful: it decides which
+    /// keypad digit selects each language, and languages past position 8 move
+    /// into a sub-menu.
+    ///
+    /// It replaces a `[String: Bool]` map, which lost that order entirely and
+    /// which the route rejects outright: `PATCH /api/settings/ivr-languages`
+    /// with `{"languages":{...}}` answers 400 `expected array, received
+    /// undefined` at `enabledLanguages`. See #1724.
+    var ivrEnabledLanguages: [String] = []
 
     /// Whether IVR languages are loading.
     var isLoadingIvrLanguages: Bool = false
@@ -205,10 +250,12 @@ final class AdminViewModel {
 
     // MARK: - Transcription Settings State
 
-    /// Current transcription configuration.
-    var transcriptionSettings: ClientTranscriptionSettings = ClientTranscriptionSettings(
-        enabled: false, allowVolunteerOptOut: false
-    )
+    /// The two transcription settings the server has — `globalEnabled` and
+    /// `allowUserOptOut` of `transcriptionSettingsSchema`, generated as
+    /// `TranscriptionSettings`. They replace a hand-written `{ enabled,
+    /// allowVolunteerOptOut }`, which the GET's response could not decode into.
+    var transcriptionGlobalEnabled: Bool = false
+    var transcriptionAllowUserOptOut: Bool = false
 
     /// Whether transcription settings are loading.
     var isLoadingTranscription: Bool = false
@@ -218,10 +265,27 @@ final class AdminViewModel {
 
     // MARK: - Spam Settings State
 
-    /// Current spam mitigation configuration.
-    var spamSettings: ClientSpamSettings = ClientSpamSettings(
-        maxCallsPerHour: 10, voiceCaptchaEnabled: false, knownNumberBypass: false
-    )
+    /// The four spam-mitigation settings the server has (`spamSettingsSchema`,
+    /// generated as `SpamSettings`).
+    ///
+    /// They replace a hand-written `{ maxCallsPerHour, voiceCaptchaEnabled,
+    /// knownNumberBypass }`: the rate limit is per *minute*, not per hour, there
+    /// is a block duration the screen never offered, and the server has no
+    /// known-number bypass at all — so that toggle controlled nothing, in
+    /// either direction, and claimed to exempt callers from the CAPTCHA.
+    var spamVoiceCaptchaEnabled: Bool = false
+    var spamRateLimitEnabled: Bool = true
+    var spamMaxCallsPerMinute: Int = AdminViewModel.defaultMaxCallsPerMinute
+    var spamBlockDurationMinutes: Int = AdminViewModel.defaultBlockDurationMinutes
+
+    /// Shown until the server answers; the same values its own defaults use.
+    static let defaultMaxCallsPerMinute = 3
+    static let defaultBlockDurationMinutes = 30
+
+    /// The ranges `spamSettingsSchema` accepts. A value outside one is rejected
+    /// by the validator before anything is stored.
+    static let maxCallsPerMinuteRange = 1...100
+    static let blockDurationMinutesRange = 1...1440
 
     /// Whether spam settings are loading.
     var isLoadingSpamSettings: Bool = false
@@ -232,7 +296,7 @@ final class AdminViewModel {
     // MARK: - System Health State
 
     /// Current system health data.
-    var systemHealth: SystemHealth?
+    var systemHealth: SystemHealthResponse?
 
     /// Whether system health is loading.
     var isLoadingHealth: Bool = false
@@ -679,18 +743,26 @@ final class AdminViewModel {
 
     // MARK: - Telephony Settings
 
-    /// Load telephony settings from the API.
+    /// Load the configured telephony provider.
+    ///
+    /// `GET /api/settings/telephony-provider` — the path the server mounts, and
+    /// the one the desktop client reads. The screen used to call
+    /// `GET /api/settings/telephony`, which answers 404; there is no
+    /// `/telephony` route and never has been.
+    ///
+    /// The response is `TelephonyProvider?`: the route answers a bare `null`
+    /// when no provider has been configured yet, which is the empty form.
     func loadTelephonySettings() async {
         guard !isLoadingTelephony else { return }
         isLoadingTelephony = true
         errorMessage = nil
 
         do {
-            let settings: TelephonySettings = try await apiService.request(
+            let stored: TelephonyProvider? = try await apiService.request(
                 method: "GET",
-                path: "/api/settings/telephony"
+                path: "/api/settings/telephony-provider"
             )
-            telephonySettings = settings
+            apply(stored)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -698,18 +770,44 @@ final class AdminViewModel {
         isLoadingTelephony = false
     }
 
-    /// Save telephony settings to the API.
+    /// Save the telephony provider.
+    ///
+    /// `POST /api/provider-setup/configure`, which is the only write path for a
+    /// provider: `PATCH /api/settings/telephony-provider` exists but answers
+    /// 400 `updateTelephonyProvider is deprecated — use POST
+    /// /provider-setup/configure which encrypts credentials at rest`, so it is
+    /// not an alternative. The credentials travel in the request's
+    /// `credentials` map and the service encrypts them before storing.
+    ///
+    /// The route answers `{ ok: true }` rather than the stored provider, so the
+    /// screen re-reads it and shows what the server actually holds — which for
+    /// this screen is the only way to see that a credential was accepted.
     func saveTelephonySettings() async {
         isSavingTelephony = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            try await apiService.request(
-                method: "PUT",
-                path: "/api/settings/telephony",
-                body: telephonySettings
+            var credentials: [String: String] = [:]
+            if !telephonyAccountSid.isEmpty { credentials["accountSid"] = telephonyAccountSid }
+            if !telephonyAuthToken.isEmpty { credentials["authToken"] = telephonyAuthToken }
+
+            let _: EmptyResponse = try await apiService.request(
+                method: "POST",
+                path: "/api/provider-setup/configure",
+                body: ConfigureProviderRequest(
+                    credentials: credentials.isEmpty ? nil : credentials,
+                    hubID: nil,
+                    phoneNumber: telephonyPhoneNumber.isEmpty ? nil : telephonyPhoneNumber,
+                    provider: telephonyProvider
+                )
             )
+
+            let stored: TelephonyProvider? = try await apiService.request(
+                method: "GET",
+                path: "/api/settings/telephony-provider"
+            )
+            apply(stored)
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
@@ -725,6 +823,16 @@ final class AdminViewModel {
         isSavingTelephony = false
     }
 
+    /// Adopt the server's copy of the provider configuration. `nil` means no
+    /// provider is configured, which leaves the form at its empty state.
+    private func apply(_ provider: TelephonyProvider?) {
+        guard let provider else { return }
+        telephonyProvider = provider.type
+        telephonyAccountSid = provider.accountSid ?? ""
+        telephonyAuthToken = provider.authToken ?? ""
+        telephonyPhoneNumber = provider.phoneNumber ?? ""
+    }
+
     // MARK: - Call Settings
 
     /// Load call settings from the API.
@@ -734,11 +842,11 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let settings: ClientCallSettings = try await apiService.request(
+            let settings: CallSettings = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/call"
             )
-            callSettings = settings
+            apply(settings)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -747,17 +855,29 @@ final class AdminViewModel {
     }
 
     /// Save call settings to the API.
+    ///
+    /// `PATCH`, which is the only write method the server mounts on this path
+    /// (`settings.patch('/call', ...)`); the `PUT` this used to send answered
+    /// 404, so no call setting entered from iOS was ever stored.
+    ///
+    /// The route answers with the stored settings after its own 30...300 clamp,
+    /// so the response is applied back onto the sliders: what the screen shows
+    /// afterwards is what the server actually holds, not what was requested.
     func saveCallSettings() async {
         isSavingCallSettings = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            try await apiService.request(
-                method: "PUT",
+            let stored: CallSettings = try await apiService.request(
+                method: "PATCH",
                 path: "/api/settings/call",
-                body: callSettings
+                body: CallSettings(
+                    queueTimeoutSeconds: queueTimeoutSeconds,
+                    voicemailMaxSeconds: voicemailMaxSeconds
+                )
             )
+            apply(stored)
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
@@ -773,46 +893,70 @@ final class AdminViewModel {
         isSavingCallSettings = false
     }
 
+    /// Adopt a server copy of the call settings, keeping the current value for
+    /// any field the server has not stored.
+    private func apply(_ settings: CallSettings) {
+        queueTimeoutSeconds = settings.queueTimeoutSeconds ?? queueTimeoutSeconds
+        voicemailMaxSeconds = settings.voicemailMaxSeconds ?? voicemailMaxSeconds
+    }
+
     // MARK: - IVR Languages
 
-    /// Load IVR language settings from the API.
+    /// Load the hub's IVR languages.
+    ///
+    /// There is deliberately no local default on failure. The screen used to
+    /// invent `{en, es}` whenever the load threw, so an admin looked at a list
+    /// that said two languages were enabled while the server held ten — and
+    /// saving from that view would have disabled the other eight.
     func loadIvrLanguages() async {
         guard !isLoadingIvrLanguages else { return }
         isLoadingIvrLanguages = true
         errorMessage = nil
 
         do {
-            let response: ClientIvrLanguages = try await apiService.request(
+            let stored: IvrLanguages = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/ivr-languages"
             )
-            ivrLanguages = response.languages
+            ivrEnabledLanguages = stored.enabledLanguages
         } catch {
-            // Initialize with defaults if endpoint returns no data
-            if ivrLanguages.isEmpty {
-                for code in Self.supportedLanguages.map(\.code) {
-                    ivrLanguages[code] = code == "en" || code == "es"
-                }
-            }
             errorMessage = error.localizedDescription
         }
 
         isLoadingIvrLanguages = false
     }
 
-    /// Save IVR language settings to the API.
+    /// Enable or disable one IVR language.
+    ///
+    /// Enabling appends, so a newly enabled language takes the last keypad
+    /// position instead of displacing the ones callers already know.
+    func setIvrLanguage(_ code: String, enabled: Bool) {
+        if enabled {
+            guard !ivrEnabledLanguages.contains(code) else { return }
+            ivrEnabledLanguages.append(code)
+        } else {
+            ivrEnabledLanguages.removeAll { $0 == code }
+        }
+    }
+
+    /// Save the IVR languages.
+    ///
+    /// `PATCH`, the only write method on this path; the `PUT` this used to send
+    /// answered 404. The route validates the list against the configured
+    /// provider's voice catalog and answers with what it stored, so the
+    /// response is applied back onto the toggles.
     func saveIvrLanguages() async {
         isSavingIvrLanguages = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            let body = ClientIvrLanguages(languages: ivrLanguages)
-            try await apiService.request(
-                method: "PUT",
+            let stored: IvrLanguages = try await apiService.request(
+                method: "PATCH",
                 path: "/api/settings/ivr-languages",
-                body: body
+                body: IvrLanguages(enabledLanguages: ivrEnabledLanguages)
             )
+            ivrEnabledLanguages = stored.enabledLanguages
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
@@ -828,21 +972,42 @@ final class AdminViewModel {
         isSavingIvrLanguages = false
     }
 
-    /// Supported IVR languages with display names.
+    /// Every locale a caller can be offered, with the language's own name —
+    /// the `code`/`label` pairs of `LANGUAGES` in `packages/i18n/languages.ts`,
+    /// which is the source of truth for which locales exist, and the same set
+    /// the desktop IVR section lists.
+    ///
+    /// It was a 13-entry list with English exonyms ("Chinese", "Haitian
+    /// Creole"), so nine shipped locales were unreachable from this screen and
+    /// the nine that were reachable were named in a language the speaker may
+    /// not read. Android keeps the same list in `SUPPORTED_LANGUAGES`
+    /// (`ui/settings/SettingsScreen.kt`); neither is generated yet, which is
+    /// tracked separately — the server still rejects a code outside
+    /// `LANGUAGE_CODES`, so a drift here cannot store a language that does not
+    /// exist.
     static let supportedLanguages: [(code: String, name: String)] = [
         ("en", "English"),
-        ("es", "Spanish"),
-        ("zh", "Chinese"),
+        ("es", "Español"),
+        ("zh", "中文"),
         ("tl", "Tagalog"),
-        ("vi", "Vietnamese"),
-        ("ar", "Arabic"),
-        ("fr", "French"),
-        ("ht", "Haitian Creole"),
-        ("ko", "Korean"),
-        ("ru", "Russian"),
-        ("hi", "Hindi"),
-        ("pt", "Portuguese"),
-        ("de", "German"),
+        ("vi", "Tiếng Việt"),
+        ("ar", "العربية"),
+        ("fr", "Français"),
+        ("ht", "Kreyòl Ayisyen"),
+        ("ko", "한국어"),
+        ("ru", "Русский"),
+        ("hi", "हिन्दी"),
+        ("pt", "Português"),
+        ("de", "Deutsch"),
+        ("uk", "Українська"),
+        ("fa", "فارسی"),
+        ("tr", "Türkçe"),
+        ("ku", "Kurdî"),
+        ("so", "Soomaali"),
+        ("am", "አማርኛ"),
+        ("my", "မြန်မာ"),
+        ("quc", "K'iche'"),
+        ("mix", "Tu'un savi"),
     ]
 
     // MARK: - Transcription Settings
@@ -854,11 +1019,11 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let settings: ClientTranscriptionSettings = try await apiService.request(
+            let stored: TranscriptionSettings = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/transcription"
             )
-            transcriptionSettings = settings
+            apply(stored)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -866,18 +1031,27 @@ final class AdminViewModel {
         isLoadingTranscription = false
     }
 
-    /// Save transcription settings to the API.
+    /// Save transcription settings.
+    ///
+    /// `PATCH`, the only write method the server mounts on this path; the `PUT`
+    /// this used to send answered 404, so no transcription setting entered from
+    /// iOS has ever been stored. The route answers with the stored settings and
+    /// they are applied back onto the toggles.
     func saveTranscriptionSettings() async {
         isSavingTranscription = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            try await apiService.request(
-                method: "PUT",
+            let stored: TranscriptionSettings = try await apiService.request(
+                method: "PATCH",
                 path: "/api/settings/transcription",
-                body: transcriptionSettings
+                body: TranscriptionSettings(
+                    allowUserOptOut: transcriptionAllowUserOptOut,
+                    globalEnabled: transcriptionGlobalEnabled
+                )
             )
+            apply(stored)
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
@@ -893,6 +1067,13 @@ final class AdminViewModel {
         isSavingTranscription = false
     }
 
+    /// Adopt a server copy of the transcription settings, keeping the current
+    /// value for any field the server did not send.
+    private func apply(_ settings: TranscriptionSettings) {
+        transcriptionGlobalEnabled = settings.globalEnabled ?? transcriptionGlobalEnabled
+        transcriptionAllowUserOptOut = settings.allowUserOptOut ?? transcriptionAllowUserOptOut
+    }
+
     // MARK: - Spam Settings
 
     /// Load spam settings from the API.
@@ -902,11 +1083,11 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let settings: ClientSpamSettings = try await apiService.request(
+            let stored: SpamSettings = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/spam"
             )
-            spamSettings = settings
+            apply(stored)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -914,18 +1095,28 @@ final class AdminViewModel {
         isLoadingSpamSettings = false
     }
 
-    /// Save spam settings to the API.
+    /// Save spam settings.
+    ///
+    /// `PATCH`, the only write method the server mounts on this path; the `PUT`
+    /// this used to send answered 404. The route answers with the stored
+    /// settings and they are applied back onto the controls.
     func saveSpamSettings() async {
         isSavingSpamSettings = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            try await apiService.request(
-                method: "PUT",
+            let stored: SpamSettings = try await apiService.request(
+                method: "PATCH",
                 path: "/api/settings/spam",
-                body: spamSettings
+                body: SpamSettings(
+                    blockDurationMinutes: spamBlockDurationMinutes,
+                    maxCallsPerMinute: spamMaxCallsPerMinute,
+                    rateLimitEnabled: spamRateLimitEnabled,
+                    voiceCAPTCHAEnabled: spamVoiceCaptchaEnabled
+                )
             )
+            apply(stored)
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
@@ -941,6 +1132,15 @@ final class AdminViewModel {
         isSavingSpamSettings = false
     }
 
+    /// Adopt a server copy of the spam settings, keeping the current value for
+    /// any field the server did not send.
+    private func apply(_ settings: SpamSettings) {
+        spamVoiceCaptchaEnabled = settings.voiceCAPTCHAEnabled ?? spamVoiceCaptchaEnabled
+        spamRateLimitEnabled = settings.rateLimitEnabled ?? spamRateLimitEnabled
+        spamMaxCallsPerMinute = settings.maxCallsPerMinute ?? spamMaxCallsPerMinute
+        spamBlockDurationMinutes = settings.blockDurationMinutes ?? spamBlockDurationMinutes
+    }
+
     // MARK: - System Health
 
     /// Load system health data from the API.
@@ -950,7 +1150,7 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let health: SystemHealth = try await apiService.request(
+            let health: SystemHealthResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/system/health"
             )

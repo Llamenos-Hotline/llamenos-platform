@@ -7,6 +7,11 @@ struct BrandEmptyState: View {
     var action: (() -> Void)? = nil
     var actionLabel: String? = nil
     var actionAccessibilityID: String? = nil
+    /// Identifier for the accessibility container this view owns. It must be set
+    /// here rather than layered on from the call site: the container is created
+    /// by `accessibilityElement(children: .contain)` below, so an identifier
+    /// applied outside this view never reaches the element that answers queries.
+    var accessibilityID: String? = nil
 
     var body: some View {
         VStack(spacing: 16) {
@@ -36,7 +41,7 @@ struct BrandEmptyState: View {
         }
         .padding(32)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("brand-empty-state")
+        .accessibilityIdentifier(accessibilityID ?? "brand-empty-state")
     }
 }
 

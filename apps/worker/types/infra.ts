@@ -65,6 +65,8 @@ export interface Env {
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
   CORS_ALLOWED_ORIGINS?: string   // Comma-separated allowed origins (overrides hardcoded defaults)
   HMAC_SECRET: string
+  /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
+  SIGNAL_QUEUE_RETENTION_DAYS?: string
   METRICS_SCRAPE_TOKEN?: string
   E2E_TEST_SECRET?: string
   DEV_RESET_SECRET?: string

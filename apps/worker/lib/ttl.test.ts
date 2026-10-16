@@ -54,7 +54,7 @@ describe('TTL constants', () => {
   })
 
   it('all TTL_OVERRIDE_KEYS have positive defaults', () => {
-    for (const [key, value] of Object.entries(TTL_OVERRIDE_KEYS)) {
+    for (const [, value] of Object.entries(TTL_OVERRIDE_KEYS)) {
       expect(value).toBeGreaterThanOrEqual(0)
     }
   })

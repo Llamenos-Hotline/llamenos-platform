@@ -5,8 +5,14 @@ export const siteConfig = {
 
   // The GitHub repository moved to the `Llamenos-Hotline` org, so every
   // github.com address here moves with it. These are live config, not
-  // decoration: Header/Footer link `url`, and download.astro drives every
-  // download button and the CHECKSUMS link off `releasesUrl`.
+  // decoration: Header/Footer link `url`, and download.astro builds its
+  // fallback links off `releasesUrl` and its issue references off `issuesUrl`.
+  //
+  // `releasesUrl` is the Releases INDEX, deliberately not /releases/latest:
+  // "latest" is the integrity-only v<version> release (CHECKSUMS.txt,
+  // provenance, SBOM — no installers). Installers ship on desktop-v<version>
+  // and the APK on android-v<version>; utils/releases.ts resolves those tag
+  // families via the GitHub API at build time and falls back to this index.
   //
   // Migrated rather than left on the redirect deliberately. GitHub serves the
   // old-owner redirect only while the vacated path stays unoccupied — and
@@ -19,9 +25,8 @@ export const siteConfig = {
     org: 'Llamenos-Hotline',
     repo: 'llamenos-platform',
     url: 'https://github.com/Llamenos-Hotline/llamenos-platform',
-    releasesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest',
+    releasesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases',
     issuesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/issues',
-    mobileReleasesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest',
   },
 
   // THE CONTAINER REGISTRY ADDRESSES BELOW — and nothing else in this file —
@@ -50,30 +55,22 @@ export const siteConfig = {
   license: 'AGPL-3.0',
 
   distribution: {
-    // Self-hosted update and download servers (Iceland VPS)
-    updateServerUrl: 'https://updates.llamenos.org/desktop',
-    downloadServerUrl: 'https://downloads.llamenos.org',
+    // Minisign public key for manual installer signature verification.
+    // This MUST stay identical to `plugins.updater.pubkey` in
+    // apps/desktop/tauri.conf.json — tauri-release.yml signs every installer
+    // on the desktop-v* releases with the matching private key, and the
+    // download page's verification instructions are worthless if they name
+    // any other key. Provenance: docs/UPDATER_KEY_PROVENANCE.md.
+    minisignKeyId: 'C8279C12F39DD35B',
+    minisignPublicKey: 'RWRb053zEpwnyHZWc7JyNuZTP+9ikeGSbqDXHBv+Boll6SHuGlJNT1Py',
 
-    // Minisign public key for manual signature verification
-    // Key ID: E1F35E58BD83142F
-    minisignPublicKey: 'RWQvFIO9WF7z4SSDEpgFWbUeUKOwbqVJeNfuIFhhhMkS/0K8XGMXJ9M2',
-
-    // GPG fingerprint for optional CHECKSUMS.txt verification
-    // Set this to the actual fingerprint once the release signing key is generated
-    gpgFingerprint: 'A1B2 C3D4 E5F6 7890 1234 5678 90AB CDEF 1234 5678',
-
-    // Public audit repository (metadata, signatures, SBOM, provenance — no binaries).
-    // Rendered on the download page as the provenance trust anchor, so it must
-    // not rest on an owner redirect — see the note above `github`.
-    //
-    // CAVEAT: this repository does not exist yet under EITHER owner (both
-    // `gh api` lookups 404). Only the owner is migrated here; the name is
-    // unchanged, because inventing a different target would be a guess. Two
-    // things must line up before this link resolves: the repo has to be
-    // created under the org, and `tauri-release.yml` has to push its metadata
-    // there — it currently clones `rhonda-rodododo/llamenos-releases`, which
-    // is inside the files #1217 owns and so was left untouched here. See
-    // #1218 for the full list of `llamenos-releases` references.
+    // Public audit repository (metadata, signatures, SBOM, provenance — no
+    // binaries). Rendered on the download page as the provenance trust
+    // anchor, so it must not rest on an owner redirect — see `github` above.
+    // The repo exists under the org but is still EMPTY: tauri-release.yml
+    // pushes metadata to the old-owner clone instead (outside site/'s
+    // ownership — tracked in #1218). The link resolves; content lands when
+    // the workflow is pointed here.
     auditRepoUrl: 'https://github.com/Llamenos-Hotline/llamenos-releases',
   },
 } as const;

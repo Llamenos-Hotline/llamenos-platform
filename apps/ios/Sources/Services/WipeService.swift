@@ -50,16 +50,22 @@ final class WipeService {
         // 5. Crash logs — delete all crash report files
         crashReportingService.clearCrashLogs()
 
-        // 6. URL cache — replace with a fresh empty cache.
-        // removeAllCachedResponses() is asynchronous under the hood and may not
-        // clear the in-memory cache immediately, causing race conditions in tests.
-        // Replacing the singleton guarantees instant, deterministic clearing.
-        let old = URLCache.shared
-        URLCache.shared = URLCache(
-            memoryCapacity: old.memoryCapacity,
-            diskCapacity: old.diskCapacity,
-            diskPath: nil
-        )
+        // 6. URL cache — delete the cached responses, then leave behind a cache that
+        // cannot store another one.
+        //
+        // Replacing `URLCache.shared` with a fresh instance deletes nothing: an
+        // instance built with `diskPath: nil` inherits the *same* default on-disk
+        // store, so every cached response survives the swap and is served again the
+        // moment that store is consulted. It only looked like a clear because
+        // `storeCachedResponse(_:for:)` is asynchronous — on an idle device the write
+        // had not reached the store yet, so the next lookup missed for the wrong
+        // reason (#1658).
+        //
+        // So: delete through the instance that owns the store, then install a cache
+        // that is incapable of storing a write which was already in flight when the
+        // wipe ran. That ordering is what removes the race, rather than narrowing it.
+        URLCache.shared.removeAllCachedResponses()
+        ResponseCachePolicy.installNonCachingSharedCache()
 
         // 7. HTTP cookies — remove all cookies
         if let cookies = HTTPCookieStorage.shared.cookies {

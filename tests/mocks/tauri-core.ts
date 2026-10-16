@@ -24,7 +24,19 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { randomBytes } from '@noble/hashes/utils.js'
 import { argon2id } from '@noble/hashes/argon2.js'
 import { utf8ToBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
+import {
+  LABEL_DEVICE_PROVISION,
+  LABEL_DEVICE_PROVISION_BUNDLE,
+  LABEL_PROVISIONING_SALT,
+  SAS_INFO,
+  SAS_SALT,
+} from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+
+/** Mirrors packages/crypto/src/provisioning.rs PROVISIONING_BUNDLE_VERSION. */
+const PROVISIONING_BUNDLE_VERSION = 1
+/** version(1) + signing seed(32) + encryption seed(32). */
+const PROVISIONING_BUNDLE_LEN = 65
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -56,6 +68,9 @@ let mockHubKey: Uint8Array | null = null
 // epoch-keyed) label split — see packages/crypto/src/labels.rs.
 const LABEL_HUB_EVENT = 'llamenos:hub-event'
 const LABEL_HUB_EVENT_EPOCH = 'llamenos:hub-event-epoch:v1'
+const LABEL_BACKUP = 'llamenos:backup'
+const LABEL_BACKUP_HKDF_INFO = 'llamenos:backup:v1'
+const LABEL_DEVICE_ENCRYPTION_SEED = 'llamenos:device-encryption-seed:v1'
 let mockServerEventKeys: Array<[number, Uint8Array]> = []
 
 // ── PUK seed mock state ─────────────────────────────────────────────
@@ -161,6 +176,24 @@ function requireDeviceState(): MockDeviceKeyState {
   return mockDeviceState
 }
 
+/**
+ * Recursive lexicographic key sort — mirrors serde_json's BTreeMap-backed
+ * serialization. Used for the sigchain canonical entry hash; see
+ * compute_entry_hash in packages/crypto/src/sigchain.rs.
+ */
+function canonicalizeForSigchain(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (Array.isArray(value)) return value.map(canonicalizeForSigchain)
+  if (typeof value === 'object') {
+    const sorted: Record<string, unknown> = {}
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = canonicalizeForSigchain((value as Record<string, unknown>)[key])
+    }
+    return sorted
+  }
+  return value
+}
+
 // ── Argon2id + AES-256-GCM for PIN/passphrase encryption ────────────
 // Parameters match packages/crypto/src/device_keys.rs (KDF_VERSION=2).
 // For test builds we use reduced memory (4 MiB) to keep Playwright fast.
@@ -168,6 +201,61 @@ function requireDeviceState(): MockDeviceKeyState {
 const ARGON2_M_COST_KIB = 4_096   // 4 MiB (production Rust uses 65_536)
 const ARGON2_T_COST = 3
 const ARGON2_P_COST = 4
+
+// ── Backup container (v4) — mirrors packages/crypto/src/backup.rs ───
+const BACKUP_FORMAT_VERSION = 4
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+
+/** Base32-encode (RFC 4648, no padding) and group into dash-separated quads. */
+function formatRecoveryKey(bytes: Uint8Array): string {
+  let chars = ''
+  let buffer = 0
+  let bits = 0
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte
+    bits += 8
+    while (bits >= 5) {
+      bits -= 5
+      chars += BASE32_ALPHABET[(buffer >> bits) & 0x1f]
+    }
+  }
+  if (bits > 0) chars += BASE32_ALPHABET[(buffer << (5 - bits)) & 0x1f]
+  return (chars.match(/.{1,4}/g) ?? [chars]).join('-')
+}
+
+/** Drop everything that is not an ASCII letter or digit, then upper-case. */
+function normalizeRecoveryKey(recoveryKey: string): string {
+  return recoveryKey.replace(/[^0-9a-zA-Z]/g, '').toUpperCase()
+}
+
+/** HKDF-SHA256 over the normalized recovery key's UTF-8 bytes. */
+function deriveRecoveryKek(recoveryKey: string, salt: Uint8Array): Uint8Array {
+  return hkdf(sha256, utf8ToBytes(normalizeRecoveryKey(recoveryKey)), salt,
+    utf8ToBytes(LABEL_BACKUP_HKDF_INFO), 32)
+}
+
+/** Open a v4 backup with either credential, returning the 32-byte signing seed. */
+async function openMockBackup(
+  backupJson: string, credential: string, isRecoveryKey: boolean,
+): Promise<Uint8Array> {
+  const file = JSON.parse(backupJson)
+  if (file.v !== BACKUP_FORMAT_VERSION) {
+    throw new Error(`Unsupported backup version ${file.v} (this build reads v${BACKUP_FORMAT_VERSION})`)
+  }
+  const block = isRecoveryKey ? file.r : file.d
+  const kek = isRecoveryKey
+    ? deriveRecoveryKek(credential, hexToBytes(block.s))
+    : await deriveKek(credential, hexToBytes(block.s))
+  const aad = utf8ToBytes(isRecoveryKey ? LABEL_BACKUP_HKDF_INFO : LABEL_BACKUP)
+  let seed: Uint8Array
+  try {
+    seed = gcm(kek, hexToBytes(block.n), aad).decrypt(hexToBytes(block.c))
+  } catch {
+    throw new Error('Decryption failed: authentication tag mismatch')
+  }
+  if (seed.length !== 32) throw new Error('Backup payload must be a 32-byte signing seed')
+  return seed
+}
 
 async function deriveKek(pin: string, salt: Uint8Array): Promise<Uint8Array> {
   return argon2id(utf8ToBytes(pin), salt, {
@@ -549,6 +637,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockDeviceState = state
     mockEncryptedKeys = result
 
+    // Test-only hook: onboarding generates the seed inside this mock, so a
+    // spec that needs to act as the same user from a SECOND client (e.g. the
+    // sigchain read-back gate in #1050) cannot otherwise reach it. Mirrors
+    // window.__last_vol_seed_hex in users.tsx. Never present outside
+    // PLAYWRIGHT_TEST builds (this module throws at load otherwise).
+    ;(window as unknown as Record<string, unknown>).__TEST_LAST_DEVICE_SEED_HEX = bytesToHex(signingSeed)
+
     return result
   },
 
@@ -694,12 +789,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       dhPubkeyHex: bytesToHex(deriveX25519Pubkey(dhSubkey)),
     }
 
-    // HPKE seal the seed to the device's encryption pubkey
+    // HPKE seal the seed to the device's encryption pubkey. The AAD matches
+    // puk::create_initial_puk in the crate: `${LABEL_PUK_WRAP_TO_DEVICE}:${deviceId}`.
     const envelope = await hpkeSealMock(
       seed,
       ds.encryptionPubkeyHex,
       'llamenos:puk:wrap:device:v1',
-      new Uint8Array(0),
+      utf8ToBytes(`llamenos:puk:wrap:device:v1:${ds.deviceId}`),
     )
 
     return {
@@ -734,7 +830,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       dhPubkeyHex: bytesToHex(deriveX25519Pubkey(dhSubkey)),
     }
 
-    // HPKE seal new seed to each remaining device
+    // HPKE seal new seed to each remaining device (AAD matches puk::rotate_puk)
     const deviceEnvelopes = await Promise.all(
       remainingDevices.map(async ([deviceId, encPubkeyHex]) => ({
         deviceId,
@@ -742,7 +838,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
           newSeed,
           encPubkeyHex,
           'llamenos:puk:wrap:device:v1',
-          new Uint8Array(0),
+          utf8ToBytes(`llamenos:puk:wrap:device:v1:${deviceId}`),
         ),
       })),
     )
@@ -785,16 +881,21 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const timestamp = a.timestamp as string
     const payloadJson = a.payloadJson as string
 
-    // Canonical hash: JSON with sorted keys
-    const canonical: Record<string, unknown> = {
-      payload: payloadJson,
+    // Canonical hash — must match packages/crypto/src/sigchain.rs
+    // compute_entry_hash and the worker's computeEntryHash byte-for-byte:
+    // the payload is a parsed, recursively key-sorted JSON OBJECT (never the
+    // raw string), and keys are sorted at every nesting level. The previous
+    // version passed payloadJson as a string and relied on a top-level-only
+    // replacer array, so the mock's hash diverged from what the server
+    // recomputes and any append through this mock failed verification (#1050).
+    const canonicalJson = JSON.stringify(canonicalizeForSigchain({
+      payload: JSON.parse(payloadJson),
       prevHash: prevHash ?? null,
       seq,
       signerDeviceId: ds.deviceId,
       signerPubkey: ds.signingPubkeyHex,
       timestamp,
-    }
-    const canonicalJson = JSON.stringify(canonical, Object.keys(canonical).sort())
+    }))
     const entryHash = bytesToHex(sha256(utf8ToBytes(canonicalJson)))
 
     // Ed25519 sign the entry hash
@@ -910,7 +1011,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const signingSeed = hexToBytes(signingSecretHex)
     // Derive encryption seed from signing seed via HKDF (matches Rust)
     const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
@@ -942,19 +1043,72 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
   },
 
-  // --- Backup generation ---
+  // --- Backup generation / restore (v4 container) ---
+  //
+  // These honour their arguments and really encrypt, so an E2E can round-trip a
+  // backup and a wrong credential is actually rejected. The container shape
+  // mirrors packages/crypto/src/backup.rs, but these are independent JS
+  // implementations — they cannot prove the Rust codec is self-consistent, and
+  // deliberately do not try to. That proof is the `backup::tests` round-trip in
+  // packages/crypto (#1709: the previous mock discarded every argument and
+  // returned a canned object, so no E2E assertion about this step meant
+  // anything at all).
 
-  generate_backup_from_state: (_a) => {
+  generate_recovery_key: () => formatRecoveryKey(randomBytes(16)),
+
+  generate_backup_from_state: async (a) => {
     const secrets = requireSecrets()
     const state = requireDeviceState()
-    // Return a mock backup JSON — real Rust would encrypt with recovery key
+    const pin = a.pin as string
+    const recoveryKey = a.recoveryKey as string
+    if (!pin) throw new Error('PIN is empty')
+    if (!normalizeRecoveryKey(recoveryKey)) throw new Error('Recovery key is empty after normalization')
+
+    const pinSalt = randomBytes(32)
+    const pinNonce = randomBytes(12)
+    const pinCt = gcm(await deriveKek(pin, pinSalt), pinNonce, utf8ToBytes(LABEL_BACKUP))
+      .encrypt(secrets.signingSeed)
+
+    const rSalt = randomBytes(32)
+    const rNonce = randomBytes(12)
+    const rCt = gcm(deriveRecoveryKek(recoveryKey, rSalt), rNonce, utf8ToBytes(LABEL_BACKUP_HKDF_INFO))
+      .encrypt(secrets.signingSeed)
+
     return JSON.stringify({
-      v: 3,
-      deviceId: state.deviceId,
-      signingPubkeyHex: state.signingPubkeyHex,
-      encryptionPubkeyHex: state.encryptionPubkeyHex,
-      encryptedPayload: bytesToHex(secrets.signingSeed), // Mock: not actually encrypted
+      v: BACKUP_FORMAT_VERSION,
+      id: bytesToHex(sha256(utf8ToBytes(state.signingPubkeyHex))).slice(0, 6),
+      t: Math.round(Date.now() / 3_600_000) * 3_600,
+      d: {
+        kv: 2, s: bytesToHex(pinSalt), m: ARGON2_M_COST_KIB, i: ARGON2_T_COST, p: ARGON2_P_COST,
+        n: bytesToHex(pinNonce), c: bytesToHex(pinCt),
+      },
+      r: { kv: 1, s: bytesToHex(rSalt), n: bytesToHex(rNonce), c: bytesToHex(rCt) },
     })
+  },
+
+  backup_verify_credential: async (a) => {
+    await openMockBackup(a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean)
+  },
+
+  restore_backup_and_load: async (a) => {
+    const signingSeed = await openMockBackup(
+      a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean,
+    )
+    const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
+
+    const state: MockDeviceKeyState = {
+      deviceId: a.deviceId as string,
+      signingPubkeyHex: bytesToHex(deriveEd25519Pubkey(signingSeed)),
+      encryptionPubkeyHex: bytesToHex(deriveX25519Pubkey(encryptionSeed)),
+    }
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, a.newPin as string)
+    const result = { ...encrypted, state }
+
+    mockSecrets = { signingSeed, encryptionSeed }
+    mockDeviceState = state
+    mockEncryptedKeys = result
+    return result
   },
 
   // --- Shamir secret sharing (only stateless verification exposed as IPC) ---
@@ -1173,25 +1327,30 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Derive symmetric key (matches Rust provisioning::derive_provisioning_key)
     const symmetricKey = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:provisioning:v1'),
-      utf8ToBytes('llamenos:device-provision'), 32)
+      utf8ToBytes(LABEL_PROVISIONING_SALT),
+      utf8ToBytes(LABEL_DEVICE_PROVISION), 32)
 
     // Compute SAS (matches Rust provisioning::compute_sas)
     const sasBytes = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:sas'),
-      utf8ToBytes('llamenos:provisioning-sas'), 4)
+      utf8ToBytes(SAS_SALT),
+      utf8ToBytes(SAS_INFO), 4)
     const sasNum = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
     const sasCode6 = (sasNum % 1_000_000).toString().padStart(6, '0')
     const sasCode = `${sasCode6.slice(0, 3)} ${sasCode6.slice(3)}`
 
-    // Encrypt signing seed as bech32 nsec (matches Rust provisioning.rs)
-    // For the mock, we encode the signing seed hex as plaintext (simplified bech32 mock)
-    const nsecPayload = utf8ToBytes(`nsec1${bytesToHex(secrets.signingSeed)}`)
+    // Key bundle: version || signing seed || encryption seed — byte-identical to
+    // packages/crypto/src/provisioning.rs::encrypt_device_bundle_for_provisioning.
+    // BOTH seeds travel: they are independently random (PROTOCOL.md 2.11), so a
+    // linked device that receives only one cannot reconstruct the other.
+    const bundle = new Uint8Array(PROVISIONING_BUNDLE_LEN)
+    bundle[0] = PROVISIONING_BUNDLE_VERSION
+    bundle.set(secrets.signingSeed, 1)
+    bundle.set(secrets.encryptionSeed, 33)
 
     const nonce = randomBytes(12)
-    const aad = utf8ToBytes('llamenos:device-provision')
+    const aad = utf8ToBytes(LABEL_DEVICE_PROVISION_BUNDLE)
     const cipher = gcm(symmetricKey, nonce, aad)
-    const ciphertext = cipher.encrypt(nsecPayload)
+    const ciphertext = cipher.encrypt(bundle)
 
     const packed = new Uint8Array(12 + ciphertext.length)
     packed.set(nonce)
@@ -1220,8 +1379,8 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const sharedSecret = x25519.getSharedSecret(mockProvisioningEphemeral, hexToBytes(primaryEncPubkeyHex))
 
     const sasBytes = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:sas'),
-      utf8ToBytes('llamenos:provisioning-sas'), 4)
+      utf8ToBytes(SAS_SALT),
+      utf8ToBytes(SAS_INFO), 4)
     const sasNum = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
     const sasCode6 = (sasNum % 1_000_000).toString().padStart(6, '0')
     return `${sasCode6.slice(0, 3)} ${sasCode6.slice(3)}`
@@ -1239,26 +1398,29 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Derive symmetric key
     const symmetricKey = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:provisioning:v1'),
-      utf8ToBytes('llamenos:device-provision'), 32)
+      utf8ToBytes(LABEL_PROVISIONING_SALT),
+      utf8ToBytes(LABEL_DEVICE_PROVISION), 32)
 
     // Decrypt
     const data = hexToBytes(encryptedHex)
     const nonce = data.slice(0, 12)
     const ciphertext = data.slice(12)
-    const aad = utf8ToBytes('llamenos:device-provision')
+    const aad = utf8ToBytes(LABEL_DEVICE_PROVISION_BUNDLE)
     const cipher = gcm(symmetricKey, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
 
-    // Parse the nsec payload — extract signing seed
-    const nsecStr = new TextDecoder().decode(plaintext)
-    // Mock format: "nsec1" + hex signing seed
-    const signingSeedHex = nsecStr.slice(5) // Remove "nsec1" prefix
-    const signingSeed = hexToBytes(signingSeedHex)
-
-    // Derive encryption seed from signing seed (matches Rust)
-    const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+    // Parse the key bundle — matches Rust decrypt_provisioned_bundle.
+    // Both seeds are used exactly as transported; deriving the encryption seed
+    // from the signing seed would give this device a different X25519 key than
+    // the one existing ciphertext was wrapped to.
+    if (plaintext.length !== PROVISIONING_BUNDLE_LEN) {
+      throw new Error(`provisioning bundle must be ${PROVISIONING_BUNDLE_LEN} bytes, got ${plaintext.length}`)
+    }
+    if (plaintext[0] !== PROVISIONING_BUNDLE_VERSION) {
+      throw new Error(`unsupported provisioning bundle version: ${plaintext[0]}`)
+    }
+    const signingSeed = plaintext.slice(1, 33)
+    const encryptionSeed = plaintext.slice(33, PROVISIONING_BUNDLE_LEN)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
