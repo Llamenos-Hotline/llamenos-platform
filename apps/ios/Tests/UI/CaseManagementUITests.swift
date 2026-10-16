@@ -485,10 +485,8 @@ final class CaseManagementUITests: BaseUITest {
         then("I should see the loaded timeline, not a spinner") {
             // `case-timeline-tab` is the container and is present while loading, so it
             // proves nothing; only the two loaded states count.
-            let loaded = anyElementExists(["timeline-empty", "case-timeline"], timeout: 10)
-            if !loaded { print("DEBUG-1884 timeline hierarchy:\n\(app.debugDescription)") }
             XCTAssertTrue(
-                loaded,
+                anyElementExists(["timeline-empty", "case-timeline"], timeout: 10),
                 "Timeline tab should show interactions or its empty state once loaded"
             )
             XCTAssertFalse(find("timeline-loading").exists, "Timeline should have finished loading")
@@ -497,77 +495,46 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Contacts tab shows linked contacts or empty state.
     func testContactsTabShowsLinkedContacts() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case with no linked contacts exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail and tap the Contacts tab") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case and tap the Contacts tab") {
+            openCase(titled: title)
             let contactsTab = find("case-tab-contacts")
-            if contactsTab.waitForExistence(timeout: 5) {
-                contactsTab.tap()
-            }
+            XCTAssertTrue(contactsTab.waitForExistence(timeout: 5), "Contacts tab should exist")
+            contactsTab.tap()
         }
-        then("I should see contacts content or empty state") {
-            guard find("case-detail-header").exists else { return }
-
-            let found = anyElementExists([
-                "case-contact-card",
-                "case-contacts-empty",
-                "case-contacts-tab",
-            ], timeout: 5)
+        then("I should see the contacts empty state") {
+            // `case-contacts-tab` is the container and exists while loading; only the
+            // loaded state counts.
             XCTAssertTrue(
-                found,
-                "Contacts tab should show contact cards or empty state"
+                find("case-contacts-empty").waitForExistence(timeout: 10),
+                "A case with no linked contacts should show the contacts empty state"
             )
-
-            // If contacts exist, verify role badges
-            let roleCard = find("case-contact-card")
-            if roleCard.exists {
-                let roleBadge = find("contact-role-badge")
-                XCTAssertTrue(
-                    roleBadge.exists,
-                    "Contact cards should display role badges"
-                )
-            }
+            XCTAssertFalse(find("case-contact-card").exists, "No contacts are linked to this case")
+            XCTAssertFalse(find("case-contacts-loading").exists, "Contacts should have finished loading")
         }
     }
 
     /// Scenario: Evidence tab shows evidence items or empty state.
     func testEvidenceTabShowsItems() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case with no evidence exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail and tap the Evidence tab") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case and tap the Evidence tab") {
+            openCase(titled: title)
             let evidenceTab = find("case-tab-evidence")
-            if evidenceTab.waitForExistence(timeout: 5) {
-                evidenceTab.tap()
-            }
+            XCTAssertTrue(evidenceTab.waitForExistence(timeout: 5), "Evidence tab should exist")
+            evidenceTab.tap()
         }
-        then("I should see evidence content or empty state") {
-            guard find("case-detail-header").exists else { return }
-
-            let found = anyElementExists([
-                "case-evidence-empty",
-                "case-evidence-tab",
-            ], timeout: 5)
+        then("I should see the evidence empty state") {
             XCTAssertTrue(
-                found,
-                "Evidence tab should show evidence items or empty state"
+                find("case-evidence-empty").waitForExistence(timeout: 10),
+                "A case with no evidence should show the evidence empty state"
             )
-
-            // If evidence items exist, verify classification badges
-            let evidenceItems = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'evidence-item-'"))
-            if evidenceItems.count > 0 {
-                let classificationBadge = find("evidence-classification-badge")
-                XCTAssertTrue(
-                    classificationBadge.exists,
-                    "Evidence items should display classification badges"
-                )
-            }
+            XCTAssertFalse(find("case-evidence-loading").exists, "Evidence should have finished loading")
         }
     }
 
