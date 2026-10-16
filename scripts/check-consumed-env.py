@@ -100,15 +100,6 @@ UNRENDERED_BY_DESIGN: dict[str, str] = {
         "(port 3100) has no Ansible role on any deploy path, so there is no address to "
         "render. SIGNAL_NOTIFIER_BEARER_TOKEN is rendered for it and reaches nothing"
     ),
-    "SIP_TLS_CA_FILE": (
-        "the SIP edge's public TLS trust anchor, as a path INSIDE the app container. "
-        "roles/kamailio writes the anchor to the host at "
-        "{{ kamailio_tls_dir }}/sip-edge-anchor.pem, but neither app compose template "
-        "bind-mounts it, so a rendered path would name a file the container cannot open "
-        "and readSipTlsTrustAnchor would fail where it currently falls back to the "
-        "device trust store. Closing it is a volume mount in both app compose "
-        "templates, on the SIP-edge work, not here"
-    ),
     "SIP_TLS_CA_PEM": (
         "the same anchor inline, and it TAKES PRECEDENCE over SIP_TLS_CA_FILE -- "
         "rendering both would make the file variant dead config. The Ansible SIP edge "

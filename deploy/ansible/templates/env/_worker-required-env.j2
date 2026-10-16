@@ -131,24 +131,16 @@ METRICS_SCRAPE_TOKEN={{ metrics_scrape_token }}
 SIP_BRIDGE_URL=http://sip-bridge:3000
 {% endif %}
 {#
-  The per-volunteer SIP registrar and its TURN relay
-  (apps/worker/telephony/registrar.ts, apps/worker/routes/webrtc.ts). Both
-  TURN values must be present or /sip-token hands clients STUN-only ICE
-  servers and an in-app call behind a symmetric NAT has no media path.
-  SIP_REGISTRAR_SECRET falls back to HMAC_SECRET; set it only to rotate every
-  volunteer's derived PJSIP secret independently of HMAC_SECRET.
-
-  SIP_TLS_CA_FILE is deliberately NOT rendered here — see
-  scripts/check-consumed-env.py's UNRENDERED_BY_DESIGN entry for it: the app
-  container has no mount for the anchor roles/kamailio publishes, so a path
-  would point at nothing inside the container.
+  SIGNAL_QUEUE_RETENTION_DAYS — how long the Signal delivery queue keeps rows
+  before the scheduler's cleanup deletes them (apps/worker/messaging/signal/
+  queue.ts; 1..3650, the worker refuses to boot on anything else). Absent, the
+  in-code default of 30 days applies, so an operator with a shorter retention
+  obligation (GDPR storage limitation) had no deploy-time way to set one; the
+  gate in scripts/check-consumed-env.py flagged it as rendered nowhere. Only
+  emitted when set, so the default stays the code's single source of truth.
 #}
-{% if (sip_registrar_secret | default('')) | length > 0 %}
-SIP_REGISTRAR_SECRET={{ sip_registrar_secret }}
-{% endif %}
-{% if (turn_host | default('')) | length > 0 and (turn_secret | default('')) | length > 0 %}
-TURN_HOST={{ turn_host }}
-TURN_SECRET={{ turn_secret }}
+{% if (signal_queue_retention_days | default('')) | string | length > 0 %}
+SIGNAL_QUEUE_RETENTION_DAYS={{ signal_queue_retention_days }}
 {% endif %}
 {#
   <PROVIDER>_WEBHOOK_IPS — the webhook IP allowlist (#1622). The var name is

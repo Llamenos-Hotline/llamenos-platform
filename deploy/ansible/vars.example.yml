@@ -56,6 +56,12 @@ acme_email: admin@yourdomain.org
 # Generate with: openssl rand -hex 32
 metrics_scrape_token: ""
 
+# ─── Signal queue retention ──────────────────────────────────────
+# Days the Signal delivery queue keeps rows before cleanup (1-3650). Unset
+# keeps the worker's 30-day default. The worker refuses to boot on a value
+# outside that range.
+# signal_queue_retention_days: 30
+
 # ─── Webhook IP allowlists ───────────────────────────────────────
 # Per-provider CIDR allowlists for inbound webhooks, rendered as
 # <PROVIDER>_WEBHOOK_IPS (apps/worker/middleware/webhook-auth.ts,
@@ -233,20 +239,6 @@ whisper_device: cpu
 ari_username: llamenos
 ari_password: ""
 bridge_secret: ""
-
-# Per-volunteer SIP registrar and its TURN relay (apps/worker/routes/webrtc.ts,
-# apps/worker/telephony/registrar.ts). Leave sip_registrar_secret empty to
-# derive volunteer SIP secrets from hmac_secret; set it to rotate every
-# volunteer's SIP credential without rotating hmac_secret.
-#
-# turn_host and turn_secret must BOTH be set or /api/telephony/sip-token hands
-# clients STUN-only ICE servers — an in-app call behind a symmetric NAT then
-# has no media path. turn_secret is the CoTURN --static-auth-secret, which is
-# not the SIP secret and not ari_password. No Ansible role deploys CoTURN
-# today, so these point at a relay you run separately.
-sip_registrar_secret: ""
-turn_host: ""
-turn_secret: ""
 # pbx_type: asterisk              # roles/llamenos-asterisk/defaults/main.yml
 # sip_bridge_local_port: 3101     # roles/llamenos-asterisk/defaults/main.yml
 
