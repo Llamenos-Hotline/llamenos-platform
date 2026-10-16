@@ -13,6 +13,7 @@ import {
   ADMIN_SEED,
 } from '../../api-helpers'
 import { bytesToHex } from '@shared/encoding'
+import { devSurfaceHeaders } from '../../dev-surface-secret'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -174,8 +175,15 @@ Given('a provision room has an encrypted payload', async ({ request, world }) =>
 
   // Create a provision room (public endpoint — mounted at /api/provision)
   const ephemeralPubkey = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  // The per-ROOM brute-force cap inside the handler
+  // (`provision:room-failures:<id>`, routes/provisioning.ts) counts only
+  // FAILED token presentations (#1789), so this scenario's correct-token
+  // polls never consume its budget. Each scenario also makes its own room,
+  // so the failure budget is per-room by design and the harness header does
+  // not touch it. The polling tier in front of it is sized for a 1–2s poll
+  // interval and shared per-IP (#1625, #1789).
   const createRes = await request.post(`${BASE_URL}/api/provision/rooms`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() },
     data: { ephemeralPubkey },
   })
   expect(createRes.status()).toBe(200)
@@ -203,7 +211,7 @@ When('two requests simultaneously poll the provision room', async ({ request, wo
   const poll = () =>
     request.get(
       `${BASE_URL}/api/provision/rooms/${s.provisionRoomId}?token=${s.provisionToken}`,
-      { headers: { 'Content-Type': 'application/json' } },
+      { headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() } },
     ).then(async (res) => ({
       status: res.status(),
       data: await res.json().catch(() => null),

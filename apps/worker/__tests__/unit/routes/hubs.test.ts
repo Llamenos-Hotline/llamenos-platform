@@ -165,15 +165,42 @@ describe('hubs routes', () => {
       expect(json.hubs).toHaveLength(0)
     })
 
-    it('omits hubs where the caller lacks hubs:read', async () => {
+    // #1708: the list has to describe the caller's ACCESS, not one permission.
+    // `role-reporter` holds no `hubs:read` but is admitted to
+    // `/hubs/:hubId/reports`, so filtering on `hubs:read` hid the only hub such
+    // a member can use — and the desktop client, which resolves its active hub
+    // from this endpoint, then had nothing to browse.
+    it('lists a member hub even when the caller lacks hubs:read in it', async () => {
       const { app } = createTestApp({
-        permissions: ['other:read'],
+        permissions: ['reports:create', 'reports:read-own'],
+        userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-test'] }],
         serviceMock: { settings: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', name: 'Hub 1', status: 'active' }] }) } },
       })
 
       const res = await app.request('/hubs')
       expect(res.status).toBe(200)
-      expect((await res.json()).hubs).toEqual([])
+      expect((await res.json()).hubs.map((h: { id: string }) => h.id)).toEqual(['hub-1'])
+    })
+
+    it('omits a hub the caller holds no permission in', async () => {
+      const { app } = createTestApp({
+        permissions: ['reports:create'],
+        userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-test'] }],
+        serviceMock: {
+          settings: {
+            getHubs: vi.fn().mockResolvedValue({
+              hubs: [
+                { id: 'hub-1', name: 'Hub 1', status: 'active' },
+                { id: 'hub-2', name: 'Hub 2', status: 'active' },
+              ],
+            }),
+          },
+        },
+      })
+
+      const res = await app.request('/hubs')
+      expect(res.status).toBe(200)
+      expect((await res.json()).hubs.map((h: { id: string }) => h.id)).toEqual(['hub-1'])
     })
 
     // #1037: a non-super-admin global role is not membership of every hub
@@ -486,6 +513,48 @@ describe('hubs routes', () => {
       expect(auditLogSpy).toHaveBeenCalledOnce()
     })
 
+    // Removal must revoke, not merely stop renewing: the role-loss hook runs
+    // on the member whose last hub role just went (#1540).
+    it('revokes the SIP identity of a member left with no hub role', async () => {
+      const getTelephonyProviderSpy = vi.fn().mockResolvedValue(null)
+      const getUserInternalSpy = vi.fn().mockResolvedValue({ pubkey: 'member-pubkey', roles: [], hubRoles: [] })
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-members'],
+        serviceMock: {
+          identity: {
+            removeHubRole: vi.fn().mockResolvedValue(undefined),
+            getUserInternal: getUserInternalSpy,
+          },
+          settings: { getTelephonyProvider: getTelephonyProviderSpy },
+        },
+      })
+
+      expect((await app.request('/hubs/hub-1/members/member-pubkey', { method: 'DELETE' })).status).toBe(200)
+      expect(getUserInternalSpy).toHaveBeenCalledWith('member-pubkey')
+      expect(getTelephonyProviderSpy).toHaveBeenCalled()
+    })
+
+    it('leaves the SIP identity of a member who still belongs elsewhere', async () => {
+      const getTelephonyProviderSpy = vi.fn().mockResolvedValue(null)
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-members'],
+        serviceMock: {
+          identity: {
+            removeHubRole: vi.fn().mockResolvedValue(undefined),
+            getUserInternal: vi.fn().mockResolvedValue({
+              pubkey: 'member-pubkey',
+              roles: [],
+              hubRoles: [{ hubId: 'hub-2', roleIds: ['role-test'] }],
+            }),
+          },
+          settings: { getTelephonyProvider: getTelephonyProviderSpy },
+        },
+      })
+
+      expect((await app.request('/hubs/hub-1/members/member-pubkey', { method: 'DELETE' })).status).toBe(200)
+      expect(getTelephonyProviderSpy).not.toHaveBeenCalled()
+    })
+
     it('returns 403 without hubs:manage-members permission', async () => {
       const { app } = createTestApp({ permissions: ['hubs:read'] })
       const res = await app.request('/hubs/hub-1/members/member-pubkey', {
@@ -510,11 +579,65 @@ describe('hubs routes', () => {
             deleteHub: deleteHubSpy,
             getHubStorageCredentials: getHubStorageCredentialsSpy,
           },
+          identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
         },
       })
 
       const res = await app.request('/hubs/hub-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
+      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1')
+    })
+
+    // Deleting a hub strips its role from every member, so it is a
+    // member-removal path: the roster is read BEFORE the hub goes, and each
+    // member the deletion leaves roleless loses their SIP identity (#1540).
+    it('reads the roster before deleting and revokes the roleless members', async () => {
+      const order: string[] = []
+      const getUsersSpy = vi.fn().mockImplementation(async () => {
+        order.push('getUsers')
+        return { users: [{ pubkey: 'member-1' }, { pubkey: 'member-2' }] }
+      })
+      const getUserInternalSpy = vi.fn().mockImplementation(async (pk: string) => {
+        order.push(`getUserInternal:${pk}`)
+        // member-1 belonged only to this hub; member-2 is still in hub-2.
+        return pk === 'member-1'
+          ? { pubkey: pk, roles: [], hubRoles: [] }
+          : { pubkey: pk, roles: [], hubRoles: [{ hubId: 'hub-2', roleIds: ['role-test'] }] }
+      })
+      const getTelephonyProviderSpy = vi.fn().mockResolvedValue(null)
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: {
+          settings: {
+            deleteHub: vi.fn().mockImplementation(async () => { order.push('deleteHub') }),
+            getHubStorageCredentials: vi.fn().mockResolvedValue(undefined),
+            getTelephonyProvider: getTelephonyProviderSpy,
+          },
+          identity: { getUsers: getUsersSpy, getUserInternal: getUserInternalSpy },
+        },
+      })
+
+      expect((await app.request('/hubs/hub-1', { method: 'DELETE' })).status).toBe(200)
+      expect(getUsersSpy).toHaveBeenCalledWith('hub-1')
+      expect(order[0]).toBe('getUsers')
+      expect(order[1]).toBe('deleteHub')
+      // Only the member left with no hub role is checked against the PBX.
+      expect(getTelephonyProviderSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('still deletes the hub when the roster cannot be read', async () => {
+      const deleteHubSpy = vi.fn().mockResolvedValue(undefined)
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: {
+          settings: {
+            deleteHub: deleteHubSpy,
+            getHubStorageCredentials: vi.fn().mockResolvedValue(undefined),
+          },
+          identity: { getUsers: vi.fn().mockRejectedValue(new Error('db down')) },
+        },
+      })
+      expect((await app.request('/hubs/hub-1', { method: 'DELETE' })).status).toBe(200)
       expect(deleteHubSpy).toHaveBeenCalledWith('hub-1')
     })
 

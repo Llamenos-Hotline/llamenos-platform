@@ -309,6 +309,18 @@ final class SecurityEventService: @unchecked Sendable {
 
         let payload = SecurityEventBatchPayload(events: batch.map(SecurityEventUploadItem.init))
         do {
+            // #1633 audit: this strategy is CORRECT here and must stay. Unlike every
+            // other endpoint, `POST /api/security-events` declares snake_case keys —
+            // `clientSecurityEventItemSchema` in apps/worker/schemas/client-security-events.ts
+            // is a `z.strictObject` of `event_type`, `occurred_at`, `app_version`,
+            // `os_version`, `pin_identifiers`, because the submission is unauthenticated
+            // and deliberately narrow. Being `strictObject`, it also *rejects* an unknown
+            // key rather than ignoring it, so a mismatch here fails loudly — which is why
+            // it is the only body in the app that is safe to key-convert.
+            //
+            // This is also why the conversion lives at the call site rather than on a
+            // shared encoder, and why this service builds its own URLRequest instead of
+            // going through APIService.
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             request.httpBody = try encoder.encode(payload)

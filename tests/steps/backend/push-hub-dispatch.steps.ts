@@ -17,6 +17,7 @@
  */
 
 import { expect } from '@playwright/test'
+import { devSurfaceSecret } from '../../dev-surface-secret'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
@@ -26,7 +27,7 @@ import {
 
 // ── Constants ──────────────────────────────────────────────────────
 
-const TEST_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+const TEST_SECRET = devSurfaceSecret()
 const BACKEND_BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 const PUSH_LOG_STATE_KEY = 'push_hub_dispatch'
 

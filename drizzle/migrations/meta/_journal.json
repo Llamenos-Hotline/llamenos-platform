@@ -379,6 +379,27 @@
       "when": 1791101203023,
       "tag": "0053_past_changeling",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1791101203024,
+      "tag": "0054_sigchain-unique-seq",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1791276445901,
+      "tag": "0055_concurrency_unique_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1791851692587,
+      "tag": "0056_secure_signal_queue",
+      "breakpoints": true
     }
   ]
 }

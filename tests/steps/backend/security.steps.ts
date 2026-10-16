@@ -24,7 +24,11 @@ import {
   decryptContent,
   wrapKeyForRecipient,
   unwrapKey,
-  x25519PubkeyFromSeed,
+  adminHpkeRecipient,
+  hpkeRecipientForSeed,
+  openStoredRecordKey,
+  decryptStoredRecordContent,
+  type TestHpkeRecipient,
 } from '../../crypto-helpers'
 import { LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 
@@ -113,17 +117,18 @@ When('the volunteer encrypts a note {string}', async ({request, world}, noteText
   state.envelopes = new Map()
 
   // Wrap for volunteer
-  const volX25519 = x25519PubkeyFromSeed(state.volunteerKeypair!.seedHex)
-  const volEnv = await wrapKeyForRecipient(contentKey, volX25519, state.volunteerKeypair!.seedHex, LABEL_NOTE_KEY)
-  state.envelopes.set(volX25519, volEnv)
+  const vol = hpkeRecipientForSeed(state.volunteerKeypair!.seedHex)
+  const volEnv = await wrapKeyForRecipient(contentKey, vol.pubkeyHex, vol.skHex, LABEL_NOTE_KEY)
+  state.envelopes.set(vol.pubkeyHex, volEnv)
 
-  // Wrap for admin (ADMIN_SEED)
-  const adminX25519 = x25519PubkeyFromSeed(ADMIN_SEED)
-  const adminEnv = await wrapKeyForRecipient(contentKey, adminX25519, ADMIN_SEED, LABEL_NOTE_KEY)
-  state.envelopes.set(adminX25519, adminEnv)
+  // Wrap for the admin's real HPKE recipient key — the one the server's
+  // ADMIN_DECRYPTION_PUBKEY names and the one the admin actually holds.
+  const admin = adminHpkeRecipient()
+  const adminEnv = await wrapKeyForRecipient(contentKey, admin.pubkeyHex, admin.skHex, LABEL_NOTE_KEY)
+  state.envelopes.set(admin.pubkeyHex, adminEnv)
 
   // Submit the note via API with real ciphertext and envelopes
-  const adminEnvelopes = [{ pubkey: adminX25519, ...adminEnv }]
+  const adminEnvelopes = [{ pubkey: admin.pubkeyHex, ...adminEnv }]
   const authorEnvelope = volEnv
 
   const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
@@ -163,9 +168,9 @@ When('the volunteer retrieves and decrypts the note', async ({request, world}) =
   expect(note!.encryptedContent).toBe(state.ciphertextHex)
 
   // Unwrap the content key via HPKE and decrypt
-  const volX25519 = x25519PubkeyFromSeed(state.volunteerKeypair!.seedHex)
-  const envelope = state.envelopes!.get(volX25519)!
-  const recoveredKey = await unwrapKey(envelope.ct, envelope.enc, state.volunteerKeypair!.seedHex, LABEL_NOTE_KEY)
+  const vol = hpkeRecipientForSeed(state.volunteerKeypair!.seedHex)
+  const envelope = state.envelopes!.get(vol.pubkeyHex)!
+  const recoveredKey = await unwrapKey(envelope.ct, envelope.enc, vol.skHex, LABEL_NOTE_KEY)
   state.decryptedText = decryptContent(note!.encryptedContent!, recoveredKey, LABEL_NOTE_KEY)
 })
 
@@ -186,10 +191,10 @@ When('the admin retrieves and decrypts the note with their key', async ({request
   expect(note).toBeTruthy()
   expect(note!.encryptedContent).toBe(state.ciphertextHex)
 
-  // Unwrap the content key via HPKE with admin's key and decrypt
-  const adminX25519 = x25519PubkeyFromSeed(ADMIN_SEED)
-  const envelope = state.envelopes!.get(adminX25519)!
-  const recoveredKey = await unwrapKey(envelope.ct, envelope.enc, ADMIN_SEED, LABEL_NOTE_KEY)
+  // Unwrap the content key via HPKE with the admin's real reader key and decrypt
+  const admin = adminHpkeRecipient()
+  const envelope = state.envelopes!.get(admin.pubkeyHex)!
+  const recoveredKey = await unwrapKey(envelope.ct, envelope.enc, admin.skHex, LABEL_NOTE_KEY)
   state.decryptedText = decryptContent(note!.encryptedContent!, recoveredKey, LABEL_NOTE_KEY)
 })
 
@@ -228,11 +233,20 @@ interface StoredMessage {
  * The server seals inbound messages itself, so this is the only way to assert
  * that a reader can actually read one. Asserting HTTP 200 on the conversation
  * says nothing about whether the envelope opens.
+ *
+ * `authSeedHex` authenticates the API call; `reader` is the HPKE key the
+ * envelope is addressed to. They are different values for the admin, which is
+ * why the reader is passed in rather than derived from the auth seed here.
+ *
+ * The server writes these rows through `apps/worker/lib/crypto.ts`, which binds
+ * the label as HPKE `info` and NO AAD on either layer (#1393) — so both layers
+ * are opened with the stored-record readers, not the canonical ones.
  */
 async function decryptStoredMessageAs(
   request: import('@playwright/test').APIRequestContext,
   world: Record<string, unknown>,
-  readerSeedHex: string,
+  authSeedHex: string,
+  reader: TestHpkeRecipient,
   readerLabel: string,
 ): Promise<string> {
   const scenario = getScenarioState(world)
@@ -242,7 +256,7 @@ async function decryptStoredMessageAs(
   const { status, data } = await apiGet<{ messages: StoredMessage[] }>(
     request,
     `/conversations/${scenario.conversationId}/messages`,
-    readerSeedHex,
+    authSeedHex,
   )
   expect(status, `${readerLabel} could not list the conversation's messages`).toBe(200)
 
@@ -250,16 +264,15 @@ async function decryptStoredMessageAs(
   expect(message, `${readerLabel} cannot see message ${scenario.messageId}`).toBeTruthy()
   expect(message!.encryptedContent, 'message has no ciphertext').toBeTruthy()
 
-  const readerX25519 = x25519PubkeyFromSeed(readerSeedHex)
-  const envelope = message!.readerEnvelopes?.find(e => e.pubkey === readerX25519)
+  const envelope = message!.readerEnvelopes?.find(e => e.pubkey === reader.pubkeyHex)
   expect(
     envelope,
-    `no reader envelope addressed to ${readerLabel}'s X25519 key ${readerX25519}; ` +
+    `no reader envelope addressed to ${readerLabel}'s X25519 key ${reader.pubkeyHex}; ` +
       `the server sealed to ${JSON.stringify(message!.readerEnvelopes?.map(e => e.pubkey))}`,
   ).toBeTruthy()
 
-  const messageKey = await unwrapKey(envelope!.ct, envelope!.enc, readerSeedHex, LABEL_MESSAGE)
-  return decryptContent(message!.encryptedContent!, messageKey, LABEL_MESSAGE)
+  const messageKey = await openStoredRecordKey(envelope!.ct, envelope!.enc, reader.skHex, LABEL_MESSAGE)
+  return decryptStoredRecordContent(message!.encryptedContent!, messageKey)
 }
 
 When('a message {string} is encrypted for volunteer and admin', async ({ request, world }, messageText: string) => {
@@ -303,12 +316,24 @@ When('the encrypted message is stored on the server', async ({ world }) => {
 Then('the volunteer can decrypt the message to {string}', async ({ request, world }, expectedText: string) => {
   const state = getSecTestState(world)
   expect(state.volunteerKeypair).toBeDefined()
-  const plaintext = await decryptStoredMessageAs(request, world, state.volunteerKeypair!.seedHex, 'the volunteer')
+  const plaintext = await decryptStoredMessageAs(
+    request,
+    world,
+    state.volunteerKeypair!.seedHex,
+    hpkeRecipientForSeed(state.volunteerKeypair!.seedHex),
+    'the volunteer',
+  )
   expect(plaintext).toBe(expectedText)
 })
 
 Then('the admin can decrypt the message to {string}', async ({ request, world }, expectedText: string) => {
-  const plaintext = await decryptStoredMessageAs(request, world, ADMIN_SEED, 'the admin')
+  const plaintext = await decryptStoredMessageAs(
+    request,
+    world,
+    ADMIN_SEED,
+    adminHpkeRecipient(),
+    'the admin',
+  )
   expect(plaintext).toBe(expectedText)
 })
 
@@ -329,16 +354,16 @@ When('a volunteer encrypts a note {string}', async ({request, world}, noteText: 
   state.noteCallId = `multi-admin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   state.envelopes = new Map()
 
-  const volX25519 = x25519PubkeyFromSeed(vol.seedHex)
-  const authorEnvelope = await wrapKeyForRecipient(contentKey, volX25519, vol.seedHex, LABEL_NOTE_KEY)
+  const volRecipient = hpkeRecipientForSeed(vol.seedHex)
+  const authorEnvelope = await wrapKeyForRecipient(contentKey, volRecipient.pubkeyHex, volRecipient.skHex, LABEL_NOTE_KEY)
 
   // Wrap the content key for each registered admin's X25519 key.
   const adminEnvelopes = await Promise.all(
     state.adminKeypairs.map(async kp => {
-      const x25519Pub = x25519PubkeyFromSeed(kp.seedHex)
-      const env = await wrapKeyForRecipient(contentKey, x25519Pub, kp.seedHex, LABEL_NOTE_KEY)
-      state.envelopes!.set(x25519Pub, env)
-      return { pubkey: x25519Pub, ...env }
+      const recipient = hpkeRecipientForSeed(kp.seedHex)
+      const env = await wrapKeyForRecipient(contentKey, recipient.pubkeyHex, recipient.skHex, LABEL_NOTE_KEY)
+      state.envelopes!.set(recipient.pubkeyHex, env)
+      return { pubkey: recipient.pubkeyHex, ...env }
     }),
   )
 
@@ -386,15 +411,15 @@ Then('all {int} admins can decrypt the note independently', async ({ request, wo
     expect(note, `admin ${kp.pubkey} cannot see the note the volunteer filed`).toBeTruthy()
     expect(note!.encryptedContent).toBe(state.ciphertextHex)
 
-    const x25519Pub = x25519PubkeyFromSeed(kp.seedHex)
-    const envelope = note!.adminEnvelopes?.find(e => e.pubkey === x25519Pub)
+    const recipient = hpkeRecipientForSeed(kp.seedHex)
+    const envelope = note!.adminEnvelopes?.find(e => e.pubkey === recipient.pubkeyHex)
     expect(
       envelope,
-      `server returned no admin envelope for ${x25519Pub}; got ${JSON.stringify(note!.adminEnvelopes)}`,
+      `server returned no admin envelope for ${recipient.pubkeyHex}; got ${JSON.stringify(note!.adminEnvelopes)}`,
     ).toBeTruthy()
     state.serverAdminEnvelopes.push(envelope!)
 
-    const recoveredKey = await unwrapKey(envelope!.ct, envelope!.enc, kp.seedHex, LABEL_NOTE_KEY)
+    const recoveredKey = await unwrapKey(envelope!.ct, envelope!.enc, recipient.skHex, LABEL_NOTE_KEY)
     expect(decryptContent(note!.encryptedContent!, recoveredKey, LABEL_NOTE_KEY)).toBe(state.notePlaintext)
   }
 

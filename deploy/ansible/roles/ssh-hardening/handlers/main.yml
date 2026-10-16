@@ -1,5 +1,37 @@
 ---
+# Where sshd listens is NOT set by ssh.service on a socket-activated host.
+#
+# Ubuntu 24.04 (noble) ships `ssh.socket` enabled, with `Accept=no` and
+# `RequiredBy=ssh.service`: systemd owns the listening socket and hands the fd
+# to sshd. `systemctl restart ssh` there re-executes sshd against the SAME
+# inherited socket and changes nothing about the port. The `Port` directive in
+# sshd_config only reaches the listener through
+# /usr/lib/systemd/system-generators/sshd-socket-generator, which re-runs on
+# `daemon-reload` or boot — not on a service restart.
+#
+# The role's next sibling in the play is `firewall`, which then allows ONLY
+# ssh_port. Net effect on noble, observed in issue #1602 (finding 6): the old
+# port is blocked by ufw, the new port has nothing listening, and the host is
+# unreachable until it is force-rebooted from the provider console.
+#
+# tasks/main.yml therefore also writes an explicit ssh.socket drop-in; this
+# handler is what makes it take effect, and it reloads the unit graph so the
+# generator re-runs too. Restarting the socket does not disturb established
+# connections (Accept=no), so the running Ansible session survives.
 - name: Restart sshd
-  ansible.builtin.systemd:
-    name: ssh
+  ansible.builtin.systemd_service:
+    name: "{{ 'ssh.socket' if (_ssh_socket_activated | bool) else 'ssh' }}"
     state: restarted
+    daemon_reload: true
+
+# A socket-activated sshd is started on demand by ssh.socket, so after the
+# socket is re-bound the old sshd must go; the next connection starts a fresh
+# one against the new fd. Stopping (not restarting) the service is deliberate:
+# starting ssh.service directly on a socket-activated host makes sshd bind the
+# port itself and defeats the socket.
+- name: Stop the inherited sshd so the next connection starts a fresh one
+  ansible.builtin.systemd_service:
+    name: ssh.service
+    state: stopped
+  when: _ssh_socket_activated | bool
+  listen: Restart sshd

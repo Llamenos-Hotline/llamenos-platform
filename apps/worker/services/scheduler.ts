@@ -34,6 +34,16 @@ import {
   startAuditChainVerifyWorker,
   stopAuditChainVerifyWorker,
 } from '../lib/audit-chain-verify-worker'
+import {
+  startPeriodicCleanupWorker,
+  stopPeriodicCleanupWorker,
+} from '../lib/periodic-cleanup-worker'
+import {
+  startSignalQueueDrainWorker,
+  stopSignalQueueDrainWorker,
+  createSignalQueueDrainOpts,
+} from '../lib/signal-queue-drain-worker'
+import { DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS } from '../messaging/signal/queue'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
@@ -43,87 +53,161 @@ import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
 
-export interface TaskSchedulerDeps {
+/**
+ * Every background worker the scheduler is responsible for starting.
+ * `start()` asserts it started all of these before returning — see the
+ * assertion at the bottom of `start()`. Add a new worker here FIRST, then
+ * wire it in `start()`/`stop()`: the assertion will fail loudly instead of
+ * silently never starting it, which is exactly how the retention, erasure,
+ * identity-cleanup and Signal-drain workers went unnoticed (issue #1127).
+ */
+export const SCHEDULER_WORKER_NAMES = [
+  'blast-delivery',
+  'scheduled-blast-poller',
+  'retention-purge',
+  'audit-chain-verify',
+  'erasure-expiry',
+  're-encryption',
+  'periodic-cleanup',
+  'signal-queue-drain',
+] as const
+
+export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
+
+/**
+ * The service-registry half of the scheduler's dependencies.
+ *
+ * Every field is REQUIRED, and `schedulerServiceDeps()` (services/index.ts) is
+ * the only thing that builds it. That is deliberate: these fields used to be
+ * optional and each worker was gated on `if (deps.x)`, so the entrypoint could
+ * omit one and nothing — not tsc, not a test, not a log line — would say so.
+ * Three workers were dead on every deployment for that reason (#1127, #1566).
+ * An omission here is now a compile error at the call site.
+ */
+export type TaskSchedulerServiceDeps = {
   blastsService: BlastsService
   settingsService: SettingsService
-  resolveAdapter: AdapterResolver
-  resolveIdentifier: (subscriberId: string) => Promise<string | null>
-  onBlastProgress?: BlastProgressCallback
-  onBlastStatusChange?: BlastStatusCallback
-
-  // These four were optional, and `start()` gated each worker behind an
-  // `if (deps.x)`. src/server/index.ts omitted retentionService and
-  // erasureService, so the retention-purge, erasure-expiry and
-  // re-encryption workers never started in production -- and it
-  // typechecked, because the deps were optional (#1127). For an
-  // EU/GDPR-scoped deployment that meant data-retention deletion and
-  // right-to-erasure expiry had never once executed.
-  //
-  // They are required now. Omitting one is a compile error, not a
-  // silently disabled worker.
   retentionService: RetentionService
   auditService: AuditService
   erasureService: ErasureService
   identityService: IdentityService
-  // Optional, as upstream declares it: the erasure-expiry worker treats
-  // the hub crypto-shred step as opt-in and skips it when absent.
-  hubShred?: HubShredService
+  hubShred: HubShredService
+}
+
+export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
+  resolveAdapter: AdapterResolver
+  resolveIdentifier: (subscriberId: string) => Promise<string | null>
+  onBlastProgress?: BlastProgressCallback
+  onBlastStatusChange?: BlastStatusCallback
 }
 
 export class TaskScheduler {
   private started = false
+  private startedWorkers: SchedulerWorkerName[] = []
 
-  constructor(protected db: Database) {}
+  constructor(
+    protected db: Database,
+    private readonly hmacSecret: string = '',
+    private readonly signalQueueRetentionDays: number = DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS,
+  ) {}
+
+  /**
+   * Names of workers started by the most recent `start()` call. Empty
+   * before the first `start()` or after `stop()`. Exists so a test (and,
+   * at boot, a human reading logs) can assert every worker the scheduler
+   * knows about actually started — see SCHEDULER_WORKER_NAMES.
+   */
+  getStartedWorkers(): readonly SchedulerWorkerName[] {
+    return this.startedWorkers
+  }
 
   /**
    * Start all background task workers.
    * Call this after all services are initialized.
    */
-  start(deps?: TaskSchedulerDeps): void {
+  start(deps: TaskSchedulerDeps): void {
     if (this.started) return
     this.started = true
 
-    if (deps) {
-      // Start blast delivery worker
-      startBlastWorker({
-        blastsService: deps.blastsService,
-        settingsService: deps.settingsService,
-        resolveAdapter: deps.resolveAdapter,
-        resolveIdentifier: deps.resolveIdentifier,
-        onProgress: deps.onBlastProgress,
-        onStatusChange: deps.onBlastStatusChange,
-      })
+    const started: SchedulerWorkerName[] = []
 
-      // Start scheduled blast poller
-      startScheduledBlastPoller(deps.blastsService)
+    // No `if (deps.x)` gates: every dependency is required, so a worker that
+    // is listed here always runs. A missing one cannot reach this method.
+    startBlastWorker({
+      blastsService: deps.blastsService,
+      settingsService: deps.settingsService,
+      resolveAdapter: deps.resolveAdapter,
+      resolveIdentifier: deps.resolveIdentifier,
+      onProgress: deps.onBlastProgress,
+      onStatusChange: deps.onBlastStatusChange,
+    })
+    started.push('blast-delivery')
 
-      // No `if (deps.x)` guards: every dep is required by the type, so
-      // every worker the scheduler knows about starts whenever the
-      // scheduler starts. A future worker whose dep is forgotten fails
-      // the build instead of quietly never running.
-      startRetentionPurgeWorker({
-        retentionService: deps.retentionService,
-        auditService: deps.auditService,
-        settingsService: deps.settingsService,
-      })
+    startScheduledBlastPoller(deps.blastsService)
+    started.push('scheduled-blast-poller')
 
-      startAuditChainVerifyWorker({
-        auditService: deps.auditService,
-        identityService: deps.identityService,
-      })
+    startRetentionPurgeWorker({
+      retentionService: deps.retentionService,
+      auditService: deps.auditService,
+      settingsService: deps.settingsService,
+    })
+    started.push('retention-purge')
 
-      startErasureExpiryWorker({
-        erasureService: deps.erasureService,
-        auditService: deps.auditService,
-        hubShred: deps.hubShred,
-      })
+    startAuditChainVerifyWorker({
+      auditService: deps.auditService,
+      identityService: deps.identityService,
+    })
+    started.push('audit-chain-verify')
 
-      startReEncryptionWorker({
-        erasureService: deps.erasureService,
-      })
+    startErasureExpiryWorker({
+      erasureService: deps.erasureService,
+      auditService: deps.auditService,
+      hubShred: deps.hubShred,
+    })
+    started.push('erasure-expiry')
+
+    startReEncryptionWorker({
+      erasureService: deps.erasureService,
+    })
+    started.push('re-encryption')
+
+    // Periodic cleanup: IdentityService.cleanup() (sessions, WebAuthn
+    // challenges, provision rooms, invite codes, auth nonces) and
+    // SettingsService.runCleanup() (rate limits, CAPTCHA challenges) plus
+    // the API rate-limit fixed-window purge. See issue #1127 — auth_nonces
+    // gained one row per authenticated request with nothing ever deleting
+    // expired ones until this worker existed.
+    startPeriodicCleanupWorker({
+      identityService: deps.identityService,
+      settingsService: deps.settingsService,
+    })
+    started.push('periodic-cleanup')
+
+    // Signal retry queue drain: claims pending signal_message_queue rows
+    // and attempts delivery, letting markFailed's own backoff/dead-letter
+    // logic run. See issue #1127 — claimBatch() had no caller at all.
+    startSignalQueueDrainWorker(
+      createSignalQueueDrainOpts(
+        this.db,
+        () => deps.resolveAdapter('signal'),
+        this.hmacSecret,
+        this.signalQueueRetentionDays,
+      ),
+    )
+    started.push('signal-queue-drain')
+
+    this.startedWorkers = started
+
+    const missing = SCHEDULER_WORKER_NAMES.filter((name) => !started.includes(name))
+    if (missing.length > 0) {
+      // Should be unreachable — every name above is pushed unconditionally.
+      // Guards against a future edit that reintroduces a conditional start
+      // without updating this list, which is the exact failure class this
+      // scheduler shipped with for retention/erasure/cleanup/signal-drain.
+      throw new Error(`TaskScheduler.start() did not start: ${missing.join(', ')}`)
     }
 
-    logger.info('Started')
+    logger.info('Started', { workers: this.startedWorkers })
   }
 
   /**
@@ -132,6 +216,7 @@ export class TaskScheduler {
   stop(): void {
     if (!this.started) return
     this.started = false
+    this.startedWorkers = []
 
     stopBlastWorker()
     stopScheduledBlastPoller()
@@ -139,6 +224,8 @@ export class TaskScheduler {
     stopAuditChainVerifyWorker()
     stopErasureExpiryWorker()
     stopReEncryptionWorker()
+    stopPeriodicCleanupWorker()
+    stopSignalQueueDrainWorker()
 
     logger.info('Stopped')
   }

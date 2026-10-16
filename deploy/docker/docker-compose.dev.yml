@@ -11,7 +11,7 @@
 #
 # Optional profiles:
 #   --profile signal      - Signal CLI + notifier sidecar
-#   --profile telephony   - Asterisk PBX + SIP bridge
+#   --profile telephony   - Kamailio SIP edge + Asterisk PBX + SIP bridge + CoTURN (STUN/TURN)
 #   --profile push        - ntfy (UnifiedPush relay for Android push notifications)
 #
 # Stop:
@@ -123,26 +123,47 @@ services:
       retries: 3
       start_period: 30s
 
-  # ── Optional: Asterisk PBX for local SIP telephony dev ─────────────────
+  # ── Optional: Asterisk PBX behind the Kamailio SIP edge ────────────────
   # Start with: docker compose -f deploy/docker/docker-compose.dev.yml --profile telephony up -d
   # No call can route until the app provisions the SIP trunk
   # (POST /api/provider-setup/create-sip-trunk; see asterisk-config/sorcery.conf).
   # An end-to-end call against a simulated carrier: deploy/docker/tests/telephony/README.md
+  # Asterisk >= 22.10.0 is required: older builds silently turn
+  # `dtls_verify = fingerprint` into chain verification and kill every
+  # DTLS-SRTP call. See deploy/docker/docker-compose.yml and #1687.
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
+    image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
     profiles: ["telephony"]
     ports:
-      - "5060:5060/udp"   # SIP
-      - "5060:5060/tcp"   # SIP TCP
-      - "8088:8088"       # ARI HTTP
+      - "8088:8088"       # ARI HTTP; SIP is reached only through Kamailio.
     # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
     # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
     user: root
     entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
+    environment:
+      # Names covered by the Asterisk internal TLS certificate and by the
+      # Kamailio edge certificate. 10.0.2.2 is the Android emulator's alias
+      # for the host; 127.0.0.1/localhost are added unconditionally.
+      - SIP_TLS_SANS=${SIP_TLS_SANS:-10.0.2.2}
+      # Certificate and key the TLS/WSS transports serve. Unset = the
+      # entrypoint generates a self-signed combined PEM at
+      # /var/lib/asterisk/keys/asterisk.pem, which is what dev and the
+      # telephony e2e harnesses rely on — so leave them unset there.
+      - ASTERISK_TLS_CERT_FILE=${ASTERISK_TLS_CERT_FILE:-}
+      - ASTERISK_TLS_KEY_FILE=${ASTERISK_TLS_KEY_FILE:-}
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
       - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - ./sip-tls-cert.sh:/usr/local/share/llamenos/sip-tls-cert.sh:ro
+      # Read-only source for an externally-managed certificate; the default is
+      # a committed placeholder directory, so dev generates its own as before.
+      - ${SIP_TLS_CERT_DIR:-./sip-tls-mount}:/etc/llamenos/sip-tls:ro
       - asterisk-db:/var/lib/asterisk/astdb   # the provisioned SIP trunk
+      # A stable keypair across restarts: the trust anchor clients pinned at
+      # their last /sip-token fetch must keep verifying after a PBX restart.
+      - asterisk-keys:/var/lib/asterisk/keys
+      # The PUBLIC trust anchor the app publishes to clients (SIP_TLS_CA_FILE).
+      - sip-tls-anchor:/var/lib/llamenos/sip-tls
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:
@@ -154,6 +175,59 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # CoTURN — STUN + TURN relay for the ICE servers /api/telephony/sip-token
+  # mints time-limited credentials against. Without it a volunteer behind a
+  # symmetric NAT gathers no usable candidate and the media leg never connects,
+  # however well signalling went.
+  #
+  # Host networking, not published ports: a TURN server has to advertise an
+  # address the client can actually reach for its RELAY candidate, and inside a
+  # bridge network it would advertise its 172.x container address. Host mode is
+  # also coturn's own recommended deployment, and unlike published ports it
+  # stays subject to the host firewall.
+  #
+  # --listening-ip/--relay-ip are pinned explicitly for the same reason as in
+  # the Ansible role: unset, coturn enumerates every interface (each docker
+  # bridge included), logs "NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED", and
+  # can source RTCP from an address its relay candidate never named (#1689).
+  # Dev defaults to loopback; set TURN_LISTENING_IP/TURN_RELAY_IP to the
+  # workstation's LAN address when testing from a real phone on the same LAN.
+  #
+  # --log-file=stdout: coturn's default log target is a /var/tmp file the
+  # container's docker logging driver never sees — `docker compose logs`
+  # (and the smoke check that greps it) would read an empty log.
+  coturn:
+    image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd2872dcf74313b3bc6cf9b69cc81be6fb3  # pinned 2026-05-18
+    profiles: ["telephony"]
+    network_mode: host
+    command: >
+      --realm=${TURN_REALM:-localhost}
+      --fingerprint
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET:-changeme}
+      --listening-port=${TURN_PORT:-3478}
+      --min-port=${TURN_RELAY_MIN_PORT:-49160}
+      --max-port=${TURN_RELAY_MAX_PORT:-49200}
+      --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
+      --no-tls
+      --no-dtls
+      --no-cli
+      --log-file=stdout
+    healthcheck:
+      # A STUN Binding request, which coturn answers UNAUTHENTICATED even in
+      # --use-auth-secret mode (only TURN allocation needs the credential). So
+      # unlike a process probe this proves the listener actually answers — and
+      # unlike the `pgrep` it replaces, it can pass at all: the pinned image
+      # ships no pgrep, so that healthcheck failed every time and marked a
+      # perfectly working coturn unhealthy. A dead listener never replies, so
+      # the probe hangs and the timeout below is what fails it.
+      test: ["CMD-SHELL", "turnutils_stunclient -p ${TURN_PORT:-3478} 127.0.0.1 2>&1 | grep -q 'reflexive addr'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # SIP bridge — translates ARI events to Llamenos webhook format.
   sip-bridge:
@@ -184,6 +258,42 @@ services:
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Kamailio is the client-facing SIP edge in the telephony dev profile, as it
+  # is in the self-hosted deployment. Asterisk has no published SIP ports, so
+  # clients and call measurements cannot accidentally bypass this listener.
+  kamailio:
+    image: ghcr.io/kamailio/kamailio:5.7.1-bookworm@sha256:a5c0564fe4bf12315ec3aed97303bc63207c0cec0c5b1150ea6500f4747163e9 # pinned 2026-09-19
+    profiles: ["telephony"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/kamailio-entrypoint.sh"]
+    ports:
+      - "${SIP_UDP_PORT:-5060}:5060/udp"
+      - "${SIP_TCP_PORT:-5060}:5060/tcp"
+      - "${SIPS_PORT:-5061}:5061/tcp"
+    environment:
+      - SIP_TLS_SANS=${SIP_TLS_SANS:-10.0.2.2}
+      - SIP_TLS_ANCHOR_SOURCE=${KAMAILIO_TLS_ANCHOR_SOURCE:-}
+      - KAMAILIO_TLS_CERT_FILE=${KAMAILIO_TLS_CERT_FILE:-/var/lib/kamailio/cert.pem}
+      - KAMAILIO_TLS_KEY_FILE=${KAMAILIO_TLS_KEY_FILE:-/var/lib/kamailio/cert.pem}
+    volumes:
+      - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+      - ./kamailio/tls.cfg.template:/usr/local/share/llamenos/tls.cfg.template:ro
+      - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro
+      - ./kamailio/kamailio-entrypoint.sh:/usr/local/share/llamenos/kamailio-entrypoint.sh:ro
+      - ./sip-tls-cert.sh:/usr/local/share/llamenos/sip-tls-cert.sh:ro
+      - ${SIP_TLS_CERT_DIR:-./sip-tls-mount}:/etc/llamenos/sip-tls:ro
+      - kamailio-keys:/var/lib/kamailio
+      - sip-tls-anchor:/var/lib/llamenos/sip-tls
+    depends_on:
+      asterisk:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kamcmd", "core.version"]
+      interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
@@ -219,6 +329,9 @@ configs:
 
 volumes:
   asterisk-db:
+  asterisk-keys:
+  kamailio-keys:
+  sip-tls-anchor:
   pgdata:
   rustfsdata:
   signal-data:

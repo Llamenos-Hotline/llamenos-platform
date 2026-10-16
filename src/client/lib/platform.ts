@@ -13,6 +13,7 @@
 
 import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
+import type { AdminHpkeRecipient } from './admin-recipient'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -79,6 +80,9 @@ export type TauriIpcCommand =
   | 'device_import_and_load'
   | 'generate_ephemeral_ed25519'
   | 'generate_backup_from_state'
+  | 'generate_recovery_key'
+  | 'backup_verify_credential'
+  | 'restore_backup_and_load'
   | 'wipe_keys'
   | 'provision_encrypt_for_device'
   | 'provision_create_session'
@@ -1027,6 +1031,12 @@ function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
  * Generates a random AES-256-GCM key, encrypts content, then HPKE-wraps
  * the key for the author and each admin.
  *
+ * `adminPubkeys` is branded (`AdminHpkeRecipient`, see `./admin-recipient`)
+ * because five call sites used to pass `adminDecryptionPubkey || authorPub`,
+ * which type-checked and silently produced notes no admin could read (#1468).
+ * A bare string — the author's own key above all — can no longer be passed
+ * here. Callers with no admin recipient must refuse to write the note.
+ *
  * Both layers carry the canonical envelope AAD (`contentAad` / `keyWrapAad`
  * for LABEL_NOTE_KEY) — the same convention Rust's `encrypt_note` binds, so a
  * note sealed here opens there and vice versa. The previous empty AAD made the
@@ -1035,7 +1045,7 @@ function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
 export async function encryptNote(
   payloadJson: string,
   authorPubkey: string,
-  adminPubkeys: string[],
+  adminPubkeys: AdminHpkeRecipient[],
 ): Promise<EncryptedNoteResult> {
   // Generate random 32-byte content key
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
@@ -1253,18 +1263,67 @@ export async function rewrapFileKey(
 }
 
 /**
- * Generate an encrypted backup from the current CryptoState.
- * In v3, wraps the device key material for offline recovery.
+ * Generate a fresh recovery key to display to the user.
+ *
+ * Base32, dash-grouped. The same string is handed straight back to
+ * `generateBackupFromState` — Rust owns both halves so there is no encoding to
+ * disagree about (#1709).
+ */
+export async function generateRecoveryKey(): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('generate_recovery_key')
+  }
+  throw new Error('WASM recovery key generation not yet implemented')
+}
+
+/**
+ * Generate an encrypted backup of the loaded device key, as a JSON string.
+ *
+ * `pin` and `recoveryKey` each independently protect the signing seed. Format
+ * and KDFs: `packages/crypto/src/backup.rs`.
  */
 export async function generateBackupFromState(
-  pubkey: string,
   pin: string,
   recoveryKey: string,
 ): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('generate_backup_from_state', { pubkey, pin, recoveryKey })
+    return tauriInvoke<string>('generate_backup_from_state', { pin, recoveryKey })
   }
   throw new Error('WASM backup generation not yet implemented')
+}
+
+/**
+ * Check that a recovery key or PIN opens a backup, without restoring it.
+ * Rejects with the Rust error when it does not.
+ */
+export async function verifyBackupCredential(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+): Promise<void> {
+  if (useTauri) {
+    return tauriInvoke<void>('backup_verify_credential', { backupJson, credential, isRecoveryKey })
+  }
+  throw new Error('WASM backup verification not yet implemented')
+}
+
+/**
+ * Restore a device key from a backup and load it into CryptoState under a new PIN.
+ * The recovered seed never enters the webview — only the re-encrypted blob comes back.
+ */
+export async function restoreBackupAndLoad(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+  newPin: string,
+  deviceId: string,
+): Promise<EncryptedDeviceKeys> {
+  if (useTauri) {
+    return tauriInvoke<EncryptedDeviceKeys>('restore_backup_and_load', {
+      backupJson, credential, isRecoveryKey, newPin, deviceId,
+    })
+  }
+  throw new Error('WASM backup restore not yet implemented')
 }
 
 /**

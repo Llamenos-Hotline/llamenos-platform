@@ -19,6 +19,7 @@ import { utf8ToBytes } from '@noble/ciphers/utils.js'
 import type { Database } from '../db'
 import { auditLog } from '../db/schema'
 import { hashIP } from '../lib/crypto'
+import { getClientIp, CLIENT_FINGERPRINT_PREFIX } from '../lib/client-ip'
 import { ServiceError } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -525,9 +526,14 @@ export async function audit(
 ): Promise<void> {
   const meta: Record<string, unknown> = {}
   if (ctx) {
-    const rawIp = ctx.request.headers.get('CF-Connecting-IP')
-      ?? ctx.request.headers.get('x-forwarded-for')
-    meta.ip = rawIp ? hashIP(rawIp, ctx.hmacSecret) : null
+    // One source of truth for who the client is (#1606): getClientIp honors
+    // forwarded-for headers only when a trusted proxy is declared, and never
+    // honors CF-Connecting-IP. Reading the raw headers here produced an audit
+    // trail an unauthenticated caller could write any address into.
+    // The fingerprint fallback is not an address, so it is recorded as null
+    // rather than hashed and passed off as one.
+    const clientIp = getClientIp(ctx.request)
+    meta.ip = clientIp.startsWith(CLIENT_FINGERPRINT_PREFIX) ? null : hashIP(clientIp, ctx.hmacSecret)
     // Hash UA: preserves same-browser pattern detection without storing fingerprint
     const rawUa = ctx.request.headers.get('User-Agent')
     meta.ua = rawUa ? bytesToHex(sha256(utf8ToBytes(rawUa))) : null

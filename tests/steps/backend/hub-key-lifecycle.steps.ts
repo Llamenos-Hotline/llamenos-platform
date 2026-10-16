@@ -11,8 +11,9 @@ import {
   apiPut,
   apiPost,
   createVolunteerViaApi,
+  uniqueName,
 } from '../../api-helpers'
-import { generateContentKey, wrapKeyForRecipient, x25519PubkeyFromSeed } from '../../crypto-helpers'
+import { generateContentKey, wrapKeyForRecipient, hpkeRecipientForSeed } from '../../crypto-helpers'
 import { LABEL_HUB_KEY_WRAP } from '@shared/crypto-labels'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -64,17 +65,17 @@ Before({ tags: '@crypto' }, async ({ world }) => {
 async function generateRealEnvelopeEntry(pubkey: string, memberSeedHex: string): Promise<EnvelopeEntry> {
   // Use real HPKE to wrap a random hub key for this member
   const hubKey = generateContentKey()
-  const x25519Pub = x25519PubkeyFromSeed(memberSeedHex)
-  const envelope = await wrapKeyForRecipient(hubKey, x25519Pub, memberSeedHex, LABEL_HUB_KEY_WRAP)
+  const member = hpkeRecipientForSeed(memberSeedHex)
+  const envelope = await wrapKeyForRecipient(hubKey, member.pubkeyHex, member.skHex, LABEL_HUB_KEY_WRAP)
   return { pubkey, ct: envelope.ct, enc: envelope.enc }
 }
 
 async function createHub(request: import('@playwright/test').APIRequestContext): Promise<string> {
-  const slug = `bdd-hub-key-${Date.now()}`
+  const slug = uniqueName('bdd-hub-key')
   const res = await apiPost<{ hub: { id: string } }>(
     request,
     '/hubs',
-    { name: `Hub Key Test ${Date.now()}`, slug },
+    { name: `Hub Key Test ${slug}`, slug },
   )
   expect([200, 201]).toContain(res.status)
   return res.data.hub.id
@@ -302,11 +303,11 @@ function getAuthGuardState(world: Record<string, unknown>): AuthGuardState {
 }
 
 Given('a hub exists with a member {string}', async ({ request, world }, name: string) => {
-  const slug = `bdd-hub-auth-${Date.now()}`
+  const slug = uniqueName('bdd-hub-auth')
   const hubRes = await apiPost<{ hub: { id: string } }>(
     request,
     '/hubs',
-    { name: `Hub Auth Test ${Date.now()}`, slug },
+    { name: `Hub Auth Test ${slug}`, slug },
   )
   expect([200, 201]).toContain(hubRes.status)
   const hubId = hubRes.data.hub.id

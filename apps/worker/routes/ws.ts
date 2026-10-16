@@ -126,8 +126,13 @@ export function createWsHandler() {
       }
 
       switch (msg.type) {
+        // `subscribe` adds a hub to the user's single channel; `unsubscribe`
+        // removes it again. Both are user-scoped: the hub's events then reach
+        // (or stop reaching) every connection this user holds, not only this
+        // socket — see ConnectionManager.publishToHub for why delivery is not
+        // filtered per connection (#1655).
         case 'subscribe': {
-          // Validate hub membership
+          // Validate hub membership — the isolation boundary for delivery
           if (!data.connState.hubs.has(msg.hubId)) {
             ws.sendText(JSON.stringify({ type: 'error', code: 'not_member', message: `Not a member of hub ${msg.hubId}` }))
             return
@@ -240,7 +245,6 @@ async function handleAuth(
     pubkey: msg.pubkey,
     ws: ws as unknown as WebSocket,
     hubs: new Set(user.hubs),
-    subscribedHubs: new Set(),
     lastReplayAt: 0,
   }
   data.connState = connState

@@ -34,6 +34,23 @@ enum TestAdminAPI {
              baseURL: baseURL, file: file, line: line)
     }
 
+    /// Create a hub through the route an operator uses and return its id. Use this when a
+    /// scenario needs a hub in a known state that the class-wide hub — shared by every
+    /// test in the class — cannot promise, e.g. one that has no records.
+    static func createHub(name: String, baseURL: String,
+                          file: StaticString = #filePath, line: UInt = #line) -> String? {
+        guard let data = send("POST", "/api/hubs", ["name": name], baseURL: baseURL, file: file, line: line) else {
+            return nil
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hub = json["hub"] as? [String: Any],
+              let id = hub["id"] as? String, !id.isEmpty else {
+            XCTFail("POST /api/hubs did not return { hub: { id } }", file: file, line: line)
+            return nil
+        }
+        return id
+    }
+
     /// Send a signed JSON request and fail the calling test on anything but 2xx.
     @discardableResult
     static func send(_ method: String, _ path: String, _ body: [String: Any]? = nil, baseURL: String,

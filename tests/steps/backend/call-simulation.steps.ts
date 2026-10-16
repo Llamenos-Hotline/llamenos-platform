@@ -165,7 +165,7 @@ Given('a shift is currently active with {int} volunteers', async ({ request, wor
   const hubId = getScenarioState(world).hubId
   getCallSimState(world).shiftVolunteers = []
   for (let i = 0; i < count; i++) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName(`Shift Vol ${i}`) })
+    const vol = await createVolunteerViaApi(request, { name: uniqueName(`Shift Vol ${i}`), hubId })
     getCallSimState(world).shiftVolunteers.push({ pubkey: vol.pubkey, deviceKey: vol.deviceKey })
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
   }
@@ -201,15 +201,15 @@ Given('no shift is active and no fallback is configured', async ({ request, worl
 })
 
 Given('two overlapping shifts with different volunteers', async ({ request, world }) => {
-  const vol1 = await createVolunteerViaApi(request, { name: uniqueName('Overlap Vol 1') })
-  const vol2 = await createVolunteerViaApi(request, { name: uniqueName('Overlap Vol 2') })
+  const hubId = getScenarioState(world).hubId
+  const vol1 = await createVolunteerViaApi(request, { name: uniqueName('Overlap Vol 1'), hubId })
+  const vol2 = await createVolunteerViaApi(request, { name: uniqueName('Overlap Vol 2'), hubId })
   getCallSimState(world).shiftVolunteers = [
     { pubkey: vol1.pubkey, deviceKey: vol1.deviceKey },
     { pubkey: vol2.pubkey, deviceKey: vol2.deviceKey },
   ]
   getScenarioState(world).volunteers.push({ ...vol1, onShift: true }, { ...vol2, onShift: true })
 
-  const hubId = getScenarioState(world).hubId
   await createShiftViaApi(request, {
     name: uniqueName('Overlap Shift A'),
     ...ALWAYS_ON_SHIFT,
@@ -228,7 +228,7 @@ Given('two overlapping shifts with different volunteers', async ({ request, worl
 
 Given('a shift configured for 9am-5pm in America\\/New_York', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
-  const vol = await createVolunteerViaApi(request, { name: uniqueName('TZ Vol') })
+  const vol = await createVolunteerViaApi(request, { name: uniqueName('TZ Vol'), hubId })
   getCallSimState(world).shiftVolunteers = [{ pubkey: vol.pubkey, deviceKey: vol.deviceKey }]
   getScenarioState(world).volunteers.push({ ...vol, onShift: true })
   // NOTE: createShiftViaApi (tests/api-helpers.ts, outside this lane's ownership) has no
@@ -301,7 +301,7 @@ Given('an incoming call from {string}', async ({ request, world }, callerNumber:
   const hubId = getScenarioState(world).hubId
   // Ensure at least one volunteer on shift for calls to route
   if (getScenarioState(world).volunteers.length === 0) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName('Sim Vol') })
+    const vol = await createVolunteerViaApi(request, { name: uniqueName('Sim Vol'), hubId })
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Sim Shift'),
@@ -322,7 +322,7 @@ Given('an incoming call from {string}', async ({ request, world }, callerNumber:
 Given('an incoming call from {string} in {string}', async ({ request, world }, callerNumber: string, language: string) => {
   const hubId = getScenarioState(world).hubId
   if (getScenarioState(world).volunteers.length === 0) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName('Lang Vol') })
+    const vol = await createVolunteerViaApi(request, { name: uniqueName('Lang Vol'), hubId })
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Lang Shift'),
@@ -345,7 +345,7 @@ Given('an incoming call from {string} for hub {string}', async ({ request, world
   // the test validates hub-specific routing, not a specific hub name)
   const workerHubId = getScenarioState(world).hubId
   if (getScenarioState(world).volunteers.length === 0) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName('Hub Vol') })
+    const vol = await createVolunteerViaApi(request, { name: uniqueName('Hub Vol'), hubId: workerHubId })
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Hub Shift'),

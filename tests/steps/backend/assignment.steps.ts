@@ -49,7 +49,7 @@ Before({ tags: '@backend' }, async ({ world }) => {
 
 Given('an entity type with autoAssign enabled and threshold {int} exists', async ({ request, world }, threshold: number) => {
   const hubId = getScenarioState(world).hubId
-  const name = `auto_assign_scoring_${Date.now()}`
+  const name = uniqueName('auto_assign_scoring', '_')
   const label = 'Auto Assign Scoring'
   const { data, status } = await apiPost<Record<string, unknown>>(
     request,
@@ -160,7 +160,7 @@ Then('each suggestion should include {string} array', async ({ world }, field: s
 
 Given('an arrest case linked to an entity type requiring specialization {string} exists', async ({ request, world }, spec: string) => {
   const hubId = getScenarioState(world).hubId
-  const name = `spec_req_type_${Date.now()}`
+  const name = uniqueName('spec_req_type', '_')
   const label = 'Specialization Required Type'
   const { data: etData, status: etStatus } = await apiPost<Record<string, unknown>>(
     request,

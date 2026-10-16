@@ -54,6 +54,23 @@ llamenos_transcription_enabled: false
 llamenos_asterisk_enabled: false
 llamenos_signal_enabled: false
 
+# ─── Self-hosted telephony image (only used if asterisk is enabled) ─
+# The sip-bridge sidecar's image. The bridge is obtained by WHICHEVER ROUTE
+# this deployment uses for the app image — never a different one (issue #1697):
+#   * Docker Hub release path: leave empty. Derived from llamenos_app_image by
+#     putting `-sip-bridge` on the REPOSITORY, which is how
+#     .github/workflows/docker.yml publishes it.
+#   * docker save | docker load: build and side-load it next to the app image —
+#         docker build -t llamenos-sip-bridge:<version> ./sip-bridge
+#         docker save llamenos-sip-bridge:<version> | ssh <host> sudo docker load
+#     then set this to the tag you loaded.
+#   * REQUIRED when llamenos_app_image is digest-pinned (repo@sha256:...): one
+#     image's digest cannot imply a sibling's, so nothing can be derived.
+# roles/llamenos-asterisk refuses to declare the service at all unless this
+# image is actually obtainable, rather than rendering a compose entry that
+# answers `manifest unknown` while the deploy reports success.
+# llamenos_sip_bridge_image: ""
+
 # ─── Service Images ─────────────────────────────────────────────
 # Pin all images to specific versions + digests for reproducible deployments.
 # Image digests must be re-verified when updating tags.
@@ -72,9 +89,10 @@ llamenos_postgres_image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2
 llamenos_caddy_image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
 llamenos_rustfs_image: rustfs/rustfs:latest
 llamenos_whisper_image: fedirz/faster-whisper-server:0.4.0-cpu@sha256:f77aaf85e2e811aae96a60b04c85ff7cb0e0f2be6729c6fd7600340842412539 # see #722
-llamenos_asterisk_image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 20.x
+llamenos_asterisk_image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
 llamenos_signal_image: bbernhard/signal-cli-rest-api:0.92@sha256:702db336aa1a87611595e66755c9ccf65b24c25589857301eabef1d46056b3c5
 llamenos_ntfy_image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
+llamenos_coturn_image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd2872dcf74313b3bc6cf9b69cc81be6fb3 # pinned 2026-05-18
 
 # ─── Application ─────────────────────────────────────────────────
 # Directory on the host where app files are stored
@@ -167,10 +185,82 @@ compose_profiles: []
 whisper_model: Systran/faster-whisper-base
 whisper_device: cpu
 
-# Asterisk PBX settings (only used if asterisk is enabled)
+# Asterisk PBX settings (only used if asterisk is enabled). sip-bridge is
+# deployed alongside asterisk automatically — see roles/llamenos-asterisk —
+# there is no separate toggle for it.
 ari_username: llamenos
 ari_password: ""
 bridge_secret: ""
+# pbx_type: asterisk              # roles/llamenos-asterisk/defaults/main.yml
+# sip_bridge_local_port: 3101     # roles/llamenos-asterisk/defaults/main.yml
+
+# ─── In-app calling (SIP edge + relay) ───────────────────────────
+# In-app audio needs three things on a deployed host, and before #1657 the
+# Ansible path supplied none of them: a PBX (llamenos_asterisk_enabled above),
+# a SIP edge clients can reach, and a TURN relay for volunteers behind a
+# symmetric NAT (common on mobile carriers). All default off — a phone-only
+# deployment wants none of them.
+
+# Kamailio, the SIP edge. It is what publishes 5060/5061 and what holds the TLS
+# certificate a volunteer's client verifies; roles/llamenos-asterisk publishes
+# no SIP port at all. It also writes the trust anchor the app publishes in
+# /api/telephony/sip-token (SIP_TLS_CA_FILE), which is the ONLY way a
+# self-signed PBX certificate becomes verifiable on iOS or Android —
+# liblinphone does not consult the platform trust store for its SIP socket.
+kamailio_enabled: false
+# Every hostname or IP a volunteer may dial for the SIP domain — these become
+# subjectAltName entries, and a name missing here fails the handshake however
+# the chain is anchored. See roles/kamailio/defaults/main.yml for the rest
+# (kamailio_tls_cert_source_dir for a real certificate, kamailio_sip_domain).
+# kamailio_tls_sans:
+#   - "sip.hotline.example.org"
+
+# Where the app container sees the SIP edge's trust anchor. The HOST path is
+# kamailio_tls_dir (roles/kamailio); the mount is in both app compose templates.
+# Only change this if something else already owns the path inside the container.
+sip_tls_anchor_container_path: /var/lib/llamenos/sip-tls
+
+# CoTURN, the STUN/TURN relay. Required for a volunteer behind a symmetric NAT:
+# the server-reflexive candidate STUN discovers is useless there (the mapping is
+# per-destination) and the relay candidate is what carries the call.
+llamenos_coturn_enabled: false
+# The hostname clients are told to reach the relay on. MUST resolve, from the
+# volunteer's network, to the host running coturn.
+turn_host: "{{ domain }}"
+# Shared secret the worker mints time-limited credentials under and coturn
+# verifies them against — one value, rendered into both, so they cannot drift.
+# REQUIRED when llamenos_coturn_enabled is true. >= 32 chars.
+# Generate with: openssl rand -hex 32
+turn_secret: ""
+# Only needed behind 1:1 NAT (a cloud VM whose public address is not on any of
+# its own interfaces): `public/private`, e.g. 203.0.113.4/10.0.0.4. Without it
+# coturn allocates a relay candidate naming the private address.
+# turn_external_ip: ""
+# The address coturn listens on, and the address named in every relay
+# candidate. Both default to the host's primary address (the source of its
+# default route) and rarely need setting — but they must NEVER be empty: unset,
+# coturn enumerates every interface (each docker bridge included), logs
+# "NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED", and can source RTCP from an
+# address its relay candidate never named, which an ICE peer rejects (#1689).
+# Where the host has several public interfaces, set turn_relay_ip to the
+# address turn_host resolves to.
+# turn_listening_ip: "203.0.113.4"
+# turn_relay_ip: "203.0.113.4"
+# coturn's listening port, and the relay port range (one port per allocation,
+# so this bounds concurrent relayed calls). Both are opened on the firewall by
+# roles/llamenos-coturn.
+turn_port: 3478
+turn_relay_min_port: 49160
+turn_relay_max_port: 49200
+# The realm coturn puts in its challenges — logged, and it belongs to this
+# deployment.
+turn_realm: "{{ domain }}"
+
+# Master secret every volunteer's PJSIP endpoint password is derived from.
+# REQUIRED when llamenos_asterisk_enabled is true. Rotating it rotates every
+# volunteer's SIP credential at once, which is why it is not HMAC_SECRET.
+# Generate with: openssl rand -hex 32
+sip_registrar_secret: ""
 
 # Signal bridge settings (only used if signal is enabled).
 # Must match the token configured in the signal-notifier sidecar.
@@ -221,13 +311,64 @@ demo_mode_confirm: ""
 # clause from the banner text. Only takes effect when demo_mode is true.
 demo_reset_cron: ""
 
-# ─── Developer/Test Routes ────────────────────────────────────────
-# NEVER set dev_routes_enabled: true or a non-empty dev_reset_secret when
-# app_environment is "production" — same guard as demo_mode applies.
-# Currently only takes effect when app_environment is "development"
-# (widening that to staging/demo instances is tracked separately — #723).
+# ─── Developer/Test Routes (the end-to-end suite's staging knobs) ─
+# These two open the `/api/test-*` HTTP surface, which can WIPE THE DATABASE
+# and mint identities without authenticating. They exist for exactly one
+# purpose: letting the end-to-end suite bootstrap and reset a THROWAWAY
+# staging target (#723 — before this the suite got 404s and could only ever
+# run against a developer's localhost). Never enable them on a host that
+# holds real caller, volunteer or note data; a reset is not recoverable.
+#
+# Rules, all three enforced rather than advisory:
+#   - app_environment MUST be "staging" (or "development" for a local box).
+#     "production" is refused, and so is any unrecognised value — the app uses
+#     an allowlist of environments, not a denylist, so a typo never serves
+#     /api/test-*. The deployment PROFILE is not the axis: both the hosted and
+#     the self-hosted shape run the same per-service roles, so only
+#     app_environment says whether this instance is production.
+#   - dev_reset_secret MUST be at least 32 characters outside "development"
+#     (MIN_DEPLOYED_SECRET_LENGTH in apps/worker/lib/dev-surfaces.ts). The
+#     worker refuses to serve the routes with a shorter one, so a weak value
+#     fails closed rather than exposing a guessable backdoor. Generate with:
+#       openssl rand -hex 32
+#     Treat it like any other secret in this file: vault it, never commit it.
+#   - dev_routes_enabled MUST be true as well. The environment alone does not
+#     open the surface — a staging host mis-set without this flag stays shut.
+#
+# Four independent layers refuse the production combination, so a mistake in
+# one place cannot carry a backdoor onto a production host:
+#   1. playbooks/tasks/guard-dev-routes.yml hard-fails the play before any file
+#      is written to the target (imported by preflight.yml, which both the
+#      hosted and the self-hosted deploy path run).
+#   2. templates/env/_worker-required-env.j2 omits both vars from the rendered
+#      .env when app_environment is "production" (see the comment on them).
+#   3. apps/worker/lib/config.ts throws at process startup if ENVIRONMENT is
+#      production and either var (or E2E_TEST_SECRET) is set.
+#   4. apps/worker/lib/dev-surfaces.ts answers 404 at the router and at every
+#      handler, with production checked before any flag is read.
+# deploy/ansible/scripts/check-required-env.py renders layer 2 in both
+# directions on every CI run, so the staging half cannot silently rot either.
 dev_routes_enabled: false
 dev_reset_secret: ""
+# Two further consequences of dev_routes_enabled on a non-production host,
+# both deliberate and both needed for the suite to mean anything:
+#   - PostgreSQL is published on 127.0.0.1 ONLY, and attached to an extra
+#     non-internal bridge. The suite asserts persisted state straight from the
+#     database and reaches it over `ssh -L`; nothing off the host can connect
+#     either way. The bridge is there because Docker silently installs no DNAT
+#     rule for a container attached only to an internal-only network — it is
+#     redundant while llamenos-internal remains a plain bridge, and keeps the
+#     publish working if that is ever hardened.
+#   - The target's admin_pubkey / admin_decryption_pubkey must be the test
+#     harness's own admin key pair, because POST /api/test-reset re-seeds the
+#     admin from them. A staging E2E target therefore does not keep an admin
+#     identity of its own.
+# See docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md for the full runbook.
+#
+# Example for a throwaway staging target only — adjust app_environment above:
+#   app_environment: staging
+#   dev_routes_enabled: true
+#   dev_reset_secret: "<64 hex chars from: openssl rand -hex 32>"
 
 # ─── Cross-Host Networking ──────────────────────────────────────
 # Enable TLS between services on different hosts (recommended for multi-host)

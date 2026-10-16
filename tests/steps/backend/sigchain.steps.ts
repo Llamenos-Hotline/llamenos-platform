@@ -186,7 +186,11 @@ When('the user appends a link with duplicate seqNo {int}', async ({ request, wor
   const s = getS(world)
   expect(s.user).toBeDefined()
   const payload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
-  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo, linkType: 'genesis', prevHash: '', payload })
+  // `prevHash: null` is the genesis spelling the wire schema accepts since #1537
+  // aligned genesis with the crate verifier (seq 1, null prevHash); `''` is a
+  // legacy alias. The scenario must reach the continuity check that answers 409,
+  // not be turned away by schema validation with a 400.
+  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo, linkType: 'genesis', prevHash: null, payload })
   setLastResponse(world, res)
 })
 

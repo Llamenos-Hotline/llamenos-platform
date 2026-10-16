@@ -10,7 +10,7 @@ import { Hono } from 'hono'
 import { createDatabase, closeDb, getDb, schema } from '../../apps/worker/db'
 import { eq, count } from 'drizzle-orm'
 import { cleanupExpiredNonces } from '../../apps/worker/services/webhook-replay'
-import { createServices, type Services } from '../../apps/worker/services'
+import { createServices, schedulerServiceDeps, type Services } from '../../apps/worker/services'
 import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
@@ -72,6 +72,15 @@ const services: Services = createServices(db, {
     SERVER_SECRET: serverSecret || undefined,
     ENVIRONMENT: process.env.ENVIRONMENT || undefined,
     DOMAIN: process.env.DOMAIN || undefined,
+    // The dev-surface factors, for services that decide per request whether a
+    // caller is the test harness (services/provider-setup/signal-registration.ts).
+    // All three are needed: `devSurfaceRequestAuthorized` wants the environment
+    // allowlist, the explicit opt-in AND the configured secret — ENVIRONMENT
+    // alone is what #1623 replaced.
+    DEV_ROUTES_ENABLED: process.env.DEV_ROUTES_ENABLED || undefined,
+    DEV_RESET_SECRET: process.env.DEV_RESET_SECRET || undefined,
+    E2E_TEST_SECRET: process.env.E2E_TEST_SECRET || undefined,
+    SIGNAL_QUEUE_RETENTION_DAYS: process.env.SIGNAL_QUEUE_RETENTION_DAYS || undefined,
   },
 })
 console.log('[llamenos] Services initialized')
@@ -149,6 +158,17 @@ const env: Record<string, unknown> = {
   NOTIFIER_URL: notifierUrl || undefined,
   NOTIFIER_API_KEY: notifierApiKey || undefined,
   NOTIFIER_TOKEN_SECRET: notifierTokenSecret || undefined,
+  // Per-volunteer SIP registrar — apps/worker/routes/webrtc.ts (/sip-token
+  // issuance against our own Asterisk) and telephony/registrar.ts.
+  SIP_REGISTRAR_SECRET: process.env.SIP_REGISTRAR_SECRET || undefined,
+  TURN_HOST: process.env.TURN_HOST || undefined,
+  TURN_SECRET: process.env.TURN_SECRET || undefined,
+  // The SIP edge's public TLS trust anchor, handed to clients by /sip-token so
+  // they can verify a self-hosted PBX certificate. Read lazily per issuance
+  // (registrar.ts caches on mtime), so the edge may write it after the app
+  // starts — which it does on a first boot.
+  SIP_TLS_CA_FILE: process.env.SIP_TLS_CA_FILE || undefined,
+  SIP_TLS_CA_PEM: process.env.SIP_TLS_CA_PEM || undefined,
   CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
   // --- Push delivery ---
@@ -212,16 +232,14 @@ const outboxCleanupTimer = setInterval(() => {
 console.log('[llamenos] Event outbox initialized (drain: 30s, cleanup: 5m)')
 
 // --- Start scheduled task poller with blast delivery worker ---
+// `schedulerServiceDeps` supplies every service the background workers
+// need, with a type that is required in every field — so an omission here is a
+// compile error, not a worker that never runs. It was three workers, silently:
+// retention purge and erasure expiry (#1127) and, with `hubShred` missing, the
+// hub crypto-shred executor, which left every hub marked for shred fully
+// readable past its deadline while the request reported as scheduled (#1566).
 services.scheduler.start({
-  blastsService: services.blasts,
-  settingsService: services.settings,
-  auditService: services.audit,
-  identityService: services.identity,
-  // Omitting these two is what kept the retention-purge, erasure-expiry
-  // and re-encryption workers from ever running (#1127). TaskSchedulerDeps
-  // now requires them, so this cannot silently regress.
-  retentionService: services.retention,
-  erasureService: services.erasure,
+  ...schedulerServiceDeps(services),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
       return await getMessagingAdapterFromService(channel, services.settings, hmacSecret)

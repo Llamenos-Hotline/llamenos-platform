@@ -100,11 +100,18 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const { callSid, callerNumber, volunteers, callbackUrl, hubId } = params
+    const { callSid, callerNumber, volunteers, appTargets, callbackUrl, hubId } = params
     const result = await this.bridgeRequest('POST', '/ring', {
       parentCallSid: callSid,
       callerNumber,
       volunteers: volunteers.map((v) => ({ pubkey: v.callToken, phone: v.phone })),
+      // In-app legs are INVITEs to a registered AOR on this PBX, not calls out
+      // through the trunk, so the bridge needs them as their own list. Omitted
+      // entirely when there are none, so the bridge's payload is unchanged for
+      // a phone-only call.
+      ...(appTargets && appTargets.length > 0
+        ? { appTargets: appTargets.map((t) => ({ callToken: t.callToken, sipAor: t.sipAor })) }
+        : {}),
       callbackUrl,
       hubId,
     })
@@ -271,6 +278,20 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     }
     const speechLang = speechLanguageFor(lang)
     return speechUrl(text(speechLang), speechLang)
+  }
+
+  /**
+   * A voice CAPTCHA's digits as generated speech, one clip per digit: ten
+   * clips a language, shared by every call, where a clip per challenge would
+   * leave a PBX media-cache entry (never evicted) per call. Each clip's URL
+   * hides its digit, so the answer is in no log and no cache key (#1352).
+   */
+  protected captchaDigitUrls(digits: string, lang: string, speechUrl: SpeechUrlBuilder | undefined): string[] {
+    if (!speechUrl) {
+      throw new Error(`${this.getPbxType()} cannot speak a CAPTCHA itself: the route must pass a speech URL builder`)
+    }
+    const speechLang = speechLanguageFor(lang)
+    return digits.split('').map((digit) => speechUrl.captchaDigit(digit, speechLang))
   }
 
   // --- Private helpers ---

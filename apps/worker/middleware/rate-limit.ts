@@ -8,28 +8,33 @@
 import type { MiddlewareHandler } from 'hono'
 import type { AppEnv } from '../types'
 import { createLogger } from '../lib/logger'
+// Import from client-ip directly, not lib/crypto — crypto.ts pulls in
+// @llamenos/crypto/ffi (bun:ffi) at module load, which a non-Bun test
+// harness importing this middleware cannot resolve (issue #1127).
+import { getClientIp } from '../lib/client-ip'
+import { devSurfaceRequestAuthorized } from '../lib/dev-surfaces'
 
 const log = createLogger('rate-limit')
 
-export type RateLimitTier = 'strict' | 'write' | 'read' | 'webhook' | 'unlimited'
+export type RateLimitTier = 'strict' | 'write' | 'read' | 'webhook' | 'poll' | 'unlimited'
 
 export const RATE_LIMIT_TIERS: Record<Exclude<RateLimitTier, 'unlimited'>, { maxRequests: number; windowMs: number }> = {
   strict:  { maxRequests: 5,   windowMs: 60_000 },
   write:   { maxRequests: 30,  windowMs: 60_000 },
   read:    { maxRequests: 120, windowMs: 60_000 },
   webhook: { maxRequests: 300, windowMs: 60_000 },
-}
-
-function extractIp(c: { req: { header(name: string): string | undefined } }): string {
-  return c.req.header('CF-Connecting-IP')
-    || c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
-    || 'unknown'
+  // Polling tier: unauthenticated poll-until-ready endpoints (device-link room
+  // polling). Sized for a 1–2s poll interval with headroom for the two devices
+  // of a link flow sharing one NAT IP (#1789). Brute-force protection for the
+  // polled resource belongs per-room and failure-counted (routes/provisioning.ts),
+  // not on this shared per-IP budget.
+  poll:    { maxRequests: 120, windowMs: 60_000 },
 }
 
 /**
  * Create a rate limiting middleware for the given tier.
  *
- * - `strict` and `webhook` tiers key by IP (no auth required)
+ * - `strict`, `webhook` and `poll` tiers key by IP (no auth required)
  * - `write` and `read` tiers key by authenticated pubkey
  * - `unlimited` returns a no-op middleware
  */
@@ -48,10 +53,45 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
       return next()
     }
 
-    // Determine key: IP-based for strict/webhook, pubkey-based for write/read
+    // The end-to-end suite can now be pointed at a DEPLOYED non-production
+    // target (docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md). There it is not on
+    // `development`, so until this bypass existed its own per-scenario setup
+    // was rate-limited: `POST /api/hubs` from the `workerHub` fixture answered
+    // 429, the fixture threw, and every step in the scenario then reported
+    // `Cannot destructure property 'admin'`. Measured against a staging VM,
+    // that single cause accounted for essentially every failure.
+    //
+    // The bypass is keyed on the REQUEST presenting the `/api/test-*` shared
+    // secret — not on the environment, and not on dev surfaces merely being
+    // switched on. The distinction is the whole point: a staging host is
+    // reachable from the internet, so an anonymous caller there must still be
+    // throttled exactly as on production. Only the holder of
+    // `DEV_RESET_SECRET` — i.e. the harness — is exempt, and that holder can
+    // already wipe the database through `/api/test-reset`, so exempting it from
+    // a throttle grants nothing it did not have.
+    //
+    // `devSurfaceRequestAuthorized` also re-checks the environment allowlist
+    // and `DEV_ROUTES_ENABLED`, so `ENVIRONMENT=production` cannot reach this
+    // even if a secret were somehow configured there (and lib/config.ts
+    // refuses to start such a process in the first place).
+    if (devSurfaceRequestAuthorized(c.env ?? {}, c.req.header('X-Test-Secret'))) {
+      return next()
+    }
+
+    // Determine key: IP-based for strict/webhook/poll, pubkey-based for write/read.
+    // getClientIp() only honors X-Forwarded-For/X-Real-IP when
+    // TRUST_PROXY_HEADERS=true (operator confirms a reverse proxy sets
+    // them, and strips the ones it does not set); otherwise it falls back
+    // to the Bun socket address. It never honors CF-Connecting-IP — no CDN
+    // sits in front of this architecture, so that header is always
+    // client-supplied here (#1606). Trusting a
+    // raw client-supplied header unconditionally — the previous
+    // behavior — let an unauthenticated caller vary that header to both
+    // write unbounded api_rate_limits rows AND dodge the limit it's
+    // supposed to be subject to (issue #1127).
     let identifier: string | undefined
-    if (tier === 'strict' || tier === 'webhook') {
-      identifier = extractIp(c)
+    if (tier === 'strict' || tier === 'webhook' || tier === 'poll') {
+      identifier = getClientIp(c.req.raw)
     } else {
       identifier = c.get('pubkey')
       if (!identifier) {

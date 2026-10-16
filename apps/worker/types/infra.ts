@@ -65,6 +65,8 @@ export interface Env {
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
   CORS_ALLOWED_ORIGINS?: string   // Comma-separated allowed origins (overrides hardcoded defaults)
   HMAC_SECRET: string
+  /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
+  SIGNAL_QUEUE_RETENTION_DAYS?: string
   METRICS_SCRAPE_TOKEN?: string
   E2E_TEST_SECRET?: string
   DEV_RESET_SECRET?: string
@@ -93,6 +95,27 @@ export interface Env {
   /** @deprecated Use SIGNAL_NOTIFIER_BEARER_TOKEN */
   NOTIFIER_API_KEY?: string
   NOTIFIER_TOKEN_SECRET?: string  // HMAC secret for signing client registration tokens (falls back to HMAC_SECRET)
+
+  // Per-volunteer SIP registrar (profile: asterisk/telephony — see telephony/registrar.ts).
+  // Master secret from which each volunteer's unique PJSIP endpoint secret is
+  // derived (HMAC-SHA256, domain-separated by HMAC_SIP_VOLUNTEER_SECRET). Not
+  // the hub credential and not the ARI password: rotating it rotates every
+  // volunteer's SIP secret at once.
+  SIP_REGISTRAR_SECRET?: string // Falls back to HMAC_SECRET when unset
+  // CoTURN relay (profile: telephony). Both must be set to mint the
+  // time-limited TURN credentials /sip-token returns (RFC 8489 long-term
+  // credentials against the coturn --static-auth-secret); either unset means
+  // no relay is wired and clients get STUN-only ICE servers.
+  TURN_HOST?: string            // Public host of the CoTURN server (also serves STUN on :3478)
+  TURN_SECRET?: string          // The coturn --static-auth-secret (never the SIP secret)
+  // The SIP edge's PUBLIC TLS trust anchor, published to clients in
+  // /sip-token so they can VERIFY a self-hosted PBX certificate no public CA
+  // vouches for — it reaches them over this app's own pinned HTTPS channel.
+  // Unset = clients verify against the device trust store (correct only when
+  // the edge serves a publicly-trusted certificate). Never key material:
+  // readSipTlsTrustAnchor publishes certificate blocks only.
+  SIP_TLS_CA_FILE?: string      // Path written by the SIP edge's entrypoint (sip-tls-cert.sh)
+  SIP_TLS_CA_PEM?: string       // The same anchor inline; takes precedence over the file
 
   // GlitchTip/Sentry DSN for client-side crash reporting (Epic 293)
   GLITCHTIP_DSN?: string
@@ -124,7 +147,8 @@ export interface Env {
 // ---------------------------------------------------------------------------
 
 export interface DeviceRecord {
-  platform: 'ios' | 'android'
+  platform: 'ios' | 'android' | 'desktop'
+  /** Empty string for desktop devices, which register without a push token (#1548) */
   pushToken: string
   wakeKeyPublic: string      // X25519 pubkey (hex) for wake-tier HPKE
   /**
