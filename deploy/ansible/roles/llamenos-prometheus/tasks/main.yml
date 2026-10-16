@@ -89,7 +89,11 @@
 - name: Assert the llamenos-app scrape target is actually up
   ansible.builtin.assert:
     that:
-      - _prometheus_app_up_check is succeeded
+      # Paired tests in ONE expression, not `is succeeded`: that is an alias of
+      # `not failed`, so a SKIPPED probe (no measurement taken) would read as a
+      # healthy target (#1617). `ignore_errors` on the query leaves `failed`
+      # set when its retries are exhausted, which is what the second half sees.
+      - _prometheus_app_up_check is not skipped and _prometheus_app_up_check is not failed
     fail_msg: >-
       up{job="llamenos-app"} did not report 1 within 60s of starting Prometheus.
       Check that metrics_scrape_token matches METRICS_SCRAPE_TOKEN in the app

@@ -17,6 +17,7 @@
   "glitchtip_dsn": "https://checkfixture@glitchtip.example.org/1",
   "llamenos_signal_enabled": true,
   "signal_notifier_bearer_token": "check-required-env-fixture-signal-token",
+  "metrics_scrape_token": "check-required-env-fixture-metrics-scrape-token",
   "dev_routes_enabled": false,
   "dev_reset_secret": "",
   "_comment_1624": "Added with #1624. Each of these switches on a var the worker READS and that no render previously reached: METRICS_SCRAPE_TOKEN (the Prometheus scrape bearer), SIGNAL_QUEUE_RETENTION_DAYS, and one <PROVIDER>_WEBHOOK_IPS line. SIP_BRIDGE_URL, SIP_REGISTRAR_SECRET and TURN_* are rendered by calling-scenario.extra-vars.json. Dummy non-secret placeholders, as above.",
