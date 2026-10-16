@@ -591,6 +591,66 @@ pub extern "C" fn ffi_ed25519_sign(
     0
 }
 
+/// Build the canonical device-auth message (the exact bytes that get signed).
+///
+/// Exposed so the Bun server shares one construction path with every client
+/// instead of re-implementing the layout. `nonce` may be null (length 0) to
+/// select the nonce-less shape, which carries its own domain-separation label.
+///
+/// All string arguments are UTF-8. Returns the number of bytes written into
+/// `out` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn ffi_build_auth_message(
+    pubkey_hex: *const u8,
+    pubkey_len: usize,
+    timestamp: u64,
+    method: *const u8,
+    method_len: usize,
+    path: *const u8,
+    path_len: usize,
+    nonce: *const u8,
+    nonce_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(pubkey_hex, method, path, out);
+    check_input_size!(pubkey_len, method_len, path_len, nonce_len);
+
+    let pubkey_slice = unsafe { std::slice::from_raw_parts(pubkey_hex, pubkey_len) };
+    let method_slice = unsafe { std::slice::from_raw_parts(method, method_len) };
+    let path_slice = unsafe { std::slice::from_raw_parts(path, path_len) };
+    let nonce_slice: &[u8] = nullable_slice!(nonce, nonce_len);
+
+    let (Ok(pubkey_str), Ok(method_str), Ok(path_str)) = (
+        std::str::from_utf8(pubkey_slice),
+        std::str::from_utf8(method_slice),
+        std::str::from_utf8(path_slice),
+    ) else {
+        set_error("pubkey, method and path must be valid UTF-8");
+        return -5;
+    };
+    let nonce_str = if nonce.is_null() {
+        None
+    } else {
+        match std::str::from_utf8(nonce_slice) {
+            Ok(n) => Some(n),
+            Err(_) => {
+                set_error("nonce must be valid UTF-8");
+                return -5;
+            }
+        }
+    };
+
+    let message =
+        crate::auth::build_auth_message(pubkey_str, timestamp, method_str, path_str, nonce_str);
+    check_output_size!(out_len, message.len());
+
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, message.len()) };
+    out_slice.copy_from_slice(&message);
+    message.len() as i32
+}
+
 /// Ed25519 verify. Returns 0 if valid, -1 if invalid signature.
 #[no_mangle]
 pub extern "C" fn ffi_ed25519_verify(

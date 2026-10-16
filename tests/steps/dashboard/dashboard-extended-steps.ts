@@ -29,13 +29,10 @@ Then('I should see the blasts screen', async ({ page }) => {
 })
 
 When('I tap the back button on blasts', async ({ page }) => {
-  const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const backVisible = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (backVisible) {
-    await backBtn.click()
-  } else {
-    await page.goBack()
-  }
+  // The desktop blasts route has no in-page back control; back is history
+  // navigation (the window's back button / Alt+Left).
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toContainText(/blasts/i, { timeout: Timeouts.ELEMENT })
+  await page.goBack()
 })
 
 // --- Break toggle ---
@@ -45,9 +42,15 @@ Given('the volunteer is on shift', async ({ page }) => {
 })
 
 Given('the volunteer is on break', async ({ page }) => {
+  // The dashboard toggle offers "Clock In" while on break. Toggle only when not
+  // already on break: an unconditional click would take a volunteer who was on
+  // break OFF it.
   const breakBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
-  await expect(breakBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await breakBtn.click()
+  await expect(breakBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
+  if ((await breakBtn.textContent())?.includes('Clock Out')) {
+    await breakBtn.click()
+  }
+  await expect(breakBtn).toContainText('Clock In', { timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the break toggle button', async ({ page }) => {
@@ -55,11 +58,10 @@ Then('I should see the break toggle button', async ({ page }) => {
 })
 
 Then('I should see the on-break banner', async ({ page }) => {
+  // The status card always has text ("Current Shift" heading), so non-empty text
+  // proves nothing: it must name the break state.
   const breakBanner = page.getByTestId(TestIds.DASHBOARD_SHIFT_STATUS)
-  await expect(breakBanner).toBeVisible({ timeout: Timeouts.ELEMENT })
-  // Verify break state is reflected in the status text
-  const statusText = await breakBanner.textContent()
-  expect(statusText).toBeTruthy()
+  await expect(breakBanner).toContainText('On Break', { timeout: Timeouts.ELEMENT })
 })
 
 // --- Dashboard help navigation ---
@@ -94,21 +96,15 @@ Then('I should see the quick actions grid', async ({ page }) => {
 // --- Dashboard errors ---
 
 Given('a dashboard error is displayed', async ({ page }) => {
-  // Error messages are transient and may not appear in normal test env — check gracefully
-  const errorEl = page.getByTestId(TestIds.ERROR_MESSAGE)
-  const isVisible = await errorEl.isVisible({ timeout: 3000 }).catch(() => false)
-  if (!isVisible) {
-    // No error displayed — subsequent steps should handle gracefully
-    return
-  }
+  // A precondition, so it must hold: the old body returned early when no error
+  // was on screen, and the scenario then "dismissed" nothing and passed.
+  await expect(page.getByTestId(TestIds.ERROR_MESSAGE)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 When('I dismiss the dashboard error', async ({ page }) => {
   const errorEl = page.getByTestId(TestIds.ERROR_MESSAGE)
-  const isVisible = await errorEl.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isVisible) {
-    await errorEl.click()
-  }
+  await expect(errorEl).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await errorEl.click()
 })
 
 Then('the dashboard error card should not be visible', async ({ page }) => {

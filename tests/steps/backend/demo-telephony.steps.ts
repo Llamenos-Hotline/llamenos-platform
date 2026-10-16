@@ -15,12 +15,14 @@ import {
   apiPatch,
   apiPost,
   apiPut,
+  clockInViaApi,
   createHubViaApi,
   createShiftViaApi,
   createVolunteerViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   listAuditLogViaApi,
   setFallbackGroupViaApi,
+  uniqueName,
 } from '../../api-helpers'
 import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
@@ -40,7 +42,7 @@ function secondHubId(world: Record<string, unknown>): string {
 
 After({ tags: '@demo-mode' }, async ({ request, world }) => {
   const id = getState<string | undefined>(world, SECOND_HUB_KEY)
-  if (id) await deleteHubViaApi(request, id).catch(() => {})
+  if (id) await deleteHubViaApiIfPresent(request, id)
 })
 
 function demoPath(hubId: string, suffix: string): string {
@@ -68,6 +70,9 @@ Given(
       userPubkeys: volunteers.map(v => v.pubkey),
       hubId,
     })
+    // Clock-in is per hub, and ringing requires it alongside the shift, so being
+    // clocked into the first hub does not put them on shift in this one.
+    for (const vol of volunteers) await clockInViaApi(request, hubId, vol.deviceKey)
     const res = await apiPut(request, demoPath(hubId, '/mock'), { enabled: true })
     expect(res.status, `enabling the mock on the second hub failed: ${JSON.stringify(res.data)}`).toBe(200)
   },
@@ -91,6 +96,8 @@ Given('every on-shift volunteer is on break', async ({ request, world }) => {
 Given('a volunteer who is not on shift is in the hub fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
   const fallback = await createVolunteerViaApi(request, { name: `BDD Fallback ${Date.now()}` })
+  // Only members who can answer in the hub are rung — a global role alone carries no hub authority (#1037)
+  await addHubMemberViaApi(request, state.hubId, fallback.pubkey, ['role-volunteer'])
   await setFallbackGroupViaApi(request, [fallback.pubkey], state.hubId)
   state.volunteers.push(fallback)
 })
@@ -105,12 +112,14 @@ After({ tags: '@demo-mode' }, async ({ request }) => {
     instanceFallbackDirty = false
     await setFallbackGroupViaApi(request, [])
   }
-  for (const hubId of extraHubIds.splice(0)) await deleteHubViaApi(request, hubId).catch(() => {})
+  for (const hubId of extraHubIds.splice(0)) await deleteHubViaApiIfPresent(request, hubId)
 })
 
 Given('a volunteer is in the instance-wide fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
   const vol = await createVolunteerViaApi(request, { name: `BDD Instance Fallback ${Date.now()}` })
+  // A member of the called hub, so the only thing keeping them from ringing is WHICH group is read
+  await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
   instanceFallbackDirty = true
   // No hubId: the un-hubbed route edits the instance-level group, not this hub's.
   await setFallbackGroupViaApi(request, [vol.pubkey])
@@ -119,7 +128,7 @@ Given('a volunteer is in the instance-wide fallback group', async ({ request, wo
 
 Given('a volunteer who belongs only to another hub is also in the hub fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
-  const otherHubId = await createHubViaApi(request, `BDD Other Hub ${Date.now()}`)
+  const otherHubId = await createHubViaApi(request, uniqueName('BDD Other Hub'))
   extraHubIds.push(otherHubId)
   const outsider = await createVolunteerViaApi(request, { name: `BDD Other-Hub Vol ${Date.now()}` })
   await addHubMemberViaApi(request, otherHubId, outsider.pubkey)

@@ -69,6 +69,14 @@ pub const LABEL_DEVICE_PROVISION: &str = "llamenos:device-provision";
 /// HKDF salt for provisioning key derivation
 pub const LABEL_PROVISIONING_SALT: &str = "llamenos:provisioning:v1";
 
+/// AEAD associated data for the device provisioning key bundle.
+///
+/// Distinct from `LABEL_DEVICE_PROVISION` (which keys the AEAD) so that a
+/// payload from one provisioning bundle format can never authenticate under
+/// another: changing the bundle format means minting a new label, and an
+/// old-format payload simply fails the GCM tag check.
+pub const LABEL_DEVICE_PROVISION_BUNDLE: &str = "llamenos:device-provision-bundle:v1";
+
 // --- SAS Verification ---
 
 /// SAS HKDF salt for provisioning verification
@@ -177,8 +185,32 @@ pub const LABEL_PUK_PREVIOUS_GEN: &str = "llamenos:puk:prev-gen:v1";
 
 // --- NEW: Device Auth (Ed25519) ---
 
-/// Ed25519 device authentication token label
+/// Ed25519 device authentication token label (message carries a nonce).
 pub const LABEL_DEVICE_AUTH: &str = "llamenos:device-auth:v1";
+
+/// Ed25519 device authentication token label for the nonce-less message shape.
+///
+/// A handful of routes carry their auth fields in the request body and have no
+/// `nonce` field in their wire schema (`POST /api/invites/redeem`). Those
+/// signatures cover a five-field message instead of six. Reusing
+/// `LABEL_DEVICE_AUTH` for both shapes would let one layout be reinterpreted as
+/// the other — a URL path may legally contain `:`, so
+/// `…:POST:/x:deadbeef` is simultaneously a nonce-less message for path
+/// `/x:deadbeef` and a nonce-bearing message for path `/x` with nonce
+/// `deadbeef`. Giving the nonce-less shape its own domain-separation label makes
+/// the two cryptographically disjoint: a nonce-less token can never be replayed
+/// as a nonce-bearing request, and stripping the nonce from a nonce-bearing
+/// token can never downgrade it — both fail signature verification.
+pub const LABEL_DEVICE_AUTH_NO_NONCE: &str = "llamenos:device-auth-no-nonce:v1";
+
+// --- Per-volunteer SIP registrar (#1556) ---
+
+/// Domain separation for the per-volunteer SIP registrar secret the worker
+/// derives from the telephony master secret
+/// (`base64url(HMAC-SHA256(master, "<label>:<pubkey>"))`). Each volunteer
+/// endpoint on the self-hosted Asterisk gets its own credential, so a leak of
+/// one endpoint's secret reveals nothing about any other volunteer's.
+pub const HMAC_SIP_VOLUNTEER_SECRET: &str = "llamenos:sip-volunteer-secret:v1";
 
 // --- NEW: Items Key / Note Epoch ---
 
@@ -355,6 +387,13 @@ pub const LABEL_FIREHOSE_BUFFER_ENCRYPT: &str = "llamenos:firehose:buffer-encryp
 /// Firehose report wrapping (admin HPKE envelope)
 pub const LABEL_FIREHOSE_REPORT_WRAP: &str = "llamenos:firehose:report-wrap";
 
+// --- IVR media URLs (#1325, #1347) ---
+
+/// HMAC over the path of an IVR audio URL the worker hands a telephony
+/// provider (an operator-uploaded prompt or generated speech), so the public
+/// media routes serve only URLs the worker minted.
+pub const HMAC_IVR_MEDIA_URL: &str = "llamenos:ivr-media-url:v1";
+
 // --- SAS Derivation (EP02) ---
 
 /// Domain separation for SAS emoji derivation (device verification ceremony)
@@ -364,9 +403,17 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // LABEL REGISTRY — maps numeric IDs (u8) to label strings.
 //
 // The index IS the labelId in the HPKE envelope wire format.
-// Indices are stable and MUST NEVER be reordered or reused.
+// Indices are stable and MUST NEVER be reordered or reused. This is ENFORCED:
+// `label_registry_indices_are_append_only` pins every index -> label-string
+// pair against `packages/crypto/label-registry.wire.snapshot` (#1646). Append
+// at the END only, then regenerate that snapshot.
 //
-// Indices 0-35: existing labels (from crypto-labels.json ordering)
+// `packages/protocol/crypto-labels.json` is NOT the authority for these numbers.
+// It is a JSON object (unordered members), it is the source of truth for the
+// label STRINGS and for codegen, and its member order does not match this array
+// — they diverge from index 7 onward. Never derive a labelId from it.
+//
+// Indices 0-35: the labels that existed when the registry was introduced
 // Indices 36-46: new v3 labels (PUK, device auth, items key, SFrame, MLS)
 // Index 53: TOMBSTONE (was LABEL_ECIES_V2_SALT — ECIES removed, index reserved)
 // Indices 57-68: labels synced from crypto-labels.json
@@ -375,6 +422,9 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Indices 77-79: Role Encryption (EP01)
 // Index 80: EP02 Device Identity
 // Indices 92-94: Firehose Agent (EP-Firehose)
+// Index 96: IVR media URL signing
+// Index 98: Per-volunteer SIP registrar (#1556)
+// Index 99: Device provisioning key bundle
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -505,6 +555,14 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_FIREHOSE_AGENT_SEAL,     // 93
     LABEL_FIREHOSE_BUFFER_ENCRYPT, // 94
     LABEL_FIREHOSE_REPORT_WRAP,    // 95
+    // 96: IVR media URL signing (#1325, #1347)
+    HMAC_IVR_MEDIA_URL, // 96
+    // 97: nonce-less device auth message shape (#1389)
+    LABEL_DEVICE_AUTH_NO_NONCE, // 97
+    // 98: per-volunteer SIP registrar (#1556)
+    HMAC_SIP_VOLUNTEER_SECRET, // 98
+    // 99: Device provisioning key bundle
+    LABEL_DEVICE_PROVISION_BUNDLE, // 99
 ];
 
 /// Look up a label string by its numeric ID.
@@ -587,6 +645,10 @@ mod tests {
         assert_eq!(LABEL_PUK_WRAP_TO_DEVICE, "llamenos:puk:wrap:device:v1");
         assert_eq!(LABEL_PUK_PREVIOUS_GEN, "llamenos:puk:prev-gen:v1");
         assert_eq!(LABEL_DEVICE_AUTH, "llamenos:device-auth:v1");
+        assert_eq!(
+            LABEL_DEVICE_AUTH_NO_NONCE,
+            "llamenos:device-auth-no-nonce:v1"
+        );
         assert_eq!(LABEL_ITEMS_KEY_EXPORT, "llamenos:items-key-export:v1");
         assert_eq!(LABEL_NOTE_EPOCH_KEY, "llamenos:note-epoch-key:v1");
         assert_eq!(LABEL_HUB_PTK_PREV_GEN, "llamenos:hub-ptk:prev-gen:v1");
@@ -677,9 +739,25 @@ mod tests {
             "llamenos:firehose:buffer-encrypt"
         );
         assert_eq!(LABEL_FIREHOSE_REPORT_WRAP, "llamenos:firehose:report-wrap");
+        assert_eq!(HMAC_IVR_MEDIA_URL, "llamenos:ivr-media-url:v1");
+        assert_eq!(
+            HMAC_SIP_VOLUNTEER_SECRET,
+            "llamenos:sip-volunteer-secret:v1"
+        );
+        assert_eq!(
+            LABEL_DEVICE_PROVISION_BUNDLE,
+            "llamenos:device-provision-bundle:v1"
+        );
     }
 
     /// Verify registry index stability.
+    ///
+    /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
+    /// 59 of the 100 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// and it cannot see a changed label STRING behind an unchanged constant
+    /// name. `label_registry_indices_are_append_only` below is the complete
+    /// form — index -> string for every entry, pinned in a snapshot file. This
+    /// test is kept as a readable, redundant cross-check, not as the guard.
     #[test]
     fn registry_indices_stable() {
         assert_eq!(id_to_label(0), Some(LABEL_NOTE_KEY));
@@ -735,6 +813,10 @@ mod tests {
         assert_eq!(id_to_label(93), Some(LABEL_FIREHOSE_AGENT_SEAL));
         assert_eq!(id_to_label(94), Some(LABEL_FIREHOSE_BUFFER_ENCRYPT));
         assert_eq!(id_to_label(95), Some(LABEL_FIREHOSE_REPORT_WRAP));
+        assert_eq!(id_to_label(96), Some(HMAC_IVR_MEDIA_URL));
+        assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
+        assert_eq!(id_to_label(98), Some(HMAC_SIP_VOLUNTEER_SECRET));
+        assert_eq!(id_to_label(99), Some(LABEL_DEVICE_PROVISION_BUNDLE));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).
@@ -848,5 +930,171 @@ mod tests {
             registry_count, json_count,
             "LABEL_REGISTRY has {registry_count} labels but crypto-labels.json has {json_count}"
         );
+    }
+
+    // =========================================================================
+    // WIRE-FORMAT APPEND-ONLY GUARD (#1646)
+    //
+    // `LABEL_REGISTRY`'s index IS the `labelId` byte in the HPKE envelope wire
+    // format, so index -> label-string is a published contract shared by
+    // desktop, iOS, Android and the server. Inserting, reordering, removing or
+    // re-using an index silently repoints every envelope already in the field:
+    // a receiver resolves the old id to a different label, and either rejects
+    // the envelope (label enforcement, the Albrecht defense) or — worse —
+    // accepts it under a label the sender never intended, which is the exact
+    // confusion domain separation exists to prevent.
+    //
+    // The three pre-existing guards cannot see this. `label_registry_matches_json`
+    // and `label_count_matches_json` compare SET MEMBERSHIP and COUNT; both are
+    // order-blind by construction (and `serde_json::Map` is a `BTreeMap` here,
+    // since `preserve_order` is off, so they iterate the JSON alphabetically and
+    // could not observe file order even if they tried). `no_duplicate_labels`
+    // rejects a repeated string but is perfectly happy with a swap.
+    //
+    // Note what is deliberately NOT guarded: `packages/protocol/crypto-labels.json`
+    // order. That file is a JSON object whose member order is incidental, it is
+    // the source of truth for label STRINGS and codegen only, and its order has
+    // never matched the registry (they diverge from index 7 and disagree at 92
+    // of 99 positions). A guard asserting they match would be asserting
+    // something untrue of main, and making it true would invent an ordering
+    // nothing reads. The registry's own indices are the thing with wire meaning,
+    // so they are what gets pinned.
+    // =========================================================================
+
+    /// The exact bytes of `label-registry.wire.snapshot`, rendered from the
+    /// live `LABEL_REGISTRY`. Header included, so regenerating reproduces the
+    /// file byte-for-byte.
+    fn render_label_registry_snapshot() -> String {
+        let mut out = String::new();
+        out.push_str(SNAPSHOT_HEADER);
+        for (idx, &label) in LABEL_REGISTRY.iter().enumerate() {
+            let rendered = if label.is_empty() { TOMBSTONE } else { label };
+            out.push_str(&format!("{idx}\t{rendered}\n"));
+        }
+        out
+    }
+
+    const TOMBSTONE: &str = "<TOMBSTONE>";
+
+    const SNAPSHOT_HEADER: &str = "\
+# LABEL_REGISTRY wire snapshot — the labelId -> label-string contract.
+#
+# Each line is `<index>\\t<label string>`, where <index> is the labelId byte in
+# the HPKE envelope wire format. `<TOMBSTONE>` is a permanently retired index.
+#
+# APPEND ONLY. An existing line may NEVER change: no insertion, no reordering,
+# no removal, no reuse of a tombstoned index. Any of those repoints labelIds
+# that are already on the wire and in stored envelopes on every platform.
+#
+# Rust constant NAMES are intentionally absent: renaming a constant does not
+# change the wire, so it must not churn this file. Only the strings are pinned.
+#
+# To APPEND a label: add it to the end of LABEL_REGISTRY, then regenerate:
+#   cargo test --manifest-path packages/crypto/Cargo.toml -- --ignored \\
+#     --exact labels::tests::regenerate_label_registry_snapshot
+# The resulting diff must be additions at the end ONLY. A reviewer who sees a
+# changed or deleted line should reject the PR, not re-run the regenerator.
+";
+
+    /// CI GUARD: `LABEL_REGISTRY` indices are append-only and permanent.
+    ///
+    /// Fails on insertion, reordering, removal and tombstone reuse — and on a
+    /// legitimate append until the snapshot is deliberately regenerated, so the
+    /// wire-format change is visible in review rather than implicit.
+    #[test]
+    fn label_registry_indices_are_append_only() {
+        let expected = include_str!("../label-registry.wire.snapshot");
+        let actual = render_label_registry_snapshot();
+        if actual == expected {
+            return;
+        }
+
+        // Parse both into `index -> string`, ignoring comments/blank lines, so
+        // the failure can name the offending index instead of dumping a diff.
+        fn parse(s: &str) -> Vec<String> {
+            s.lines()
+                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+                .enumerate()
+                .map(|(pos, l)| {
+                    let (idx, label) = l
+                        .split_once('\t')
+                        .unwrap_or_else(|| panic!("malformed snapshot line: {l:?}"));
+                    assert_eq!(
+                        idx.parse::<usize>().expect("snapshot index is a number"),
+                        pos,
+                        "snapshot line {pos} is numbered {idx}: the file must list every index \
+                         from 0 upward with no gaps"
+                    );
+                    label.to_string()
+                })
+                .collect()
+        }
+
+        let pinned = parse(expected);
+        let live = parse(&actual);
+
+        // 1. Any index that already exists must be unchanged. This is the class
+        //    that is never legitimate, so report it first and loudest.
+        for (idx, (was, now)) in pinned.iter().zip(live.iter()).enumerate() {
+            assert_eq!(
+                was, now,
+                "LABEL_REGISTRY index {idx} CHANGED: labelId {idx} was \"{was}\" and is now \
+                 \"{now}\".\n\n\
+                 That index is the labelId byte in the HPKE envelope wire format. Changing it \
+                 repoints every envelope already produced with labelId {idx} on desktop, iOS, \
+                 Android and the server — they will reject it, or decrypt it under a label the \
+                 sender never intended.\n\n\
+                 Indices are APPEND ONLY. If you inserted or reordered a label, move it to the \
+                 END of LABEL_REGISTRY instead. If you removed one, restore it, or retire it in \
+                 place by replacing its entry with \"\" (a tombstone, as index 53 already is) and \
+                 regenerating the snapshot. Never re-use a tombstoned index.\n\n\
+                 Do NOT silence this by regenerating packages/crypto/label-registry.wire.snapshot."
+            );
+        }
+
+        // 2. Nothing may be dropped off the end either.
+        assert!(
+            live.len() >= pinned.len(),
+            "LABEL_REGISTRY SHRANK from {} entries to {}: indices {}..{} were removed.\n\n\
+             Retiring a label does not free its index — the labelId stays spent forever. Replace \
+             the entry with \"\" in place (a tombstone, as index 53 already is) rather than \
+             deleting it, then regenerate the snapshot.",
+            pinned.len(),
+            live.len(),
+            live.len(),
+            pinned.len() - 1
+        );
+
+        // 3. Only a pure append is left. Legitimate, but it is a wire-format
+        //    change, so it has to be recorded deliberately.
+        let appended: Vec<String> = live[pinned.len()..].to_vec();
+        panic!(
+            "LABEL_REGISTRY grew by {} entry/entries ({}) — a WIRE FORMAT CHANGE for every \
+             platform.\n\n\
+             The append itself is fine; the snapshot has to record it so the new labelId is \
+             visible in review. Regenerate:\n\n  \
+             cargo test --manifest-path packages/crypto/Cargo.toml -- --ignored --exact \
+             labels::tests::regenerate_label_registry_snapshot\n\n\
+             Then confirm the diff to packages/crypto/label-registry.wire.snapshot is additions \
+             at the END only, and add the label to packages/protocol/crypto-labels.json as well \
+             (label_registry_matches_json enforces that).",
+            appended.len(),
+            appended.join(", ")
+        );
+    }
+
+    /// Rewrites `packages/crypto/label-registry.wire.snapshot` from the live
+    /// `LABEL_REGISTRY`. `#[ignore]`d: it is a deliberate maintenance action
+    /// after an APPEND, never something CI runs.
+    ///
+    ///   cargo test --manifest-path packages/crypto/Cargo.toml -- --ignored \
+    ///     --exact labels::tests::regenerate_label_registry_snapshot
+    #[test]
+    #[ignore = "writes label-registry.wire.snapshot; run deliberately after appending a label"]
+    fn regenerate_label_registry_snapshot() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/label-registry.wire.snapshot");
+        std::fs::write(path, render_label_registry_snapshot())
+            .unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
+        println!("wrote {path} ({} entries)", LABEL_REGISTRY.len());
     }
 }

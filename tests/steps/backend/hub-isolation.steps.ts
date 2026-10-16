@@ -21,7 +21,7 @@ import {
   apiPut,
   apiDelete,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   createUserViaApi,
   createRoleViaApi,
   addHubMemberViaApi,
@@ -119,13 +119,13 @@ function listedUsers(state: IsolationState): ListedUser[] {
 
 Before({ tags: '@hub-isolation' }, async ({ request, world }) => {
   // Create two isolated hubs with separate admin users
-  const hubAId = await createHubViaApi(request, `bdd-iso-a-${Date.now()}`)
-  const hubBId = await createHubViaApi(request, `bdd-iso-b-${Date.now()}`)
+  const hubAId = await createHubViaApi(request, uniqueName('bdd-iso-a'))
+  const hubBId = await createHubViaApi(request, uniqueName('bdd-iso-b'))
 
   // Create admin users for each hub
   const roleA = await createRoleViaApi(request, {
     name: uniqueName('iso-admin-a'),
-    slug: `iso-admin-a-${Date.now()}`,
+    slug: `iso-admin-a-${crypto.randomUUID()}`,
     permissions: [
       'telephony:manage-providers',
       'telephony:view-providers',
@@ -135,7 +135,7 @@ Before({ tags: '@hub-isolation' }, async ({ request, world }) => {
   })
   const roleB = await createRoleViaApi(request, {
     name: uniqueName('iso-admin-b'),
-    slug: `iso-admin-b-${Date.now()}`,
+    slug: `iso-admin-b-${crypto.randomUUID()}`,
     permissions: [
       'telephony:manage-providers',
       'telephony:view-providers',
@@ -172,8 +172,8 @@ Before({ tags: '@hub-isolation' }, async ({ request, world }) => {
 
 After({ tags: '@hub-isolation' }, async ({ request, world }) => {
   const state = getIS(world)
-  await deleteHubViaApi(request, state.hubA.hubId).catch(() => {})
-  await deleteHubViaApi(request, state.hubB.hubId).catch(() => {})
+  await deleteHubViaApiIfPresent(request, state.hubA.hubId)
+  await deleteHubViaApiIfPresent(request, state.hubB.hubId)
 })
 
 // ── Given ──────────────────────────────────────────────────────────
@@ -316,7 +316,7 @@ When('{string} POSTs to create a provider template', async ({ request, world }, 
     '/provider-templates',
     {
       name: uniqueName('iso-template'),
-      slug: `iso-template-${Date.now()}`,
+      slug: uniqueName('iso-template'),
       providerType: 'twilio',
       defaultChannels: ['voice'],
     },

@@ -158,7 +158,7 @@ Given('I sent a message in a conversation', async ({ page, backendRequest, worke
 
   const outboundBody = `Outbound delivery probe ${Date.now()}`
   const base = `/hubs/${workerHub}/conversations/${seeded.conversationId}`
-  const { encryptedContent, readerEnvelopes } = encryptMessageForDesktop(outboundBody, [ADMIN_SEED])
+  const { encryptedContent, readerEnvelopes } = await encryptMessageForDesktop(outboundBody, [ADMIN_SEED])
   const send = await apiPost<{ id?: string }>(backendRequest, `${base}/messages`, {
     encryptedContent,
     readerEnvelopes,
@@ -231,18 +231,6 @@ Then('the volunteer name should appear on the conversation', async ({ page }) =>
   // stops showing the italic "Waiting" assignee placeholder.
   const assigned = page.locator('text=/assigned|claimed|volunteer/i').first()
   await expect(assigned).toBeVisible({ timeout: Timeouts.ELEMENT })
-})
-
-Given('multiple volunteers are available', async () => {
-  // Precondition — verified by API in setup
-})
-
-When('a new conversation arrives', async () => {
-  // Simulated inbound message — server-side precondition
-})
-
-Then('it should be assigned to the volunteer with lowest load', async () => {
-  // Auto-assignment logic is server-side — verified by integration tests
 })
 
 Given('conversations exist across SMS and WhatsApp', async ({ page, backendRequest, workerHub }) => {

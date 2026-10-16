@@ -179,6 +179,7 @@ pub fn run() {
             crypto::get_device_pubkeys,
             // Auth (Ed25519)
             crypto::create_auth_token_from_state,
+            crypto::create_nonceless_auth_token_from_state,
             // Ed25519 signing/verification
             crypto::ed25519_sign_from_state,
             crypto::ed25519_verify,
@@ -219,6 +220,9 @@ pub fn run() {
             crypto::device_import_and_load,
             crypto::generate_ephemeral_ed25519,
             crypto::generate_backup_from_state,
+            crypto::generate_recovery_key,
+            crypto::backup_verify_credential,
+            crypto::restore_backup_and_load,
             // H17: Stronghold vault file wipe
             crypto::wipe_keys,
             // Device provisioning (seed NEVER enters the webview)

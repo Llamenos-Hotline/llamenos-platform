@@ -154,6 +154,10 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
     return mockResponse('reject', { status: 403 })
   }
 
+  hangupResponse(): TelephonyResponse {
+    return mockResponse('hangup')
+  }
+
   async hangupCall(callSid: string): Promise<void> {
     this.record({ type: 'hangup', callSid })
   }

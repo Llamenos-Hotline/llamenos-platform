@@ -45,7 +45,7 @@ uploads.post('/entity-file',
     const fileId = crypto.randomUUID()
     const uploadedAt = new Date().toISOString()
 
-    await c.env.R2_BUCKET.put(`entity-files/${fileId}`, buffer)
+    await c.env.BLOB_STORAGE.put(`entity-files/${fileId}`, buffer)
     await audit(services.audit, 'entityFileUploaded', pubkey, { fileId, size: blob.size }, undefined, null)
 
     return c.json({ fileId, uploadedAt }, 201)
@@ -138,7 +138,7 @@ uploads.put('/:id/chunks/:chunkIndex',
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    // Store chunk directly in R2
+    // Store chunk directly in blob storage
     const body = await c.req.arrayBuffer()
     if (!body || body.byteLength === 0) {
       return c.json({ error: 'Empty chunk' }, 400)
@@ -148,7 +148,7 @@ uploads.put('/:id/chunks/:chunkIndex',
       return c.json({ error: `Chunk too large (max ${MAX_CHUNK_SIZE / 1024 / 1024}MB)` }, 400)
     }
 
-    const r2Key = `files/${uploadId}/chunk-${String(chunkIndex).padStart(6, '0')}`
+    const blobKey = `files/${uploadId}/chunk-${String(chunkIndex).padStart(6, '0')}`
     const storageBreaker = getCircuitBreaker({
       name: 'blob:r2',
       failureThreshold: 5,
@@ -156,14 +156,14 @@ uploads.put('/:id/chunks/:chunkIndex',
     })
     await storageBreaker.execute(() =>
       withRetry(
-        () => c.env.R2_BUCKET.put(r2Key, body),
+        () => c.env.BLOB_STORAGE.put(blobKey, body),
         {
           maxAttempts: 3,
           baseDelayMs: 200,
           maxDelayMs: 2000,
           isRetryable: isRetryableError,
           onRetry: (attempt, error) => {
-            logger.warn(`R2 put retry ${attempt} for ${r2Key}`, { error })
+            logger.warn(`blob put retry ${attempt} for ${blobKey}`, { error })
             incCounter('llamenos_retry_attempts_total', { service: 'blob', operation: 'put' })
           },
         },
@@ -216,11 +216,11 @@ uploads.post('/:id/complete',
       }, 400)
     }
 
-    // Concatenate chunks into a single R2 object
+    // Concatenate chunks into a single blob
     const chunks: Uint8Array[] = []
     for (let i = 0; i < fileRecord.totalChunks; i++) {
-      const r2Key = `files/${uploadId}/chunk-${String(i).padStart(6, '0')}`
-      const obj = await c.env.R2_BUCKET.get(r2Key)
+      const blobKey = `files/${uploadId}/chunk-${String(i).padStart(6, '0')}`
+      const obj = await c.env.BLOB_STORAGE.get(blobKey)
       if (!obj) {
         return c.json({ error: `Missing chunk ${i}` }, 500)
       }
@@ -244,25 +244,25 @@ uploads.post('/:id/complete',
 
     await completeStorageBreaker.execute(() =>
       withRetry(
-        () => c.env.R2_BUCKET.put(`files/${uploadId}/content`, assembled),
+        () => c.env.BLOB_STORAGE.put(`files/${uploadId}/content`, assembled),
         {
           maxAttempts: 3,
           baseDelayMs: 300,
           maxDelayMs: 3000,
           isRetryable: isRetryableError,
           onRetry: (attempt, error) => {
-            logger.warn(`R2 put content retry ${attempt}`, { error })
+            logger.warn(`blob put content retry ${attempt}`, { error })
             incCounter('llamenos_retry_attempts_total', { service: 'blob', operation: 'put' })
           },
         },
       )
     )
 
-    // Store envelopes and metadata in R2
+    // Store envelopes and metadata in blob storage
     await withRetry(
       async () => {
-        await c.env.R2_BUCKET.put(`files/${uploadId}/envelopes`, JSON.stringify(fileRecord.recipientEnvelopes))
-        await c.env.R2_BUCKET.put(`files/${uploadId}/metadata`, JSON.stringify(fileRecord.encryptedMetadata))
+        await c.env.BLOB_STORAGE.put(`files/${uploadId}/envelopes`, JSON.stringify(fileRecord.recipientEnvelopes))
+        await c.env.BLOB_STORAGE.put(`files/${uploadId}/metadata`, JSON.stringify(fileRecord.encryptedMetadata))
       },
       {
         maxAttempts: 3,
@@ -270,7 +270,7 @@ uploads.post('/:id/complete',
         maxDelayMs: 2000,
         isRetryable: isRetryableError,
         onRetry: (attempt) => {
-            logger.warn(`R2 put envelopes/metadata retry ${attempt}`)
+            logger.warn(`blob put envelopes/metadata retry ${attempt}`)
             incCounter('llamenos_retry_attempts_total', { service: 'blob', operation: 'put' })
         },
       },
@@ -278,8 +278,8 @@ uploads.post('/:id/complete',
 
     // Clean up individual chunks
     for (let i = 0; i < fileRecord.totalChunks; i++) {
-      const r2Key = `files/${uploadId}/chunk-${String(i).padStart(6, '0')}`
-      await c.env.R2_BUCKET.delete(r2Key)
+      const blobKey = `files/${uploadId}/chunk-${String(i).padStart(6, '0')}`
+      await c.env.BLOB_STORAGE.delete(blobKey)
     }
 
     // Mark file as complete via service

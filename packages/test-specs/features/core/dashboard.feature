@@ -15,7 +15,8 @@ Feature: Dashboard
     And I should see the recent notes card
     And I should see the identity card
 
-  @smoke
+  # @fixme: desktop dashboard has no identity card and v3 has no npub — #1313
+  @smoke @fixme
   Scenario: Dashboard shows npub in identity card
     Given I am authenticated and on the dashboard
     Then the identity card should display my npub
@@ -130,12 +131,14 @@ Feature: Dashboard
 
   # ── Dashboard Error Handling ──────────────────────────────────────
 
-  @regression
+  # @fixme: desktop dashboard has no error card, so "hidden" is vacuously true — #1313
+  @regression @fixme
   Scenario: Error card is hidden by default
     Given I am authenticated and on the dashboard
     Then the dashboard error card should not be visible
 
-  @regression
+  # @fixme: desktop dashboard has no error card to dismiss — #1313
+  @regression @fixme
   Scenario: Error card can be dismissed
     Given I am authenticated and on the dashboard
     And a dashboard error is displayed

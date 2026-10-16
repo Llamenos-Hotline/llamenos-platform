@@ -13,6 +13,7 @@
  */
 import { hpkeSeal, symmetricEncrypt, randomBytes } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { keyWrapAad } from '@shared/envelope-aad'
 import { LABEL_FIREHOSE_BUFFER_ENCRYPT } from '@shared/crypto-labels'
 import { createLogger } from '../lib/logger'
 import type { FirehoseService } from '../services/firehose'
@@ -69,7 +70,7 @@ async function getOrCreateWindowKey(
 
   // HPKE-seal the key for the agent
   const labelBytes = utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT)
-  const aadKeyWrap = utf8ToBytes(`${LABEL_FIREHOSE_BUFFER_ENCRYPT}:key-wrap`)
+  const aadKeyWrap = keyWrapAad(LABEL_FIREHOSE_BUFFER_ENCRYPT)
   const sealed = hpkeSeal(hexToBytes(agentPubkey), windowKeyBytes, labelBytes, aadKeyWrap)
 
   const enc = bytesToHex(sealed.subarray(0, 32))

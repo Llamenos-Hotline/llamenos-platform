@@ -1,4 +1,5 @@
 import { type Page, type APIRequestContext, expect } from '@playwright/test'
+import { devSurfaceSecret } from './dev-surface-secret'
 import { TestIds } from './test-ids'
 
 export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
@@ -504,30 +505,34 @@ export function uniquePhone(): string {
 
 /**
  * Fill in the call ID field in the new note form.
- * Handles both modes: Input (when no recent calls) and Select (when recent calls exist).
- * In Select mode, selects the "Enter manually" option then fills the manual input.
+ *
+ * The form renders exactly one of two mutually exclusive controls (see
+ * `src/client/components/notes/new-note-form.tsx`): a plain Input when the hub
+ * has no recent calls, or a Select listing them when it does. In Select mode the
+ * manual-entry option must be chosen first, which then reveals the same
+ * `note-call-id` input.
+ *
+ * The option is located by `call-id-manual-option`, never by its label: the
+ * label is the translated `notes.enterManually` ("Enter call ID manually"), and
+ * the previous `getByRole('option', { name: /enter manually/i })` never matched
+ * it. That made the Select branch dead code — it timed out the moment a hub
+ * acquired a recent call, which is why "Note detail displays decrypted content"
+ * failed with a bare `locator.click` timeout.
  */
 export async function fillCallId(page: Page, callId: string): Promise<void> {
   const callIdInput = page.getByTestId('note-call-id')
   const callIdSelect = page.getByTestId('call-id-select')
-  const isInput = await callIdInput.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isInput) {
-    await callIdInput.fill(callId)
-    return
-  }
-  // Select mode: choose "Enter manually" then fill
-  const isSelect = await callIdSelect.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isSelect) {
+  // Wait for whichever of the two branches rendered; after that it is settled.
+  await expect(callIdInput.or(callIdSelect)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  if (await callIdSelect.count() > 0) {
     await callIdSelect.click()
-    await page.getByRole('option', { name: /enter manually/i }).click()
-    await callIdInput.fill(callId)
-    return
+    await page.getByTestId('call-id-manual-option').click()
   }
-  // Last resort: try the input by id
-  await page.locator('#call-id').fill(callId)
+  await expect(callIdInput).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await callIdInput.fill(callId)
 }
 
-const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+const TEST_RESET_SECRET = devSurfaceSecret()
 
 export async function resetTestState(request: APIRequestContext) {
   const res = await request.post('/api/test-reset', {
@@ -539,11 +544,21 @@ export async function resetTestState(request: APIRequestContext) {
 }
 
 /**
- * Mock /api/config to include a hub, ensuring currentHubId is set in ConfigProvider.
- * Must be called BEFORE loginAsAdmin() since login loads the page which fetches config.
+ * Pin the app to one known hub.
+ *
+ * The active hub comes from the AUTHENTICATED `GET /api/hubs` — the user's own
+ * memberships — so that is what gets mocked (#1708). `/api/config` is mocked
+ * alongside it for the rest of the pre-login payload; it carries no hub roster
+ * any more (#1710).
+ *
+ * Must be called BEFORE loginAsAdmin(), since login loads the page.
  * Tests that depend on hub-scoped routes (hub-communications, etc.) need this.
  */
 export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promise<void> {
+  const hub = {
+    id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active',
+    createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  }
   await page.route('**/api/config', async (route) => {
     await route.fulfill({
       status: 200,
@@ -556,13 +571,23 @@ export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promi
         demoMode: false,
         demoResetSchedule: null,
         needsBootstrap: false,
-        hubs: [{ id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active', createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
-        defaultHubId: hubId,
         serverPubkey: 'bfaca2c5f99ed9d65db5f522a68820c458ae9ccfe00327c64bc66ccde06e5703',
         wsRelayUrl: '/ws',
         apiVersion: 1,
         minApiVersion: 1,
       }),
+    })
+  })
+  // Membership, not the instance roster: this is what decides the active hub.
+  await page.route('**/api/hubs', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue()
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ hubs: [hub] }),
     })
   })
 }
@@ -587,4 +612,41 @@ export async function flagSeedFailed(page: Page): Promise<void> {
 
 export async function readSeedFailedFlag(page: Page): Promise<boolean> {
   return page.evaluate(() => (window as unknown as SeedFlagWindow).__test_seed_failed === true).catch(() => false)
+}
+
+/**
+ * Create a hub this scenario owns and make it the page's active hub.
+ *
+ * The `workerHub` fixture is worker-scoped: every scenario a Playwright worker
+ * runs shares one hub, and none of them clean up after themselves. A scenario
+ * that asserts an *absence* — an empty triage queue, an empty record list —
+ * therefore cannot assert it in that hub: whether it holds anything depends on
+ * which scenarios the shard happened to put in front of this one, so the same
+ * commit passes or fails as shard composition moves. Such a scenario has to own
+ * the hub it looks at.
+ *
+ * Case management is enabled in the new hub because every caller is a CMS page.
+ * The returned id is the hub to seed through the API for the rest of the
+ * scenario — `workerHub` is no longer what the page is looking at.
+ */
+export async function useScenarioHub(
+  page: Page,
+  request: APIRequestContext,
+  namePrefix: string,
+): Promise<string> {
+  const { createHubViaApi, verifyHubMembership, enableCaseManagementViaApi } = await import('./api-helpers')
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const hubId = await createHubViaApi(request, `${namePrefix}-${suffix}`)
+  await verifyHubMembership(request, hubId)
+  await enableCaseManagementViaApi(request, true, ADMIN_SEED, hubId)
+  // Registered after common/before-hooks.ts set the worker hub, so this one wins
+  // on the next full page load — which loginAsAdmin() performs.
+  await page.addInitScript((id) => {
+    (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB = id
+  }, hubId)
+  await loginAsAdmin(page)
+  await expect
+    .poll(() => page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null), { timeout: Timeouts.AUTH })
+    .toBe(hubId)
+  return hubId
 }

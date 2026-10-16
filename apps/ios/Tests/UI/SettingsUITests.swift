@@ -28,16 +28,24 @@ final class SettingsUITests: BaseUITest {
     }
 
     func testSettingsShowsHubURL() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the settings screen of an app configured with a hub") {
+            // setUp launched without a hub, which is the state this scenario is not about.
+            // Relaunch with the test hub configured, the way a user who has joined one is.
+            app.terminate()
+            app.launchArguments += ["--test-hub-url", testHubURL]
+            launchAuthenticated()
+            navigateToSettings()
         }
-        then("I should see the hub URL or not-configured state") {
-            // Hub URL may not be set in test-authenticated mode
+        then("I should see the hub URL I am connected to") {
             let hubRow = find("settings-hub-url")
-            if hubRow.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Hub URL is displayed")
-            }
-            // Hub URL being absent is acceptable in test mode (no hub configured)
+            XCTAssertTrue(
+                hubRow.waitForExistence(timeout: 10),
+                "Settings should display the configured hub URL"
+            )
+            XCTAssertEqual(
+                hubRow.label, testHubURL,
+                "The hub URL row should show the hub the app is configured with"
+            )
         }
     }
 
@@ -151,11 +159,10 @@ final class SettingsUITests: BaseUITest {
         }
     }
 
-    // MARK: - Device Link (device-link.feature)
+    // MARK: - Device Link (not offered, #1300)
 
-    func testDeviceLinkButtonExists() {
-        given("I am on the settings screen") {
-            // Device link is now in Account Settings sub-page
+    func testAccountSettingsDoesNotOfferDeviceLinking() {
+        given("I am on the account settings screen") {
             let accountLink = find("settings-account-link")
             guard accountLink.waitForExistence(timeout: 5) else {
                 XCTFail("Account settings link should exist")
@@ -163,64 +170,96 @@ final class SettingsUITests: BaseUITest {
             }
             accountLink.tap()
         }
-        then("I should see a device link button") {
-            let linkButton = scrollToFind("settings-link-device", maxSwipes: 10)
-            XCTAssertTrue(
-                linkButton.exists,
-                "Link device button should exist in account settings"
+        then("the whole list renders without a device link entry") {
+            // Erasure is the last section — reaching it means every section has rendered.
+            let erasure = scrollToFind("erasure-request-link", maxSwipes: 10)
+            XCTAssertTrue(erasure.exists, "Account settings should render through to the erasure section")
+            XCTAssertFalse(
+                find("settings-link-device").exists,
+                "Account settings must not offer device linking — it reports success without moving the keys"
             )
         }
     }
 
-    // MARK: - Notification Settings
+    // MARK: - Notification and Security Preferences
+    //
+    // These rows live on the Preferences screen (`settings-preferences-link`), not on the
+    // top-level settings list. They used to be looked up on the top-level list behind an
+    // `if toggle.exists` guard, so they were never found and never asserted.
+
+    private func openPreferences() {
+        let link = scrollToFind("settings-preferences-link", maxSwipes: 10)
+        XCTAssertTrue(link.exists, "Settings should link to the Preferences screen")
+        link.tap()
+        XCTAssertTrue(
+            find("settings-call-sounds").waitForExistence(timeout: 10),
+            "The Preferences screen should open"
+        )
+    }
+
+    private func isOn(_ element: XCUIElement) -> Bool {
+        (element.value as? String) == "1"
+    }
+
+    /// Flip a Form `Toggle` and wait for it to hold the opposite value.
+    ///
+    /// The identifier lands on the merged row, whose centre is over the label; tapping a
+    /// Form Toggle's label does not toggle it, so the trailing edge is tried second (see
+    /// `AdminSettingsUITests.setSwitch`, where this was measured).
+    private func flip(_ toggle: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        let before = isOn(toggle)
+        let taps: [() -> Void] = [
+            { toggle.tap() },
+            { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() },
+        ]
+        for tap in taps {
+            tap()
+            let deadline = Date().addingTimeInterval(3)
+            while isOn(toggle) == before, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            if isOn(toggle) != before { return }
+        }
+        XCTFail("Tapping the toggle should flip it from \(before)", file: file, line: line)
+    }
 
     func testCallSoundsToggleExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences screen") {
+            openPreferences()
         }
-        then("I should see a call sounds toggle") {
-            let toggle = scrollToFind("settings-call-sounds")
-            if toggle.exists {
-                XCTAssertTrue(true, "Call sounds toggle exists")
-            }
+        then("tapping the call sounds toggle should change its value") {
+            flip(find("settings-call-sounds"))
         }
     }
 
     func testMessageAlertsToggleExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences screen") {
+            openPreferences()
         }
-        then("I should see a message alerts toggle") {
-            let toggle = scrollToFind("settings-message-alerts")
-            if toggle.exists {
-                XCTAssertTrue(true, "Message alerts toggle exists")
-            }
+        then("tapping the message alerts toggle should change its value") {
+            flip(find("settings-message-alerts"))
         }
     }
 
     // MARK: - Security Settings
 
     func testAutoLockPickerExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences screen") {
+            openPreferences()
         }
         then("I should see an auto-lock timeout picker") {
             let picker = scrollToFind("settings-auto-lock-picker")
-            if picker.exists {
-                XCTAssertTrue(true, "Auto-lock picker exists")
-            }
+            XCTAssertTrue(picker.exists, "Preferences should offer an auto-lock timeout picker")
         }
     }
 
     func testBiometricToggleExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences screen") {
+            openPreferences()
         }
         then("I should see a biometric unlock toggle") {
             let toggle = scrollToFind("settings-biometric-toggle")
-            if toggle.exists {
-                XCTAssertTrue(true, "Biometric toggle exists")
-            }
+            XCTAssertTrue(toggle.exists, "Preferences should offer a biometric unlock toggle")
         }
     }
 

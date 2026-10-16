@@ -7,14 +7,12 @@ import { When, Then } from '../fixtures'
 import { Timeouts } from '../../helpers'
 
 Then('I should see the platform bans list or empty state', async ({ page }) => {
-  await page.waitForLoadState('domcontentloaded')
+  // Exactly one of the two settled states. The old version also accepted the
+  // admin shell's `admin-section` wrapper, so it passed before (or without)
+  // the bans list ever loading.
   const bansList = page.getByTestId('platform-bans-list')
   const empty = page.getByTestId('platform-bans-empty')
-  const section = page.getByTestId('admin-section')
-  const hasList = await bansList.isVisible({ timeout: Timeouts.API }).catch(() => false)
-  const hasEmpty = await empty.isVisible({ timeout: 2000 }).catch(() => false)
-  const hasSection = await section.isVisible({ timeout: 2000 }).catch(() => false)
-  expect(hasList || hasEmpty || hasSection).toBe(true)
+  await expect(bansList.or(empty)).toBeVisible({ timeout: Timeouts.API })
 })
 
 Then('I should see the platform bans create button', async ({ page }) => {

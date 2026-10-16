@@ -11,11 +11,12 @@ import {
   apiDelete,
   createUserViaApi,
   generateTestKeypair,
+  redeemInviteViaApi,
+  seedHexToPubkey,
+  simulatedClientIp,
   ADMIN_SEED,
 } from '../../api-helpers'
-import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { harnessClientHeaders } from '../../dev-surface-secret'
 
 // ── State ──────────────────────────────────────────────────────────���
 
@@ -25,7 +26,13 @@ interface InviteTestState {
   volunteerDeviceKey?: string
   /** Seed of the user who redeemed an invite earlier in the scenario. */
   redeemerSeedHex?: string
-  /** Unique per-scenario fake IP so validation calls don't share the 'unknown' rate limit bucket. */
+  /**
+   * Unique per-scenario client address. Invite validation AND redemption are
+   * rate limited per client; without this every scenario in every Playwright
+   * worker shares one bucket and the suite 429s itself (#1480). Presented
+   * through `harnessClientHeaders`, so it also survives the proxy on a
+   * deployed target (#1625).
+   */
   scenarioIp: string
 }
 
@@ -38,28 +45,24 @@ function getS(world: Record<string, unknown>): InviteTestState {
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
 Before(async ({ world }) => {
-  // Assign a unique fake IP per scenario so all validation calls use an isolated
-  // rate limit bucket instead of the shared 'unknown' bucket (which fills up across
-  // scenarios when CF-Connecting-IP is absent and causes spurious 429s).
-  const scenarioIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
-  setState<InviteTestState>(world, STATE_KEY, { rateLimitResponses: [], scenarioIp })
+  // Assign a unique client address per scenario so validation and redemption
+  // calls each use an isolated rate limit bucket instead of the shared one for
+  // the real remote address (which fills up across scenarios and answers 429
+  // to scenarios that are not about rate limiting). The limiter still enforces
+  // its production threshold inside this scenario's bucket — nothing is exempt.
+  setState<InviteTestState>(world, STATE_KEY, {
+    rateLimitResponses: [],
+    scenarioIp: simulatedClientIp(),
+  })
 })
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function createRedeemAuth(seedHex: string): { pubkey: string; timestamp: number; token: string } {
-  const seedBytes = hexToBytes(seedHex)
-  const pubkey = bytesToHex(ed25519.getPublicKey(seedBytes))
-  const timestamp = Date.now()
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:/api/invites/redeem`)
-  const sig = ed25519.sign(message, seedBytes)
-  return { pubkey, timestamp, token: bytesToHex(sig) }
-}
-
 // ── Given ───────────────────────────────────��───────────────────────
 
-Given('an invite exists for {string} with phone {string}', async ({ request, world }, name: string, phone: string) => {
+Given('an invite exists for {string} with phone {string}', async ({ request, world, workerHub }, name: string, phone: string) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name, phone, roleIds: ['role-volunteer'],
   }, ADMIN_SEED)
   expect(res.status).toBe(201)
@@ -70,12 +73,8 @@ Given('the invite has been redeemed by a user', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const kp = generateTestKeypair()
-  const auth = createRedeemAuth(kp.seedHex)
-  const res = await request.post(`${BASE_URL}/api/invites/redeem`, {
-    headers: { 'Content-Type': 'application/json' },
-    data: { code: s.inviteCode, ...auth },
-  })
-  expect(res.status()).toBe(200)
+  const res = await redeemInviteViaApi(request, s.inviteCode!, kp.seedHex, s.scenarioIp)
+  expect(res.status).toBe(200)
   s.redeemerSeedHex = kp.seedHex
 })
 
@@ -86,9 +85,10 @@ Given('a registered volunteer user', async ({ request, world }) => {
 
 // ── When ────────────────────────────────────────────────────────────
 
-When('the admin creates an invite for {string} with phone {string}', async ({ request, world }, name: string, phone: string) => {
+When('the admin creates an invite for {string} with phone {string}', async ({ request, world, workerHub }, name: string, phone: string) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name, phone, roleIds: ['role-volunteer'],
   }, ADMIN_SEED)
   setLastResponse(world, res)
@@ -101,7 +101,7 @@ When('the invite code is validated', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const res = await request.get(`${BASE_URL}/api/invites/validate/${s.inviteCode}`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
   })
   const data = res.ok() ? await res.json().catch(() => null) : null
   setLastResponse(world, { status: res.status(), data })
@@ -110,7 +110,7 @@ When('the invite code is validated', async ({ request, world }) => {
 When('a random UUID is validated as an invite', async ({ request, world }) => {
   const s = getS(world)
   const res = await request.get(`${BASE_URL}/api/invites/validate/${crypto.randomUUID()}`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
   })
   const data = res.ok() ? await res.json().catch(() => null) : null
   setLastResponse(world, { status: res.status(), data })
@@ -120,26 +120,15 @@ When('a new user redeems the invite', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const kp = generateTestKeypair()
-  const auth = createRedeemAuth(kp.seedHex)
-  const res = await request.post(`${BASE_URL}/api/invites/redeem`, {
-    headers: { 'Content-Type': 'application/json' },
-    data: { code: s.inviteCode, ...auth },
-  })
-  const data = res.ok() ? await res.json().catch(() => null) : null
-  setLastResponse(world, { status: res.status(), data })
+  setLastResponse(world, await redeemInviteViaApi(request, s.inviteCode!, kp.seedHex, s.scenarioIp))
 })
 
 When('the same user redeems the invite', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   expect(s.redeemerSeedHex).toBeDefined()
-  const auth = createRedeemAuth(s.redeemerSeedHex!)
-  const res = await request.post(`${BASE_URL}/api/invites/redeem`, {
-    headers: { 'Content-Type': 'application/json' },
-    data: { code: s.inviteCode, ...auth },
-  })
-  const data = await res.json().catch(() => null)
-  setLastResponse(world, { status: res.status(), data })
+  // The same person, so deliberately the same client address.
+  setLastResponse(world, await redeemInviteViaApi(request, s.inviteCode!, s.redeemerSeedHex!, s.scenarioIp))
 })
 
 When('the admin lists invites', async ({ request, world }) => {
@@ -155,15 +144,15 @@ When('the admin revokes the invite', async ({ request, world }) => {
 })
 
 When('a client floods invite validation {int} times', async ({ request, world }, count: number) => {
-  // Use a unique fake IP per scenario so each parallel worker gets its own rate limit bucket.
-  // The server rate-limits invite validation by hashed IP (CF-Connecting-IP header).
-  const fakeIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
+  // One client address for the whole flood — this scenario's own, distinct from
+  // every other worker's — so the 5/min invite-validate limiter fires on THIS
+  // flood and not on whatever a parallel scenario was doing.
   const s = getS(world)
   const shared = getSharedState(world)
   shared.floodResponses = []
   for (let i = 0; i < count; i++) {
     const res = await request.get(`${BASE_URL}/api/invites/validate/${crypto.randomUUID()}`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
     })
     s.rateLimitResponses.push(res.status())
     shared.floodResponses.push(res.status())
@@ -171,15 +160,35 @@ When('a client floods invite validation {int} times', async ({ request, world },
   setLastResponse(world, { status: s.rateLimitResponses[s.rateLimitResponses.length - 1], data: null })
 })
 
-When('the volunteer tries to create an invite', async ({ request, world }) => {
+When('the volunteer tries to create an invite', async ({ request, world, workerHub }) => {
   const s = getS(world)
   expect(s.volunteerDeviceKey).toBeDefined()
   setLastResponse(world, await apiPost(request, '/invites', {
+    hubId: workerHub,
     name: 'Unauthorized Invite', phone: '+15559999999', roleIds: ['role-volunteer'],
   }, s.volunteerDeviceKey!))
 })
 
 // ── Then ─────────────────��──────────────────────────────────────────
+
+/**
+ * The list the operator actually sees — GET /api/hubs/:hubId/users, which the
+ * shift editor and the ring-group picker populate from. A redeemed volunteer
+ * missing from it cannot be scheduled and can never be rung (#1037).
+ */
+Then('the redeemed user is a member of the hub', async ({ request, world, workerHub }) => {
+  const s = getS(world)
+  expect(s.redeemerSeedHex, 'no user redeemed an invite in this scenario').toBeDefined()
+  const pubkey = seedHexToPubkey(s.redeemerSeedHex!)
+  const { status, data } = await apiGet<{ users: Array<{ pubkey: string }> }>(
+    request, `/hubs/${workerHub}/users`, ADMIN_SEED,
+  )
+  expect(status).toBe(200)
+  expect(
+    (data.users ?? []).map(u => u.pubkey),
+    'the redeemed volunteer is absent from the hub the invite named',
+  ).toContain(pubkey)
+})
 
 Then('the invite has a valid UUID code', async ({ world }) => {
   const s = getS(world)
@@ -219,7 +228,7 @@ Then('the invite code is no longer valid', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const res = await request.get(`${BASE_URL}/api/invites/validate/${s.inviteCode}`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
   })
   const data = await res.json().catch(() => null)
   expect(data?.valid).toBe(false)

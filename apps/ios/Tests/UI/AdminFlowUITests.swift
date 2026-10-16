@@ -101,7 +101,7 @@ final class AdminFlowUITests: BaseUITest {
         XCTAssertTrue(found, "Ban list view should show list, empty state, or loading")
     }
 
-    func testAddBanButtonExists() {
+    func testAddBanEnablesSubmissionAfterEnteringAnIdentifier() {
         navigateToAdminPanel()
 
         // Tap Bans link
@@ -109,12 +109,18 @@ final class AdminFlowUITests: BaseUITest {
         guard bansLink.waitForExistence(timeout: 5) else { return }
         bansLink.tap()
 
-        // Wait for content to load
-        _ = anyElementExists(["ban-list", "bans-empty-state", "bans-loading"])
+        // The identifier belongs to a SwiftUI toolbar Button. Query the button
+        // itself so tapping it exercises the action rather than its container.
+        app.buttons["add-ban-button"].tap()
 
-        // Add ban button should exist (either in toolbar or empty state)
-        let found = anyElementExists(["add-ban-button", "add-first-ban"], timeout: 5)
-        XCTAssertTrue(found, "Add ban button should exist")
+        let identifierInput = app.textFields["ban-hash-input"]
+        identifierInput.tap()
+        identifierInput.typeText(String(repeating: "a", count: 64))
+
+        XCTAssertTrue(
+            app.buttons["submit-add-ban"].isEnabled,
+            "Entering a ban identifier should enable submission"
+        )
     }
 
     // MARK: - Audit Log Tab
@@ -165,26 +171,6 @@ final class AdminFlowUITests: BaseUITest {
         // Create invite button should exist
         let found = anyElementExists(["create-invite-button", "create-first-invite"], timeout: 5)
         XCTAssertTrue(found, "Create invite button should exist")
-    }
-
-    // MARK: - Settings Device Link
-
-    func testDeviceLinkButtonExists() {
-        navigateToSettings()
-
-        // Device link is now in Account Settings sub-page
-        let accountLink = find("settings-account-link")
-        guard accountLink.waitForExistence(timeout: 5) else {
-            XCTFail("Account settings link should exist")
-            return
-        }
-        accountLink.tap()
-
-        let linkButton = scrollToFind("settings-link-device")
-        XCTAssertTrue(
-            linkButton.exists,
-            "Link device button should exist in account settings"
-        )
     }
 
     func testSettingsRoleBadgeExists() {

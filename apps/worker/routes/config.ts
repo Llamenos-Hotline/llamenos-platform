@@ -3,26 +3,89 @@ import { describeRoute, resolver } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { deriveServerKeypair } from '../lib/server-identity'
 import { CURRENT_API_VERSION, MIN_API_VERSION } from '../lib/api-versions'
-import type { Hub } from '@shared/types'
 import { configResponseSchema, configVerifyResponseSchema, configPinsResponseSchema } from '@protocol/schemas/config'
 import { publicErrors } from '../openapi/helpers'
 import { ed25519Sign } from '@llamenos/crypto/ffi'
 import { bytesToHex } from '@shared/encoding'
 import { demoIdentities } from '../lib/demo-identities'
-import { devSurfacesEnabled } from '../lib/dev-surfaces'
+import { demoSurfacesEnabled } from '../lib/dev-surfaces'
 
 const config = new Hono<AppEnv>()
 
 /**
- * Whether the deployment presents itself as a demo/test environment. DEMO_MODE
- * is deployment configuration. The `demoMode` flag the setup wizard stores in the
- * database only counts on a development server — everywhere else no database
- * row can put a deployment into demo mode.
+ * Whether the deployment presents itself as a demo/test environment.
+ *
+ * The two arms carry deliberately different authority, and the asymmetry is the
+ * point:
+ *
+ *   - `DEMO_MODE` is deployment configuration an operator set on purpose, and
+ *     what it drives on the client is a WARNING — the demo banner
+ *     (`src/client/routes/__root.tsx`) telling a viewer that nothing here is
+ *     real. Suppressing a warning on a deployed host would be the less safe
+ *     choice, so this arm is not narrowed: a staging end-to-end target may
+ *     legitimately run `DEMO_MODE=true` (see `routes/dev.ts`) and still reports
+ *     `demoMode: true`. That is exactly what it did before the staging
+ *     allowlist existed.
+ *   - the `demoMode` flag the setup wizard stores in the DATABASE only counts
+ *     on a development server. A row no operator reviewed must never change how
+ *     a reachable host describes itself on a PUBLIC, unauthenticated endpoint.
+ *
+ * `demoSurfacesEnabled`, NOT `devSurfacesEnabled`: the staging allowlist widened
+ * the latter so an opted-in staging host may serve `/api/test-*`, and keying the
+ * stored-flag arm on it would have let a database row flip public `/api/config`
+ * there by side effect. The demo predicate stays pinned to a development server
+ * (lib/dev-surfaces.ts).
+ *
+ * The capability — the demo cast's signing seeds, below — is gated on
+ * `demoSurfacesEnabled` ALONE, with no `DEMO_MODE` arm. So an opted-in staging
+ * host running `DEMO_MODE=true` advertises demo mode and still refuses the
+ * seeds. Warn widely; hand out key material narrowly.
  */
 function effectiveDemoMode(env: AppEnv['Bindings'], storedDemoMode: boolean): boolean {
-  return env.DEMO_MODE === 'true' || (devSurfacesEnabled(env) && storedDemoMode)
+  return env.DEMO_MODE === 'true' || (demoSurfacesEnabled(env) && storedDemoMode)
 }
 
+/**
+ * What this endpoint may say to an anonymous caller.
+ *
+ * `/api/config` is the one route a client reads BEFORE it has any credentials,
+ * so it is also the one route whose payload an adversary who can merely reach
+ * the host gets for free. Everything below is here because a pre-login client
+ * cannot function without it:
+ *
+ *   - `hotlineName`, `channels` — rendered on the sign-in screen and used to
+ *     route first-run setup. The deployment is self-identifying pre-login by
+ *     construction: it has to greet the volunteer by the hotline's name.
+ *   - `hotlineNumber` — the number the organisation publishes so callers can
+ *     dial it. Public by purpose, and it names nothing `hotlineName` does not.
+ *   - `setupCompleted`, `needsBootstrap` — decide between the wizard, the
+ *     bootstrap screen and the login screen before anyone can authenticate.
+ *   - `serverPubkey` — a verification key; publishing it is the point.
+ *   - `wsRelayUrl` — the relay address every client (Android included) needs
+ *     before it holds a session.
+ *   - `apiVersion` / `minApiVersion` — version negotiation happens on the
+ *     first request, which is this one.
+ *   - `demoMode` / `demoResetSchedule` — a WARNING that nothing here is real,
+ *     and operator-set. Suppressing it would be the less safe choice.
+ *   - `sentryDsn` — a write-only ingest DSN, needed to report a pre-login crash.
+ *
+ * What is deliberately NOT here: the hub roster. It used to return every active
+ * hub with name, slug, description, `createdBy` and timestamps, to an
+ * unauthenticated caller, while `GET /api/hubs` — the same data — answered 401
+ * (#1710). Hub names are the organisation's internal structure (chapters,
+ * regions, partner orgs), `createdBy` is an admin's Ed25519 pubkey, and the
+ * timestamps date the organisation's expansion; this project's threat model
+ * treats organisational structure as implicating, not merely as metadata.
+ *
+ * `defaultHubId` went with it. Its only consumer was the desktop client
+ * choosing an active hub before login, which is a defect in its own right
+ * (#1708): the active hub must come from the authenticated user's memberships
+ * via `GET /api/hubs`, never from an instance-wide list. With that fixed,
+ * nothing needs a hub id pre-authentication.
+ *
+ * Adding a field here widens an anonymous read. `__tests__/unit/routes/config.test.ts`
+ * asserts the exact key set so that widening cannot happen by accident.
+ */
 config.get('/',
   describeRoute({
     tags: ['Config'],
@@ -74,17 +137,6 @@ config.get('/',
       needsBootstrap = !hasAdmin
     } catch { /* default to false */ }
 
-    // Fetch active hubs
-    let hubs: Hub[] = []
-    let defaultHubId: string | undefined
-    try {
-      const hubsData = await services.settings.getHubs()
-      hubs = hubsData.hubs.filter(h => h.status === 'active')
-      if (hubs.length === 1) {
-        defaultHubId = hubs[0].id
-      }
-    } catch { /* default to empty */ }
-
     // Derive server Ed25519 pubkey for client event signature verification
     const serverSecret = c.env.SERVER_SECRET
     let serverPubkey: string | undefined
@@ -107,8 +159,6 @@ config.get('/',
       demoMode,
       demoResetSchedule: c.env.DEMO_MODE === 'true' ? (c.env.DEMO_RESET_CRON || null) : null,
       needsBootstrap,
-      hubs,
-      defaultHubId,
       serverPubkey,
       wsRelayUrl,
       apiVersion: CURRENT_API_VERSION,
@@ -150,7 +200,7 @@ config.get('/verify',
 /** Let's Encrypt ISRG Root X1 — RSA 4096 intermediate CA SPKI SHA-256. */
 const ISRG_ROOT_X1_HASH = 'C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M='
 /** Let's Encrypt ISRG Root X2 — ECDSA P-384 backup root SPKI SHA-256. */
-const ISRG_ROOT_X2_HASH = 'diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA='
+const ISRG_ROOT_X2_HASH = 'diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI='
 
 /**
  * GET /api/config/pins — Ed25519-signed certificate pin list.
@@ -230,9 +280,17 @@ config.get('/pins',
  * generated per server process (lib/demo-identities.ts) and never appear in any
  * client bundle or image. Everywhere else this is a 404 decided before the
  * database is read, so no stored setup state can open it.
+ *
+ * Unauthenticated, and it dispenses Ed25519 signing seeds — so the gate is
+ * `demoSurfacesEnabled` (a development server), the same split `routes/dev.ts`
+ * `demoRouteDenied` makes, and NOT `devSurfacesEnabled`, which the staging
+ * allowlist widened for `/api/test-*`. On an opted-in staging host this answers
+ * the indistinguishable 404 up front rather than reaching `demoIdentities()` and
+ * letting `DemoIdentitiesUnavailableError` become a 500: non-disclosure must
+ * rest on the guard, never on an exception a layer below it.
  */
 config.get('/demo/credentials', async (c) => {
-  if (!devSurfacesEnabled(c.env)) {
+  if (!demoSurfacesEnabled(c.env)) {
     return c.json({ error: 'Not Found' }, 404)
   }
   let storedDemoMode = false

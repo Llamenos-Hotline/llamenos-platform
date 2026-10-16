@@ -21,6 +21,9 @@ import type { Services } from '../../services'
 vi.mock('../../lib/service-factories', () => ({
   getTelephonyFromService: vi.fn().mockResolvedValue(null),
   getHubTelephonyFromService: vi.fn().mockResolvedValue(null),
+  // No telephony provider at all in these scenarios: they are about relay
+  // fan-out, and nobody is in-app reachable without the self-hosted registrar.
+  resolveHubTelephonyConfig: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('../../lib/voip-push', () => ({
@@ -48,7 +51,6 @@ function connect(
     pubkey,
     ws: { send: (m: string) => frames.push(m) } as unknown as WebSocket,
     hubs: new Set(memberHubs),
-    subscribedHubs: new Set(),
     lastReplayAt: 0,
   }
   expect(mgr.register(state)).toBe(true)
@@ -77,6 +79,11 @@ function makeServices(rosters: Record<string, string[]>): Services {
       .map(([hubId]) => ({ hubId, roleIds: ['role-volunteer'] }))
   return {
     shifts: { getCurrentVolunteers: vi.fn(async (hubId: string) => rosters[hubId] ?? []) },
+    // These scenarios are about relay fan-out, not consent: everyone on a hub's
+    // roster has also clocked into that hub, which ringing now requires.
+    activeShifts: {
+      listClockedInPubkeys: vi.fn(async (hubId: string) => new Set(rosters[hubId] ?? [])),
+    },
     settings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),

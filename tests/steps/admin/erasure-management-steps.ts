@@ -7,27 +7,18 @@ import { When, Then } from '../fixtures'
 import { Timeouts } from '../../helpers'
 
 Then('I should see the erasure queue or empty state', async ({ page }) => {
-  await page.waitForLoadState('domcontentloaded')
-  // Wait for loading state to disappear first — the API call may take longer in CI
-  const loadingEl = page.getByTestId('erasure-loading')
-  await loadingEl.waitFor({ state: 'hidden', timeout: Timeouts.API }).catch(() => {})
+  // The queue settles into exactly one of: the request list, or the empty
+  // message (erasure-loading renders until then). The old version also accepted
+  // any `erasure-*` testid — erasure-loading included — so it passed mid-load.
   const requestList = page.getByTestId('erasure-request-list')
   const empty = page.getByTestId('erasure-empty')
-  const section = page.locator('[data-testid^="erasure-"]').first()
-  const hasList = await requestList.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  const hasEmpty = await empty.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  const hasSection = await section.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  expect(hasList || hasEmpty || hasSection).toBe(true)
+  await expect(requestList.or(empty)).toBeVisible({ timeout: Timeouts.API })
 })
 
 Then('I should see the erasure config form', async ({ page }) => {
-  await page.waitForLoadState('domcontentloaded')
-  // Erasure config section shows delay hours input
-  const form = page.locator('input[type="number"]').first()
-  const section = page.getByTestId('admin-section')
-  const hasForm = await form.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  const hasSection = await section.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  expect(hasForm || hasSection).toBe(true)
+  // The config form's delay input. The old version also accepted the admin
+  // shell's `admin-section` wrapper, which is on screen for every section.
+  await expect(page.getByTestId('erasure-delay-input')).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the admin erase button', async ({ page }) => {

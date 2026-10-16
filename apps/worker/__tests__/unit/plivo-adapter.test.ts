@@ -236,6 +236,13 @@ describe('PlivoAdapter', () => {
     })
   })
 
+  describe('hangupCall failures', () => {
+    it('rejects when Plivo refuses the hang-up', async () => {
+      fetchMock.mockResolvedValue(new Response('{}', { status: 500 }))
+      await expect(adapter.hangupCall('CA123')).rejects.toThrow(/hangup failed: 500/)
+    })
+  })
+
   describe('ringVolunteers', () => {
     it('initiates parallel calls and returns request UUIDs', async () => {
       fetchMock.mockResolvedValue({
@@ -318,12 +325,6 @@ describe('PlivoAdapter', () => {
   describe('validateWebhook', () => {
     it('accepts valid Plivo V3 signature', async () => {
       const body = new URLSearchParams({ CallUUID: 'CA123', From: '+15551234567' })
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      })
-
       const encoder = new TextEncoder()
       const url = new URL('https://example.com/webhook')
       let dataString = url.origin + url.pathname
@@ -411,12 +412,6 @@ describe('PlivoAdapter', () => {
       params.append('CallUUID', 'CA123')
       params.append('Status', 'ringing')
       params.append('Status', 'completed')
-
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString(),
-      })
 
       const encoder = new TextEncoder()
       const url = new URL('https://example.com/webhook')

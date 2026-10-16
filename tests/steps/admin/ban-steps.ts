@@ -215,13 +215,12 @@ When('I add two bans with different phone numbers', async ({ page }) => {
 })
 
 Then('both phone numbers should appear in the ban list', async ({ page, backendRequest: request, workerHub }) => {
-  const phones = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_ban_phones)) as string[] | undefined
-  if (!phones || phones.length === 0) {
-    // Prior step didn't create bans — just verify ban page is loaded
-    await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
-    return
-  }
-  expect(phones.length).toBe(2)
+  const recorded = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_ban_phones)) as string[] | undefined
+  // The import step records the two numbers it banned. If it did not, there is
+  // nothing to verify and the scenario must fail (the old branch fell back to
+  // "the ban page loaded").
+  const phones = recorded ?? []
+  expect(phones, 'the bulk-import step must record the phones it banned').toHaveLength(2)
 
   // UI verification (masked format)
   for (const phone of phones) {

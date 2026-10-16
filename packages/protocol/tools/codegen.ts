@@ -760,6 +760,28 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
   // Catch remaining property references to `Category` (e.g., `let type: Category?` in SharedMetadata)
   output = output.replace(/\b: Category\b/g, ': ReportTypeCategory')
 
+  // `MediaEncryption` COLLIDES with linphonesw's own `MediaEncryption` enum, which the
+  // iOS app imports — `LinphoneService` cannot name either one unqualified while both are
+  // in scope, and the build fails outright. It comes from `sipTokenResponseSchema`'s
+  // inline enum, where the property name is what gets promoted to a type name (#1659).
+  output = output.replace(/^(enum |\/\/ MARK: - )MediaEncryption\b/gm, '$1SipMediaEncryption')
+  output = output.replace(/\blet mediaEncryption: MediaEncryption\b/g, 'let mediaEncryption: SipMediaEncryption')
+
+  // `Transport` is from the same schema and is far too generic to leave at the top level
+  // of a module that also imports a SIP stack. Renamed for the same reason as `Value` and
+  // `Category` above, before it collides rather than after.
+  output = output.replace(/^(enum |\/\/ MARK: - )Transport\b(?! *[A-Z])/gm, '$1SipTransport')
+  output = output.replace(/\blet transport: Transport\b/g, 'let transport: SipTransport')
+
+  // `SIP` and `IceServer` likewise come from `sipTokenResponseSchema`'s nesting. Neither
+  // collides today, but `SIP` names a whole protocol family rather than a response field,
+  // and the hand-written iOS/Android models this will eventually replace (#1189) are
+  // called SipAccountParams/SipIceServer.
+  output = output.replace(/^(struct |\/\/ MARK: - )SIP\b(?![A-Za-z])/gm, '$1SipAccountParamsDTO')
+  output = output.replace(/\blet sip: SIP\b(?![A-Za-z])/g, 'let sip: SipAccountParamsDTO')
+  output = output.replace(/^(struct |\/\/ MARK: - )IceServer\b/gm, '$1SipIceServerDTO')
+  output = output.replace(/\blet iceServers: \[IceServer\]/g, 'let iceServers: [SipIceServerDTO]')
+
   // `Operator` is near-identical to Swift keyword `operator` — rename to FieldOperator.
   output = output.replace(/^(enum |\/\/ MARK: - )Operator:/gm, '$1FieldOperator:')
   output = output.replace(/^(enum |\/\/ MARK: - )Operator\b(?! *[A-Z])/gm, '$1FieldOperator')

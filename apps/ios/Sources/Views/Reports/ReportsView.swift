@@ -217,11 +217,9 @@ struct ReportsView: View {
             )
         } description: {
             if vm.selectedFilter != .all {
-                Text(String(
-                    format: NSLocalizedString(
-                        "reports_empty_filtered",
-                        comment: "No %@ reports found."
-                    ),
+                Text(L10n.format(
+                    "reports_empty_filtered",
+                    comment: "No %@ reports found.",
                     vm.selectedFilter.displayName.lowercased()
                 ))
             } else {

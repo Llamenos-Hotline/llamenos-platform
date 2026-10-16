@@ -73,7 +73,12 @@ asterisk:
   enabled: false
   image:
     repository: andrius/asterisk
-    tag: "20.11"
+    # Must stay >= 22.10.0. Below it, the `dtls_verify = fingerprint` the app
+    # provisions on every volunteer endpoint becomes full X.509 chain
+    # verification and every DTLS-SRTP call dies at the handshake — see
+    # deploy/docker/docker-compose.yml and #1687. The previous `20.11` pin both
+    # predates that fix and diverged from the compose digest.
+    tag: "22.10.1_debian-trixie"
 
 # SIP bridge (supports Asterisk, FreeSWITCH, Kamailio via PBX_TYPE)
 sipBridge:
@@ -165,10 +170,17 @@ ingress:
 # Secrets (reference existing K8s secrets)
 secrets:
   # Create a secret named "llamenos-secrets" with these keys:
-  #   admin-pubkey, postgres-password, twilio-account-sid, twilio-auth-token, twilio-phone-number
+  #   admin-pubkey, admin-decryption-pubkey, postgres-password, twilio-account-sid,
+  #   twilio-auth-token, twilio-phone-number
   existingSecret: ""
   # Or provide values directly (will be base64-encoded into a Secret)
-  adminPubkey: ""
+  adminPubkey: ""           # Ed25519 identity key (verifies the admin's signatures)
+  # X25519 HPKE recipient key — a DIFFERENT value from adminPubkey, printed
+  # alongside it by `bun run bootstrap-admin`. Required whenever adminPubkey is
+  # set: the app refuses to boot rather than seal admin envelopes to an Ed25519
+  # key, which succeeds and makes every note permanently undecryptable (#1283).
+  adminDecryptionPubkey: ""
+
   postgresPassword: ""  # Required
   hmacSecret: ""         # Required: 64-char hex, generate with: openssl rand -hex 32
   twilioAccountSid: ""

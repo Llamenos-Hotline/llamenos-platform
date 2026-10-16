@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import org.llamenos.core.mobileCreateAuthTokenFromSigningKey
 
 /**
  * HTTP client for the test simulation endpoints defined in
@@ -207,8 +208,11 @@ object SimulationClient {
      * Corresponds to `POST /api/test-add-hub-member`.
      * Used by hub-switch tests to give the test user membership in specific hubs
      * without promoting to super-admin (which would show ALL hubs).
+     *
+     * [roleIds] has no default: the old default (`role-admin`) names a role that does not
+     * exist (the hub admin is `role-hub-admin`), and a member with it cannot list any hub.
      */
-    fun addHubMember(pubkey: String, hubId: String, roleIds: List<String> = listOf("role-admin")): StatusResponse {
+    fun addHubMember(pubkey: String, hubId: String, roleIds: List<String>): StatusResponse {
         val roleIdsJson = roleIds.joinToString(",") { "\"${escapeJson(it)}\"" }
         val body = """{"pubkey":"${escapeJson(pubkey)}","hubId":"${escapeJson(hubId)}","roleIds":[$roleIdsJson]}"""
         val responseText = post("/api/test-add-hub-member", body)
@@ -216,6 +220,15 @@ object SimulationClient {
     }
 
     // ─── Hub Management ───────────────────────────────────────────
+
+    /**
+     * `POST /api/hubs` wraps the hub: `{"hub":{"id":...}}`. The dev route it
+     * replaced answered with a bare `{"id":...}`, which is why this exists.
+     */
+    @Serializable
+    data class HubEnvelope(
+        val hub: HubResponse,
+    )
 
     @Serializable
     data class HubResponse(
@@ -225,18 +238,192 @@ object SimulationClient {
     )
 
     /**
-     * Create an isolated test hub via the test endpoint.
+     * Admin Ed25519 signing seed — the same identity `tests/api-helpers.ts` and
+     * iOS `TestAdminAPI` use, and the one `ci.yml` sets as `TEST_ADMIN_PUBKEY`.
+     * It holds `role-super-admin`, whose permissions are `['*']`.
+     */
+    private const val ADMIN_SEED_HEX =
+        "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7" // gitleaks:allow
+
+    /**
+     * Authorization header for an authenticated request, signed with the admin
+     * seed.
      *
-     * Calls POST /api/test-create-hub with X-Test-Secret header.
-     * Returns the new hub's ID. Called once per Cucumber scenario in ScenarioHooks @Before.
+     * Uses the Rust crypto already shipped in this APK rather than a new
+     * dependency: `mobileCreateAuthTokenFromSigningKey` is uniffi-exported for
+     * exactly this ("integration tests that need to sign requests on behalf of
+     * a server-side identity ... where the signing secret is provided
+     * out-of-band"). JCA's Ed25519 needs API 33 and `minSdk` here is 26, so the
+     * platform alternative is not available.
+     */
+    private fun adminAuthHeader(method: String, path: String): String {
+        val token = mobileCreateAuthTokenFromSigningKey(
+            ADMIN_SEED_HEX,
+            System.currentTimeMillis().toULong(),
+            method,
+            path,
+        )
+        val payload = AuthTokenPayload(
+            pubkey = token.pubkey,
+            timestamp = token.timestamp.toLong(),
+            token = token.token,
+            nonce = token.nonce,
+        )
+        return "Bearer ${json.encodeToString(payload)}"
+    }
+
+    /**
+     * Wire shape of the `Authorization: Bearer <json>` payload the server's
+     * `verifyAuthToken` parses. `nonce` is absent unless the signing key
+     * supplies one, so it must be omitted rather than sent as null.
+     */
+    @Serializable
+    private data class AuthTokenPayload(
+        val pubkey: String,
+        val timestamp: Long,
+        val token: String,
+        val nonce: String? = null,
+    )
+
+    /**
+     * Authenticated `GET`, signed with the admin identity above.
      *
-     * Hub is NOT deleted after the scenario — stale hubs accumulate and are purged periodically.
+     * The simulation routes write; nothing here could read a stored row back.
+     * `EnvelopeAadInteropTest` needs to see the *server's own* envelope exactly
+     * as the API serves it — reading it from the database or re-deriving it
+     * locally would prove nothing about the wire.
+     */
+    fun authorizedGet(path: String): String {
+        return authorizedRequest("GET", path)
+    }
+
+    /**
+     * Authenticated `PATCH`, signed with the admin identity above.
+     *
+     * Used to restore a setting to its pre-scenario value after a
+     * save-and-verify assertion: settings are platform-wide, so a scenario
+     * that leaves its probe value behind would poison the next scenario's
+     * starting state.
+     */
+    fun authorizedPatch(path: String, jsonBody: String): String {
+        return authorizedRequest("PATCH", path, jsonBody)
+    }
+
+    private fun authorizedRequest(method: String, path: String, jsonBody: String? = null): String {
+        val url = URL("$hubUrl$path")
+        val conn = url.openConnection() as HttpURLConnection
+        return try {
+            conn.requestMethod = method
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.setRequestProperty("Authorization", adminAuthHeader(method, path))
+            conn.setRequestProperty("X-Test-Secret", testSecret)
+            if (jsonBody != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(jsonBody.toByteArray(Charsets.UTF_8)) }
+            }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) {
+                throw IOException("$method $path -> HTTP $code: $text")
+            }
+            text
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // ─── Settings read-back (behaviour assertions, #1743) ──────────
+    //
+    // All three routes answer a fully-populated object (stored values over
+    // built-in defaults), so the fields are non-nullable: a missing field is
+    // a decode failure, which is the loud failure we want.
+
+    @Serializable
+    data class CallSettingsResponse(
+        val queueTimeoutSeconds: Int,
+        val voicemailMaxSeconds: Int,
+    )
+
+    @Serializable
+    data class SpamSettingsResponse(
+        val voiceCaptchaEnabled: Boolean,
+        val rateLimitEnabled: Boolean,
+        val maxCallsPerMinute: Int,
+        val blockDurationMinutes: Int,
+    )
+
+    @Serializable
+    data class TranscriptionSettingsResponse(
+        val globalEnabled: Boolean,
+        val allowUserOptOut: Boolean,
+    )
+
+    fun getCallSettings(): CallSettingsResponse =
+        json.decodeFromString(authorizedGet("/api/settings/call"))
+
+    fun getSpamSettings(): SpamSettingsResponse =
+        json.decodeFromString(authorizedGet("/api/settings/spam"))
+
+    fun getTranscriptionSettings(): TranscriptionSettingsResponse =
+        json.decodeFromString(authorizedGet("/api/settings/transcription"))
+
+    /**
+     * Poll a server-side read until [matches] holds, or fail naming what
+     * never happened and the last value the server actually reported.
+     *
+     * This is the behaviour-assertion counterpart of Compose's `waitUntil`:
+     * the save PATCH is fired from a coroutine after the tap returns, so the
+     * read-back has to poll. The deadline only bounds a genuinely absent
+     * state change — a slow emulator cannot trip it, because the condition
+     * becomes true the moment the server stores the value.
+     */
+    fun <T> awaitServerState(
+        what: String,
+        timeoutMs: Long = 15_000,
+        intervalMs: Long = 250,
+        fetch: () -> T,
+        matches: (T) -> Boolean,
+    ): T {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            val last = fetch()
+            if (matches(last)) return last
+            if (System.currentTimeMillis() >= deadline) {
+                throw AssertionError(
+                    "$what — server never reflected it within ${timeoutMs}ms; last value: $last",
+                )
+            }
+            Thread.sleep(intervalMs)
+        }
+    }
+
+    /**
+     * Create an isolated test hub through the route an operator uses.
+     *
+     * This posted to `/api/test-create-hub` with `X-Test-Secret`. `devGuard`
+     * (apps/worker/app.ts) answers 404 for every `/api/test-*` outside a
+     * development server, so the whole Android E2E suite could only ever run
+     * against a dev box (#1423).
+     *
+     * `POST /api/hubs` also assigns its CREATOR hub membership, which the dev
+     * route did not. That creator is this admin identity, not the app's own
+     * device identity — so a scenario that needs the app to *see* the hub still
+     * promotes the device identity (see HubSwitchSteps.launchWithTwoHubs).
+     *
+     * Hub is NOT deleted after the scenario — stale hubs accumulate and are
+     * purged periodically.
      */
     fun createTestHub(name: String? = null): HubResponse {
         val hubName = name ?: "android-test-${System.currentTimeMillis()}"
         val body = """{"name":"${escapeJson(hubName)}"}"""
-        val responseText = post("/api/test-create-hub", body)
-        return json.decodeFromString<HubResponse>(responseText)
+        val path = "/api/hubs"
+        val responseText = post(path, body, authorization = adminAuthHeader("POST", path))
+        // POST /api/hubs answers 201 with `{"hub":{"id":...}}`; the dev route
+        // answered 200 with a bare `{"id":...}`.
+        return json.decodeFromString<HubEnvelope>(responseText).hub
     }
 
     // ─── HTTP Helpers ───────────────────────────────────────────────
@@ -246,7 +433,7 @@ object SimulationClient {
      *
      * @throws SimulationException if the HTTP request fails or returns a non-2xx status.
      */
-    private fun post(path: String, jsonBody: String): String {
+    private fun post(path: String, jsonBody: String, authorization: String? = null): String {
         val url = URL("$hubUrl$path")
         Log.d(TAG, "POST $url")
 
@@ -257,7 +444,14 @@ object SimulationClient {
             conn.readTimeout = READ_TIMEOUT_MS
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("X-Test-Secret", testSecret)
+            // Authenticated when a signed header is supplied; the remaining
+            // callers are /api/test-simulate/* routes, which have no
+            // authenticated equivalent and are development-only by design.
+            if (authorization != null) {
+                conn.setRequestProperty("Authorization", authorization)
+            } else {
+                conn.setRequestProperty("X-Test-Secret", testSecret)
+            }
 
             conn.outputStream.use { os ->
                 os.write(jsonBody.toByteArray(Charsets.UTF_8))

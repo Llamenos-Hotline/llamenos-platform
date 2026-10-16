@@ -45,8 +45,10 @@ Given('I am on the note detail screen', async ({ page, backendRequest: request, 
   await replyBtn.click()
 })
 
-Given('the note has no replies', async () => {
-  // Precondition: a fresh note with no replies — verified by subsequent assertions
+Given('the note has no replies', async ({ page }) => {
+  // Check the precondition instead of assuming it: the opened (first) note's
+  // reply button reads plain "Reply" when it has none, "N replies" otherwise.
+  await expect(page.getByTestId(TestIds.NOTE_REPLY_BTN).first()).toHaveText(/^\s*Reply\s*$/, { timeout: Timeouts.ELEMENT })
 })
 
 Given('I am on the notes list', async ({ page }) => {

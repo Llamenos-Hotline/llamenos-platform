@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
+import { resolveTargetHub } from '../lib/hub-scope'
 import { requirePermission } from '../middleware/permission-guard'
 import { checkRateLimit } from '../lib/helpers'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -25,39 +26,18 @@ import { getProviderCapability } from '../services/provider-setup/registry'
 import { ProviderApiError } from '../services/provider-setup/types'
 import { SignalRegistrationError } from '../services/provider-setup/signal-registration'
 import { A2pRegistrationError } from '../services/provider-setup/a2p-registration'
-import { permissionGranted, resolvePermissions, resolveHubPermissions } from '@shared/permissions'
+import { removeAllVolunteerEndpoints } from '../telephony/registrar'
 
 /**
- * When a non-hub-scoped route receives hubId from the request body/query,
- * validate that the user has access to that hub (either super-admin or hub member
- * with appropriate permissions). Returns the validated hubId or null if no hubId.
- * Throws ProviderApiError(403) if the user lacks access.
+ * Resolve the hub a provider-setup request acts on: the path hub, or a hub
+ * named in the body/query — honoured only when the caller holds
+ * `requiredPermission` in that hub (see resolveTargetHub). Returns undefined
+ * when neither names a hub. Throws ProviderApiError(403) otherwise.
  */
-function validateBodyHubAccess(c: Context<AppEnv>, bodyHubId?: string, requiredPermission?: string): string | undefined {
-  const hubId = c.get('hubId') ?? bodyHubId
-  if (!hubId) return undefined
-
-  // If hubId comes from hub context middleware, it's already validated
-  if (c.get('hubId')) return hubId
-
-  // hubId came from request body — validate access
-  const user = c.get('user')
-  const allRoles = c.get('allRoles')
-
-  // Super-admin bypasses hub membership checks
-  const globalPerms = resolvePermissions(user.roles, allRoles)
-  if (permissionGranted(globalPerms, '*')) return hubId
-
-  // Non-super-admin must have hub membership with the required permission
-  const hubPerms = resolveHubPermissions(user.roles, user.hubRoles || [], allRoles, hubId)
-  if (hubPerms.length === 0) {
-    throw new ProviderApiError('Access denied', 403, 'No hub access')
-  }
-  if (requiredPermission && !permissionGranted(hubPerms, requiredPermission)) {
-    throw new ProviderApiError('Insufficient permissions', 403, 'Missing hub permission')
-  }
-
-  return hubId
+function validateBodyHubAccess(c: Context<AppEnv>, bodyHubId: string | undefined, requiredPermission: string): string | undefined {
+  const target = resolveTargetHub(c, bodyHubId, requiredPermission)
+  if (!target.ok) throw new ProviderApiError('Access denied', 403, target.error)
+  return target.hubId
 }
 
 
@@ -460,12 +440,27 @@ providerSetup.post('/configure',
 
     try {
       const hubId = validateBodyHubAccess(c, body.hubId, 'telephony:manage-providers')
+      // Endpoint cleanup when the GLOBAL provider moves away from Asterisk:
+      // the gate stops issuing, but provisioned PJSIP objects on the PBX
+      // would keep accepting registrations from old credentials — tear them
+      // down with the config that can still reach the PBX. Best-effort per
+      // endpoint; the outcome is logged by removeAllVolunteerEndpoints.
+      const previous = hubId
+        ? null
+        : await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
       await services.providerSetup.configure(
         body.provider,
         body.credentials ?? {},
         hubId,
         body.phoneNumber,
       )
+      if (previous?.type === 'asterisk' && body.provider !== 'asterisk') {
+        const { users } = await services.identity.getUsers()
+        await removeAllVolunteerEndpoints(
+          previous,
+          users.map((u) => u.pubkey),
+        )
+      }
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ProviderApiError) {
@@ -558,7 +553,9 @@ providerSetup.get('/phone-numbers',
   async (c) => {
     const provider = c.req.query('provider')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? c.req.query('hubId')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'telephony:view-numbers')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId
 
     if (!provider) {
       return c.json({ error: 'provider query param required' }, 400)
@@ -822,6 +819,11 @@ providerSetup.post('/signal/register',
         phoneNumber: body.phoneNumber,
         method: body.method ?? 'sms',
         hubId,
+        // Forward the dev-surface secret as presented, never a decision. The
+        // service checks it against the host's own (lib/dev-surfaces.ts), which
+        // refuses `production` before reading any secret at all — see
+        // SignalRegistrationService.syntheticBridge (#1623).
+        harnessSecret: c.req.header('X-Test-Secret'),
       })
       return c.json(registration)
     } catch (err) {
@@ -845,13 +847,18 @@ providerSetup.get('/signal/status',
     },
   }),
   async (c) => {
-    const hubId = c.get('hubId') ?? c.req.query('hubId')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'messaging:manage-signal')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId
     const registrationId = c.req.query('registrationId')
     const services = c.get('services')
 
     try {
       if (registrationId) {
-        const registration = await services.signalRegistration.checkStatus(registrationId)
+        const registration = await services.signalRegistration.checkStatus(
+          registrationId,
+          c.req.header('X-Test-Secret'),
+        )
         return c.json(registration)
       }
 
@@ -899,6 +906,7 @@ providerSetup.post('/signal/verify',
       const registration = await services.signalRegistration.verifyCode({
         registrationId: body.registrationId,
         code: body.code,
+        harnessSecret: c.req.header('X-Test-Secret'),
       })
       return c.json(registration)
     } catch (err) {
@@ -933,7 +941,7 @@ providerSetup.delete('/signal/unregister',
     }
 
     try {
-      await services.signalRegistration.unregister(registrationId)
+      await services.signalRegistration.unregister(registrationId, c.req.header('X-Test-Secret'))
       return c.json({ ok: true })
     } catch (err) {
       return handleSignalError(err, c)
@@ -1104,7 +1112,9 @@ providerSetup.get('/a2p/status',
     },
   }),
   async (c) => {
-    const hubId = c.get('hubId') ?? c.req.query('hubId')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'telephony:manage-a2p')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId
     const registrationId = c.req.query('registrationId')
     const services = c.get('services')
 

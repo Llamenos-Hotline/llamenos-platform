@@ -13,21 +13,30 @@
  */
 
 import { type APIRequestContext } from '@playwright/test'
+import { devSurfaceSecret, devSurfaceHeaders, harnessClientHeaders } from './dev-surface-secret'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import {
+  ADMIN_SIGNING_SEED,
   generateContentKey,
   encryptContent,
   wrapKeyForRecipient,
-  x25519PubkeyFromSeed,
+  hpkeRecipientForSeed,
   encryptMessageForDesktop,
   type DesktopReaderEnvelope,
 } from './crypto-helpers'
 
-// Admin Ed25519 seed (32 bytes hex) — deterministic test credential.
-// The corresponding pubkey is derived at runtime via ed25519PubkeyFromSeed.
-export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
+/**
+ * Admin Ed25519 signing seed (32 bytes hex) — deterministic test credential.
+ * The corresponding pubkey is derived at runtime via ed25519PubkeyFromSeed.
+ *
+ * Defined in `./crypto-helpers` and re-exported here: the admin's HPKE
+ * recipient key is derived from it (`adminHpkeRecipient`), and that module has
+ * to recognise the seed to refuse it where an X25519 secret belongs.
+ */
+export const ADMIN_SEED = ADMIN_SIGNING_SEED
 
 /** @deprecated Use ADMIN_SEED instead */
 export const ADMIN_NSEC = ADMIN_SEED
@@ -36,23 +45,6 @@ export const ADMIN_NSEC = ADMIN_SEED
 
 export function seedHexToPubkey(seedHex: string): string {
   return bytesToHex(ed25519.getPublicKey(hexToBytes(seedHex)))
-}
-
-/**
- * Build the canonical auth message bytes.
- * Format: `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}`
- * MUST match apps/worker/lib/auth.ts::buildAuthMessage()
- */
-function buildAuthMessage(pubkey: string, timestamp: number, method: string, path: string, nonce?: string): Uint8Array {
-  const base = `${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}`
-  return utf8ToBytes(nonce ? `${base}:${nonce}` : base)
-}
-
-/** Generate a random 16-byte hex nonce for auth replay prevention */
-function randomNonce(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
-  return bytesToHex(bytes)
 }
 
 /**
@@ -67,7 +59,7 @@ function createEd25519AuthToken(
 ): { pubkey: string; timestamp: number; token: string; nonce: string } {
   const pubkey = seedHexToPubkey(seedHex)
   const timestamp = Date.now()
-  const nonce = randomNonce()
+  const nonce = randomAuthNonce()
   const message = buildAuthMessage(pubkey, timestamp, method, path, nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
   return { pubkey, timestamp, token: bytesToHex(sig), nonce }
@@ -80,6 +72,10 @@ function authHeaders(seedHex: string, method: string, path: string): Record<stri
   return {
     'Authorization': `Bearer ${JSON.stringify(token)}`,
     'Content-Type': 'application/json',
+    // Marks this as the harness's own request so the API rate limiter exempts
+    // it on a deployed target — see ./dev-surface-secret.ts for why every
+    // request needs it and why only the secret-holder is exempt.
+    ...devSurfaceHeaders(),
   }
 }
 
@@ -99,7 +95,7 @@ async function safeJson(res: import('@playwright/test').APIResponse): Promise<un
 // Dev routes (/api/test-*) require X-Test-Secret header instead of Bearer auth.
 // These are gated by ENVIRONMENT=development + DEV_ROUTES_ENABLED=true + secret.
 
-const DEV_TEST_SECRET = process.env.DEV_RESET_SECRET || process.env.E2E_TEST_SECRET || 'test-reset-secret'
+const DEV_TEST_SECRET = devSurfaceSecret()
 
 function devHeaders(): Record<string, string> {
   return { 'Content-Type': 'application/json', 'X-Test-Secret': DEV_TEST_SECRET }
@@ -216,23 +212,36 @@ export async function apiDelete<T = unknown>(
   return { status: res.status(), data: data as T }
 }
 
+/**
+ * Create a hub through the route an operator uses.
+ *
+ * This called /api/test-create-hub, on the stated grounds that "the
+ * authenticated /api/hubs POST requires system:manage-hubs which the bootstrap
+ * admin may not have". That is not so: `role-super-admin` carries
+ * `permissions: ['*']` (packages/shared/permissions.ts DEFAULT_ROLES), and the
+ * bootstrap admin holds that role — global-setup verifies it before any test
+ * runs. The dev route was never needed here.
+ *
+ * It was, however, actively harmful: `devGuard` (apps/worker/app.ts) answers
+ * 404 for every /api/test-* outside a development server, so every suite built
+ * on this helper — 15 files — could only ever run against a dev box. See #1423.
+ *
+ * `POST /api/hubs` also calls `setHubRole` for the creator, so the admin ends
+ * up a member of the hub exactly as the dev route arranged via `adminPubkey`.
+ */
 export async function createHubViaApi(
   request: APIRequestContext,
   name: string,
 ): Promise<string> {
-  // Use the test-create-hub endpoint (dev.ts) which bypasses permission checks
-  // and only requires the X-Test-Secret header. The authenticated /api/hubs POST
-  // requires system:manage-hubs which the bootstrap admin may not have.
-  // Pass adminPubkey so the endpoint can add the admin as a hub member even when
-  // ADMIN_PUBKEY env var is not set (local dev without .env).
-  const { status, data } = await devPost<{ id: string }>(request, '/test-create-hub', {
-    name,
-    adminPubkey: seedHexToPubkey(ADMIN_SEED),
-  })
-  if (status !== 200) {
-    throw new Error(`Failed to create hub: ${status}`)
+  const { status, data } = await apiPost<{ hub?: { id: string } }>(request, '/hubs', { name })
+  if (status !== 201 && status !== 200) {
+    throw new Error(`Failed to create hub "${name}": POST /api/hubs returned ${status}`)
   }
-  return data.id
+  const id = data?.hub?.id
+  if (!id) {
+    throw new Error(`POST /api/hubs returned ${status} but no hub id: ${JSON.stringify(data)}`)
+  }
+  return id
 }
 
 /**
@@ -258,8 +267,29 @@ export async function deleteHubViaApi(
 ): Promise<void> {
   const { status } = await apiDelete(request, `/hubs/${hubId}`)
   if (status !== 200 && status !== 204) {
-    // Non-fatal: log but don't throw — teardown should not fail tests
-    console.warn(`Failed to delete hub ${hubId}: ${status}`)
+    // Loud on purpose (#1502). This used to console.warn, which made a hub
+    // that would not delete indistinguishable from one that did — no suite
+    // could observe the broken files.conversation_id cascade, for two
+    // releases. Teardown that genuinely may race a delete should use
+    // deleteHubViaApiIfPresent, which tolerates 404 and nothing else.
+    throw new Error(`Failed to delete hub ${hubId}: ${status}`)
+  }
+}
+
+/**
+ * Teardown for a hub the scenario itself may already have deleted.
+ *
+ * Tolerates 404 and NOTHING else: a hub that is gone is fine, a hub the server
+ * refuses to delete is still a failure. Prefer `deleteHubViaApi` whenever the
+ * hub is certain to exist.
+ */
+export async function deleteHubViaApiIfPresent(
+  request: APIRequestContext,
+  hubId: string,
+): Promise<void> {
+  const { status } = await apiDelete(request, `/hubs/${hubId}`)
+  if (status !== 200 && status !== 204 && status !== 404) {
+    throw new Error(`Failed to delete hub ${hubId}: ${status}`)
   }
 }
 
@@ -288,7 +318,18 @@ export async function ensureAdminRole(
   request: APIRequestContext,
 ): Promise<void> {
   const pubkey = seedHexToPubkey(ADMIN_SEED)
-  let lastRoles: string[] | null = null
+
+  // Already correct — the normal case, and the ONLY reachable case on a
+  // deployment. The promotion below exists for a dev-only race (a concurrent
+  // /api/test-reset wiping the users table mid-run, recreating the admin as
+  // role-volunteer). A deployed server has no test-reset, so nothing can
+  // downgrade the admin, and /api/test-promote-admin is 404 there anyway.
+  // Checking first means this helper is a no-op rather than a hard failure
+  // against a real server (#1423).
+  const current = await readAdminRoles(request)
+  if (current?.includes('role-super-admin')) return
+
+  let lastRoles: string[] | null = current
   let lastStatus = 0
   for (let attempt = 0; attempt < 5; attempt++) {
     const { status } = await devPost(request, '/test-promote-admin', { pubkey })
@@ -336,22 +377,33 @@ export async function verifyHubMembership(
     console.warn(
       `[verifyHubMembership] Admin denied on hub ${hubId} — body: ${JSON.stringify(data)}`,
     )
-    // Re-add admin as hub member via the dev endpoint (bypasses auth)
-    const { status: devStatus } = await devPost(request, '/test-add-hub-member', {
-      hubId,
+    // The AUTHENTICATED route first. It works everywhere; the dev route below
+    // is 404 outside a development server, so trying it first made this path
+    // fail on a deployment for a reason that had nothing to do with hub
+    // membership (#1423).
+    const { status: addStatus } = await apiPost(request, `/hubs/${hubId}/members`, {
       pubkey: seedHexToPubkey(ADMIN_SEED),
       roleIds: ['role-super-admin'],
     })
-    if (devStatus !== 200) {
-      // Fallback: try the authenticated endpoint
-      const { status: addStatus } = await apiPost(request, `/hubs/${hubId}/members`, {
+    // Declared out here, not inside the branch: the final diagnostic below
+    // reports it too, and it stays `null` when the real route succeeded —
+    // which is itself the useful signal that no fallback was needed.
+    let devStatus: number | null = null
+    if (addStatus !== 200 && addStatus !== 201 && addStatus !== 204 && addStatus !== 409) {
+      // Dev-only fallback: bypasses auth entirely, for the case where the
+      // admin's own permissions are what is broken. 404 here means a
+      // deployment, where this route does not exist by design.
+      ;({ status: devStatus } = await devPost(request, '/test-add-hub-member', {
+        hubId,
         pubkey: seedHexToPubkey(ADMIN_SEED),
         roleIds: ['role-super-admin'],
-      })
-      if (addStatus !== 200 && addStatus !== 201 && addStatus !== 204 && addStatus !== 409) {
+      }))
+      // Only now is it genuinely unrecoverable: the real route failed AND the
+      // dev bypass either failed or does not exist on this server.
+      if (devStatus !== 200) {
         throw new Error(
           `Failed to ensure admin hub membership for hub ${hubId}: ` +
-          `notes returned ${status}, dev-add returned ${devStatus}, add-member returned ${addStatus}`
+          `notes returned ${status}, add-member returned ${addStatus}, dev-add returned ${devStatus}`
         )
       }
     }
@@ -378,7 +430,8 @@ export async function verifyHubMembership(
         )
         throw new Error(
           `Admin still lacks hub membership after re-add for hub ${hubId} ` +
-          `(status: ${finalStatus}, dev-add: ${devStatus}, body: ${JSON.stringify(finalData)})`
+          `(status: ${finalStatus}, add-member: ${addStatus}, ` +
+          `dev-add: ${devStatus ?? 'not attempted'}, body: ${JSON.stringify(finalData)})`
         )
       }
     }
@@ -396,8 +449,24 @@ export function uniquePhone(): string {
   return `+1212${String(seq).padStart(7, '0')}`
 }
 
-export function uniqueName(prefix: string): string {
-  return `${prefix} ${Date.now()}`
+/**
+ * A name no other parallel test worker can produce — for anything that hits a
+ * uniqueness constraint: hub names (the server derives the slug from them),
+ * slugs, entity and report type names (#1632).
+ *
+ * `Date.now()` alone is millisecond-resolution, so two workers reaching the
+ * same step in the same millisecond asked for the same hub and the second got
+ * a 409. The random suffix is the uniqueness; the timestamp only keeps names
+ * sortable by creation time when reading a database or a log.
+ *
+ * `separator` joins all three parts, so the result is valid wherever the
+ * prefix is: `-` (default) for hub and role slugs, which reject `_`; `_` for
+ * entity and report type names, which reject `-`.
+ *
+ * Enforced by `scripts/check-unique-test-names.ts`.
+ */
+export function uniqueName(prefix: string, separator: '-' | '_' = '-'): string {
+  return [prefix, Date.now(), Math.random().toString(36).slice(2)].join(separator)
 }
 
 // ── Keypair Generation ────────────────────────────────────────────
@@ -407,6 +476,68 @@ export function generateTestKeypair(): { seedHex: string; pubkey: string } {
   const seedHex = bytesToHex(seedBytes)
   const pubkey = seedHexToPubkey(seedHex)
   return { seedHex, pubkey }
+}
+
+// ── Invite Redemption ─────────────────────────────────────────────
+
+/**
+ * A distinct simulated client address, for endpoints rate limited per client.
+ *
+ * The dev and CI servers run with `TRUST_PROXY_HEADERS=true` and have nothing
+ * in front of them, so the suite can present itself as many clients rather
+ * than one. Without an `X-Forwarded-For` every request in every Playwright
+ * worker falls into the single bucket for 127.0.0.1, so the suite's own
+ * parallelism — not the behaviour under test — decides who gets a 429.
+ *
+ * `X-Forwarded-For` alone only works against a directly-reachable server. A
+ * deployed instance sits behind Caddy, which overwrites it with the real remote
+ * address and strips every other forwarded-for header (#1606) — deliberately,
+ * so that no caller can choose its own bucket. Against such a target the whole
+ * suite was one client sharing one 5/min bucket per endpoint, which is 18 of
+ * the 27 deployed-target failures in #1625.
+ *
+ * So the address is now presented through `harnessClientHeaders()`, which sends
+ * it in `X-Test-Client-Address` as well — a channel the proxy does not rewrite,
+ * honoured only for a request carrying the dev surface's shared secret
+ * (`apps/worker/lib/route-rate-limit.ts`). The limiter still enforces its
+ * production threshold inside the bucket the harness names; nothing is exempt.
+ */
+export function simulatedClientIp(): string {
+  const octet = () => 1 + Math.floor(Math.random() * 254)
+  return `10.${octet()}.${octet()}.${octet()}`
+}
+
+/**
+ * Redeem an invite as ONE client, distinct from every other redeemer.
+ *
+ * `POST /api/invites/redeem` is rate limited to 5 per minute per client
+ * (`apps/worker/routes/invites.ts`) — an anti-enumeration control, and not
+ * something any scenario here is asserting. Sharing one bucket across the
+ * suite made that control answer 429 to whichever redemption happened to be
+ * sixth, which is how "two users simultaneously redeem the same invite code"
+ * came to observe ZERO successes instead of one (#1480).
+ *
+ * Each redeemer is a different person, so each gets its own address. Pass
+ * `clientIp` explicitly when a scenario needs two redemptions to come from the
+ * same client.
+ */
+export async function redeemInviteViaApi<T = unknown>(
+  request: APIRequestContext,
+  code: string,
+  seedHex: string,
+  clientIp: string = simulatedClientIp(),
+): Promise<{ status: number; data: T }> {
+  const path = '/api/invites/redeem'
+  const pubkey = seedHexToPubkey(seedHex)
+  const timestamp = Date.now()
+  const token = bytesToHex(
+    ed25519.sign(buildAuthMessage(pubkey, timestamp, 'POST', path), hexToBytes(seedHex)),
+  )
+  const res = await request.post(path, {
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(clientIp) },
+    data: { code, pubkey, timestamp, token },
+  })
+  return { status: res.status(), data: (await safeJson(res)) as T }
 }
 
 // ── User CRUD ─────────────────────────────────────────────────────
@@ -425,9 +556,18 @@ export interface CreateUserResult {
 /** @deprecated Use CreateUserResult instead */
 export type CreateVolunteerResult = CreateUserResult
 
+/**
+ * Create a user as the admin.
+ *
+ * With `hubId`, the user is created as a MEMBER of that hub (`POST /hubs/:hubId/users`):
+ * `roleIds` become their role assignment in that hub (and, per the server's current
+ * semantics, their global roles too). Without it, `roleIds` are GLOBAL roles only,
+ * which carry no authority inside any hub unless one of them is super-admin (#1037) —
+ * use `hubId` for any actor that acts in a hub.
+ */
 export async function createUserViaApi(
   request: APIRequestContext,
-  options?: { name?: string; phone?: string; roleIds?: string[] },
+  options?: { name?: string; phone?: string; roleIds?: string[]; hubId?: string },
 ): Promise<CreateUserResult> {
   const name = options?.name ?? uniqueName('TestUser')
   const phone = options?.phone ?? uniquePhone()
@@ -435,7 +575,8 @@ export async function createUserViaApi(
 
   const { seedHex, pubkey } = generateTestKeypair()
 
-  const { status, data } = await apiPost(request, '/users', {
+  const path = options?.hubId ? `/hubs/${options.hubId}/users` : '/users'
+  const { status, data } = await apiPost(request, path, {
     name, phone, roleIds, pubkey,
   })
 
@@ -446,8 +587,67 @@ export async function createUserViaApi(
   return { pubkey, seedHex, nsec: seedHex, deviceKey: seedHex, name, phone }
 }
 
-/** @deprecated Use createUserViaApi instead */
-export const createVolunteerViaApi = createUserViaApi
+/**
+ * Register a device carrying this identity's X25519 encryption key.
+ *
+ * Uses the real `POST /devices/register` route — no test-only backdoor. The
+ * X25519 key comes from `hpkeRecipientForSeed`, the one place that knows how an
+ * identity is addressed, so the key registered here is the key tests unwrap
+ * with.
+ */
+export async function registerDeviceKeyViaApi(
+  request: APIRequestContext,
+  seedHex: string,
+): Promise<string> {
+  const x25519Pubkey = hpkeRecipientForSeed(seedHex).pubkeyHex
+  const { status, data } = await apiPost(
+    request,
+    '/devices/register',
+    {
+      platform: 'ios',
+      // Opaque per-identity token: `registerDevice` keys devices by pushToken,
+      // so a unique one keeps repeat registrations idempotent per identity.
+      pushToken: `test-device-${seedHex.slice(0, 16)}`,
+      wakeKeyPublic: x25519Pubkey,
+      ed25519Pubkey: seedHexToPubkey(seedHex),
+      x25519Pubkey,
+      deviceName: 'backend-bdd',
+    },
+    seedHex,
+  )
+
+  if (status !== 204 && status !== 200) {
+    throw new Error(
+      `Failed to register device encryption key: ${status} ${JSON.stringify(data)}`,
+    )
+  }
+
+  return x25519Pubkey
+}
+
+/**
+ * Create a user who can actually READ their own encrypted data.
+ *
+ * `createUserViaApi` registers an identity: `pubkey` is the Ed25519 AUTH key,
+ * which is NOT an HPKE recipient and which the server must never seal to
+ * (#1021). Server-sealed records — inbound/outbound messages, transcriptions —
+ * resolve their readers through `devices.x25519Pubkey`, so a user with no
+ * device key on file gets no envelope at all.
+ *
+ * This helper adds that missing half, the way a real client does at device
+ * registration. Use it for any role that reads encrypted content (volunteers,
+ * assignees, message authors). Use plain `createUserViaApi` when the scenario
+ * is ABOUT devices and asserts exact device counts — device-lifecycle, PUK
+ * envelope distribution, MLS key packages, the device-cap race.
+ */
+export async function createVolunteerViaApi(
+  request: APIRequestContext,
+  options?: { name?: string; phone?: string; roleIds?: string[]; hubId?: string },
+): Promise<CreateUserResult> {
+  const user = await createUserViaApi(request, options)
+  await registerDeviceKeyViaApi(request, user.seedHex)
+  return user
+}
 
 export async function deleteUserViaApi(
   request: APIRequestContext,
@@ -588,6 +788,29 @@ export async function createShiftViaApi(
     throw new Error(`Failed to create shift: ${status}`)
   }
   return { id: data.id, encryptedName }
+}
+
+/**
+ * Clock a volunteer in to a hub, as themselves, through the real route.
+ *
+ * Ringing requires BOTH consents (apps/worker/services/ringing.ts
+ * `resolveRingableVolunteers`): an admin put the volunteer on a shift covering
+ * now, AND the volunteer clocked in. A scenario that only creates a shift has
+ * established half the precondition, and the hub would fall through to its
+ * fallback group — so "on shift" setup steps must call this too.
+ *
+ * `seedHex` is the VOLUNTEER's seed, not the admin's: clocking somebody else in
+ * is not a thing the API permits, and it is the volunteer's own consent.
+ */
+export async function clockInViaApi(
+  request: APIRequestContext,
+  hubId: string,
+  seedHex: string,
+): Promise<void> {
+  const { status } = await apiPost(request, hubPath('/shifts/clock-in', hubId), {}, seedHex)
+  if (status !== 200) {
+    throw new Error(`Failed to clock in: ${status}`)
+  }
 }
 
 export async function deleteShiftViaApi(
@@ -1039,7 +1262,7 @@ export async function createEntityTypeViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const name = options?.name ?? `test_type_${Date.now()}`
+  const name = options?.name ?? uniqueName('test_type', '_')
   const defaultStatuses = [
     { value: 'open', label: 'Open', order: 0 },
     { value: 'closed', label: 'Closed', order: 1, isClosed: true },
@@ -1252,7 +1475,7 @@ export async function createCmsReportTypeViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const name = options?.name ?? `test_report_type_${Date.now()}`
+  const name = options?.name ?? uniqueName('test_report_type', '_')
   const defaultStatuses = [
     { value: 'submitted', label: 'Submitted', order: 0 },
     { value: 'closed', label: 'Closed', order: 1, isClosed: true },
@@ -1339,7 +1562,7 @@ export async function createContactByNameViaApi(
   // Encrypt the summary the way the desktop client's encryptMessage does, for
   // the admin reader, so the directory renders the contact instead of the
   // "Restricted" placeholder (issue #796).
-  const { encryptedContent: encryptedSummary, readerEnvelopes } = encryptMessageForDesktop(
+  const { encryptedContent: encryptedSummary, readerEnvelopes } = await encryptMessageForDesktop(
     JSON.stringify({ displayName, contactType, tags: [] }),
     [seedHex],
   )
@@ -1364,9 +1587,9 @@ async function realEnvelope(
   seedHex = ADMIN_SEED,
   label = LABEL_NOTE_KEY,
 ): Promise<{ pubkey: string; ct: string; enc: string }> {
-  const x25519Pubkey = x25519PubkeyFromSeed(seedHex)
-  const envelope = await wrapKeyForRecipient(contentKey, x25519Pubkey, seedHex, label)
-  return { pubkey: x25519Pubkey, ...envelope }
+  const recipient = hpkeRecipientForSeed(seedHex)
+  const envelope = await wrapKeyForRecipient(contentKey, recipient.pubkeyHex, recipient.skHex, label)
+  return { pubkey: recipient.pubkeyHex, ...envelope }
 }
 
 /**

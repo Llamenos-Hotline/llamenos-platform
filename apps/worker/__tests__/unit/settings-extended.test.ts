@@ -71,6 +71,11 @@ function makeRole(overrides: Record<string, unknown> = {}) {
 
 function setup() {
   const { db } = createMockDb()
+  // updateHubSettings (#1144) now reads its merged result back via
+  // `.returning()` instead of computing it purely in JS — give it a
+  // non-empty default row so tests that don't care about the exact
+  // persisted shape don't have to set one up themselves.
+  db.$setInsertResult([{ settings: {} }])
   const service = new SettingsService(db as any)
   return { db, service }
 }
@@ -287,10 +292,13 @@ describe('SettingsService per-hub call settings (#1051)', () => {
 
   it('hub update clamps, persists to hub_settings and never touches system_settings', async () => {
     const { db, service } = setup()
+    // updateHubSettings (#1144) no longer reads the existing blob before
+    // writing — it merges atomically in SQL — so only the caller's own
+    // read (existing overrides) and the post-update re-read consume
+    // SELECTs now.
     db.$setSelectResults([
-      [{ hubId: 'hub-a', settings: {} }],
-      [{ hubId: 'hub-a', settings: {} }],
-      [makeSettingsRow()],
+      [{ hubId: 'hub-a', settings: {} }], // updateCallSettings -> getHubSettings (existing overrides)
+      [makeSettingsRow()], // re-read effective: system_settings
       [{ hubId: 'hub-a', settings: { callSettings: { queueTimeoutSeconds: 30 } } }],
     ])
     await service.updateCallSettings({ queueTimeoutSeconds: 5 }, 'hub-a')
@@ -399,6 +407,19 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
     await expect(
       service.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('tells a self-hosted operator which language a caller hears instead, and that recordings fix it (#1347)', async () => {
+    const { service } = setup()
+    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+      type: 'asterisk',
+      phoneNumber: '+15551234567',
+    } as any)
+
+    // Generated speech has no Tagalog or Mixtec voice (ivr-speech/voices.ts).
+    const refused = service.updateIvrLanguages({ enabledLanguages: ['en', 'tl', 'mix'] }, 'hub-1')
+    await expect(refused).rejects.toMatchObject({ status: 400 })
+    await expect(refused).rejects.toThrow(/cannot speak: tl, mix\. No offline voice exists for them: .*\(tl → en, mix → es\) unless you upload recordings/)
   })
 
   it('accepts a hub override where every language is in the provider catalog', async () => {
@@ -788,6 +809,39 @@ describe('SettingsService.getEnabledChannels', () => {
     const result = await service.getEnabledChannels({})
     expect(result.voice).toBe(false)
   })
+
+  /**
+   * On a real deployment `system_settings.setup_state` is `{}` — that is what
+   * `getSettings()` upserts for the singleton row, so it is the shape every
+   * fresh install has until the setup wizard writes to it. `getEnabledChannels`
+   * read `row.setupState` directly and cast it `as SetupState | null`, then did
+   * `setupState?.selectedChannels.includes(...)`: the `?.` guards a null row but
+   * not a present-and-empty one, so `{}` threw a TypeError.
+   *
+   * `GET /api/config` catches that and returns every channel `false`, and the
+   * desktop gates its whole Conversations page on those flags
+   * (`src/client/lib/config.tsx` `hasAnyMessaging`) — so a deployment with
+   * `enabledChannels: ['signal']` persisted rendered "No messaging channels
+   * enabled" and the messaging UI was unreachable.
+   *
+   * Every other test here supplies a complete `setupState` or `null`, which is
+   * exactly why this was never caught. Do not "fix" this case by giving the
+   * fixture a fuller object than production has.
+   */
+  it('reads channels when setupState is the empty object a fresh install stores', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow({
+        messagingConfig: { enabledChannels: ['signal'], inactivityTimeout: 60, maxConcurrentPerUser: 5, requireAssignment: false },
+        setupState: {},
+      })],
+      [],
+    ])
+
+    const result = await service.getEnabledChannels({})
+    expect(result.signal).toBe(true)
+    expect(result.reports).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1154,7 +1208,10 @@ describe('SettingsService.createRole', () => {
 
   it('throws 409 when slug already exists', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([makeRole({ slug: 'existing' })])
+    // The slug's unique index swallowed the insert (ON CONFLICT DO NOTHING
+    // returned no row) — this is also what the loser of a concurrent
+    // same-slug create sees, so it must be a 409, never a 500.
+    db.$setInsertResult([])
 
     await expect(
       service.createRole({ name: 'New', slug: 'existing', permissions: ['read'], description: 'Test' }),
@@ -1163,7 +1220,7 @@ describe('SettingsService.createRole', () => {
 
   it('creates role with valid data', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([]) // slug check: not found
+    db.$setInsertResult([{ id: 'role-new' }]) // insert won: no slug conflict
 
     const result = await service.createRole({
       name: 'Observer',
@@ -1409,35 +1466,40 @@ describe('SettingsService.deleteHub', () => {
 // ---------------------------------------------------------------------------
 
 describe('SettingsService.runCleanup', () => {
+  // The rate-limit trim+delete now runs as a single SQL CTE (issue #1127 —
+  // `select().from(rateLimits)` with no limit used to pull every distinct
+  // rate-limit key in the table into Node memory on every tick), so what
+  // this layer owns is the metrics bookkeeping around the row count the
+  // statement returns. db.$setExecuteResult represents the deleted-key rows
+  // the CTE's RETURNING clause produces.
+
   it('deletes expired rate limit entries and returns metrics', async () => {
     const { db, service } = setup()
-    const now = Date.now()
-    const oldTs = now - 999_999_999 // far in the past — well beyond any TTL
-    const recentTs = now - 1000 // 1 second ago — within TTL
 
-    // Select sequence: getSettings → select rateLimits
+    // Select sequence: getSettings only — rate limits are no longer
+    // selected into app memory.
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [
-        { key: 'stale-key', timestamps: [oldTs] },
-        { key: 'active-key', timestamps: [recentTs] },
-      ],
     ])
-    db.$setDeleteResult([{ key: 'stale-key' }])
+    db.$setExecuteResult([{ key: 'stale-key' }])
+    db.$setDeleteResult([])
 
     const metrics = await service.runCleanup()
 
     expect(metrics.rateLimitEntriesDeleted).toBe(1)
-    expect(db.delete).toHaveBeenCalled()
+    expect(db.execute).toHaveBeenCalled()
+    // getSettings() is the only select — the rate_limits table is no
+    // longer pulled into app memory, only trimmed/deleted via the execute
+    // CTE above.
+    expect(db.select).toHaveBeenCalledTimes(1)
   })
 
   it('deletes expired CAPTCHA challenges', async () => {
     const { db, service } = setup()
-    // Select: getSettings + empty rateLimits
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([{ id: 'cap-1' }, { id: 'cap-2' }])
 
     const metrics = await service.runCleanup()
@@ -1454,8 +1516,8 @@ describe('SettingsService.runCleanup', () => {
     }
     db.$setSelectResults([
       [makeSettingsRow({ cleanupMetrics: existing })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([{ id: 'cap-1' }])
 
     const metrics = await service.runCleanup()
@@ -1470,8 +1532,8 @@ describe('SettingsService.runCleanup', () => {
     const before = new Date().toISOString()
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([])
 
     const metrics = await service.runCleanup()
@@ -1484,8 +1546,8 @@ describe('SettingsService.runCleanup', () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([])
 
     await service.runCleanup()
@@ -1502,5 +1564,20 @@ describe('SettingsService.runCleanup', () => {
     })
 
     await expect(service.runCleanup()).rejects.toThrow('DB connection failed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// clearExpiredApiRateLimits
+// ---------------------------------------------------------------------------
+
+describe('SettingsService.clearExpiredApiRateLimits', () => {
+  it('deletes api_rate_limits rows older than the expiry window', async () => {
+    const { db, service } = setup()
+    db.$setDeleteResult([{ key: 'strict:1.2.3.4' }])
+
+    await service.clearExpiredApiRateLimits()
+
+    expect(db.delete).toHaveBeenCalled()
   })
 })

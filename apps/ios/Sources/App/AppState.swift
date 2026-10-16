@@ -32,9 +32,11 @@ final class AppState {
     let crashReportingService: CrashReportingService
     let offlineQueue: OfflineQueue
     let hubActivityService: HubActivityService
+    let hubMembershipService: HubMembershipService
     let linphoneService: LinphoneService
     let wipeService: WipeService
     let permissionService: PermissionService
+    let shiftClockService: ShiftClockService
 
     // MARK: - Auth State
 
@@ -120,8 +122,14 @@ final class AppState {
         self.crashReportingService = crashReporting
         self.offlineQueue = offline
         self.hubActivityService = hubActivity
+        self.hubMembershipService = HubMembershipService(
+            apiService: api,
+            cryptoService: crypto,
+            hubContext: hubContext
+        )
         self.linphoneService = linphone
         self.permissionService = permission
+        self.shiftClockService = ShiftClockService(apiService: api)
         self.wipeService = WipeService(
             keychainService: keychain,
             cryptoService: crypto,
@@ -208,10 +216,19 @@ final class AppState {
                 .flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
                 .flatMap { $0.isEmpty ? nil : $0 }
             registerTestIdentity(asAdmin: !args.contains("--test-volunteer-identity"), hubId: hubId)
+            // --test-no-active-hub undoes the harness's setActiveHub so a test can
+            // prove the SESSION loads membership: with #1720's loader removed the
+            // active hub stays nil and hub-scoped actions refuse to run.
+            if args.contains("--test-no-active-hub") {
+                hubContext.clearActiveHub()
+            }
             // After successful registration, connect WebSocket and fetch role
             // so the dashboard shows "Connected" and the correct user role.
             connectWebSocketIfConfigured()
             fetchUserRole()
+            // The harness stands in for unlock: the session is usable from this
+            // point, so membership loads here exactly as it does in didUnlock.
+            loadMemberHubs()
         }
     }
 
@@ -343,6 +360,7 @@ final class AppState {
         authStatus = .unlocked
         connectWebSocketIfConfigured()
         fetchUserRole()
+        loadMemberHubs()
         offlineQueue.startMonitoring()
         // Replay any queued operations now that we're authenticated
         Task { await offlineQueue.replay() }
@@ -384,6 +402,7 @@ final class AppState {
 
         connectWebSocketIfConfigured()
         fetchUserRole()
+        loadMemberHubs()
         offlineQueue.startMonitoring()
         Task { await SecurityEventService.shared.flush() }
     }
@@ -402,6 +421,11 @@ final class AppState {
         eventListenerTask = nil
         relayConnectTask?.cancel()
         relayConnectTask = nil
+        // Cancel any in-flight membership load before resetting: a response that
+        // lands after logout must not re-populate membership or re-set an active hub.
+        membershipLoadTask?.cancel()
+        membershipLoadTask = nil
+        hubMembershipService.reset()
         authService.logout()
         isLocked = false
         authStatus = .unauthenticated
@@ -412,29 +436,41 @@ final class AppState {
         unreadConversationCount = 0
     }
 
-    // MARK: - Hub Key Management
+    // MARK: - Hub Membership
 
-    /// Load hub keys for all hubs in parallel. Called after login.
-    /// Fetches each hub's HPKE-wrapped key envelope from the API and unwraps it
-    /// into Rust CryptoState. Failures on individual hubs are logged and skipped —
-    /// partial key loading is better than blocking the entire login flow.
-    func loadAllHubKeys(hubs: [SharedHub]) async {
-        await withTaskGroup(of: Void.self) { group in
-            for hub in hubs {
-                guard !cryptoService.hasHubKey(hubId: hub.id) else { continue }
-                group.addTask { [apiService, cryptoService] in
-                    do {
-                        let envelope = try await apiService.getHubKey(hub.id)
-                        try cryptoService.loadHubKey(hubId: hub.id, envelope: envelope)
-                    } catch {
-                        #if DEBUG
-                        print("[HubKeys] Failed to load key for hub \(hub.id): \(error.localizedDescription)")
-                        #endif
-                    }
-                }
-            }
+    /// In-flight membership load, so logout can cancel it before it applies.
+    private var membershipLoadTask: Task<Void, Never>?
+
+    /// Load the user's hub memberships now that the session is usable (#1720).
+    ///
+    /// Fires from `didUnlock` and `didCompleteOnboarding` — and from the
+    /// UI_TESTING registration path — the moments a session becomes usable.
+    /// Until #1720 the only hub-list call site was Settings → Hubs, so a user
+    /// who never opened it had no active hub (clock-in refused with "No hub
+    /// selected") and no hub keys (every E2EE payload unreadable).
+    ///
+    /// Non-blocking: the load is session bookkeeping, not a gate on the UI.
+    func loadMemberHubs() {
+        #if DEBUG
+        if let handler = loadMemberHubsHandlerForTesting {
+            handler()
+            return
+        }
+        #endif
+        membershipLoadTask?.cancel()
+        membershipLoadTask = Task { [hubMembershipService] in
+            await hubMembershipService.loadMembership()
         }
     }
+
+    #if DEBUG
+    /// Test seam: when set, replaces the membership load the session-establishment
+    /// paths schedule, so a unit test can prove didUnlock / didCompleteOnboarding
+    /// fire it (the behavioural half is covered through HubMembershipService).
+    var loadMemberHubsHandlerForTesting: (() -> Void)?
+    #endif
+
+    // MARK: - Hub Key Management
 
     /// Clear hub key cache on lock / logout.
     /// Evicts all hub symmetric keys from Rust memory and resets the active hub.

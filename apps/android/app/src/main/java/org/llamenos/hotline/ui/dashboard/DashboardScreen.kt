@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.filled.Close
@@ -52,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
+import org.llamenos.hotline.telephony.rememberMicrophoneRequest
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.util.DateFormatUtils
 import org.llamenos.hotline.ui.notes.DecryptedNote
@@ -90,10 +92,13 @@ fun DashboardScreen(
     onNavigateToHubs: () -> Unit = {},
     onNavigateToEvents: () -> Unit = {},
     onNavigateToTriage: () -> Unit = {},
+    /** Extra work for pull-to-refresh beyond this screen's own view models (hub selection). */
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val notesUiState by notesViewModel.uiState.collectAsState()
+    val requestMicrophone = rememberMicrophoneRequest()
 
     Scaffold(
         topBar = {
@@ -163,6 +168,7 @@ fun DashboardScreen(
             onRefresh = {
                 viewModel.refresh()
                 notesViewModel.refresh()
+                onRefresh()
             },
             modifier = Modifier
                 .fillMaxSize()
@@ -189,6 +195,52 @@ fun DashboardScreen(
                         isReportingSpam = uiState.isReportingSpam,
                         isBanning = uiState.isBanning,
                     )
+                }
+
+                // Missing UnifiedPush distributor — calls can never wake this device.
+                // Explicit, localized state instead of silent registration failure (#955).
+                if (uiState.pushDistributorMissing) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("push-distributor-warning"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.push_setup_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                                Text(
+                                    text = stringResource(R.string.push_setup_distributor_not_found),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                            }
+                            TextButton(
+                                onClick = { viewModel.retryPushRegistration() },
+                                modifier = Modifier.testTag("push-distributor-retry"),
+                            ) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                    }
                 }
 
                 // Connection status card
@@ -333,7 +385,12 @@ fun DashboardScreen(
                                     if (uiState.isOnShift) {
                                         viewModel.clockOut()
                                     } else {
-                                        viewModel.clockIn()
+                                        // Same RECORD_AUDIO gate as the Shifts screen: ask while
+                                        // an activity is foreground and unlocked, not when a
+                                        // call is already ringing.
+                                        requestMicrophone { granted ->
+                                            viewModel.clockIn(microphoneGranted = granted)
+                                        }
                                     }
                                 },
                                 enabled = !uiState.isClockingInOut,

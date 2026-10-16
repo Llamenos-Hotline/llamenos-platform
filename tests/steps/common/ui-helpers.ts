@@ -9,6 +9,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import { Timeouts } from '../../helpers'
+import { TestIds } from '../../test-ids'
 
 /**
  * Expand a `SettingsSection` collapsible and return the section locator.
@@ -96,4 +97,37 @@ export async function clickResolvedControl(
     return
   }
   throw new Error(`"${text}": a candidate was visible but disappeared before it could be clicked`)
+}
+
+/**
+ * Assert the app is on `pathname` and has rendered its page title.
+ *
+ * A visible `page-title` alone is true on every authenticated route, so a step
+ * named "I should see the notes screen" that only checks it passes on any page.
+ */
+export async function expectRoute(page: Page, pathname: string): Promise<void> {
+  await expect(page).toHaveURL(url => url.pathname === pathname, { timeout: Timeouts.NAVIGATION })
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+}
+
+/**
+ * Log in as the admin unless the page already shows an authenticated session.
+ *
+ * A fresh page (about:blank) has no session. Any other page is first allowed to
+ * settle into one of its two states — the app shell (sidebar) or an auth screen
+ * — before the branch is chosen; sampling the sidebar once would log in again
+ * whenever the shell simply had not rendered yet.
+ */
+export async function ensureAuthenticated(page: Page): Promise<void> {
+  const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
+  if (page.url() !== 'about:blank') {
+    const authScreen = page.getByTestId(TestIds.PIN_INPUT)
+      .or(page.getByTestId(TestIds.LOGIN_SUBMIT_BTN))
+      .or(page.getByTestId(TestIds.DEVICE_KEY_INPUT))
+    await expect(sidebar.or(authScreen).first()).toBeVisible({ timeout: Timeouts.AUTH })
+    if (await sidebar.isVisible()) return
+  }
+  const { loginAsAdmin } = await import('../../helpers')
+  await loginAsAdmin(page)
+  await expect(sidebar).toBeVisible({ timeout: Timeouts.ELEMENT })
 }

@@ -1,4 +1,5 @@
 import { safeFetch } from '../lib/safe-fetch'
+import { assertHangupResponse } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -239,6 +240,10 @@ export class BandwidthAdapter implements TelephonyAdapter {
     return this.bxml('<Response><Hangup/></Response>')
   }
 
+  hangupResponse(): TelephonyResponse {
+    return this.bxml('<Response><Hangup/></Response>')
+  }
+
   emptyResponse(): TelephonyResponse {
     return this.bxml('<Response/>')
   }
@@ -246,11 +251,12 @@ export class BandwidthAdapter implements TelephonyAdapter {
   // --- Call Control Methods ---
 
   async hangupCall(callSid: string): Promise<void> {
-    await this.bandwidthApi(`/calls/${callSid}`, {
+    const res = await this.bandwidthApi(`/calls/${callSid}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state: 'completed' }),
     })
+    await assertHangupResponse(res, 'Bandwidth')
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {

@@ -8,10 +8,25 @@ const x25519PubkeySchema = z.string().regex(/^[0-9a-f]{64}$/i, 'Must be 32-byte 
 
 // --- Input schemas ---
 
+/**
+ * Register a device's push endpoint and/or its per-device crypto keys.
+ *
+ * Push and identity are orthogonal, and conflating them cost the desktop its
+ * ability to receive E2EE content: `pushToken` and `wakeKeyPublic` used to be
+ * required and `platform` admitted only the two mobile clients, so a Tauri
+ * desktop — which has no push distributor — could not register at all. Its
+ * `devices.x25519_pubkey` stayed NULL, and with no X25519 key on record nothing
+ * could HPKE-wrap a message to it.
+ *
+ * A registration must therefore carry at least one of the two things it can
+ * register: a push endpoint (`pushToken` + its wake key) or an identity
+ * (`x25519Pubkey`). One that carries neither is refused rather than stored as
+ * an empty row.
+ */
 export const registerDeviceBodySchema = z.object({
-  platform: z.enum(['ios', 'android']),
-  pushToken: z.string().min(1, 'pushToken is required'),
-  wakeKeyPublic: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be 32-byte X25519 public key in hex'),
+  platform: z.enum(['ios', 'android', 'desktop']),
+  pushToken: z.string().min(1).optional(),
+  wakeKeyPublic: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be 32-byte X25519 public key in hex').optional(),
   ed25519Pubkey: ed25519PubkeySchema.optional(),
   x25519Pubkey: x25519PubkeySchema.optional(),
   deviceName: z.string().max(100).optional(),
@@ -19,6 +34,14 @@ export const registerDeviceBodySchema = z.object({
   osVersion: z.string().max(50).optional(),
   appVersion: z.string().max(50).optional(),
 })
+  .refine(
+    (b) => b.pushToken !== undefined || b.x25519Pubkey !== undefined,
+    { message: 'Provide pushToken (to register for push) or x25519Pubkey (to register this device as an HPKE recipient)' },
+  )
+  .refine(
+    (b) => b.pushToken === undefined || b.wakeKeyPublic !== undefined,
+    { message: 'wakeKeyPublic is required alongside pushToken', path: ['wakeKeyPublic'] },
+  )
 
 export const voipTokenBodySchema = z.object({
   platform: z.enum(['ios', 'android']),

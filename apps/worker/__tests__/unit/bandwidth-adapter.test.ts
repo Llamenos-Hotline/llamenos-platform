@@ -312,6 +312,13 @@ describe('BandwidthAdapter', () => {
     })
   })
 
+  describe('hangupCall failures', () => {
+    it('rejects when Bandwidth refuses the hang-up', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 500 }))
+      await expect(adapter.hangupCall('call-1')).rejects.toThrow(/hangup failed: 500/)
+    })
+  })
+
   describe('ringVolunteers', () => {
     it('POSTs outbound calls for each volunteer and returns callIds', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url) => {

@@ -37,11 +37,9 @@ struct OfflineBanner: View {
                                 .font(.caption2)
                         }
 
-                        Text(String(
-                            format: NSLocalizedString(
-                                pending == 1 ? "offline_pending_sync_message_one" : "offline_pending_sync_message",
-                                comment: "N operations waiting to sync"
-                            ),
+                        Text(L10n.format(
+                            pending == 1 ? "offline_pending_sync_message_one" : "offline_pending_sync_message",
+                            comment: "N operations waiting to sync",
                             pending
                         ))
                         .font(.brand(.caption))

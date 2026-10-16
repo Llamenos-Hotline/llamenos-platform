@@ -12,7 +12,7 @@ import {
   generateContentKey,
   wrapKeyForRecipient,
   unwrapKey,
-  x25519PubkeyFromSeed,
+  hpkeRecipientForSeed,
 } from '../../crypto-helpers'
 import {
   apiGet,
@@ -21,12 +21,15 @@ import {
   createUserViaApi,
   createRoleViaApi,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   addHubMemberViaApi,
   generateTestKeypair,
   ADMIN_SEED,
   seedHexToPubkey,
+  uniqueName,
+  simulatedClientIp,
 } from '../../api-helpers'
+import { harnessClientHeaders } from '../../dev-surface-secret'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
@@ -107,7 +110,7 @@ Before({ tags: '@backend' }, async ({ world }) => {
 After({ tags: '@backend' }, async ({ request, world }) => {
   const s = getS(world)
   if (s.secondHubId) {
-    await deleteHubViaApi(request, s.secondHubId).catch(() => {})
+    await deleteHubViaApiIfPresent(request, s.secondHubId)
   }
 })
 
@@ -173,7 +176,7 @@ async function enrollRecoveryGroup(
  * is outside apps/worker's ownership). `wrapKeyForRecipient`/`unwrapKey` are
  * unaffected — they go through `hpkeSuite.importKey('raw', ...)`, a different
  * code path — so deriving the raw 32-byte X25519 secret ourselves (the same
- * way `x25519PubkeyFromSeed` already does for device keys) and feeding it
+ * way `hpkeRecipientForSeed` already does for device keys) and feeding it
  * through the existing wrap/unwrap helpers gives a fully real HPKE round trip.
  */
 function generateX25519Keypair(): { skHex: string; pubkeyHex: string } {
@@ -211,7 +214,7 @@ function canonicalizeJson(value: unknown): unknown {
 
 function computeSigchainLinkHash(
   seqNo: number,
-  prevHash: string,
+  prevHash: string | null,
   payload: unknown,
   signerDeviceId: string,
   signerPubkey: string,
@@ -349,7 +352,7 @@ Given('a recovery group is enrolled for the hub', async ({ request, world }) => 
 Given('a user without {string} permission', async ({ request, world }, _permission: string) => {
   const s = getS(world)
 
-  const roleSlug = `no-recovery-${Date.now()}`
+  const roleSlug = uniqueName('no-recovery')
   await createRoleViaApi(request, {
     name: `No Recovery ${Date.now()}`,
     slug: roleSlug,
@@ -393,13 +396,19 @@ When('an unauthenticated client initiates recovery for a nonexistent user in the
   const s = getS(world)
   expect(s.hubId).toBeDefined()
 
+  // `recovery-initiate` is capped at 2/min per client inside the route handler
+  // (and sits behind the `strict`-tier middleware). Name a client of our own so
+  // this scenario's single request is not the third one some other scenario's
+  // bucket has seen — on a deployed target every caller shares Caddy's address,
+  // so two unrelated scenarios were enough to 429 this one (#1625). The cap
+  // still applies inside the named bucket.
   const res = await request.post(`${BASE_URL}/api/recovery-group/initiate`, {
     data: {
       hubId: s.hubId!,
       userIdentifier: `nonexistent-user-${Date.now()}@nowhere.invalid`,
       newDevicePubkey: 'a'.repeat(64),
     },
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(simulatedClientIp()) },
   })
 
   const body = await res.json().catch(() => ({})) as Record<string, unknown>
@@ -594,7 +603,7 @@ Then('the listed sessions include the seeded session', async ({ world }) => {
 Given('a second hub with a seeded recovery session', async ({ request, world }) => {
   const s = getS(world)
 
-  const secondHubId = await createHubViaApi(request, `recovery-second-hub-${Date.now()}`)
+  const secondHubId = await createHubViaApi(request, uniqueName('recovery-second-hub'))
   s.secondHubId = secondHubId
 
   const recoveringUser = await createUserViaApi(request, { name: `Second Hub Recovering User ${Date.now()}` })
@@ -614,7 +623,7 @@ Given('a user with global {string} permission who is only a member of the first 
   const s = getS(world)
   expect(s.hubId).toBeDefined()
 
-  const roleSlug = `recovery-view-global-${Date.now()}`
+  const roleSlug = uniqueName('recovery-view-global')
   const role = await createRoleViaApi(request, {
     name: `Recovery Viewer ${Date.now()}`,
     slug: roleSlug,
@@ -690,7 +699,7 @@ Given('a second hub with a recovery group enrolled', async ({ request, world }) 
   const s = getS(world)
 
   if (!s.secondHubId) {
-    s.secondHubId = await createHubViaApi(request, `recovery-second-hub-${Date.now()}`)
+    s.secondHubId = await createHubViaApi(request, uniqueName('recovery-second-hub'))
   }
 
   const { status } = await enrollRecoveryGroup(request, s.secondHubId!, s.adminSeed)
@@ -808,7 +817,7 @@ Given('a verified recovery session exists for the second hub', async ({ request,
   const s = getS(world)
 
   if (!s.secondHubId) {
-    s.secondHubId = await createHubViaApi(request, `recovery-second-hub-${Date.now()}`)
+    s.secondHubId = await createHubViaApi(request, uniqueName('recovery-second-hub'))
   }
 
   const recoveringUser = await createUserViaApi(request, { name: `Second Hub Verified Session User ${Date.now()}` })
@@ -1023,7 +1032,7 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // the two real contributing holders (mirrors the "Given a recovery group
   // is enrolled for the hub" pattern above, which sidesteps this by using
   // the wildcard-permission admin as a holder instead).
-  const holderRoleSlug = `recovery-holder-${Date.now()}`
+  const holderRoleSlug = uniqueName('recovery-holder')
   const holderRole = await createRoleViaApi(request, {
     name: `Recovery Holder ${Date.now()}`,
     slug: holderRoleSlug,
@@ -1033,6 +1042,15 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // use the id the server actually returned, not a guessed `role-${slug}`.
   const holder1 = await createUserViaApi(request, { name: `Holder One ${Date.now()}`, roleIds: [holderRole.id] })
   const holder2 = await createUserViaApi(request, { name: `Holder Two ${Date.now()}`, roleIds: [holderRole.id] })
+  // A share holder is a member of the hub whose recovery secret they hold
+  // (EP09 D2/D8: the hub is the trust boundary and `recovery:hold-share` is
+  // hub-scoped), and contributing re-checks that membership (#1620) — a
+  // holder removed from the hub has a share that is "compromised by
+  // definition". The global role above only satisfies the unscoped route's
+  // `requirePermission`; membership is the separate axis, exactly as in the
+  // cross-hub viewer step.
+  await addHubMemberViaApi(request, s.hubId!, holder1.pubkey, ['role-volunteer'])
+  await addHubMemberViaApi(request, s.hubId!, holder2.pubkey, ['role-volunteer'])
   const placeholderHolder = `${'e'.repeat(63)}9`
 
   const group = generateX25519Keypair()
@@ -1059,7 +1077,7 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // exactly like a real device: Ed25519 for signing (sigchain), X25519 for
   // HPKE receipt (share contributions + the PUK seed envelope).
   const { seedHex: newDeviceSeedHex, pubkey: newDeviceEdPubkey } = generateTestKeypair()
-  const newDeviceX25519Pubkey = x25519PubkeyFromSeed(newDeviceSeedHex)
+  const newDeviceX25519Pubkey = hpkeRecipientForSeed(newDeviceSeedHex).pubkeyHex
 
   const { status: sessionStatus, data: sessionData } = await devPost<{ sessionId: string }>(request, '/test-recovery-seed-session', {
     hubId: s.hubId!,
@@ -1136,8 +1154,8 @@ When('the new device completes recovery with a self-authorizing sigchain link', 
   const s = getS(world)
   const cer = s.ceremony!
 
-  const seqNo = 0
-  const prevHash = ''
+  const seqNo = 1
+  const prevHash = null
   const timestamp = new Date().toISOString()
   const signerDeviceId = `recovered-device-${cer.newDeviceEdPubkey.slice(0, 8)}`
   const payload = {

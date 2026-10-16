@@ -269,10 +269,11 @@ struct ConversationRowView: View {
                 Capsule()
                     .fill(Color.brandDestructive)
             )
-            .accessibilityLabel(String(format: NSLocalizedString(
+            .accessibilityLabel(L10n.format(
                 "conversations_unread_count",
-                comment: "%d unread messages"
-            ), conversation.unreadCount))
+                comment: "%d unread messages",
+                conversation.unreadCount
+            ))
     }
 }
 

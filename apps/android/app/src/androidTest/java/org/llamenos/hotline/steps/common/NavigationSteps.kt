@@ -104,7 +104,7 @@ class NavigationSteps : BaseSteps() {
     fun iTapTheBackButton() {
         // Try all known back button tags — different screens use different tags
         val backTags = listOf(
-            "note-create-back", "note-detail-back", "admin-back", "device-link-back",
+            "note-create-back", "note-detail-back", "admin-back",
             "reports-back", "call-history-back", "contacts-back", "report-create-back",
             "help-back", "shift-detail-back", "timeline-back", "report-detail-back",
             "conversation-detail-back", "volunteer-detail-back", "blasts-back",

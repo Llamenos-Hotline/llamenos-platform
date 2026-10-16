@@ -17,7 +17,8 @@ import {
   navigateAfterLogin,
 } from '../../helpers'
 import { Navigation } from '../../pages/index'
-import { updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
+import { ensureAuthenticated } from '../common/ui-helpers'
+import { updateUserViaApi, seedHexToPubkey, addHubMemberViaApi, getUserViaApi } from '../../api-helpers'
 
 // --- Volunteer lifecycle ---
 
@@ -100,14 +101,10 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   const phone = `+1212${Date.now().toString().slice(-7)}`
   await page.getByLabel('Phone Number').fill(phone)
   await page.getByLabel('Phone Number').blur()
-  // Invite form uses 'create-invite-btn', not 'form-save-btn'
+  // The invite form submits with 'create-invite-btn', not 'form-save-btn'.
   const createInviteBtn = page.getByTestId('create-invite-btn')
-  const isCreateInvite = await createInviteBtn.isVisible({ timeout: 5000 }).catch(() => false)
-  if (isCreateInvite) {
-    await createInviteBtn.click()
-  } else {
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-  }
+  await expect(createInviteBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
+  await createInviteBtn.click()
   // Wait for the invite link card to appear
   await page.getByTestId('dismiss-invite').waitFor({ state: 'visible', timeout: Timeouts.API })
   // Persist the vol name in localStorage so it survives page.reload()
@@ -118,29 +115,17 @@ When('I create an invite for a new volunteer', async ({ page }) => {
 })
 
 Then('an invite link should be generated', async ({ page }) => {
-  // After creating an invite, the invite link card appears (testid="invite-link-code").
-  // The device key card/code appears after direct volunteer creation (not invite flow).
-  const inviteLinkCode = page.getByTestId('invite-link-code')
-  const isInviteLink = await inviteLinkCode.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isInviteLink) return
-  const inviteCard = page.getByTestId(TestIds.VOLUNTEER_INVITE_CARD)
-  const isInvite = await inviteCard.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isInvite) return
-  const keyCard = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CARD)
-  const isKeyCard = await keyCard.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isKeyCard) return
-  // At minimum, the device key code must be visible
-  await expect(page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)).toBeVisible({ timeout: 3000 })
+  // The invite card shows the full onboarding URL (users.tsx: `${origin}/onboarding?code=…`).
+  await expect(page.getByTestId('invite-link-code')).toHaveText(/\/onboarding\?code=\S+/, { timeout: Timeouts.ELEMENT })
 })
 
 When('the volunteer opens the invite link', async ({ page }) => {
-  // In test context, we'd navigate to the invite URL
-  const inviteLink = page.getByTestId(TestIds.VOLUNTEER_INVITE_LINK)
-  const linkVisible = await inviteLink.isVisible({ timeout: 2000 }).catch(() => false)
-  if (linkVisible) {
-    const href = await inviteLink.getAttribute('href')
-    if (href) await page.goto(href)
-  }
+  // The previous body looked for a testid the app never renders and silently did
+  // nothing, so the rest of the scenario ran against the admin's volunteers page.
+  const link = (await page.getByTestId('invite-link-code').textContent())?.trim() ?? ''
+  expect(link, 'invite link').toMatch(/\/onboarding\?code=\S+/)
+  await page.goto(link)
+  await expect(page).toHaveURL(/\/onboarding\?code=/, { timeout: Timeouts.NAVIGATION })
 })
 
 Then('they should see a welcome screen with their name', async ({ page }) => {
@@ -151,13 +136,18 @@ Then('they should see a welcome screen with their name', async ({ page }) => {
 })
 
 When('the volunteer completes the onboarding flow', async ({ page }) => {
-  // Complete PIN setup
+  // welcome → PIN (create + confirm) → keypair + invite redemption → backup → continue
   const { enterPin } = await import('../../helpers')
-  const pinInput = page.getByTestId('pin-input').locator('input')
-  if (await pinInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await enterPin(page, '12345678')
-    await enterPin(page, '12345678')
-  }
+  await page.getByRole('button', { name: 'Get Started' }).click()
+  await enterPin(page, '12345678')
+  await enterPin(page, '12345678')
+  // The backup step only renders once the keypair exists and the invite was redeemed.
+  await expect(page.getByTestId('recovery-key')).toBeVisible({ timeout: Timeouts.AUTH })
+  await page.getByRole('button', { name: 'Download Encrypted Backup' }).click()
+  await page.getByRole('checkbox').check()
+  const continueBtn = page.getByRole('button', { name: 'Continue' })
+  await expect(continueBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
+  await continueBtn.click()
 })
 
 Then('the volunteer name should appear in the pending invites list', async ({ page }) => {
@@ -200,31 +190,19 @@ Then('I should see the volunteer device key', async ({ page }) => {
 
 When('I paste invalid phone numbers in the textarea', async ({ page }) => {
   const bulkPhones = page.getByTestId('ban-bulk-phones')
-  if (await bulkPhones.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    await bulkPhones.fill('+12\n+34\ninvalid')
-    return
-  }
-  const textarea = page.locator('textarea').first()
-  if (await textarea.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await textarea.fill('+12\n+34\ninvalid')
-  }
+  await expect(bulkPhones).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await bulkPhones.fill('+12\n+34\ninvalid')
 })
 
 When('I paste two phone numbers in the textarea', async ({ page }) => {
   const phone1 = `+1212${Date.now().toString().slice(-7)}`
   const phone2 = `+1212${(Date.now() + 1).toString().slice(-7)}`
   const bulkPhones = page.getByTestId('ban-bulk-phones')
-  if (await bulkPhones.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    await bulkPhones.fill(`${phone1}\n${phone2}`)
-  } else {
-    const textarea = page.locator('textarea').first()
-    if (await textarea.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await textarea.fill(`${phone1}\n${phone2}`)
-    }
-  }
+  await expect(bulkPhones).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await bulkPhones.fill(`${phone1}\n${phone2}`)
   await page.evaluate(
     ({ p1, p2 }) => {
-      (window as unknown as Record<string, unknown>).__test_bulk_phones = [p1, p2]
+      (window as unknown as Record<string, unknown>).__test_ban_phones = [p1, p2]
     },
     { p1: phone1, p2: phone2 },
   )
@@ -266,7 +244,44 @@ When('the volunteer logs in and navigates to {string}', async ({ page }, path: s
 
 // "a volunteer with the {string} role exists" is defined in roles-extended-steps.ts (API-based)
 
-Given('a reporter has been invited and onboarded', async ({ page, backendRequest }) => {
+/**
+ * Make a freshly created user a reporter *of the worker hub*.
+ *
+ * Inside a hub the caller's authority is exactly their role assignment in that
+ * hub; a global role other than super-admin grants nothing there (#1044, landed
+ * in #1540 — `hubContext` replaces `permissions` with the hub-resolved set).
+ * `PATCH /users/:pubkey` writes the *global* roles, so granting `role-reporter`
+ * that way left the account with `hubRoles: []`-worth of reporter authority and
+ * `POST /api/hubs/:hubId/reports` answered 403. The hub assignment is the one
+ * that counts, and `POST /hubs/:hubId/members` is how it is written — the same
+ * correction roles-extended-steps.ts already carries for volunteers.
+ *
+ * `role-volunteer` is kept alongside `role-reporter` because the reporter still
+ * has to resolve its own hub: `GET /api/hubs` lists only hubs where the caller
+ * holds `hubs:read`, which `role-reporter` does not carry, and without a hub the
+ * client cannot address any hub-scoped route at all. Reporter-only authority is
+ * asserted separately by "Reporter cannot access admin pages" — neither role
+ * grants `users:read`.
+ */
+async function grantReporterRole(
+  request: import('@playwright/test').APIRequestContext,
+  deviceKey: string,
+  hubId: string,
+): Promise<void> {
+  const pubkey = seedHexToPubkey(deviceKey)
+  await updateUserViaApi(request, pubkey, { roles: ['role-reporter'] })
+  await addHubMemberViaApi(request, hubId, pubkey, ['role-volunteer', 'role-reporter'])
+  // addHubMemberViaApi only warns on a non-2xx, so read the grant back: without it
+  // a failed membership write would surface much later as an unexplained 403.
+  const user = await getUserViaApi(request, pubkey)
+  const hubRoles = (user.hubRoles ?? []) as Array<{ hubId: string; roleIds: string[] }>
+  expect(
+    hubRoles.find(hr => hr.hubId === hubId)?.roleIds ?? [],
+    `reporter ${pubkey.slice(0, 8)} must hold role-reporter in hub ${hubId}`,
+  ).toContain('role-reporter')
+}
+
+Given('a reporter has been invited and onboarded', async ({ page, backendRequest, workerHub }) => {
   // Create a user via the volunteer creation flow, then assign the reporter role via API
   await Navigation.goToVolunteers(page)
   const name = `Reporter ${Date.now()}`
@@ -276,35 +291,26 @@ Given('a reporter has been invited and onboarded', async ({ page, backendRequest
     (window as unknown as Record<string, unknown>).__test_reporter_nsec = n
   }, deviceKey)
   await dismissDeviceKeyCard(page)
-  // Assign role-reporter so the user has reports:create permission
-  const pubkey = seedHexToPubkey(deviceKey)
-  await updateUserViaApi(backendRequest, pubkey, { roles: ['role-reporter'] })
+  await grantReporterRole(backendRequest, deviceKey, workerHub)
 })
 
-Given('a reporter is logged in', async ({ page, backendRequest }) => {
+Given('a reporter is logged in', async ({ page, backendRequest, workerHub }) => {
   // Check if a reporter key was set by a previous step (e.g., "a reporter has been invited and onboarded")
   let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
   if (!key) {
-    // No reporter exists yet — create one via the admin flow
-    // Ensure we're logged in as admin first
-    const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-    const isAuth = await sidebar.isVisible({ timeout: 1000 }).catch(() => false)
-    if (!isAuth) {
-      await loginAsAdmin(page)
-    }
+    // No reporter exists yet — create one via the admin flow, as the admin.
+    await ensureAuthenticated(page)
     await Navigation.goToVolunteers(page)
     const name = `Reporter ${Date.now()}`
     const phone = `+1212${Date.now().toString().slice(-7)}`
     key = await createUserAndGetDeviceKey(page, name, phone)
     await dismissDeviceKeyCard(page)
-    // Assign role-reporter so the user has reports:create permission
-    const pubkey = seedHexToPubkey(key)
-    await updateUserViaApi(backendRequest, pubkey, { roles: ['role-reporter'] })
+    await grantReporterRole(backendRequest, key, workerHub)
   }
   await loginAsVolunteer(page, key)
 })
 
-When('the reporter logs in', async ({ page, backendRequest }) => {
+When('the reporter logs in', async ({ page, backendRequest, workerHub }) => {
   let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
   if (!key) {
     // Reporter wasn't set up yet — create one (loginAsAdmin first to access volunteers)
@@ -314,9 +320,7 @@ When('the reporter logs in', async ({ page, backendRequest }) => {
     const phone = `+1212${Date.now().toString().slice(-7)}`
     key = await createUserAndGetDeviceKey(page, name, phone)
     await dismissDeviceKeyCard(page)
-    // Assign role-reporter so the user has reports:create permission
-    const pubkey = seedHexToPubkey(key)
-    await updateUserViaApi(backendRequest, pubkey, { roles: ['role-reporter'] })
+    await grantReporterRole(backendRequest, key, workerHub)
   }
   await loginAsVolunteer(page, key)
 })
@@ -325,40 +329,29 @@ When('they create a new report', async ({ page }) => {
   const newBtn = page.getByTestId(TestIds.REPORT_NEW_BTN)
   await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
   await newBtn.click()
-  // Reports creation form — fill in title and body
-  const titleInput = page.getByTestId(TestIds.REPORT_TITLE_INPUT)
-  const isTitleVisible = await titleInput.isVisible({ timeout: 5000 }).catch(() => false)
-  if (isTitleVisible) {
-    await titleInput.fill('Test report content')
-  }
-  const bodyInput = page.getByTestId(TestIds.REPORT_BODY_INPUT)
-  const isBodyVisible = await bodyInput.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isBodyVisible) {
-    await bodyInput.fill('Test report body content')
-  } else {
-    // Chat-style interface — find textarea
-    const textarea = page.locator('textarea').first()
-    const isTextarea = await textarea.isVisible({ timeout: 3000 }).catch(() => false)
-    if (isTextarea) {
-      await textarea.fill('Test report content')
-    }
-  }
-  // Submit via report submit button, form save, or generic submit (use combined locator)
+  // A unique title, so the saved-report check can find this report and no other.
+  const title = `Test report ${Date.now()}`
+  await page.getByTestId(TestIds.REPORT_TITLE_INPUT).fill(title)
+  await page.getByTestId(TestIds.REPORT_BODY_INPUT).fill('Test report body content')
+  await page.evaluate((t) => {
+    (window as unknown as Record<string, unknown>).__test_report_title = t
+  }, title)
   const submitBtn = page.getByTestId(TestIds.REPORT_SUBMIT_BTN)
-    .or(page.getByTestId(TestIds.FORM_SAVE_BTN))
-    .or(page.getByTestId(TestIds.FORM_SUBMIT_BTN))
-  await expect(submitBtn.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await submitBtn.first().click()
+  await expect(submitBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
+  await submitBtn.click()
+  // The form closes only on a 201 — every refusal (a 403 from the hub, a missing
+  // required field) leaves the sheet open behind an error toast. Asserting that
+  // here names the act that failed, instead of surfacing two steps later as an
+  // unexplained "element(s) not found" in the report list.
+  await expect(page.getByTestId(TestIds.REPORT_TITLE_INPUT)).toBeHidden({ timeout: Timeouts.API })
 })
 
 Then('the report should be saved successfully', async ({ page }) => {
-  // Check for success toast, success text, or return to report list
-  const successToast = page.getByTestId(TestIds.SUCCESS_TOAST)
-  const isToast = await successToast.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isToast) return
-  const successText = page.getByText(/success|saved|created/i).first()
-  const isText = await successText.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isText) return
-  // Success toast may have already dismissed — check we're back on the list page
-  await expect(page.getByTestId(TestIds.REPORT_LIST)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The report list is on screen whether or not anything was saved, so it proves
+  // nothing by itself: the new report must be listed under its own title.
+  const title = await page.evaluate(
+    () => (window as unknown as Record<string, unknown>).__test_report_title as string | undefined,
+  )
+  expect(title, 'the create step must record the report title').toBeTruthy()
+  await expect(page.getByTestId(TestIds.REPORT_LIST).getByText(title as string)).toBeVisible({ timeout: Timeouts.API })
 })

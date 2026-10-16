@@ -1,3 +1,5 @@
+{% set pg_e2e_publish = (dev_routes_enabled | default(false) | bool) and (app_environment | default('production')) != 'production' %}
+{% set pg_e2e_network = 'e2e-db' %}
 name: llamenos-postgres
 
 services:
@@ -12,6 +14,50 @@ services:
       - POSTGRES_PASSWORD={{ pg_password }}
     networks:
       - llamenos-internal
+{#
+  The end-to-end suite asserts persisted state straight from PostgreSQL
+  (tests/db-helpers.ts), so against a DEPLOYED target it has to be able to
+  reach this database — and by default nothing can: no port is published, which
+  is correct for every host that serves real callers.
+
+  Publishing it on 127.0.0.1 ONLY, and only on an E2E target, is the narrowest
+  thing that makes the suite possible. Loopback means nothing off the host can
+  connect even with the password; the operator carries it to the test runner
+  over SSH (`ssh -L`), which is already the administrative channel for this box.
+  See docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
+
+  Tied to `dev_routes_enabled` deliberately rather than given a switch of its
+  own: that flag already means "this is the throwaway target the suite resets",
+  and a second independent knob would let the database be exposed on a host
+  where the suite cannot run anyway. The `app_environment != 'production'` arm
+  is the same belt-and-braces as templates/env/_worker-required-env.j2 —
+  playbooks/tasks/guard-dev-routes.yml already refuses that combination outright.
+
+  Why the extra network. Docker cannot publish a host port for a container
+  attached only to an `internal: true` network: it accepts the `ports:` entry,
+  records the binding in the container, installs NO DNAT rule, and nothing ever
+  listens — a silent no-op that LOOKS configured. Measured on a real deploy of
+  the deprecated monolithic role, whose `internal` network IS `internal: true`:
+  `docker inspect` reported `127.0.0.1:5432`, `iptables -t nat -S` had no rule,
+  and the port was closed.
+
+  `llamenos-internal` is NOT internal-only today — roles/docker/tasks/main.yml
+  creates it as a plain bridge — so the publish works here without this. The
+  network is here so that it KEEPS working if that is ever hardened, which is
+  the direction its name implies: without it, adding `internal: true` to
+  `llamenos-internal` would silently stop the end-to-end suite from reaching
+  this database while every file still looked correct. Cheap insurance against
+  the failure mode this whole change exists to prevent.
+
+  `{{ pg_e2e_network }}` is an ordinary bridge with no published service of its
+  own; the loopback host binding is still the only way in from outside the host,
+  and both only exist on a non-production instance that opted in.
+#}
+{% if pg_e2e_publish %}
+      - {{ pg_e2e_network }}
+    ports:
+      - "127.0.0.1:{{ pg_e2e_loopback_port | default(5432) }}:5432"
+{% endif %}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U llamenos -d llamenos"]
       interval: 10s
@@ -30,3 +76,7 @@ volumes:
 networks:
   llamenos-internal:
     external: true
+{% if pg_e2e_publish %}
+  {{ pg_e2e_network }}:
+    driver: bridge
+{% endif %}

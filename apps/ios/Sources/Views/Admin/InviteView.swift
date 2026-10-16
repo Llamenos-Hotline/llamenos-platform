@@ -56,10 +56,11 @@ struct InviteView: View {
                             .accessibilityIdentifier("invite-row-\(invite.id)")
                     }
                 } header: {
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_active_invites_header",
-                        comment: "Active (%d)"
-                    ), activeInvites.count))
+                        comment: "Active (%d)",
+                        activeInvites.count
+                    ))
                 }
             }
 
@@ -72,10 +73,11 @@ struct InviteView: View {
                             .accessibilityIdentifier("invite-row-\(invite.id)")
                     }
                 } header: {
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_claimed_invites_header",
-                        comment: "Claimed (%d)"
-                    ), claimedInvites.count))
+                        comment: "Claimed (%d)",
+                        claimedInvites.count
+                    ))
                 }
             }
 
@@ -88,10 +90,11 @@ struct InviteView: View {
                             .accessibilityIdentifier("invite-row-\(invite.id)")
                     }
                 } header: {
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_expired_invites_header",
-                        comment: "Expired (%d)"
-                    ), expiredInvites.count))
+                        comment: "Expired (%d)",
+                        expiredInvites.count
+                    ))
                 }
             }
         }

@@ -70,6 +70,11 @@ function flattenKeysDotted(obj: Record<string, unknown>, prefix = ''): Record<st
 }
 
 /** Load canonical keys from en.json */
+function loadEnglishSourcesUnderscore(): Record<string, string> {
+  const en = JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8'))
+  return flattenKeysUnderscore(en)
+}
+
 function loadCanonicalKeysUnderscore(): Set<string> {
   const data = JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8'))
   return new Set(Object.keys(flattenKeysUnderscore(data)))
@@ -464,6 +469,460 @@ function validateLocaleCompleteness(): number {
 }
 
 // ---------------------------------------------------------------------------
+// Format-argument validators (issue #1413)
+//
+// The codegen renders every {{placeholder}} as an *object* specifier: `%N$@`
+// on iOS, `%N$s` on Android. A specifier and the argument handed to it must
+// agree, and the ways they can disagree are silent:
+//
+//   - `String(format: "%@", 30)` reads the Int as an object pointer and
+//     segfaults in `_NSDescriptionWithStringProxyFunc`.
+//   - `String(format: "%ld", "lots")` prints a garbage integer, no crash.
+//   - `getString(R.string.x)` with no varargs renders `%1$s` literally.
+//
+// So iOS interpolation must go through `L10n.format`, which stringifies every
+// argument, and every call must pass exactly as many arguments as the source
+// string has placeholders.
+// ---------------------------------------------------------------------------
+
+/** Count {{placeholder}} occurrences in an en.json source string. */
+function placeholderCount(value: string): number {
+  return (value.match(/\{\{\w+\}\}/g) ?? []).length
+}
+
+/** Blank out line and block comments, preserving byte offsets and line numbers. */
+function blankComments(src: string): string {
+  let out = ''
+  let i = 0
+  while (i < src.length) {
+    const c = src[i]
+    if (c === '"') {
+      out += c
+      i++
+      while (i < src.length) {
+        if (src[i] === '\\') { out += src.slice(i, i + 2); i += 2; continue }
+        out += src[i]
+        if (src[i] === '"') { i++; break }
+        i++
+      }
+      continue
+    }
+    if (c === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') { out += ' '; i++ }
+      continue
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) { out += src[i] === '\n' ? '\n' : ' '; i++ }
+      out += '  '
+      i += 2
+      continue
+    }
+    out += c
+    i++
+  }
+  return out
+}
+
+/**
+ * Index of the `)` matching the `(` at `openIdx`, skipping string literals.
+ * Returns -1 when unbalanced (truncated/pathological source).
+ */
+function matchingParen(src: string, openIdx: number): number {
+  let depth = 0
+  let i = openIdx
+  while (i < src.length) {
+    const c = src[i]
+    if (c === '"') {
+      i++
+      while (i < src.length) {
+        if (src[i] === '\\') { i += 2; continue }
+        if (src[i] === '"') break
+        i++
+      }
+    } else if (c === '(') {
+      depth++
+    } else if (c === ')') {
+      depth--
+      if (depth === 0) return i
+    }
+    i++
+  }
+  return -1
+}
+
+/** Split a call's argument list on top-level commas. */
+function splitArguments(args: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  let i = 0
+  while (i < args.length) {
+    const c = args[i]
+    if (c === '"') {
+      i++
+      while (i < args.length) {
+        if (args[i] === '\\') { i += 2; continue }
+        if (args[i] === '"') break
+        i++
+      }
+    } else if (c === '(' || c === '[' || c === '{') {
+      depth++
+    } else if (c === ')' || c === ']' || c === '}') {
+      depth--
+    } else if (c === ',' && depth === 0) {
+      parts.push(args.slice(start, i))
+      start = i + 1
+    }
+    i++
+  }
+  const tail = args.slice(start)
+  if (tail.trim().length > 0) parts.push(tail)
+  return parts.map(p => p.trim()).filter(p => p.length > 0)
+}
+
+/**
+ * Pre-existing sites where a source *sentence* is used as a bare label, or an
+ * argument is handed to a string with no placeholder to receive it.
+ *
+ * Either way the user sees the wrong thing -- a raw "%1$@", or a value that
+ * never appears -- but neither crashes, and fixing one means rewording the
+ * English sentence or restructuring the view, not changing a call. That is
+ * string-authoring work, distinct from the crash class this guard was built
+ * for (issue #1413).
+ *
+ * They are pinned here so the inventory is explicit, printed on every CI run,
+ * and a *new* occurrence still fails the build. Tracked by the follow-up issue
+ * linked from #1413 -- remove entries as the strings are reworded, never add
+ * one to get a build green.
+ */
+const PLACEHOLDER_MISMATCH_BACKLOG = new Set([
+  'apps/ios/Sources/Views/Settings/ErasureRequestView.swift:erasure_request_confirm_message',
+  'apps/ios/Sources/Views/Settings/ErasureRequestView.swift:erasure_countdown_days',
+  'apps/ios/Sources/Views/Settings/ErasureRequestView.swift:erasure_countdown_hours',
+  'apps/ios/Sources/Views/Settings/ErasureRequestView.swift:erasure_countdown_minutes',
+  'apps/ios/Sources/Views/Settings/Channels/A2pRegistrationView.swift:channels_a2p_brand_status',
+  'apps/ios/Sources/Views/Settings/Channels/A2pRegistrationView.swift:channels_a2p_campaign_status',
+  'apps/ios/Sources/Views/Settings/Channels/SMSChannelConfigView.swift:channels_shared_enable_channel',
+  'apps/ios/Sources/Views/Settings/Channels/TelegramChannelConfigView.swift:channels_shared_enable_channel',
+  'apps/ios/Sources/Views/Admin/RecoveryRequestsView.swift:recovery_group_requests_approval_progress',
+  'apps/ios/Sources/Views/Admin/UsersView.swift:admin_total_members',
+  'apps/ios/Sources/Views/Admin/UsersView.swift:admin_admin_count',
+  'apps/ios/Sources/Views/Admin/UsersView.swift:admin_active_count',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/settings/ErasureRequestScreen.kt:erasure_request_confirm_message',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/channels/TelegramChannelConfigScreen.kt:channels_shared_enable_channel',
+  'apps/ios/Sources/Views/ProviderSetup/OAuthProviderView.swift:provider_oauth_connect_button',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/shifts/ShiftsScreen.kt:shifts_since',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/dashboard/DashboardScreen.kt:active_since',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/notes/NoteDetailScreen.kt:notes_call_id_badge',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/notes/NoteDetailScreen.kt:notes_chat_id_badge',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/notes/NoteDetailScreen.kt:notes_updated',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactsScreen.kt:contacts_first_seen',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactsScreen.kt:contacts_last_seen',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactTimelineScreen.kt:timeline_contact_id',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/reports/ReportDetailScreen.kt:reports_linked_call',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/OAuthProviderScreen.kt:oauth_connect_title',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/OAuthProviderScreen.kt:oauth_description',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/OAuthProviderScreen.kt:connect_with_oauth',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/APIKeyProviderScreen.kt:api_key_title',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/APIKeyProviderScreen.kt:api_key_description',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/ProviderSetupScreen.kt:phone_numbers_label',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/ProviderSetupScreen.kt:connect_with_oauth',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/ProviderSetupScreen.kt:connection_success',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/ProviderSetupScreen.kt:account_name_label',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/PhoneNumberScreen.kt:provision_success_message',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/PhoneNumberScreen.kt:provision_number_confirm',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/UserDetailScreen.kt:users_joined',
+  'apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/SystemHealthTab.kt:admin_system_last_updated',
+])
+
+interface FormatFinding { file: string; line: number; message: string; backlogged?: boolean }
+
+const lineOf = (src: string, index: number) => src.slice(0, index).split('\n').length
+
+/**
+ * iOS: reject `String(format:)` on a non-literal format string, and check the
+ * argument arity of every `L10n.format` call.
+ */
+function checkSwiftSource(
+  file: string,
+  rawSource: string,
+  sources: Record<string, string>
+): FormatFinding[] {
+  const findings: FormatFinding[] = []
+  const src = blankComments(rawSource)
+
+  // Rule 1: the format string handed to String(format:) must be a literal.
+  const formatCall = /String\(\s*format:\s*/g
+  let m: RegExpExecArray | null
+  while ((m = formatCall.exec(src)) !== null) {
+    if (src[m.index + m[0].length] === '"') continue
+    findings.push({
+      file,
+      line: lineOf(src, m.index),
+      message:
+        'String(format:) on a non-literal format string. Localized templates use the ' +
+        'object specifier %N$@, which crashes when handed a non-object argument -- ' +
+        'use L10n.format(key, comment:, args...) instead (issue #1413).',
+    })
+  }
+
+  // Rule 2: a bare NSLocalizedString on a source string that has placeholders
+  // renders the raw specifier ("%1$@") to the user.
+  const bareLookup = /(?<!format:\s*)\bNSLocalizedString\(\s*"([^"]+)"/g
+  while ((m = bareLookup.exec(src)) !== null) {
+    // Skip lookups that are the template argument of an L10n.format/String(format:) call.
+    const before = src.slice(Math.max(0, m.index - 40), m.index)
+    if (/format:\s*$/.test(before)) continue
+    const source = sources[m[1]]
+    if (source === undefined) continue
+    const expected = placeholderCount(source)
+    if (expected > 0) {
+      findings.push({
+        file,
+        line: lineOf(src, m.index),
+        message: `NSLocalizedString("${m[1]}") is rendered without arguments but the source string has ${expected} placeholder(s), so the raw specifier reaches the UI: ${JSON.stringify(source)}`,
+        backlogged: PLACEHOLDER_MISMATCH_BACKLOG.has(`${relative(ROOT_DIR, file)}:${m[1]}`),
+      })
+    }
+  }
+
+  // Rule 3: L10n.format argument count must match the source string's placeholders.
+  const l10nCall = /\bL10n\.format\(/g
+  while ((m = l10nCall.exec(src)) !== null) {
+    const open = m.index + m[0].length - 1
+    const close = matchingParen(src, open)
+    if (close === -1) continue
+    const args = splitArguments(src.slice(open + 1, close))
+    if (args.length === 0) continue
+    const keyMatch = /^"([^"]+)"$/.exec(args[0])
+    if (!keyMatch) continue // dynamic key (e.g. a ternary) -- not statically checkable
+    const key = keyMatch[1]
+    const source = sources[key]
+    if (source === undefined) continue // key not yet translated; nothing to check against
+    const supplied = args.slice(1).filter(a => !a.startsWith('comment:')).length
+    const expected = placeholderCount(source)
+    if (supplied !== expected) {
+      findings.push({
+        file,
+        line: lineOf(src, m.index),
+        message: `L10n.format("${key}") passes ${supplied} argument(s) but the source string has ${expected} placeholder(s): ${JSON.stringify(source)}`,
+        backlogged: PLACEHOLDER_MISMATCH_BACKLOG.has(`${relative(ROOT_DIR, file)}:${key}`),
+      })
+    }
+  }
+
+  return findings
+}
+
+/**
+ * Android: `getString`/`stringResource` argument count must match the source
+ * string's placeholders, and manual `%@`/`%s` substitution is forbidden.
+ */
+function checkKotlinSource(
+  file: string,
+  rawSource: string,
+  sources: Record<string, string>
+): FormatFinding[] {
+  const findings: FormatFinding[] = []
+  const src = blankComments(rawSource)
+
+  const call = /\b(?:stringResource|getString)\(\s*R\.string\.(\w+)/g
+  let m: RegExpExecArray | null
+  while ((m = call.exec(src)) !== null) {
+    const key = m[1]
+    const source = sources[key]
+    if (source === undefined) continue
+    const expected = placeholderCount(source)
+    const open = src.lastIndexOf('(', m.index + m[0].length)
+    const close = matchingParen(src, open)
+    if (close === -1) continue
+    const supplied = splitArguments(src.slice(open + 1, close)).length - 1
+    if (supplied !== expected) {
+      findings.push({
+        file,
+        line: lineOf(src, m.index),
+        message: `R.string.${key} is rendered with ${supplied} argument(s) but the source string has ${expected} placeholder(s): ${JSON.stringify(source)}`,
+        backlogged: PLACEHOLDER_MISMATCH_BACKLOG.has(`${relative(ROOT_DIR, file)}:${key}`),
+      })
+    }
+  }
+
+  // Manual substitution means the generated specifier did not match the call --
+  // fix the source string instead of patching the rendered output.
+  const manual = /\.replace\(\s*"%[@sd]"/g
+  while ((m = manual.exec(src)) !== null) {
+    findings.push({
+      file,
+      line: lineOf(src, m.index),
+      message: 'manual format-specifier substitution. Write the source string with {{placeholder}} and pass the value as a getString/stringResource argument (issue #1413).',
+    })
+  }
+
+  return findings
+}
+
+function reportFindings(platform: string, findings: FormatFinding[]): number {
+  const errors = findings.filter(f => !f.backlogged)
+  const backlog = findings.filter(f => f.backlogged)
+
+  if (errors.length === 0) {
+    console.log(`  ${platform} format arguments: all calls match their source strings`)
+  } else {
+    console.error(`  ${platform} format arguments: ${errors.length} problem(s):`)
+    for (const f of errors) {
+      console.error(`    ${relative(ROOT_DIR, f.file)}:${f.line} -- ${f.message}`)
+    }
+  }
+
+  if (backlog.length > 0) {
+    console.warn(`  ${platform} format arguments: ${backlog.length} known placeholder mismatch(es) (pinned backlog -- see #1413 follow-up):`)
+    for (const f of backlog) {
+      console.warn(`    ${relative(ROOT_DIR, f.file)}:${f.line} -- ${f.message}`)
+    }
+  }
+
+  return errors.length
+}
+
+function validateIOSFormatArguments(): number {
+  const sources = loadEnglishSourcesUnderscore()
+  const files = collectFiles(join(ROOT_DIR, 'apps/ios/Sources'), ['.swift'])
+    // L10n.format is the one sanctioned String(format:) call site.
+    .filter(f => !f.endsWith('Utilities/LocalizedFormat.swift'))
+  const findings = files.flatMap(f => checkSwiftSource(f, readFileSync(f, 'utf-8'), sources))
+  return reportFindings('iOS', findings)
+}
+
+function validateAndroidFormatArguments(): number {
+  const sources = loadEnglishSourcesUnderscore()
+  const files = collectFiles(join(ROOT_DIR, 'apps/android/app/src'), ['.kt'])
+  const findings = files.flatMap(f => checkKotlinSource(f, readFileSync(f, 'utf-8'), sources))
+  return reportFindings('Android', findings)
+}
+
+/**
+ * Prove the detectors fire by feeding them the defects they exist to catch.
+ *
+ * A guard that is never shown failing is a guard nobody knows is wired up; this
+ * runs on every CI invocation so the check cannot silently rot into a no-op.
+ */
+function selfTestFormatArguments(): number {
+  const sources = {
+    self_test_two: 'Page {{page}} of {{total}}',
+    self_test_one: 'Copy {{label}}',
+    self_test_none: 'Settings',
+  }
+
+  interface Case { name: string; lang: 'swift' | 'kotlin'; source: string; shouldFlag: boolean }
+  const cases: Case[] = [
+    {
+      name: 'swift: String(format:) on a localized template',
+      lang: 'swift',
+      source: 'let s = String(format: NSLocalizedString("self_test_two", comment: ""), a, b)',
+      shouldFlag: true,
+    },
+    {
+      name: 'swift: String(format:) on a variable template',
+      lang: 'swift',
+      source: 'let s = String(format: template, value)',
+      shouldFlag: true,
+    },
+    {
+      name: 'swift: multi-line String(format:) on a localized template',
+      lang: 'swift',
+      source: 'let s = String(\n    format: NSLocalizedString("self_test_one", comment: ""),\n    label\n)',
+      shouldFlag: true,
+    },
+    {
+      name: 'swift: L10n.format with too few arguments',
+      lang: 'swift',
+      source: 'let s = L10n.format("self_test_two", comment: "c", page)',
+      shouldFlag: true,
+    },
+    {
+      name: 'swift: L10n.format with too many arguments',
+      lang: 'swift',
+      source: 'let s = L10n.format("self_test_none", comment: "c", extra)',
+      shouldFlag: true,
+    },
+    {
+      name: 'swift: correct L10n.format call',
+      lang: 'swift',
+      source: 'let s = L10n.format(\n    "self_test_two",\n    comment: "c",\n    page,\n    total\n)',
+      shouldFlag: false,
+    },
+    {
+      name: 'swift: String(format:) on a literal is still allowed',
+      lang: 'swift',
+      source: 'let hex = bytes.map { String(format: "%02x", $0) }.joined()',
+      shouldFlag: false,
+    },
+    {
+      name: 'swift: commented-out offender is not flagged',
+      lang: 'swift',
+      source: '// let s = String(format: NSLocalizedString("self_test_one", comment: ""), label)',
+      shouldFlag: false,
+    },
+    {
+      name: 'swift: bare NSLocalizedString on a placeholder string',
+      lang: 'swift',
+      source: 'Text(NSLocalizedString("self_test_one", comment: ""))',
+      shouldFlag: true,
+    },
+    {
+      name: 'swift: bare NSLocalizedString on a plain string is fine',
+      lang: 'swift',
+      source: 'Text(NSLocalizedString("self_test_none", comment: ""))',
+      shouldFlag: false,
+    },
+    {
+      name: 'kotlin: stringResource with no argument for a placeholder string',
+      lang: 'kotlin',
+      source: 'Text(text = stringResource(R.string.self_test_one))',
+      shouldFlag: true,
+    },
+    {
+      name: 'kotlin: manual %@ substitution',
+      lang: 'kotlin',
+      source: 'val t = stringResource(R.string.self_test_one, x).replace("%@", label)',
+      shouldFlag: true,
+    },
+    {
+      name: 'kotlin: a backlogged file still fails for a MISSING argument',
+      lang: 'kotlin',
+      source: 'val t = stringResource(R.string.self_test_two, page)',
+      shouldFlag: true,
+    },
+    {
+      name: 'kotlin: correct getString call',
+      lang: 'kotlin',
+      source: 'val t = getString(R.string.self_test_two, page, total)',
+      shouldFlag: false,
+    },
+  ]
+
+  let failures = 0
+  for (const c of cases) {
+    const findings = c.lang === 'swift'
+      ? checkSwiftSource('<self-test>', c.source, sources)
+      : checkKotlinSource('<self-test>', c.source, sources)
+    const flagged = findings.length > 0
+    if (flagged !== c.shouldFlag) {
+      failures++
+      console.error(
+        `  self-test FAILED: ${c.name} -- expected ${c.shouldFlag ? 'a finding' : 'no finding'}, got ${findings.length}`
+      )
+      findings.forEach(f => console.error(`      ${f.message}`))
+    }
+  }
+
+  if (failures === 0) {
+    console.log(`  Format-argument self-test: ${cases.length}/${cases.length} detector cases behave as specified`)
+  }
+  return failures
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -485,12 +944,15 @@ function main() {
   totalErrors += validateKeyCasing()
   totalErrors += validateLocaleCoverage()
   totalErrors += validateLocaleCompleteness()
+  totalErrors += selfTestFormatArguments()
 
   if (command === 'android' || command === 'all') {
     totalErrors += validateAndroid()
+    totalErrors += validateAndroidFormatArguments()
   }
   if (command === 'ios' || command === 'all') {
     totalErrors += validateIOS()
+    totalErrors += validateIOSFormatArguments()
   }
   if (command === 'desktop' || command === 'all') {
     totalErrors += validateDesktop()

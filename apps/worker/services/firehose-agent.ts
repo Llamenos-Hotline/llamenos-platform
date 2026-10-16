@@ -12,6 +12,7 @@
  * Circuit breaker: 3 consecutive extraction failures auto-pause the connection.
  */
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import {
   LABEL_FIREHOSE_AGENT_SEAL,
@@ -24,6 +25,7 @@ import type { RecipientEnvelope } from '@shared/types'
 import type { Database } from '../db'
 import { unsealAgentKey } from '../lib/agent-identity'
 import { encryptMessageForStorage } from '../lib/crypto'
+import { adminHpkeRecipient, type Ed25519AuthPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { CircuitBreaker } from '../lib/circuit-breaker'
 import { createLogger } from '../lib/logger'
 import { clearWindowKeyCache } from '../messaging/firehose-observer'
@@ -77,8 +79,10 @@ export class FirehoseAgentService {
     private readonly sealKey: string,
     private readonly env: {
       SERVER_SECRET?: string
-      ADMIN_PUBKEY?: string
-      ADMIN_DECRYPTION_PUBKEY?: string
+      /** Ed25519, for signature verification. Never an envelope recipient. */
+      ADMIN_PUBKEY?: Ed25519AuthPubkey | string
+      /** X25519, the HPKE recipient admin envelopes are sealed to. */
+      ADMIN_DECRYPTION_PUBKEY?: HpkeRecipientPubkey | string
     },
   ) {}
 
@@ -403,16 +407,14 @@ export class FirehoseAgentService {
       extractedAt: new Date().toISOString(),
     })
 
-    // Get admin pubkeys for envelope encryption
-    const adminPubkeys: string[] = []
-    if (this.env.ADMIN_PUBKEY && /^[0-9a-f]{64}$/i.test(this.env.ADMIN_PUBKEY)) {
-      adminPubkeys.push(this.env.ADMIN_PUBKEY)
-    }
-    if (this.env.ADMIN_DECRYPTION_PUBKEY && /^[0-9a-f]{64}$/i.test(this.env.ADMIN_DECRYPTION_PUBKEY)) {
-      adminPubkeys.push(this.env.ADMIN_DECRYPTION_PUBKEY)
-    }
+    // The admin reader for this report is the X25519 HPKE recipient, and only
+    // that. ADMIN_PUBKEY used to be added here too: an Ed25519 signing key,
+    // accepted by DHKEM(X25519) as 32 arbitrary bytes, producing a second
+    // envelope that no secret key could ever open (#1283).
+    const adminRecipient = adminHpkeRecipient(this.env)
+
     const recipientPubkeys = [
-      ...new Set([conn.agentPubkey, ...adminPubkeys]),
+      ...new Set([conn.agentPubkey, ...(adminRecipient ? [adminRecipient] : [])]),
     ]
 
     if (recipientPubkeys.length === 0) {
@@ -502,7 +504,7 @@ export class FirehoseAgentService {
       secretKey,
       envelope,
       utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT),
-      utf8ToBytes(`${LABEL_FIREHOSE_BUFFER_ENCRYPT}:key-wrap`),
+      keyWrapAad(LABEL_FIREHOSE_BUFFER_ENCRYPT),
     )
   }
 
@@ -512,13 +514,13 @@ export class FirehoseAgentService {
    */
   private decryptWithWindowKey(encryptedHex: string, windowKey: Uint8Array): string {
     const bytes = hexToBytes(encryptedHex)
-    const plaintext = symmetricDecrypt(windowKey, bytes, utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT))
+    const plaintext = symmetricDecrypt(windowKey, bytes, contentAad(LABEL_FIREHOSE_BUFFER_ENCRYPT))
     return new TextDecoder().decode(plaintext)
   }
 
   /**
    * Decrypt an HPKE envelope-encrypted value using the agent's secret key.
-   * Uses LABEL_MESSAGE for key unwrapping (encryptMessageForStorage default).
+   * Inverse of encryptMessageForStorage: LABEL_MESSAGE as HPKE info, no AAD.
    */
   private decryptEnvelope(
     encryptedHex: string,
@@ -526,7 +528,7 @@ export class FirehoseAgentService {
     secretKey: Uint8Array,
   ): string {
     const labelBytes = utf8ToBytes(LABEL_MESSAGE)
-    const aadKeyWrap = utf8ToBytes(`${LABEL_MESSAGE}:key-wrap`)
+    const noAad = new Uint8Array(0)
 
     // Reconstruct the HPKE envelope: enc(32) || ct
     const encBytes = hexToBytes(envelope.enc)
@@ -536,11 +538,11 @@ export class FirehoseAgentService {
     hpkeEnvelope.set(ctBytes, encBytes.length)
 
     // Unwrap the per-message key via HPKE
-    const messageKey = hpkeOpen(secretKey, hpkeEnvelope, labelBytes, aadKeyWrap)
+    const messageKey = hpkeOpen(secretKey, hpkeEnvelope, labelBytes, noAad)
 
     // Decrypt the content with AES-256-GCM
     const contentBytes = hexToBytes(encryptedHex)
-    const plaintext = symmetricDecrypt(messageKey, contentBytes, labelBytes)
+    const plaintext = symmetricDecrypt(messageKey, contentBytes, noAad)
 
     return new TextDecoder().decode(plaintext)
   }

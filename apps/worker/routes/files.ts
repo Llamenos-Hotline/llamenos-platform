@@ -58,14 +58,14 @@ files.get('/:id/content',
     })
     const obj = await storageBreaker.execute(() =>
       withRetry(
-        () => c.env.R2_BUCKET.get(`files/${fileId}/content`),
+        () => c.env.BLOB_STORAGE.get(`files/${fileId}/content`),
         {
           maxAttempts: 3,
           baseDelayMs: 200,
           maxDelayMs: 2000,
           isRetryable: isRetryableError,
           onRetry: (attempt, error) => {
-            logger.warn(`R2 get retry ${attempt} for ${fileId}`, { error })
+            logger.warn(`blob get retry ${attempt} for ${fileId}`, { error })
             incCounter('llamenos_retry_attempts_total', { service: 'blob', operation: 'get' })
           },
         },

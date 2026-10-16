@@ -1,13 +1,15 @@
-# Telephony end-to-end: a real call through self-hosted Asterisk
+# Telephony end-to-end: a real call through the SIP edge and self-hosted Asterisk
 
-`run-call-e2e.sh` proves that a phone call is actually routed, and that the
-caller actually hears what the operator uploaded — not that Asterisk booted. It
-starts, in its own compose project (`ll-telephony-e2e`), on one Docker network:
+`run-call-e2e.sh` proves that a phone call is routed through the same
+client-facing Kamailio edge as a deployment, and that the caller hears the
+uploaded prompt — not just that Asterisk booted. It starts, in its own compose
+project (`ll-telephony-e2e`), on one Docker network:
 
 | Service       | Role                                                                  |
 |---------------|-----------------------------------------------------------------------|
 | `app`         | The shipped app image, built from this tree, with the project's own `postgres` and `rustfs` |
-| `asterisk`    | The hotline PBX, with the shipped `asterisk-config/` — and, like a fresh deployment, no SIP trunk |
+| `kamailio`    | Client-facing SIP edge; the only published SIP listener |
+| `asterisk`    | The hotline PBX, with the shipped `asterisk-config/` — and no published SIP ports |
 | `sip-bridge`  | The shipped bridge image (ARI ↔ app webhooks at `http://app:3000`)   |
 | `sip-carrier` | A second Asterisk playing the phone network — TEST ONLY (`carrier/`)  |
 
@@ -15,7 +17,9 @@ starts, in its own compose project (`ll-telephony-e2e`), on one Docker network:
 
 Every scenario provisions the SIP trunk the way an operator does, through
 `POST /api/provider-setup/create-sip-trunk`, which writes it into the PBX over
-ARI (astdb, on the `asterisk-db` volume). Nothing configures a trunk any other way.
+ARI (astdb, on the `asterisk-db` volume). The simulated caller sends SIP
+traffic to Kamailio, which dispatches it to Asterisk; no E2E client can connect
+directly to a host-published Asterisk SIP port.
 
 1. **Answered call** — provisions a hub, the Asterisk provider, a volunteer and
    the trunk through the API; the carrier dials the hotline over SIP; the worker's IVR and
@@ -41,13 +45,119 @@ ARI (astdb, on the `asterisk-db` volume). Nothing configures a trunk any other w
    volunteer with digest authentication.
 6. **The caller hears the uploaded prompt** — the hub rate-limits to one call a
    minute; the caller's second call is turned away and, with no prompt
-   uploaded, hears nothing. The operator's WebM upload is refused; a 2 s 1 kHz
-   PCM WAV is accepted. The third call is turned away again, and the carrier's
-   recording of what the caller heard (`[caller-hears]` in
-   `carrier/extensions.conf`) holds the tone for its whole length: Asterisk
-   fetched it from `http://app:3000/api/ivr-audio/rateLimited/en` and the
-   bridge let it finish before hanging up. Fails without the media cache
+   uploaded, hears the generated rate-limit message. The operator's WebM upload
+   is refused; a 2 s 1 kHz PCM WAV is accepted. The third call is turned away
+   again, and the carrier's recording of what the caller heard (`[caller-hears]`
+   in `carrier/extensions.conf`) holds the tone for its whole length, and not
+   the generated message: the upload wins. Fails without the media cache
    directory (`asterisk-entrypoint.sh`) or with an immediate hangup.
+7. **Uploaded greeting, then hold message** — both uploads are heard, in order,
+   before the caller is queued.
+8. **Generated menu and prompts (#1347)** — a hub offering Spanish and French,
+   with nothing uploaded; a caller from a French number presses nothing. The
+   recording holds, in order, the Spanish and French menu options, then the
+   French greeting and hold message — each found by normalised cross-correlation
+   (`audio-match.ts`) with the exact clip the app serves for it
+   (`fetch-speech.ts`, which mints the same signed URL the worker hands the PBX).
+9. **Fallback language (#1347)** — the same, from a Philippine number: Tagalog
+   has no offline voice, so the caller hears the English greeting and hold
+   message.
+
+`audio-match.test.ts` proves the instrument itself: it finds a clip that was
+played through µ-law and rejects one that was not.
+
+## The per-volunteer SIP registrar
+
+`run-register-e2e.sh` proves the safe half of #1435 against the same stack
+(own compose project `ll-telephony-register-e2e`). It runs two specs.
+
+`kamailio-edge.e2e.ts` (#1688) asserts the SIP edge is **actually up** —
+measured at the socket, never in file text: the Kamailio container is running
+with zero restarts and answers `kamcmd core.version`; a SIP OPTIONS over UDP
+5060, TCP 5060 and TLS 5061 each gets a 200 from Kamailio itself (TLS verified
+against the published trust anchor); and a REGISTER through the TLS listener
+with an ARI-provisioned credential gets 200 while a wrong secret gets 401.
+It replaces a test that asserted the compose file *contained certain strings*
+— an assertion a dead edge satisfies, which is how the edge spent its life
+down while everything looked configured.
+
+`asterisk-register.e2e.ts`: `/api/telephony/sip-token`
+issues a REAL per-volunteer identity — username `vol_<pubkey16>`, a derived
+per-endpoint secret, time-limited TURN credentials — and that identity
+registers through the client-facing SIP edge against the live PBX:
+
+1. The operator configures the Asterisk provider through the API
+   (`sipDomain` is the public registrar host clients REGISTER against).
+2. A volunteer fetches `/api/telephony/sip-token`; the worker provisions
+   `auth`/`aor`/`endpoint` on the PBX over ARI (the #1327 trunk path) and
+   returns the credential plus RFC 8489 TURN credentials.
+3. `sip-register.ts` — a minimal SIP REGISTER client — validates Kamailio's
+   published trust anchor, answers the digest challenge over TLS, and registers
+   through the edge: 200 OK with the issued credential, 401 with a wrong one,
+   401 again after the volunteer's account is deleted (the revocation hook
+   removes the PJSIP objects; the e2e checks they are gone over ARI).
+
+The app-facing TLS listener (`:5061`) belongs to Kamailio. The PBX TLS
+transport remains internal for PBX-side integration; this e2e verifies the
+client-facing TLS handshake and registration rather than a direct PBX socket.
+
+```sh
+deploy/docker/tests/telephony/run-register-e2e.sh                       # needs only Docker and bun
+deploy/docker/tests/telephony/run-register-e2e.sh --keep                # leave the stack up
+```
+
+## The Android transport and media layer (#1188)
+
+`run-android-sip-e2e.sh` drives the **production `LinphoneService` on an
+emulator** against this same PBX, over **TLS**, and reads the evidence off
+Asterisk's own log. It exists because all three defects it covers are invisible
+to a unit test: each is decided where liblinphone meets Asterisk, and each
+produced a client that believed it was configured correctly.
+
+| Defect | What was wrong | Evidence it is fixed |
+|---|---|---|
+| TLS trust | The client set no root CA, the edge certificate is self-signed → `tlsv1 alert unknown ca`. | A `200 OK` for a `REGISTER` through Kamailio's TLS listener, with `verifyServerCertificates`/`verifyServerCn` still on; Asterisk receives the forwarded request over its internal UDP transport. |
+| SRTP vs DTLS | The client mandated `SRTP`; the endpoint is provisioned `media_encryption: dtls`. Nothing could negotiate. | Asterisk's SDP answer (`UDP/TLS/RTP/SAVPF`, `a=fingerprint`) and `StreamsRunning` with `currentParams.mediaEncryption == DTLS`. |
+| ICE dropped | `iceServers` was deserialised and discarded — no STUN, no TURN, no `natPolicy`. | `a=candidate` lines of types beyond `host` in the offer Asterisk logs. |
+
+It also grants the app the runtime `RECORD_AUDIO` permission it now asks a
+volunteer for at clock-in — without which a perfectly negotiated call has no
+microphone.
+
+How the pieces fit:
+
+* The emulator reaches the host, and only the host, at `10.0.2.2`. So that is
+  the configured `sipDomain`, the `TURN_HOST`, **and** a mandatory
+  `subjectAltName` on the Kamailio edge certificate — a client verifies the
+  hostname as well as the chain.
+* The trust anchor is not installed out of band. `/api/telephony/sip-token`
+  publishes the SIP edge's certificate (public half only) in its response, and
+  that response arrives over the app's own certificate-pinned HTTPS channel.
+  The client makes it the *only* root CA for SIP.
+* CoTURN runs on **host networking**, because a TURN server on a bridge network
+  advertises its container address in the relay candidate — allocation succeeds
+  and the candidate is useless, which is exactly the case a symmetric-NAT
+  volunteer depends on.
+* `extensions.d/e2e-volunteer-echo.conf` is bind-mounted over `/etc/asterisk/extensions.d/`
+  and adds one answer-and-echo target to the volunteer dialplan context. The
+  PBX answering is the only way to read the AGREED encryption and a nominated
+  ICE pair off the PBX rather than off the client, and the echo returns the
+  volunteer's own audio so RTP is proven in both directions. Nothing ships in
+  `extensions.d/`; a deployment's dialplan is unchanged.
+
+**The INVITE is placed by the test**, through a `coreForTesting()` seam. The
+product has no outbound-calling feature, and the inbound INVITE path — the
+server dialling a registered volunteer — does not exist yet (#1188). So this
+proves the whole layer *beneath* that keystone, on the volunteer↔PBX leg, and
+claims nothing about a caller reaching a volunteer.
+
+```sh
+deploy/docker/tests/telephony/run-android-sip-e2e.sh                 # boots everything, incl. an emulator
+deploy/docker/tests/telephony/run-android-sip-e2e.sh --no-emulator   # use the device already on adb
+deploy/docker/tests/telephony/run-android-sip-e2e.sh --keep          # leave the stack and emulator up
+```
+
+Logs and the issued credential land in `.android-sip-evidence/` (gitignored).
 
 ```sh
 deploy/docker/tests/telephony/run-call-e2e.sh                         # needs only Docker and bun
@@ -60,11 +170,11 @@ takes several minutes; later runs reuse Docker's cache.
 
 ## What it does not cover
 
-- **Most prompts.** Only an uploaded `rateLimited` prompt is played on this
-  path. The Asterisk adapter asks for `connecting`, `captcha`, `holdMusic` and
-  `voicemailPrompt`, which are not prompt types an operator can upload, and
-  speaks the language menu, which the bridge cannot (it has no speech engine:
-  a `speak` is skipped). Those parts of the call are silent.
+- **FreeSWITCH.** Its adapter plays the same generated-speech URLs through
+  mod_httapi, but no FreeSWITCH runs here.
+- **Intelligibility.** A clip found in the recording is the clip the app
+  synthesised; whether a listener understands it is measured separately
+  (#1347: ASR over the G.711 channel), not here.
 - **Hold music and the voicemail beep.** The image ships no sound files and
   no music-on-hold class.
 - **DTMF input.** The captcha and multi-digit menu paths are covered by the

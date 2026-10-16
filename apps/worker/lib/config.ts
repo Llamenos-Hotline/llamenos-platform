@@ -48,6 +48,7 @@ function assertDatabaseUrl(env: ConfigInput): void {
 }
 
 import { createLogger } from './logger'
+import { MIN_DEPLOYED_SECRET_LENGTH } from './dev-surfaces'
 
 const logger = createLogger('config')
 
@@ -81,6 +82,50 @@ export function validateConfig(env: ConfigInput = process.env): void {
   }
   if (adminPubkey.length === 0) {
     logger.warn('ADMIN_PUBKEY not set — first admin must be bootstrapped via the Tauri desktop app')
+  }
+
+  // --- The admin's HPKE recipient key (#1283) ---
+  //
+  // ADMIN_PUBKEY is Ed25519: it verifies the admin's request signatures.
+  // ADMIN_DECRYPTION_PUBKEY is X25519: it is the HPKE recipient that note,
+  // message and hub-key envelopes are sealed to. `bun run bootstrap-admin`
+  // derives both from one seed and prints both.
+  //
+  // These assertions exist because the consequence of getting it wrong is
+  // invisible. DHKEM(X25519) accepts any 32 bytes as a recipient key, so
+  // sealing to the Ed25519 key succeeds and yields an envelope no secret key
+  // can open — every note written on such a deployment is lost, with no error
+  // at write time and none at read time. A server that cannot name a correct
+  // recipient must refuse to start rather than accept work it will destroy.
+  const adminDecryptionPubkey = env['ADMIN_DECRYPTION_PUBKEY']?.trim() ?? ''
+  if (adminDecryptionPubkey.length > 0 &&
+      (adminDecryptionPubkey.length !== 64 || !HEX_RE.test(adminDecryptionPubkey))) {
+    throw new Error(
+      `[llamenos] ADMIN_DECRYPTION_PUBKEY must be exactly 64 lowercase hex characters ` +
+      `(the admin's X25519 encryption public key). Got length ${adminDecryptionPubkey.length}. ` +
+      `Generate with: bun run bootstrap-admin`
+    )
+  }
+  // Equal values mean one key was copied into both slots. Whichever it is, one
+  // of the two uses is wrong, and if it is the Ed25519 key then every admin
+  // envelope on this deployment is unopenable.
+  if (adminDecryptionPubkey.length > 0 && adminDecryptionPubkey === adminPubkey) {
+    throw new Error(
+      `[llamenos] ADMIN_DECRYPTION_PUBKEY is identical to ADMIN_PUBKEY. They are different ` +
+      `keys for different algorithms: ADMIN_PUBKEY is Ed25519 (signature verification), ` +
+      `ADMIN_DECRYPTION_PUBKEY is X25519 (the HPKE recipient admin envelopes are sealed to). ` +
+      `Sealing to the Ed25519 key produces envelopes nobody can decrypt. ` +
+      `Run: bun run bootstrap-admin — it prints both values, derived from one seed.`
+    )
+  }
+  if (adminPubkey.length > 0 && adminDecryptionPubkey.length === 0) {
+    throw new Error(
+      `[llamenos] ADMIN_PUBKEY is set but ADMIN_DECRYPTION_PUBKEY is missing or empty. ` +
+      `The admin cannot be a recipient of any encrypted note, message or hub key without it, ` +
+      `and the server will not substitute ADMIN_PUBKEY — that is an Ed25519 signing key, not ` +
+      `an X25519 HPKE recipient, and envelopes sealed to it are silently undecryptable forever. ` +
+      `Run: bun run bootstrap-admin and set BOTH values it prints.`
+    )
   }
 
   assertNonEmpty(env, 'HOTLINE_NAME')
@@ -118,6 +163,41 @@ export function validateConfig(env: ConfigInput = process.env): void {
     logger.warn(
       'DEMO_MODE is enabled — scheduled data resets are active. ' +
       'This server will periodically destroy all application data.',
+    )
+  }
+
+  // --- Dev-surface production gate ---
+  // The /api/test-* routes reset the database, delete the admin and promote
+  // arbitrary pubkeys. lib/dev-surfaces.ts already refuses to SERVE them under
+  // ENVIRONMENT=production, and deploy/ansible refuses to RENDER the vars for a
+  // production host. This is the third, independent layer: a production process
+  // configured with them refuses to start at all, rather than running with a
+  // disabled-but-configured backdoor nobody notices until the guard regresses.
+  const devRoutesEnabled = env['DEV_ROUTES_ENABLED']?.trim() === 'true'
+  const devSecret = (env['DEV_RESET_SECRET'] ?? env['E2E_TEST_SECRET'] ?? '').trim()
+  if (environment === 'production' && (devRoutesEnabled || devSecret.length > 0)) {
+    const offenders = [
+      devRoutesEnabled ? 'DEV_ROUTES_ENABLED=true' : null,
+      env['DEV_RESET_SECRET']?.trim() ? 'DEV_RESET_SECRET' : null,
+      env['E2E_TEST_SECRET']?.trim() ? 'E2E_TEST_SECRET' : null,
+    ].filter(Boolean).join(', ')
+    throw new Error(
+      `[llamenos] CRITICAL: ${offenders} is set in a production environment. ` +
+      'Those variables exist only to let the end-to-end suite reset a throwaway ' +
+      'staging target; on production they configure a destructive backdoor. ' +
+      'Remove them, or set ENVIRONMENT=staging if this host really is the test target.',
+    )
+  }
+  // A reachable dev surface without a strong secret is the failure mode the
+  // length minimum exists for; say so at startup rather than letting every
+  // /api/test-* request 404 for a reason nobody can see.
+  if (devRoutesEnabled && environment !== 'development' && devSecret.length < MIN_DEPLOYED_SECRET_LENGTH) {
+    throw new Error(
+      `[llamenos] DEV_ROUTES_ENABLED=true on ENVIRONMENT=${environment} requires ` +
+      `DEV_RESET_SECRET of at least ${MIN_DEPLOYED_SECRET_LENGTH} characters ` +
+      `(got ${devSecret.length}). The /api/test-* surface is reachable on a deployed ` +
+      'host, so it may not be served without a strong shared secret. ' +
+      'Generate one with: openssl rand -hex 32',
     )
   }
 

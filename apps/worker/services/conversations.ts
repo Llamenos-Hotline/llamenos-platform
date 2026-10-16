@@ -18,7 +18,12 @@ import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
 import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
+import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { getUserHpkeRecipients, messageReaders } from '../lib/device-recipients'
 import { ServiceError } from './settings'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('services.conversations')
 
 // ---------------------------------------------------------------------------
 // Types
@@ -262,12 +267,18 @@ export class ConversationsService {
 
   // --- Claim (assign to volunteer) ---
 
+  /**
+   * Atomic claim (#1144). The previous implementation read the conversation,
+   * checked `status !== 'waiting'` in JS, then did an UNCONDITIONAL UPDATE —
+   * two concurrent claimants (two volunteers clicking "claim", or manual
+   * claim racing auto-assign) both passed the check and both got a 200; the
+   * later writer's UPDATE won and silently displaced the earlier volunteer
+   * mid-reply. The `AND status = 'waiting'` predicate on the UPDATE itself
+   * is what actually serialises this: Postgres's row lock means only one
+   * concurrent claimant's UPDATE can match it, and the loser gets zero rows
+   * back and a 409 instead of a false 200.
+   */
   async claim(id: string, pubkey: string): Promise<ConversationRow> {
-    const existing = await this.getById(id)
-    if (existing.status !== 'waiting') {
-      throw new ServiceError(400, 'Conversation is not in waiting state')
-    }
-
     const [row] = await this.db
       .update(conversations)
       .set({
@@ -275,8 +286,15 @@ export class ConversationsService {
         status: 'active',
         updatedAt: new Date(),
       })
-      .where(eq(conversations.id, id))
+      .where(and(eq(conversations.id, id), eq(conversations.status, 'waiting')))
       .returning()
+
+    if (!row) {
+      // Distinguish "doesn't exist" (404) from "already claimed" (409) by
+      // re-reading — this read is informational only, not a race guard.
+      await this.getById(id)
+      throw new ServiceError(409, 'Conversation is not in waiting state')
+    }
 
     return row
   }
@@ -287,32 +305,41 @@ export class ConversationsService {
     // Verify conversation exists (throws 404 if not found)
     await this.getById(input.conversationId)
 
-    const [msg] = await this.db
-      .insert(messages)
-      .values({
-        id: input.id ?? undefined,
-        conversationId: input.conversationId,
-        direction: input.direction,
-        authorPubkey: input.authorPubkey,
-        encryptedContent: input.encryptedContent ?? '',
-        readerEnvelopes: input.readerEnvelopes,
-        hasAttachments: input.hasAttachments ?? false,
-        attachmentIds: input.attachmentIds,
-        externalId: input.externalId,
-        status: input.direction === 'outbound' ? (input.status ?? 'pending') : (input.status ?? 'sent'),
-        failureReason: input.failureReason,
-      })
-      .returning()
+    // Atomic pair (#1144): the increment itself (`messageCount + 1`) is
+    // SQL-atomic, but the insert-then-update pair was not — a failure
+    // between the two statements left messageCount permanently drifted
+    // from the actual row count. Wrapping both in one transaction makes
+    // the pair all-or-nothing.
+    const [msg] = await this.db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(messages)
+        .values({
+          id: input.id ?? undefined,
+          conversationId: input.conversationId,
+          direction: input.direction,
+          authorPubkey: input.authorPubkey,
+          encryptedContent: input.encryptedContent ?? '',
+          readerEnvelopes: input.readerEnvelopes,
+          hasAttachments: input.hasAttachments ?? false,
+          attachmentIds: input.attachmentIds,
+          externalId: input.externalId,
+          status: input.direction === 'outbound' ? (input.status ?? 'pending') : (input.status ?? 'sent'),
+          failureReason: input.failureReason,
+        })
+        .returning()
 
-    // Update conversation timestamps and count
-    await this.db
-      .update(conversations)
-      .set({
-        lastMessageAt: new Date(),
-        updatedAt: new Date(),
-        messageCount: sql`${conversations.messageCount} + 1`,
-      })
-      .where(eq(conversations.id, input.conversationId))
+      // Update conversation timestamps and count
+      await tx
+        .update(conversations)
+        .set({
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+          messageCount: sql`${conversations.messageCount} + 1`,
+        })
+        .where(eq(conversations.id, input.conversationId))
+
+      return [inserted]
+    })
 
     return msg
   }
@@ -344,16 +371,7 @@ export class ConversationsService {
   async updateMessageStatus(
     update: MessageStatusUpdate,
   ): Promise<{ conversationId: string; messageId: string; status: string } | { found: false }> {
-    // Look up message by external ID
-    const [msg] = await this.db
-      .select()
-      .from(messages)
-      .where(eq(messages.externalId, update.externalId))
-      .limit(1)
-
-    if (!msg) return { found: false }
-
-    // Only update if the new status is "more advanced" than current
+    // Status rank, used to guard against moving status backwards.
     const statusOrder: Record<string, number> = {
       pending: 0,
       sent: 1,
@@ -361,13 +379,7 @@ export class ConversationsService {
       read: 3,
       failed: 3,
     }
-
-    const currentOrder = statusOrder[msg.status ?? 'pending']
     const newOrder = statusOrder[update.status]
-
-    if (newOrder <= currentOrder && update.status !== 'failed') {
-      return { conversationId: msg.conversationId, messageId: msg.id, status: msg.status ?? 'pending' }
-    }
 
     const updateFields: Record<string, unknown> = {
       status: update.status,
@@ -377,19 +389,53 @@ export class ConversationsService {
       updateFields.deliveredAt = new Date(update.timestamp)
     } else if (update.status === 'read') {
       updateFields.readAt = new Date(update.timestamp)
-      if (!msg.deliveredAt) {
-        updateFields.deliveredAt = new Date(update.timestamp)
-      }
+      // Backfill from the row's CURRENT value via COALESCE, not a value
+      // read earlier in JS — only fills deliveredAt in if it's still unset.
+      updateFields.deliveredAt = sql`COALESCE(${messages.deliveredAt}, ${new Date(update.timestamp)})`
     } else if (update.status === 'failed') {
       updateFields.failureReason = update.failureReason
     }
 
-    await this.db
+    // Atomic status-advance guard (#1144). The previous implementation
+    // read the message, computed `newOrder <= currentOrder` in JS, then
+    // did an UNCONDITIONAL UPDATE. Two delivery-receipt callbacks
+    // (`delivered` and `read`) racing on the same message both read
+    // `status = 'sent'`, both pass the check, and whichever UPDATE commits
+    // last wins — so a message can end up at `delivered` after it was
+    // already `read`. The CASE expression below is evaluated against the
+    // row this UPDATE just locked, so the loser of the race affects zero
+    // rows instead of regressing the status.
+    const rankGuard = update.status === 'failed'
+      ? sql`true`
+      : sql`(CASE ${messages.status}
+          WHEN 'pending' THEN 0
+          WHEN 'sent' THEN 1
+          WHEN 'delivered' THEN 2
+          WHEN 'read' THEN 3
+          WHEN 'failed' THEN 3
+          ELSE 0
+        END) < ${newOrder}`
+
+    const [row] = await this.db
       .update(messages)
       .set(updateFields)
-      .where(eq(messages.id, msg.id))
+      .where(and(eq(messages.externalId, update.externalId), rankGuard))
+      .returning()
 
-    return { conversationId: msg.conversationId, messageId: msg.id, status: update.status }
+    if (row) {
+      return { conversationId: row.conversationId, messageId: row.id, status: row.status ?? update.status }
+    }
+
+    // Either the message doesn't exist, or the status didn't advance.
+    // Both need the current row to answer correctly.
+    const [existing] = await this.db
+      .select()
+      .from(messages)
+      .where(eq(messages.externalId, update.externalId))
+      .limit(1)
+
+    if (!existing) return { found: false }
+    return { conversationId: existing.conversationId, messageId: existing.id, status: existing.status ?? 'pending' }
   }
 
   // --- External ID lookup ---
@@ -413,7 +459,14 @@ export class ConversationsService {
 
   async handleIncoming(
     incoming: IncomingMessage,
-    adminDecryptionPubkey: string,
+    /**
+    /**
+     * The platform admin's X25519 HPKE recipient, or `undefined` when the
+     * deployment has none. Typed as a brand so an Ed25519 auth key — which is
+     * also 64 hex characters, and which the messaging router used to pass here
+     * — cannot be supplied by mistake (#1283).
+     */
+    adminDecryptionPubkey: HpkeRecipientPubkey | undefined,
     hubId?: string,
   ): Promise<{
     conversationId: string
@@ -486,13 +539,54 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern
-    const readerPubkeys = [adminDecryptionPubkey]
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
+    // Encrypt the message content using envelope pattern. An absent admin
+    // recipient means one fewer reader, never a substituted key (#1283).
+    //
+    // #1021: `conversations.assigned_to` holds the assignee's Ed25519 *identity*
+    // pubkey — the key that signs their auth tokens (see `claim()` and
+    // `POST /conversations/:id/claim`, which store `c.get('pubkey')`). Sealing
+    // to it produced a well-formed envelope that nobody can open: DHKEM(X25519)
+    // accepts any 32 bytes, so it neither threw nor warned. This is the same
+    // defect as #1283, at a second site.
+    //
+    // `devices.x25519_pubkey` is the one column that can supply a real HPKE
+    // recipient for a user, and the desktop now populates it on unlock
+    // (`src/client/lib/device-registration.ts`). `getUserHpkeRecipients` is the
+    // only path from a user id to that key, and the branded type below makes
+    // re-adding a non-X25519 key a compile error rather than silent, permanent
+    // data loss.
+    const assigneeRecipients = conv.assignedTo
+      ? await getUserHpkeRecipients(this.db, conv.assignedTo)
+      : []
+    if (conv.assignedTo && assigneeRecipients.length === 0) {
+      // Never silent: the assigned volunteer will not be able to read this
+      // message, and the only way they ever will is by registering a device.
+      // The message is still stored — dropping an inbound crisis message
+      // would be worse than one an admin has to relay.
+      logger.error('assigned volunteer has no X25519 device key; inbound message is readable by admins only', {
+        conversationId: conv.id,
+      })
     }
+    const readerPubkeys = messageReaders(adminDecryptionPubkey, assigneeRecipients)
 
-    const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
+    // An EMPTY reader list — no admin decryption key configured AND nobody
+    // with a registered device — is a deployment-level failure, and the
+    // contract (see `messageReaders`) is loud-but-stored, never dropped: a
+    // thrown error here escapes the webhook handler as a 500, after the
+    // replay-guard has already consumed the delivery slot, so the provider's
+    // retry is answered with an idempotent 200 and the crisis message is
+    // silently lost. Store the record with no content instead: no plaintext
+    // is persisted, the conversation shows the message arrived, and the error
+    // log above is the operator's signal to fix the deployment.
+    let encrypted: { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] }
+    if (readerPubkeys.length === 0) {
+      logger.error('no HPKE recipient for inbound message (no admin decryption key, no registered device) — storing an unreadable record rather than dropping it', {
+        conversationId: conv.id,
+      })
+      encrypted = { encryptedContent: '', readerEnvelopes: [] }
+    } else {
+      encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
+    }
 
     const msg = await this.addMessage({
       conversationId: conv.id,
@@ -639,7 +733,16 @@ export class ConversationsService {
     envelope: FileKeyEnvelope,
     encryptedMetadata: { pubkey: string; encryptedContent: string; enc: string; ct: string },
   ): Promise<FileRow> {
-    // Use JSONB append to add envelope and metadata atomically
+    // Use JSONB append to add envelope and metadata atomically.
+    //
+    // The JSON payloads go through `(...)::text::jsonb`, not `...::jsonb`.
+    // Binding a JS *string* straight to a jsonb parameter position reaches
+    // Postgres double-encoded — a jsonb *string scalar* — so the append wrote
+    // a quoted string into the array instead of an object. The `elem->>'pubkey'`
+    // dedupe guard right above could then never see it (a string element has no
+    // keys), so grants duplicated, and the granted user could not find their own
+    // envelope. Casting the parameter to text first makes Postgres parse it.
+    // See the same warning in identity.ts and erasure.ts.
     const [row] = await this.db
       .update(files)
       .set({
@@ -649,7 +752,7 @@ export class ConversationsService {
               SELECT 1 FROM jsonb_array_elements(${files.recipientEnvelopes}) elem
               WHERE elem->>'pubkey' = ${envelope.pubkey}
             )
-            THEN ${files.recipientEnvelopes} || ${JSON.stringify(envelope)}::jsonb
+            THEN ${files.recipientEnvelopes} || (${JSON.stringify(envelope)})::text::jsonb
             ELSE ${files.recipientEnvelopes}
           END
         )`,
@@ -659,7 +762,7 @@ export class ConversationsService {
               SELECT 1 FROM jsonb_array_elements(${files.encryptedMetadata}) elem
               WHERE elem->>'pubkey' = ${encryptedMetadata.pubkey}
             )
-            THEN ${files.encryptedMetadata} || ${JSON.stringify(encryptedMetadata)}::jsonb
+            THEN ${files.encryptedMetadata} || (${JSON.stringify(encryptedMetadata)})::text::jsonb
             ELSE ${files.encryptedMetadata}
           END
         )`,

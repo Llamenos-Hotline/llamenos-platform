@@ -8,6 +8,7 @@ import { expect } from '@playwright/test'
 import { Given, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
+import { getTranscriptionSettingsViaApi } from '../../api-helpers'
 
 Given('I expand the transcription section', async ({ page }) => {
   const section = page.getByTestId(TestIds.TRANSCRIPTION_SECTION)
@@ -15,8 +16,14 @@ Given('I expand the transcription section', async ({ page }) => {
   await section.click()
 })
 
-Given('transcription opt-out is not allowed', async () => {
-  // Precondition — admin has disabled opt-out; this is a config state
+Given('transcription opt-out is not allowed', async ({ backendRequest, $test }) => {
+  // allowUserOptOut is a GLOBAL setting (/settings/transcription), so a parallel
+  // run cannot flip it without poisoning other workers' scenarios. Read it: when
+  // opt-out is allowed the premise does not hold and the scenario is SKIPPED,
+  // reported as such. (The old body was empty, and the managed-message check
+  // then matched unrelated "admin" text in the section.)
+  const settings = await getTranscriptionSettingsViaApi(backendRequest)
+  $test.skip(settings.allowUserOptOut, 'transcription opt-out is allowed on this server; the scenario needs it disallowed')
 })
 
 Then('I should see the transcription settings section', async ({ page }) => {

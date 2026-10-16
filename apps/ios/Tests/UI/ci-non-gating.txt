@@ -1,0 +1,29 @@
+# XCUITest classes that are NOT part of the merge gate.
+#
+# One entry per line: `<Class>  # <why it does not gate>`
+#
+# WHAT BELONGS HERE. A class that produces an ARTEFACT rather than a verdict —
+# something a person asks for once, when they want it. Not "a test we think is
+# flaky" (that is ci-quarantine.txt, per test, with the issue that owns it) and
+# not "a test we run less often" (there is no such tier).
+#
+# The bar is enforced by `ui-tests.py check-non-gating`: a class named here must
+# contain NO XCTAssert of any kind. A class that asserts something is making a
+# claim about the product, and a claim the merge gate does not check is worse
+# than no claim at all — so it may not be parked here.
+#
+# HOW TO RUN ONE. Opt in explicitly; nothing runs these on a schedule, because
+# nothing consumes their output on a schedule:
+#
+#   python3 apps/ios/scripts/ui-tests.py shard --index 0 --total 1 --include-non-gating
+#
+# or, for just this class, the invocation in its own file header:
+#
+#   xcodebuild test -scheme Llamenos \
+#     -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+#     -only-testing:LlamenosUITests/ScreenshotAuditTests \
+#     -derivedDataPath /tmp/llamenos-screenshots
+#
+# Checked by: python3 apps/ios/scripts/ui-tests.py check-non-gating
+
+ScreenshotAuditTests  # captures screens for the site and presentations; 42 methods, 0 assertions, ~20 min — an asset generator, not a gate

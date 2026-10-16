@@ -1,7 +1,7 @@
 /**
  * SAS verification step definitions.
  * Matches steps from: packages/test-specs/features/security/network-security.feature
- * (SAS-related @wip scenarios)
+ * (SAS device-key import scenarios)
  *
  * These test the SAS (Short Authentication String) verification gate
  * during device linking. A Playwright test event ('test:provisioning-complete')
@@ -14,6 +14,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, type SasWorld } from '../fixtures'
+import { Timeouts } from '../../helpers'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { gcm } from '@noble/ciphers/aes.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
@@ -121,12 +122,10 @@ Then('I should see instructions to compare with the other device', async ({ page
     .locator('text=/compare|verify|match|other device/i')
   // Fallback to any visible compare text on the page
   const pageText = page.getByText(/compare|verify.*code/i)
-  const found = await instruction.first().isVisible({ timeout: 3000 }).catch(() => false)
-    || await pageText.first().isVisible({ timeout: 3000 }).catch(() => false)
-  expect(found).toBe(true)
+  await expect(instruction.or(pageText).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('an encrypted nsec is received from the other device', ({ sasWorld }) => {
+Given('an encrypted device key is received from the other device', ({ sasWorld }) => {
   // Already set in 'a valid provisioning room is established'
   expect(sasWorld.encryptedNsec).toBeTruthy()
 })
@@ -138,10 +137,17 @@ When('I have not yet confirmed the SAS code', async ({ page }) => {
   await expect(page.getByTestId('sas-mismatch')).toBeVisible({ timeout: 3000 })
 })
 
-Then('the nsec should not be imported', async ({ page }) => {
-  // Before confirmation, the pin-create step must NOT be visible
-  const pinCreateVisible = await page.getByTestId('pin-input').isVisible({ timeout: 500 }).catch(() => false)
-  expect(pinCreateVisible).toBe(false)
+Then('the device key should not be imported', async ({ page }) => {
+  // This step is shared by two scenarios in different states when it runs:
+  // before SAS confirmation (still on verify-sas, sas-match visible) and
+  // after SAS rejection (verify-sas has already been torn down in favor of
+  // a cancelled/error state). Neither prior step in either scenario needs
+  // re-anchoring here — "I have not yet confirmed the SAS code" and "the
+  // provisioning room should be closed" already settled the page for their
+  // own scenario. The one invariant true in both cases, and the one this
+  // step actually exists to check, is that the import never reached the
+  // decrypt step: pin-input never renders.
+  await expect(page.getByTestId('pin-input')).toHaveCount(0)
 })
 
 Then('the crypto service should not have a new key', async ({ page }) => {
@@ -153,22 +159,21 @@ When('I confirm the SAS code matches', async ({ page }) => {
   await page.getByTestId('sas-match').click()
 })
 
-Then('the nsec should be imported', async ({ page }) => {
+Then('the device key should be imported', async ({ page }) => {
   // After SAS confirmation, the component advances to pin-create (nsec is NOT
   // decrypted here — it happens when the user enters a PIN in handlePinConfirm).
   // Both pin-create and done states indicate successful SAS verification.
   const pinCreate = page.locator('[data-testid="pin-input"]')
   const doneState = page.getByText(/success|linked|complete/i)
-  const advancedStep = await pinCreate.first().isVisible({ timeout: 5000 }).catch(() => false)
-    || await doneState.first().isVisible({ timeout: 5000 }).catch(() => false)
-  expect(advancedStep, 'Expected to advance past verify-sas after SAS confirmation').toBe(true)
+  await expect(pinCreate.or(doneState).first(), 'Expected to advance past verify-sas after SAS confirmation')
+    .toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the import success state', async ({ page }) => {
   // After decrypt: either pin-create (success) or done (after pin set).
   // In tests, decryption success means we left the verify-sas step.
-  const stillOnSas = await page.getByTestId('sas-code').isVisible({ timeout: 500 }).catch(() => false)
-  expect(stillOnSas, 'Should have advanced past SAS verification step').toBe(false)
+  await expect(page.getByTestId('sas-code'), 'Should have advanced past SAS verification step')
+    .not.toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 When('I reject the SAS code', async ({ page }) => {

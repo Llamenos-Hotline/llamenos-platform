@@ -57,7 +57,25 @@ function flattenKeysSnake(obj: Record<string, unknown>, prefix = ''): Record<str
   return result
 }
 
-// Convert i18next interpolation to iOS format and escape special characters
+// Matches a printf-style conversion specifier (%d, %@, %s, %1$@, %.2f, %%-excluded).
+// Locale source strings must never contain one: every substitution goes through
+// {{placeholder}} so that each platform's codegen picks a specifier that matches
+// the argument type it will actually be handed. See issue #1413.
+const RAW_FORMAT_SPECIFIER =
+  /%(?:\d+\$)?[-+ #0]*[\d.*]*(?:hh|h|ll|l|L|z|j|t|q)?[diouxXeEfgGaAcsp@]/
+
+// Convert i18next interpolation to iOS format and escape special characters.
+//
+// Every {{placeholder}} becomes a *positional object* specifier (`%1$@`, `%2$@`, ...).
+//
+//   - Object (`%@`), never numeric (`%ld`/`%f`): `String(format:)` reads a `%@`
+//     argument as an object pointer, so the Swift side must always hand it a real
+//     object. `L10n.format` (apps/ios/Sources/Utilities/LocalizedFormat.swift)
+//     enforces that by stringifying every argument. The inverse — guessing `%ld`
+//     from a placeholder *name* like {{count}} — is worse than the crash it
+//     replaces: `String(format: "%ld", "lots")` prints a garbage integer silently.
+//   - Positional, never bare: translators reorder clauses, and a bare `%@`
+//     followed by `%2$@` mixes the two addressing modes in one string.
 function toIOSString(value: string): string {
   let index = 0
   return value
@@ -66,8 +84,24 @@ function toIOSString(value: string): string {
     .replace(/\n/g, '\\n')      // escape newlines
     .replace(/\{\{(\w+)\}\}/g, () => {
       index++
-      return index === 1 ? '%@' : `%${index}$@`
+      return `%${index}$@`
     })
+}
+
+// Fail codegen if any locale string carries a hand-written printf specifier.
+//
+// A raw specifier is correct for at most one platform: `%@` crashes Android's
+// String.format, `%s` crashes iOS's, `%d` renders literally on desktop's i18next,
+// and none of them survive translation reordering.
+function assertNoRawFormatSpecifiers(locale: string, keys: Record<string, string>): string[] {
+  const offenders: string[] = []
+  for (const [key, value] of Object.entries(keys)) {
+    // %% is a literal percent and is not a substitution.
+    const stripped = value.replace(/%%/g, '')
+    const match = stripped.match(RAW_FORMAT_SPECIFIER)
+    if (match) offenders.push(`${locale}: ${key} contains "${match[0]}" -- use {{placeholder}} instead (${JSON.stringify(value)})`)
+  }
+  return offenders
 }
 
 // Escape special characters for iOS .strings format
@@ -151,11 +185,23 @@ function main() {
 
   const localeFiles = readdirSync(LOCALES_DIR).filter(f => f.endsWith('.json'))
   let hasErrors = false
+  let rawSpecifierErrors = 0
 
   for (const file of localeFiles) {
     const locale = file.replace('.json', '')
     const data = JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))
     const keys = flattenKeysSnake(data)
+
+    // Guard: no hand-written printf specifiers in locale source (issue #1413).
+    // Runs for every locale in both codegen and --validate mode, so neither a
+    // new source string nor a translation can reintroduce the shape.
+    const rawSpecifiers = assertNoRawFormatSpecifiers(locale, keys)
+    if (rawSpecifiers.length > 0) {
+      console.error(`  ${locale}: ${rawSpecifiers.length} raw format specifier(s):`)
+      rawSpecifiers.forEach(o => console.error(`    - ${o}`))
+      rawSpecifierErrors += rawSpecifiers.length
+      hasErrors = true
+    }
 
     // Validate coverage
     if (locale !== 'en') {
@@ -194,6 +240,15 @@ function main() {
     const androidAppDir = join(ANDROID_RESOURCES_DIR, locale === 'en' ? 'values' : `values-${androidLocale}`)
     mkdirSync(androidAppDir, { recursive: true })
     writeFileSync(join(androidAppDir, 'strings.xml'), androidContent)
+  }
+
+  if (rawSpecifierErrors > 0) {
+    console.error(
+      `\n${rawSpecifierErrors} raw printf specifier(s) in packages/i18n/locales. ` +
+      `Substitutions must be written as {{placeholder}} so each platform's codegen ` +
+      `emits a specifier matching the argument type it is handed (issue #1413).`
+    )
+    process.exit(1)
   }
 
   if (validate && hasErrors) {

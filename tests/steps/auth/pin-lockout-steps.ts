@@ -50,10 +50,11 @@ async function seedFailedAttempts(page: import('@playwright/test').Page, count: 
 // NOTE: "I should see a PIN error message" is defined in assertion-steps.ts
 
 Then('I should not see a lockout timer', async ({ page }) => {
-  // No "Locked out" message visible
-  const lockoutText = page.locator('text=/locked out/i')
-  const isVisible = await lockoutText.isVisible({ timeout: 1000 }).catch(() => false)
-  expect(isVisible).toBe(false)
+  // Absence is only meaningful once the attempt has been answered: wait for the
+  // wrong-PIN response first, then check it is not a lockout and the pad is live.
+  await expect(page.getByRole('alert').first()).toBeVisible({ timeout: Timeouts.AUTH })
+  await expect(page.locator('text=/locked out/i')).toHaveCount(0)
+  await expect(page.getByTestId('pin-input').locator('input').first()).toBeEnabled()
 })
 
 Given('I have {int} failed PIN attempts', async ({ page }, count: number) => {
@@ -86,29 +87,34 @@ Then('the lockout duration should be approximately {int} minutes', async ({ page
   expect(remainingMs).toBeLessThanOrEqual(expectedMs + 10_000)
 })
 
+/**
+ * Lockout as the desktop enforces it. The desktop PIN pad is not disabled during
+ * a lockout (see PinUnlockInline in src/client/routes/login.tsx): the Rust side
+ * rejects every attempt until the deadline. So assert the enforcement itself —
+ * the lockout message is shown and the lockout deadline is in the future — not
+ * "disabled OR message", whose first branch can never hold here.
+ */
+async function expectLockedOut(page: import('@playwright/test').Page) {
+  await expect(page.locator('text=/locked out/i').first()).toBeVisible({ timeout: Timeouts.AUTH })
+  const lockoutState = await testInvoke(page, 'get_pin_lockout_state') as { failedAttempts: number; lockoutUntil: number }
+  expect(lockoutState.lockoutUntil, 'lockout deadline').toBeGreaterThan(Date.now())
+}
+
 Then('the PIN pad should be disabled', async ({ page }) => {
-  // After lockout, PIN input should be disabled or the error prevents entry
-  const firstDigit = page.getByTestId('pin-input').locator('input')
-  const isDisabled = await firstDigit.isDisabled({ timeout: 2000 }).catch(() => false)
-  const errorVisible = await page.locator('text=/locked out/i').isVisible({ timeout: 1000 }).catch(() => false)
-  // Either the pad is disabled or the lockout message prevents entry
-  expect(isDisabled || errorVisible).toBe(true)
+  await expectLockedOut(page)
 })
 
 Then('the stored keys should be wiped', async ({ page }) => {
-  // After 10 failed attempts, keys are wiped from storage
-  // Wait for the wipe to take effect (UI may redirect to login/setup)
-  await page.waitForTimeout(1000)
-  const hasKey = await page.evaluate(() => {
-    return (
+  // The wipe is asynchronous (keyManager.wipeKey after the tenth failure): poll
+  // storage until the encrypted device keys are gone. The previous version slept
+  // a second and then accepted "keys gone OR a message mentioning 'wiped'".
+  await expect.poll(
+    () => page.evaluate(() =>
       localStorage.getItem('stronghold:llamenos:llamenos-encrypted-device-keys') !== null ||
-      localStorage.getItem('llamenos:llamenos-encrypted-device-keys') !== null
-    )
-  })
-  // Keys should be wiped OR the wipe message shown
-  const wipeText = page.locator('text=/wiped/i')
-  const wipeVisible = await wipeText.isVisible({ timeout: 5000 }).catch(() => false)
-  expect(!hasKey || wipeVisible).toBe(true)
+      localStorage.getItem('llamenos:llamenos-encrypted-device-keys') !== null,
+    ),
+    { message: 'encrypted device keys still stored after the wipe', timeout: Timeouts.AUTH },
+  ).toBe(false)
 })
 
 Then('I should be redirected to the setup or login screen', async ({ page }) => {
@@ -137,10 +143,7 @@ Then('I should still see the lockout message', async ({ page }) => {
 })
 
 Then('I should not be able to enter a PIN until lockout expires', async ({ page }) => {
-  const firstDigit = page.getByTestId('pin-input').locator('input')
-  const isDisabled = await firstDigit.isDisabled({ timeout: 2000 }).catch(() => false)
-  const errorVisible = await page.locator('text=/locked out/i').isVisible({ timeout: 1000 }).catch(() => false)
-  expect(isDisabled || errorVisible).toBe(true)
+  await expectLockedOut(page)
 })
 
 Given('the lockout has expired', async ({ page }) => {

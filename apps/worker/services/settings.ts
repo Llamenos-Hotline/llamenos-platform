@@ -94,6 +94,7 @@ import type {
 import { IVR_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
+import { speechLanguageFor } from './ivr-speech/voices'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
 import type { Role } from '@shared/permissions'
 import { DEFAULT_ROLES } from '@shared/permissions'
@@ -153,6 +154,18 @@ const DEFAULT_SPAM_SETTINGS: SpamSettings = {
 const DEFAULT_CALL_SETTINGS: CallSettings = {
   queueTimeoutSeconds: 90,
   voicemailMaxSeconds: 120,
+}
+
+/**
+ * On a self-hosted PBX every prompt nobody uploaded is generated speech
+ * (IvrSpeechService), so a language with no offline voice is not just absent
+ * from the menu: its callers are spoken to in another language. Say which, and
+ * how to fix it, where the operator hits the limit.
+ */
+function generatedSpeechGap(provider: string, unspeakable: string[]): string {
+  if (provider !== 'asterisk' && provider !== 'freeswitch') return ''
+  const heard = unspeakable.map((code) => `${code} → ${speechLanguageFor(code)}`).join(', ')
+  return `. No offline voice exists for them: callers in these languages hear prompts in another language (${heard}) unless you upload recordings in their language.`
 }
 
 const VALID_PROMPT_TYPES = [
@@ -586,7 +599,8 @@ export class SettingsService {
       if (unspeakable.length > 0) {
         throw new ServiceError(
           400,
-          `The active telephony provider (${resolution.catalog.provider}) cannot speak: ${unspeakable.join(', ')}`,
+          `The active telephony provider (${resolution.catalog.provider}) cannot speak: ${unspeakable.join(', ')}` +
+            generatedSpeechGap(resolution.catalog.provider, unspeakable),
         )
       }
     }
@@ -654,27 +668,49 @@ export class SettingsService {
       )
     }
 
-    const now = Date.now()
     const windowMs = 60_000
 
-    const [existing] = await this.db
-      .select()
-      .from(rateLimits)
-      .where(eq(rateLimits.key, data.key))
+    // Single atomic statement (#1492). The previous implementation was a
+    // read-modify-write: SELECT the array, filter and append in JS, then upsert
+    // the whole array back. Concurrent requests on the same key all read the
+    // same array and the last write won, so N simultaneous requests were
+    // recorded as one — the limiter undercounted precisely under the parallel
+    // traffic it exists to stop (invite enumeration, credential grinding).
+    //
+    // INSERT ... ON CONFLICT DO UPDATE takes a row lock and re-evaluates the
+    // SET expression against the *committed* row, so concurrent callers are
+    // serialised by PostgreSQL and each one observes every predecessor.
+    //
+    // The window is evaluated from the database's own clock (`now()`, the
+    // transaction timestamp — stable for the whole statement) rather than from
+    // Date.now(), so the stored timestamps and the expiry cutoff share one
+    // clock and a skewed application server cannot widen or narrow the window.
+    //
+    // Retention is capped at maxPerMinute in-window entries before appending,
+    // which bounds the row under a flood without changing any verdict: entries
+    // dropped by the cap are strictly older than the ones kept, so whenever a
+    // dropped entry would still be in-window the retained set already holds
+    // maxPerMinute entries and the request is limited either way.
+    const nowMs = sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`
+    const result = await this.db.execute<{ count: number }>(sql`
+      INSERT INTO rate_limits (key, timestamps)
+      VALUES (${data.key}, jsonb_build_array(${nowMs}))
+      ON CONFLICT (key) DO UPDATE SET timestamps =
+        COALESCE((
+          SELECT jsonb_agg(recent.t)
+          FROM (
+            SELECT a.t
+            FROM jsonb_array_elements(rate_limits.timestamps) AS a(t)
+            WHERE (a.t)::numeric > ${nowMs} - ${windowMs}
+            ORDER BY (a.t)::numeric DESC
+            LIMIT ${data.maxPerMinute}
+          ) AS recent
+        ), '[]'::jsonb) || jsonb_build_array(${nowMs})
+      RETURNING jsonb_array_length(timestamps) AS count
+    `)
 
-    const timestamps = (existing?.timestamps as number[]) ?? []
-    const recent = timestamps.filter((t) => now - t < windowMs)
-    recent.push(now)
-
-    await this.db
-      .insert(rateLimits)
-      .values({ key: data.key, timestamps: recent })
-      .onConflictDoUpdate({
-        target: rateLimits.key,
-        set: { timestamps: recent },
-      })
-
-    return { limited: recent.length > data.maxPerMinute }
+    const count = Number(result[0]?.count ?? 0)
+    return { limited: count > data.maxPerMinute }
   }
 
   // =========================================================================
@@ -718,6 +754,43 @@ export class SettingsService {
         ? windowStart.getTime()
         : new Date(String(windowStart)).getTime()
       const windowEndMs = windowStartMs + windowMs
+      const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - Date.now()) / 1000))
+      return { limited: true, retryAfterSeconds }
+    }
+
+    return { limited: false, retryAfterSeconds: 0 }
+  }
+
+  /**
+   * Read-only rate limit check — reports whether a key is currently limited
+   * WITHOUT consuming budget. Pair with checkApiRateLimit() on the failure
+   * path to build failure-only counting (#1789): peek before doing the work,
+   * increment only once an attempt has proven to be a failure, so conforming
+   * callers are never charged against a brute-force budget.
+   */
+  async peekApiRateLimit(
+    key: string,
+    maxRequests: number,
+    windowMs: number,
+  ): Promise<{ limited: boolean; retryAfterSeconds: number }> {
+    const rows = await this.db
+      .select({ count: apiRateLimits.count, windowStart: apiRateLimits.windowStart })
+      .from(apiRateLimits)
+      .where(eq(apiRateLimits.key, key))
+      .limit(1)
+
+    const row = rows[0]
+    if (!row) return { limited: false, retryAfterSeconds: 0 }
+
+    const windowStartMs = row.windowStart instanceof Date
+      ? row.windowStart.getTime()
+      : new Date(String(row.windowStart)).getTime()
+    const windowEndMs = windowStartMs + windowMs
+
+    // Window expired — the next increment resets the counter, so not limited.
+    if (windowEndMs <= Date.now()) return { limited: false, retryAfterSeconds: 0 }
+
+    if (row.count >= maxRequests) {
       const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - Date.now()) / 1000))
       return { limited: true, retryAfterSeconds }
     }
@@ -1001,8 +1074,17 @@ export class SettingsService {
       .from(providerConfigs)
       .where(isNull(providerConfigs.hubId))
       .limit(1)
-    const messagingConfig = row.messagingConfig as MessagingConfig | null
-    const setupState = row.setupState as SetupState | null
+    // These two columns hold partially-written JSON. `getSettings()` upserts the
+    // singleton row with `setup_state = '{}'`, so on every fresh install
+    // `row.setupState` is present but empty — casting it `as SetupState | null`
+    // claimed `selectedChannels` was always an array, and `setupState?.…` guarded
+    // only the null case. `{}` therefore threw a TypeError, `GET /api/config`
+    // caught it and reported every channel disabled, and the desktop — which
+    // gates its whole Conversations page on those flags — showed "No messaging
+    // channels enabled" on a deployment that had channels configured.
+    // `Partial<>` is what the data actually is, and makes the guards mandatory.
+    const messagingConfig = row.messagingConfig as Partial<MessagingConfig> | null
+    const setupState = row.setupState as Partial<SetupState> | null
 
     const voiceEnabled =
       !!providerConfig ||
@@ -1014,12 +1096,12 @@ export class SettingsService {
 
     return {
       voice: voiceEnabled,
-      sms: messagingConfig?.enabledChannels.includes('sms') ?? false,
-      whatsapp: messagingConfig?.enabledChannels.includes('whatsapp') ?? false,
-      signal: messagingConfig?.enabledChannels.includes('signal') ?? false,
-      rcs: messagingConfig?.enabledChannels.includes('rcs') ?? false,
-      telegram: messagingConfig?.enabledChannels.includes('telegram') ?? false,
-      reports: setupState?.selectedChannels.includes('reports') ?? false,
+      sms: messagingConfig?.enabledChannels?.includes('sms') ?? false,
+      whatsapp: messagingConfig?.enabledChannels?.includes('whatsapp') ?? false,
+      signal: messagingConfig?.enabledChannels?.includes('signal') ?? false,
+      rcs: messagingConfig?.enabledChannels?.includes('rcs') ?? false,
+      telegram: messagingConfig?.enabledChannels?.includes('telegram') ?? false,
+      reports: setupState?.selectedChannels?.includes('reports') ?? false,
     }
   }
 
@@ -1563,24 +1645,15 @@ export class SettingsService {
       )
     }
 
-    // Check slug uniqueness
-    const [existing] = await this.db
-      .select()
-      .from(rolesTable)
-      .where(eq(rolesTable.slug, slug))
-    if (existing) {
-      throw new ServiceError(
-        409,
-        `Role slug "${slug}" already exists`,
-      )
-    }
-
     const now = new Date()
     const id = data.id ?? `role-${crypto.randomUUID()}`
 
     const roleDescription = description ?? ''
 
-    await this.db.insert(rolesTable).values({
+    // Slug uniqueness is enforced atomically by the unique index: a
+    // check-then-insert let two concurrent creates of the same slug both pass
+    // the check, and the loser surfaced the unique violation as a 500.
+    const inserted = await this.db.insert(rolesTable).values({
       id,
       name: data.name ?? null,
       slug,
@@ -1593,6 +1666,14 @@ export class SettingsService {
       createdAt: now,
       updatedAt: now,
     })
+      .onConflictDoNothing({ target: rolesTable.slug })
+      .returning({ id: rolesTable.id })
+    if (inserted.length === 0) {
+      throw new ServiceError(
+        409,
+        `Role slug "${slug}" already exists`,
+      )
+    }
 
     if (envelopes && envelopes.length > 0) {
       for (const env of envelopes) {
@@ -1732,24 +1813,15 @@ export class SettingsService {
       throw new ServiceError(404, 'User not found')
     }
 
-    const { resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
+    const { resolveAllRoleIds, resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
     const allRoles = await this.getRoles()
     const hubRoles = Array.isArray(user.hubRoles) ? user.hubRoles as Array<{ hubId: string; roleIds: string[] }> : []
 
-    let permissions: string[]
-    if (hubId) {
-      // Resolve for a specific hub (global + that hub's roles)
-      permissions = resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
-    } else {
-      // Union global permissions with all hub-scoped permissions
-      const allPerms = new Set<string>(resolvePermissions(user.roles ?? [], allRoles.roles))
-      for (const assignment of hubRoles) {
-        for (const p of resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, assignment.hubId)) {
-          allPerms.add(p)
-        }
-      }
-      permissions = Array.from(allPerms)
-    }
+    const permissions = hubId
+      // Resolve for a specific hub (that hub's roles; super-admin globals)
+      ? resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
+      // Union of global permissions and every hub's permissions
+      : resolvePermissions(resolveAllRoleIds(user.roles ?? [], hubRoles), allRoles.roles)
     return { userId, permissions }
   }
 
@@ -2220,18 +2292,44 @@ export class SettingsService {
       }
     }
 
-    const existing = await this.getHubSettings(hubId)
-    const merged = { ...existing, ...sanitized }
-
-    await this.db
+    // Atomic top-level JSONB merge (#1144). The previous implementation was
+    // read-modify-write: SELECT the whole settings blob, spread it with the
+    // new keys in JS, write the whole object back. Two admins changing
+    // *different* keys concurrently (or one admin with two tabs) both read
+    // the same blob and the last write silently discarded the other's
+    // change — including spam-mitigation toggles and the fallback ring
+    // group, which live in this same blob.
+    //
+    // The `||` jsonb concatenation operator merges at the top level only:
+    // every key in the right operand overwrites the corresponding key on
+    // the left, and every key absent from the right operand is preserved.
+    // It is evaluated by Postgres against the row this statement just
+    // locked for the UPDATE — not a value read earlier in JS — so
+    // concurrent writers touching disjoint (or even the same) keys are
+    // serialised by the row lock instead of clobbering each other.
+    //
+    // Pass `sanitized` as a raw object, not JSON.stringify'd: Bun's native
+    // SQL driver (what production and `bun run dev:server` use) already
+    // JSON.stringifies a JS value bound to a jsonb-typed parameter
+    // position. Pre-stringifying it here double-encodes — Postgres then
+    // sees a quoted JSON *string scalar* instead of an object, and `||`
+    // between an object and a scalar boxes both into a 2-element array
+    // instead of merging keys (confirmed live via #1144's own BDD
+    // coverage: "Shift and fallback group are independent" silently lost
+    // the fallback group). Mirrors the existing `metadata` merge in
+    // conversations.ts#update.
+    const [row] = await this.db
       .insert(hubSettingsTable)
-      .values({ hubId, settings: merged })
+      .values({ hubId, settings: sanitized })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
-        set: { settings: merged },
+        set: {
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${sanitized}::jsonb`,
+        },
       })
+      .returning({ settings: hubSettingsTable.settings })
 
-    return merged
+    return row.settings as Record<string, unknown>
   }
 
   async getHubProviderSettings(
@@ -2252,32 +2350,51 @@ export class SettingsService {
     hubId: string,
     quotas: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const current = await this.getHubSettings(hubId)
-    const updated = { ...current, quotas }
-    await this.db
+    // Atomic — see updateHubSettings (#1144). Only the `quotas` key is
+    // touched, so a concurrent updateHubSettings/updateHubUsage call on a
+    // different key cannot be clobbered by this one. Raw object, not
+    // JSON.stringify'd — see the comment in updateHubSettings for why.
+    const [row] = await this.db
       .insert(hubSettingsTable)
-      .values({ hubId, settings: updated })
+      .values({ hubId, settings: { quotas } })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
-        set: { settings: updated },
+        set: {
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('quotas', ${quotas}::jsonb)`,
+        },
       })
-    return updated.quotas as Record<string, unknown>
+      .returning({ settings: hubSettingsTable.settings })
+
+    return (row.settings as Record<string, unknown>).quotas as Record<string, unknown>
   }
 
   async updateHubUsage(
     hubId: string,
     usage: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[]> {
-    const current = await this.getHubSettings(hubId)
-    const updated = { ...current, usage }
-    await this.db
+    // Atomic — see updateHubSettings (#1144). Raw value, not
+    // JSON.stringify'd — see the comment in updateHubSettings for why.
+    //
+    // `usage` is wrapped in an object rather than bound on its own. Bun SQL
+    // serializes a JS *object* into a jsonb parameter correctly, but expands a
+    // JS *array* into a positional record list: `${usage}::jsonb` compiled to
+    // `($1, $2)::jsonb`, which Postgres rejects with "cannot cast type record
+    // to jsonb" for any usage with more than one entry — and silently stored a
+    // single-entry usage as a bare object instead of a one-element array.
+    // Merging `{ usage }` with `||` sets exactly the same key, with no array
+    // ever reaching a parameter position.
+    const [row] = await this.db
       .insert(hubSettingsTable)
-      .values({ hubId, settings: updated })
+      .values({ hubId, settings: { usage } })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
-        set: { settings: updated },
+        set: {
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${{ usage }}::jsonb`,
+        },
       })
-    return updated.usage as Record<string, unknown>[]
+      .returning({ settings: hubSettingsTable.settings })
+
+    return (row.settings as Record<string, unknown>).usage as Record<string, unknown>[]
   }
 
   async incrementHubUsage(
@@ -2285,29 +2402,54 @@ export class SettingsService {
     resource: string,
     amount = 1,
   ): Promise<Record<string, unknown>> {
-    const settings = await this.getHubSettings(hubId)
-    const usage = (settings.usage as Record<string, unknown>[]) ?? []
-    const now = new Date()
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    // No production caller today, but fixed proactively (#1144) since the
+    // read-modify-write shape here is identical to updateHubSettings and
+    // would silently clobber a concurrent admin edit the moment it gains
+    // one. A simple top-level `||` merge isn't enough because the mutation
+    // is nested (find-or-create the current month inside the `usage`
+    // array, then increment one field on it) — so this takes a row lock
+    // with SELECT ... FOR UPDATE inside a transaction and recomputes
+    // against the value Postgres just handed it under that lock, the same
+    // pattern used by registerDevice/sigchain elsewhere in this codebase.
+    return await this.db.transaction(async (tx) => {
+      // Ensure a row exists to lock — an UPDATE/SELECT FOR UPDATE against a
+      // missing row takes no lock at all, which would let two concurrent
+      // "first increment for this hub" calls both race past the check.
+      await tx
+        .insert(hubSettingsTable)
+        .values({ hubId, settings: {} })
+        .onConflictDoNothing()
 
-    let currentMonth = usage.find((u) => u.month === month)
-    if (!currentMonth) {
-      currentMonth = { month, year: now.getFullYear() }
-      usage.push(currentMonth)
-    }
+      const [row] = await tx
+        .select({ settings: hubSettingsTable.settings })
+        .from(hubSettingsTable)
+        .where(eq(hubSettingsTable.hubId, hubId))
+        .for('update')
 
-    currentMonth[resource] = ((currentMonth[resource] as number) ?? 0) + amount
+      const settings = (row?.settings as Record<string, unknown>) ?? {}
+      const usage = [...((settings.usage as Record<string, unknown>[]) ?? [])]
+      const now = new Date()
+      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 
-    const updated = { ...settings, usage }
-    await this.db
-      .insert(hubSettingsTable)
-      .values({ hubId, settings: updated })
-      .onConflictDoUpdate({
-        target: hubSettingsTable.hubId,
-        set: { settings: updated },
-      })
+      const idx = usage.findIndex((u) => u.month === month)
+      let currentMonth: Record<string, unknown>
+      if (idx === -1) {
+        currentMonth = { month, year: now.getFullYear() }
+        usage.push(currentMonth)
+      } else {
+        currentMonth = { ...usage[idx] }
+        usage[idx] = currentMonth
+      }
 
-    return currentMonth
+      currentMonth[resource] = ((currentMonth[resource] as number) ?? 0) + amount
+
+      await tx
+        .update(hubSettingsTable)
+        .set({ settings: { ...settings, usage } })
+        .where(eq(hubSettingsTable.hubId, hubId))
+
+      return currentMonth
+    })
   }
 
   /**
@@ -2485,7 +2627,13 @@ export class SettingsService {
       enc: string
       ct: string
     }>
+    /** Generation of the hub key these wraps belong to (hubs.hub_key_generation). */
+    generation: number
   }> {
+    const [hub] = await this.db
+      .select({ generation: hubsTable.hubKeyGeneration })
+      .from(hubsTable)
+      .where(eq(hubsTable.id, hubId))
     const rows = await this.db
       .select()
       .from(hubKeys)
@@ -2497,9 +2645,16 @@ export class SettingsService {
         enc: r.enc,
         ct: r.ct,
       })),
+      generation: hub?.generation ?? 0,
     }
   }
 
+  /**
+   * Replace all hub-key envelopes. A caller that read the wraps earlier MUST
+   * pass `expectedGeneration`: if the generation moved on (a rotation, or a
+   * crypto-shred that destroyed the key), the cached wraps no longer describe
+   * the hub's current key and re-installing them would be a replay.
+   */
   async setHubKeyEnvelopes(
     hubId: string,
     data: {
@@ -2508,6 +2663,7 @@ export class SettingsService {
         enc: string
         ct: string
       }>
+      expectedGeneration?: number
     },
   ): Promise<{ ok: true }> {
     // Validate hub exists
@@ -2517,6 +2673,18 @@ export class SettingsService {
       .where(eq(hubsTable.id, hubId))
     if (!hub) {
       throw new ServiceError(404, 'Hub not found')
+    }
+    if (hub.status === 'shredded') {
+      throw new ServiceError(409, 'Hub is shredded — hub key writes are refused')
+    }
+    if (
+      data.expectedGeneration !== undefined &&
+      data.expectedGeneration !== hub.hubKeyGeneration
+    ) {
+      throw new ServiceError(
+        409,
+        `Hub key generation mismatch: expected ${data.expectedGeneration}, current ${hub.hubKeyGeneration}`,
+      )
     }
 
     // Replace all envelopes in a transaction
@@ -3068,7 +3236,14 @@ export class SettingsService {
   // CMS Report Type Definitions (Epic 343)
   // =========================================================================
 
-  async getCmsReportTypes(hubId?: string): Promise<{
+  /**
+   * Report type definitions for one hub, or — when `hubId` is `undefined` —
+   * every hub's. The parameter is required rather than optional on purpose:
+   * omitting it silently widened the triage queue's conversion filter to every
+   * hub's configuration (#1591), so each caller has to state its scope and the
+   * type checker catches any that does not.
+   */
+  async getCmsReportTypes(hubId: string | undefined): Promise<{
     reportTypes: ReportTypeDefinition[]
   }> {
     const rows = hubId !== undefined
@@ -3321,24 +3496,30 @@ export class SettingsService {
               (row.cleanupMetrics as CleanupMetrics) ?? emptyCleanupMetrics()
             const now = Date.now()
 
-            // Clean up expired rate limit entries
+            // Clean up expired rate limit entries. Done entirely in SQL —
+            // `select().from(rateLimits)` with no limit used to pull every
+            // distinct rate-limit key in the table into Node memory on
+            // every cleanup tick, unbounded in the number of distinct
+            // clients ever seen (issue #1127). The CTE below trims stale
+            // timestamps and deletes now-empty rows in one round trip,
+            // returning only the keys it deleted.
             const rateLimitTTL = resolveTTL('rateLimit', overrides)
-            const allRateLimits = await this.db.select().from(rateLimits)
-            for (const rl of allRateLimits) {
-              const timestamps = rl.timestamps as number[]
-              const recent = timestamps.filter((t) => now - t < rateLimitTTL)
-              if (recent.length === 0) {
-                await this.db
-                  .delete(rateLimits)
-                  .where(eq(rateLimits.key, rl.key))
-                metrics.rateLimitEntriesDeleted++
-              } else {
-                await this.db
-                  .update(rateLimits)
-                  .set({ timestamps: recent })
-                  .where(eq(rateLimits.key, rl.key))
-              }
-            }
+            const cutoffMs = now - rateLimitTTL
+            const deletedRateLimits = await this.db.execute<{ key: string }>(sql`
+              WITH trimmed AS (
+                UPDATE rate_limits
+                SET timestamps = COALESCE((
+                  SELECT jsonb_agg(elem.v)
+                  FROM jsonb_array_elements(rate_limits.timestamps) AS elem(v)
+                  WHERE (elem.v)::numeric > ${cutoffMs}
+                ), '[]'::jsonb)
+                RETURNING key, timestamps
+              )
+              DELETE FROM rate_limits
+              WHERE key IN (SELECT key FROM trimmed WHERE timestamps = '[]'::jsonb)
+              RETURNING key
+            `)
+            metrics.rateLimitEntriesDeleted += deletedRateLimits.length
 
             // Clean up expired CAPTCHA challenges
             const captchaTTL = resolveTTL('captchaChallenge', overrides)

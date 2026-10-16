@@ -339,9 +339,10 @@ Then('only notes for that call should be returned', async ({ world }) => {
 
 // ─── Invites ────────────────────────────────────────────────────────
 
-When('an admin creates an invite for {string}', async ({ request, world }, name: string) => {
+When('an admin creates an invite for {string}', async ({ request, world, workerHub }, name: string) => {
   getCrudState(world).inviteName = name
   const { data, status } = await apiPost<{ code?: string; invite?: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name,
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
@@ -369,7 +370,7 @@ When('an admin creates a custom role {string} with permissions {string}', async 
   const permissions = permsStr.split(',')
   const role = await createRoleViaApi(request, {
     name,
-    slug: `crud-${Date.now()}`,
+    slug: uniqueName('crud'),
     permissions,
     description: 'CRUD test role',
   })

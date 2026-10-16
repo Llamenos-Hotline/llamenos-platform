@@ -1,10 +1,67 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
 import { hashPhone } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
+import type { activeCalls, callRecords } from '@worker/db/schema'
+import { ServiceError } from '@worker/services/settings'
+import { cancelLosingLegs } from '@worker/services/ringing'
+import { DEFAULT_ROLES } from '@shared/permissions'
+import type { Role } from '@shared/permissions'
+
+// Ring-leg cancellation talks to the telephony provider — covered in ringing-service.test.ts.
+// Here we only assert the answer route invokes it (and only after winning).
+vi.mock('@worker/services/ringing', async (orig) => ({
+  ...(await orig<typeof import('@worker/services/ringing')>()),
+  cancelLosingLegs: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 
 const TEST_HMAC_SECRET = 'a'.repeat(64) // gitleaks:allow
+
+/** An `active_calls` row as the service returns it — `callerNumber` is the HMAC of the caller's number. */
+function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {}): typeof activeCalls.$inferSelect {
+  return {
+    callId: 'call-1',
+    hubId: 'hub-1',
+    callerNumber: hashPhone('+15551234567', TEST_HMAC_SECRET),
+    callerLast4: '4567',
+    answeredBy: null,
+    status: 'ringing',
+    hasTranscription: false,
+    hasVoicemail: false,
+    hasRecording: false,
+    recordingSid: null,
+    reportedBy: null,
+    startedAt: new Date('2026-09-30T10:00:00.000Z'),
+    answeredAt: null,
+    endedAt: null,
+    duration: null,
+    ...overrides,
+  }
+}
+
+/** A `call_records` row as the service returns it. */
+function callRecordRow(overrides: Partial<typeof callRecords.$inferSelect> = {}): typeof callRecords.$inferSelect {
+  return {
+    callId: 'call-1',
+    hubId: 'hub-1',
+    callerLast4: '4567',
+    startedAt: new Date('2026-09-30T10:00:00.000Z'),
+    endedAt: new Date('2026-09-30T10:05:00.000Z'),
+    duration: 300,
+    answeredBy: 'a'.repeat(64),
+    status: 'completed',
+    hasTranscription: false,
+    hasVoicemail: false,
+    hasRecording: false,
+    recordingSid: null,
+    encryptedContent: '',
+    adminEnvelopes: [],
+    createdAt: new Date('2026-09-30T10:05:00.000Z'),
+    ...overrides,
+  }
+}
 
 function createTestApp(opts: {
   permissions?: string[]
@@ -58,13 +115,13 @@ function makeMockCallsService() {
   return {
     getActiveCalls: vi.fn().mockResolvedValue([]),
     getTodayCount: vi.fn().mockResolvedValue(5),
-    getPresence: vi.fn().mockResolvedValue({ activeCalls: 0, availableVolunteers: 2, users: [] }),
     listCallHistory: vi.fn().mockResolvedValue({ calls: [], total: 0, hasMore: false }),
     getActiveCallById: vi.fn().mockResolvedValue(null),
     getActiveCallByCallId: vi.fn().mockResolvedValue(null),
     getCallRecord: vi.fn().mockResolvedValue(null),
-    answerCall: vi.fn().mockResolvedValue({ callId: 'call-1', status: 'in-progress' }),
-    endCall: vi.fn().mockResolvedValue({ callId: 'call-1', status: 'completed' }),
+    answerCall: vi.fn().mockResolvedValue(activeCallRow({ status: 'in-progress', answeredBy: 'a'.repeat(64) })),
+    getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
+    endCall: vi.fn().mockResolvedValue(callRecordRow()),
     reportSpam: vi.fn().mockResolvedValue({ ok: true }),
     debug: vi.fn().mockResolvedValue({ activeCount: 0, activeCalls: [] }),
   }
@@ -98,6 +155,38 @@ function makeMockAuditService() {
 function makeMockSettingsService() {
   return {
     getTelephonyProvider: vi.fn().mockResolvedValue(null),
+    getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+    getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+  }
+}
+
+/** Every roster user is a volunteer member of the hub the tests answer in. */
+const HUB_MEMBER = { roles: [] as string[], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] }
+
+/**
+ * Volunteers a call would ring: scheduled, clocked in, active, not on break,
+ * members of hub-1.
+ */
+function makeRingRoster(onShift: string[], users = onShift) {
+  return {
+    shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue(onShift) },
+    // Both reads of `active_shifts` the roster serves, from one source, so a
+    // test overriding `activeShifts` cannot silently drop one of them: the
+    // resolver needs `listClockedInPubkeys` (ringing requires a clock-in) and
+    // the /routing diagnostic needs `listActiveByHub` for its `clockedIn`
+    // count. These scenarios are about the availability filters, not consent,
+    // so everyone scheduled has also clocked in.
+    activeShifts: {
+      listClockedInPubkeys: vi.fn().mockResolvedValue(new Set(onShift)),
+      listActiveByHub: vi.fn().mockResolvedValue({
+        activeShifts: onShift.map(pubkey => ({ pubkey, hubId: 'hub-1' })),
+      }),
+    },
+    identity: {
+      getUsers: vi.fn().mockResolvedValue({
+        users: users.map(pubkey => ({ pubkey, active: true, onBreak: false, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER })),
+      }),
+    },
   }
 }
 
@@ -109,17 +198,17 @@ function makeServices(overrides: Record<string, unknown> = {}) {
     records: makeMockRecordsService(),
     audit: makeMockAuditService(),
     settings: makeMockSettingsService(),
+    ...makeRingRoster(['a'.repeat(64)]),
     ...overrides,
   }
 }
 
 describe('Calls Routes', () => {
   describe('GET /active', () => {
-    it('returns active calls with full info when user has calls:read-active-full', async () => {
+    it('never sends the caller-number HMAC, even with calls:read-active-full', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.getActiveCalls.mockResolvedValue([
-        { callId: 'call-1', callerNumber: '+15551234567', status: 'ringing' },
-      ])
+      const row = activeCallRow()
+      callsSvc.getActiveCalls.mockResolvedValue([row])
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -129,17 +218,21 @@ describe('Calls Routes', () => {
 
       const res = await app.request('/active')
       expect(res.status).toBe(200)
-      const body = await res.json()
+      const raw = await res.text()
+      expect(raw).not.toContain(row.callerNumber)
+      const body = JSON.parse(raw)
       expect(body.calls).toHaveLength(1)
-      expect(body.calls[0].callerNumber).toBe('+15551234567')
+      expect(body.calls[0].id).toBe('call-1')
+      expect(body.calls[0].callerLast4).toBe('4567')
+      expect(body.calls[0]).not.toHaveProperty('callerNumber')
+      expect(body.calls[0]).not.toHaveProperty('callId')
       expect(callsSvc.getActiveCalls).toHaveBeenCalledWith('hub-1')
     })
 
-    it('redacts callerNumber when user lacks calls:read-active-full', async () => {
+    it('never sends the caller-number HMAC, or a redaction placeholder, without calls:read-active-full', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.getActiveCalls.mockResolvedValue([
-        { callId: 'call-1', callerNumber: '+15551234567', status: 'ringing' },
-      ])
+      const row = activeCallRow()
+      callsSvc.getActiveCalls.mockResolvedValue([row])
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -149,8 +242,11 @@ describe('Calls Routes', () => {
 
       const res = await app.request('/active')
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.calls[0].callerNumber).toBe('[redacted]')
+      const raw = await res.text()
+      expect(raw).not.toContain(row.callerNumber)
+      const body = JSON.parse(raw)
+      expect(body.calls[0].id).toBe('call-1')
+      expect(body.calls[0]).not.toHaveProperty('callerNumber')
     })
 
     it('returns 403 when permission is missing', async () => {
@@ -186,15 +282,21 @@ describe('Calls Routes', () => {
   })
 
   describe('GET /presence', () => {
-    it('returns presence status', async () => {
+    /**
+     * The route composes presence from the ringing resolver (services/presence.ts)
+     * rather than reading a `calls.getPresence` the production factory never
+     * wired. So this drives the roster and the active-call list, not a canned
+     * presence object: mocking the answer is how the defect survived.
+     */
+    it('reports the on-shift roster, labelling whoever is on a live call', async () => {
+      const onShift = ['a'.repeat(64), 'b'.repeat(64)]
       const callsSvc = makeMockCallsService()
-      callsSvc.getPresence.mockResolvedValue({
-        activeCalls: 1,
-        availableVolunteers: 2,
-        users: [{ pubkey: 'pk1', status: 'available' }],
-      })
+      callsSvc.getActiveCalls.mockResolvedValue([
+        { callId: 'call-1', status: 'in-progress', answeredBy: onShift[0] },
+      ])
+      callsSvc.getBusyPubkeys.mockResolvedValue(new Set([onShift[0]]))
 
-      const services = makeServices({ calls: callsSvc })
+      const services = makeServices({ calls: callsSvc, ...makeRingRoster(onShift) })
       const { app } = createTestApp({
         permissions: ['calls:read-presence'],
         services,
@@ -204,8 +306,13 @@ describe('Calls Routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.activeCalls).toBe(1)
-      expect(body.availableVolunteers).toBe(2)
-      expect(callsSvc.getPresence).toHaveBeenCalledWith('hub-1')
+      expect(body.availableVolunteers).toBe(1)
+      expect(body.users).toEqual(expect.arrayContaining([
+        { pubkey: onShift[0], status: 'on-call' },
+        { pubkey: onShift[1], status: 'available' },
+      ]))
+      expect(callsSvc.getActiveCalls).toHaveBeenCalledWith('hub-1')
+      expect(services.shifts.getCurrentVolunteers).toHaveBeenCalledWith('hub-1')
     })
 
     it('returns 403 when permission is missing', async () => {
@@ -215,11 +322,76 @@ describe('Calls Routes', () => {
     })
   })
 
+  describe('GET /routing', () => {
+    /** The read-only oracle for "would a call arriving now ring anybody?". */
+    it('answers the verdict, the counts, and who — for a caller who may see presence', async () => {
+      const onShift = ['a'.repeat(64), 'b'.repeat(64)]
+      const services = makeServices(makeRingRoster(onShift))
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-presence'],
+        services,
+      })
+
+      const res = await app.request('/routing')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.wouldRing).toBe(true)
+      expect(body.volunteerCount).toBe(2)
+      expect(body.usingFallbackGroup).toBe(false)
+      expect(body.scheduledNow).toBe(2)
+      expect(body.clockedIn).toBe(2)
+      expect(body.volunteers.map((v: { pubkey: string }) => v.pubkey).sort()).toEqual([...onShift].sort())
+    })
+
+    /**
+     * A volunteer may ask whether a call would reach anyone; they may not learn
+     * WHO. Personal information is admin-only in this product, and a pubkey
+     * identifies a person.
+     */
+    it('withholds the volunteer list from a caller without calls:read-presence', async () => {
+      const onShift = ['a'.repeat(64)]
+      const services = makeServices(makeRingRoster(onShift))
+      const { app } = createTestApp({ permissions: ['calls:read-active'], services })
+
+      const res = await app.request('/routing')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.wouldRing).toBe(true)
+      expect(body.volunteerCount).toBe(1)
+      expect(body.volunteers).toBeUndefined()
+      expect(JSON.stringify(body)).not.toContain(onShift[0])
+    })
+
+    it('reports a hub that would ring nobody, with the counts that diagnose why', async () => {
+      const services = makeServices(makeRingRoster([]))
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-presence'],
+        services,
+      })
+
+      const res = await app.request('/routing')
+      const body = await res.json()
+      expect(body).toMatchObject({
+        wouldRing: false,
+        volunteerCount: 0,
+        scheduledNow: 0,
+        clockedIn: 0,
+      })
+      expect(body.volunteers).toEqual([])
+    })
+
+    it('returns 403 without calls:read-active', async () => {
+      const { app } = createTestApp({ permissions: ['calls:read-presence'] })
+      const res = await app.request('/routing')
+      expect(res.status).toBe(403)
+    })
+  })
+
   describe('GET /history', () => {
     it('returns paginated call history', async () => {
       const callsSvc = makeMockCallsService()
       callsSvc.listCallHistory.mockResolvedValue({
-        calls: [{ callId: 'c1' }],
+        calls: [callRecordRow({ callId: 'c1' })],
         total: 1,
         hasMore: false,
       })
@@ -234,6 +406,9 @@ describe('Calls Routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.calls).toHaveLength(1)
+      expect(body.calls[0].id).toBe('c1')
+      expect(body.calls[0]).not.toHaveProperty('callId')
+      expect(body).toMatchObject({ total: 1, page: 1, limit: 10 })
       expect(callsSvc.listCallHistory).toHaveBeenCalledWith('hub-1', {
         search: undefined,
         dateFrom: undefined,
@@ -308,55 +483,118 @@ describe('Calls Routes', () => {
   })
 
   describe('POST /:callId/answer', () => {
-    it('answers a call and returns the call object', async () => {
-      const callsSvc = makeMockCallsService()
-      callsSvc.answerCall.mockResolvedValue({ callId: 'call-1', status: 'in-progress' })
+    const ME = 'a'.repeat(64)
+    const ringingCall = { callId: 'call-1', hubId: 'hub-1', status: 'ringing', answeredBy: null }
 
-      const services = makeServices({ calls: callsSvc })
-      const { app } = createTestApp({
-        permissions: ['calls:answer'],
-        services,
-      })
+    function answerApp(callsSvc = makeMockCallsService(), extra: Record<string, unknown> = {}) {
+      callsSvc.getActiveCallById.mockResolvedValue(ringingCall)
+      const services = makeServices({ calls: callsSvc, ...extra })
+      const { app } = createTestApp({ permissions: ['calls:answer'], services })
+      return { app, services, callsSvc }
+    }
+
+    beforeEach(() => {
+      vi.mocked(cancelLosingLegs).mockClear()
+    })
+
+    it('answers a call, audits it, and cancels the other ringing legs', async () => {
+      const callsSvc = makeMockCallsService()
+      const row = activeCallRow({ status: 'in-progress', answeredBy: ME, callerLast4: '1234' })
+      callsSvc.answerCall.mockResolvedValue(row)
+      const { app, services } = answerApp(callsSvc)
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.call.status).toBe('in-progress')
-      expect(callsSvc.answerCall).toHaveBeenCalledWith('hub-1', 'call-1', 'a'.repeat(64))
+      // The response is the projected protocol shape, never the raw row: the
+      // caller-number HMAC must not appear anywhere in the body.
+      const raw = await res.text()
+      expect(raw).not.toContain(row.callerNumber)
+      const body = JSON.parse(raw)
+      expect(body.call).toMatchObject({ id: 'call-1', status: 'in-progress' })
+      expect(body.call).not.toHaveProperty('callerNumber')
+      expect(callsSvc.answerCall).toHaveBeenCalledWith('hub-1', 'call-1', ME)
+      expect((services.audit as ReturnType<typeof makeMockAuditService>).log).toHaveBeenCalled()
+      // In-app answer: no winning phone leg, so every phone leg is a loser.
+      expect(cancelLosingLegs).toHaveBeenCalledWith(expect.anything(), services, 'hub-1', 'call-1')
     })
 
-    it('returns 409 when call already answered', async () => {
+    it('returns 404 when the call does not exist', async () => {
       const callsSvc = makeMockCallsService()
-      const err = new Error('Call already answered') as Error & { status: number }
-      err.status = 409
-      callsSvc.answerCall.mockRejectedValue(err)
-
       const services = makeServices({ calls: callsSvc })
-      const { app } = createTestApp({
-        permissions: ['calls:answer'],
-        services,
-      })
+      const { app } = createTestApp({ permissions: ['calls:answer'], services })
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(404)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+    })
+
+    it('returns 409 without answering when the call is already in progress', async () => {
+      const callsSvc = makeMockCallsService()
+      const { app } = answerApp(callsSvc)
+      callsSvc.getActiveCallById.mockResolvedValue({ ...ringingCall, status: 'in-progress', answeredBy: 'b'.repeat(64) })
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(409)
-      const body = await res.json()
-      expect(body.error).toBe('Call already answered')
+      expect((await res.json()).error).toBe('Call already answered')
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+      expect(cancelLosingLegs).not.toHaveBeenCalled()
+    })
+
+    it('returns 409 and does no side effects when another answer wins the race', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.answerCall.mockRejectedValue(new ServiceError(409, 'Call already answered'))
+      const { app, services } = answerApp(callsSvc)
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toBe('Call already answered')
+      expect((services.audit as ReturnType<typeof makeMockAuditService>).log).not.toHaveBeenCalled()
+      expect(cancelLosingLegs).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when the volunteer was not rung for this call', async () => {
+      const callsSvc = makeMockCallsService()
+      // Someone else is on shift; the caller is not.
+      const { app } = answerApp(callsSvc, makeRingRoster(['b'.repeat(64)]))
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when the volunteer is on shift but on break (not rung)', async () => {
+      const callsSvc = makeMockCallsService()
+      const roster = makeRingRoster([ME])
+      roster.identity.getUsers.mockResolvedValue({
+        users: [{ pubkey: ME, active: true, onBreak: true, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER }],
+      })
+      const { app } = answerApp(callsSvc, roster)
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when the volunteer is on shift but already on a live call (not rung)', async () => {
+      const callsSvc = makeMockCallsService()
+      // Answering an in-progress call in another hub — ringing skipped them, so
+      // the answer route must refuse them too.
+      callsSvc.getBusyPubkeys.mockResolvedValue(new Set([ME]))
+      const { app } = answerApp(callsSvc, makeRingRoster([ME]))
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
     })
 
     it('returns 500 on generic answer failure', async () => {
       const callsSvc = makeMockCallsService()
       callsSvc.answerCall.mockRejectedValue(new Error('DB failure'))
-
-      const services = makeServices({ calls: callsSvc })
-      const { app } = createTestApp({
-        permissions: ['calls:answer'],
-        services,
-      })
+      const { app } = answerApp(callsSvc)
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(500)
-      const body = await res.json()
-      expect(body.error).toBe('Failed to answer call')
+      expect((await res.json()).error).toBe('Failed to answer call')
     })
 
     it('returns 403 when permission is missing', async () => {
@@ -375,7 +613,7 @@ describe('Calls Routes', () => {
         answeredBy: pubkey,
         status: 'in-progress',
       })
-      callsSvc.endCall.mockResolvedValue({ callId: 'call-1', status: 'completed' })
+      callsSvc.endCall.mockResolvedValue(callRecordRow())
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -387,7 +625,7 @@ describe('Calls Routes', () => {
       const res = await app.request('/call-1/hangup', { method: 'POST' })
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.call.status).toBe('completed')
+      expect(body.call).toMatchObject({ id: 'call-1', status: 'completed', duration: 300 })
       expect(callsSvc.getActiveCallById).toHaveBeenCalledWith('hub-1', 'call-1')
       expect(callsSvc.endCall).toHaveBeenCalledWith('hub-1', 'call-1')
     })
@@ -516,7 +754,7 @@ describe('Calls Routes', () => {
         callerLast4: '4567',
         hubId: 'hub-1',
       })
-      callsSvc.endCall.mockResolvedValue({ callId: 'call-1', status: 'completed' })
+      callsSvc.endCall.mockResolvedValue(callRecordRow())
 
       const services = makeServices({
         calls: callsSvc,

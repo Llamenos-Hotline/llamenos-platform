@@ -53,7 +53,7 @@ fun DemoBanner(
     ) {
         Text(
             text = if (demoResetSchedule != null) {
-                stringResource(R.string.demo_banner_text_schedule)
+                stringResource(R.string.demo_banner_text_schedule, demoResetSchedule)
             } else {
                 stringResource(R.string.demo_banner_text)
             },

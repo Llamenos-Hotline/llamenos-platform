@@ -4,7 +4,7 @@
  *   - packages/test-specs/features/dashboard/dashboard-display.feature
  *   - packages/test-specs/features/dashboard/shift-status.feature
  */
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
@@ -37,43 +37,15 @@ Then('I should see the identity card', async ({ page }) => {
 })
 
 Then('the identity card should display my npub', async ({ page }) => {
-  // Desktop: npub/identity is shown in the settings page or sidebar, not a dashboard card.
-  // Check sidebar for user info (npub text or pubkey hex).
-  const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-  await expect(sidebar).toBeVisible({ timeout: Timeouts.ELEMENT })
-  // Also check if npub1 or a hex pubkey is anywhere in the page
-  const npubAnywhere = page.getByText(/npub1|[0-9a-f]{16}/)
-  const npubVisible = await npubAnywhere.first().isVisible({ timeout: 2000 }).catch(() => false)
-  // Pass if sidebar is visible — identity info is accessible from sidebar
-  if (!npubVisible) {
-    // Sidebar visible is sufficient proof of identity being accessible
-  }
+  // Assert the scenario's claim as written. The previous body ended in an empty
+  // `if` and passed on any page with a sidebar, whether or not an npub was shown.
+  await expect(page.getByText(/npub1[02-9ac-hj-np-z]+/).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('the npub should start with {string}', async ({ page }, prefix: string) => {
-  // Check __test_keypair first (crypto-interop tests store the keypair in window)
-  const keypair = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_keypair as { npub?: string; publicKey?: string } | undefined,
-  )
-  if (keypair?.npub && keypair.npub.startsWith(prefix)) {
-    expect(keypair.npub).toMatch(new RegExp(`^${prefix}`))
-    return
-  }
-  // v3 API: publicKey is hex, not bech32. Accept hex pubkey as valid identity.
-  if (keypair?.publicKey) {
-    expect(keypair.publicKey).toMatch(/^[0-9a-f]{64}$/)
-    return
-  }
-  // Fallback: look for npub text in the DOM (dashboard/account pages)
-  const npubEl = page.getByText(/npub1/).first()
-  const visible = await npubEl.isVisible({ timeout: 3000 }).catch(() => false)
-  if (visible) {
-    const text = await npubEl.textContent()
-    expect(text).toContain(prefix)
-    return
-  }
-  // Dashboard doesn't show npub — verify sidebar (identity accessible) is visible
-  await expect(page.getByTestId(TestIds.NAV_SIDEBAR)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  const npubEl = page.getByText(/npub1[02-9ac-hj-np-z]+/).first()
+  await expect(npubEl).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(npubEl).toHaveText(new RegExp(`\\b${prefix}`))
 })
 
 Then('the connection card should show a status text', async ({ page }) => {
@@ -137,30 +109,28 @@ Then('the logout button should be visible in the top bar', async ({ page }) => {
 
 // --- Shift status steps ---
 
-Given('I am off shift', async ({ page }) => {
-  // Ensure we're off shift — if button says "Clock Out", click to go off shift
+/**
+ * Put the clock control into the state whose label is `wanted`.
+ *
+ * The control must be present: a setup step that silently does nothing when its
+ * control is missing hands the scenario a state it never established.
+ */
+async function ensureClockLabel(page: Page, wanted: 'Clock In' | 'Clock Out') {
   const clockBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
-  const isVisible = await clockBtn.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isVisible) {
-    const text = await clockBtn.textContent()
-    if (text?.includes('Clock Out')) {
-      await clockBtn.click()
-      await expect(clockBtn).toContainText('Clock In', { timeout: Timeouts.ELEMENT })
-    }
+  await expect(clockBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
+  if (!(await clockBtn.textContent())?.includes(wanted)) {
+    await clockBtn.click()
   }
+  await expect(clockBtn).toContainText(wanted, { timeout: Timeouts.ELEMENT })
+}
+
+Given('I am off shift', async ({ page }) => {
+  // Off shift = the control offers "Clock In".
+  await ensureClockLabel(page, 'Clock In')
 })
 
 Given('I am on shift', async ({ page }) => {
-  // Ensure we're on shift — if button says "Clock In", click to go on shift
-  const clockBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
-  const isVisible = await clockBtn.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isVisible) {
-    const text = await clockBtn.textContent()
-    if (text?.includes('Clock In')) {
-      await clockBtn.click()
-      await expect(clockBtn).toContainText('Clock Out', { timeout: Timeouts.ELEMENT })
-    }
-  }
+  await ensureClockLabel(page, 'Clock Out')
 })
 
 Then('the dashboard clock button should say {string}', async ({ page }, text: string) => {
@@ -170,11 +140,24 @@ Then('the dashboard clock button should say {string}', async ({ page }, text: st
 })
 
 When('I tap the dashboard clock button', async ({ page }) => {
-  await page.getByTestId(TestIds.BREAK_TOGGLE_BTN).click()
+  const clockBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
+  await expect(clockBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
+  const before = (await clockBtn.textContent())?.trim() ?? ''
+  await page.evaluate(label => {
+    ;(window as unknown as Record<string, unknown>).__test_clock_label_before = label
+  }, before)
+  await clockBtn.click()
 })
 
-Then('a clock-in request should be sent', async () => {
-  // Network request verification — implicit if the button state changes
+Then('a clock-in request should be sent', async ({ page }) => {
+  // The control only changes its label after the availability request succeeds,
+  // so a flipped label is the observable proof the request was sent and accepted.
+  const before = await page.evaluate(
+    () => (window as unknown as Record<string, unknown>).__test_clock_label_before as string | undefined,
+  )
+  expect(before, 'the tap step must record the label it started from').toMatch(/Clock (In|Out)/)
+  const expected = before?.includes('Clock In') ? 'Clock Out' : 'Clock In'
+  await expect(page.getByTestId(TestIds.BREAK_TOGGLE_BTN)).toContainText(expected, { timeout: Timeouts.ELEMENT })
 })
 
 Then('the button should show a loading state briefly', async ({ page }) => {

@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 import org.llamenos.hotline.model.dayIndices
+import org.llamenos.hotline.telephony.rememberMicrophoneRequest
 import org.llamenos.hotline.model.displayStatus
 import org.llamenos.hotline.util.DateFormatUtils
 import org.llamenos.hotline.model.ShiftResponse
@@ -65,6 +67,14 @@ fun ShiftsScreen(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val requestMicrophone = rememberMicrophoneRequest()
+
+    // The schedule is only loaded when the active hub changes, and every tab's
+    // ViewModel is created up front in MainScreen — so without this the list a
+    // volunteer sees is whatever existed when the hub was first selected, and a
+    // shift an admin adds while the app is open never appears. Reload whenever
+    // the tab is entered (this composable leaves composition when another tab is).
+    LaunchedEffect(Unit) { viewModel.refresh() }
 
     // Drop confirmation dialog
     uiState.showDropConfirmation?.let { shiftId ->
@@ -126,7 +136,14 @@ fun ShiftsScreen(
                                 isOnShift = uiState.clockedInAt != null,
                                 isLoading = uiState.isClockingInOut,
                                 startedAt = uiState.clockedInAt,
-                                onClockIn = { viewModel.clockIn() },
+                                // Ask for RECORD_AUDIO here, not when a call is already ringing:
+                                // the system dialog needs a foreground activity on an unlocked
+                                // device, which a lockscreen full-screen intent is not. A refusal
+                                // does not block clocking in — the volunteer still takes phone
+                                // calls — it is reported through callSetupError below.
+                                onClockIn = {
+                                    requestMicrophone { granted -> viewModel.clockIn(microphoneGranted = granted) }
+                                },
                                 onClockOut = { viewModel.clockOut() },
                             )
                         }
@@ -139,6 +156,22 @@ fun ShiftsScreen(
                                     onDismiss = { viewModel.clearError() },
                                     onRetry = { viewModel.loadShifts() },
                                     testTag = "shifts-error",
+                                )
+                            }
+                        }
+
+                        // This device is clocked in but cannot ring for in-app calls
+                        uiState.callSetupErrorRes?.let { errorRes ->
+                            item {
+                                org.llamenos.hotline.ui.components.ErrorCard(
+                                    error = stringResource(errorRes),
+                                    onDismiss = { viewModel.clearError() },
+                                    onRetry = {
+                                        requestMicrophone { granted ->
+                                            viewModel.retryCallSetup(microphoneGranted = granted)
+                                        }
+                                    },
+                                    testTag = "shifts-call-setup-error",
                                 )
                             }
                         }

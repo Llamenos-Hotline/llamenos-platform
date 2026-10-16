@@ -848,7 +848,6 @@ class ScreenshotTests {
                     onDebugLoggingChange = {},
                     onClearCache = {},
                     onNavigateToAdmin = {},
-                    onNavigateToDeviceLink = {},
                 )
             }
         }
@@ -890,7 +889,6 @@ class ScreenshotTests {
                     onDebugLoggingChange = {},
                     onClearCache = {},
                     onNavigateToAdmin = {},
-                    onNavigateToDeviceLink = {},
                     biometricState = BiometricSectionState(enrolled = true),
                 )
             }

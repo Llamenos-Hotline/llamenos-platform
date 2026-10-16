@@ -7,6 +7,7 @@ import { Given, When, Then } from '../fixtures'
 import { Navigation } from '../../pages/index'
 import { TestIds, navTestIdMap } from '../../test-ids'
 import { Timeouts, navigateAfterLogin } from '../../helpers'
+import { collapseSettingsSection, ensureAuthenticated, expectRoute } from './ui-helpers'
 
 // --- Parameterised navigation (covers most "navigate to X page" steps) ---
 
@@ -83,24 +84,12 @@ Given('I am authenticated and on the shifts screen', async ({ page }) => {
 })
 
 Given('I am on the settings screen', async ({ page }) => {
-  // If not yet authenticated (fresh page context in parallel mode), log in first
-  const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-  const isAuthenticated = await sidebar.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (!isAuthenticated) {
-    const { loginAsAdmin } = await import('../../helpers')
-    await loginAsAdmin(page)
-  }
+  await ensureAuthenticated(page)
   await Navigation.goToSettings(page)
 })
 
 Given('I am on the dashboard', async ({ page }) => {
-  // If not yet authenticated (fresh page context in parallel mode), log in first
-  const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-  const isAuthenticated = await sidebar.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (!isAuthenticated) {
-    const { loginAsAdmin } = await import('../../helpers')
-    await loginAsAdmin(page)
-  }
+  await ensureAuthenticated(page)
   await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
@@ -121,52 +110,15 @@ Given('I have navigated to the admin panel', async ({ page }) => {
 
 // --- When navigation steps ---
 
-// Map tab names to their route paths for direct URL navigation fallback
-const navPathMap: Record<string, string> = {
-  'Conversations': '/conversations',
-  'Reports': '/reports',
-  'Notes': '/notes',
-  'Call Notes': '/notes',
-  'Blasts': '/blasts',
-  'Call History': '/calls',
-  'Calls': '/calls',
-  'Settings': '/settings',
-  'Dashboard': '/',
-}
-
 When('I tap the {string} tab', async ({ page }, tabName: string) => {
-  // Try nav test ID first (deterministic)
+  // The tab must exist. The old version fell back to page.goto() when the nav
+  // link was not visible, so a scenario about tapping a hidden tab still passed.
   const testId = navTestIdMap[tabName]
-  if (testId) {
-    const navLink = page.getByTestId(testId)
-    const isVisible = await navLink.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-    if (isVisible) {
-      await navLink.click()
-      return
-    }
-    // Nav link not visible (e.g. conversations hidden when no channels configured)
-    // Fall back to direct URL navigation
-    const path = navPathMap[tabName]
-    if (path) {
-      await page.goto(path)
-      await page.waitForLoadState('domcontentloaded')
-      return
-    }
-  }
-  // Fallback: look for text in sidebar
-  const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-  const textLink = sidebar.getByText(tabName, { exact: true }).first()
-  const textVisible = await textLink.isVisible({ timeout: 3000 }).catch(() => false)
-  if (textVisible) {
-    await textLink.click()
-    return
-  }
-  // Last resort: direct URL navigation
-  const path = navPathMap[tabName]
-  if (path) {
-    await page.goto(path)
-    await page.waitForLoadState('domcontentloaded')
-  }
+  const navLink = testId
+    ? page.getByTestId(testId)
+    : page.getByTestId(TestIds.NAV_SIDEBAR).getByText(tabName, { exact: true })
+  await expect(navLink).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await navLink.click()
 })
 
 When('I navigate to the admin panel', async ({ page }) => {
@@ -178,37 +130,28 @@ When('I scroll to and tap the admin card', async ({ page }) => {
 })
 
 When('I tap the back button', async ({ page }) => {
+  // Let the current view settle before deciding what "back" means on it.
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+
+  // A route with its own back control (contact detail, volunteer profile).
   const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const backVisible = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (backVisible) {
+  if (await backBtn.count() > 0) {
     await backBtn.click()
     return
   }
-  // Check for cancel button (e.g. note form, shift form) as a "back" equivalent
+  // An open inline form (note, shift): its cancel button is the way back.
   const cancelBtn = page.getByTestId(TestIds.FORM_CANCEL_BTN)
-  const cancelVisible = await cancelBtn.isVisible({ timeout: 1000 }).catch(() => false)
-  if (cancelVisible) {
+  if (await cancelBtn.count() > 0) {
     await cancelBtn.click()
     return
   }
-  // On desktop settings page, sections are inline — "back" from a section means
-  // collapsing the expanded section rather than navigating away from settings.
-  // The CollapsibleContent inside the linked-devices card has data-state="open"
-  // when expanded (set by Radix UI Collapsible).
-  if (page.url().includes('/settings')) {
-    const linkedDevicesSection = page.getByTestId('linked-devices')
-    const sectionInDom = await linkedDevicesSection.isVisible({ timeout: 2000 }).catch(() => false)
-    if (sectionInDom) {
-      // Check if expanded by looking for CollapsibleContent with data-state="open"
-      const content = linkedDevicesSection.locator('[data-state="open"]').first()
-      const isExpanded = await content.isVisible({ timeout: 1000 }).catch(() => false)
-      if (isExpanded) {
-        await page.getByTestId('linked-devices-trigger').click()
-      }
-      // Remain on the settings page — no navigation needed on desktop
-      return
-    }
+  // Desktop settings sections are inline: "back" from the device-link section
+  // collapses it, and the page stays on /settings.
+  if (new URL(page.url()).pathname === '/settings') {
+    await collapseSettingsSection(page, 'linked-devices')
+    return
   }
+  // Anything else: the window's history back.
   await page.goBack()
 })
 
@@ -287,31 +230,32 @@ Then('the response should contain {string}', async ({ page }, text: string) => {
 })
 
 Then('I should see the dashboard', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/')
 })
 
 Then('I should see the notes screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/notes')
 })
 
 Then('I should see the shifts screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/shifts')
 })
 
 Then('I should see the conversations screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/conversations')
 })
 
 Then('I should see the settings screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/settings')
 })
 
 Then('I should return to the settings screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/settings')
 })
 
 Then('I should return to the notes list', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expectRoute(page, '/notes')
+  await expect(page.getByTestId(TestIds.NOTE_FORM)).toHaveCount(0)
 })
 
 Then('I should return to the login screen', async ({ page }) => {

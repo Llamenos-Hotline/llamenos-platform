@@ -41,6 +41,9 @@ import { expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import * as clientLabels from '@shared/crypto-labels'
+import { buildAuthMessage } from '@shared/auth-message'
+import { keyWrapAadHex } from '@shared/envelope-aad'
+import { bytesToHex } from '@shared/encoding'
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
 const CRYPTO_LABELS_JSON = resolve(__dirname_, '../../../packages/protocol/crypto-labels.json')
@@ -344,7 +347,7 @@ Then('every admin envelope should name a distinct recipient', async ({ page }) =
 })
 
 When('I encrypt the same payload as two separate notes', async ({ page }) => {
-  const notes = await page.evaluate(async (payload) => {
+  const notes = await page.evaluate(async ({ payload, keyWrapAad }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       encryptNote(payload: string, author: string, admins: string[]): Promise<{
@@ -362,22 +365,34 @@ When('I encrypt the same payload as two separate notes', async ({ page }) => {
     // same key still differ byte-for-byte. Only the unwrapped key is evidence.
     // Verified by mutation: pinning encryptNote to a constant content key left
     // a wrapped-ciphertext comparison green.
+    // A stored envelope is hex in BOTH fields (PROTOCOL.md §2.4); the IPC
+    // `HpkeEnvelope` is base64url in both. Converting `enc` and passing `ct`
+    // through was the same defect the production code carried, so this step
+    // would have stayed green while the desktop wrote envelopes nothing else
+    // could read.
+    const hexToB64url = (hex: string) =>
+      btoa(String.fromCharCode(...(hex.match(/../g) ?? []).map(h => parseInt(h, 16))))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     const toEnv = (e: { enc: string; ct: string }) => ({
       v: 3,
       labelId: 0, // LABEL_NOTE_KEY
-      enc: btoa(String.fromCharCode(...(e.enc.match(/../g) ?? []).map(h => parseInt(h, 16))))
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
-      ct: e.ct,
+      enc: hexToB64url(e.enc),
+      ct: hexToB64url(e.ct),
     })
-    const k1 = await p.hpkeOpenKeyFromState(toEnv(one.authorEnvelope), 'llamenos:note-key', '')
-    const k2 = await p.hpkeOpenKeyFromState(toEnv(two.authorEnvelope), 'llamenos:note-key', '')
+    // A note's key wrap binds the canonical key-wrap AAD (PROTOCOL.md §2.3:
+    // `UTF-8("llamenos:note-key:key-wrap")`), which is what `encryptNote` seals
+    // with and `decryptNote` opens with. Passing empty here failed the AEAD tag
+    // and threw out of the step — it is derived from `@shared/envelope-aad`,
+    // never re-spelled, so it cannot drift from the production call site again.
+    const k1 = await p.hpkeOpenKeyFromState(toEnv(one.authorEnvelope), 'llamenos:note-key', keyWrapAad)
+    const k2 = await p.hpkeOpenKeyFromState(toEnv(two.authorEnvelope), 'llamenos:note-key', keyWrapAad)
     return {
       one: { encryptedContent: one.encryptedContent },
       two: { encryptedContent: two.encryptedContent },
       keysEqual: k1 === k2,
       keyLen: k1.length,
     }
-  }, NOTE_PAYLOAD)
+  }, { payload: NOTE_PAYLOAD, keyWrapAad: keyWrapAadHex(clientLabels.LABEL_NOTE_KEY) })
   await setStash(page, '__test_notes_pair', notes)
 })
 
@@ -660,13 +675,13 @@ Then('deriving with a different secret should produce a different code', async (
 
 // ─── Auth tokens ────────────────────────────────────────────────────────
 
-type ParsedToken = { pubkey: string; timestamp: number; token: string }
+type ParsedToken = { pubkey: string; timestamp: number; token: string; nonce?: string }
 
 async function createToken(page: Page, method: string, path: string, timestamp: number) {
   return page.evaluate(
     async ({ m, p: pth, ts }) => {
       const plat = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-        createAuthToken(ts: number, method: string, path: string, nonce?: string): Promise<string>
+        createAuthToken(ts: number, method: string, path: string): Promise<string>
       }
       return JSON.parse(await plat.createAuthToken(ts, m, pth))
     },
@@ -727,9 +742,13 @@ Then('the two tokens should have different signatures', async ({ page }) => {
 })
 
 /**
- * Rebuild the exact message the device signs and verify it with Ed25519.
- * Format (Rust build_auth_message, mirrored in tests/mocks/tauri-core.ts):
- *   llamenos:device-auth:v1:{pubkey}:{timestamp}:{method}:{path}
+ * Verify a token against the exact message the device signed.
+ *
+ * The message comes from the canonical shared builder in Node — never rebuilt
+ * by hand in the page, and never from a label literal. It must carry the
+ * token's own nonce: the signer generates one, and a message assembled without
+ * it is a different domain (`LABEL_DEVICE_AUTH_NO_NONCE`) that verification
+ * correctly rejects.
  */
 async function verifyToken(
   page: Page,
@@ -737,18 +756,15 @@ async function verifyToken(
   method: string,
   path: string,
 ): Promise<boolean> {
+  const msgHex = bytesToHex(buildAuthMessage(token.pubkey, token.timestamp, method, path, token.nonce))
   return page.evaluate(
-    async ({ t, m, p: pth }) => {
+    async ({ t, hex }) => {
       const plat = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
         ed25519Verify(messageHex: string, sigHex: string, pubkeyHex: string): Promise<boolean>
       }
-      const msg = `llamenos:device-auth:v1:${t.pubkey}:${t.timestamp}:${m}:${pth}`
-      const msgHex = Array.from(new TextEncoder().encode(msg), b =>
-        b.toString(16).padStart(2, '0'),
-      ).join('')
-      return plat.ed25519Verify(msgHex, t.token, t.pubkey)
+      return plat.ed25519Verify(hex, t.token, t.pubkey)
     },
-    { t: token, m: method, p: path },
+    { t: token, hex: msgHex },
   ) as Promise<boolean>
 }
 

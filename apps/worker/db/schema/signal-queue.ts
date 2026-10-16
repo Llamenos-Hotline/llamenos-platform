@@ -25,8 +25,12 @@ export const signalMessageQueue = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     hubId: text('hub_id').notNull().references(() => hubs.id, { onDelete: 'cascade' }),
     conversationId: text('conversation_id').notNull(),
-    recipientIdentifier: text('recipient_identifier').notNull(),
-    body: text('body').notNull(),
+    /** Keyed HMAC used for recipient rate-limit lookups; not reversible. */
+    recipientIdentifierHash: text('recipient_identifier_hash').notNull(),
+    /** Server-encrypted destination needed by the sender; never plaintext at rest. */
+    recipientIdentifierCiphertext: text('recipient_identifier_ciphertext').notNull(),
+    /** Server-encrypted message text; never plaintext at rest. */
+    encryptedBody: text('encrypted_body').notNull(),
     mediaUrl: text('media_url'),
     mediaType: text('media_type'),
     externalId: text('external_id'),
@@ -51,7 +55,7 @@ export const signalMessageQueue = pgTable(
       .where(sql`status = 'pending'`),
     // Rate-limit lookups: recent sends per recipient
     index('signal_queue_recipient_status_idx')
-      .on(table.recipientIdentifier, table.status, table.updatedAt),
+      .on(table.recipientIdentifierHash, table.status, table.updatedAt),
     // Idempotency: prevent duplicate enqueues
     uniqueIndex('signal_queue_idempotency_idx')
       .on(table.idempotencyKey)

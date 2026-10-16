@@ -26,6 +26,7 @@ import { ErrorBoundary } from '@/components/error-boundary'
 import { OfflineBanner } from '@/components/offline-banner'
 import { UpdateRequiredScreen } from '@/components/update-required-screen'
 import { HubSwitcher } from '@/components/hub-switcher'
+import { NoHubMembershipScreen, HubMembershipErrorScreen } from '@/components/hub-membership-screen'
 import {
   LayoutDashboard,
   StickyNote,
@@ -59,6 +60,16 @@ import {
   BarChart3,
 } from 'lucide-react'
 
+/**
+ * Routes that render before the active hub is known.
+ *
+ * Everything else waits: hub-scoped screens that mount without a resolved hub
+ * either issue unscoped requests or — before #1708 — requests scoped to a hub
+ * the user is not in, which answer 403 and render as "No notes yet" and
+ * "Off Shift".
+ */
+const HUB_GATE_EXEMPT_PATHS = ['/setup', '/profile-setup', '/preferences', '/settings']
+
 export const Route = createRootRoute({
   component: RootLayout,
 })
@@ -81,8 +92,8 @@ function DeviceWipeOverlay() {
 
 function RootLayout() {
   const { t } = useTranslation()
-  const { isAuthenticated, isLoading, profileCompleted, webauthnEnrollmentRequired } = useAuth()
-  const { needsBootstrap, demoMode, isLoading: configLoading } = useConfig()
+  const { isAuthenticated, isLoading, profileCompleted, webauthnEnrollmentRequired, hasPermission } = useAuth()
+  const { needsBootstrap, demoMode, isLoading: configLoading, currentHubId, hubsResolved, hubsError } = useConfig()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -101,7 +112,7 @@ function RootLayout() {
 
   useEffect(() => {
     // Wait for both auth and config to finish loading before redirecting
-    if (serverAddressConfigured && !isLoading && !configLoading && !isAuthenticated && location.pathname !== '/login' && location.pathname !== '/onboarding' && location.pathname !== '/link-device' && location.pathname !== '/setup') {
+    if (serverAddressConfigured && !isLoading && !configLoading && !isAuthenticated && location.pathname !== '/login' && location.pathname !== '/onboarding' && location.pathname !== '/setup') {
       // If no admin exists, redirect to setup wizard (which includes bootstrap)
       if (needsBootstrap) {
         navigate({ to: '/setup' })
@@ -166,7 +177,7 @@ function RootLayout() {
   } else if (!isAuthenticated || !profileCompleted) {
     // Only render Outlet for public routes — prevent protected route components
     // from mounting and making API calls before the redirect effect fires
-    const publicPaths = ['/login', '/onboarding', '/profile-setup', '/setup', '/link-device', '/preferences']
+    const publicPaths = ['/login', '/onboarding', '/profile-setup', '/setup', '/preferences']
     if (!publicPaths.includes(location.pathname)) {
       content = (
         <div className="flex h-screen items-center justify-center">
@@ -183,6 +194,34 @@ function RootLayout() {
         </>
       )
     }
+  } else if (HUB_GATE_EXEMPT_PATHS.includes(location.pathname)) {
+    // The wizard creates the first hub, profile setup and settings must stay
+    // reachable for a user who has none, and the passkey-enrollment redirect
+    // targets /settings. Gating these would lock the user out of the only
+    // screens that could change the situation.
+    content = <RelayWrappedLayout />
+  } else if (hubsError) {
+    content = <HubMembershipErrorScreen />
+  } else if (!hubsResolved) {
+    content = (
+      <div className="flex h-screen items-center justify-center">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <LogoMark size="sm" className="animate-pulse" />
+          {t('common.loading')}
+        </div>
+      </div>
+    )
+  } else if (!currentHubId && !hasPermission('system:manage-hubs')) {
+    // Membership resolved and produced nothing to browse. Keyed on the resolved
+    // active hub rather than on `hubs.length`, because the Playwright harness
+    // pins a hub directly (`__TEST_WORKER_HUB`) for workers whose user holds no
+    // hub role — see `chooseActiveHub`. In a real build the only source of an
+    // active hub is membership, so this is exactly "the user is in no hub".
+    //
+    // Not for an operator who can create one: a freshly bootstrapped server has
+    // no hubs at all, and its first admin needs the app in order to make one.
+    // Telling them to wait for an invitation would be a dead end.
+    content = <NoHubMembershipScreen />
   } else {
     content = <RelayWrappedLayout />
   }

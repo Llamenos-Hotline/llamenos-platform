@@ -38,10 +38,16 @@ export async function maybeTranscribe(
     })
 
     if (result.text) {
-      // Envelope encryption: single ciphertext, wrapped key for user + admin
-      const adminPubkey = env.ADMIN_DECRYPTION_PUBKEY || env.ADMIN_PUBKEY
-      const readerPubkeys = [userPubkey]
-      if (adminPubkey !== userPubkey) readerPubkeys.push(adminPubkey)
+      // Envelope encryption: single ciphertext, wrapped key for user + admin.
+      // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
+      // key, not an HPKE recipient. #1021: `userPubkey` is the answering
+      // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
+      // is resolved to their devices' X25519 encryption keys rather than
+      // sealed to directly.
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        env.ADMIN_DECRYPTION_PUBKEY,
+        [userPubkey],
+      )
 
       const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
@@ -89,9 +95,18 @@ export async function transcribeVoicemail(
     })
 
     if (result.text) {
-      // Voicemails: envelope encryption for admin only
-      const adminPubkey = env.ADMIN_DECRYPTION_PUBKEY || env.ADMIN_PUBKEY
-      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, [adminPubkey])
+      // Voicemails: envelope encryption for admin only. With no admin HPKE
+      // recipient configured there is no reader at all, and storing a
+      // ciphertext nobody can open is worse than not transcribing (#1283).
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        env.ADMIN_DECRYPTION_PUBKEY,
+        [],
+      )
+      if (readerPubkeys.length === 0) {
+        logger.warn('Voicemail transcription skipped: no ADMIN_DECRYPTION_PUBKEY, so no reader could open it', { callSid })
+        return
+      }
+      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
         callId: callSid,
         authorPubkey: 'system:voicemail',

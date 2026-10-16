@@ -48,7 +48,17 @@ env:
 
 jobs:
   # ─── JavaScript/TypeScript Dependency Audit ─────────────────
+  # The five PR-eligible jobs below each carry the SAME release-PR exemption
+  # (#1817) as codeql.yml, desktop-e2e.yml and semgrep.yml — keep the
+  # predicate byte-identical across all four files. The knope release PR
+  # (head branch `release`) diffs version strings and a changelog; this
+  # workflow's pull_request paths filter matches its Cargo.toml/Cargo.lock
+  # bumps, so it used to burn a full audit + three image builds per
+  # regeneration (6 on 2026-10-11) over a diff with no dependency changes.
+  # Every job still runs on the push to main the release merge produces,
+  # which is where the bumped manifests actually land.
   dependency-audit:
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,6 +89,8 @@ jobs:
 
   # ─── Rust Dependency Audit ─────────────────────────────────
   rust-audit:
+    # Release-PR exemption (#1817) — see the comment above dependency-audit.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     # GitHub-hosted, like every job a `pull_request` can reach. cargo-audit
     # comes from install-action as a prebuilt, checksum-verified release
     # binary (seconds), never `cargo install` (a from-source compile).
@@ -136,6 +148,8 @@ jobs:
 
   # ─── Dockerfile Security Scanning ──────────────────────────
   dockerfile-scan:
+    # Release-PR exemption (#1817) — see the comment above dependency-audit.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     # aquasecurity/trivy-action restores/installs the trivy binary under
     # $HOME/.local/bin and adds it to $GITHUB_PATH, but on the self-hosted
     # runner that PATH update doesn't take effect for the next step ("trivy:
@@ -213,7 +227,7 @@ jobs:
           exit-code: '1'
 
       - name: Upload Dockerfile.build scan results
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
         # upload-sarif requires GitHub Advanced Security (public repos or GHAS license).
         # Skip on private repos to avoid action_required failures.
         if: always() && github.repository_visibility == 'public'
@@ -222,14 +236,14 @@ jobs:
           category: 'dockerfile-build'
 
       - name: Upload deploy Dockerfile scan results
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
         if: always() && github.repository_visibility == 'public'
         with:
           sarif_file: 'dockerfile-deploy-results.sarif'
           category: 'dockerfile-deploy'
 
       - name: Upload Docker Compose scan results
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
         if: always() && github.repository_visibility == 'public'
         with:
           sarif_file: 'docker-compose-results.sarif'
@@ -237,6 +251,8 @@ jobs:
 
   # ─── Container Image Vulnerability Scan ────────────────────
   image-scan:
+    # Release-PR exemption (#1817) — see the comment above dependency-audit.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     # GitHub-hosted, like every job a `pull_request` can reach. A hosted
     # runner starts with an empty Docker daemon, so layer reuse comes from
     # BuildKit's GitHub Actions cache backend (below) via a
@@ -383,7 +399,7 @@ jobs:
           exit-code: '1'
 
       - name: Upload image scan results
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
         if: always() && github.repository_visibility == 'public'
         with:
           sarif_file: 'image-results.sarif'
@@ -481,6 +497,8 @@ jobs:
   # dated entry in deny.toml `[advisories].ignore` — enforced by the expiry
   # step below.
   cargo-deny:
+    # Release-PR exemption (#1817) — see the comment above dependency-audit.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     # GitHub-hosted, like every job a `pull_request` can reach. cargo-deny
     # comes from install-action as a prebuilt, checksum-verified release
     # binary (seconds); compiling it from source was once most of this job's

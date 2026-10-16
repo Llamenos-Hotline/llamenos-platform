@@ -1,0 +1,693 @@
+package org.llamenos.hotline.discovery
+
+import android.os.ParcelFileDescriptor
+import android.util.Log
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
+import androidx.test.core.app.ActivityScenario
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import dagger.hilt.android.EntryPointAccessors
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.llamenos.hotline.LlamenosApp
+import org.llamenos.hotline.MainActivity
+import org.llamenos.hotline.di.ActiveHubEntryPoint
+import org.llamenos.hotline.di.CryptoEntryPoint
+import org.llamenos.hotline.helpers.TestPermissions
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * M1 capability probe — discovery instrument, not a regression suite.
+ *
+ * Drives the real app UI against a live backend to establish, per M1 flow,
+ * whether it WORKS / is BROKEN / is ABSENT. Every step either succeeds or fails
+ * the test with the exact state it saw; nothing is caught and nothing is skipped.
+ * Enrollment is the real path: an admin creates an invite and grants hub membership
+ * through the admin API (as the desktop admin UI does), and the volunteer redeems the
+ * invite in the Android UI. The only backdoors are for what no client can do here (hub
+ * creation, the test admin's own registration, shift seeding, telephony and messaging
+ * simulation) — each is marked `BACKDOOR`.
+ *
+ * Required flows are enforced by the `m1ProbeGate` Gradle task
+ * (`src/androidTest/m1-probe-required.txt`).
+ *
+ * Deliberately NOT done: [org.llamenos.hotline.steps.ScenarioHooks]' write of the
+ * active hub into ActiveHubState. A real user has no such hook, so the probe lets the
+ * app choose its own hub and records what it chose.
+ *
+ * Run one method per process, after `pm clear org.llamenos.hotline.debug` (except the
+ * restart phase, which must inherit phase 1's data):
+ *
+ *   adb shell am instrument -w -e cucumberUseAndroidJUnitRunner true \
+ *     -e class org.llamenos.hotline.discovery.M1CapabilityProbe#auth \
+ *     -e testHubUrl http://10.0.2.2:3171 -e testSecret test-reset-secret \
+ *     org.llamenos.hotline/org.llamenos.hotline.CucumberHiltRunner
+ *
+ * Evidence: `adb logcat -s PROBE` plus the server's request log.
+ */
+@RunWith(AndroidJUnit4::class)
+class M1CapabilityProbe {
+
+    @get:Rule
+    val compose = createEmptyComposeRule()
+
+    private var scenario: ActivityScenario<MainActivity>? = null
+    private val args = InstrumentationRegistry.getArguments()
+    private val hubUrl: String = args.getString("testHubUrl", "http://10.0.2.2:3171")
+    private val testSecret: String = args.getString("testSecret", "test-reset-secret")
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** Hub role the probe user is enrolled with (`-e probeRole role-hub-admin` to separate permission gaps from app gaps). */
+    private val role: String = args.getString("probeRole", "role-volunteer")
+
+    /** Survives `am instrument` process boundaries (the restart phase skips `pm clear`). */
+    private val stateFile = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "m1-probe-state")
+
+    /**
+     * The runtime permissions the app asks for mid-flow, granted before the app starts.
+     *
+     * Clocking in asks for `RECORD_AUDIO` ([org.llamenos.hotline.telephony.rememberMicrophoneRequest]),
+     * and the system dialog is an overlay the Compose harness can neither see nor dismiss — the
+     * clock-in callback would never fire and the shifts flow would stall. The gate runs
+     * `pm clear` before every flow, so this grant has to happen in-process, here.
+     */
+    @Before
+    fun grantPermissions() {
+        TestPermissions.grant()
+    }
+
+    @After
+    fun tearDown() {
+        scenario?.close()
+    }
+
+    // ─── Flows ──────────────────────────────────────────────────────────────
+
+    /**
+     * Enroll by invite, get a hub without visiting Hub Management, then lock from both entry
+     * points and after the activity is recreated: every lock shows the PIN pad, a wrong
+     * PIN is rejected, and the PIN that was set unlocks.
+     */
+    @Test
+    fun auth() {
+        val (pubkey, hub) = enrollViaInvite("auth", "probe-auth")
+        probe("auth", "enrolled by invite, signing pubkey ${pubkey.take(12)}…")
+        ensureActiveHub("auth", hub)
+
+        compose.onNodeWithTag("lock-button").performClick()
+        val lockedFromDashboard = pollFor(10_000) { has("pin-pad") && !has("dashboard-title") }
+        probe("auth", "dashboard lock-button → PIN pad shown=$lockedFromDashboard; keys unlocked=${crypto().isUnlocked}")
+        check(lockedFromDashboard) { fail("auth", "the lock button left the dashboard on screen; tags=${visibleTags()}") }
+
+        enterPin("87654321")
+        val wrongRejected = pollFor(5_000) { has("pin-error") } && !has("dashboard-title")
+        probe("auth", "wrong PIN rejected=$wrongRejected texts=${screenTexts()}")
+        check(wrongRejected) { fail("auth", "a wrong PIN was not rejected with an error") }
+        unlockWithPin("auth", "after dashboard lock")
+
+        tapTab("nav-settings")
+        scrollClick("auth", "settings-lock-button")
+        val lockedFromSettings = pollFor(10_000) { has("pin-pad") && !has("dashboard-title") }
+        probe("auth", "Settings → Lock → PIN pad shown=$lockedFromSettings; keys unlocked=${crypto().isUnlocked}")
+        check(lockedFromSettings) { fail("auth", "Settings → Lock left the app unlocked on screen; tags=${visibleTags()}") }
+        unlockWithPin("auth", "after Settings lock")
+
+        scenario?.close()
+        launch()
+        waitForTag("auth", "pin-pad", 20_000)
+        unlockWithPin("auth", "after the activity was recreated")
+        probe("auth", "activeHubId after unlock: ${activeHubId()}")
+        check(activeHubId() == hub) { fail("auth", "active hub lost across lock/unlock: ${activeHubId()} (expected $hub)") }
+        probe("auth", "RESULT enrolled by invite, hub chosen by the app, both locks show the PIN pad, the PIN unlocks")
+    }
+
+    /** An invite code the server does not know is refused on the login screen. */
+    @Test
+    fun enrollmentRejectsUnknownInvite() {
+        launch()
+        waitForTag("invite", "create-identity", 20_000)
+        compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
+        compose.onNodeWithTag("invite-code-input").performTextReplacement(java.util.UUID.randomUUID().toString())
+        compose.onNodeWithTag("create-identity").performClick()
+        waitForTag("invite", "invite-error", 15_000)
+        probe("invite", "unknown invite: error=${textOf("invite-error")} tags=${visibleTags()}")
+        check(!has("pin-pad")) { fail("invite", "an unknown invite continued to PIN set") }
+        check(crypto().signingPubkeyHex == null) { fail("invite", "a device key was created for an unknown invite") }
+        probe("invite", "RESULT unknown invite refused before any key was created")
+    }
+
+    /**
+     * Enroll by pasting the whole invite link (which also names the hub), then log out from
+     * Settings: must land back on the login screen.
+     */
+    @Test
+    fun logout() {
+        enrollViaInvite("logout", "probe-logout", asLink = true)
+        tapTab("nav-settings")
+        scrollClick("logout", "settings-logout-button")
+        waitForTag("logout", "confirm-logout-button", 5_000)
+        compose.onNodeWithTag("confirm-logout-button").performClick()
+        waitForTag("logout", "create-identity", 15_000)
+        probe("logout", "RESULT after logout the login screen is shown: tags=${visibleTags()}")
+    }
+
+    /** Phase 1: create and save a note. State is kept for [notesAfterRestart]. */
+    @Test
+    fun notesCreate() {
+        val (_, hub) = enrollViaInvite("notes", "probe-notes")
+        ensureActiveHub("notes", hub)
+        val marker = "probe-note-${System.currentTimeMillis()}"
+        stateFile.parentFile?.mkdirs()
+        stateFile.writeText("$hub\n$marker\n")
+
+        createNote(marker)
+        // Read back from the server within the session: leave, return, refresh.
+        tapTab("nav-dashboard")
+        tapTab("nav-notes")
+        val reread = pollFor(20_000) { hasText(marker) }
+        probe("notes", "re-read after leaving and returning to Notes: shown=$reread")
+        check(reread) { fail("notes", "note not shown when the list is reloaded") }
+        probe("notes", "RESULT saved note visible in list and on reload: $marker")
+    }
+
+    /** Phase 2 — a new process, same app data: unlock with PIN and read the note back. */
+    @Test
+    fun notesAfterRestart() {
+        val (hub, marker) = stateFile.readLines().let { it[0] to it[1] }
+        launch()
+        waitForAnyTag("notes-restart", 20_000, "pin-pad", "create-identity", "dashboard-title")
+        probe("notes-restart", "cold start shows: ${visibleTags()}")
+        check(has("pin-pad")) { fail("notes-restart", "cold start did not show PIN unlock") }
+        enterPin(PIN)
+        waitForTag("notes-restart", "dashboard-title", 20_000)
+        probe("notes-restart", "activeHubId after restart: ${activeHubId()} (note hub=$hub)")
+        tapTab("nav-notes")
+        waitForText("notes-restart", marker, 20_000)
+        probe("notes-restart", "RESULT note decrypted and shown after restart: $marker")
+    }
+
+    /**
+     * The M1 note path: during an answered call, "quick note" from the active-call card
+     * (carries the callId the server requires). Saves state for [notesAfterRestart].
+     */
+    @Test
+    fun notesDuringCall() {
+        val (pubkey, hub) = enrollViaInvite("quicknote", "probe-quicknote")
+        backdoor("quicknote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
+        val ring = backdoor("quicknote", "test-simulate/incoming-call", """{"callerNumber":"+15555550140","hubId":"$hub"}""")
+        val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
+        backdoor("quicknote", "test-simulate/answer-call", """{"callId":"$callId","pubkey":"$pubkey"}""")
+        ensureActiveHub("quicknote", hub)
+        waitForTag("quicknote", "active-call-card", 15_000)
+        scrollClick("quicknote", "quick-note-button")
+        waitForTag("quicknote", "note-text-input", 10_000)
+        val marker = "probe-quicknote-${System.currentTimeMillis()}"
+        stateFile.parentFile?.mkdirs()
+        stateFile.writeText("$hub\n$marker\n")
+        compose.onNodeWithTag("note-text-input").performTextReplacement(marker)
+        compose.onNodeWithTag("note-save-button").performClick()
+        val saved = pollFor(20_000) { !has("note-text-input") }
+        probe("quicknote", "after save: left editor=$saved tags=${visibleTags().take(12)} texts=${screenTexts().filter { "rror" in it || "equired" in it || "ail" in it }}")
+        check(saved) { fail("quicknote", "note for the active call was not saved") }
+        tapTab("nav-notes")
+        val inList = pollFor(20_000) { hasText(marker) }
+        probe("quicknote", "Notes tab shows the note (decrypted)=$inList tags=${visibleTags().take(12)}")
+        check(inList) { fail("quicknote", "saved note not shown in Notes") }
+        tapTab("nav-dashboard")
+        tapTab("nav-notes")
+        val reread = pollFor(20_000) { hasText(marker) }
+        probe("quicknote", "RESULT note saved during a call, listed=$inList, re-listed after reload=$reread")
+        check(reread) { fail("quicknote", "note missing when the Notes list reloads") }
+    }
+
+    /**
+     * A note attached to a call — the only kind the server accepts (callId or conversationId
+     * is required). The call is completed through the telephony simulator, then the note is
+     * written from Call History, the one screen that offers "add note" for a past call.
+     */
+    @Test
+    fun notesFromCall() {
+        val (pubkey, hub) = enrollViaInvite("callnote", "probe-callnote")
+        backdoor("callnote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
+        ensureActiveHub("callnote", hub)
+        val ring = backdoor("callnote", "test-simulate/incoming-call", """{"callerNumber":"+15555550130","hubId":"$hub"}""")
+        val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
+        backdoor("callnote", "test-simulate/answer-call", """{"callId":"$callId","pubkey":"$pubkey"}""")
+        backdoor("callnote", "test-simulate/end-call", """{"callId":"$callId"}""")
+
+        scrollClick("callnote", "view-call-history")
+        waitForAnyTag("callnote", 15_000, "call-history-list", "call-history-title")
+        val listed = pollFor(15_000) { has("call-record-$callId") }
+        probe("callnote", "history: call-record-$callId present=$listed tags=${visibleTags()} texts=${screenTexts().take(20)}")
+        check(listed) { fail("callnote", "completed call not in history") }
+        scrollClick("callnote", "call-add-note-$callId")
+        waitForTag("callnote", "note-text-input", 10_000)
+        val marker = "probe-callnote-${System.currentTimeMillis()}"
+        compose.onNodeWithTag("note-text-input").performTextReplacement(marker)
+        compose.onNodeWithTag("note-save-button").performClick()
+        val saved = pollFor(20_000) { !has("note-text-input") }
+        probe("callnote", "after save: left editor=$saved tags=${visibleTags()} texts=${screenTexts().take(20)}")
+        check(saved) { fail("callnote", "note for a call was not saved") }
+        if (has("call-history-back")) compose.onNodeWithTag("call-history-back").performClick()
+        tapTab("nav-notes")
+        val inList = pollFor(20_000) { hasText(marker) }
+        probe("callnote", "Notes tab shows the call note (decrypted)=$inList tags=${visibleTags()}")
+        check(inList) { fail("callnote", "saved call note not shown in Notes") }
+        probe("callnote", "RESULT note attached to a call saved and read back")
+    }
+
+    /** View the schedule, clock in, clock out. */
+    @Test
+    fun shifts() {
+        val (pubkey, hub) = enrollViaInvite("shifts", "probe-shifts")
+        backdoor("shifts", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
+        ensureActiveHub("shifts", hub)
+
+        tapTab("nav-shifts")
+        waitForAnyTag("shifts", 15_000, "shifts-list", "clock-card")
+        compose.waitForIdle()
+        Thread.sleep(2_000)
+        val shiftCards = tagsWithPrefix("shift-card-")
+        probe("shifts", "schedule: shift cards=${shiftCards.size} tags=${visibleTags()}")
+        if (shiftCards.isEmpty()) probe("shifts", "schedule texts=${screenTexts()}")
+
+        // Clock in/out is independent of seeing the schedule — probe it regardless.
+        waitForTag("shifts", "clock-in-button", 10_000)
+        compose.onNodeWithTag("clock-in-button").performClick()
+        waitForTag("shifts", "clock-out-button", 15_000)
+        probe("shifts", "clock in → clock-out button shown")
+        compose.onNodeWithTag("clock-out-button").performClick()
+        waitForTag("shifts", "clock-in-button", 15_000)
+        probe("shifts", "clock out → clock-in button shown")
+        check(shiftCards.isNotEmpty()) { fail("shifts", "seeded shift is not in the schedule") }
+        probe("shifts", "RESULT schedule, clock in and clock out all work")
+    }
+
+    /**
+     * Calls, in two halves so a dead realtime channel cannot hide a display bug:
+     *  1. an answered call that already exists when the dashboard loads its hub data —
+     *     can the app show it and hang it up at all?
+     *  2. a live ring after the dashboard is up — does the app learn about it?
+     * Then Call History. There is no in-app answer control to test (answering happens on
+     * the volunteer's phone via the telephony provider), so the probe records its absence.
+     */
+    @Test
+    fun calls() {
+        val (pubkey, hub) = enrollViaInvite("calls", "probe-calls")
+        backdoor("calls", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
+
+        // 1. Pre-existing answered call
+        val ring1 = backdoor("calls", "test-simulate/incoming-call", """{"callerNumber":"+15555550123","hubId":"$hub"}""")
+        val call1 = json.parseToJsonElement(ring1).jsonObject["callId"]!!.jsonPrimitive.content
+        backdoor("calls", "test-simulate/answer-call", """{"callId":"$call1","pubkey":"$pubkey"}""")
+        ensureActiveHub("calls", hub)
+        val cardOnLoad = pollFor(15_000) { has("active-call-card") }
+        probe("calls", "answered call present at dashboard load: active-call-card=$cardOnLoad count=${textOf("active-call-count")} tags=${visibleTags()}")
+        if (cardOnLoad) {
+            compose.onNodeWithTag("hangup-button").performScrollTo().performClick()
+            val gone = pollFor(15_000) { !has("active-call-card") }
+            probe("calls", "hangup tapped: card gone=$gone")
+        }
+
+        // 2. Live ring into the active hub
+        val ring2 = backdoor("calls", "test-simulate/incoming-call", """{"callerNumber":"+15555550124","hubId":"$hub"}""")
+        val call2 = json.parseToJsonElement(ring2).jsonObject["callId"]!!.jsonPrimitive.content
+        val sawRing = pollFor(15_000) { textOf("active-call-count")?.trim()?.let { it != "0" } == true }
+        probe("calls", "live ring: dashboard reacted=$sawRing count=${textOf("active-call-count")} connection=${textOf("connection-status")} answer-control=${visibleTags().filter { "answer" in it }}")
+        backdoor("calls", "test-simulate/answer-call", """{"callId":"$call2","pubkey":"$pubkey"}""")
+        val sawLive = pollFor(15_000) { has("active-call-card") }
+        probe("calls", "live answer: active-call-card=$sawLive")
+        backdoor("calls", "test-simulate/end-call", """{"callId":"$call2"}""")
+
+        scrollClick("calls", "view-call-history")
+        waitForAnyTag("calls", 15_000, "call-history-list", "call-history-title")
+        val inHistory = pollFor(15_000) { has("call-record-$call1") || has("call-record-$call2") }
+        probe("calls", "history shows the calls=$inHistory texts=${screenTexts().filter { "error" in it.lowercase() || "required" in it }}")
+        probe("calls", "RESULT preloaded=$cardOnLoad liveRing=$sawRing liveAnswer=$sawLive history=$inHistory")
+        check(cardOnLoad && sawRing && sawLive && inHistory) { fail("calls", "call lifecycle incomplete (see RESULT)") }
+    }
+
+    /** List hubs, switch the active hub, and receive a call ring from the non-active hub. */
+    @Test
+    fun hubs() {
+        val (pubkey, hubA) = enrollViaInvite("hubs", "probe-hub-a")
+        val hubB = createHub("probe-hub-b")
+        addHubMember("hubs", pubkey, hubB)
+        probe("hubs", "activeHubId the app chose: ${activeHubId()} (A=$hubA B=$hubB)")
+
+        tapTab("nav-dashboard")
+        scrollClick("hubs", "hubs-card")
+        waitForAnyTag("hubs", 15_000, "hubs-list", "hub-row")
+        Thread.sleep(2_000)
+        val rows = compose.onAllNodesWithTag("hub-row", useUnmergedTree = true).fetchSemanticsNodes().size
+        probe("hubs", "hub list rows=$rows tags=${visibleTags()}")
+        check(rows >= 2) { fail("hubs", "expected both member hubs in the list, saw $rows") }
+
+        compose.onNode(hasTestTag("hub-row") and hasAnyDescendantText("probe-hub-a"), useUnmergedTree = true)
+            .performClick()
+        val switched = pollFor(10_000) { activeHubId() == hubA }
+        probe("hubs", "tapped hub A: activeHubId=${activeHubId()} switched=$switched indicator=${has("hub-active-indicator")}")
+        check(switched) { fail("hubs", "tapping hub A did not switch the active hub") }
+
+        compose.onNodeWithTag("hubs-back").performClick()
+        tapTab("nav-dashboard")
+        waitForTag("hubs", "dashboard-title", 10_000)
+        probe("hubs", "dashboard (active=A) before ring: count=${textOf("active-call-count")} connection=${textOf("connection-status")}")
+        backdoor("hubs", "test-simulate/incoming-call", """{"callerNumber":"+15555550124","hubId":"$hubB"}""")
+        val sawB = pollFor(15_000) { textOf("active-call-count")?.trim()?.let { it != "0" } == true }
+        probe("hubs", "call rang in NON-active hub B: dashboard reacted=$sawB count=${textOf("active-call-count")} tags=${visibleTags()}")
+        backdoor("hubs", "test-simulate/incoming-call", """{"callerNumber":"+15555550125","hubId":"$hubA"}""")
+        val sawA = pollFor(15_000) { textOf("active-call-count")?.trim()?.let { it != "0" } == true }
+        probe("hubs", "control — call rang in ACTIVE hub A: dashboard reacted=$sawA count=${textOf("active-call-count")}")
+        probe("hubs", "RESULT list=$rows switch=$switched nonActiveRing=$sawB activeRing=$sawA")
+        check(sawA) { fail("hubs", "a call ringing in the active hub never reached the app") }
+        check(sawB) { fail("hubs", "a call ringing in a non-active member hub never reached the app") }
+    }
+
+    /** An inbound SMS creates a conversation; open it, read it, reply. */
+    @Test
+    fun conversations() {
+        val (_, hub) = enrollViaInvite("conversations", "probe-conv")
+        ensureActiveHub("conversations", hub)
+        val body = "probe-sms-${System.currentTimeMillis()}"
+        backdoor(
+            "conversations", "test-simulate/incoming-message",
+            """{"senderNumber":"+15555550199","body":"$body","channel":"sms","hubId":"$hub"}""",
+        )
+
+        tapTab("nav-conversations")
+        val cardAppeared = pollFor(20_000) { tagsWithPrefix("conversation-card-").isNotEmpty() }
+        probe("conversations", "list: cards=${tagsWithPrefix("conversation-card-")} tags=${visibleTags()}")
+        if (!cardAppeared) probe("conversations", "list texts=${screenTexts()}")
+        check(cardAppeared) { fail("conversations", "inbound conversation never listed") }
+
+        compose.onNodeWithTag(tagsWithPrefix("conversation-card-").first(), useUnmergedTree = true).performClick()
+        waitForAnyTag("conversations", 15_000, "messages-list", "messages-empty", "messages-error")
+        Thread.sleep(2_000)
+        val readable = hasText(body)
+        probe("conversations", "detail: inbound text readable=$readable tags=${visibleTags()}")
+
+        waitForTag("conversations", "reply-text-input", 10_000)
+        val reply = "probe-reply-${System.currentTimeMillis()}"
+        compose.onNodeWithTag("reply-text-input").performTextReplacement(reply)
+        compose.onNodeWithTag("send-button").performClick()
+        val sent = pollFor(15_000) { hasText(reply) }
+        probe("conversations", "reply shown in thread=$sent tags=${visibleTags()}")
+        check(readable) { fail("conversations", "inbound message text not readable in the thread") }
+        check(sent) { fail("conversations", "sent reply never appeared in the thread") }
+        probe("conversations", "RESULT inbound readable, reply sent")
+    }
+
+    // ─── UI helpers ─────────────────────────────────────────────────────────
+
+    private fun launch() {
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    /**
+     * A user who belongs to a hub must end up browsing it without visiting Hub Management
+     * (#1340). Membership is granted after the dashboard first loaded, so this refreshes
+     * the dashboard the way a user would, then requires the app to have chosen the hub.
+     */
+    private fun ensureActiveHub(flow: String, hubId: String) {
+        // An injected swipe can land before the dashboard settles and not register as a
+        // pull (no request reaches the server), so pull again the way a user would.
+        val chosen = (1..3).any { attempt ->
+            pullToRefreshDashboard()
+            pollFor(5_000) { activeHubId() == hubId }.also { probe(flow, "pull-to-refresh #$attempt: hub chosen=$it") }
+        }
+        probe(flow, "activeHubId the app chose by itself: ${activeHubId()} (member of $hubId)")
+        check(chosen) { fail(flow, "the app did not select the user's hub by itself: ${activeHubId()} (expected $hubId)") }
+    }
+
+    /**
+     * Pull-to-refresh only fires with the list at its top, so scroll the first card into
+     * view first. The pull is a real touch (`input swipe`): a Compose-injected swipe never
+     * triggered the dashboard's refresh, so no request reached the server.
+     */
+    private fun pullToRefreshDashboard() {
+        waitForTag("nav", "dashboard-pull-refresh", 10_000)
+        compose.onNodeWithTag("connection-card").performScrollTo()
+        compose.waitForIdle()
+        val node = compose.onNodeWithTag("dashboard-pull-refresh").fetchSemanticsNode()
+        val x = (node.positionOnScreen.x + node.size.width / 2).toInt()
+        val fromY = (node.positionOnScreen.y + node.size.height * 0.2f).toInt()
+        val toY = (node.positionOnScreen.y + node.size.height * 0.8f).toInt()
+        val swipe = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("input swipe $x $fromY $x $toY 600")
+        // Reading to EOF waits for the gesture to finish.
+        ParcelFileDescriptor.AutoCloseInputStream(swipe).use { it.readBytes() }
+        compose.waitForIdle()
+    }
+
+    /**
+     * Enrollment as a volunteer does it (#1345): an admin creates an invite for [role] into
+     * a new hub, and the volunteer redeems it on a fresh install (hub URL + invite code →
+     * PIN twice). Redemption is what grants the hub membership (#1474), so the invite
+     * names the hub — this server has many, and an unnamed hub is refused as ambiguous.
+     * [addHubMember] afterwards is belt-and-braces on the role, and idempotent.
+     * Returns the signing pubkey and the hub.
+     *
+     * [asLink]: paste the invite link instead, leaving the hub URL empty — the app must
+     * take both the code and the hub from the link.
+     */
+    private fun enrollViaInvite(flow: String, hubName: String, asLink: Boolean = false): Pair<String, String> {
+        val hub = createHub(hubName)
+        val invite = adminApi(
+            flow, "POST", "/api/invites",
+            """{"name":"Probe $flow","phone":"+15555550100","roleIds":["$role"],"hubId":"$hub"}""",
+        )
+        val code = json.parseToJsonElement(invite).jsonObject["invite"]!!.jsonObject["code"]!!.jsonPrimitive.content
+        launch()
+        waitForTag(flow, "create-identity", 20_000)
+        if (asLink) {
+            compose.onNodeWithTag("invite-code-input").performTextReplacement("$hubUrl/onboarding?code=$code")
+        } else {
+            compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
+            compose.onNodeWithTag("invite-code-input").performTextReplacement(code)
+        }
+        compose.onNodeWithTag("create-identity").performClick()
+        waitForAnyTag(flow, 15_000, "pin-pad", "invite-error")
+        check(!has("invite-error")) { fail(flow, "a fresh invite was refused: ${textOf("invite-error")}") }
+        enterPin(PIN)
+        enterPin(PIN)
+        waitForAnyTag(flow, 20_000, "dashboard-title", "invite-redeem-error")
+        check(has("dashboard-title")) { fail(flow, "invite redemption failed: ${textOf("invite-redeem-error")}") }
+        val pubkey = checkNotNull(crypto().signingPubkeyHex) { fail(flow, "no signing pubkey after enrollment") }
+        probe(flow, "invite redeemed in the UI; the app is on the dashboard")
+        addHubMember(flow, pubkey, hub)
+        return pubkey to hub
+    }
+
+    /** Enter the PIN on the unlock screen and require the dashboard. */
+    private fun unlockWithPin(flow: String, context: String) {
+        waitForTag(flow, "pin-pad", 10_000)
+        enterPin(PIN)
+        val unlocked = pollFor(15_000) { has("dashboard-title") }
+        probe(flow, "$context: the PIN unlocks=$unlocked keys unlocked=${crypto().isUnlocked}")
+        check(unlocked) { fail(flow, "$context: the PIN set at enrollment did not unlock the app; texts=${screenTexts()}") }
+    }
+
+    private fun enterPin(pin: String) {
+        for (d in pin) compose.onNodeWithTag("pin-$d").performClick()
+        compose.waitForIdle()
+    }
+
+    private fun tapTab(tag: String) {
+        waitForTag("nav", tag, 10_000)
+        compose.onNodeWithTag(tag).performClick()
+        compose.waitForIdle()
+    }
+
+    private fun scrollClick(flow: String, tag: String) {
+        waitForTag(flow, tag, 10_000)
+        compose.onNodeWithTag(tag).performScrollTo().performClick()
+        compose.waitForIdle()
+    }
+
+    private fun createNote(text: String) {
+        tapTab("nav-notes")
+        waitForTag("notes", "create-note-fab", 10_000)
+        compose.onNodeWithTag("create-note-fab").performClick()
+        waitForTag("notes", "note-text-input", 10_000)
+        compose.onNodeWithTag("note-text-input").performTextReplacement(text)
+        compose.onNodeWithTag("note-save-button").performClick()
+        val listed = pollFor(20_000) { hasText(text) && !has("note-text-input") }
+        probe("notes", "after save: listed=$listed tags=${visibleTags()} texts=${screenTexts()}")
+        check(listed) { fail("notes", "saved note never appeared in the notes list") }
+    }
+
+    private fun has(tag: String): Boolean =
+        compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    /** All text currently on screen (for evidence when no error tag exists). */
+    private fun screenTexts(): List<String> =
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Text), useUnmergedTree = true)
+            .fetchSemanticsNodes().flatMap { n -> n.config[SemanticsProperties.Text].map { it.text } }.distinct()
+
+    private fun hasText(text: String): Boolean =
+        compose.onAllNodes(hasText(text, substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    private fun hasAnyDescendantText(text: String): SemanticsMatcher =
+        androidx.compose.ui.test.hasAnyDescendant(hasText(text, substring = true))
+
+    private fun textOf(tag: String): String? = runCatching {
+        compose.onAllNodesWithTag(tag, useUnmergedTree = true).onFirst().fetchSemanticsNode()
+            .config.getOrNull(SemanticsProperties.Text)?.joinToString(" ") { it.text }
+    }.getOrNull()
+
+    private fun visibleTags(): List<String> =
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.TestTag), useUnmergedTree = true)
+            .fetchSemanticsNodes().mapNotNull { it.config.getOrNull(SemanticsProperties.TestTag) }.distinct()
+
+    private fun tagsWithPrefix(prefix: String): List<String> = visibleTags().filter { it.startsWith(prefix) }
+
+    /** Texts of any error-ish nodes currently shown, for evidence. */
+    private fun visibleErrorTexts(): List<String> =
+        visibleTags().filter { "error" in it || "not-found" in it }.mapNotNull { t -> textOf(t)?.let { "$t=$it" } }
+
+    private fun waitForTag(flow: String, tag: String, timeoutMs: Long) = waitForAnyTag(flow, timeoutMs, tag)
+
+    private fun waitForAnyTag(flow: String, timeoutMs: Long, vararg tags: String) {
+        try {
+            compose.waitUntil(timeoutMs) { tags.any { has(it) } }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError(fail(flow, "none of ${tags.toList()} within ${timeoutMs}ms; visible=${visibleTags()} errors=${visibleErrorTexts()}"), e)
+        }
+    }
+
+    private fun waitForText(flow: String, text: String, timeoutMs: Long) {
+        if (!pollFor(timeoutMs) { hasText(text) }) {
+            throw AssertionError(fail(flow, "text '$text' not shown within ${timeoutMs}ms; visible=${visibleTags()} errors=${visibleErrorTexts()}"))
+        }
+    }
+
+    private fun pollFor(timeoutMs: Long, predicate: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            compose.waitForIdle()
+            if (predicate()) return true
+            Thread.sleep(250)
+        }
+        compose.waitForIdle()
+        return predicate()
+    }
+
+    // ─── App state (read-only) ──────────────────────────────────────────────
+
+    private fun crypto() =
+        EntryPointAccessors.fromApplication(LlamenosApp.instance, CryptoEntryPoint::class.java).cryptoService()
+
+    private fun activeHubId(): String? =
+        EntryPointAccessors.fromApplication(LlamenosApp.instance, ActiveHubEntryPoint::class.java)
+            .activeHubState().activeHubId.value
+
+    // ─── Backend (BACKDOOR: things the app has no UI for) ───────────────────
+
+    private fun createHub(name: String): String {
+        val body = backdoor("setup", "test-create-hub", """{"name":"$name-${System.currentTimeMillis()}"}""")
+        return json.parseToJsonElement(body).jsonObject["id"]!!.jsonPrimitive.content
+    }
+
+    /** A hub admin adds the user to a hub — `POST /api/hubs/:id/members`, as the desktop admin UI does. */
+    private fun addHubMember(flow: String, pubkey: String, hubId: String) {
+        adminApi(flow, "POST", "/api/hubs/$hubId/members", """{"pubkey":"$pubkey","roleIds":["$role"]}""")
+    }
+
+    /**
+     * A request signed by the test admin (CI's fixed `ADMIN_SEED`, whose pubkey is the
+     * server's `ADMIN_PUBKEY`). Makes sure the admin is registered first.
+     */
+    private fun adminApi(flow: String, method: String, path: String, body: String): String {
+        if (!adminReady) {
+            val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(ADMIN_SEED, 0u, "GET", "/")
+            backdoor(flow, "test-promote-admin", """{"pubkey":"${token.pubkey}"}""")
+            adminReady = true
+        }
+        val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(
+            ADMIN_SEED, System.currentTimeMillis().toULong(), method, path,
+        )
+        val auth = buildString {
+            append("""{"pubkey":"${token.pubkey}","timestamp":${token.timestamp},"token":"${token.token}"""")
+            token.nonce?.let { append(""","nonce":"$it"""") }
+            append('}')
+        }
+        return http(flow, method, path, body, "ADMIN") {
+            setRequestProperty("Authorization", "Bearer $auth")
+            // The probe's seeding traffic is ordinary API traffic, and every flow seeds as the
+            // SAME admin pubkey, so it all lands in one `write` bucket: 30 requests / 60s
+            // (middleware/rate-limit.ts RATE_LIMIT_TIERS.write, keyed by pubkey). Without this
+            // header the gate's own setup throttles itself once the ratchet grows past a
+            // handful of flows, and the symptom is `POST /api/invites -> 429` in enrollment —
+            // indistinguishable from an app regression, and "fixed" by deleting a flow.
+            // `devSurfaceRequestAuthorized` (lib/dev-surfaces.ts) exempts a request presenting
+            // the dev-surface secret for exactly this reason; `backdoor` already relies on it.
+            setRequestProperty("X-Test-Secret", testSecret)
+        }
+    }
+
+    private var adminReady = false
+
+    private fun backdoor(flow: String, path: String, body: String): String =
+        http(flow, "POST", "/api/$path", body, "BACKDOOR") { setRequestProperty("X-Test-Secret", testSecret) }
+
+    private fun http(
+        flow: String,
+        method: String,
+        path: String,
+        body: String,
+        kind: String,
+        headers: HttpURLConnection.() -> Unit,
+    ): String {
+        val conn = URL("$hubUrl$path").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = method
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.headers()
+            conn.doOutput = true
+            conn.outputStream.use { it.write(body.toByteArray()) }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() }.orEmpty()
+            probe(flow, "$kind $method $path → $code ${text.take(160)}")
+            check(code in 200..299) { fail(flow, "$kind $method $path failed: $code $text") }
+            return text
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun probe(flow: String, msg: String) = Log.i(TAG, "[$flow/$role] $msg")
+
+    private fun fail(flow: String, msg: String): String = "[$flow] FAIL $msg".also { Log.e(TAG, it) }
+
+    private companion object {
+        const val TAG = "PROBE"
+        const val PIN = "12345678"
+
+        /** CI's test admin (`tests/helpers.ts` ADMIN_SEED → `TEST_ADMIN_PUBKEY`). */
+        const val ADMIN_SEED = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7"
+    }
+}

@@ -447,7 +447,8 @@
         "conversations:*",
         "reports:*",
         "shifts:read",
-        "volunteers:read",
+        "shifts:set-availability",
+        "users:read",
         "hubs:read"
       ]
     },

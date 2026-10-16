@@ -1,8 +1,8 @@
 import { createHash } from 'crypto'
 import type { AuthPayload, User } from '../types'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
-import { hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { hexToBytes } from '@shared/encoding'
+import { buildAuthMessage, isCanonicalAuthNonce } from '@shared/auth-message'
 import type { IdentityService } from '../services/identity'
 import { createLogger } from './logger'
 import { isRevokedSigningKey } from './revoked-signing-keys'
@@ -35,20 +35,44 @@ export function validateToken(auth: AuthPayload): boolean {
 }
 
 /**
- * Build the canonical auth message bytes.
- * Format: `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}` (legacy)
- * or:     `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}:{nonce}` (with nonce)
+ * Re-exported from `@shared/auth-message` — the single TypeScript construction
+ * path, which mirrors `packages/crypto/src/auth.rs::build_auth_message`.
  *
- * MUST match exactly: packages/crypto/src/auth.rs::build_auth_message()
+ * Re-exported rather than re-implemented so route code and tests that need the
+ * canonical bytes cannot grow a second copy of the layout.
  */
-export function buildAuthMessage(pubkey: string, timestamp: number, method: string, path: string, nonce?: string): Uint8Array {
-  const base = `${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}`
-  return utf8ToBytes(nonce ? `${base}:${nonce}` : base)
+export { buildAuthMessage }
+
+export interface VerifyAuthOptions {
+  /**
+   * Accept the nonce-less message shape.
+   *
+   * Opt-in per route, and only for routes whose wire schema makes `nonce`
+   * optional (today just `POST /api/invites/redeem`, whose body is
+   * `{ code, pubkey, timestamp, token, nonce? }`; clients that sign a nonce
+   * verify in the canonical nonce-ful domain). Everywhere else a token
+   * without a nonce is rejected outright, so a client that drops the nonce it
+   * signed fails loudly instead of silently downgrading to a replayable
+   * signature.
+   */
+  allowMissingNonce?: boolean
 }
 
-export function verifyAuthToken(auth: AuthPayload, method?: string, path?: string): boolean {
+export function verifyAuthToken(
+  auth: AuthPayload,
+  method?: string,
+  path?: string,
+  options: VerifyAuthOptions = {},
+): boolean {
   if (!validateToken(auth)) return false
   if (!method || !path) return false
+  if (auth.nonce === undefined) {
+    // Nonce-less tokens are a separate label domain with no replay protection
+    // by construction. Only routes that cannot carry a nonce may accept them.
+    if (!options.allowMissingNonce) return false
+  } else if (!isCanonicalAuthNonce(auth.nonce)) {
+    return false
+  }
   try {
     const message = buildAuthMessage(auth.pubkey, auth.timestamp, method, path, auth.nonce)
     return ed25519Verify(
@@ -57,6 +81,33 @@ export function verifyAuthToken(auth: AuthPayload, method?: string, path?: strin
       hexToBytes(auth.token),
     )
   } catch {
+    return false
+  }
+}
+
+/**
+ * Mark a verified Ed25519 auth token as used, so it cannot be replayed.
+ *
+ * The Ed25519 signature is deterministic (RFC 8032), so the same
+ * pubkey+timestamp+method+path(+nonce) always produces the same signature
+ * bytes. Storing a hash of the signature makes every signed request
+ * single-use within its TOKEN_MAX_AGE_MS window; the row expires with it.
+ *
+ * Call only AFTER verifyAuthToken() succeeds. Returns false on replay, and
+ * fails closed (false) if the nonce store cannot be reached.
+ */
+export async function consumeAuthToken(auth: AuthPayload, identityService: IdentityService): Promise<boolean> {
+  const nonceHash = createHash('sha256').update(auth.token).digest('hex')
+  const nonceExpiresAt = new Date(auth.timestamp + TOKEN_MAX_AGE_MS)
+  try {
+    const isFirst = await identityService.checkAndMarkAuthNonce(nonceHash, auth.pubkey, nonceExpiresAt)
+    if (!isFirst) {
+      logger.warn('Auth token replay detected', { pubkeyPrefix: auth.pubkey.slice(0, 8) })
+      return false
+    }
+    return true
+  } catch (e) {
+    logger.warn('Auth nonce check failed', { error: e })
     return false
   }
 }
@@ -100,22 +151,7 @@ export async function authenticateRequest(
   const url = new URL(request.url)
   if (!verifyAuthToken(auth, request.method, url.pathname)) return null
 
-  // Replay protection: mark the signature nonce as used.
-  // The Ed25519 signature is deterministic (RFC 8032), so the same
-  // pubkey+timestamp+method+path always produces the same signature bytes.
-  // Storing a hash of the signature prevents replay within the 5-minute window.
-  const nonceHash = createHash('sha256').update(auth.token).digest('hex')
-  const nonceExpiresAt = new Date(auth.timestamp + TOKEN_MAX_AGE_MS)
-  try {
-    const isFirst = await identityService.checkAndMarkAuthNonce(nonceHash, auth.pubkey, nonceExpiresAt)
-    if (!isFirst) {
-      logger.warn('Bearer token replay detected', { pubkeyPrefix: auth.pubkey.slice(0, 8) })
-      return null
-    }
-  } catch (e) {
-    logger.warn('Auth nonce check failed', { error: e })
-    return null
-  }
+  if (!(await consumeAuthToken(auth, identityService))) return null
 
   // Look up user via identity service
   try {

@@ -14,7 +14,7 @@
     "themeLight": "Saq ruwach",
     "themeSystem": "Ruwach rech k'uxlab'al",
     "back": "Titzolij",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "Majun tz'ib'anela' k'o",
     "optOutFooter": "Ruk'isib'al Tzij rech Telik",
     "rateLimit": "Ruch'uyik Jachike (taq tzijob'al/segundo)",
-    "recipientCount": "%d taq winaq kak'ul",
+    "recipientCount": "{{count}} taq winaq kak'ul",
     "recipientCountOne": "1 winaq kak'ul",
     "recipients": "taq winaq kak'ul",
     "saveDraft": "Tiyak Nab'ey Tz'ib'axik",
@@ -617,6 +617,7 @@
     "errorBreak": "Man xtikir ta xjalwachix ri uxlanem",
     "errorClockIn": "Man xtikir ta xtikitaj ri samaj",
     "errorClockOut": "Man xtikir ta xk'istaj ri samaj",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Man xtikir ta xk'astaj chik",
     "goOnBreak": "Tuxlanij",
     "help": "To'ik",
@@ -648,51 +649,6 @@
     "cases": "Cases",
     "triage": "Triage"
   },
-  "deviceLink": {
-    "cameraPermission": "Rajawaxik ri okem pa ri ruk'utu'n rech ketz'et ri taq QR etal",
-    "codePlaceholder": "Tik'am ri QR o etal...",
-    "codesDontMatch": "Man kejunamaj ta ri taq etal",
-    "codesMatch": "Kejunamaj ri taq etal",
-    "codesMismatch": "Man Kejunamaj Ta ri Taq Etal",
-    "compareCodes": "Ka'ib' ri taq k'uxlab'al rajawaxik kek'ut ri junam etal. We man kejunamaj ta, MAN tib'an — jun aj elk'anel katikir k'o.",
-    "complete": "K'uxlab'al K'aman",
-    "connecting": "Tajin kak'am...",
-    "continue": "Tisamajix na",
-    "decryptFailed": "Man xtikir ta xjaqax ri etal chi re ri nab'ey k'uxlab'al. Tarayij chik.",
-    "description": "Tichojmirisax re k'uxlab'al re' rik'in ruk'amik rik'in ri awetal winaq k'o chik.",
-    "enterCode": "Etal rech Chojmixik",
-    "expiresIn5": "Re etal re' kak'is pa 5 minutos.",
-    "importing": "Tajin kaqasax retal winaq...",
-    "instructions": "Pa ri nab'ey k'uxlab'al awech, tib'e pa Uchojmixik xuqujeʼ tijaqax ri 'Taq K'aman K'uxlab'al' raqan. Chirij tatz'et ri QR etal o tatz'ib'aj ri etal waral kak'ut.",
-    "invalidCode": "Man okel ta ri etal rech chojmixik. Tatz'et ri QR etal o tawachib'ej ronojel ri etal.",
-    "link": "Tik'am",
-    "linkExpired": "Ri ramaj rech ruk'amik xk'is. Tarayij chik.",
-    "linkFailed": "Man xtikir ta xk'am ri k'uxlab'al",
-    "linkFromPrimary": "Rech kak'am jun k'ak'a' k'uxlab'al, tajaqaj ri K'uxlab'al pa ri k'ak'a' k'uxlab'al, tapitz'a' 'Tik'am re k'uxlab'al re'', xuqujeʼ tatz'ib'aj ri etal kak'ut ikim.",
-    "linkSuccess": "¡Ri k'uxlab'al xk'am utz!",
-    "linkSuccessDesc": "Ri awetal winaq k'o chik pa re k'uxlab'al re'. Tib'an jun PIN rech kuchajij.",
-    "linkThisDevice": "Tik'am re k'uxlab'al re'",
-    "linkedDevices": "Taq K'aman K'uxlab'al",
-    "linkedDevicesDesc": "Tik'am jun k'ak'a' k'uxlab'al rik'in ri awetal winaq rik'in rutz'ib'axik ri etal.",
-    "openSettings": "Tijaqax Uchojmixik",
-    "orEnterCode": "O tatz'ib'aj re etal re' pa ri nab'ey k'uxlab'al awech:",
-    "retry": "Tarayij Chik",
-    "sasMismatch": "Ri taq etal rech ruchajixik man xkijunamaj ta. Ri ruk'amik xq'at rech aruchajixik. Tarayij chik.",
-    "scan": "Tatz'et QR Etal",
-    "scanFromPrimary": "Tatz'et re etal re' pa ri Uchojmixik ri nab'ey k'uxlab'al awech.",
-    "securityCode": "Retal ruchajixik",
-    "startLinking": "Titikirisax Ruk'amik",
-    "stepImport": "Tiqasax",
-    "stepScan": "Titz'et",
-    "stepVerify": "Tijikib'ax",
-    "title": "Tik'am K'uxlab'al",
-    "verify": "Tijikib'ax K'uxlab'al",
-    "verifySAS": "Tijikib'ax Retal Ruchajixik",
-    "verifySASDesc": "Tatz'et chi re junam re etal re' rik'in ri etal pa ri nab'ey k'uxlab'al awech.",
-    "verifySASPrimary": "Tijikib'ax chi re junam re etal re' rik'in ri etal pa ri k'ak'a' k'uxlab'al:",
-    "verifySubtitle": "Tijikib'ax chi ri etal kejunamaj pa ka'ib' taq k'uxlab'al",
-    "waitingForPrimary": "Tajin kak'iy ri nab'ey k'uxlab'al"
-  },
   "hubs": {
     "accessDenied": "Man k'o ta okem",
     "createHub": "Tib'an Hub",
@@ -716,6 +672,7 @@
       "archived": "Yakon",
       "suspended": "Q'atal"
     },
+    "switchFooter": "Chachapa jun hub rech kakꞌexik ri achꞌaꞌteem. Ri hub ri tajin kachakun kubꞌij jas taq tzꞌibꞌ kawilo.",
     "switchHub": "Tik'ex hub",
     "title": "Rub'anik Hub",
     "urlLabel": "Hub URL",
@@ -734,9 +691,12 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Ri tzꞌibꞌ awatalik pa we hub riꞌ majaꞌ kakwin katzijox pa we kꞌutbꞌal riꞌ",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Couldn't load your hubs",
+    "membershipLoadFailedBody": "The server didn't say which hubs you belong to, so nothing can be shown yet. Check your connection and try again."
   },
   "ivr": {
     "selfAnnouncement": "Pa K'iche', tzukutij [N].",
@@ -822,6 +782,7 @@
     "loading": "Tajin kesamajix ri taq tz'ib'atajem...",
     "newConversationNote": "K'ak'a' Tz'ib'atajem rech Tzijoxik",
     "newNote": "K'ak'a' Tz'ib'atajem",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Majun tz'ib'atajem k'o",
     "noReplies": "Majun taq tzolixik",
     "noSearchResults": "Majun tz'ib'atajem xriq",
@@ -874,6 +835,7 @@
     "backupAcknowledge": "Xyak ri nwetal rech koltajem pa jun chajin k'olib'al",
     "backupDescription": "Tatz'ib'aj re etal rech koltajem re' xuqujeʼ tayak pa jun chajin k'olib'al. Ri' xa re' ri b'eyal rech katzolij ri awetal winaq pa jun k'ak'a' k'uxlab'al.",
     "backupDownloaded": "Ri yakb'al xqasax",
+    "backupFailed": "Man xkowin taj uxik ri achajinik ri tzʼapital: {{reason}}",
     "backupTitle": "Tiyak ri Awetal rech Koltajem",
     "confirmPin": "Tijikib'ax ri PIN awech",
     "confirmPinDescription": "Tatz'ib'aj ri junam PIN chik rech tijikib'ax",
@@ -888,6 +850,8 @@
     "getStarted": "Titikirisax",
     "goToLogin": "Tib'e pa Tok",
     "invalidCode": "Man okel ta ri etal rech okem",
+    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
+    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
     "noCode": "Majun etal rech okem ya'on",
     "npubLabel": "Ri Awetal K'utunïq",
     "deviceKeyLabel": "Ri Awewan Etal",
@@ -935,19 +899,19 @@
     "dotFilled": "Nojinaq",
     "enterPin": "Tatz'ib'aj ri PIN awech",
     "keyLocked": "Ri etal tz'apital",
-    "lockoutRemaining": "Tz'apital. Tarayij chik pa %d segundos.",
+    "lockoutRemaining": "Tz'apital. Tarayij chik pa {{seconds}} segundos.",
     "mismatch": "Ri taq PIN man kijunamaj ta. Tarayij chik.",
     "setEncrypting": "Tajin ke'ewan ri awetal...",
     "setSubtitle": "Tacha' jun PIN rech 6-8 ajilab'al rech kuchajij ri awetal",
     "setTitle": "Tib'an jun PIN",
     "tooShort": "Ri PIN rajawaxik 6 ajilab'al",
-    "unlockAttempts": "%d chi re %d rayik kojo'on",
+    "unlockAttempts": "{{used}} chi re {{total}} rayik kojo'on",
     "unlockSubtitle": "Tatz'ib'aj ri PIN awech rech tijaqax",
     "unlockTitle": "Tatz'ib'aj ri PIN awech",
     "unlockVerifying": "Tajin katz'et...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1164,7 +1128,6 @@
     "debugLogging": "Rutz'ib'axik Sachoj",
     "debugLoggingDesc": "Tijaqax ri nimalaj rutz'ib'axik rech kichajixik taq sachoj",
     "default": "Ruyonil",
-    "deviceLinkDesc": "Tik'am jun chik k'uxlab'al rik'in ri awetal winaq",
     "devicesHeader": "Taq K'uxlab'al",
     "displayName": "Rub'i' rech K'utik",
     "enableTranscription": "Tijaqax ri rutz'ib'axik ch'ab'al rech oyonik",
@@ -1189,7 +1152,6 @@
     "languageHeader": "Ch'ab'al",
     "languages": "Taq Ch'ab'al",
     "linkCopied": "Ri okem xwachib'ex",
-    "linkDevice": "Tik'am K'uxlab'al",
     "lock": "Titz'apix ri K'uxlab'al",
     "lock15min": "15 minutos",
     "lock1min": "1 minuto",
@@ -1422,7 +1384,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "%d oyonik tajin kasamaj",
+    "activeCalls": "{{count}} oyonik tajin kasamaj",
     "assigned": "Ya'on",
     "available": "K'o",
     "clockIn": "Titikitaj Samaj",
@@ -1431,7 +1393,7 @@
     "clockOutTitle": "Tik'is ri Samaj?",
     "clockedIn": "At pa samaj chik",
     "clockedOut": "Man at pa samaj ta chik",
-    "count": "%d samaj",
+    "count": "{{count}} samaj",
     "create": "Tib'an Samaj",
     "createShift": "Tib'an Samaj",
     "days": {
@@ -1458,6 +1420,7 @@
     "fallbackDescription": "We aj samajela' kek'ul oyonik we majun samaj chojmirisan",
     "fallbackGroup": "Molaj rech K'ayewal",
     "loading": "Tajin kasamajix ri ucholajil...",
+    "manage": "B'anel",
     "name": "Rub'i' Samaj",
     "nextShift": "Jun chik samaj",
     "noShifts": "Majun samaj chojmirisan. Tib'an jun samaj rech katikirisax ri oyonik.",
@@ -1476,7 +1439,7 @@
     "selectedCount": "{{count}} ch'akon",
     "shiftName": "Rub'i' Samaj",
     "signUp": "Tatz'ib'aj Ab'i'",
-    "signedUp": "Xatz'ib'aj ab'i' rech %@",
+    "signedUp": "Xatz'ib'aj ab'i' rech {{shift}}",
     "since": "Chi rij",
     "startTime": "Rutikirisaxik Ramaj",
     "startsAt": "katikirisax pa",
@@ -1522,6 +1485,8 @@
       "empty": "No overrides",
       "emptySubtitle": "Add overrides to modify shift assignments for specific dates",
       "note": "Note",
+      "scope": "Samaj",
+      "scopeAll": "Ronojel samaj",
       "title": "Shift Overrides",
       "type": "Override Type",
       "typeCancel": "Cancel shift",
@@ -1541,6 +1506,7 @@
       "empty": "No availability blocks",
       "emptySubtitle": "Add blocks to indicate when you are unavailable",
       "endDate": "End Date",
+      "invalidRange": "End date must be on or after the start date",
       "reason": "Reason (optional)",
       "startDate": "Start Date",
       "title": "Availability"
@@ -2217,7 +2183,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -2228,7 +2194,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -2764,7 +2730,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -2821,7 +2787,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -2928,7 +2894,7 @@
     "faqGettingStartedHeader": "FAQ: Getting Started",
     "faqGsA1": "Ask your admin for an invite code. Enter the hub URL, create or import your identity, and set a PIN. You'll be ready to receive calls once you clock in for your shift.",
     "faqGsA2": "Your device key is your secret signing key — like a password that proves your identity. It's generated on your device and never sent to the server. Back it up securely; if you lose it, you'll need a new identity.",
-    "faqGsA3": "Yes. Use the Device Link feature in Settings to securely transfer your identity to another device using a QR code and encrypted key exchange.",
+    "faqGsA3": "Not yet. This release supports one device per identity — multi-device linking is planned for a future update. For now, sign in on the device where you created your identity.",
     "faqGsQ1": "How do I get started?",
     "faqGsQ2": "What is a device key?",
     "faqGsQ3": "Can I use multiple devices?",
@@ -3903,7 +3869,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -4135,8 +4101,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -4159,15 +4125,15 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "unlock": {
     "subtitle": "Tatz'ib'aj ri PIN awech rech tijaqax",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "callActions": {
     "openNotes": "Taq Tz'ib'atajem",
@@ -4210,7 +4176,8 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "lock": {
     "app": "Titz'apix ri K'uxlab'al",
@@ -4345,7 +4312,7 @@
     "connecting": "Tajin kak'am...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "platformSettings": {
     "transcriptionEnabled": "Rutz'ib'axik Ch'ab'al",
@@ -4460,7 +4427,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4473,7 +4440,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4512,16 +4479,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4539,6 +4506,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4634,7 +4604,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",
@@ -4660,5 +4630,17 @@
     "unavailableMessage": "Kojonik, man k'o ta jun chik chuyak' ri oyonem awäch wakami. Tab'ana' tachajij jun chik mul. Chawila'.",
     "voicemailPrompt": "Man k'o ta jun chik chuyak' ri oyonem awäch wakami. Tab'ana' taya' jun tzijob'äl chirij ri ch'ab'äl.",
     "voicemailThanks": "Maltiox rech ri atzijob'äl. Chawila'."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

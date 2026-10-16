@@ -4,7 +4,6 @@ import { cors } from './middleware/cors'
 import { apiVersion } from './middleware/api-version'
 import { auth } from './middleware/auth'
 import { rateLimit } from './middleware/rate-limit'
-import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from './lib/helpers'
 import { createMiddleware } from 'hono/factory'
 import configRoutes from './routes/config'
 import devRoutes from './routes/dev'
@@ -19,6 +18,7 @@ import callsRoutes from './routes/calls'
 import auditRoutes from './routes/audit'
 import settingsRoutes from './routes/settings'
 import telephonyRoutes from './routes/telephony'
+import ivrMediaRoutes from './routes/ivr-media'
 import webrtcRoutes from './routes/webrtc'
 import messagingRoutes from './messaging/router'
 import conversationsRoutes from './routes/conversations'
@@ -103,7 +103,10 @@ api.use('*', async (c, next) => {
   const durationSec = (performance.now() - t0) / 1000
   const method = c.req.method
   // Normalize path: strip query params and collapse IDs for cardinality control
-  const path = c.req.path.replace(/\/[0-9a-f-]{8,}(\/|$)/gi, '/:id$1')
+  // A generated-speech path names its own text (one per CAPTCHA), so it is one route.
+  const path = c.req.path
+    .replace(/\/ivr-speech\/.*$/, '/ivr-speech/:clip')
+    .replace(/\/[0-9a-f-]{8,}(\/|$)/gi, '/:id$1')
   recordHttpRequest(method, path, c.res.status, durationSec)
 })
 
@@ -123,7 +126,9 @@ api.use('*', async (c, next) => {
 
 api.use('*', apiVersion)
 
-// Dev route guard — only available when ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true (H04)
+// Dev route guard — see lib/dev-surfaces.ts for the three factors that must all
+// hold (environment allowlist, DEV_ROUTES_ENABLED, and a strong shared secret
+// on anything but a developer's own machine). H04.
 const devGuard = createMiddleware<AppEnv>(async (c, next) => {
   if (!devSurfacesEnabled(c.env)) {
     return c.json({ error: 'Not Found' }, 404)
@@ -131,13 +136,45 @@ const devGuard = createMiddleware<AppEnv>(async (c, next) => {
   return next()
 })
 api.use('/test-*', devGuard)
+// The dev surface can now be reached on a staging target, so the shared secret
+// is guessable in principle. Throttle the GUESSING, not the harness: a caller
+// that already presents the right secret is the test runner and makes hundreds
+// of /test-* calls per run, so a cap on those would make the suite unrunnable —
+// which is how a security control becomes a reason to turn the control off.
+//
+// Plain `rateLimit('webhook')` is enough to say both of those things, because
+// the exemption for a secret-carrying request now lives INSIDE the middleware
+// (middleware/rate-limit.ts, via devSurfaceRequestAuthorized) — the suite's
+// ordinary API calls need it too, not just its /test-* calls. This used to be a
+// wrapper here that short-circuited on the secret before delegating; that line
+// would now be an exact duplicate of the middleware's own check, so the wrapper
+// is gone rather than kept as a second copy that can drift. The behaviour it
+// specified is pinned by tests, not by its existence:
+// `__tests__/unit/dev-surface-rate-limit-bypass.test.ts` asserts that a
+// secret-less and a wrong-secret /test-* request are still counted, and that a
+// correct-secret one is not.
+//
+// `webhook` (300/min per IP) rather than `strict` (5/min) for the probes: the
+// suite itself asserts the refusal path, calling /test-reset with no secret and
+// with a wrong one (packages/test-specs/features/security/*.feature), and a
+// 5/min bucket turns those deliberate 404s into 429s on exactly the deployed
+// target this change exists to enable. 300/min against a secret of at least
+// MIN_DEPLOYED_SECRET_LENGTH characters — `openssl rand -hex 32`, 128 bits — is
+// no weaker in any practical sense; the length minimum, enforced both at
+// startup (lib/config.ts) and at the gate (lib/dev-surfaces.ts), is the control
+// that actually bounds guessing.
+api.use('/test-*', rateLimit('webhook'))
 
 // --- Rate limiting (H03) — applied per-tier before route handlers ---
-// Strict tier: auth/provisioning endpoints (by IP, 5 req/min)
+// Strict tier: auth endpoints (by IP, 5 req/min). Provisioning is deliberately
+// NOT mounted here: its routes carry their own tiers (create: strict, poll:
+// poll, payload: write) because a link flow's two devices usually share one
+// NAT IP, and a second strict mount here also double-counted every provision
+// request against the same `strict:<ip>` bucket as the route-level limiter
+// (#1789).
 api.use('/auth/*', rateLimit('strict'))
 api.use('/webauthn/*', rateLimit('strict'))
 api.use('/invites/*', rateLimit('strict'))
-api.use('/provision/*', rateLimit('strict'))
 api.use('/recovery-group/*', rateLimit('strict'))
 
 // Webhook tier: provider callbacks (by IP, 300 req/min)
@@ -190,22 +227,11 @@ api.patch('/messaging/preferences', async (c) => {
 // Only POST is registered here; GET /security-events falls through to the authenticated router.
 api.route('/security-events', publicSecurityEventsRoutes)
 
-// Public IVR audio serve: the telephony provider fetches operator-uploaded
-// prompts during a call (buildAudioUrlMap). Operators listen back through the
-// authenticated GET /settings/ivr-audio/:promptType/:language instead.
+// Public IVR media: what a telephony provider fetches during a call —
+// operator-uploaded prompts and generated speech — through signed URLs only.
 api.use('/ivr-audio/*', rateLimit('webhook'))
-api.get('/ivr-audio/:promptType/:language', async (c) => {
-  const services = c.get('services')
-  const promptType = c.req.param('promptType')
-  const language = c.req.param('language')
-  if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) {
-    return c.json({ error: 'Invalid parameters' }, 400)
-  }
-  const result = await services.settings.getIvrAudio(promptType, language)
-  if (!result) return c.json({ error: 'Not found' }, 404)
-  // Uploads are validated as PCM WAV (ivrAudioFormatError), so the type is true.
-  return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
-})
+api.use('/ivr-speech/*', rateLimit('webhook'))
+api.route('/', ivrMediaRoutes)
 
 // Authenticated routes
 const authenticated = new Hono<AppEnv>()

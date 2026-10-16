@@ -22,9 +22,9 @@ enum WakeKeyError: LocalizedError {
         case .noPrivateKey:
             return NSLocalizedString("error_no_wake_key", comment: "No wake key found")
         case .decryptionFailed(let detail):
-            return String(format: NSLocalizedString("error_wake_decrypt_failed", comment: "Wake decrypt failed: %@"), detail)
+            return L10n.format("error_wake_decrypt_failed", comment: "Wake decrypt failed: %@", detail)
         case .registrationFailed(let detail):
-            return String(format: NSLocalizedString("error_wake_register_failed", comment: "Device registration failed: %@"), detail)
+            return L10n.format("error_wake_register_failed", comment: "Device registration failed: %@", detail)
         }
     }
 }

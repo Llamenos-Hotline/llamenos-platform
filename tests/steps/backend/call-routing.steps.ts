@@ -3,32 +3,47 @@
  * Simulates calls, verifies routing, call state, and call history via API.
  */
 import { expect } from '@playwright/test'
-import { When, Then } from './fixtures'
+import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
-  simulateIncomingCall,
+  simulateIncomingCallResponse,
   simulateAnswerCall,
   simulateEndCall,
   simulateVoicemail,
 } from '../../simulation-helpers'
-import { apiGet } from '../../api-helpers'
+import { apiGet, apiPost, createVolunteerViaApi, addHubMemberViaApi } from '../../api-helpers'
+import type { CallRecord } from '@protocol/schemas/calls'
 
 // ── Call Simulation ────────────────────────────────────────────────
 
 When('a call arrives from {string}', async ({ request, world }, caller: string) => {
   const state = getScenarioState(world)
-  try {
-    const result = await simulateIncomingCall(request, { callerNumber: caller, hubId: state.hubId })
-    state.callId = result.callId
-    state.callStatus = result.status
-  } catch {
-    // The simulation endpoint runs the real ban check (services.records.checkBan) and
-    // returns non-2xx when the caller is banned — this catch is what actually observes
-    // that. Do NOT also derive "rejected" from state.banPhones here: that would mark the
-    // call rejected regardless of what the server actually did, silently passing even if
-    // the real ban check were removed or broken (see issue #1151).
-    state.callStatus = 'rejected'
+
+  // Record the server's own answer and nothing else. The step must never decide
+  // the outcome itself (e.g. by re-reading the ban list it just wrote) and must
+  // never swallow a failure: a crashing server and an enforced ban both used to
+  // land on callStatus 'rejected', so a 500 made every ban scenario pass.
+  const response = await simulateIncomingCallResponse(request, {
+    callerNumber: caller,
+    hubId: state.hubId,
+  })
+  state.callHttpStatus = response.status
+  state.callResponseBody = response.data
+
+  if (response.ok) {
+    state.callId = response.data.callId
+    state.callStatus = response.data.status
+    return
   }
+
+  // Only the documented refusals are routing decisions. Anything else — a 500,
+  // a 404 from a disabled simulation route, an HTML error page — is a fault and
+  // must fail the scenario here rather than be re-read as "rejected".
+  expect(
+    [403, 422],
+    `incoming-call for ${caller} returned HTTP ${response.status}: ${JSON.stringify(response.data)}`,
+  ).toContain(response.status)
+  state.callStatus = response.status === 403 ? 'rejected' : (response.data.status ?? 'refused')
 })
 
 When('volunteer {int} answers the call', async ({ request, world }, index: number) => {
@@ -52,6 +67,107 @@ When('the call goes to voicemail', async ({ request, world }) => {
   getScenarioState(world).callStatus = result.status
 })
 
+// ── In-app answer (first pickup wins) ──────────────────────────────
+// These go through the real POST /hubs/:hubId/calls/:callId/answer route — the
+// simulation endpoint bypasses the ring-set and first-pickup checks under test.
+
+const IN_APP_ANSWER_KEY = 'inAppAnswer'
+
+interface InAppAnswer {
+  /** 1-based volunteer index (into ScenarioState.volunteers) */
+  volunteer: number
+  status: number
+}
+
+interface InAppAnswerState {
+  answers: InAppAnswer[]
+}
+
+function inAppAnswers(world: Record<string, unknown>): InAppAnswerState {
+  let s = getState<InAppAnswerState | undefined>(world, IN_APP_ANSWER_KEY)
+  if (!s) {
+    s = { answers: [] }
+    setState(world, IN_APP_ANSWER_KEY, s)
+  }
+  return s
+}
+
+async function answerInApp(
+  request: Parameters<typeof apiPost>[0],
+  world: Record<string, unknown>,
+  index: number,
+): Promise<InAppAnswer> {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeDefined()
+  const vol = state.volunteers[index - 1]
+  expect(vol).toBeDefined()
+  const res = await apiPost(request, `/hubs/${state.hubId}/calls/${state.callId}/answer`, {}, vol.deviceKey)
+  const answer = { volunteer: index, status: res.status }
+  inAppAnswers(world).answers.push(answer)
+  return answer
+}
+
+Given('a hub member who is not on shift', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const member = await createVolunteerViaApi(request, { name: `BDD Off-shift ${Date.now()}` })
+  await addHubMemberViaApi(request, state.hubId, member.pubkey, ['role-volunteer'])
+  state.volunteers.push({ ...member, onShift: false })
+})
+
+When('volunteer {int} answers the call in the app', async ({ request, world }, index: number) => {
+  await answerInApp(request, world, index)
+})
+
+When('the off-shift member answers the call in the app', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const index = state.volunteers.findIndex(v => v.onShift === false) + 1
+  expect(index).toBeGreaterThan(0)
+  await answerInApp(request, world, index)
+})
+
+When(
+  'volunteers {int} and {int} answer the call in the app at the same time',
+  async ({ request, world }, a: number, b: number) => {
+    await Promise.all([answerInApp(request, world, a), answerInApp(request, world, b)])
+  },
+)
+
+Then('exactly {int} in-app answer succeeds', async ({ world }, count: number) => {
+  expect(inAppAnswers(world).answers.filter(a => a.status === 200)).toHaveLength(count)
+})
+
+Then('every other in-app answer is rejected with status {int}', async ({ world }, status: number) => {
+  const losers = inAppAnswers(world).answers.filter(a => a.status !== 200)
+  expect(losers.length).toBeGreaterThan(0)
+  for (const loser of losers) expect(loser.status).toBe(status)
+})
+
+Then('the last in-app answer is rejected with status {int}', async ({ world }, status: number) => {
+  const answers = inAppAnswers(world).answers
+  expect(answers.length).toBeGreaterThan(0)
+  expect(answers[answers.length - 1].status).toBe(status)
+})
+
+Then('the winning volunteer owns the call', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const winners = inAppAnswers(world).answers.filter(a => a.status === 200)
+  expect(winners).toHaveLength(1)
+  const { status, data } = await apiGet<{ answeredBy: string; status: string }>(
+    request,
+    `/hubs/${state.hubId}/calls/${state.callId}`,
+  )
+  expect(status).toBe(200)
+  expect(data.status).toBe('in-progress')
+  expect(data.answeredBy).toBe(state.volunteers[winners[0].volunteer - 1].pubkey)
+})
+
+Then('volunteer {int} can still hang up the call', async ({ request, world }, index: number) => {
+  const state = getScenarioState(world)
+  const vol = state.volunteers[index - 1]
+  const res = await apiPost(request, `/hubs/${state.hubId}/calls/${state.callId}/hangup`, {}, vol.deviceKey)
+  expect(res.status).toBe(200)
+})
+
 // ── Call State Assertions ──────────────────────────────────────────
 
 Then('the call status is {string}', async ({ world }, expectedStatus: string) => {
@@ -59,12 +175,28 @@ Then('the call status is {string}', async ({ world }, expectedStatus: string) =>
 })
 
 Then('the call is rejected', async ({ world }) => {
-  expect(getScenarioState(world).callStatus).toBe('rejected')
+  const state = getScenarioState(world)
+
+  // "Rejected" means the server refused the caller as banned — HTTP 403 with the
+  // ban marker. Asserting only on a local status string cannot distinguish that
+  // from a server fault, which is how a 500 used to satisfy this step.
+  expect(
+    state.callHttpStatus,
+    `expected the ban check to refuse the call with 403, got ${state.callHttpStatus}: ${JSON.stringify(state.callResponseBody)}`,
+  ).toBe(403)
+  expect(state.callResponseBody?.banned).toBe(true)
+  expect(state.callStatus).toBe('rejected')
+  // A refused call is never recorded, so there is nothing to answer or end.
+  expect(state.callId).toBeUndefined()
 })
 
 Then('no volunteers receive a ring', async ({ world }) => {
-  // When a call is rejected, no ring happens — verified by the rejected status
-  expect(getScenarioState(world).callStatus).toBe('rejected')
+  const state = getScenarioState(world)
+  // No call record was created, so no ring event could have been published.
+  // Assert the refusal itself, not a status string the step could have set.
+  expect(state.callHttpStatus).toBe(403)
+  expect(state.callResponseBody?.banned).toBe(true)
+  expect(state.callId).toBeUndefined()
 })
 
 Then('all {int} volunteers receive a ring', async ({ world }, count: number) => {
@@ -83,7 +215,7 @@ Then('volunteer {int} no longer receives a ring', async ({ world }, _index: numb
 Then('the call history contains {int} entry/entries', async ({request, world}, count: number) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history` : '/calls/history'
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string }>; total: number }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
   )
@@ -95,7 +227,7 @@ Then('the call history contains {int} entry/entries', async ({request, world}, c
 Then('the most recent call shows status {string}', async ({request, world}, expectedStatus: string) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history?limit=1` : '/calls/history?limit=1'
-  const { status, data } = await apiGet<{ calls: Array<{ status: string }> }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request,
     path,
   )
@@ -107,21 +239,22 @@ Then('the most recent call shows status {string}', async ({request, world}, expe
 Then('the most recent call shows caller {string}', async ({request, world}, _expectedCaller: string) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history?limit=1` : '/calls/history?limit=1'
-  const { status, data } = await apiGet<{ calls: Array<{ callerLast4?: string; callerNumber?: string }> }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request,
     path,
   )
   expect(status).toBe(200)
   expect(data.calls.length).toBeGreaterThan(0)
-  // Caller number is stored as a hash; callerLast4 is available for display
+  // The server sends only the last four digits; the full number is encrypted (#1129).
   const call = data.calls[0]
-  expect(call.callerLast4 || call.callerNumber).toBeTruthy()
+  expect(call.callerLast4).toBeTruthy()
+  expect(call.callerNumber).toBeUndefined()
 })
 
 When('the call history is filtered by status {string}', async ({ request, world }, filterStatus: string) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history?status=${filterStatus}` : `/calls/history?status=${filterStatus}`
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string }>; total: number }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
   )
@@ -135,7 +268,7 @@ When('the call history is filtered to today\'s date', async ({ request, world })
   const path = hubId
     ? `/hubs/${hubId}/calls/history?dateFrom=${today}&dateTo=${today}`
     : `/calls/history?dateFrom=${today}&dateTo=${today}`
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string }>; total: number }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
   )

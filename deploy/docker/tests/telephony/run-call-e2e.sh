@@ -14,7 +14,7 @@
 #   E2E_ARI_DEBUG=1 log every ARI event in the Asterisk container's output
 #
 # Needs: Docker. Nothing else: the stack shares no database, port or volume
-# with the dev stack (docker-compose.dev.yml) beyond the PBX's SIP/ARI ports.
+# with the dev stack (docker-compose.dev.yml).
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -28,6 +28,7 @@ KEEP=false
 export E2E_WORKER_PORT="$PORT"
 export E2E_CARRIER_CONTAINER="$PROJECT-sip-carrier-1"
 export E2E_ASTERISK_CONTAINER="$PROJECT-asterisk-1"
+export E2E_APP_CONTAINER="$PROJECT-app-1"
 # The app reaches ARI and the bridge by their names on the compose network,
 # exactly as in production.
 export E2E_WORKER_ARI_URL=http://asterisk:8088
@@ -38,11 +39,26 @@ export BRIDGE_SECRET="${BRIDGE_SECRET:-$(openssl rand -hex 32)}"
 export HMAC_SECRET="$(openssl rand -hex 32)"
 export SERVER_SECRET="$(openssl rand -hex 32)"
 export ADMIN_PUBKEY="$(bun -e "import { seedHexToPubkey, ADMIN_SEED } from './tests/api-helpers'; console.log(seedHexToPubkey(ADMIN_SEED))")"
+# The X25519 HPKE recipient derived from the same seed — a different key from
+# ADMIN_PUBKEY, and required whenever it is set (#1283).
+export ADMIN_DECRYPTION_PUBKEY="$(bun -e "import { deriveAdminKeys } from './scripts/bootstrap-admin'; import { ADMIN_SEED } from './tests/api-helpers'; import { hexToBytes } from '@noble/hashes/utils.js'; console.log(deriveAdminKeys(hexToBytes(ADMIN_SEED)).decryptionPubkey)")"
 export TEST_HUB_URL="http://127.0.0.1:$PORT"
+# The client-facing ports belong to Kamailio, never Asterisk. Use isolated
+# host ports so this suite can run beside a shared dev telephony profile.
+export E2E_SIP_EDGE_PORT="${E2E_SIP_EDGE_PORT:-35060}"
+export E2E_SIP_EDGE_TLS_PORT="${E2E_SIP_EDGE_TLS_PORT:-35061}"
+export E2E_PBX_ARI_PORT="${E2E_PBX_ARI_PORT:-38088}"
+export E2E_BRIDGE_PORT="${E2E_BRIDGE_PORT:-33200}"
+export SIP_UDP_PORT="$E2E_SIP_EDGE_PORT"
+export SIP_TCP_PORT="$E2E_SIP_EDGE_PORT"
+export SIPS_PORT="$E2E_SIP_EDGE_TLS_PORT"
+export E2E_ARI_REST_URL="http://127.0.0.1:$E2E_PBX_ARI_PORT/ari"
+export E2E_BRIDGE_URL="http://127.0.0.1:$E2E_BRIDGE_PORT"
 
 COMPOSE=(docker compose -p "$PROJECT"
   -f deploy/docker/docker-compose.dev.yml
   -f deploy/docker/tests/telephony/docker-compose.carrier.yml
+  -f deploy/docker/tests/telephony/docker-compose.ports.yml
   --profile telephony)
 
 cleanup() {
@@ -54,17 +70,17 @@ trap cleanup EXIT
 
 # Always a fresh stack: credentials and secrets are generated per run, and
 # Asterisk only reads the ARI password when it starts. Drop this project's own
-# volumes — its database, and the astdb where a previous run's provisioned
-# trunk lives — so the PBX starts with no trunk and the app with no hubs.
+# volumes — its database, Asterisk astdb, and SIP edge certificate — so the PBX
+# starts with no trunk and the app with no hubs.
 "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
-# Compose claims the PBX ports itself; the app's host port is published by
-# this project, so check it only once a stack kept by --keep is gone.
+# Compose claims the edge and ARI ports itself; the app's host port is published
+# by this project, so check it only once a stack kept by --keep is gone.
 if ss -ltnH "( sport = :$PORT )" | grep -q .; then
   echo "port $PORT is already in use — set E2E_WORKER_PORT or stop whatever holds it" >&2
   exit 1
 fi
-docker volume rm -f "${PROJECT}_asterisk-db" "${PROJECT}_pgdata" "${PROJECT}_rustfsdata" >/dev/null
-"${COMPOSE[@]}" up -d --build --wait app asterisk sip-carrier sip-bridge
+docker volume rm -f "${PROJECT}_asterisk-db" "${PROJECT}_asterisk-keys" "${PROJECT}_kamailio-keys" "${PROJECT}_sip-tls-anchor" "${PROJECT}_pgdata" "${PROJECT}_rustfsdata" >/dev/null
+"${COMPOSE[@]}" up -d --build --wait app asterisk kamailio sip-carrier sip-bridge
 if [[ -n "${E2E_ARI_DEBUG:-}" ]]; then
   # Log every ARI event sent to the bridge in the Asterisk container's output.
   docker exec "$PROJECT-asterisk-1" asterisk -rx "ari set debug llamenos on"

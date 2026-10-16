@@ -44,6 +44,11 @@ function makeHub(overrides: Record<string, unknown> = {}) {
 
 function setup() {
   const { db } = createMockDb()
+  // updateHubSettings (#1144) now reads its merged result back via
+  // `.returning()` instead of computing it purely in JS — give it a
+  // non-empty default row so tests that don't care about the exact
+  // persisted shape don't have to set one up themselves.
+  db.$setInsertResult([{ settings: {} }])
   const service = new SettingsService(db as any)
   return { db, service }
 }
@@ -119,57 +124,50 @@ describe('SettingsService.checkRateLimit', () => {
     ).rejects.toMatchObject({ status: 400 })
   })
 
-  it('returns not limited for first call (no existing record)', async () => {
+  // The window arithmetic now runs inside a single atomic SQL statement
+  // (#1492), so what this layer owns is the verdict boundary applied to the
+  // count the statement returns. The counting, window expiry and concurrency
+  // behaviour are asserted against real PostgreSQL in
+  // __tests__/integration/rate-limit-concurrency.test.ts — a mocked db cannot
+  // exhibit the interleaving that made the old read-modify-write undercount.
+
+  it('returns not limited for the first request in a window', async () => {
     const { db, service } = setup()
-    // No existing rate limit record
-    db.$setSelectResult([])
+    db.$setExecuteResult([{ count: 1 }])
 
     const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
     expect(result).toEqual({ limited: false })
   })
 
-  it('returns not limited when under the limit', async () => {
+  it('returns not limited when the in-window count is within the budget', async () => {
     const { db, service } = setup()
-    const now = Date.now()
-    // 1 recent timestamp, limit is 3 → after adding new one: 2 < 3 = not limited
-    db.$setSelectResult([{ key: 'caller:1', timestamps: [now - 5000] }])
+    db.$setExecuteResult([{ count: 3 }])
 
     const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
     expect(result).toEqual({ limited: false })
   })
 
-  it('returns limited when at or over the limit', async () => {
+  it('returns limited once the in-window count exceeds the budget', async () => {
     const { db, service } = setup()
-    const now = Date.now()
-    // 3 recent timestamps + the new one = 4 total, limit is 3
-    db.$setSelectResult([
-      { key: 'caller:1', timestamps: [now - 5000, now - 10000, now - 15000] },
-    ])
+    db.$setExecuteResult([{ count: 4 }])
 
     const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
-    // 3 existing + 1 new = 4 >= 3, so limited
     expect(result).toEqual({ limited: true })
   })
 
-  it('filters out timestamps older than 60 seconds', async () => {
+  it('counts the request through a single statement, not a read-then-write', async () => {
     const { db, service } = setup()
-    const now = Date.now()
-    // Old timestamps (>60s ago) should be filtered; only the new one counts
-    db.$setSelectResult([
-      {
-        key: 'caller:1',
-        timestamps: [now - 90_000, now - 120_000],
-      },
-    ])
+    db.$setExecuteResult([{ count: 1 }])
 
-    const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
-    // Only 1 timestamp (the new one) counts — not limited
-    expect(result).toEqual({ limited: false })
+    await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
+
+    expect(db.execute).toHaveBeenCalledTimes(1)
+    expect(db.select).not.toHaveBeenCalled()
   })
 
   it('allows alphanumeric keys with colons, underscores, hyphens', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([])
+    db.$setExecuteResult([{ count: 1 }])
 
     // Should not throw
     await expect(
@@ -289,9 +287,12 @@ describe('SettingsService per-hub spam settings (#1051)', () => {
 
   it('hub update persists to hub_settings and never to system_settings', async () => {
     const { db, service } = setup()
+    // updateHubSettings (#1144) no longer reads the existing blob before
+    // writing — it merges atomically in SQL — so only the caller's own
+    // read (existing overrides) and the post-update re-read consume
+    // SELECTs now.
     db.$setSelectResults([
-      [{ hubId: 'hub-a', settings: {} }], // getHubSettings (existing overrides)
-      [{ hubId: 'hub-a', settings: {} }], // updateHubSettings -> getHubSettings
+      [{ hubId: 'hub-a', settings: {} }], // updateSpamSettings -> getHubSettings (existing overrides)
       [makeSettingsRow()], // re-read effective: system_settings
       [{ hubId: 'hub-a', settings: { spamSettings: { rateLimitEnabled: false } } }],
     ])

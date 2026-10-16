@@ -10,7 +10,8 @@ import { Hono } from 'hono'
 import { createDatabase, closeDb, getDb, schema } from '../../apps/worker/db'
 import { eq, count } from 'drizzle-orm'
 import { cleanupExpiredNonces } from '../../apps/worker/services/webhook-replay'
-import { createServices, type Services } from '../../apps/worker/services'
+import { createServices, schedulerServiceDeps, type Services } from '../../apps/worker/services'
+import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
 import { validateConfig } from '../../apps/worker/lib/config'
@@ -26,6 +27,7 @@ import { KIND_BLAST_PROGRESS, KIND_BLAST_STATUS } from '../../packages/shared/ev
 import type { MessagingChannelType } from '../../packages/shared/types'
 import type { Env } from '../../apps/worker/types/infra'
 import fs from 'node:fs'
+import { ed25519AuthPubkey, hpkeRecipientPubkey } from '@worker/lib/hpke-recipient'
 
 console.log('[llamenos] Starting Bun server...')
 
@@ -65,11 +67,20 @@ const services: Services = createServices(db, {
   notifierApiKey,
   notifierTokenSecret,
   env: {
-    ADMIN_PUBKEY: readSecret('admin-pubkey', 'ADMIN_PUBKEY'),
-    ADMIN_DECRYPTION_PUBKEY: process.env.ADMIN_DECRYPTION_PUBKEY || undefined,
+    ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
+    ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
     SERVER_SECRET: serverSecret || undefined,
     ENVIRONMENT: process.env.ENVIRONMENT || undefined,
     DOMAIN: process.env.DOMAIN || undefined,
+    // The dev-surface factors, for services that decide per request whether a
+    // caller is the test harness (services/provider-setup/signal-registration.ts).
+    // All three are needed: `devSurfaceRequestAuthorized` wants the environment
+    // allowlist, the explicit opt-in AND the configured secret — ENVIRONMENT
+    // alone is what #1623 replaced.
+    DEV_ROUTES_ENABLED: process.env.DEV_ROUTES_ENABLED || undefined,
+    DEV_RESET_SECRET: process.env.DEV_RESET_SECRET || undefined,
+    E2E_TEST_SECRET: process.env.E2E_TEST_SECRET || undefined,
+    SIGNAL_QUEUE_RETENTION_DAYS: process.env.SIGNAL_QUEUE_RETENTION_DAYS || undefined,
   },
 })
 console.log('[llamenos] Services initialized')
@@ -104,9 +115,20 @@ try {
   console.warn('[llamenos] Could not check for plaintext contacts:', err)
 }
 
+// --- Startup: warn about any hub that could not route a call to anybody ---
+// A hub with no shift and no fallback group rings nobody, which is the correct
+// out-of-the-box state (nobody is enrolled into crisis calls implicitly) but is
+// invisible: readiness passes, the wizard reports complete, and the first caller
+// hears voicemail. Warn while it can still be fixed, not once somebody is on the
+// line. A warning only — never a boot failure.
+await warnOnUnroutableHubs(services)
+
 const env: Record<string, unknown> = {
-  ADMIN_PUBKEY: readSecret('admin-pubkey', 'ADMIN_PUBKEY'),
-  ADMIN_DECRYPTION_PUBKEY: process.env.ADMIN_DECRYPTION_PUBKEY || undefined,
+  // The only place a raw env string becomes a typed key. Past this point the
+  // Ed25519 identity key and the X25519 HPKE recipient are different types and
+  // cannot be substituted for one another (apps/worker/lib/hpke-recipient.ts).
+  ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
+  ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
   HMAC_SECRET: hmacSecret,
   HOTLINE_NAME: process.env.HOTLINE_NAME || 'Hotline',
   ENVIRONMENT: process.env.ENVIRONMENT || 'production',
@@ -118,7 +140,7 @@ const env: Record<string, unknown> = {
   // Read by apps/worker/routes/config.ts:101 to report the demo reset schedule.
   DEMO_RESET_CRON: process.env.DEMO_RESET_CRON || undefined,
   AI: createTranscriptionService(),
-  R2_BUCKET: createBlobStorage(),
+  BLOB_STORAGE: createBlobStorage(),
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
   SERVER_SECRET: serverSecret || undefined,
   GLITCHTIP_DSN: process.env.GLITCHTIP_DSN || undefined,
@@ -136,6 +158,17 @@ const env: Record<string, unknown> = {
   NOTIFIER_URL: notifierUrl || undefined,
   NOTIFIER_API_KEY: notifierApiKey || undefined,
   NOTIFIER_TOKEN_SECRET: notifierTokenSecret || undefined,
+  // Per-volunteer SIP registrar — apps/worker/routes/webrtc.ts (/sip-token
+  // issuance against our own Asterisk) and telephony/registrar.ts.
+  SIP_REGISTRAR_SECRET: process.env.SIP_REGISTRAR_SECRET || undefined,
+  TURN_HOST: process.env.TURN_HOST || undefined,
+  TURN_SECRET: process.env.TURN_SECRET || undefined,
+  // The SIP edge's public TLS trust anchor, handed to clients by /sip-token so
+  // they can verify a self-hosted PBX certificate. Read lazily per issuance
+  // (registrar.ts caches on mtime), so the edge may write it after the app
+  // starts — which it does on a first boot.
+  SIP_TLS_CA_FILE: process.env.SIP_TLS_CA_FILE || undefined,
+  SIP_TLS_CA_PEM: process.env.SIP_TLS_CA_PEM || undefined,
   CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
   // --- Push delivery ---
@@ -199,11 +232,14 @@ const outboxCleanupTimer = setInterval(() => {
 console.log('[llamenos] Event outbox initialized (drain: 30s, cleanup: 5m)')
 
 // --- Start scheduled task poller with blast delivery worker ---
+// `schedulerServiceDeps` supplies every service the background workers
+// need, with a type that is required in every field — so an omission here is a
+// compile error, not a worker that never runs. It was three workers, silently:
+// retention purge and erasure expiry (#1127) and, with `hubShred` missing, the
+// hub crypto-shred executor, which left every hub marked for shred fully
+// readable past its deadline while the request reported as scheduled (#1566).
 services.scheduler.start({
-  blastsService: services.blasts,
-  settingsService: services.settings,
-  auditService: services.audit,
-  identityService: services.identity,
+  ...schedulerServiceDeps(services),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
       return await getMessagingAdapterFromService(channel, services.settings, hmacSecret)

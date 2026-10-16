@@ -1,15 +1,18 @@
 /**
  * CallsService — replaces CallRouterDO.
  *
- * Manages active call state, call history records (encrypted),
- * and volunteer presence derived from shifts + active calls.
+ * Manages active call state and call history records (encrypted).
  * All state is stored in PostgreSQL via Drizzle ORM.
+ *
+ * Volunteer presence is NOT here. It needs the shift roster and the hub's
+ * ringing rules, which this service does not own — it lived here behind an
+ * optional `ShiftsService` that production never passed, so presence reported
+ * nobody on every deployment. See services/presence.ts.
  */
-import { eq, and, desc, sql, gte, lte, count, or, lt } from 'drizzle-orm'
+import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
 import { ServiceError } from './settings'
-import type { ShiftsService } from './shifts'
 
 /** Ringing calls older than 3 minutes are stale */
 const RINGING_TTL_MS = 3 * 60 * 1000
@@ -21,10 +24,7 @@ type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
 
 export class CallsService {
-  constructor(
-    protected db: Database,
-    private shiftsService?: ShiftsService,
-  ) {}
+  constructor(protected db: Database) {}
 
   // =========================================================================
   // Active Calls
@@ -144,42 +144,6 @@ export class CallsService {
     return (activeResult?.total ?? 0) + (historyResult?.total ?? 0)
   }
 
-  /**
-   * Get presence info: active calls + available volunteers.
-   * Delegates to ShiftsService.getCurrentVolunteers for on-shift data.
-   */
-  async getPresence(hubId: string): Promise<{
-    activeCalls: number
-    availableVolunteers: number
-    users: Array<{ pubkey: string; status: 'available' | 'on-call' }>
-  }> {
-    const active = await this.getActiveCalls(hubId)
-
-    const onCallPubkeys = new Set(
-      active
-        .filter(c => c.answeredBy && c.status === 'in-progress')
-        .map(c => c.answeredBy!),
-    )
-
-    let onShiftPubkeys: string[] = []
-    if (this.shiftsService) {
-      onShiftPubkeys = await this.shiftsService.getCurrentVolunteers(hubId)
-    }
-
-    const presenceUsers = onShiftPubkeys.map(pubkey => ({
-      pubkey,
-      status: onCallPubkeys.has(pubkey) ? 'on-call' as const : 'available' as const,
-    }))
-
-    const available = onShiftPubkeys.filter(pk => !onCallPubkeys.has(pk)).length
-
-    return {
-      activeCalls: active.length,
-      availableVolunteers: available,
-      users: presenceUsers,
-    }
-  }
-
   // =========================================================================
   // Call Lifecycle
   // =========================================================================
@@ -208,7 +172,13 @@ export class CallsService {
     return row
   }
 
-  /** Mark a call as answered by a volunteer */
+  /**
+   * Mark a call as answered by a volunteer — first pickup wins.
+   *
+   * The UPDATE is conditional on the call still ringing and unanswered, so of any
+   * number of concurrent answers exactly one gets a row back. Everyone else gets
+   * 409 (call exists but is already taken/ended) or 404 (no such call).
+   */
   async answerCall(hubId: string, callId: string, pubkey: string): Promise<ActiveCallRow> {
     const [row] = await this.db
       .update(activeCalls)
@@ -221,15 +191,17 @@ export class CallsService {
         and(
           eq(activeCalls.callId, callId),
           eq(activeCalls.hubId, hubId),
+          eq(activeCalls.status, 'ringing'),
+          isNull(activeCalls.answeredBy),
         ),
       )
       .returning()
 
-    if (!row) {
-      throw new ServiceError(404, 'Call not found')
-    }
+    if (row) return row
 
-    return row
+    const existing = await this.getActiveCallById(hubId, callId)
+    if (!existing) throw new ServiceError(404, 'Call not found')
+    throw new ServiceError(409, 'Call already answered')
   }
 
   /**

@@ -24,6 +24,7 @@ import {
   createVolunteerViaApi,
   createRoleViaApi,
   uniquePhone,
+  uniqueName,
 } from '../../api-helpers'
 import type { NotifyContactsResult } from '../../api-helpers'
 
@@ -93,7 +94,7 @@ Given('{int} contacts with role {string} are linked to the record', async ({ req
 Given('a volunteer exists without cases:update permission', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
     name: `ReadOnly ${Date.now()}`,
-    slug: `readonly-${Date.now()}`,
+    slug: uniqueName('readonly'),
     permissions: ['cases:read-own'],
     description: 'Read-only CMS access',
   })

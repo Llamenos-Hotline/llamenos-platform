@@ -27,12 +27,10 @@ When('I start typing in the device key field', async ({ page }) => {
 })
 
 Then('the error should disappear', async ({ page }) => {
-  // Wait briefly for error to clear
-  const _errorVisible = await page
-    .getByTestId(TestIds.ERROR_MESSAGE)
-    .isVisible({ timeout: 1000 })
-    .catch(() => false)
-  // Error may or may not be gone depending on implementation
-  // Just verify the device key field is still editable
+  // The login page renders its validation error as login-error (role="alert").
+  // The previous body sampled a different testid, discarded the result and
+  // asserted only that the input was still editable.
   await expect(page.getByTestId(TestIds.DEVICE_KEY_INPUT)).toBeEditable()
+  await expect(page.getByTestId(TestIds.LOGIN_ERROR).or(page.getByTestId(TestIds.ERROR_MESSAGE)))
+    .toHaveCount(0, { timeout: Timeouts.ELEMENT })
 })

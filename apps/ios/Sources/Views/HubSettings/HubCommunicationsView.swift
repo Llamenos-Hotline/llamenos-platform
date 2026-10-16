@@ -25,9 +25,9 @@ struct HubCommunicationsView: View {
         let vm = self.vm
 
         Group {
-            if vm.isLoading && vm.providerSettings == nil {
+            if vm.isLoading && vm.setupStatus == nil {
                 loadingView
-            } else if !vm.providerSetupComplete {
+            } else if !vm.isSetUp {
                 noProviderView(vm: vm)
             } else {
                 settingsView(vm: vm)
@@ -74,6 +74,7 @@ struct HubCommunicationsView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hub-comms-loading")
     }
 
@@ -107,7 +108,7 @@ struct HubCommunicationsView: View {
 
             if appState.hasPermission("settings:manage-messaging") {
                 Button {
-                    vm.showOnboardingSheet = true
+                    vm.presentOnboardingSheet()
                 } label: {
                     HStack {
                         Image(systemName: "wand.and.stars")
@@ -129,6 +130,7 @@ struct HubCommunicationsView: View {
 
             Spacer()
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hub-comms-no-provider")
     }
 
@@ -230,6 +232,7 @@ struct HubCommunicationsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hub-comms-settings-list")
     }
 }

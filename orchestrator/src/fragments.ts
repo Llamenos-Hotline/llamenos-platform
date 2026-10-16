@@ -39,6 +39,10 @@ export interface LaneScope {
  * more bullets below) is not a shape this parser recognizes and will drop
  * the later bullets silently. And any backticked path must contain `/`, `.`,
  * or `*` or it will be silently treated as prose, not scope.
+ *
+ * To own ONE file at the top level, write it with a leading slash —
+ * `/README.md`, not `README.md`. A bare name is a basename pattern and matches
+ * that name at every depth in the tree; see `matchesPath` and #1473.
  */
 const OWNED_HEADING = /^\*\*Owned paths:?\*\*\s*(.*)$/
 const NOT_OWNED_HEADING = /^\*\*Does NOT own:?\*\*\s*(.*)$/i
@@ -134,10 +138,57 @@ function globToRegExp(pattern: string): RegExp {
  * write list MORE conservative, never less.
  */
 export function matchesPath(file: string, pattern: string): boolean {
+  // A LEADING `/` anchors the pattern to the repo root, and is the ONLY way to
+  // express "this one file, at the top level" (#1473).
+  //
+  // Without it, a single-file grant is unsayable. A pattern with no `/` is a
+  // basename pattern matched at ANY depth, so infra's `README.md` grant in
+  // #1467 also handed it `apps/ios/README.md`, `packages/test-specs/README.md`
+  // and 17 others — including a file the shared lane owns exclusively. Lane
+  // scope decides which lane may SELF-MERGE a path, so that silently
+  // transferred authority over other lanes' documentation; the review rejected
+  // it on breadth, independent of those files being harmless documentation.
+  // Adding a `/` to the pattern does not help either: `README.md/` reads as a
+  // directory and `./README.md` matches nothing.
+  //
+  // Deliberately ADDITIVE. Bare `README.md` keeps its basename-prefix
+  // behaviour, because that behaviour is load-bearing for the never-write list
+  // (see `SECRET_PATH_PATTERNS` and `config.ts`): it is what makes `.env`,
+  // `*.pem` and `id_ed25519` catch a secret at any depth, the way CODEOWNERS'
+  // `**/.env` would. Narrowing basename matching globally to fix one grant
+  // would have quietly widened what a worker may write. The defect was the
+  // ABSENCE of an anchored alternative, not the presence of basename matching.
+  if (pattern.startsWith('/')) {
+    const rooted = pattern.slice(1)
+    // A lone `/` is not "the whole repo": before the anchor existed it matched
+    // nothing (no repo-relative path starts with `/`), and an empty pattern
+    // here would make `startsWith('')` own every file. Keep it matching
+    // nothing, so adding the anchor cannot widen any existing scope.
+    if (rooted.length === 0) return false
+    return matchesRootedPath(file, rooted)
+  }
   if (!pattern.includes('/')) {
     const basename = file.slice(file.lastIndexOf('/') + 1)
     return pattern.includes('*') ? globToRegExp(pattern).test(basename) : basename.startsWith(pattern)
   }
+  return matchesRootedPath(file, pattern)
+}
+
+/**
+ * The three rules a path-shaped (non-basename) pattern has always used,
+ * unchanged and now shared with the root-anchored form so both spell
+ * "directory", "glob" and "literal prefix" identically: a trailing slash is a
+ * directory, a `*` is a single-segment glob, anything else is a literal prefix.
+ *
+ * The prefix case means `/README.md` also matches a root `README.md.bak`,
+ * exactly as `docs/QUICKSTART.md` already matches `docs/QUICKSTART.md.bak`.
+ * That is the pre-existing behaviour of every slash-bearing owned path, kept
+ * on purpose rather than tightened here: whether a dotted pattern should
+ * instead match exactly is a separate, riskier decision (#1473 raises it), and
+ * making the anchored form behave differently from every other path pattern
+ * would be a second semantics for readers to hold.
+ */
+function matchesRootedPath(file: string, pattern: string): boolean {
   if (pattern.endsWith('/')) {
     return file.startsWith(pattern)
   }
@@ -216,8 +267,150 @@ export function isSecretTemplatePath(file: string): boolean {
 export const TEMPLATED_SECRET_PATTERNS: readonly string[] = ['.env', 'keystore.properties']
 
 /**
+ * The ONLY secret patterns a PUBLIC CERTIFICATE may be exempt from.
+ *
+ * The exact counterpart of `TEMPLATED_SECRET_PATTERNS` above, for the exact
+ * same reason and with the exact same fail-closed discipline — read that
+ * comment first; this one only states what differs.
+ *
+ * Why it exists: PEM is a CONTAINER format, not a secret. `*.pem` catches
+ * private keys, but it equally catches public root CA certificates, CSRs,
+ * public keys and DH parameters, none of which are secret. All three `.pem`
+ * files tracked in this repo are public root CAs vendored for bundler
+ * (`apps/ios/vendor/bundle/.../ssl_certs/`), so every one of them was
+ * permanently unwritable by any lane — a `bundle update` that refreshes a
+ * vendored cert was un-mergeable, and the failure arrived as
+ * `NO-VERDICT:scope`, which reads like a scope violation rather than a false
+ * positive (#1610).
+ *
+ * Derived from evidence, not from a general rule: `*.pem` is the only secret
+ * pattern a public certificate tracked in this repo actually matches. A NEW
+ * secret pattern does NOT get a carve-out; it gets one only when a tracked
+ * public certificate proves it needs one, and then only by being added here
+ * deliberately. `tests/orchestrator/config.test.ts` enforces both directions
+ * against the real tree, so this list can neither silently under-cover nor
+ * rot into a dead exemption. Concretely, this is why a `*.key` or `*.p12`
+ * holding certificate bytes is still FORBIDDEN: nothing in this repo needs
+ * it, so nothing exempts it.
+ *
+ * Why CONTENT and not a path rule. `.example` works as a path suffix because
+ * the name itself says "template". A certificate's name does not:
+ * `isrg-root-x2.pem` reads as a cert purely by convention, and nothing stops
+ * a private key being called `server-cert.pem`. Any name-based rule here
+ * fails OPEN in the one direction that matters. PEM makes the honest
+ * discriminator explicit and machine-checkable, so `isPublicCertificateFile`
+ * reads the bytes — see its own comment for the fail-closed rules, and
+ * `matchesSecretPath` for what happens when no bytes are available (the file
+ * stays a secret).
+ */
+export const CERTIFICATE_ONLY_PATTERNS: readonly string[] = ['*.pem']
+
+/** Labels whose block body is public by construction. An allowlist, never a
+ *  denylist: an unknown label is a label nobody analysed. */
+const PUBLIC_PEM_LABELS: ReadonlySet<string> = new Set(['CERTIFICATE', 'PUBLIC KEY'])
+
+/** RFC 7468 encapsulation boundaries, anchored and case-SENSITIVE. A
+ *  lowercase or whitespace-padded boundary does not match, and therefore
+ *  fails closed as "not parseable as PEM". */
+const PEM_BEGIN = /^-----BEGIN ([A-Z0-9][A-Z0-9 ]*)-----$/
+const PEM_END = /^-----END ([A-Z0-9][A-Z0-9 ]*)-----$/
+
+/** A base64 body line. Non-empty, no whitespace, padding only at the end. */
+const PEM_BODY = /^[A-Za-z0-9+/]+={0,2}$/
+
+/** Printable US-ASCII plus tab/CR/LF. Anything else — a NUL, a DER blob, a
+ *  UTF-8 replacement character from a binary file decoded as text — is not
+ *  PEM and is refused before parsing. Written as a scan rather than a regex
+ *  so the control characters stay out of a character class. */
+function isPrintableAsciiText(s: string): boolean {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i)
+    if (c === 0x09 || c === 0x0a || c === 0x0d) continue
+    if (c < 0x20 || c > 0x7e) return false
+  }
+  return true
+}
+
+/**
+ * True ONLY for a file that is, in its entirety, public certificate material.
+ *
+ * The content half of the `*.pem` carve-out. Every rule here is written to
+ * fail CLOSED, because the cost of a false negative is "a vendored CA bundle
+ * needs a one-line carve-out added" and the cost of a false positive is "a
+ * private key becomes writable by a lane".
+ *
+ * Refused, each case deliberately:
+ *
+ * - `undefined` — the file could not be read at all. "Could not look" is
+ *   never "is safe"; the caller gets no exemption rather than a guess.
+ * - empty, or whitespace only — zero blocks is not "one or more blocks".
+ * - any byte outside printable ASCII — binary, DER, or a mis-decoded blob.
+ * - any line outside a block that is not blank. This refuses the common
+ *   `openssl x509 -text` output with its human-readable preamble, on
+ *   purpose: text outside the boundaries is content this function did not
+ *   analyse, and a private key can be hidden in exactly that position in a
+ *   way a block-only scan would never see.
+ * - a BEGIN whose label is not in `PUBLIC_PEM_LABELS`, and separately and
+ *   redundantly any label containing `PRIVATE KEY`. The allowlist already
+ *   subsumes the second check; it is stated anyway so that widening the
+ *   allowlist by accident cannot also admit `RSA PRIVATE KEY`.
+ * - a BEGIN inside an open block, an END with no BEGIN, or an END whose
+ *   label differs from the BEGIN it closes. Mismatched boundaries mean the
+ *   file does not parse, and a mismatched pair is precisely how a block's
+ *   real contents could be mislabelled.
+ * - a file that ends with a block still open — the truncated-file case. A
+ *   `BEGIN CERTIFICATE` followed by an unterminated second block is NOT one
+ *   valid certificate plus some noise; it is a file that did not parse.
+ * - a non-base64 line inside a block, including a blank one. RFC 1421-style
+ *   in-block headers are not accepted either: they are not needed by any
+ *   certificate this repo tracks, and accepting them is surface for nothing.
+ *
+ * Permitted only when: at least one block was parsed, every block closed,
+ * and every label was public.
+ */
+export function isPublicCertificateFile(content: string | undefined): boolean {
+  if (content === undefined) return false
+  if (!isPrintableAsciiText(content)) return false
+
+  let open: string | undefined
+  let body = 0
+  let blocks = 0
+  for (const raw of content.split('\n')) {
+    // Only trailing whitespace is tolerated (a CRLF file's `\r`). Leading
+    // whitespace is not: an indented boundary is not a boundary.
+    const line = raw.replace(/[ \t\r]+$/, '')
+
+    if (open === undefined) {
+      if (line.length === 0) continue
+      const begin = PEM_BEGIN.exec(line)
+      if (begin === null) return false
+      const label = begin[1]
+      if (label.includes('PRIVATE KEY')) return false
+      if (!PUBLIC_PEM_LABELS.has(label)) return false
+      open = label
+      body = 0
+      continue
+    }
+
+    const end = PEM_END.exec(line)
+    if (end !== null) {
+      // An empty block — BEGIN immediately followed by END — carries no
+      // certificate at all. It is not a parse this function will vouch for.
+      if (end[1] !== open || body === 0) return false
+      open = undefined
+      blocks += 1
+      continue
+    }
+    if (!PEM_BODY.test(line)) return false
+    body += 1
+  }
+
+  return open === undefined && blocks > 0
+}
+
+/**
  * `matchesPath` for the NEVER-WRITE gate specifically: the secret patterns,
- * minus committed templates.
+ * minus committed templates, minus public certificates.
  *
  * Separate from `matchesPath` on purpose, rather than being folded into it.
  * `matchesPath` is also how lane OWNERSHIP is decided, and a lane that owns
@@ -227,22 +420,50 @@ export const TEMPLATED_SECRET_PATTERNS: readonly string[] = ['.env', 'keystore.p
  * PR failing the same gate for a different stated reason. The carve-out is a
  * property of the secret deny list, so it lives in the secret matcher.
  *
- * Scoped to `TEMPLATED_SECRET_PATTERNS` — it is NOT applied to every secret
- * pattern. Only two patterns have a tracked template to justify one, and a
+ * TWO carve-outs, each scoped to its OWN pattern list, neither applied to
+ * every secret pattern:
+ *
+ * 1. `TEMPLATED_SECRET_PATTERNS` — a committed template is not the secret it
+ *    is a template of. Decided by the PATH, because the name says
+ *    "template".
+ * 2. `CERTIFICATE_ONLY_PATTERNS` — a public certificate is not a key.
+ *    Decided by the CONTENT, because the name says nothing: a private key
+ *    may be called `server-cert.pem`, so a path rule here would fail OPEN.
+ *
+ * Only patterns with a tracked file to justify one get a carve-out, and a
  * carve-out that buys nothing today is latent surface: the glob patterns
  * (`*.pem`, `*.key`, …) anchor their extension in `globToRegExp`, so
- * `ca.pem.example` never matched them and exempting them was already a
- * no-op — but if `globToRegExp` were ever loosened, or a directory-shaped
- * secret pattern added, a blanket carve-out would silently become
- * load-bearing for patterns nobody analysed, and a `server.key.example`
- * holding a real key would become writable. The fail-closed default is that
- * a NEW pattern inherits no carve-out and someone must justify adding one,
- * which is the same reasoning that rejected environment enumeration above.
+ * `ca.pem.example` never matched them and exempting them from the TEMPLATE
+ * rule was already a no-op — but if `globToRegExp` were ever loosened, or a
+ * directory-shaped secret pattern added, a blanket carve-out would silently
+ * become load-bearing for patterns nobody analysed, and a
+ * `server.key.example` holding a real key would become writable. The
+ * fail-closed default is that a NEW pattern inherits no carve-out and
+ * someone must justify adding one, which is the same reasoning that rejected
+ * environment enumeration above.
+ *
+ * `contentOf` is OPTIONAL and the certificate carve-out is inert without it.
+ * That is the fail-closed default, not an oversight: a caller that cannot
+ * supply the bytes of the commit under judgement gets the pre-#1610
+ * behaviour, where every `*.pem` is a secret. `verifyMechanical` (verify.ts)
+ * supplies it from the base checkout — the head commit is fetched as an
+ * object there, so `git show <head>:<path>` reads it without checking it out
+ * or executing anything from it. A file that cannot be read (deleted in the
+ * diff, unreadable, binary) yields `undefined` and stays forbidden.
  */
-export function matchesSecretPath(file: string, pattern: string): boolean {
+export function matchesSecretPath(
+  file: string,
+  pattern: string,
+  contentOf?: (file: string) => string | undefined,
+): boolean {
   if (!matchesPath(file, pattern)) return false
-  if (!TEMPLATED_SECRET_PATTERNS.includes(pattern)) return true
-  return !isSecretTemplatePath(file)
+  if (TEMPLATED_SECRET_PATTERNS.includes(pattern) && isSecretTemplatePath(file)) return false
+  if (
+    contentOf !== undefined &&
+    CERTIFICATE_ONLY_PATTERNS.includes(pattern) &&
+    isPublicCertificateFile(contentOf(file))
+  ) return false
+  return true
 }
 
 export async function loadLaneScopes(repoRoot: string): Promise<Record<string, LaneScope>> {

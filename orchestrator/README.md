@@ -94,9 +94,9 @@ from the repo root: `bun run fleet <command>`.
 
 | Command | What it does |
 |---------|--------------|
-| `llamenos-fleet doctor` | Runs every health check (`gh` auth, repo readable, exactly one git remote, every lane has a non-empty parsed scope, not halted, command on `PATH`, last tick pass did not error) and prints current lane modes. Exits non-zero if any check fails. |
+| `llamenos-fleet doctor` | Runs every health check (`gh` auth, repo readable, exactly one git remote, every lane has a non-empty parsed scope, not halted, command on `PATH`, last tick pass did not error), **fails when the fleet runtime checkout itself is not current with `origin/main`** — behind, dirty, detached, or unverifiable (see "Runtime provenance" below) — **fails when the dispatch dependency repo has uncommitted changes**, prints current lane modes, and reports the salvage-branch inventory (count of local `salvage/*` branches, naming the ones holding real work — see "Salvage wedges" below). Exits non-zero if any check fails. |
 | `llamenos-fleet status` | Prints halted state, dispatch outcome counts from the last 24h of the ledger, the configured limits, and whether the last recorded tick pass errored. Exits non-zero if the last tick pass ended in `aborted: 'error'`. |
-| `llamenos-fleet tick` | Runs one dispatch pass. Refuses outright (exit 1, no pass run) if any lane's mode is `live` — see "Live dispatch is not implemented" below. Otherwise runs `tick()`, logs the JSON result to `~/.llamenos-fleet/fleet.log`, and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`). |
+| `llamenos-fleet tick` | Runs one dispatch pass. First fast-forwards the runtime checkout to `origin/main` when that is safe (on `main`, clean, verifiably behind) and **refuses the pass outright when it is not** — see "Runtime provenance" below. Then it checks the kill switches and circuit breakers, lists candidate work per lane, judges each candidate against that lane's rules, claims exclusively (an item labelled for two lanes goes to the higher-priority one, never both), and — per lane mode — either records what it *would* dispatch (`shadow`) or dispatches for real (`live`). Logs the JSON result to `~/.llamenos-fleet/fleet.log` and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`) or was refused on staleness. |
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 
@@ -137,6 +137,25 @@ Request one from `llamenos-auto` (or from `rhonda-rodododo` on the `release`
 PR) and `fleet/review` runs. Nothing else fires it — no label, and never a
 push.
 
+**The orchestrator makes that request itself when a worker's PR appears
+(#1760).** `realDispatch` calls `requestReviewAtOpen`
+(`orchestrator/src/review-request.ts`) in the same step it links the issue
+and arms standard auto-merge, so a fleet PR is never born with an empty
+`requested_reviewers` list — before this, every one was, and `fleet/review`
+could only ever republish `NO-VERDICT:unreviewed` on it: permanently
+BLOCKED, since a push never starts a review. The request is confirmed by
+the `review_requested` EVENT COUNT advancing, never by the POST response
+(a POST naming an already-pending reviewer succeeds and emits no event);
+when the count does not advance the reviewer is DELETEd and re-POSTed. An
+already-pending trigger reviewer at PR open (the CODEOWNERS auto-request)
+is success, not a retry — re-firing a CODEOWNER's request is the
+non-terminating loop #1471 measured. Whom to ask is `reviewTriggerLogins`
+over the PR's live author, so the author is never asked (GitHub's 422).
+A PR that still ends up with `fleet/review` ABSENT or
+`NO-VERDICT:unreviewed` **and** an empty `requested_reviewers` list is
+named `REQUEST_REVIEW` on `llamenos-fleet board` — uncapped, so every dead
+PR shows, not just the oldest.
+
 **The agent decides which reviews to run from the labels and from the PR
 itself.** The general non-author review always runs. On top of it:
 
@@ -166,9 +185,50 @@ hash changes, which reviews afresh. An infrastructure failure (timeout,
 quota, unparseable response) is **never** cached, so it is always retried.
 Adding or removing a `-reviewer` label cannot orphan either verdict.
 
-**`llamenos-fleet review-and-merge` only runs the general review**, so it
-refuses outright on a PR whose set needs more — request a review from
-`llamenos-auto` and let the CI gate run the whole set.
+**`llamenos-fleet review-and-merge` runs the WHOLE set too (#1637).** It
+calls the same `decideReviewSet` from the same base code, resolves each
+profile against the same `.claude/agents/` registry, runs the general
+reviewer and every profile concurrently against one read-only export, and
+composes them with the same `composeReviewSet` — ANY FAIL FAILS. It refuses,
+posting nothing, only when a required reviewer cannot be RUN at all
+(`review-set-unrunnable`): a `fleet/review` narrower than its own name is
+the one thing it must never produce. That is also what makes it the escape
+hatch for a PR owned by its required reviewer, which `review_requested`
+cannot reach (#1471) and `synchronize` is forbidden from reviewing.
+
+**`llamenos-fleet review-and-merge` is non-functional until the GitHub App
+exists (#1483).** The Checks API refuses a personal access token
+(`You must authenticate via a GitHub App. (HTTP 403)`), so without the two
+credentials in the next section the command refuses *before* spending a
+review and exits non-zero. Use the CI gate (request a review on the PR)
+until then. There is deliberately no fallback: `POST …/statuses` on a commit
+does accept a PAT, but a PAT-written green status under the `fleet/review`
+context name could override a red check run, which is fail-open — see
+`orchestrator/src/github-app.ts`.
+
+### Recording a verdict: the `llamenos-fleet-review` GitHub App (#1483)
+
+Two values, both read by `orchestrator/src/github-app.ts` and used for
+exactly one API call — the `fleet/review` check-run POST. Everything else
+`review-and-merge` does (reading the PR, exporting its head, merging) keeps
+using the operator's own `gh` credentials.
+
+| Value | Where it goes | Secret? |
+|-------|---------------|---------|
+| `FLEET_REVIEW_APP_ID` | A line in `~/.llamenos-fleet/env`. The App's numeric ID, shown on its settings page. | No |
+| The App's private key (`.pem`) | `~/.llamenos-fleet/review-app.pem`, **mode 600**. Override the path with `FLEET_REVIEW_APP_KEY_PATH` (tests use this; production should not). | **Yes** |
+| `FLEET_REVIEW_APP_INSTALLATION_ID` | Optional, in `~/.llamenos-fleet/env`. Skips the installation lookup. Without it the installation is matched by account login, and an ambiguous result is a refusal, not a guess. | No |
+
+The App needs **`checks: write` and nothing else** (`metadata: read` is added
+by GitHub automatically). That is the point: if the key leaked, the worst an
+attacker could do is post a check-run conclusion — it cannot read this
+repository's code, merge, push, or touch issues or pull requests. See issue
+#1483 for the creation steps.
+
+Each invocation mints a fresh installation token (RS256 App JWT → installation
+token → one POST) and keeps no copy of it. A missing, mis-permissioned or
+unparseable key is a hard refusal with the remedy named — never a silent
+skip, and never a "posted the verdict" line when nothing was posted.
 
 **Fail closed.** Unreadable labels, an unknown or malformed `-reviewer`
 label, an unreadable agent registry: each fails the check with the rule it
@@ -314,18 +374,24 @@ model for that lane, e.g. to run a lane on opencode/Kimi while the Anthropic
 account's quota is exhausted:
 
 ```json
-{"backend": {"mode": "live", "engine": "opencode", "model": "kimi-for-coding/k3-256k"}}
+{"backend": {"mode": "live", "engine": "opencode", "model": "kimi-code-plan-global/k3-256k"}}
 ```
 
 Allowed keys are exactly `mode`, `engine`, `model`; `engine` is `"claude"`
 (the default) or `"opencode"`. A raw opencode provider/model id is mapped to
-the dispatcher's token form (`kimi-for-coding/k3-256k` → `kimi`, anything
-else → `opencode:<id>`); dispatcher tokens pass through untouched. `--effort`
+the dispatcher's token form (`kimi-code-plan-global/k3-256k` → `kimi`, as is
+the retired `kimi-for-coding/k3-256k` id a lane file on disk may still carry,
+anything else → `opencode:<id>`); dispatcher tokens pass through untouched.
+`--effort`
 is omitted for opencode lanes (the dispatcher only supports it for Claude).
 Any malformed entry — unknown key, invalid mode or engine — fails CLOSED:
 that lane stays `off` and the rejection reason is written to the fleet log.
 `llamenos-fleet doctor` prints each lane's mode/engine/model and fails if a
-`live` opencode lane has no `opencode` binary on PATH.
+`live` opencode lane has no `opencode` binary on PATH **or its configured
+model id does not resolve** — doctor enumerates `opencode models` and
+compares, because a provider id that was renamed or removed fails at dispatch
+time with a generic server error that reads like an outage, not a config
+error (#1738).
 
 ## Where state lives
 
@@ -342,7 +408,87 @@ deliberate exception:
 | `~/.llamenos-fleet/scheduler.lock` | Pidfile lock; ensures only one `tick()` runs at a time. Stale locks (holder process no longer alive) are reaped automatically. |
 | `~/.llamenos-fleet/runs.jsonl` | The ledger — one JSON line per dispatch/shadow/rejection-relevant outcome. Read by `status`, the circuit breakers, and the per-item attempt limit. |
 | `~/.llamenos-fleet/fleet.log` | Plain `<timestamp> <message>` log, one line per event plus one JSON-encoded `TickResult` line per pass. `doctor` and `status` tail this file to report whether the *last* pass errored. |
-| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). |
+| `~/.llamenos-fleet/review-app.pem` | The `llamenos-fleet-review` GitHub App's private key, mode **600** (#1483). The only credential the fleet reads that is not the operator's own `gh` auth — used solely to mint a short-lived installation token for the `fleet/review` check-run POST, which the Checks API refuses to accept from a PAT. Absent, loose-permissioned or unparseable, `review-and-merge` refuses before spending a review. Path overridable with `FLEET_REVIEW_APP_KEY_PATH`. |
+| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
+
+## Runtime provenance (#1801)
+
+The fleet executes from a checkout (`llamenos-fleet-runtime`), not from the
+GitHub `main` its PRs merge into — so "the fix is merged" and "the fleet is
+running the fix" are different facts, and on 2026-10-10 they diverged for
+hours: the runtime sat 35 commits behind `main` on a detached HEAD while
+`doctor` reported every lane ok. Three mechanisms close that hole, all built
+on `orchestrator/src/provenance.ts`:
+
+- **`doctor` FAILS on drift — it does not warn.** The check fetches
+  `origin/main` (best-effort, bounded) and compares the runtime's HEAD: any
+  behind count, a dirty tree, a detached HEAD, or an unverifiable
+  measurement (fetch failed, refs unreadable) is a hard failure naming the
+  commit count and the drifted `orchestrator/` files, because "35 behind"
+  does not tell an operator *which* merged fixes are not running. Severity
+  is the point: doctor's standing warnings train a reader to skim, and this
+  condition silently disables reviewed code. The dispatch dependency's
+  uncommitted-changes state — the identical provenance hole in a second
+  repo — moved from WARN to FAIL at the same time; both are one class.
+- **Every dispatch records the runtime's revision.** `runs.jsonl` notes now
+  carry `rt:<sha>` alongside the existing `dep:<sha>`, so a worker's
+  behaviour can be attributed to the exact orchestrator code that dispatched
+  it after the fact.
+- **Currency is the default.** `tick` begins every pass with
+  `ensureRuntimeCurrent`: if the checkout is on `main`, clean, and simply
+  behind, it is fast-forwarded (`git merge --ff-only origin/main`) and the
+  update is logged — the already-running pass finishes on its in-memory
+  code, and everything it spawns (worker worktrees, briefs) comes from the
+  fresh tree. If a fast-forward is not safe (dirty, detached, diverged,
+  unverifiable), the pass is **refused** with the remedy printed — a fleet
+  that stops and says so beats a fleet silently running yesterday's rails.
+
+The runtime checkout must be on `main` tracking `origin/main` for the
+auto-update half to apply. If doctor FAILs this check, the remedy is:
+
+```bash
+git -C /path/to/llamenos-fleet-runtime checkout main
+git -C /path/to/llamenos-fleet-runtime pull --ff-only   # commit/discard/clean local changes first
+```
+
+## Salvage wedges (#1755)
+
+`settle()` salvages uncommitted work onto a pushed `salvage/<branch>-<epoch>`
+branch before destroying a worktree. The failure mode this section exists
+for: a gitignored test artifact (`.test-encrypted-seed.sqlite`, copied into
+every worktree by dispatch-one.sh's seed cache) ended up **staged** in a
+worktree — `.gitignore` does not apply to a path already in the index, so
+the tree read dirty forever, salvage kept firing on a worthless file, and
+every later dispatch for that item refused on the branch mismatch. Three
+refusals tripped the consecutive-failure breaker and halted the fleet.
+
+The rules now:
+
+- **Ignored artifacts are never work.** `salvageUncommittedWork` classifies
+  a worktree's changes by the repo's own ignore rules (`git check-ignore
+  --no-index`, which matches even staged paths): a tree whose only changes
+  are ignored artifacts is CLEAN — the artifacts are unstaged in place, no
+  salvage branch is created, and the worktree stays on its original branch.
+  One genuinely modified source file still triggers a full commit+push
+  salvage; when real work and artifacts coexist, the salvage commit carries
+  only the work.
+- **A wedged lane is resolved BEFORE a worker is spent.** `realDispatch`
+  checks for a leftover worktree on this item's `salvage/<branch>-*`
+  (slash or dash form). An artifact-only wedge is removed on the spot (the
+  salvage BRANCH is always kept — deleting one is an operator decision) and
+  the lane dispatches fresh. A wedge holding real work — committed on the
+  salvage branch or uncommitted in the worktree — refuses WITHOUT launching
+  a worker and is recorded as the distinct `WEDGED` ledger outcome, naming
+  the worktree and salvage branch, with `needs-human` applied.
+- **`WEDGED` never feeds the consecutive-failure breaker.** Three identical
+  refusals are one stuck condition, not three failures. It does count toward
+  the per-item attempt limit (the wedge is the item's own lane state), and
+  the failure breaker's halt reason now names the latest failing
+  lane/item/note — `halt-reason.txt` carries the cause, not just a count.
+- **`doctor` reports the inventory**: how many `salvage/*` branches exist,
+  which hold real work (a diff against `origin/main` with artifact paths
+  filtered out), and which have a worktree attached. Branches that cannot be
+  diffed are named as unreadable, never silently counted as empty.
 
 ## systemd timer
 

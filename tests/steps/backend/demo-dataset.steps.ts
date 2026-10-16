@@ -17,16 +17,14 @@
  * the secret-gated dev route and keeps them on the scenario's world.
  */
 import { expect } from '@playwright/test'
-import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
-import { gcm } from '@noble/ciphers/aes.js'
-import { hkdf } from '@noble/hashes/hkdf.js'
-import { sha256 } from '@noble/hashes/sha2.js'
-import { hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { When, Then, After, getState, setState } from './fixtures'
 import { getSharedState, setLastResponse } from './shared-state'
 import { apiGet, apiPost, devDelete, devGet, devPost, seedHexToPubkey } from '../../api-helpers'
-import { LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { decryptContent, importedDeviceHpkeRecipient, unwrapKey } from '../../crypto-helpers'
+import { LABEL_CALL_META, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { DEMO_CALLS, DEMO_HUB } from '@worker/lib/demo-dataset'
+import type { CallRecord } from '@protocol/schemas/calls'
 
 const HUB = DEMO_HUB.id
 const KEY = 'demo_dataset'
@@ -72,27 +70,37 @@ function account(world: Record<string, unknown>, name: string): DemoCredential {
 const ADMIN = (world: Record<string, unknown>) => account(world, 'Demo Admin')
 const VOLUNTEER = (world: Record<string, unknown>) => account(world, 'James Chen')
 
-const hpke = new CipherSuite({ kem: KemId.DhkemX25519HkdfSha256, kdf: KdfId.HkdfSha256, aead: AeadId.Aes256Gcm })
-
-function base64urlToBytes(value: string): Uint8Array {
-  return new Uint8Array(Buffer.from(value, 'base64url'))
+function base64urlToHex(value: string): string {
+  return bytesToHex(new Uint8Array(Buffer.from(value, 'base64url')))
 }
 
-/** Decrypt content sealed for a demo account: HPKE-open the key wrap (empty AAD), then AES-256-GCM (iv || ct, no AAD). */
+/**
+ * Decrypt content the demo seeder sealed for a demo account.
+ *
+ * `apps/worker/lib/demo-crypto.ts` writes the **canonical** envelope format —
+ * `contentAad(label)` on the content layer, `keyWrapAad(label)` on the key wrap
+ * — for every label it uses, LABEL_CALL_META included. This reader used to pass
+ * an empty AAD on both layers, which is the *stored-record* convention
+ * (`apps/worker/lib/crypto.ts`), and so could never open anything the seeder
+ * wrote: both demo decryption scenarios failed with `OpenError`. Which of the
+ * two conventions applies is a property of the writer, never of the label — see
+ * `@shared/envelope-aad`.
+ *
+ * It now goes through the shared canonical readers instead of a second
+ * hand-rolled HPKE suite, so there is one implementation to keep correct.
+ *
+ * Demo accounts are imported-device identities: their X25519 key is HKDF'd from
+ * the signing seed, exactly as the desktop derives it on `device_import_and_load`.
+ */
 async function decryptFor(
   seedHex: string,
   encryptedContent: string,
   envelope: { enc: string; ct: string },
   label: string,
 ): Promise<string> {
-  const encryptionSeed = hkdf(sha256, hexToBytes(seedHex), new Uint8Array(0), utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
-  const recipientKey = await hpke.importKey('raw', new Uint8Array(encryptionSeed).buffer, false)
-  const contentKey = await hpke.open(
-    { recipientKey, enc: hexToBytes(envelope.enc), info: utf8ToBytes(label) },
-    new Uint8Array(base64urlToBytes(envelope.ct)).buffer,
-  )
-  const packed = hexToBytes(encryptedContent)
-  return new TextDecoder().decode(gcm(new Uint8Array(contentKey), packed.slice(0, 12)).decrypt(packed.slice(12)))
+  const reader = importedDeviceHpkeRecipient(seedHex)
+  const contentKey = await unwrapKey(base64urlToHex(envelope.ct), envelope.enc, reader.skHex, label)
+  return decryptContent(encryptedContent, contentKey, label)
 }
 
 interface NoteRow {
@@ -247,15 +255,16 @@ Then('every demo note decrypts to its authored text for the demo admin', async (
 
 Then('every demo call record decrypts for the demo admin with the fictional caller number', async ({ request, world }) => {
   const admin = ADMIN(world)
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string; callerLast4: string; encryptedContent: string; adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }> }> }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request, `/hubs/${HUB}/calls/history?limit=100`, admin.seedHex,
   )
   expect(status).toBe(200)
   expect(data.calls).toHaveLength(DEMO_CALLS.length)
   for (const call of data.calls) {
-    const envelope = call.adminEnvelopes.find(e => e.pubkey === admin.pubkey)
-    expect(envelope, `admin envelope for ${call.callId}`).toBeDefined()
-    const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent, envelope!, LABEL_CALL_META)) as { answeredBy: string | null; callerNumber: string }
+    const envelope = call.adminEnvelopes?.find(e => e.pubkey === admin.pubkey)
+    expect(envelope, `admin envelope for ${call.id}`).toBeDefined()
+    expect(call.encryptedContent, `encrypted metadata for ${call.id}`).toBeTruthy()
+    const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent!, envelope!, LABEL_CALL_META)) as { answeredBy: string | null; callerNumber: string }
     expect(meta.callerNumber).toBe(`+1555555${call.callerLast4}`)
     expect(meta.callerNumber).toMatch(/^\+155555501\d\d$/)
   }

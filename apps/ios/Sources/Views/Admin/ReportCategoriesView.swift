@@ -102,10 +102,11 @@ struct ReportCategoriesView: View {
                     }
                 }
             } header: {
-                Text(String(format: NSLocalizedString(
+                Text(L10n.format(
                     "admin_categories_header",
-                    comment: "Categories (%d)"
-                ), viewModel.reportCategories.count))
+                    comment: "Categories (%d)",
+                    viewModel.reportCategories.count
+                ))
             }
         }
         .listStyle(.insetGrouped)

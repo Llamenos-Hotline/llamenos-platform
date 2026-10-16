@@ -227,6 +227,23 @@ describe('TwilioAdapter', () => {
     })
   })
 
+  describe('hangupCall failures', () => {
+    it('rejects when Twilio refuses the hang-up, so callers never claim a disconnect that did not happen', async () => {
+      fetchMock.mockResolvedValue(new Response('{"message":"boom"}', { status: 500 }))
+      await expect(adapter.hangupCall('CA123')).rejects.toThrow(/hangup failed: 500/)
+    })
+
+    it('treats an already-completed call (21220) as disconnected', async () => {
+      fetchMock.mockResolvedValue(new Response('{"code":21220,"message":"Call is not in-progress"}', { status: 400 }))
+      await expect(adapter.hangupCall('CA123')).resolves.toBeUndefined()
+    })
+
+    it('treats a missing call (404) as disconnected', async () => {
+      fetchMock.mockResolvedValue(new Response('{}', { status: 404 }))
+      await expect(adapter.hangupCall('CA123')).resolves.toBeUndefined()
+    })
+  })
+
   describe('ringVolunteers', () => {
     it('initiates parallel calls and returns call SIDs', async () => {
       fetchMock.mockResolvedValue({

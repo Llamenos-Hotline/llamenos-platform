@@ -14,7 +14,7 @@
     "themeLight": "پوسته روشن",
     "themeSystem": "پوسته سیستم",
     "back": "بازگشت",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "هنوز مشترکی نیست",
     "optOutFooter": "پانویس لغو اشتراک",
     "rateLimit": "محدودیت نرخ (پیام/ثانیه)",
-    "recipientCount": "%d گیرنده",
+    "recipientCount": "{{count}} گیرنده",
     "recipientCountOne": "۱ گیرنده",
     "recipients": "گیرندگان",
     "saveDraft": "ذخیره پیش‌نویس",
@@ -617,6 +617,7 @@
     "errorBreak": "به‌روزرسانی وضعیت استراحت ناموفق بود",
     "errorClockIn": "ثبت ورود به شیفت ناموفق بود",
     "errorClockOut": "ثبت خروج از شیفت ناموفق بود",
+    "errorInAppCallsUnavailable": "ورود به شیفت ثبت شد، اما این دستگاه نمی‌تواند تماس‌ها را در برنامه دریافت کند. دوباره ورود به شیفت را امتحان کنید.",
     "errorRefresh": "بازنشانی ناموفق بود",
     "goOnBreak": "استراحت کردن",
     "help": "راهنما",
@@ -648,51 +649,6 @@
     "cases": "Cases",
     "triage": "Triage"
   },
-  "deviceLink": {
-    "cameraPermission": "مجوز دوربین برای اسکن کدهای QR لازم است",
-    "codePlaceholder": "داده QR یا کد را بچسبانید...",
-    "codesDontMatch": "کدها مطابقت ندارند",
-    "codesMatch": "کدها مطابقت دارند",
-    "codesMismatch": "کدها مطابقت ندارند",
-    "compareCodes": "هر دو دستگاه باید کد یکسانی نشان دهند. اگر کدها مطابقت ندارند، ادامه ندهید — ممکن است مهاجمی حضور داشته باشد.",
-    "complete": "دستگاه متصل شد",
-    "connecting": "در حال اتصال...",
-    "continue": "ادامه",
-    "decryptFailed": "رمزگشایی کلید از دستگاه اصلی ناموفق بود. لطفا دوباره تلاش کنید.",
-    "description": "این دستگاه را با اتصال به حساب موجودتان راه‌اندازی کنید.",
-    "enterCode": "کد تامین",
-    "expiresIn5": "این کد تا ۵ دقیقه منقضی می‌شود.",
-    "importing": "در حال وارد کردن هویت...",
-    "instructions": "در دستگاه اصلی خود، به تنظیمات بروید و بخش «دستگاه‌های متصل» را باز کنید. سپس کد QR را اسکن کنید یا کد نمایش داده شده در اینجا را وارد کنید.",
-    "invalidCode": "کد تامین نامعتبر. لطفا کد QR را اسکن کنید یا کد کامل را کپی کنید.",
-    "link": "اتصال",
-    "linkExpired": "نشست اتصال منقضی شد. لطفا دوباره تلاش کنید.",
-    "linkFailed": "اتصال دستگاه ناموفق بود",
-    "linkFromPrimary": "برای اتصال دستگاه جدید، برنامه خط اضطراری را در دستگاه جدید باز کنید، روی «اتصال این دستگاه» بزنید، سپس کد نمایش داده شده را در زیر وارد کنید.",
-    "linkSuccess": "دستگاه با موفقیت متصل شد!",
-    "linkSuccessDesc": "حساب شما اکنون در این دستگاه در دسترس است. برای محافظت یک PIN تنظیم کنید.",
-    "linkThisDevice": "اتصال این دستگاه",
-    "linkedDevices": "دستگاه‌های متصل",
-    "linkedDevicesDesc": "یک دستگاه جدید را با وارد کردن کد تامین آن به حساب خود متصل کنید.",
-    "openSettings": "باز کردن تنظیمات",
-    "orEnterCode": "یا این کد را در دستگاه اصلی خود وارد کنید:",
-    "retry": "تلاش مجدد",
-    "sasMismatch": "کدهای امنیتی مطابقت نداشتند. نشست اتصال برای امنیت شما لغو شد. لطفا دوباره تلاش کنید.",
-    "scan": "اسکن کد QR",
-    "scanFromPrimary": "این کد را از تنظیمات دستگاه اصلی خود اسکن کنید.",
-    "securityCode": "کد امنیتی",
-    "startLinking": "شروع اتصال",
-    "stepImport": "وارد کردن",
-    "stepScan": "اسکن",
-    "stepVerify": "تایید",
-    "title": "اتصال دستگاه",
-    "verify": "تایید دستگاه",
-    "verifySAS": "تایید کد امنیتی",
-    "verifySASDesc": "این کد را با کد نمایش داده شده در دستگاه اصلی خود مقایسه کنید.",
-    "verifySASPrimary": "بررسی کنید که این کد با کد دستگاه جدید مطابقت داشته باشد:",
-    "verifySubtitle": "تایید کنید که کد در هر دو دستگاه یکسان است",
-    "waitingForPrimary": "در انتظار دستگاه اصلی"
-  },
   "hubs": {
     "accessDenied": "دسترسی رد شد",
     "createHub": "ایجاد هاب",
@@ -716,6 +672,7 @@
       "archived": "بایگانی شده",
       "suspended": "تعلیق شده"
     },
+    "switchFooter": "برای تغییر زمینهٔ فعال روی یک هاب ضربه بزنید. هاب فعال تعیین می‌کند چه داده‌هایی می‌بینید.",
     "switchHub": "تغییر هاب",
     "title": "مدیریت هاب",
     "urlLabel": "نشانی هاب",
@@ -734,9 +691,12 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "محتوای رمزگذاری‌شدهٔ این هاب هنوز روی این دستگاه باز نمی‌شود",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "هاب‌های شما بارگیری نشد",
+    "membershipLoadFailedBody": "سرور نگفت که عضو کدام هاب‌ها هستید، بنابراین هنوز چیزی نمایش داده نمی‌شود. اتصال خود را بررسی کنید و دوباره تلاش کنید."
   },
   "ivr": {
     "selfAnnouncement": "برای فارسی، [N] را فشار دهید.",
@@ -822,6 +782,7 @@
     "loading": "در حال بارگذاری یادداشت‌ها...",
     "newConversationNote": "یادداشت مکالمه جدید",
     "newNote": "یادداشت جدید",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "هنوز یادداشتی نیست",
     "noReplies": "هنوز پاسخی نیست",
     "noSearchResults": "یادداشتی با جستجوی شما مطابقت ندارد",
@@ -874,6 +835,7 @@
     "backupAcknowledge": "کلید بازیابی خود را در مکانی امن ذخیره کرده‌ام",
     "backupDescription": "این کلید بازیابی را یادداشت کرده و در جای امن نگه دارید. تنها راه بازیابی حساب شما در دستگاه جدید همین است.",
     "backupDownloaded": "پشتیبان دانلود شد",
+    "backupFailed": "ایجاد پشتیبان رمزگذاری‌شده ممکن نبود: {{reason}}",
     "backupTitle": "کلید بازیابی خود را ذخیره کنید",
     "confirmPin": "PIN خود را تایید کنید",
     "confirmPinDescription": "همان PIN را دوباره برای تایید وارد کنید",
@@ -888,6 +850,8 @@
     "getStarted": "شروع کنید",
     "goToLogin": "رفتن به صفحه ورود",
     "invalidCode": "کد دعوت نامعتبر",
+    "rateLimitedRetry": "تعداد تلاش‌ها بیش از حد است. لطفاً {{seconds}} ثانیه صبر کنید و دوباره تلاش کنید.",
+    "validationUnavailable": "در حال حاضر امکان تأیید دعوت شما وجود ندارد. اتصال خود را بررسی کنید و دوباره تلاش کنید.",
     "noCode": "کد دعوتی ارائه نشده",
     "npubLabel": "کلید عمومی شما",
     "deviceKeyLabel": "کلید محرمانه شما",
@@ -935,19 +899,19 @@
     "dotFilled": "پر",
     "enterPin": "PIN خود را وارد کنید",
     "keyLocked": "کلید قفل شده است",
-    "lockoutRemaining": "قفل شده. بعد از %d ثانیه دوباره تلاش کنید.",
+    "lockoutRemaining": "قفل شده. بعد از {{seconds}} ثانیه دوباره تلاش کنید.",
     "mismatch": "PIN‌ها مطابقت ندارند. دوباره تلاش کنید.",
     "setEncrypting": "در حال رمزنگاری کلید شما...",
     "setSubtitle": "یک PIN ۶ تا ۸ رقمی برای محافظت از کلید خود انتخاب کنید",
     "setTitle": "ایجاد PIN",
     "tooShort": "PIN باید ۶ رقم باشد",
-    "unlockAttempts": "%d از %d تلاش استفاده شده",
+    "unlockAttempts": "{{used}} از {{total}} تلاش استفاده شده",
     "unlockSubtitle": "PIN خود را برای باز کردن قفل وارد کنید",
     "unlockTitle": "PIN خود را وارد کنید",
     "unlockVerifying": "در حال تایید...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1164,7 +1128,6 @@
     "debugLogging": "ثبت گزارش اشکال‌زدایی",
     "debugLoggingDesc": "فعال‌سازی ثبت گزارش مفصل برای عیب‌یابی",
     "default": "پیش‌فرض",
-    "deviceLinkDesc": "اتصال دستگاه دیگر به حساب شما",
     "devicesHeader": "دستگاه‌ها",
     "displayName": "نام نمایشی",
     "enableTranscription": "فعال‌سازی رونویسی تماس",
@@ -1189,7 +1152,6 @@
     "languageHeader": "زبان",
     "languages": "زبان‌ها",
     "linkCopied": "لینک کپی شد",
-    "linkDevice": "اتصال دستگاه",
     "lock": "قفل برنامه",
     "lock15min": "۱۵ دقیقه",
     "lock1min": "۱ دقیقه",
@@ -1422,7 +1384,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "%d تماس فعال",
+    "activeCalls": "{{count}} تماس فعال",
     "assigned": "اختصاص داده شده",
     "available": "در دسترس",
     "clockIn": "ورود به شیفت",
@@ -1431,7 +1393,7 @@
     "clockOutTitle": "پایان شیفت؟",
     "clockedIn": "اکنون در شیفت هستید",
     "clockedOut": "اکنون خارج از شیفت هستید",
-    "count": "%d شیفت",
+    "count": "{{count}} شیفت",
     "create": "ایجاد شیفت",
     "createShift": "ایجاد شیفت",
     "days": {
@@ -1458,6 +1420,7 @@
     "fallbackDescription": "این داوطلبان وقتی شیفتی برنامه‌ریزی نشده تماس‌ها را دریافت می‌کنند",
     "fallbackGroup": "گروه جایگزین",
     "loading": "در حال بارگذاری برنامه...",
+    "manage": "مدیریت",
     "name": "نام شیفت",
     "nextShift": "شیفت بعدی",
     "noShifts": "شیفتی برنامه‌ریزی نشده. برای شروع مسیریابی تماس‌ها یک شیفت ایجاد کنید.",
@@ -1476,7 +1439,7 @@
     "selectedCount": "{{count}} انتخاب شده",
     "shiftName": "نام شیفت",
     "signUp": "ثبت‌نام",
-    "signedUp": "ثبت‌نام شده برای %@",
+    "signedUp": "ثبت‌نام شده برای {{shift}}",
     "since": "از",
     "startTime": "زمان شروع",
     "startsAt": "شروع در",
@@ -1521,6 +1484,8 @@
       "empty": "No overrides",
       "emptySubtitle": "Add overrides to modify shift assignments for specific dates",
       "note": "Note",
+      "scope": "شیفت",
+      "scopeAll": "همه شیفت‌ها",
       "title": "Shift Overrides",
       "type": "Override Type",
       "typeCancel": "Cancel shift",
@@ -1541,6 +1506,7 @@
       "empty": "No availability blocks",
       "emptySubtitle": "Add blocks to indicate when you are unavailable",
       "endDate": "End Date",
+      "invalidRange": "تاریخ پایان باید برابر یا بعد از تاریخ شروع باشد",
       "reason": "Reason (optional)",
       "startDate": "Start Date",
       "title": "Availability"
@@ -1908,7 +1874,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -2014,7 +1980,7 @@
     "faqGettingStartedHeader": "FAQ: Getting Started",
     "faqGsA1": "Ask your admin for an invite code. Enter the hub URL, create or import your identity, and set a PIN. You'll be ready to receive calls once you clock in for your shift.",
     "faqGsA2": "Your device key is your secret signing key — like a password that proves your identity. It's generated on your device and never sent to the server. Back it up securely; if you lose it, you'll need a new identity.",
-    "faqGsA3": "Yes. Use the Device Link feature in Settings to securely transfer your identity to another device using a QR code and encrypted key exchange.",
+    "faqGsA3": "Not yet. This release supports one device per identity — multi-device linking is planned for a future update. For now, sign in on the device where you created your identity.",
     "faqGsQ1": "How do I get started?",
     "faqGsQ2": "What is a device key?",
     "faqGsQ3": "Can I use multiple devices?",
@@ -2202,7 +2168,8 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "admin": {
     "spamSettings": "مقابله با هرزنامه",
@@ -3416,7 +3383,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -3833,7 +3800,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -3852,8 +3819,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -3876,9 +3843,9 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "activeCalls": "تماس‌های فعال",
   "badge": {
@@ -4062,7 +4029,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -4073,7 +4040,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -4118,7 +4085,7 @@
     "connecting": "در حال اتصال...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "actionDone": "انجام شد",
   "status": {
@@ -4278,7 +4245,7 @@
     "subtitle": "PIN خود را برای باز کردن قفل وارد کنید",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "phoneNumberLabel": "شماره تلفن",
   "callActions": {
@@ -4460,7 +4427,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4473,7 +4440,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4512,16 +4479,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4539,6 +4506,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "برای پاسخ دادن به تماس‌ها در برنامه، دسترسی به میکروفون لازم است.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4634,7 +4604,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",
@@ -4660,5 +4630,17 @@
     "unavailableMessage": "متاسفانه در حال حاضر کسی برای پاسخگویی به تماس شما در دسترس نیست. لطفاً بعداً دوباره تلاش کنید. خداحافظ.",
     "voicemailPrompt": "در حال حاضر کسی برای پاسخگویی به تماس شما در دسترس نیست. لطفاً بعد از صدای بوق پیام بگذارید.",
     "voicemailThanks": "از پیام شما سپاسگزاریم. خداحافظ."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

@@ -65,13 +65,10 @@ Then('I should see contacts with identifiers or the empty state', async ({ page 
 })
 
 When('I tap the back button on contacts', async ({ page }) => {
-  const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const backVisible = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (backVisible) {
-    await backBtn.click()
-  } else {
-    await page.goBack()
-  }
+  // The contacts LIST has no in-page back control (back-btn renders only in a
+  // contact's detail view), so back from the list is history navigation.
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await page.goBack()
 })
 
 // --- Contacts navigation & detail steps ---
@@ -81,57 +78,49 @@ When('I tap the view contacts button', async ({ page }) => {
 })
 
 When('I tap a contact card', async ({ page, backendRequest, workerHub }) => {
-  // Ensure at least one contact exists so the tap has something to click.
-  const contactRow = page.getByTestId(TestIds.CONTACT_ROW).first()
-  const hasContact = await contactRow.isVisible({ timeout: 5000 }).catch(() => false)
-  if (!hasContact) {
-    try {
-      const existing = await listContactsViaApi(backendRequest, { hubId: workerHub })
-      if (existing.contacts.length === 0) {
-        await createContactByNameViaApi(backendRequest, `Test Contact ${Date.now()}`, { hubId: workerHub })
-        // Also create a report so the contact appears in the timeline-aggregated view
-        await createReportViaApi(backendRequest, { title: `Contact report ${Date.now()}`, hubId: workerHub }).catch(() => {})
-      }
-      // SPA re-navigate to refresh the contacts list — navigate away then back
-      await page.getByTestId(TestIds.NAV_DASHBOARD).click()
-      await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
-      await page.getByTestId(TestIds.NAV_CONTACTS).click()
-      await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
-      // Wait for network to settle so the seeded contact appears
-      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-    } catch (e) {
-      console.warn('[contacts] Auto-seed failed:', e)
-    }
+  // Make sure the hub has a contact, then load the list fresh. Decided by the
+  // API, not by a probe of the list; seeding failures fail the step (the old
+  // version logged them and carried on).
+  const existing = await listContactsViaApi(backendRequest, { hubId: workerHub })
+  if (existing.contacts.length === 0) {
+    await createContactByNameViaApi(backendRequest, `Test Contact ${Date.now()}`, { hubId: workerHub })
+    // Also create a report so the contact appears in the timeline-aggregated view
+    await createReportViaApi(backendRequest, { title: `Contact report ${Date.now()}`, hubId: workerHub })
   }
-  // Use longer timeout in CI to allow for slow API responses
+  await page.getByTestId(TestIds.NAV_DASHBOARD).click()
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await page.getByTestId(TestIds.NAV_CONTACTS).click()
+  const contactRow = page.getByTestId(TestIds.CONTACT_ROW).first()
   await expect(contactRow).toBeVisible({ timeout: Timeouts.API })
   await contactRow.click()
 })
 
+// A contact's detail (timeline) view is the only contacts view with a back-btn;
+// the list has none. Each step used to accept the page title, which the list
+// view has too.
+
 Then('I should see the timeline screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.BACK_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the timeline contact identifier', async ({ page }) => {
-  // Desktop shows contact details via page title or content
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.BACK_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The detail title is the masked contact number, or "Contact" when none is known.
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toHaveText(/\*\*\*-\d{4}|Contact/)
 })
 
 Then('I should see timeline events or the empty state', async ({ page }) => {
-  // The contacts timeline detail view shows Card components for notes/conversations,
-  // or an empty-state Card if no history. Look for any Card content in the timeline area.
-  const content = page.locator(
-    `[data-testid="${TestIds.CONTACT_ROW}"], [data-testid="${TestIds.EMPTY_STATE}"], [data-testid="${TestIds.PAGE_TITLE}"]`,
-  )
-  await expect(content.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.BACK_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Settled once the loading skeleton is gone: then either history cards or the
+  // "No interaction history found" card.
+  await expect(page.locator('main .animate-pulse')).toHaveCount(0, { timeout: Timeouts.ELEMENT })
+  const empty = page.getByText('No interaction history found')
+  const history = page.locator('main [data-slot="card"]').filter({ has: page.locator('[data-slot="badge"]') })
+  await expect(empty.or(history).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 When('I tap the back button on timeline', async ({ page }) => {
   const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const backVisible = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (backVisible) {
-    await backBtn.click()
-  } else {
-    await page.goBack()
-  }
+  await expect(backBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await backBtn.click()
 })

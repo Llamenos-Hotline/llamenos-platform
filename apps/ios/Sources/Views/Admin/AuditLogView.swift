@@ -35,10 +35,11 @@ struct AuditLogView: View {
             Section {
                 HStack {
                     Label {
-                        Text(String(format: NSLocalizedString(
+                        Text(L10n.format(
                             "admin_audit_total",
-                            comment: "%d total entries"
-                        ), viewModel.auditTotal))
+                            comment: "%d total entries",
+                            viewModel.auditTotal
+                        ))
                         .font(.brand(.subheadline))
                     } icon: {
                         Image(systemName: "list.clipboard.fill")

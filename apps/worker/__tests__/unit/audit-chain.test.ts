@@ -119,7 +119,6 @@ describe('Audit chain integrity', () => {
       const hash2 = hashAuditEntry(entry2)
 
       const entry3 = createEntry('audit-003', 'logout', hash2)
-      const hash3 = hashAuditEntry(entry3)
 
       // If entry2 is deleted, entry3's previousEntryHash (hash2) won't match
       // the recomputed hash of entry1 (hash1)
@@ -153,7 +152,6 @@ describe('Audit chain integrity', () => {
     } {
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[i]
-        const computedHash = hashAuditEntry(entry)
 
         // First entry should have no previous hash
         if (i === 0 && entry.previousEntryHash) {
@@ -185,7 +183,6 @@ describe('Audit chain integrity', () => {
       const e1 = createEntry('001', 'login')
       const h1 = hashAuditEntry(e1)
       const e2 = { ...createEntry('002', 'action', h1), action: 'tampered' }
-      const h2 = hashAuditEntry(e2)
       const e3 = createEntry('003', 'logout', 'wrong-hash')
 
       const result = verifyChain([e1, e2, e3])

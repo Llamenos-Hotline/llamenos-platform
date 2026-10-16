@@ -75,6 +75,7 @@ import { healthResponseSchema, livenessResponseSchema, readinessResponseSchema }
 import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { configResponseSchema } from '@protocol/schemas/config'
 import { activeCallsResponseSchema, todayCountResponseSchema, callPresenceResponseSchema } from '@protocol/schemas/calls'
+import type { activeCalls } from '../../db/schema'
 import { hubListResponseSchema, hubDetailResponseSchema } from '@protocol/schemas/hubs'
 import { noteListResponseSchema, noteResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
@@ -273,7 +274,6 @@ describe('Config Routes — response conformance', () => {
       getEnabledChannels: vi.fn().mockResolvedValue({ voice: true, sms: false, whatsapp: false, signal: false, rcs: false, telegram: false, reports: false }),
       getTelephonyProvider: vi.fn().mockResolvedValue(null),
       getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
-      getHubs: vi.fn().mockResolvedValue({ hubs: [] }),
     }
     const mockIdentity = {
       hasAdmin: vi.fn().mockResolvedValue({ hasAdmin: true }),
@@ -286,8 +286,9 @@ describe('Config Routes — response conformance', () => {
     const result = await assertConformsToSchema(app, 'GET', '/config', configResponseSchema, { env })
     expect(result.parsed.hotlineName).toBe('Test Hotline')
     expect(typeof result.parsed.setupCompleted).toBe('boolean')
-    expect(Array.isArray(result.parsed.hubs)).toBe(true)
     expect(typeof result.parsed.apiVersion).toBe('number')
+    // The unauthenticated payload carries no hub roster (#1710).
+    expect(result.parsed).not.toHaveProperty('hubs')
   })
 })
 
@@ -296,13 +297,24 @@ describe('Config Routes — response conformance', () => {
 // ---------------------------------------------------------------------------
 
 describe('Calls Routes — response conformance', () => {
-  const mockActiveCalls = [
+  // An active_calls row, as the service returns it — the route projects it onto the schema (#1129).
+  const mockActiveCalls: (typeof activeCalls.$inferSelect)[] = [
     {
-      id: 'call-1',
-      callerNumber: '+15551234567',
-      startedAt: new Date().toISOString(),
-      status: 'ringing' as const,
+      callId: 'call-1',
+      hubId: 'hub-1',
+      callerNumber: 'f'.repeat(64),
+      callerLast4: '4567',
       answeredBy: null,
+      status: 'ringing',
+      hasTranscription: false,
+      hasVoicemail: false,
+      hasRecording: false,
+      recordingSid: null,
+      reportedBy: null,
+      startedAt: new Date(),
+      answeredAt: null,
+      endedAt: null,
+      duration: null,
     },
   ]
 
@@ -316,7 +328,8 @@ describe('Calls Routes — response conformance', () => {
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/calls/active', activeCallsResponseSchema, { env })
-    expect(Array.isArray(result.parsed.calls)).toBe(true)
+    expect(result.parsed.calls[0].id).toBe('call-1')
+    expect(result.parsed.calls[0].callerNumber).toBeUndefined()
   })
 
   it('GET /calls/today-count — conforms to todayCountResponseSchema', async () => {
@@ -334,14 +347,34 @@ describe('Calls Routes — response conformance', () => {
   })
 
   it('GET /calls/presence — conforms to callPresenceResponseSchema', async () => {
-    const mockCalls = {
-      getPresence: vi.fn().mockResolvedValue({
-        users: [{ pubkey: MOCK_PUBKEY, status: 'available' }],
-      }),
-    }
-
+    // Presence is composed in services/presence.ts from the ringing resolver,
+    // not read off CallsService, so the route needs the services that resolver
+    // reads. Mocking `calls.getPresence` here would have conformed to the
+    // schema while production answered `users: []` — the defect this shape
+    // change removes.
     const { app, env } = buildApp('/calls', callsRoutes, {
-      services: { calls: mockCalls },
+      services: {
+        calls: {
+          getActiveCalls: vi.fn().mockResolvedValue([]),
+          getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
+        },
+        shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue([MOCK_PUBKEY]) },
+        activeShifts: {
+          listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [{ pubkey: MOCK_PUBKEY, hubId: '' }] }),
+          listClockedInPubkeys: vi.fn().mockResolvedValue(new Set([MOCK_PUBKEY])),
+        },
+        settings: {
+          getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+          getRoles: vi.fn().mockResolvedValue({
+            roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }],
+          }),
+        },
+        identity: {
+          getUsers: vi.fn().mockResolvedValue({
+            users: [{ pubkey: MOCK_PUBKEY, active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] }],
+          }),
+        },
+      },
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/calls/presence', callPresenceResponseSchema, { env })

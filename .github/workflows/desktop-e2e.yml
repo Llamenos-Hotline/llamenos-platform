@@ -34,6 +34,12 @@ permissions:
 env:
   BUN_VERSION: "1.3.5"
   TEST_ADMIN_PUBKEY: "79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
+  # The X25519 HPKE recipient derived from the same test seed
+  # (tests/api-helpers.ts ADMIN_SEED). A DIFFERENT key from TEST_ADMIN_PUBKEY,
+  # and required whenever it is set — the server refuses to boot rather than
+  # seal admin envelopes to an Ed25519 signing key (#1283).
+
+  TEST_ADMIN_DECRYPTION_PUBKEY: "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
 
 jobs:
   # ─── Detect Changed Files ─────────────────────────────────────
@@ -42,6 +48,17 @@ jobs:
   # truth (#664). Consolidated from what used to be this workflow's own
   # `on.pull_request.paths:` list.
   changes:
+    # Release-PR exemption (#1817) — the SAME predicate codeql.yml,
+    # semgrep.yml and security-audit.yml carry; keep them byte-identical.
+    # The knope release PR (head branch `release`) diffs version strings —
+    # its apps/desktop/Cargo.toml bump sets `desktop: true`, so E2E (Linux)
+    # ran ~11 min of UI tests per regeneration (6 on 2026-10-11) over a diff
+    # with no UI code. Gated HERE, at `changes`, because the `build`/`test`
+    # job-level `if:`s are pinned byte-exact by tests/orchestrator/
+    # guards.test.ts; skipping this job empties the outputs they read, so
+    # both skip. Desktop E2E is not a required context (see the header), so
+    # a skipped run cannot strand the PR.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -73,8 +90,17 @@ jobs:
             HEAD="HEAD"
           fi
 
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
+          # Three-dot on pull_request so only the PR's own changes pick
+          # platforms, not everything the base moved since the fork — see
+          # ci.yml's `lint` "Determine changed files" step for why (#1396).
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RANGE="$BASE...$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+
+          CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
@@ -177,6 +203,7 @@ jobs:
         uses: ./.github/actions/bootstrap-backend
         with:
           admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
+          admin_decryption_pubkey: ${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
 
       # ── WASM build (required for crypto-interop-wasm.spec.ts) ──
       - name: Install Rust stable

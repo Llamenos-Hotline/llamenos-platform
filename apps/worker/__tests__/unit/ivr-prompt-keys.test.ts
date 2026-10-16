@@ -1,8 +1,9 @@
 /**
  * #1346 — every IVR prompt an adapter plays from an upload must be one an
  * operator can upload. A key nobody can upload is never in the audio map, so
- * the adapter falls back to speech — and on a self-hosted PBX the bridge has
- * no speech engine, so the caller hears silence.
+ * the adapter always falls back to speech: the provider's own, or on a
+ * self-hosted PBX the worker's generated speech (#1347) — never the
+ * operator's recording.
  *
  * Each adapter is driven through every call-flow step that takes an audio map.
  * The map records every key the adapter looks up; each is then offered to the
@@ -19,6 +20,7 @@ import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
 import { SettingsService } from '@worker/services/settings'
 import { createMockDb } from './mock-db'
+import { fakeSpeech } from '../helpers/fake-speech'
 
 /** The adapters that play uploaded prompts. Telnyx takes no audio map at all. */
 const ADAPTERS: Record<string, () => TelephonyAdapter> = {
@@ -48,7 +50,7 @@ function recordingAudioMap(): { audioUrls: AudioUrlMap; requested: string[] } {
   return { audioUrls, requested }
 }
 
-const incoming = { callSid: 'CA1', callerNumber: '+15550000000', callerLanguage: LANG, hotlineName: 'Test' }
+const incoming = { callSid: 'CA1', callerNumber: '+15550000000', callerLanguage: LANG, hotlineName: 'Test', speechUrl: fakeSpeech }
 
 /** Every flow step that takes an audio map, and the uploads its caller hears, in order */
 const FLOWS: Array<{ step: string; hears: string[]; run: (a: TelephonyAdapter, audioUrls: AudioUrlMap) => Promise<{ body: string }> }> = [
@@ -71,18 +73,20 @@ const FLOWS: Array<{ step: string; hears: string[]; run: (a: TelephonyAdapter, a
   {
     step: 'a caller waiting in the queue',
     hears: ['waitMessage'],
-    run: (a, audioUrls) => a.handleWaitMusic(LANG, audioUrls, 10, 90),
+    run: (a, audioUrls) => a.handleWaitMusic(LANG, audioUrls, 10, 90, fakeSpeech),
   },
   {
     step: 'a caller sent to voicemail',
     hears: ['voicemailPrompt'],
-    run: (a, audioUrls) => a.handleVoicemail({ callSid: 'CA1', callerLanguage: LANG, callbackUrl: 'https://app.example', audioUrls }),
+    run: (a, audioUrls) =>
+      a.handleVoicemail({ callSid: 'CA1', callerLanguage: LANG, callbackUrl: 'https://app.example', audioUrls, speechUrl: fakeSpeech }),
   },
 ]
 
 /**
  * Prompts every adapter plays from an upload, but that the upload path does
- * not accept yet. Named, not silently skipped: on a PBX each is silence.
+ * not accept yet. Named, not silently skipped: every caller hears the
+ * provider's or the worker's generated speech, never the operator's voice.
  */
 const NOT_YET_UPLOADABLE = new Set(['voicemailPrompt'])
 

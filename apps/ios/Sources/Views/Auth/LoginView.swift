@@ -2,9 +2,11 @@ import SwiftUI
 
 // MARK: - LoginView
 
-/// Initial login screen. Provides a hub URL text field and two paths:
+/// Initial login screen. Provides a hub URL text field and identity creation:
 /// - "Create New Identity" → generates device keys with PIN encryption
-/// - "Link Device" → QR code scan for device linking via ECDH
+/// Device linking is not offered in the pilot build — it reported success
+/// without importing any key material (#1028); it returns with the unified
+/// provisioning protocol tracked in #1027.
 struct LoginView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router
@@ -99,23 +101,6 @@ struct LoginView: View {
                         .buttonStyle(.plain)
                         .disabled(vm.isLoading)
                         .accessibilityIdentifier("create-identity")
-
-                        Button {
-                            router.showDeviceLink()
-                        } label: {
-                            Label(
-                                NSLocalizedString("login_link_device", comment: "Link from Another Device"),
-                                systemImage: "qrcode.viewfinder"
-                            )
-                            .fontWeight(.medium)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.brandPrimary, lineWidth: 1.5))
-                            .foregroundStyle(Color.brandPrimary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(vm.isLoading)
-                        .accessibilityIdentifier("link-device")
                     }
 
                     // Security tagline

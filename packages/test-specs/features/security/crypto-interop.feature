@@ -75,6 +75,19 @@ Feature: Crypto Interop
     And the admin can decrypt the message
     And a third party with a wrong key cannot decrypt
 
+  # Byte equality for the signed auth message, asserted against bytes real Rust
+  # produced. Tagged @android only: the step bodies live in
+  # apps/android/.../steps/crypto/CryptoSteps.kt and, unlike the older steps in
+  # that file, do NOT swallow their assertions. There is no Swift
+  # implementation, so this is deliberately not @ios, and no @desktop either —
+  # the TypeScript half of this same equality is asserted for real in
+  # tests/crypto-interop.spec.ts, against the same fixture.
+  @android @regression
+  Scenario: The canonical auth message is byte-identical to Rust's
+    Given the test-vectors.json fixture is loaded
+    Then the Kotlin binding rebuilds the exact auth message bytes from vectors
+    And the nonce-less token from vectors verifies and the nonce-bearing one does not downgrade
+
   @ios @android @smoke
   Scenario: PIN encryption matches format constraints
     Given the test-vectors.json fixture is loaded

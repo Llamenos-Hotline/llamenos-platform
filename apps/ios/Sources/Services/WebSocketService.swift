@@ -28,7 +28,7 @@ enum ConnectionState: Equatable, Sendable {
         case .connected:
             return NSLocalizedString("ws_connected", comment: "Connected")
         case .reconnecting(let attempt):
-            return String(format: NSLocalizedString("ws_reconnecting", comment: "Reconnecting (%d)..."), attempt)
+            return L10n.format("ws_reconnecting", comment: "Reconnecting (%d)...", attempt)
         }
     }
 }
@@ -174,6 +174,8 @@ final class WebSocketService: @unchecked Sendable {
         self.cryptoService = cryptoService
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
+        // `.default` shares `URLCache.shared`; relay traffic must never reach it (#1658).
+        ResponseCachePolicy.harden(config)
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
     }
 

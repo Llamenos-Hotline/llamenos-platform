@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,8 @@ class ActiveHubState @Inject constructor(
 
     val activeHubId: StateFlow<String?> = _activeHubId
 
+    private val hydrated = CompletableDeferred<Unit>()
+
     init {
         // Hydrate from DataStore on startup, then keep in-memory state as source of truth.
         scope.launch {
@@ -49,9 +52,17 @@ class ActiveHubState @Inject constructor(
                     // Only update from DataStore if we haven't set a value yet (startup hydration)
                     // or if an external process changed it.
                     _activeHubId.compareAndSet(null, persisted)
+                    hydrated.complete(Unit)
                 }
         }
     }
+
+    /**
+     * Suspends until the persisted choice has been read. A null [activeHubId] before this
+     * means "not loaded yet", not "no hub chosen" — deciding on it would overwrite the
+     * user's own choice.
+     */
+    suspend fun awaitHydrated() = hydrated.await()
 
     private val _refreshTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 

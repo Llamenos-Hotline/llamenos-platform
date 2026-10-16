@@ -20,14 +20,9 @@ Then('I should see the calls today count on the dashboard', async ({ page }) => 
   // Wait for page title first (proves auth + layout rendered), then check calls card.
   const pageTitle = page.getByTestId(TestIds.PAGE_TITLE)
   await expect(pageTitle).toBeVisible({ timeout: Timeouts.AUTH })
+  // '-' is the card's loading placeholder, so it is not a count.
   const callsCard = page.getByTestId(TestIds.DASHBOARD_CALLS_TODAY)
-  const isCard = await callsCard.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isCard) {
-    const text = await callsCard.textContent()
-    // Card shows either a count or '-' placeholder
-    expect(text).toMatch(/\d+|-/)
-  }
-  // If calls card isn't visible, dashboard loaded successfully (card may not render in test env)
+  await expect(callsCard).toContainText(/\d+/, { timeout: Timeouts.ELEMENT })
 })
 
 When('I pull to refresh the dashboard', async ({ page }) => {

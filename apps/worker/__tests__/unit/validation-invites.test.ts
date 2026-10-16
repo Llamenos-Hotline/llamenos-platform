@@ -118,13 +118,30 @@ describe('invites route validation', () => {
       expect(result.success).toBe(false)
     })
 
-    it('rejects empty roleIds array', () => {
+    it('accepts an empty roleIds array, meaning "let the hub template decide"', () => {
+      // The role an invite grants is no longer required of the client: an
+      // empty list defers to the hub template's defaultMemberRole, and a
+      // template naming none grants none (#1446).
       const result = createInviteBodySchema.safeParse({ ...VALID_INVITE, roleIds: [] })
-      expect(result.success).toBe(false)
+      expect(result.success).toBe(true)
     })
 
-    it('rejects missing roleIds', () => {
+    it('defaults missing roleIds to an empty array rather than rejecting', () => {
       const result = createInviteBodySchema.safeParse({ name: 'Test', phone: '+1234' })
+      expect(result.success).toBe(true)
+      expect(result.success && result.data.roleIds).toEqual([])
+    })
+
+    it('accepts an explicit hubId', () => {
+      const result = createInviteBodySchema.safeParse({ ...VALID_INVITE, hubId: 'hub-1' })
+      expect(result.success).toBe(true)
+      expect(result.success && result.data.hubId).toBe('hub-1')
+    })
+
+    it('rejects an empty hubId', () => {
+      // Empty string is not "no hub": it would be stamped onto the invite and
+      // produce a hubRoles entry for a hub that does not exist.
+      const result = createInviteBodySchema.safeParse({ ...VALID_INVITE, hubId: '' })
       expect(result.success).toBe(false)
     })
 

@@ -12,6 +12,7 @@ import { requirePermission } from '../middleware/permission-guard'
 import { systemHealthResponseSchema } from '@protocol/schemas/system'
 import { authErrors } from '../openapi/helpers'
 import type { Services } from '../services'
+import { getHubPresence } from '../services/presence'
 
 declare const __BUILD_VERSION__: string
 
@@ -69,7 +70,7 @@ async function fetchServices(env: Record<string, unknown>): Promise<ServiceStatu
   const services: ServiceStatus[] = []
 
   // Check blob storage
-  const hasStorage = !!(env.R2_BUCKET || env.STORAGE_MANAGER)
+  const hasStorage = !!(env.BLOB_STORAGE || env.STORAGE_MANAGER)
   services.push({
     name: 'Blob Storage',
     status: hasStorage ? 'ok' : 'down',
@@ -117,7 +118,7 @@ async function fetchUserInfo(services: Services, hubId: string): Promise<SystemH
   try {
     const [volResult, presenceResult, onShiftPubkeys] = await Promise.all([
       services.identity.getUsers(),
-      services.calls.getPresence(hubId),
+      getHubPresence(services, hubId),
       services.shifts.getCurrentVolunteers(hubId),
     ])
 
@@ -192,7 +193,7 @@ systemRoutes.get('/health',
     calls,
     storage: {
       dbSize: 'N/A',
-      blobStorage: (env.R2_BUCKET || env.STORAGE_MANAGER) ? 'Connected' : 'Not configured',
+      blobStorage: (env.BLOB_STORAGE || env.STORAGE_MANAGER) ? 'Connected' : 'Not configured',
     },
     backup: {
       lastBackup: null,

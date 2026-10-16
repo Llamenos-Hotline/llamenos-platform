@@ -51,6 +51,21 @@ BASELINE_FILE = Path(__file__).resolve().parent / "stale-identifiers-baseline.tx
 STRING_LITERAL_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 # Calls whose first argument is a single accessibility identifier literal.
+# A test may name an identifier precisely to assert it is GONE — that is the
+# opposite of a stale reference, and flagging it inverts the check's meaning.
+# #1300 removes the device-link entry points from the pilot build, and the
+# tests that prove it stays removed read:
+#
+#     XCTAssertFalse(find("link-device").exists, "Login must not offer linking")
+#
+# Without this, deleting a feature and asserting it stays deleted is
+# unrepresentable: the assertion that guards the removal is itself reported as
+# debt. Matched before the general scan and excluded from it.
+ASSERTED_ABSENT_RE = re.compile(
+    r'XCTAssertFalse\(\s*(?:find|app\.\w+)\(?\s*"([^"]+)"\s*\)?[^)]*?\.exists',
+    re.DOTALL,
+)
+
 SCALAR_CALL_RE = re.compile(
     r'\b(?:find|waitForElement|scrollToFind|scrollToVisible|scrollAndTap)\(\s*'
     r'"((?:[^"\\]|\\.)*)"'
@@ -200,7 +215,17 @@ def collect_test_references() -> dict[str, list[str]]:
         text = strip_comments(f.read_text(encoding="utf-8", errors="replace"))
         rel = f.relative_to(IOS_ROOT)
 
+        # Spans asserting an identifier is absent, so the scan below can skip
+        # them: the identifier being undefined in Sources/ is what the test is
+        # there to prove.
+        absent_spans = [(m.start(), m.end()) for m in ASSERTED_ABSENT_RE.finditer(text)]
+
+        def asserted_absent(pos: int) -> bool:
+            return any(start <= pos < end for start, end in absent_spans)
+
         for m in SCALAR_CALL_RE.finditer(text):
+            if asserted_absent(m.start()):
+                continue
             line_no = text.count("\n", 0, m.start()) + 1
             record(m.group(1), f"{rel}:{line_no}")
 

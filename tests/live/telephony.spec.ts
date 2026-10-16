@@ -7,7 +7,8 @@ import {
   sendSMS,
   sleep,
   getLiveConfig,
-  resetStaging,
+  callCount,
+  conversationCount,
 } from './helpers'
 
 test.describe.configure({ mode: 'serial' })
@@ -15,16 +16,28 @@ test.describe.configure({ mode: 'serial' })
 // Skip the entire suite when live Twilio credentials are not available (e.g. CI)
 const hasLiveCreds = !!process.env.TWILIO_ACCOUNT_SID
 
+/**
+ * No beforeAll reset. This suite runs against a DEPLOYED server, and a
+ * deployed server has no reset — `devGuard` 404s every /api/test-* outside a
+ * development host, and /api/demo/reset is gated on exactly the same
+ * condition. The old `resetStaging()` could therefore only ever succeed
+ * against a development box, which is the opposite of what a live suite is
+ * for (#1423).
+ *
+ * Nothing is lost, because nothing depended on it. Every assertion here was
+ * `.first()` being visible — "some call row exists" — which a row left over
+ * from a previous run satisfied just as well, so a passing test proved
+ * nothing about the call it had just placed. Each test now records a count
+ * BEFORE acting and asserts the count it caused, which is both independent of
+ * pre-existing data and strictly stronger than what it replaced.
+ */
 test.describe('Live Telephony', () => {
   test.skip(!hasLiveCreds, 'Live telephony tests require TWILIO_ACCOUNT_SID')
 
-  test.beforeAll(async ({ request }) => {
-    await resetStaging(request)
-  })
-
-  test('inbound call reaches IVR and language menu plays', async ({ page }) => {
+  test('inbound call reaches IVR and language menu plays', async ({ page, request }) => {
     // Login as admin first so we can check call logs later
     await loginAsAdmin(page)
+    const callsBefore = await callCount(request)
 
     // Place a call to the hotline — no digits, just let the IVR play
     const { sid } = await callHotline()
@@ -48,13 +61,17 @@ test.describe('Live Telephony', () => {
     })
     await page.waitForURL(/\/calls/, { timeout: 10_000 })
 
-    // The call should appear in the call log (may be unanswered since nobody picked up)
-    // Look for any call entry — the page shows call rows with caller info
+    // THIS call must have been recorded — not merely "some row is present".
+    // The UI deliberately hides the caller number (asserted below in the
+    // notification test), so the count is what identifies our own effect.
+    await expect.poll(() => callCount(request), { timeout: 30_000 })
+      .toBeGreaterThan(callsBefore)
     await expect(page.locator('.divide-y > div').first()).toBeVisible({ timeout: 10_000 })
   })
 
-  test('IVR language selection works (press 2 for Spanish)', async ({ page }) => {
+  test('IVR language selection works (press 2 for Spanish)', async ({ page, request }) => {
     await loginAsAdmin(page)
+    const callsBefore = await callCount(request)
 
     // Call hotline and press 2 for Spanish (es)
     // 'ww' = 1 second wait per 'w', so 'wwwwwwwwww2' waits ~5s then presses 2
@@ -77,7 +94,8 @@ test.describe('Live Telephony', () => {
     })
     await page.waitForURL(/\/calls/, { timeout: 10_000 })
 
-    // Verify a call entry exists
+    await expect.poll(() => callCount(request), { timeout: 30_000 })
+      .toBeGreaterThan(callsBefore)
     await expect(page.locator('.divide-y > div').first()).toBeVisible({ timeout: 10_000 })
   })
 
@@ -128,8 +146,9 @@ test.describe('Live Telephony', () => {
     await waitForCallStatus(sid, 'completed', 15_000)
   })
 
-  test('unanswered call is recorded in call history', async ({ page }) => {
+  test('unanswered call is recorded in call history', async ({ page, request }) => {
     await loginAsAdmin(page)
+    const callsBefore = await callCount(request)
 
     // Place a call with language selection — no volunteers on shift, so it will queue
     const { sid } = await callHotline({ sendDigits: 'wwwwwwwwww2' })
@@ -171,6 +190,10 @@ test.describe('Live Telephony', () => {
     }
 
     await expect(callEntry).toBeVisible({ timeout: 10_000 })
+    // The point of the test: an UNANSWERED call still lands in history.
+    // Polled on the API so a stale row cannot satisfy it.
+    await expect.poll(() => callCount(request), { timeout: 30_000 })
+      .toBeGreaterThan(callsBefore)
   })
 
   test('SMS inbound creates conversation', async ({ page, request }) => {
@@ -180,6 +203,7 @@ test.describe('Live Telephony', () => {
     test.skip(!appConfig.channels?.sms, 'SMS channel is not enabled on staging — skipping')
 
     await loginAsAdmin(page)
+    const conversationsBefore = await conversationCount(request)
 
     // Send an SMS from the test caller to the hotline
     const testMessage = `Live E2E test ${Date.now()}`
@@ -203,5 +227,10 @@ test.describe('Live Telephony', () => {
 
     const conversationEntries = page.locator('[class*="cursor-pointer"]')
     await expect(conversationEntries.first()).toBeVisible({ timeout: 10_000 })
+
+    // A conversation this test caused — the `/sms/i` text above would match a
+    // conversation from any previous run.
+    await expect.poll(() => conversationCount(request), { timeout: 30_000 })
+      .toBeGreaterThan(conversationsBefore)
   })
 })

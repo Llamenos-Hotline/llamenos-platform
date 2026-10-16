@@ -5,8 +5,10 @@
 import { Given, Before, getState, setState } from './fixtures'
 import {
   createVolunteerViaApi,
+  addHubMemberViaApi,
   createShiftViaApi,
   createBanViaApi,
+  clockInViaApi,
   type CreateVolunteerResult,
 } from '../../api-helpers'
 import type { RelayCapture } from '../../helpers/relay-capture'
@@ -26,6 +28,10 @@ export interface ScenarioState {
   shiftIds: string[]
   callId?: string
   callStatus?: string
+  /** HTTP status the incoming-call simulation returned (undefined until a call arrives). */
+  callHttpStatus?: number
+  /** Parsed body of that response — carries `banned: true` when the server refused a banned caller. */
+  callResponseBody?: { error?: string; banned?: boolean; status?: string; callId?: string }
   conversationId?: string
   messageId?: string
   lastApiResponse?: { status: number; data: unknown }
@@ -75,6 +81,9 @@ Given('{int} volunteers are on shift', async ({ request, world }, count: number)
     const vol = await createVolunteerViaApi(request, {
       name: `BDD Vol ${Date.now()}-${i}`,
     })
+    // Only members who can answer in the hub are rung / may claim its
+    // conversations — a global role alone carries no hub authority (#1037)
+    await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
     volunteers.push({ ...vol, onShift: true })
   }
 
@@ -86,6 +95,13 @@ Given('{int} volunteers are on shift', async ({ request, world }, count: number)
     userPubkeys: pubkeys,
     hubId: state.hubId,
   })
+
+  // "On shift" is the intersection of both consents: the admin's shift above and
+  // each volunteer's own clock-in. A volunteer who has not clocked in is not
+  // rung and may not answer (apps/worker/services/ringing.ts).
+  for (const vol of volunteers) {
+    await clockInViaApi(request, state.hubId, vol.deviceKey)
+  }
 
   state.volunteers = volunteers
   state.shiftIds.push(shift.id)

@@ -34,10 +34,11 @@ struct DiagnosticsSettingsView: View {
             let pendingCount = appState.crashReportingService.pendingReportCount
             if pendingCount > 0 {
                 Section {
-                    Text(
-                        NSLocalizedString("crash_reporting_pending_reports_description", comment: "")
-                            .replacingOccurrences(of: "%@", with: "\(pendingCount)")
-                    )
+                    Text(L10n.format(
+                        "crash_reporting_pending_reports_description",
+                        comment: "N crash report(s) are ready to send.",
+                        pendingCount
+                    ))
                     .font(.brand(.callout))
                     .foregroundStyle(Color.brandMutedForeground)
 

@@ -9,11 +9,11 @@ import {
   apiPost,
   createUserViaApi,
   generateTestKeypair,
+  redeemInviteViaApi,
   ADMIN_SEED,
 } from '../../api-helpers'
-import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { bytesToHex } from '@shared/encoding'
+import { devSurfaceHeaders } from '../../dev-surface-secret'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -52,20 +52,12 @@ Before(async ({ world }) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function createRedeemAuth(seedHex: string): { pubkey: string; timestamp: number; token: string } {
-  const seedBytes = hexToBytes(seedHex)
-  const pubkey = bytesToHex(ed25519.getPublicKey(seedBytes))
-  const timestamp = Date.now()
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:/api/invites/redeem`)
-  const sig = ed25519.sign(message, seedBytes)
-  return { pubkey, timestamp, token: bytesToHex(sig) }
-}
-
 // ── RACE-01: Concurrent invite redemption ────────────────────────────
 
-Given('an admin creates an invite code for race testing', async ({ request, world }) => {
+Given('an admin creates an invite code for race testing', async ({ request, world, workerHub }) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name: `Race Test ${Date.now()}`,
     phone: `+1555${Date.now().toString().slice(-7)}`,
     roleIds: ['role-volunteer'],
@@ -78,28 +70,28 @@ When('two users simultaneously redeem the same invite code', async ({ request, w
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
 
+  // Two users, so two distinct clients: redeemInviteViaApi gives each its own
+  // simulated address. Sending both from one address would put them in the
+  // same per-client rate-limit bucket, where the control under test is the
+  // 5/min limiter rather than the single-use claim (#1480).
   const kp1 = generateTestKeypair()
   const kp2 = generateTestKeypair()
-  const auth1 = createRedeemAuth(kp1.seedHex)
-  const auth2 = createRedeemAuth(kp2.seedHex)
 
-  const redeem = (auth: { pubkey: string; timestamp: number; token: string }) =>
-    request.post(`${BASE_URL}/api/invites/redeem`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: { code: s.inviteCode, ...auth },
-    }).then(async (res) => ({
-      status: res.status(),
-      data: await res.json().catch(() => null),
-    }))
-
-  s.redeemResults = await Promise.all([redeem(auth1), redeem(auth2)])
+  s.redeemResults = await Promise.all([
+    redeemInviteViaApi(request, s.inviteCode!, kp1.seedHex),
+    redeemInviteViaApi(request, s.inviteCode!, kp2.seedHex),
+  ])
 })
 
 Then('exactly one redemption succeeds', async ({ world }) => {
   const s = getS(world)
   expect(s.redeemResults).toBeDefined()
+  // The statuses are in the message because the bare length told us nothing:
+  // "expected 1, received 0" looked like a broken single-use claim when both
+  // redemptions had in fact been rate limited (#1480).
+  const statuses = s.redeemResults!.map(r => r.status)
   const successes = s.redeemResults!.filter(r => r.status === 200)
-  expect(successes).toHaveLength(1)
+  expect(successes, `redemption statuses: ${statuses.join(', ')}`).toHaveLength(1)
 })
 
 Then('one redemption returns an error', async ({ world }) => {
@@ -107,7 +99,9 @@ Then('one redemption returns an error', async ({ world }) => {
   expect(s.redeemResults).toBeDefined()
   const failures = s.redeemResults!.filter(r => r.status !== 200)
   expect(failures).toHaveLength(1)
+  // A clean client error, not a 500 from an unhandled unique-key violation.
   expect(failures[0].status).toBeGreaterThanOrEqual(400)
+  expect(failures[0].status).toBeLessThan(500)
 })
 
 // ── RACE-02: Concurrent MLS message fetch ────────────────────────────
@@ -181,8 +175,15 @@ Given('a provision room has an encrypted payload', async ({ request, world }) =>
 
   // Create a provision room (public endpoint — mounted at /api/provision)
   const ephemeralPubkey = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  // The per-ROOM brute-force cap inside the handler
+  // (`provision:room-failures:<id>`, routes/provisioning.ts) counts only
+  // FAILED token presentations (#1789), so this scenario's correct-token
+  // polls never consume its budget. Each scenario also makes its own room,
+  // so the failure budget is per-room by design and the harness header does
+  // not touch it. The polling tier in front of it is sized for a 1–2s poll
+  // interval and shared per-IP (#1625, #1789).
   const createRes = await request.post(`${BASE_URL}/api/provision/rooms`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() },
     data: { ephemeralPubkey },
   })
   expect(createRes.status()).toBe(200)
@@ -210,7 +211,7 @@ When('two requests simultaneously poll the provision room', async ({ request, wo
   const poll = () =>
     request.get(
       `${BASE_URL}/api/provision/rooms/${s.provisionRoomId}?token=${s.provisionToken}`,
-      { headers: { 'Content-Type': 'application/json' } },
+      { headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() } },
     ).then(async (res) => ({
       status: res.status(),
       data: await res.json().catch(() => null),

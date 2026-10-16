@@ -17,35 +17,35 @@ struct HubUsageView: View {
                         label: NSLocalizedString("hub_onboarding_usage_calls", comment: "Calls"),
                         icon: "phone.fill",
                         value: usage.callsReceived,
-                        quota: viewModel.providerSettings?.quotas.maxCallsPerMonth
+                        quota: viewModel.setupStatus?.quotas?.maxCallsPerMonth
                     )
 
                     usageRow(
                         label: NSLocalizedString("hub_onboarding_usage_sms", comment: "SMS"),
                         icon: "message.fill",
                         value: usage.smsSent,
-                        quota: viewModel.providerSettings?.quotas.maxSMSPerMonth
+                        quota: viewModel.setupStatus?.quotas?.maxSMSPerMonth
                     )
 
                     usageRow(
                         label: NSLocalizedString("hub_onboarding_usage_signal", comment: "Signal Messages"),
                         icon: "lock.shield.fill",
                         value: usage.signalMessagesSent,
-                        quota: viewModel.providerSettings?.quotas.maxSignalMessagesPerMonth
+                        quota: viewModel.setupStatus?.quotas?.maxSignalMessagesPerMonth
                     )
 
                     usageRow(
                         label: NSLocalizedString("hub_onboarding_usage_whats_app", comment: "WhatsApp Messages"),
                         icon: "bubble.left.and.bubble.right.fill",
                         value: usage.whatsAppMessagesSent,
-                        quota: viewModel.providerSettings?.quotas.maxWhatsAppMessagesPerMonth
+                        quota: viewModel.setupStatus?.quotas?.maxWhatsAppMessagesPerMonth
                     )
 
                     usageRow(
                         label: NSLocalizedString("hub_onboarding_quota_phone_numbers", comment: "Phone Numbers"),
                         icon: "phone.badge.plus",
                         value: usage.phoneNumbers,
-                        quota: viewModel.providerSettings?.quotas.maxPhoneNumbers
+                        quota: viewModel.setupStatus?.quotas?.maxPhoneNumbers
                     )
                 } header: {
                     Text(NSLocalizedString("hub_onboarding_usage_title", comment: "Usage This Month"))
@@ -57,7 +57,7 @@ struct HubUsageView: View {
             }
 
             // Quota Limits
-            if let quotas = viewModel.providerSettings?.quotas {
+            if let quotas = viewModel.setupStatus?.quotas {
                 Section {
                     quotaRow(
                         label: NSLocalizedString("hub_onboarding_quota_calls", comment: "Calls / Month"),
@@ -81,6 +81,7 @@ struct HubUsageView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(NSLocalizedString("hub_onboarding_usage_title", comment: "Usage This Month"))
         .navigationBarTitleDisplayMode(.inline)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hub-usage-view")
     }
 

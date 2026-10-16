@@ -11,7 +11,12 @@ import XCTest
 /// (79215a4c…af9183, ci.yml TEST_ADMIN_PUBKEY); `seedHex` is its Ed25519 seed, the
 /// same fixture as ADMIN_SEED in tests/helpers.ts. Requests carry the per-request
 /// Ed25519 token the server verifies in apps/worker/lib/auth.ts: a signature over
-/// `LABEL_DEVICE_AUTH:pubkey:timestamp:METHOD:path`.
+/// `LABEL_DEVICE_AUTH:pubkey:timestamp:METHOD:path:nonce`.
+///
+/// Header auth is the nonce-bearing domain — the server rejects the nonce-less
+/// shape (which has its own label, `LABEL_DEVICE_AUTH_NO_NONCE`) on every route
+/// that does not explicitly opt in. A harness that signed the other shape would
+/// be testing a path the app never takes.
 enum TestAdminAPI {
     static let seedHex = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7" // gitleaks:allow
 
@@ -27,6 +32,23 @@ enum TestAdminAPI {
                               file: StaticString = #filePath, line: UInt = #line) {
         send("POST", "/api/hubs/\(hubId)/settings/cms/templates/apply", ["templateId": templateId, "hubId": hubId],
              baseURL: baseURL, file: file, line: line)
+    }
+
+    /// Create a hub through the route an operator uses and return its id. Use this when a
+    /// scenario needs a hub in a known state that the class-wide hub — shared by every
+    /// test in the class — cannot promise, e.g. one that has no records.
+    static func createHub(name: String, baseURL: String,
+                          file: StaticString = #filePath, line: UInt = #line) -> String? {
+        guard let data = send("POST", "/api/hubs", ["name": name], baseURL: baseURL, file: file, line: line) else {
+            return nil
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hub = json["hub"] as? [String: Any],
+              let id = hub["id"] as? String, !id.isEmpty else {
+            XCTFail("POST /api/hubs did not return { hub: { id } }", file: file, line: line)
+            return nil
+        }
+        return id
     }
 
     /// Send a signed JSON request and fail the calling test on anything but 2xx.
@@ -73,13 +95,18 @@ enum TestAdminAPI {
     }
 
     /// `{"pubkey","timestamp","token"}` for the Authorization header.
-    private static func authorization(method: String, path: String) throws -> String {
+    /// Internal rather than private: `BaseUITest.createClassHub` signs its own
+    /// request so it can keep a 60s timeout (a first request on a freshly
+    /// booted CI runner has taken 30-49s, where `send` allows 15s). Sharing
+    /// the signing keeps one implementation of the token format.
+    static func authorization(method: String, path: String) throws -> String {
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hexString: seedHex))
         let pubkey = key.publicKey.rawRepresentation.hexString
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        let message = "\(CryptoLabels.LABEL_DEVICE_AUTH):\(pubkey):\(timestamp):\(method):\(path)"
+        let nonce = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        let message = "\(CryptoLabels.LABEL_DEVICE_AUTH):\(pubkey):\(timestamp):\(method):\(path):\(nonce)"
         let token = try key.signature(for: Data(message.utf8)).hexString
-        let json = try JSONSerialization.data(withJSONObject: ["pubkey": pubkey, "timestamp": timestamp, "token": token])
+        let json = try JSONSerialization.data(withJSONObject: ["pubkey": pubkey, "timestamp": timestamp, "token": token, "nonce": nonce])
         return String(decoding: json, as: UTF8.self)
     }
 }
