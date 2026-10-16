@@ -21,7 +21,7 @@ final class AdminFlowUITests: BaseUITest {
         // Admin panel link should be visible for admin users
         let adminLink = find("settings-admin-link")
         if adminLink.waitForExistence(timeout: 10) {
-            XCTAssertTrue(true, "Admin panel link exists in settings for admin users")
+            _ = 0 // break-it fixture: constant assertion removed
         }
         // If the admin section is not visible, the user might not have admin role
         // in the test configuration, which is acceptable
@@ -81,7 +81,7 @@ final class AdminFlowUITests: BaseUITest {
         _ = anyElementExists(["volunteers-list", "volunteers-empty-state", "volunteers-loading"])
 
         // Search bar should be accessible
-        XCTAssertTrue(true, "Volunteers tab loaded successfully")
+        _ = 0 // break-it fixture: constant assertion removed
     }
 
     // MARK: - Ban List Tab

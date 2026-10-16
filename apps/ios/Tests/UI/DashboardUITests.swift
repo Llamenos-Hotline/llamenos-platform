@@ -88,7 +88,7 @@ final class DashboardUITests: BaseUITest {
                 return
             }
             // Should have some text indicating shift state
-            XCTAssertTrue(true, "Shift status card is displayed")
+            _ = 0 // break-it fixture: constant assertion removed
         }
     }
 

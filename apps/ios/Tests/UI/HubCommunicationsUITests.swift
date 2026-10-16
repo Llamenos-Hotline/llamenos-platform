@@ -376,7 +376,7 @@ final class HubCommunicationsUITests: BaseUITest {
             let usageLink = scrollToFind("hub-comms-usage-link", maxSwipes: 3)
             // Usage link only appears when usage data is non-nil
             if usageLink.exists {
-                XCTAssertTrue(true, "Usage link is visible when usage data is available")
+                _ = 0 // break-it fixture: constant assertion removed
             }
         }
     }
@@ -435,7 +435,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the usage view should appear") {
             let usageView = find("hub-usage-view")
             if usageView.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Usage view rendered successfully")
+                _ = 0 // break-it fixture: constant assertion removed
             }
         }
     }

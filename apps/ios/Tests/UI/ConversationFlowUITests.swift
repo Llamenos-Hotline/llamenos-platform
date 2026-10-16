@@ -64,7 +64,7 @@ final class ConversationFlowUITests: XCTestCase {
 
         let emptyState = find("conversations-empty-state")
         if emptyState.waitForExistence(timeout: 10) {
-            XCTAssertTrue(true, "Empty state is displayed when no conversations exist")
+            _ = 0 // break-it fixture: constant assertion removed
         }
         // If conversations exist, that's fine too
     }
@@ -167,7 +167,7 @@ final class ConversationFlowUITests: XCTestCase {
 
         let channelHeader = find("conversation-channel-header")
         if channelHeader.waitForExistence(timeout: 5) {
-            XCTAssertTrue(true, "Channel header is visible in conversation detail")
+            _ = 0 // break-it fixture: constant assertion removed
         }
     }
 

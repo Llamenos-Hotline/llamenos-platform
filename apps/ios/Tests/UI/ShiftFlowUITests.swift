@@ -105,7 +105,7 @@ final class ShiftFlowUITests: BaseUITest {
             // Confirmation dialog should appear
             let alertExists = app.alerts.firstMatch.waitForExistence(timeout: 5)
             if alertExists {
-                XCTAssertTrue(true, "Clock out confirmation dialog appeared")
+                _ = 0 // break-it fixture: constant assertion removed
                 // Cancel
                 let cancelButton = app.alerts.firstMatch.buttons.element(boundBy: 0)
                 if cancelButton.exists {
@@ -151,7 +151,7 @@ final class ShiftFlowUITests: BaseUITest {
             let todaySection = find("shift-day-\(today)")
 
             if todaySection.waitForExistence(timeout: 3) {
-                XCTAssertTrue(true, "Today's day section exists in the schedule")
+                _ = 0 // break-it fixture: constant assertion removed
             }
         }
     }
@@ -171,7 +171,7 @@ final class ShiftFlowUITests: BaseUITest {
                 "shifts-error", "shifts-empty-state",
             ])
             if found {
-                XCTAssertTrue(true, "Error or empty state displayed when hub connection fails")
+                _ = 0 // break-it fixture: constant assertion removed
             }
             // If neither, that's fine — hub might be configured
         }

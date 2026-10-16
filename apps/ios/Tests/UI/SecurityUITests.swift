@@ -205,7 +205,7 @@ final class SecurityUITests: BaseUITest {
             )
             // Biometric button is optional — depends on device capabilities
             if biometricButton.waitForExistence(timeout: 2) {
-                XCTAssertTrue(true, "Biometric unlock button is displayed")
+                _ = 0 // break-it fixture: constant assertion removed
             }
         }
     }
@@ -233,7 +233,7 @@ final class SecurityUITests: BaseUITest {
             // AuthViewModel.errorMessage under "login-error" (see LoginView.swift).
             let errorElement = find("login-error")
             if errorElement.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "HTTP rejection error is displayed")
+                _ = 0 // break-it fixture: constant assertion removed
             } else {
                 // Check for any error text on screen
                 let errorText = app.staticTexts.matching(
