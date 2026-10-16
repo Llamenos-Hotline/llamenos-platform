@@ -2187,7 +2187,11 @@
     "suggestedRoleCount": "{{count}} roles",
     "slugPlaceholder": "e.g. intake-coordinator",
     "title": "Roles & Permissions",
-    "updated": "Role updated"
+    "updated": "Role updated",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "notificationChannelGeneral": "Guud",
   "tags": {
@@ -2209,7 +2213,9 @@
     "createTagNamed": "Create \"{{name}}\"",
     "noTagsFound": "No tags found.",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "adminEntityType": {
     "sectionGeneral": "Guud",
@@ -2827,7 +2833,9 @@
     "eventsMigrationComplete": "Events migration complete",
     "eventsMigrationError": "Migration failed",
     "checkingMigration": "Checking migration status...",
-    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}"
+    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "permissions": {
     "groups": {
