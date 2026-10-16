@@ -7,6 +7,13 @@
  */
 import { getState, setState } from './fixtures'
 
+/** A test actor capable of authenticating API requests. */
+export interface ActingAdmin {
+  seedHex: string
+  pubkey: string
+  deviceKey: string
+}
+
 export interface SharedResponseState {
   lastResponse?: { status: number; data: unknown }
   /** User created by "a registered user with a known keypair" — shared across step namespaces. */
@@ -17,6 +24,15 @@ export interface SharedResponseState {
   sharedDeviceLabels: Record<string, string>
   /** Collected response statuses from flood/rate-limit tests (invite, webauthn). */
   floodResponses: number[]
+  /**
+   * The scenario's current "acting admin" actor for generic, cross-file admin
+   * HTTP-verb steps (e.g. "the admin GETs {string}", "the admin POSTs to {string}").
+   * Whichever Given step creates the scenario's admin-like actor (super admin,
+   * hub admin, plain admin, …) sets this via setActingAdmin() so any step file's
+   * generic verb step can act as that user without needing its own duplicate
+   * actor-creation Given (which would collide as an ambiguous step definition).
+   */
+  actingAdmin?: ActingAdmin
 }
 
 const KEY = 'shared'
@@ -35,6 +51,16 @@ export function getSharedState(world: Record<string, unknown>): SharedResponseSt
 
 export function setLastResponse(world: Record<string, unknown>, res: { status: number; data: unknown }): void {
   getSharedState(world).lastResponse = res
+}
+
+/** Record this scenario's acting admin actor for generic cross-file admin steps. */
+export function setActingAdmin(world: Record<string, unknown>, actor: ActingAdmin): void {
+  getSharedState(world).actingAdmin = actor
+}
+
+/** Read this scenario's acting admin actor, set by whichever Given step created it. */
+export function getActingAdmin(world: Record<string, unknown>): ActingAdmin | undefined {
+  return getSharedState(world).actingAdmin
 }
 
 /**
