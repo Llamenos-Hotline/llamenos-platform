@@ -432,6 +432,13 @@ jobs:
       - name: Validate i18n strings
         run: bun run i18n:validate:all
 
+      # i18n:validate:all reads locales/*.json and platform SOURCE only — it passes
+      # with every generated .lproj / values-*/strings.xml deleted (proven in the
+      # i18n-pipeline audit). This asserts the codegen output the apps actually
+      # load exists, is named the way the platforms resolve it, and is complete.
+      - name: Verify i18n codegen output was delivered
+        run: bash scripts/check-i18n-codegen-output.sh
+
       - name: Validate test-specs coverage
         run: bun run test-specs:validate
 
