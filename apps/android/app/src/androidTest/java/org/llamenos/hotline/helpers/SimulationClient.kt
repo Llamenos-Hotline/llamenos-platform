@@ -294,23 +294,109 @@ object SimulationClient {
      * locally would prove nothing about the wire.
      */
     fun authorizedGet(path: String): String {
+        return authorizedRequest("GET", path)
+    }
+
+    /**
+     * Authenticated `PATCH`, signed with the admin identity above.
+     *
+     * Used to restore a setting to its pre-scenario value after a
+     * save-and-verify assertion: settings are platform-wide, so a scenario
+     * that leaves its probe value behind would poison the next scenario's
+     * starting state.
+     */
+    fun authorizedPatch(path: String, jsonBody: String): String {
+        return authorizedRequest("PATCH", path, jsonBody)
+    }
+
+    private fun authorizedRequest(method: String, path: String, jsonBody: String? = null): String {
         val url = URL("$hubUrl$path")
         val conn = url.openConnection() as HttpURLConnection
         return try {
-            conn.requestMethod = "GET"
+            conn.requestMethod = method
             conn.connectTimeout = CONNECT_TIMEOUT_MS
             conn.readTimeout = READ_TIMEOUT_MS
-            conn.setRequestProperty("Authorization", adminAuthHeader("GET", path))
+            conn.setRequestProperty("Authorization", adminAuthHeader(method, path))
             conn.setRequestProperty("X-Test-Secret", testSecret)
+            if (jsonBody != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(jsonBody.toByteArray(Charsets.UTF_8)) }
+            }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: ""
             if (code !in 200..299) {
-                throw IOException("GET $path -> HTTP $code: $text")
+                throw IOException("$method $path -> HTTP $code: $text")
             }
             text
         } finally {
             conn.disconnect()
+        }
+    }
+
+    // ─── Settings read-back (behaviour assertions, #1743) ──────────
+    //
+    // All three routes answer a fully-populated object (stored values over
+    // built-in defaults), so the fields are non-nullable: a missing field is
+    // a decode failure, which is the loud failure we want.
+
+    @Serializable
+    data class CallSettingsResponse(
+        val queueTimeoutSeconds: Int,
+        val voicemailMaxSeconds: Int,
+    )
+
+    @Serializable
+    data class SpamSettingsResponse(
+        val voiceCaptchaEnabled: Boolean,
+        val rateLimitEnabled: Boolean,
+        val maxCallsPerMinute: Int,
+        val blockDurationMinutes: Int,
+    )
+
+    @Serializable
+    data class TranscriptionSettingsResponse(
+        val globalEnabled: Boolean,
+        val allowUserOptOut: Boolean,
+    )
+
+    fun getCallSettings(): CallSettingsResponse =
+        json.decodeFromString(authorizedGet("/api/settings/call"))
+
+    fun getSpamSettings(): SpamSettingsResponse =
+        json.decodeFromString(authorizedGet("/api/settings/spam"))
+
+    fun getTranscriptionSettings(): TranscriptionSettingsResponse =
+        json.decodeFromString(authorizedGet("/api/settings/transcription"))
+
+    /**
+     * Poll a server-side read until [matches] holds, or fail naming what
+     * never happened and the last value the server actually reported.
+     *
+     * This is the behaviour-assertion counterpart of Compose's `waitUntil`:
+     * the save PATCH is fired from a coroutine after the tap returns, so the
+     * read-back has to poll. The deadline only bounds a genuinely absent
+     * state change — a slow emulator cannot trip it, because the condition
+     * becomes true the moment the server stores the value.
+     */
+    fun <T> awaitServerState(
+        what: String,
+        timeoutMs: Long = 15_000,
+        intervalMs: Long = 250,
+        fetch: () -> T,
+        matches: (T) -> Boolean,
+    ): T {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            val last = fetch()
+            if (matches(last)) return last
+            if (System.currentTimeMillis() >= deadline) {
+                throw AssertionError(
+                    "$what — server never reflected it within ${timeoutMs}ms; last value: $last",
+                )
+            }
+            Thread.sleep(intervalMs)
         }
     }
 
