@@ -11,9 +11,12 @@ backup_postgres_jobs: 2 # parallel dump jobs (directory format only)
 backup_postgres_compress: 9 # compression level (0-9)
 backup_postgres_exclude_tables: [] # tables to skip (e.g., sessions, cache)
 
-# WAL archiving (continuous archiving for PITR)
-backup_postgres_wal_enabled: false
-backup_postgres_wal_dir: "{{ backup_base_dir }}/postgres-wal"
+# NOTE: there is no WAL/PITR archiving here. `pg_dump` gives point-in-time
+# recovery to the moment of the last daily dump only (RPO: up to 24h). A
+# `backup_postgres_wal_enabled` knob used to exist here and did nothing but
+# `mkdir` an empty directory — removed rather than left as false confidence.
+# Real continuous archiving needs `archive_command` wired into postgresql.conf
+# plus a WAL shipping target; track that as its own feature, not a toggle.
 
 # Retention policy
 backup_postgres_retain_daily: 7
@@ -32,3 +35,8 @@ backup_compose_file: "{{ app_dir }}/docker-compose.yml"
 # Database credentials
 backup_postgres_user: llamenos
 backup_postgres_db: llamenos
+
+# Minimum free space (MB) required at the backup directory before a dump
+# starts. Retention pruning runs after the write, so it cannot rescue a dump
+# that already filled the disk and took PostgreSQL down with it.
+backup_min_free_mb: 1024

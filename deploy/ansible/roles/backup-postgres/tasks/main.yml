@@ -25,15 +25,6 @@
     - weekly
     - monthly
 
-- name: Create WAL archive directory
-  ansible.builtin.file:
-    path: "{{ backup_postgres_wal_dir }}"
-    state: directory
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_group }}"
-    mode: "0700"
-  when: backup_postgres_wal_enabled
-
 - name: Template PostgreSQL backup script
   ansible.builtin.template:
     src: backup-postgres.sh.j2
@@ -46,8 +37,7 @@
   ansible.builtin.command: "{{ app_dir }}/scripts/backup-postgres.sh --manifest"
   become_user: "{{ deploy_user }}"
   register: initial_pg_backup
-  changed_when: "'Backup complete' in initial_pg_backup.stdout"
-  ignore_errors: true
+  changed_when: "'PostgreSQL backup complete' in initial_pg_backup.stdout"
 
 - name: Display initial backup result
   ansible.builtin.debug:

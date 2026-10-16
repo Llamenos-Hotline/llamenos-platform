@@ -24,6 +24,23 @@
       ansible.builtin.import_tasks: tasks/skip-unencrypted-host.yml
       tags: always
 
+    # Defense in depth: preflight.yml already requires this, but backup.yml
+    # can be run directly (`just backup`, cron, an operator by hand) without
+    # preflight ever running. The config backup includes .env — refuse to
+    # write a plaintext copy of every server secret under any invocation path.
+    - name: Require a valid backup_age_public_key before backing anything up
+      ansible.builtin.assert:
+        that:
+          - backup_age_public_key | default('') | length > 0
+          - backup_age_public_key | default('') | regex_search('^age1[0-9a-z]{58}$') is truthy
+        fail_msg: |
+          'backup_age_public_key' must be a valid age public key (age1...) before
+          backups run — the config backup includes .env, and an unencrypted copy of
+          every server secret must never be written. Generate one with:
+            age-keygen -o backup-key.txt
+          and set backup_age_public_key in vars.yml.
+      tags: always
+
     - name: Ensure backup base directory exists
       ansible.builtin.file:
         path: "{{ app_dir }}/backups"
@@ -196,6 +213,26 @@
               notifempty
               create 0640 {{ deploy_user }} {{ deploy_group }}
           }
+
+          {{ app_dir }}/backups/manifest.log {
+              weekly
+              rotate 12
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 0640 {{ deploy_user }} {{ deploy_group }}
+          }
+      tags: always
+
+    - name: Initialize DR drill schedule (if not already present)
+      ansible.builtin.template:
+        src: ../templates/dr-schedule.json.j2
+        dest: "{{ app_dir }}/dr-schedule.json"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_group }}"
+        mode: "0640"
+        force: false # never clobber recorded drill history (the "history" array)
       tags: always
 
     - name: Display backup summary
