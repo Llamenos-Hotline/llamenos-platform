@@ -439,10 +439,46 @@ mod tests {
     fn secrets_zeroize_on_drop() {
         let encrypted = generate_device_keys("dev-z", "12345678").unwrap();
         let pubkey = encrypted.state.signing_pubkey_hex.clone();
-        {
+
+        // Record where the seeds live, and what they held, while `secrets` is
+        // still alive. Every assertion about zeroization has to look at that
+        // memory *after* the drop — asserting inside the scope only proves the
+        // seeds were readable, which is true with or without `#[zeroize(drop)]`.
+        let (signing_ptr, encryption_ptr, signing_before, encryption_before) = {
             let secrets = unlock_device_keys(&encrypted, "12345678").unwrap();
             assert_eq!(hex::encode(secrets.signing_pubkey().to_bytes()), pubkey);
-        }
+            (
+                secrets.signing_seed.as_ptr() as *const [u8; 32],
+                secrets.encryption_seed.as_ptr() as *const [u8; 32],
+                secrets.signing_seed,
+                secrets.encryption_seed,
+            )
+            // `secrets` is dropped here — `#[zeroize(drop)]` must wipe both seeds.
+        };
+
+        // Read the post-drop bytes before anything else runs: any intervening
+        // call could reuse the stack slot and zero it for unrelated reasons.
+        // Reading freed stack memory is the only way to observe a Drop impl's
+        // effect, and is the whole purpose of this test.
+        let signing_after = unsafe { std::ptr::read_volatile(signing_ptr) };
+        let encryption_after = unsafe { std::ptr::read_volatile(encryption_ptr) };
+
+        assert_ne!(
+            signing_before, [0u8; 32],
+            "generated signing seed was already all zeros — the test cannot tell zeroization apart from that"
+        );
+        assert_ne!(
+            encryption_before, [0u8; 32],
+            "generated encryption seed was already all zeros — the test cannot tell zeroization apart from that"
+        );
+        assert_eq!(
+            signing_after, [0u8; 32],
+            "signing seed survived the drop — DeviceSecrets is not zeroized on drop"
+        );
+        assert_eq!(
+            encryption_after, [0u8; 32],
+            "encryption seed survived the drop — DeviceSecrets is not zeroized on drop"
+        );
     }
 
     #[test]

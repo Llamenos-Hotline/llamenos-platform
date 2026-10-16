@@ -3,14 +3,25 @@ import { paginationSchema, paginatedMeta, recipientEnvelopeSchema } from './comm
 
 // --- Response schemas ---
 
+export const callStatusSchema = z.enum(['ringing', 'in-progress', 'completed', 'unanswered'])
+
+/**
+ * A call as the server sends it — active (`/calls/active`) or finished (`/calls/history`).
+ *
+ * The server never sends the HMAC of the caller's number: it is a stable, correlatable
+ * caller identifier, and no client needs it (bans resolve it server-side). Nor the
+ * volunteer who reported spam. Routes project their rows onto this shape; they never
+ * pass a database row through.
+ */
 export const callRecordResponseSchema = z.object({
   id: z.string(),
+  hubId: z.string().optional(),
   callerLast4: z.string().optional(),
   answeredBy: z.string().nullable().optional(),
   startedAt: z.string(),
   endedAt: z.string().optional(),
   duration: z.number().optional(),
-  status: z.enum(['ringing', 'in-progress', 'completed', 'unanswered']).optional(),
+  status: callStatusSchema.optional(),
   hasTranscription: z.boolean().optional(),
   hasVoicemail: z.boolean().optional(),
   hasRecording: z.boolean().optional(),
@@ -26,7 +37,7 @@ export const activeCallResponseSchema = z.object({
   callerNumber: z.string(),
   answeredBy: z.string().nullable().optional(),
   startedAt: z.string(),
-  status: z.enum(['ringing', 'in-progress', 'completed', 'unanswered']),
+  status: callStatusSchema,
 })
 
 export type CallRecord = z.infer<typeof callRecordResponseSchema>

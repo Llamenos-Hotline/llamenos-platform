@@ -6,6 +6,9 @@ import dagger.hilt.components.SingletonComponent
 import org.llamenos.hotline.api.HubOnboardApi
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.service.PushRegistrationManager
+import org.llamenos.hotline.service.UnifiedPushGateway
+import org.llamenos.hotline.telephony.LinphoneService
 
 /**
  * Hilt entry points for accessing singletons from non-injected code.
@@ -35,4 +38,28 @@ interface CryptoEntryPoint {
 @InstallIn(SingletonComponent::class)
 interface HubOnboardApiEntryPoint {
     fun hubOnboardApi(): HubOnboardApi
+}
+
+/**
+ * The real, singleton [LinphoneService] — the one the app itself registers with.
+ *
+ * Reached from `LiveSipRegistrationTest`, which drives it against a live PBX. The point of
+ * going through the production Dagger graph rather than constructing one is that the thing
+ * under test is then the service the app actually uses, liblinphone core and all.
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface LinphoneEntryPoint {
+    fun linphoneService(): LinphoneService
+}
+
+/**
+ * Push registration state for instrumentation tests — lets step definitions
+ * assert the real distributor state the app settled on after login (#955).
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface PushRegistrationEntryPoint {
+    fun pushRegistrationManager(): PushRegistrationManager
+    fun unifiedPushGateway(): UnifiedPushGateway
 }

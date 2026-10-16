@@ -139,7 +139,7 @@ signal.get('/queue/stats',
   async (c) => {
     const hubId = c.req.query('hub') || undefined
     const db = getDb()
-    const queue = new SignalMessageQueue(db)
+    const queue = new SignalMessageQueue(db, c.env.HMAC_SECRET)
     const stats = await queue.getStats(hubId)
     return c.json(stats)
   })
@@ -160,7 +160,7 @@ signal.get('/queue/dead-letters',
   async (c) => {
     const hubId = c.req.query('hub') || undefined
     const db = getDb()
-    const queue = new SignalMessageQueue(db)
+    const queue = new SignalMessageQueue(db, c.env.HMAC_SECRET)
     const deadLetters = await queue.getDeadLetters(hubId)
     return c.json({ deadLetters })
   })
@@ -182,7 +182,7 @@ signal.post('/queue/retry/:id',
     const messageId = c.req.param('id')
     const services = c.get('services')
     const db = getDb()
-    const queue = new SignalMessageQueue(db)
+    const queue = new SignalMessageQueue(db, c.env.HMAC_SECRET)
     const success = await queue.retryDeadLetter(messageId)
 
     if (success) {

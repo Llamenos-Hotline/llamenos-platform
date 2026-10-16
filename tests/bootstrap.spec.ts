@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test'
+import { devSurfaceSecret } from './dev-surface-secret'
 import { ADMIN_SEED, enterPin, resetTestState, TEST_PIN, Timeouts, completeProfileSetup } from './helpers'
 import { TestIds } from './test-ids'
 
-const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+const TEST_RESET_SECRET = devSurfaceSecret()
 const resetHeaders = { 'X-Test-Secret': TEST_RESET_SECRET }
 const STORAGE_DIR = 'tests/storage'
 
@@ -93,6 +94,29 @@ async function bootstrapAdmin(page: import('@playwright/test').Page) {
   // Wait for keypair generation + recovery key display (PBKDF2 600K — slow)
   const recoveryKey = page.getByTestId('recovery-key')
   await expect(recoveryKey).toBeVisible({ timeout: 90000 })
+
+  // #1709: this download gates `Continue to Setup`, so a failure on it must be
+  // visible. The reachable failure is an idle auto-lock while the user is on
+  // this screen — CryptoState then holds no secrets and the backup command
+  // refuses. Before the real download, prove the refusal is SHOWN and that
+  // Continue stays disabled, instead of the rejection being swallowed and the
+  // installer stranded with a dead button.
+  await page.evaluate(async () => {
+    const platform = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      lockCrypto(): Promise<void>
+    }
+    await platform.lockCrypto()
+  })
+  await page.getByRole('button', { name: /download.*backup/i }).click()
+  await expect(page.getByTestId(TestIds.BACKUP_ERROR)).toBeVisible({ timeout: 20000 })
+  await expect(page.getByRole('button', { name: /continue to setup/i })).toBeDisabled()
+  console.log('[SETUP] Backup failure surfaced and Continue stayed disabled')
+  await page.evaluate(async (pin) => {
+    const km = (window as unknown as Record<string, unknown>).__TEST_KEY_MANAGER as {
+      unlock(pin: string): Promise<string | null>
+    }
+    if (!(await km.unlock(pin))) throw new Error('could not re-unlock after the deliberate lock')
+  }, TEST_PIN)
 
   // Download backup (required before continuing)
   const downloadPromise = page.waitForEvent('download')

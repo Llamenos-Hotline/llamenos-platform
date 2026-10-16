@@ -17,7 +17,9 @@ import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
+import { getClientIp } from '../lib/client-ip'
 import { webhookAuth } from '../middleware/webhook-auth'
+import { hasHubPermission, permissionGranted, resolvePermissions } from '@shared/permissions'
 
 const logger = createLogger('messaging')
 
@@ -98,7 +100,7 @@ messaging.post('/:channel/webhook',
   const cidrs = (c.env as unknown as Record<string, string | undefined>)[cidrKey]
   if (cidrs) {
     const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
-    const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
+    const clientIp = getClientIp(c.req.raw)
     if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
       logger.warn(`Messaging webhook IP not in allowlist for ${channel}`, { clientIp })
       return new Response('Forbidden', { status: 403 })
@@ -348,11 +350,18 @@ async function tryAutoAssign(
 
     // 3. Get user details to filter by channel capability
     const { users: allUsers } = await services.identity.getUsers()
+    const { roles: roleDefs } = await services.settings.getRoles()
+    // The assignee must be able to claim conversations in the conversation's
+    // hub — a volunteer removed from the hub may linger in its shift roster (#1037).
+    const canClaimHere = (v: (typeof allUsers)[number]) => hubId
+      ? hasHubPermission(v.roles, v.hubRoles ?? [], roleDefs, hubId, 'conversations:claim')
+      : permissionGranted(resolvePermissions(v.roles, roleDefs), 'conversations:claim')
     const onShiftVolunteers = allUsers.filter(v =>
       onShiftPubkeys.includes(v.pubkey) &&
       v.active &&
       !v.onBreak &&
-      v.messagingEnabled !== false
+      v.messagingEnabled !== false &&
+      canClaimHere(v)
     )
 
     // Filter by channel capability

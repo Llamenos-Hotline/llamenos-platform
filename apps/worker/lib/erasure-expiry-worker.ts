@@ -1,9 +1,12 @@
 /**
- * Erasure expiry worker — polls for pending self-service erasure
- * requests that have passed their executeAt deadline and executes them.
+ * Erasure expiry worker — polls for pending erasure (user-scope) and hub
+ * shred (hub-scope) requests that have passed their execute_at deadline and
+ * executes them. The deadline is compared with the DATABASE clock, so a
+ * worker whose wall clock is ahead can never execute a request early.
  */
 import type { ErasureService } from '../services/erasure'
 import type { AuditService } from '../services/audit'
+import type { HubShredService } from '../services/hub-shred'
 import { getConnectionManager } from './ws-manager'
 import { createLogger } from './logger'
 
@@ -17,6 +20,85 @@ let intervalId: ReturnType<typeof setInterval> | null = null
 interface ErasureExpiryWorkerOpts {
   erasureService: ErasureService
   auditService: AuditService
+  /**
+   * Executes hub-scope (crypto-shred) requests. REQUIRED — it was optional,
+   * and `src/server/index.ts` never passed it, so every hub marked for shred
+   * hit the `if (!opts.hubShred) return` below and stayed readable forever
+   * while the request sat pending past its deadline (#1566). There is no
+   * caller that wants this worker without a shred executor: a hub-scope
+   * request it cannot execute is a privacy promise it cannot keep.
+   */
+  hubShred: HubShredService
+}
+
+type ExpiredRequest = Awaited<ReturnType<ErasureService['getExpiredPendingRequests']>>[number]
+
+/**
+ * Claim and execute one expired request. Throws on execution failure (the
+ * caller marks the request failed); returns silently when another worker won
+ * the CAS claim.
+ */
+export async function processExpiredRequest(
+  request: ExpiredRequest,
+  opts: ErasureExpiryWorkerOpts,
+): Promise<void> {
+  if (request.scope === 'hub' || request.userId === null) {
+    // Hub-scoped requests are crypto-shreds, not person erasures: they have
+    // no userId and a different executor.
+    if (request.scope !== 'hub' || !request.hubId) return
+
+    // IMP-2: CAS claim — skip if another worker already claimed it
+    const claimed = await opts.erasureService.markExecuting(request.id)
+    if (!claimed) return
+
+    // A co-approved force override already carries the second pair of eyes;
+    // anything else must respect platform retention floors. A refusal throws
+    // (marking the request failed) and leaves the hub shred_pending — a
+    // refused shred is never reported as shredded.
+    if (!request.emergencyOverride) {
+      const block = await opts.erasureService.hubShredRetentionBlock(request.hubId)
+      if (block) {
+        throw new Error(`Hub shred refused by retention floor: ${block}`)
+      }
+    }
+
+    await opts.hubShred.execute(request.hubId, 'system', opts.auditService)
+    await opts.erasureService.markCompleted(request.id)
+
+    logger.info('Hub shred executed', { requestId: request.id, hubId: request.hubId })
+    return
+  }
+
+  // IMP-2: CAS claim — skip if another worker already claimed it
+  const claimed = await opts.erasureService.markExecuting(request.id)
+  if (!claimed) return
+
+  const userId = request.userId
+
+  const { reEncryptionJobIds } =
+    await opts.erasureService.executeErasure(
+      userId,
+      'system',
+      request.justification ?? 'Self-service erasure delay expired',
+      opts.auditService,
+    )
+
+  const wsManager = getConnectionManager()
+  if (wsManager) {
+    wsManager.sendSignedWipeToUser(userId, {
+      type: 'device:wipe',
+      targetUserId: userId,
+      reason: 'user-erasure',
+      timestamp: new Date().toISOString(),
+    })
+    wsManager.terminateUser(userId)
+  }
+
+  logger.info('Erasure executed', {
+    requestId: request.id,
+    userId: request.userId,
+    reEncryptionJobs: reEncryptionJobIds.length,
+  })
 }
 
 export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
@@ -35,34 +117,7 @@ export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
 
       for (const request of expired) {
         try {
-          // IMP-2: CAS claim — skip if another worker already claimed it
-          const claimed = await opts.erasureService.markExecuting(request.id)
-          if (!claimed) continue
-
-          const { reEncryptionJobIds } =
-            await opts.erasureService.executeErasure(
-              request.userId,
-              'system',
-              request.justification ?? 'Self-service erasure delay expired',
-              opts.auditService,
-            )
-
-          const wsManager = getConnectionManager()
-          if (wsManager) {
-            wsManager.sendSignedWipeToUser(request.userId, {
-              type: 'device:wipe',
-              targetUserId: request.userId,
-              reason: 'user-erasure',
-              timestamp: new Date().toISOString(),
-            })
-            wsManager.terminateUser(request.userId)
-          }
-
-          logger.info('Erasure executed', {
-            requestId: request.id,
-            userId: request.userId,
-            reEncryptionJobs: reEncryptionJobIds.length,
-          })
+          await processExpiredRequest(request, opts)
         } catch (err) {
           logger.error('Erasure execution failed', {
             requestId: request.id,

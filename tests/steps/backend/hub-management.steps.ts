@@ -7,7 +7,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, Before, After, getState, setState } from './fixtures'
-import { apiGet, apiPost, apiDelete } from '../../api-helpers'
+import { apiGet, apiPost, apiDelete, uniqueName } from '../../api-helpers'
 import { setLastResponse } from './shared-state'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -39,8 +39,8 @@ After(async ({ request, world }) => {
 // ── Given ──────────────────────────────────────────────────────────
 
 Given('the admin creates a hub via API', async ({ request, world }) => {
-  const name = `BDD Hub ${Date.now()}`
-  const slug = `bdd-hub-${Date.now()}`
+  const slug = uniqueName('bdd-hub')
+  const name = `BDD Hub ${slug}`
   const res = await apiPost<{ hub: { id: string; name: string; slug: string } }>(
     request,
     '/hubs',

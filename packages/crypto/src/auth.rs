@@ -9,9 +9,12 @@
 //! }
 //! ```
 //!
-//! Canonical auth message (UTF-8, signed directly — no pre-hashing):
+//! Canonical auth message (UTF-8, signed directly — no pre-hashing). Two
+//! shapes, each with its own domain-separation label so neither can be
+//! reinterpreted as the other:
 //! ```text
-//! llamenos:device-auth:v1:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}
+//! llamenos:device-auth:v1:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}:{nonce}
+//! llamenos:device-auth-no-nonce:v1:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}
 //! ```
 //!
 //! Ed25519 internally applies SHA-512, providing 256-bit collision resistance.
@@ -22,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::device_keys::DeviceSecrets;
 use crate::errors::CryptoError;
-use crate::labels::LABEL_DEVICE_AUTH;
+use crate::labels::{LABEL_DEVICE_AUTH, LABEL_DEVICE_AUTH_NO_NONCE};
 
 /// A signed Ed25519 authentication token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,17 +41,25 @@ pub struct AuthToken {
 
 /// Build the canonical auth message bytes (UTF-8, no hashing).
 ///
-/// Format (legacy): `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}`
-/// Format (nonce):  `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}:{nonce}`
+/// THE single construction path for this message on every platform. Both shapes
+/// are produced here and nowhere else:
 ///
-/// This is the EXACT byte sequence that gets signed/verified.
-/// Both Rust and TypeScript MUST produce identical bytes for interop.
-pub fn build_auth_message(pubkey_hex: &str, timestamp: u64, method: &str, path: &str) -> Vec<u8> {
-    format!("{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp}:{method}:{path}").into_bytes()
-}
-
-/// Build auth message with an optional nonce for replay prevention.
-pub fn build_auth_message_with_nonce(
+/// | nonce | message |
+/// |---|---|
+/// | `Some(n)` | `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp}:{method}:{path}:{n}` |
+/// | `None`    | `{LABEL_DEVICE_AUTH_NO_NONCE}:{pubkey_hex}:{timestamp}:{method}:{path}` |
+///
+/// The nonce-less shape gets its own label rather than simply dropping a field:
+/// a URL path may legally contain `:`, so a five-field message with path
+/// `/x:abcd` and a six-field message with path `/x` and nonce `abcd` would
+/// otherwise be the same bytes under the same label. Distinct labels make the
+/// two shapes cryptographically disjoint domains.
+///
+/// This is the EXACT byte sequence that gets signed/verified. Rust,
+/// TypeScript (`packages/shared/auth-message.ts`), Kotlin and Swift (both via
+/// the UniFFI export of this function) MUST produce identical bytes; the
+/// vectors in `packages/crypto/tests/interop.rs` pin that.
+pub fn build_auth_message(
     pubkey_hex: &str,
     timestamp: u64,
     method: &str,
@@ -59,8 +70,20 @@ pub fn build_auth_message_with_nonce(
         Some(n) => {
             format!("{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp}:{method}:{path}:{n}").into_bytes()
         }
-        None => build_auth_message(pubkey_hex, timestamp, method, path),
+        None => format!("{LABEL_DEVICE_AUTH_NO_NONCE}:{pubkey_hex}:{timestamp}:{method}:{path}")
+            .into_bytes(),
     }
+}
+
+/// Canonical nonce format: exactly 32 lowercase hex characters (16 bytes).
+///
+/// Enforced at verify so an attacker-supplied nonce cannot contain `:` and
+/// shift the path/nonce boundary inside the nonce-bearing shape.
+pub fn is_canonical_nonce(nonce: &str) -> bool {
+    nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Generate a random 16-byte hex nonce for replay prevention.
@@ -73,65 +96,124 @@ fn generate_nonce() -> String {
     hex::encode(bytes)
 }
 
-/// Create an Ed25519 auth token using device secrets.
+/// Sign an auth token over the canonical message.
 ///
-/// The message is bound to the specific key, method, and path to prevent
-/// cross-endpoint replay and type-confusion attacks.
-pub fn create_auth_token(
-    secrets: &DeviceSecrets,
+/// Private on purpose: no public constructor takes a nonce, so a caller can
+/// neither invent one nor drop one. `Some`/`None` is chosen here by the named
+/// public wrapper the caller picked, which is what keeps the nonce-bearing
+/// flows nonce-bearing.
+fn sign_auth_token(
+    signing_key: &ed25519_dalek::SigningKey,
     timestamp: u64,
     method: &str,
     path: &str,
-) -> Result<AuthToken, CryptoError> {
-    let signing_key = secrets.signing_key();
+    nonce: Option<String>,
+) -> AuthToken {
     let pubkey_hex = hex::encode(signing_key.verifying_key().to_bytes());
-
-    let nonce = generate_nonce();
-    let message = build_auth_message_with_nonce(&pubkey_hex, timestamp, method, path, Some(&nonce));
+    let message = build_auth_message(&pubkey_hex, timestamp, method, path, nonce.as_deref());
     let signature = signing_key.sign(&message);
-    let token_hex = hex::encode(signature.to_bytes());
 
-    Ok(AuthToken {
+    AuthToken {
         pubkey: pubkey_hex,
         timestamp,
-        token: token_hex,
-        nonce: Some(nonce),
-    })
+        token: hex::encode(signature.to_bytes()),
+        nonce,
+    }
 }
 
-/// Create an Ed25519 auth token from a raw 32-byte signing seed (hex-encoded).
-///
-/// Used by FFI and stateless callers that don't have a DeviceSecrets struct.
-pub fn create_auth_token_from_signing_key(
-    signing_key_hex: &str,
-    timestamp: u64,
-    method: &str,
-    path: &str,
-) -> Result<AuthToken, CryptoError> {
+/// Decode a 32-byte hex signing seed into a signing key.
+fn signing_key_from_hex(signing_key_hex: &str) -> Result<ed25519_dalek::SigningKey, CryptoError> {
     use zeroize::Zeroizing;
 
     let sk_bytes = Zeroizing::new(hex::decode(signing_key_hex).map_err(CryptoError::HexError)?);
     if sk_bytes.len() != 32 {
         return Err(CryptoError::InvalidSecretKey);
     }
-
     let sk_arr = Zeroizing::new(
         <[u8; 32]>::try_from(sk_bytes.as_slice()).map_err(|_| CryptoError::InvalidSecretKey)?,
     );
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk_arr);
-    let pubkey_hex = hex::encode(signing_key.verifying_key().to_bytes());
+    Ok(ed25519_dalek::SigningKey::from_bytes(&sk_arr))
+}
 
-    let nonce = generate_nonce();
-    let message = build_auth_message_with_nonce(&pubkey_hex, timestamp, method, path, Some(&nonce));
-    let signature = signing_key.sign(&message);
-    let token_hex = hex::encode(signature.to_bytes());
-
-    Ok(AuthToken {
-        pubkey: pubkey_hex,
+/// Create an Ed25519 auth token using device secrets.
+///
+/// The message is bound to the specific key, method, and path to prevent
+/// cross-endpoint replay and type-confusion attacks, and always carries a
+/// freshly generated nonce — there is no way for a caller to omit it.
+pub fn create_auth_token(
+    secrets: &DeviceSecrets,
+    timestamp: u64,
+    method: &str,
+    path: &str,
+) -> Result<AuthToken, CryptoError> {
+    Ok(sign_auth_token(
+        &secrets.signing_key(),
         timestamp,
-        token: token_hex,
-        nonce: Some(nonce),
-    })
+        method,
+        path,
+        Some(generate_nonce()),
+    ))
+}
+
+/// Create an Ed25519 auth token with NO nonce, for the routes whose wire
+/// schema has no `nonce` field.
+///
+/// Only `POST /api/invites/redeem` is such a route today: its body is
+/// `{ code, pubkey, timestamp, token }`, so a nonce would be dropped in
+/// transit and the signature could never verify (#1389). The resulting token
+/// is signed under `LABEL_DEVICE_AUTH_NO_NONCE`, a separate domain, and is
+/// therefore useless against any nonce-bearing endpoint.
+///
+/// **Do not reach for this to make a signature "simpler".** A nonce-less
+/// message is a function only of (pubkey, timestamp, method, path), so it is
+/// replayable for as long as the server's timestamp window lasts; the server
+/// accepts the nonce-less domain only on routes that explicitly opt in.
+pub fn create_auth_token_without_nonce(
+    secrets: &DeviceSecrets,
+    timestamp: u64,
+    method: &str,
+    path: &str,
+) -> Result<AuthToken, CryptoError> {
+    Ok(sign_auth_token(
+        &secrets.signing_key(),
+        timestamp,
+        method,
+        path,
+        None,
+    ))
+}
+
+/// Create an Ed25519 auth token from a raw 32-byte signing seed (hex-encoded).
+///
+/// Used by FFI and stateless callers that don't have a DeviceSecrets struct.
+/// Always nonce-bearing.
+pub fn create_auth_token_from_signing_key(
+    signing_key_hex: &str,
+    timestamp: u64,
+    method: &str,
+    path: &str,
+) -> Result<AuthToken, CryptoError> {
+    let signing_key = signing_key_from_hex(signing_key_hex)?;
+    Ok(sign_auth_token(
+        &signing_key,
+        timestamp,
+        method,
+        path,
+        Some(generate_nonce()),
+    ))
+}
+
+/// Nonce-less counterpart of [`create_auth_token_from_signing_key`].
+///
+/// Same caveats as [`create_auth_token_without_nonce`].
+pub fn create_auth_token_from_signing_key_without_nonce(
+    signing_key_hex: &str,
+    timestamp: u64,
+    method: &str,
+    path: &str,
+) -> Result<AuthToken, CryptoError> {
+    let signing_key = signing_key_from_hex(signing_key_hex)?;
+    Ok(sign_auth_token(&signing_key, timestamp, method, path, None))
 }
 
 /// Verify an Ed25519 auth token with timestamp-based expiry.
@@ -171,7 +253,15 @@ pub fn verify_auth_token(token: &AuthToken, method: &str, path: &str) -> Result<
     let verifying_key =
         VerifyingKey::from_bytes(&pubkey_arr).map_err(|_| CryptoError::InvalidPublicKey)?;
 
-    let message = build_auth_message_with_nonce(
+    // A nonce must be canonical hex: a nonce containing ':' could otherwise
+    // shift the path/nonce boundary within the nonce-bearing shape.
+    if let Some(nonce) = token.nonce.as_deref() {
+        if !is_canonical_nonce(nonce) {
+            return Ok(false);
+        }
+    }
+
+    let message = build_auth_message(
         &token.pubkey,
         token.timestamp,
         method,
@@ -366,10 +456,16 @@ mod tests {
         let path = "/api/calls";
 
         // Build message and verify it matches expected format
-        let message = build_auth_message(&pubkey_hex, timestamp, method, path);
-        let expected_prefix =
-            format!("{LABEL_DEVICE_AUTH}:{pubkey_hex}:1700000000000:GET:/api/calls");
-        assert_eq!(message, expected_prefix.as_bytes());
+        let nonce = "0f0e0d0c0b0a09080706050403020100";
+        let message = build_auth_message(&pubkey_hex, timestamp, method, path, Some(nonce));
+        let expected =
+            format!("{LABEL_DEVICE_AUTH}:{pubkey_hex}:1700000000000:GET:/api/calls:{nonce}");
+        assert_eq!(message, expected.as_bytes());
+
+        let nonceless = build_auth_message(&pubkey_hex, timestamp, method, path, None);
+        let expected_nonceless =
+            format!("{LABEL_DEVICE_AUTH_NO_NONCE}:{pubkey_hex}:1700000000000:GET:/api/calls");
+        assert_eq!(nonceless, expected_nonceless.as_bytes());
 
         // Sign and verify
         let signature = signing_key.sign(&message);
@@ -377,7 +473,7 @@ mod tests {
             pubkey: pubkey_hex.clone(),
             timestamp,
             token: hex::encode(signature.to_bytes()),
-            nonce: None,
+            nonce: Some(nonce.to_string()),
         };
         assert!(verify_auth_token(&token, method, path).unwrap());
 
@@ -388,5 +484,118 @@ mod tests {
             pubkey_hex,
             "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
         );
+    }
+
+    #[test]
+    fn nonceless_token_roundtrips() {
+        let secrets = test_secrets();
+        let token =
+            create_auth_token_without_nonce(&secrets, 1708900000000, "POST", "/api/invites/redeem")
+                .unwrap();
+        assert!(token.nonce.is_none());
+        assert!(verify_auth_token(&token, "POST", "/api/invites/redeem").unwrap());
+    }
+
+    #[test]
+    fn nonceless_from_signing_key_roundtrips() {
+        let secrets = test_secrets();
+        let sk_hex = hex::encode(secrets.signing_seed);
+        let token = create_auth_token_from_signing_key_without_nonce(
+            &sk_hex,
+            1708900000000,
+            "POST",
+            "/api/invites/redeem",
+        )
+        .unwrap();
+        assert!(token.nonce.is_none());
+        assert!(verify_auth_token(&token, "POST", "/api/invites/redeem").unwrap());
+    }
+
+    /// Dropping the nonce from a nonce-bearing token must NOT downgrade it to a
+    /// valid nonce-less token — the two shapes are separate label domains.
+    /// This is #1389's failure mode, asserted as a rejection.
+    #[test]
+    fn stripping_nonce_invalidates_token() {
+        let secrets = test_secrets();
+        let token = create_auth_token(&secrets, 1708900000000, "POST", "/api/test").unwrap();
+        assert!(token.nonce.is_some());
+
+        let stripped = AuthToken {
+            nonce: None,
+            ..token.clone()
+        };
+        assert!(!verify_auth_token(&stripped, "POST", "/api/test").unwrap());
+    }
+
+    /// The reverse direction: a nonce-less token cannot be dressed up as a
+    /// nonce-bearing one by attaching any nonce.
+    #[test]
+    fn attaching_nonce_invalidates_nonceless_token() {
+        let secrets = test_secrets();
+        let token =
+            create_auth_token_without_nonce(&secrets, 1708900000000, "POST", "/api/test").unwrap();
+        let dressed = AuthToken {
+            nonce: Some(generate_nonce()),
+            ..token
+        };
+        assert!(!verify_auth_token(&dressed, "POST", "/api/test").unwrap());
+    }
+
+    /// The two shapes cannot collide through a colon in the path. Under a single
+    /// shared label these two messages would be identical bytes.
+    #[test]
+    fn colon_in_path_cannot_collide_shapes() {
+        let pubkey = hex::encode([0xabu8; 32]);
+        let nonce = generate_nonce();
+        let nonceless = build_auth_message(&pubkey, 1, "POST", &format!("/x:{nonce}"), None);
+        let nonced = build_auth_message(&pubkey, 1, "POST", "/x", Some(&nonce));
+        assert_ne!(nonceless, nonced);
+    }
+
+    #[test]
+    fn non_canonical_nonce_rejected() {
+        // Every fixture is DERIVED from a freshly generated nonce and then
+        // mutated into one invalid shape. Deliberately not written as string
+        // literals: a literal in a nonce position is a hard-coded
+        // cryptographic value (CodeQL rust/hard-coded-cryptographic-value),
+        // and deriving them also keeps the test honest about what the real
+        // generator actually produces.
+        let good = generate_nonce();
+        assert!(is_canonical_nonce(&good));
+
+        let empty = String::new();
+        assert!(!is_canonical_nonce(&empty));
+        assert!(!is_canonical_nonce(&good[..good.len() - 1])); // too short
+        assert!(!is_canonical_nonce(&format!("{good}0"))); // too long
+        assert!(!is_canonical_nonce(&format!("A{}", &good[1..]))); // not lowercase
+        let with_colon = format!(":{}", &good[1..]);
+        assert!(!is_canonical_nonce(&with_colon));
+
+        // A token whose nonce carries a ':' is rejected before verification, so
+        // the path/nonce boundary cannot be shifted by a chosen nonce.
+        let secrets = test_secrets();
+        let signing_key = secrets.signing_key();
+        let pubkey_hex = hex::encode(signing_key.verifying_key().to_bytes());
+        let message = build_auth_message(
+            &pubkey_hex,
+            1708900000000,
+            "POST",
+            "/x",
+            Some(with_colon.as_str()),
+        );
+        let token = AuthToken {
+            pubkey: pubkey_hex,
+            timestamp: 1708900000000,
+            token: hex::encode(signing_key.sign(&message).to_bytes()),
+            nonce: Some(with_colon),
+        };
+        assert!(!verify_auth_token(&token, "POST", "/x").unwrap());
+    }
+
+    #[test]
+    fn generated_nonce_is_canonical() {
+        for _ in 0..32 {
+            assert!(is_canonical_nonce(&generate_nonce()));
+        }
     }
 }

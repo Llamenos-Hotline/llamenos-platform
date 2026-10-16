@@ -37,6 +37,7 @@ type RecordLike = {
   assignedTo: string[]
   entityTypeId?: string
   caseNumber?: string
+  hubId?: string
 }
 
 function makeApp(opts: {
@@ -44,6 +45,10 @@ function makeApp(opts: {
   pubkey?: string
   record?: RecordLike
   hubId?: string
+  users?: Array<{ pubkey: string; active: boolean; roles: string[]; hubRoles: { hubId: string; roleIds: string[] }[] }>
+  roles?: Array<{ id: string; slug: string; permissions: string[] }>
+  /** user pubkey -> that user's registered device X25519 encryption keys */
+  deviceKeys?: Record<string, string[]>
 } = {}) {
   const {
     permissions = ['cases:read-all', 'cases:create', 'cases:update', 'cases:delete', 'cases:assign', 'cases:link'],
@@ -51,12 +56,14 @@ function makeApp(opts: {
     record = { id: 'rec-1', createdBy: 'owner-pub', assignedTo: ['assignee-pub'], entityTypeId: 'et-1' },
     hubId = 'hub-1',
   } = opts
+  // Records live in the app's hub unless a test says otherwise
+  const hubRecord = { hubId, ...opts.record ?? record }
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockCases = {
     list: vi.fn().mockResolvedValue({ records: [], total: 0 }),
-    get: vi.fn().mockResolvedValue(record),
-    getByNumber: vi.fn().mockResolvedValue(record),
+    get: vi.fn().mockResolvedValue(hubRecord),
+    getByNumber: vi.fn().mockResolvedValue(hubRecord),
     create: vi.fn().mockResolvedValue(record),
     update: vi.fn().mockResolvedValue(record),
     delete: vi.fn().mockResolvedValue(undefined),
@@ -79,10 +86,21 @@ function makeApp(opts: {
   const mockSettings = {
     getEntityTypeById: vi.fn().mockResolvedValue({ id: 'et-1', numberingEnabled: false }),
     generateCaseNumber: vi.fn().mockResolvedValue({ number: 'CASE-001' }),
-    getRoles: vi.fn().mockResolvedValue({ roles: [] }),
+    getRoles: vi.fn().mockResolvedValue({ roles: opts.roles ?? [] }),
   }
   const mockIdentity = {
-    getUsers: vi.fn().mockResolvedValue({ users: [] }),
+    getUsers: vi.fn().mockResolvedValue({ users: opts.users ?? [] }),
+    // Mirrors IdentityService.resolveDeviceEncryptionPubkeys: users with no
+    // registered device key are ABSENT from the map, never mapped to [].
+    resolveDeviceEncryptionPubkeys: vi.fn(async (pubkeys: string[]) => {
+      const table = opts.deviceKeys ?? {}
+      const map = new Map<string, string[]>()
+      for (const pubkey of pubkeys) {
+        const keys = table[pubkey]
+        if (keys?.length) map.set(pubkey, keys)
+      }
+      return map
+    }),
   }
   const mockShifts = {
     getCurrentVolunteers: vi.fn().mockResolvedValue([]),
@@ -423,5 +441,144 @@ describe('GET /records/by-contact/:contactId — IDOR hub isolation', () => {
     expect(body.records).toHaveLength(0)
     // listByContact must have been called with hub-B, not hub-A
     expect(mockCases.listByContact).toHaveBeenCalledWith('contact-1', 'hub-B')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hub isolation (#1037) — a record of another hub is invisible from this hub
+// ---------------------------------------------------------------------------
+
+describe('records — hub isolation', () => {
+  const foreign = { id: 'rec-a', createdBy: 'owner', assignedTo: [], entityTypeId: 'et-1', hubId: 'hub-A' }
+
+  it.each([
+    ['GET', '/rec-a'],
+    ['PATCH', '/rec-a'],
+    ['DELETE', '/rec-a'],
+    ['GET', '/rec-a/envelope-recipients'],
+    ['POST', '/rec-a/assign'],
+    ['GET', '/rec-a/contacts'],
+  ])('%s %s returns 404 for a record of another hub', async (method, path) => {
+    const { app, mockCases } = makeApp({ hubId: 'hub-B', record: foreign })
+    const res = await app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(method === 'GET' || method === 'DELETE' ? {} : { body: JSON.stringify({ pubkeys: ['x'] }) }),
+    })
+    expect(res.status).toBe(404)
+    expect(mockCases.update).not.toHaveBeenCalled()
+    expect(mockCases.delete).not.toHaveBeenCalled()
+    expect(mockCases.assign).not.toHaveBeenCalled()
+  })
+
+  it('GET /by-number/:number returns 404 for a record of another hub', async () => {
+    const { app } = makeApp({ hubId: 'hub-B', record: { ...foreign, caseNumber: 'CASE-1' } })
+    const res = await app.request('/by-number/CASE-1')
+    expect(res.status).toBe(404)
+  })
+
+  // --- Envelope recipients: who, and by WHICH key ------------------------
+  //
+  // Two separate properties, both verified against the HTTP response because
+  // that response is the wire: a client HPKE-wraps each record tier for
+  // exactly the strings it finds here.
+  //
+  //  1. hub isolation (#1037) — only this hub's members and super-admins
+  //  2. key type (#1021/#1283/#1466) — only `devices.x25519_pubkey` values.
+  //     `users.pubkey` is Ed25519; DHKEM(X25519) accepts any 32 bytes, so a
+  //     client obeying this response would store envelopes no secret key can
+  //     open, with no error at write time or read time.
+
+  const envRoles = [
+    { id: 'role-super-admin', slug: 'super-admin', permissions: ['*'] },
+    { id: 'role-hub-admin', slug: 'hub-admin', permissions: ['cases:*'] },
+    { id: 'role-volunteer', slug: 'volunteer', permissions: ['cases:read-own'] },
+  ]
+  const envUsers = [
+    { pubkey: 'member-admin', active: true, roles: [], hubRoles: [{ hubId: 'hub-B', roleIds: ['role-hub-admin'] }] },
+    // Admin of ANOTHER hub, and a legacy global hub-admin: neither may receive hub-B keys
+    { pubkey: 'other-hub-admin', active: true, roles: [], hubRoles: [{ hubId: 'hub-A', roleIds: ['role-hub-admin'] }] },
+    { pubkey: 'global-hub-admin', active: true, roles: ['role-hub-admin'], hubRoles: [] },
+    { pubkey: 'super', active: true, roles: ['role-super-admin'], hubRoles: [] },
+    { pubkey: 'assignee', active: true, roles: [], hubRoles: [{ hubId: 'hub-B', roleIds: ['role-volunteer'] }] },
+    // A hub-B volunteer who has never registered a device encryption key
+    { pubkey: 'keyless', active: true, roles: [], hubRoles: [{ hubId: 'hub-B', roleIds: ['role-volunteer'] }] },
+  ]
+  const DEV = {
+    memberAdmin: 'a1'.repeat(32),
+    otherHubAdmin: 'a2'.repeat(32),
+    globalHubAdmin: 'a3'.repeat(32),
+    super: 'a4'.repeat(32),
+    assignee: 'a5'.repeat(32),
+    assignee2: 'a6'.repeat(32),
+  }
+  const envDeviceKeys: Record<string, string[]> = {
+    'member-admin': [DEV.memberAdmin],
+    'other-hub-admin': [DEV.otherHubAdmin],
+    'global-hub-admin': [DEV.globalHubAdmin],
+    super: [DEV.super],
+    // Two devices — both must be named, or the volunteer's second device
+    // cannot read a record their first device can
+    assignee: [DEV.assignee, DEV.assignee2],
+  }
+
+  function envelopeApp(assignedTo: string[] = []) {
+    return makeApp({
+      hubId: 'hub-B',
+      record: { id: 'rec-b', createdBy: 'member-admin', assignedTo, entityTypeId: 'et-1' },
+      users: envUsers,
+      roles: envRoles,
+      deviceKeys: envDeviceKeys,
+    })
+  }
+
+  async function recipients(assignedTo: string[] = []) {
+    const { app } = envelopeApp(assignedTo)
+    const res = await app.request('/rec-b/envelope-recipients')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { summary: string[]; fields: string[]; pii: string[] }
+    return { body, everyone: new Set([...body.summary, ...body.fields, ...body.pii]) }
+  }
+
+  it('names only members of the record\'s hub (and super-admins) as envelope recipients', async () => {
+    const { everyone } = await recipients()
+    expect(everyone.has(DEV.memberAdmin)).toBe(true)
+    expect(everyone.has(DEV.super)).toBe(true)
+    expect(everyone.has(DEV.otherHubAdmin)).toBe(false)
+    expect(everyone.has(DEV.globalHubAdmin)).toBe(false)
+  })
+
+  it('names device encryption keys, never a users.pubkey identity key', async () => {
+    const { everyone } = await recipients(['assignee'])
+    for (const user of envUsers) {
+      expect(everyone.has(user.pubkey)).toBe(false)
+    }
+    // ...and what it does name is a device key of an entitled member
+    expect(everyone.has(DEV.memberAdmin)).toBe(true)
+  })
+
+  it('names every device of an assigned volunteer in the fields tier', async () => {
+    const { body } = await recipients(['assignee'])
+    expect(body.fields).toContain(DEV.assignee)
+    expect(body.fields).toContain(DEV.assignee2)
+    expect(body.fields).not.toContain('assignee')
+  })
+
+  it('omits a member with no registered device key rather than naming their identity key', async () => {
+    const { everyone } = await recipients(['keyless'])
+    expect(everyone.has('keyless')).toBe(false)
+    expect(everyone.has(DEV.memberAdmin)).toBe(true)
+  })
+
+  it('names device keys on the by-entity-type variant too', async () => {
+    const { app } = envelopeApp()
+    const res = await app.request('/envelope-recipients?entityTypeId=et-1&assignedTo=assignee')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { summary: string[]; fields: string[]; pii: string[] }
+    const everyone = new Set([...body.summary, ...body.fields, ...body.pii])
+    for (const user of envUsers) {
+      expect(everyone.has(user.pubkey)).toBe(false)
+    }
+    expect(body.fields).toContain(DEV.assignee)
   })
 })

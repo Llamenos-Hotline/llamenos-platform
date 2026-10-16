@@ -166,8 +166,9 @@ class BaseUITest: XCTestCase {
     /// Fails the test before launching when the class hub could not be created —
     /// a backend that is not reachable must not turn into assertions about
     /// connection-error screens.
-    private func launchConnected(_ identityArgs: [String]) {
-        guard !testHubId.isEmpty else {
+    private func launchConnected(_ identityArgs: [String], hubId overrideHubId: String? = nil) {
+        let hubId = overrideHubId ?? testHubId
+        guard !hubId.isEmpty else {
             XCTFail("No test hub for \(type(of: self)) — is the backend running at \(testHubURL)?")
             return
         }
@@ -179,7 +180,7 @@ class BaseUITest: XCTestCase {
             "--test-authenticated",
         ] + identityArgs + [
             "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
+            "--test-hub-id", hubId,
             "--test-register",
         ])
         app.launchAnsweringSystemPrompts()
@@ -199,8 +200,11 @@ class BaseUITest: XCTestCase {
 
     /// Launch connected to the live backend as a super-admin, with the admin UI
     /// role set before the server's `/api/auth/me` answer arrives.
-    func launchAsAdminWithAPI() {
-        launchConnected(["--test-admin"])
+    ///
+    /// `hubId` launches into a hub other than the class's shared one — for a scenario that
+    /// needs a hub in a state no other test in the class has touched.
+    func launchAsAdminWithAPI(hubId: String? = nil) {
+        launchConnected(["--test-admin"], hubId: hubId)
     }
 
     // MARK: - Server State (deprecated)
@@ -421,7 +425,11 @@ class BaseUITest: XCTestCase {
         }
         adminLink.tap()
 
-        guard anyElementExists(["admin-sidebar-list", "admin-tab-view"]) else {
+        // The app presents AdminTabView here. (AdminSidebarView — the
+        // "admin-sidebar-list" this used to probe for first, at the cost of a
+        // full 10s timeout on every admin navigation — was dead code presented
+        // by nothing, and is deleted: #1776.)
+        guard find("admin-tab-view").waitForExistence(timeout: 10) else {
             XCTFail("Admin panel should appear after tapping the admin link")
             return
         }
@@ -598,6 +606,21 @@ class BaseUITest: XCTestCase {
             if element.waitForExistence(timeout: 1) {
                 return element
             }
+        }
+        return element
+    }
+
+    /// Scroll until the element matching `predicate` is in the list's rendered
+    /// window, and return it. A SwiftUI `List` only instantiates rows near the
+    /// viewport, so a row below the fold does not *exist* until it is scrolled
+    /// to — `waitForExistence` alone will never find it, however long it waits.
+    @discardableResult
+    func scrollToMatch(_ predicate: NSPredicate, maxSwipes: Int = 8) -> XCUIElement {
+        let element = app.descendants(matching: .any).matching(predicate).firstMatch
+        if element.waitForExistence(timeout: 5) { return element }
+        for _ in 0..<maxSwipes {
+            app.swipeUp()
+            if element.waitForExistence(timeout: 1) { return element }
         }
         return element
     }

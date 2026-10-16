@@ -35,6 +35,7 @@ import {
 } from './api-helpers'
 import {
   simulateIncomingCall,
+  simulateIncomingMessage,
   uniqueCallerNumber,
 } from './simulation-helpers'
 
@@ -245,16 +246,12 @@ test.describe('App Screenshots', () => {
     await loginAsAdmin(page)
 
     // Simulate incoming SMS messages to populate conversations
-    const secret = process.env.DEV_RESET_SECRET || 'test-reset-secret'
     for (const msg of [
       { senderNumber: uniqueCallerNumber(), body: 'Hi, I need some support right now' },
       { senderNumber: uniqueCallerNumber(), body: 'Is there anyone available to talk?' },
       { senderNumber: uniqueCallerNumber(), body: 'Following up from yesterday' },
     ]) {
-      await request.post('http://localhost:3000/api/test-simulate/incoming-message', {
-        headers: { 'Content-Type': 'application/json', 'X-Test-Secret': secret },
-        data: msg,
-      }).catch(() => {})
+      await simulateIncomingMessage(request, msg)
     }
 
     await Navigation.goToConversations(page)

@@ -12,7 +12,10 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { buildAuthMessage } from '@shared/auth-message'
+
+/** Fixed canonical nonce for deterministic Ed25519 fixtures. */
+const ED25519_TEST_NONCE = 'abcdefabcdefabcdefabcdefabcdefab'
 
 import {
   parseAuthHeader,
@@ -61,9 +64,10 @@ async function makeEd25519Token(
   method: string,
   path: string,
 ): Promise<string> {
-  // Ed25519 uses LABEL_DEVICE_AUTH prefix; message is signed directly (no pre-hashing —
-  // ed25519 applies SHA-512 internally). Must match build_auth_message() in auth.rs.
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkeyHex}:${timestamp}:${method}:${path}`)
+  // Built with the canonical shared builder (which mirrors build_auth_message()
+  // in auth.rs) and signed directly — no pre-hashing, ed25519 applies SHA-512
+  // internally. Header auth is the nonce-bearing domain.
+  const message = buildAuthMessage(pubkeyHex, timestamp, method, path, ED25519_TEST_NONCE)
   const sig = ed25519.sign(message, privKey)
   return bytesToHex(sig)
 }
@@ -195,7 +199,7 @@ describe('verifyAuthToken (Schnorr)', () => {
     const { privKey, pubkeyHex } = makeSchnorrKeys()
     const ts = Date.now()
     const token = await makeSchnorrToken(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     expect(await verifyAuthToken(auth, 'GET', '/api/me')).toBe(false)
   })
 
@@ -203,7 +207,7 @@ describe('verifyAuthToken (Schnorr)', () => {
     const { privKey, pubkeyHex } = makeSchnorrKeys()
     const ts = Date.now()
     const token = await makeSchnorrToken(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     expect(await verifyAuthToken(auth, 'POST', '/api/me')).toBe(false)
   })
 
@@ -211,7 +215,7 @@ describe('verifyAuthToken (Schnorr)', () => {
     const { privKey, pubkeyHex } = makeSchnorrKeys()
     const ts = Date.now()
     const token = await makeSchnorrToken(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     expect(await verifyAuthToken(auth, 'GET', '/api/other')).toBe(false)
   })
 
@@ -234,7 +238,7 @@ describe('verifyAuthToken (Ed25519)', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'POST', '/api/notes')
-    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     expect(await verifyAuthToken(auth, 'POST', '/api/notes')).toBe(true)
   })
 
@@ -242,7 +246,7 @@ describe('verifyAuthToken (Ed25519)', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'POST', '/api/notes')
-    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     expect(await verifyAuthToken(auth, 'POST', '/api/other')).toBe(false)
   })
 
@@ -250,7 +254,7 @@ describe('verifyAuthToken (Ed25519)', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const staleTs = Date.now() - 10 * 60 * 1000
     const token = await makeEd25519Token(privKey, pubkeyHex, staleTs, 'GET', '/api/me')
-    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: staleTs, token }
+    const auth: AuthPayload = { pubkey: pubkeyHex, timestamp: staleTs, token, nonce: ED25519_TEST_NONCE }
     expect(await verifyAuthToken(auth, 'GET', '/api/me')).toBe(false)
   })
 })
@@ -340,7 +344,7 @@ describe('authenticateRequest', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     const svc = makeIdentityService({
       getUserInternal: vi.fn().mockResolvedValue({ pubkey: pubkeyHex, active: true }),
     })
@@ -355,7 +359,7 @@ describe('authenticateRequest', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     const svc = makeIdentityService({
       getUserInternal: vi.fn().mockResolvedValue({ pubkey: pubkeyHex, active: false }),
     })
@@ -375,7 +379,7 @@ describe('authenticateRequest', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     const svc = makeIdentityService({
       // Simulate: nonce already in DB (replay)
       checkAndMarkAuthNonce: vi.fn().mockResolvedValue(false),
@@ -391,7 +395,7 @@ describe('authenticateRequest', () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
-    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
     const checkNonce = vi.fn().mockResolvedValue(true)
     const svc = makeIdentityService({
       checkAndMarkAuthNonce: checkNonce,

@@ -1,11 +1,17 @@
 package org.llamenos.hotline
 
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -14,10 +20,19 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.llamenos.hotline.api.ApiException
+import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.service.PushRegistrationManager
 import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
+import org.llamenos.hotline.ui.auth.EnrollmentError
+import org.llamenos.hotline.ui.auth.EnrollmentState
+import org.llamenos.hotline.ui.auth.StoredKeyData
+import org.llamenos.hotline.ui.auth.resetForLock
+import java.io.IOException
 
 /**
  * Unit tests for AuthViewModel state machine transitions (v3 device key model).
@@ -43,6 +58,8 @@ class AuthViewModelTest {
     private lateinit var cryptoService: CryptoService
     private lateinit var keyValueStore: InMemoryKeyValueStore
     private lateinit var biometricKeyStore: FakeBiometricKeyStore
+    private lateinit var inviteRepository: InviteRepository
+    private lateinit var pushRegistrationManager: PushRegistrationManager
 
     @Before
     fun setup() {
@@ -51,6 +68,8 @@ class AuthViewModelTest {
         cryptoService.computeDispatcher = testDispatcher
         keyValueStore = InMemoryKeyValueStore()
         biometricKeyStore = FakeBiometricKeyStore()
+        inviteRepository = mockk()
+        pushRegistrationManager = mockPushRegistrationManager()
     }
 
     @After
@@ -59,7 +78,13 @@ class AuthViewModelTest {
     }
 
     private fun createViewModel(): AuthViewModel {
-        return AuthViewModel(cryptoService, keyValueStore, biometricKeyStore)
+        return AuthViewModel(
+            cryptoService,
+            keyValueStore,
+            biometricKeyStore,
+            inviteRepository,
+            pushRegistrationManager,
+        )
     }
 
     /**
@@ -203,6 +228,28 @@ class AuthViewModelTest {
         assertFalse(state.isConfirmingPin)
         assertFalse(state.pinMismatch)
         assertNull(state.error)
+    }
+
+    @Test
+    fun `lock path clears authenticated state`() {
+        // JVM tests cannot reach isAuthenticated = true through the crypto
+        // paths (native lib hard-fails), so assert the lock transition at its
+        // pure seam: the mapping resetPinEntry applies to the UI state.
+        val locked = AuthUiState(
+            isAuthenticated = true,
+            pin = "12345678",
+            confirmPin = "1234",
+            isConfirmingPin = true,
+            pinMismatch = true,
+            error = "stale",
+        ).resetForLock()
+
+        assertFalse(locked.isAuthenticated)
+        assertEquals("", locked.pin)
+        assertEquals("", locked.confirmPin)
+        assertFalse(locked.isConfirmingPin)
+        assertFalse(locked.pinMismatch)
+        assertNull(locked.error)
     }
 
     @Test
@@ -397,5 +444,259 @@ class AuthViewModelTest {
         assertNull(decryptCipher)
         // The stale enrollment is wiped as part of detecting the invalidation.
         assertFalse(vm.hasBiometricPIN())
+    }
+
+    // ---- Invite-code enrollment (#1345) ----
+
+    private val inviteCode = "3f6f8f2c-9f3e-4a2b-b1c1-2d4e6f8091a2"
+
+    @Test
+    fun `updateInviteCode updates state and clears error`() {
+        val vm = createViewModel()
+        vm.updateInviteCode(inviteCode)
+
+        assertEquals(inviteCode, vm.uiState.value.inviteCode)
+        assertNull(vm.uiState.value.error)
+    }
+
+    @Test
+    fun `redeem success marks enrollment redeemed and authenticates`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns Result.success(Unit)
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        assertTrue(vm.uiState.value.enrollment is EnrollmentState.Redeemed)
+        assertTrue(vm.uiState.value.isAuthenticated)
+    }
+
+    // ---- UnifiedPush registration on authentication (#955) ----
+
+    @Test
+    fun `successful invite redemption triggers UnifiedPush registration`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns Result.success(Unit)
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `failed invite redemption does not trigger UnifiedPush registration`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(404, "Invite not found"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        assertFalse(vm.uiState.value.isAuthenticated)
+        verify(exactly = 0) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `skip enrollment triggers UnifiedPush registration`() = runTest {
+        val vm = createViewModel()
+
+        vm.skipEnrollment()
+
+        assertTrue(vm.uiState.value.isAuthenticated)
+        verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `successful PIN unlock triggers UnifiedPush registration`() = runTest {
+        // CryptoService is mocked here (not the real no-native-lib instance) so
+        // the unlock path can complete in a JVM test; the assertion is on the
+        // ViewModel → PushRegistrationManager wiring, not on crypto.
+        val mockCrypto = mockk<CryptoService>()
+        coEvery { mockCrypto.unlockWithPin(any(), any()) } returns
+            DeviceKeyState(
+                deviceId = "device-1",
+                signingPubkeyHex = "a".repeat(64),
+                encryptionPubkeyHex = "b".repeat(64),
+            )
+        keyValueStore.store(
+            KeystoreService.KEY_ENCRYPTED_KEYS,
+            Json.encodeToString(
+                StoredKeyData(
+                    salt = "c2FsdA==",
+                    nonce = "bm9uY2U=",
+                    ciphertext = "Y2lwaGVydGV4dA==",
+                    signingPubkeyHex = "a".repeat(64),
+                    encryptionPubkeyHex = "b".repeat(64),
+                    deviceId = "device-1",
+                ),
+            ),
+        )
+        val vm = AuthViewModel(
+            mockCrypto,
+            keyValueStore,
+            biometricKeyStore,
+            inviteRepository,
+            pushRegistrationManager,
+        )
+
+        vm.unlockWithPin("123456")
+
+        assertTrue(vm.uiState.value.isAuthenticated)
+        verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `failed PIN unlock does not trigger UnifiedPush registration`() = runTest {
+        val mockCrypto = mockk<CryptoService>()
+        coEvery { mockCrypto.unlockWithPin(any(), any()) } throws IllegalStateException("bad PIN")
+        keyValueStore.store(
+            KeystoreService.KEY_ENCRYPTED_KEYS,
+            Json.encodeToString(
+                StoredKeyData(
+                    salt = "c2FsdA==",
+                    nonce = "bm9uY2U=",
+                    ciphertext = "Y2lwaGVydGV4dA==",
+                    signingPubkeyHex = "a".repeat(64),
+                    encryptionPubkeyHex = "b".repeat(64),
+                    deviceId = "device-1",
+                ),
+            ),
+        )
+        val vm = AuthViewModel(
+            mockCrypto,
+            keyValueStore,
+            biometricKeyStore,
+            inviteRepository,
+            pushRegistrationManager,
+        )
+
+        vm.unlockWithPin("000000")
+
+        assertFalse(vm.uiState.value.isAuthenticated)
+        verify(exactly = 0) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `initial login screen does not trigger UnifiedPush registration`() {
+        createViewModel()
+
+        verify(exactly = 0) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `redeem invalid code surfaces INVALID_CODE and stays unauthenticated`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(400, "Invalid invite code"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrollment = vm.uiState.value.enrollment
+        assertTrue(enrollment is EnrollmentState.Failed)
+        assertEquals(EnrollmentError.INVALID_CODE, (enrollment as EnrollmentState.Failed).error)
+        assertFalse(vm.uiState.value.isAuthenticated)
+    }
+
+    @Test
+    fun `redeem not-found invite surfaces NOT_FOUND`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(404, "Invite not found"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrollment = vm.uiState.value.enrollment
+        assertTrue(enrollment is EnrollmentState.Failed)
+        assertEquals(EnrollmentError.NOT_FOUND, (enrollment as EnrollmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem expired invite surfaces EXPIRED`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(410, "Invite expired"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrollment = vm.uiState.value.enrollment
+        assertTrue(enrollment is EnrollmentState.Failed)
+        assertEquals(EnrollmentError.EXPIRED, (enrollment as EnrollmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem rate limit surfaces RATE_LIMITED`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(429, "Too many requests"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrollment = vm.uiState.value.enrollment
+        assertTrue(enrollment is EnrollmentState.Failed)
+        assertEquals(EnrollmentError.RATE_LIMITED, (enrollment as EnrollmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem hub rejection surfaces UNKNOWN`() = runTest {
+        // A code valid for another hub comes back as a generic failure the
+        // client cannot fix locally.
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(403, "Access denied"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrollment = vm.uiState.value.enrollment
+        assertTrue(enrollment is EnrollmentState.Failed)
+        assertEquals(EnrollmentError.UNKNOWN, (enrollment as EnrollmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem network failure surfaces NETWORK`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(IOException("Connection refused"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrollment = vm.uiState.value.enrollment
+        assertTrue(enrollment is EnrollmentState.Failed)
+        assertEquals(EnrollmentError.NETWORK, (enrollment as EnrollmentState.Failed).error)
+    }
+
+    @Test
+    fun `retryEnrollment retries the same code after a failure`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(400, "Invalid invite code")) andThen
+            Result.success(Unit)
+        val vm = createViewModel()
+        vm.updateInviteCode(inviteCode)
+        vm.redeemInvite(inviteCode)
+        assertTrue(vm.uiState.value.enrollment is EnrollmentState.Failed)
+
+        vm.retryEnrollment()
+
+        assertTrue(vm.uiState.value.enrollment is EnrollmentState.Redeemed)
+        assertTrue(vm.uiState.value.isAuthenticated)
+        coVerify(exactly = 2) { inviteRepository.redeemInvite(inviteCode) }
+    }
+
+    @Test
+    fun `skipEnrollment enters unauthenticated-on-server but unlocks the app`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(410, "Invite expired"))
+        val vm = createViewModel()
+        vm.redeemInvite(inviteCode)
+        assertTrue(vm.uiState.value.enrollment is EnrollmentState.Failed)
+
+        vm.skipEnrollment()
+
+        assertTrue(vm.uiState.value.enrollment is EnrollmentState.Skipped)
+        assertTrue(vm.uiState.value.isAuthenticated)
+    }
+
+    @Test
+    fun `initial enrollment state is NotApplicable`() {
+        val vm = createViewModel()
+
+        assertTrue(vm.uiState.value.enrollment is EnrollmentState.NotApplicable)
     }
 }

@@ -4,10 +4,13 @@ import { hashPhone } from '../../lib/crypto'
 import type { Env } from '../../types'
 import type { Services } from '../../services'
 import * as serviceFactories from '../../lib/service-factories'
+import { resolveHubTelephonyConfig } from '../../lib/service-factories'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 import { incCounter } from '../../routes/metrics'
 import { publishEvent } from '../../lib/ws-events'
+import { dispatchVoipPushFromService } from '../../lib/voip-push'
+import { listReachableVolunteerEndpoints, volunteerSipUsername } from '../../telephony/registrar'
 import { KIND_CALL_RING } from '@shared/event-kinds'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
@@ -22,6 +25,9 @@ vi.mock('../../lib/service-factories', () => {
   return {
     getTelephonyFromService: vi.fn().mockResolvedValue(mockAdapter),
     getHubTelephonyFromService: vi.fn().mockResolvedValue(mockAdapter),
+    // The provider a hub's calls go through — hub row, else instance-wide.
+    // Null is an unconfigured hub, so no volunteer is in-app reachable.
+    resolveHubTelephonyConfig: vi.fn().mockResolvedValue(null),
     __mockAdapter: mockAdapter,
   }
 })
@@ -46,6 +52,18 @@ vi.mock('../../routes/metrics', () => ({
   incCounter: vi.fn(),
 }))
 
+/**
+ * In-app reachability is read from the PBX itself (ARI endpoint state), which
+ * these unit tests have no PBX for. The live proof that a reachable endpoint
+ * is dialled — and that the INVITE arrives — is
+ * deploy/docker/tests/telephony/asterisk-inapp-ring.e2e.ts; these tests pin
+ * what ringing.ts does with the answer.
+ */
+vi.mock('../../telephony/registrar', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../telephony/registrar')>()),
+  listReachableVolunteerEndpoints: vi.fn().mockResolvedValue(new Set<string>()),
+}))
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -64,7 +82,7 @@ function makeUser(overrides: {
   onBreak?: boolean
   callPreference?: string
   phone?: string | null
-  /** Global role ids. Default: the instance-wide volunteer role. */
+  /** Global role ids. Default: none — hub authority comes from hubRoles (#1037). */
   roles?: string[]
   hubRoles?: { hubId: string; roleIds: string[] }[]
 }) {
@@ -75,8 +93,9 @@ function makeUser(overrides: {
     onBreak: overrides.onBreak ?? false,
     callPreference: overrides.callPreference ?? 'phone',
     phone: 'phone' in overrides ? overrides.phone : '+15551234567',
-    roles: overrides.roles ?? ['role-volunteer'],
-    hubRoles: overrides.hubRoles ?? [],
+    roles: overrides.roles ?? ([] as string[]),
+    // Members of the hub the tests ring (hub-1) unless a test says otherwise
+    hubRoles: overrides.hubRoles ?? [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
   }
 }
 
@@ -328,7 +347,7 @@ describe('startParallelRinging', () => {
     })
 
     it('clocked in but NOT scheduled — does not ring', async () => {
-      // An admin never put them on the schedule. Clocking in cannot enrol you.
+      // An admin never put them on the schedule. Clocking in cannot enroll you.
       const services = makeServices({
         onShiftPubkeys: [],
         clockedInPubkeys: ['pk-clocked'],
@@ -432,8 +451,8 @@ describe('startParallelRinging', () => {
       onShiftPubkeys: ['pk-busy', 'pk-free'],
       busyPubkeys: ['pk-busy'],
       allUsers: [
-        makeUser({ pubkey: 'pk-busy', phone: '+15550000001' }),
-        makeUser({ pubkey: 'pk-free', phone: '+15550000002' }),
+        makeUser({ pubkey: 'pk-busy', phone: '+15550000001', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
+        makeUser({ pubkey: 'pk-free', phone: '+15550000002', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
       ],
     })
     ;(services.calls.createCallToken as ReturnType<typeof vi.fn>).mockImplementation(
@@ -452,7 +471,10 @@ describe('startParallelRinging', () => {
       onShiftPubkeys: ['pk-busy'],
       fallbackPubkeys: ['pk-fallback'],
       busyPubkeys: ['pk-busy'],
-      allUsers: [makeUser({ pubkey: 'pk-busy' }), makeUser({ pubkey: 'pk-fallback' })],
+      allUsers: [
+        makeUser({ pubkey: 'pk-busy', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
+        makeUser({ pubkey: 'pk-fallback', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
+      ],
     })
 
     const result = await startParallelRinging('CA-busy2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
@@ -600,12 +622,15 @@ describe('startParallelRinging', () => {
 
     const services = makeServices({
       onShiftPubkeys: ['pk-1'],
-      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'both' })],
+      // No hub to be a member of — global-scope authority is the global roles
+      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })],
     })
 
-    await startParallelRinging('CA-8', '+15551234567', 'http://localhost', makeEnv(), services, '')
+    const result = await startParallelRinging('CA-8', '+15551234567', 'http://localhost', makeEnv(), services, '')
 
-    // VoIP push should NOT be dispatched for empty hubId
+    // The volunteer IS rung (so the assertion below is not vacuous) ...
+    expect(result.ringing).toBe(true)
+    // ... but VoIP push should NOT be dispatched for empty hubId
     expect(dispatchVoipPushFromService).not.toHaveBeenCalled()
   })
 
@@ -690,5 +715,236 @@ describe('first-pickup-wins: cancelling losing ring legs', () => {
     recordRingLegs('CA-boom', ['LEG-A'])
     mockAdapter.cancelRinging.mockRejectedValueOnce(new Error('provider down'))
     await expect(cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-boom', 'LEG-X')).resolves.toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hub isolation (#1037): only people who can act IN THIS HUB ring
+// ---------------------------------------------------------------------------
+
+describe('startParallelRinging — hub isolation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('does not ring a rostered volunteer who is no longer a member of the hub', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-removed', 'pk-member'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-removed', phone: '+15550000001', hubRoles: [] }),
+        makeUser({ pubkey: 'pk-member', phone: '+15550000002' }),
+      ],
+    })
+
+    await startParallelRinging('CA-iso', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    const rung = mockAdapter.ringVolunteers.mock.calls[0][0].volunteers.map((v: { phone: string }) => v.phone)
+    expect(rung).toEqual(['+15550000002'])
+  })
+
+  it('does not ring a member of a different hub, nor a non-super-admin global role holder', async () => {
+    // callPreference 'both' so a leak would show on every ring path: phone, relay, VoIP push
+    const other = makeUser({ pubkey: 'pk-other-hub', callPreference: 'both', hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }] })
+    const globalOnly = makeUser({ pubkey: 'pk-global', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })
+    const services = makeServices({
+      onShiftPubkeys: ['pk-other-hub', 'pk-global'],
+      allUsers: [other, globalOnly],
+    })
+
+    const result = await startParallelRinging('CA-iso2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    // Neither is eligible in hub-1, so the call is unroutable ...
+    expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
+    // ... and nobody is told a caller is waiting, on any channel.
+    expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
+    expect(services.calls.createCallToken).not.toHaveBeenCalled()
+    expect(publishEvent).not.toHaveBeenCalled()
+    expect(dispatchVoipPushFromService).not.toHaveBeenCalled()
+    // The call record is still created, in hub-1 only, so the caller can reach
+    // voicemail (#1069 registers the call before any volunteer lookup).
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+    expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', expect.objectContaining({ callId: 'CA-iso2' }))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// In-app ringing (#1188)
+// ---------------------------------------------------------------------------
+
+/**
+ * A registered in-app endpoint is inert until something sends it an INVITE.
+ * A relay event and a VoIP push tell a client a call exists; neither makes the
+ * endpoint ring. These pin that the ringing path now dials it — and, as
+ * importantly, that it refuses to when the PBX cannot vouch for the
+ * registration, when the volunteer asked for phone-only, or when anything
+ * about the in-app path fails, because the phone legs must survive all three.
+ */
+describe('startParallelRinging — in-app legs', () => {
+  const ASTERISK = { type: 'asterisk' }
+  const PK = 'pk-inapp'
+  const AOR = volunteerSipUsername(PK)
+  const reachable = listReachableVolunteerEndpoints as unknown as ReturnType<typeof vi.fn>
+  const provider = resolveHubTelephonyConfig as unknown as ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reachable.mockResolvedValue(new Set<string>())
+    provider.mockResolvedValue(ASTERISK)
+    mockAdapter.ringVolunteers.mockResolvedValue([])
+  })
+
+  function servicesWith(users: ReturnType<typeof makeUser>[]) {
+    return makeServices({ onShiftPubkeys: users.map(u => u.pubkey), allUsers: users })
+  }
+
+  const ringArgs = () => mockAdapter.ringVolunteers.mock.calls[0][0] as {
+    volunteers: Array<{ phone: string; callToken: string }>
+    appTargets?: Array<{ sipAor: string; callToken: string }>
+  }
+
+  it('dials the registered AOR as well as the phone, for a volunteer who has both', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone', 'leg-app'])
+    const services = servicesWith([vol])
+    ;(services.calls.createCallToken as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('token-phone')
+      .mockResolvedValueOnce('token-app')
+
+    await startParallelRinging('CA-app-1', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    // Both legs, in one adapter call, so both land in the one
+    // first-pickup-wins registry and the loser is cancelled either way.
+    const args = ringArgs()
+    expect(args.volunteers).toEqual([{ phone: '+15550001111', callToken: 'token-phone' }])
+    // A distinct token per leg: /user-answer resolves the token to decide,
+    // atomically, which of this volunteer's two legs won.
+    expect(args.appTargets).toEqual([{ sipAor: AOR, callToken: 'token-app' }])
+    expect(services.calls.createCallToken).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not dial a volunteer who is scheduled but has not clocked in', async () => {
+    // The operator's rule — ring = scheduled_now ∩ clocked_in — is inherited
+    // from `available`, not re-derived for the in-app path. Reachability is
+    // deliberately a yes here: the only thing keeping the INVITE away is the
+    // missing clock-in.
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    const services = makeServices({
+      onShiftPubkeys: [PK],
+      clockedInPubkeys: [],
+      fallbackPubkeys: [],
+      allUsers: [vol],
+    })
+
+    const result = await startParallelRinging('CA-app-shift', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    expect(result).toEqual({ ringing: false, reason: 'no-volunteers', volunteersNotified: 0 })
+    expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
+    expect(reachable).not.toHaveBeenCalled()
+  })
+
+  it('rings a volunteer who has no phone at all — the whole point of in-app', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'browser', phone: null })
+    reachable.mockResolvedValue(new Set([AOR]))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-app'])
+
+    const result = await startParallelRinging('CA-app-2', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
+    const args = ringArgs()
+    expect(args.volunteers).toEqual([])
+    expect(args.appTargets).toEqual([{ sipAor: AOR, callToken: expect.any(String) }])
+  })
+
+  it('does not dial a volunteer the PBX has no reachable registration for', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set(['vol_somebodyelse00']))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    await startParallelRinging('CA-app-3', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    // Their phone still rings. An INVITE to an endpoint with no live contact
+    // would ring nobody while looking, to the caller, exactly like ringing.
+    expect(ringArgs().volunteers.map(v => v.phone)).toEqual(['+15550001111'])
+    expect(ringArgs().appTargets).toEqual([])
+  })
+
+  it('does not dial a volunteer who asked for phone-only, however reachable they are', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'phone', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    await startParallelRinging('CA-app-4', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(ringArgs().appTargets).toEqual([])
+  })
+
+  it('does not dial anyone in-app when the hub is on a vendor provider', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    provider.mockResolvedValue({ type: 'twilio' })
+
+    await startParallelRinging('CA-app-5', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    // No vendor hosts a per-volunteer AOR (#1203), so the PBX is never asked
+    // and no vendor adapter is ever handed an in-app target.
+    expect(reachable).not.toHaveBeenCalled()
+    expect(ringArgs().appTargets).toEqual([])
+  })
+
+  it('still rings phones, loudly, when the PBX will not report endpoint state', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockRejectedValue(new Error('ARI unreachable'))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    const result = await startParallelRinging('CA-app-6', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
+    expect(ringArgs().volunteers.map(v => v.phone)).toEqual(['+15550001111'])
+    expect(ringArgs().appTargets).toEqual([])
+    // Not silent: registered volunteers are not being rung in-app.
+    expect(incCounter).toHaveBeenCalledWith('llamenos_inapp_ring_errors_total', { reason: 'reachability' })
+  })
+
+  it('still rings phones when the provider configuration itself cannot be read', async () => {
+    // The in-app path runs inside the ring that places the phone legs. PSTN
+    // ringing works today, and nothing here may cost a volunteer their phone
+    // call — so this path is total, not merely careful.
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    provider.mockRejectedValue(new Error('settings unavailable'))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    const result = await startParallelRinging('CA-app-9', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
+    expect(ringArgs().volunteers.map(v => v.phone)).toEqual(['+15550001111'])
+    expect(ringArgs().appTargets).toEqual([])
+    expect(incCounter).toHaveBeenCalledWith('llamenos_inapp_ring_errors_total', { reason: 'reachability' })
+  })
+
+  it('counts an INVITE the PBX refused instead of letting the leg vanish', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    // Two legs asked for, one originated: the in-app INVITE was refused.
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    await startParallelRinging('CA-app-7', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(incCounter).toHaveBeenCalledWith('llamenos_ring_legs_refused_total', { reason: 'originate-failed' })
+  })
+
+  it('leaves a phone-only ring exactly as it was — no in-app field, no PBX query', async () => {
+    const vol = makeUser({ pubkey: PK, callPreference: 'phone', phone: '+15550001111' })
+    provider.mockResolvedValue(null)
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone'])
+
+    await startParallelRinging('CA-app-8', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(reachable).not.toHaveBeenCalled()
+    expect(ringArgs().appTargets).toEqual([])
+    expect(incCounter).not.toHaveBeenCalledWith('llamenos_ring_legs_refused_total', expect.anything())
   })
 })

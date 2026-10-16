@@ -139,11 +139,31 @@ notes.patch('/:id',
     const id = c.req.param('id')
     const body = c.req.valid('json')
 
+    // Optional optimistic-concurrency header (#1144): a client that has the
+    // note's `updatedAt` (every note response includes it) can send it back
+    // as `X-If-Unmodified-Since` to detect a lost-update race — see
+    // RecordsService.updateNote. Not a standard HTTP date header on purpose:
+    // the server's own ISO-8601 serialization is millisecond-precision and
+    // we want an exact round-trip match, which the RFC 7231 HTTP-date
+    // format (second precision) can't give us. Omitting the header keeps
+    // the previous last-write-wins behavior for clients that haven't
+    // adopted it yet.
+    const ifUnmodifiedSinceHeader = c.req.header('x-if-unmodified-since')
+    let expectedUpdatedAt: Date | undefined
+    if (ifUnmodifiedSinceHeader) {
+      const parsed = new Date(ifUnmodifiedSinceHeader)
+      if (Number.isNaN(parsed.getTime())) {
+        return c.json({ error: 'Invalid X-If-Unmodified-Since header' }, 400)
+      }
+      expectedUpdatedAt = parsed
+    }
+
     const updated = await services.records.updateNote(id, {
       encryptedContent: body.encryptedContent ?? '',
       authorPubkey: pubkey,
       authorEnvelope: body.authorEnvelope,
       adminEnvelopes: body.adminEnvelopes,
+      expectedUpdatedAt,
     })
 
     await audit(services.audit, 'noteEdited', pubkey, { noteId: id }, undefined, updated.hubId ?? null)

@@ -54,13 +54,35 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+# 0755, and holding ONLY the published anchor — see kamailio_tls_anchor_dir.
+# The app container has to traverse it, and under userns-remap its uid is
+# neither the owner nor in the deploy group. The private key is not in here.
+- name: Create the published trust anchor directory
+  ansible.builtin.file:
+    path: "{{ kamailio_tls_anchor_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0755"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_publish_anchor | default(true) | bool
+
+# 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
+# compose bind-mounts these configs into the kamailio container, which runs as
+# root — and `docker_userns_remap: true` maps that to host uid 100000, which
+# is neither their owner nor in the deploy group, so 0640 made Kamailio unable
+# to read its own config. These files hold no key material: tls.cfg only names
+# the paths of the certificate and private key, which stay 0600 (see "Set TLS
+# certificate permissions" below) — those are NOT to be loosened; under
+# userns-remap they need an owner the container can read as instead.
 - name: Template Kamailio main configuration
   ansible.builtin.template:
     src: kamailio.cfg.j2
     dest: "{{ app_dir }}/services/kamailio/config/kamailio.cfg"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart kamailio service
 
 - name: Template dispatcher list
@@ -69,7 +91,7 @@
     dest: "{{ app_dir }}/services/kamailio/config/dispatcher.list"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart kamailio service
 
 - name: Template TLS configuration
@@ -78,7 +100,7 @@
     dest: "{{ app_dir }}/services/kamailio/config/tls.cfg"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   when: kamailio_tls_enabled | default(true) | bool
   notify: Restart kamailio service
 
@@ -100,28 +122,167 @@
     mode: "0600"
   notify: Restart kamailio service
 
+# A volunteer's client verifies the HOSTNAME as well as the chain (RFC 6125),
+# so a certificate with no subjectAltName is rejected by every modern TLS
+# stack however trusted its issuer — which is why kamailio_tls_sans must list
+# every name or address a client may dial for the SIP domain. A bare IPv4
+# literal belongs in an IP: SAN; a DNS: SAN holding an address matches nothing.
+# IPv6 is classified by the colon a hostname cannot contain, IPv4 by consisting
+# only of digits and dots; everything else is a DNS name. (Review raised that
+# the first version only recognised dotted-quad IPv4.)
+- name: Build the subjectAltName list for the SIP edge certificate
+  ansible.builtin.set_fact:
+    kamailio_tls_san_list: >-
+      {{ kamailio_tls_sans
+         | map('regex_replace', '^([0-9A-Fa-f:]*:[0-9A-Fa-f:.]*)$', 'IP:\1')
+         | map('regex_replace', '^([0-9][0-9.]*)$', 'IP:\1')
+         | map('regex_replace', '^(?!IP:)(.+)$', 'DNS:\1')
+         | join(',') }}
+  when: kamailio_tls_enabled | default(true) | bool
+
+# Skipped entirely when a certificate is already there — `creates:` covers both
+# a previous run and an operator-installed certificate. Also skipped when the
+# certificate comes from elsewhere (kamailio_tls_cert_source_dir), because that
+# directory is mounted read-only and is not ours to write into.
 - name: Generate self-signed TLS certificate (if no cert exists)
   ansible.builtin.command: >
     openssl req -x509 -nodes -days 365
     -subj "/CN={{ kamailio_sip_domain }}"
-    -keyout "{{ app_dir }}/services/kamailio/tls/kamailio.key"
-    -out "{{ app_dir }}/services/kamailio/tls/kamailio.crt"
+    -addext "subjectAltName={{ kamailio_tls_san_list }}"
+    -keyout "{{ kamailio_tls_dir }}/kamailio.key"
+    -out "{{ kamailio_tls_dir }}/kamailio.crt"
     -newkey rsa:2048
   args:
-    creates: "{{ app_dir }}/services/kamailio/tls/kamailio.crt"
+    creates: "{{ kamailio_tls_dir }}/kamailio.crt"
   become_user: "{{ deploy_user }}"
-  when: kamailio_tls_enabled | default(true) | bool
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_cert_source_dir is not defined
 
+# The PUBLIC trust anchor clients verify the SIP TLS chain against.
+#
+# Kamailio is the SIP edge, so this is the certificate a volunteer's client
+# sees. Since it is self-signed by default, nothing in the device trust store
+# can vouch for it — and verification is never switched off on a leg carrying
+# a crisis call. The app therefore publishes this anchor inside the
+# authenticated /api/telephony/sip-token response, over its own pinned HTTPS
+# channel, and the client verifies against exactly this and nothing else.
+#
+# Copied (certificate only — never the key) to a path the app container can
+# read. With a real certificate in place, point kamailio_tls_anchor_source at
+# its ISSUING ROOT instead: pinning a leaf breaks at every renewal.
+#
+# The app reads it at SIP_TLS_CA_FILE, which
+# deploy/ansible/templates/env/_worker-required-env.j2 now renders — gated on
+# this role being enabled and on kamailio_tls_publish_anchor — and the app's
+# compose file bind-mounts kamailio_tls_dir read-only so the container can
+# actually open it. Both halves are asserted by
+# deploy/ansible/scripts/check-required-env.py (check_calling_vars), because
+# the variable without the mount is worse than neither: readSipTlsTrustAnchor
+# would log "not readable" and return undefined.
+#
+# This replaces the note that used to sit here saying an operator had to add
+# SIP_TLS_CA_FILE "to the app's environment by hand" — along with
+# SIP_REGISTRAR_SECRET, TURN_HOST and TURN_SECRET. A comment is not a check,
+# nothing failed when the hand-step was skipped, and the result was a deployed
+# host serving STUN-only ICE with no trust anchor and a 200 from
+# /api/telephony/sip-token either way (#1657).
+- name: Publish the SIP edge TLS trust anchor for the app
+  ansible.builtin.copy:
+    src: "{{ kamailio_tls_anchor_source | default(kamailio_tls_dir ~ '/kamailio.crt') }}"
+    dest: "{{ kamailio_tls_anchor_dir }}/sip-edge-anchor.pem"
+    remote_src: true
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0644"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    # A publicly-trusted certificate needs no anchor: the client's own CA set
+    # verifies it (ISRG Root X1/X2 are both in liblinphone's bundle). Set
+    # kamailio_tls_publish_anchor false there, and leave SIP_TLS_CA_FILE empty
+    # in the app's environment, so nothing is pinned to a leaf that will be
+    # renewed.
+    - kamailio_tls_publish_anchor | default(true) | bool
+
+# Only material this role generated. An externally-managed certificate
+# (kamailio_tls_cert_source_dir) is mounted read-only and owned by whatever
+# produced it — chmod-ing it would either fail or weaken it.
 - name: Set TLS certificate permissions
   ansible.builtin.file:
-    path: "{{ app_dir }}/services/kamailio/tls/{{ item }}"
+    path: "{{ kamailio_tls_dir }}/{{ item }}"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
     mode: "0600"
   loop:
     - kamailio.crt
     - kamailio.key
-  when: kamailio_tls_enabled | default(true) | bool
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_cert_source_dir is not defined
+
+# ─── ACME renewal reload ────────────────────────────────────────────
+#
+# Kamailio reads its certificate once, at module init. A renewed certificate on
+# disk is therefore invisible to the running daemon, and an ACME certificate is
+# renewed roughly every 60 days — so a deployment that serves Let's Encrypt
+# material and stops at "point the paths at it" works for two months and then
+# fails every TLS handshake, with a perfectly valid file on disk and nothing in
+# any log that looks like the cause. Clients verify the chain (verification is
+# never switched off), so they fail CLOSED: no volunteer receives a call.
+#
+# This is strictly worse than the self-signed default, which lasts ten years.
+# Hence the watcher: it hashes the certificate, and on a change issues
+# `kamcmd tls.reload` (and an Asterisk res_pjsip reload where that service is
+# present). Both are in-process and drop no established call.
+- name: Install the SIP TLS reload script
+  ansible.builtin.copy:
+    # `role_path`, not `playbook_dir`: the only playbook that runs this role is
+    # playbooks/deploy.yml, so `{{ playbook_dir }}/../docker/` resolved to
+    # deploy/ansible/docker/ — a directory that does not exist — and the task
+    # failed with "Could not find or access". It went unnoticed because this
+    # role was on NO deploy path until #1657 put it on one, which is the same
+    # reason its trust anchor was never written on a deployed host. Same idiom
+    # as roles/llamenos-asterisk's asterisk-config copy.
+    src: "{{ role_path }}/../../../docker/sip-tls-reload.sh"
+    dest: "{{ app_dir }}/services/kamailio/sip-tls-reload.sh"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0755"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
+
+- name: Install the SIP TLS reload systemd service
+  ansible.builtin.template:
+    src: systemd/sip-tls-reload.service.j2
+    dest: /etc/systemd/system/llamenos-sip-tls-reload.service
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
+
+- name: Install the SIP TLS reload systemd timer
+  ansible.builtin.template:
+    src: systemd/sip-tls-reload.timer.j2
+    dest: /etc/systemd/system/llamenos-sip-tls-reload.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
+
+- name: Enable and start the SIP TLS reload timer
+  ansible.builtin.systemd:
+    name: llamenos-sip-tls-reload.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
 
 - name: Pull Kamailio image
   community.docker.docker_compose_v2:
@@ -136,21 +297,35 @@
     state: present
   register: kamailio_compose
 
-- name: Wait for Kamailio JSONRPC endpoint
-  ansible.builtin.uri:
-    url: "http://localhost:{{ kamailio_jsonrpc_port }}/jsonrpc"
-    method: POST
-    body_format: json
-    body:
-      jsonrpc: "2.0"
-      method: "core.psx"
-      id: 1
-    status_code: 200
+# The management probe is `kamcmd core.version` over the ctl.so binrpc socket,
+# NOT the HTTP JSONRPC endpoint this task used to poll. kamailio.cfg serves
+# jsonrpcs with transport=2 (FIFO) and never loads xhttp.so, so nothing binds
+# kamailio_jsonrpc_port and a uri probe of /jsonrpc cannot succeed on ANY
+# deployment of this role — it measured an endpoint that does not exist
+# (issue #1688, defect 4). kamcmd talks to the same ctl socket the container
+# healthcheck uses, so a daemon that is up answers and one that is not does
+# not.
+- name: Wait for Kamailio to answer on its management socket
+  ansible.builtin.command: >
+    docker compose --project-directory {{ app_dir }}/services/kamailio
+    exec -T kamailio kamcmd core.version
   register: kamailio_health
   retries: 10
   delay: 3
+  until: kamailio_health.rc == 0
   ignore_errors: true
+  changed_when: false
 
+# The kamcmd exit status, not `is succeeded`: `succeeded` means `not failed`,
+# so a probe that never ran reported HEALTHY (issue #1617). This task only
+# reports — nothing in the role gates on a Kamailio that never answered, which
+# is noted in the PR for #1617 as found-but-not-changed; making it fatal is a
+# deploy-behaviour change, not a reporting fix (#1636 owns the fatal-vs-nonfatal
+# policy).
 - name: Report Kamailio status
   ansible.builtin.debug:
-    msg: "Kamailio JSONRPC endpoint: {{ 'HEALTHY' if kamailio_health is succeeded else 'NOT READY' }}"
+    msg: >-
+      Kamailio management socket (kamcmd core.version):
+      {{ 'HEALTHY' if (kamailio_health is not skipped and (kamailio_health.rc | default(1) | int) == 0)
+         else 'NOT CHECKED' if kamailio_health is skipped
+         else 'NOT READY' }}

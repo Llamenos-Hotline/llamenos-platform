@@ -1,6 +1,6 @@
 import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
-import { permissionGranted } from '@shared/permissions'
+import { permissionGranted, resolveHubRoleIds } from '@shared/permissions'
 import type { EntityTypeDefinition } from '@protocol/schemas/entity-schema'
 import { createLogger } from '../lib/logger'
 
@@ -17,17 +17,16 @@ const logger = createLogger('middleware.permission-guard')
  */
 export function requirePermission(...required: string[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
+    // Routes mounted under /hubs/:hubId go through hubContext, which replaces
+    // `permissions` with the hub-resolved set — so this is hub-bounded there and
+    // global (super-admin / legacy global roles) on unscoped routes. Never OR the
+    // two sets: that would let a global role authorize inside a foreign hub.
     const permissions = c.get('permissions')
-    // For hub-scoped routes, also check hub-level permissions.
-    // Routes mounted under /hubs/:hubId go through hubContext middleware
-    // which sets hubPermissions — users may have permissions only at hub scope.
-    const hubPermissions = c.get('hubPermissions') as string[] | undefined
     for (const perm of required) {
-      if (!permissionGranted(permissions, perm) &&
-          !(hubPermissions && permissionGranted(hubPermissions, perm))) {
+      if (!permissionGranted(permissions, perm)) {
         const user = c.get('user')
         if (c.env?.ENVIRONMENT === 'development') {
-          return c.json({ error: 'Forbidden', required: perm, debug: { roles: user?.roles, permCount: permissions?.length, hubPermCount: hubPermissions?.length } }, 403)
+          return c.json({ error: 'Forbidden', required: perm, debug: { roles: user?.roles, hubId: c.get('hubId'), permCount: permissions?.length } }, 403)
         }
         return c.json({ error: 'Forbidden', required: perm }, 403)
       }
@@ -46,11 +45,7 @@ export function requirePermission(...required: string[]) {
 export function requireAnyPermission(...anyOf: string[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const permissions = c.get('permissions')
-    const hubPermissions = c.get('hubPermissions') as string[] | undefined
-    const hasAny = anyOf.some(perm =>
-      permissionGranted(permissions, perm) ||
-      (hubPermissions != null && permissionGranted(hubPermissions, perm)),
-    )
+    const hasAny = anyOf.some(perm => permissionGranted(permissions, perm))
     if (!hasAny) {
       return c.json({ error: 'Forbidden', required: anyOf }, 403)
     }
@@ -93,9 +88,14 @@ export function requireEntityTypeAccess(action: 'read' | 'write') {
 
     const permissions = c.get('permissions')
     const user = c.get('user')
-    // Resolve role slugs from the user's role IDs + all role definitions
+    // Resolve role slugs from the roles that carry authority in this request:
+    // the hub's assignment inside a hub (#1037), global roles otherwise.
     const allRoles = c.get('allRoles')
-    const userRoleSlugs = user.roles
+    const hubId = c.get('hubId')
+    const roleIds = hubId
+      ? resolveHubRoleIds(user.roles, user.hubRoles ?? [], allRoles, hubId)
+      : user.roles
+    const userRoleSlugs = roleIds
       .map(roleId => allRoles.find(r => r.id === roleId)?.slug)
       .filter((s): s is string => !!s)
 

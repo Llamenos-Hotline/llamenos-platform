@@ -529,6 +529,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 /**
  * A signed Ed25519 authentication token.
@@ -1349,223 +1367,6 @@ public func FfiConverterTypeKeyEnvelope_lower(_ value: KeyEnvelope) -> RustBuffe
 
 
 /**
- * Result of an MLS commit operation.
- */
-public struct MlsCommitResult: Equatable, Hashable {
-    /**
-     * Serialized commit message, hex-encoded
-     */
-    public let commitHex: String
-    /**
-     * Optional welcome message for new members, hex-encoded
-     */
-    public let welcomeHex: String?
-    /**
-     * New epoch after commit
-     */
-    public let newEpoch: UInt64
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Serialized commit message, hex-encoded
-         */commitHex: String, 
-        /**
-         * Optional welcome message for new members, hex-encoded
-         */welcomeHex: String?, 
-        /**
-         * New epoch after commit
-         */newEpoch: UInt64) {
-        self.commitHex = commitHex
-        self.welcomeHex = welcomeHex
-        self.newEpoch = newEpoch
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension MlsCommitResult: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeMlsCommitResult: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsCommitResult {
-        return
-            try MlsCommitResult(
-                commitHex: FfiConverterString.read(from: &buf), 
-                welcomeHex: FfiConverterOptionString.read(from: &buf), 
-                newEpoch: FfiConverterUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: MlsCommitResult, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.commitHex, into: &buf)
-        FfiConverterOptionString.write(value.welcomeHex, into: &buf)
-        FfiConverterUInt64.write(value.newEpoch, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMlsCommitResult_lift(_ buf: RustBuffer) throws -> MlsCommitResult {
-    return try FfiConverterTypeMlsCommitResult.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMlsCommitResult_lower(_ value: MlsCommitResult) -> RustBuffer {
-    return FfiConverterTypeMlsCommitResult.lower(value)
-}
-
-
-/**
- * MLS group state (public info).
- */
-public struct MlsGroupState: Equatable, Hashable {
-    /**
-     * Group ID bytes, hex-encoded
-     */
-    public let groupIdHex: String
-    /**
-     * Current epoch
-     */
-    public let epoch: UInt64
-    /**
-     * Number of members in the group
-     */
-    public let memberCount: UInt32
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Group ID bytes, hex-encoded
-         */groupIdHex: String, 
-        /**
-         * Current epoch
-         */epoch: UInt64, 
-        /**
-         * Number of members in the group
-         */memberCount: UInt32) {
-        self.groupIdHex = groupIdHex
-        self.epoch = epoch
-        self.memberCount = memberCount
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension MlsGroupState: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeMlsGroupState: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsGroupState {
-        return
-            try MlsGroupState(
-                groupIdHex: FfiConverterString.read(from: &buf), 
-                epoch: FfiConverterUInt64.read(from: &buf), 
-                memberCount: FfiConverterUInt32.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: MlsGroupState, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.groupIdHex, into: &buf)
-        FfiConverterUInt64.write(value.epoch, into: &buf)
-        FfiConverterUInt32.write(value.memberCount, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMlsGroupState_lift(_ buf: RustBuffer) throws -> MlsGroupState {
-    return try FfiConverterTypeMlsGroupState.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMlsGroupState_lower(_ value: MlsGroupState) -> RustBuffer {
-    return FfiConverterTypeMlsGroupState.lower(value)
-}
-
-
-/**
- * Key package bundle for pre-publishing.
- */
-public struct MlsKeyPackageBundle: Equatable, Hashable {
-    /**
-     * Serialized key package bytes, hex-encoded
-     */
-    public let keyPackageHex: String
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Serialized key package bytes, hex-encoded
-         */keyPackageHex: String) {
-        self.keyPackageHex = keyPackageHex
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension MlsKeyPackageBundle: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeMlsKeyPackageBundle: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsKeyPackageBundle {
-        return
-            try MlsKeyPackageBundle(
-                keyPackageHex: FfiConverterString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: MlsKeyPackageBundle, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.keyPackageHex, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMlsKeyPackageBundle_lift(_ buf: RustBuffer) throws -> MlsKeyPackageBundle {
-    return try FfiConverterTypeMlsKeyPackageBundle.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMlsKeyPackageBundle_lower(_ value: MlsKeyPackageBundle) -> RustBuffer {
-    return FfiConverterTypeMlsKeyPackageBundle.lower(value)
-}
-
-
-/**
  * PUK state (public info) — no secret material.
  */
 public struct PukState: Equatable, Hashable {
@@ -2204,6 +2005,8 @@ public enum CryptoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedE
     
     case StaleTimestamp(message: String)
     
+    case FutureTimestamp(message: String)
+    
 
     
 
@@ -2309,6 +2112,10 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
+        case 20: return .FutureTimestamp(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2358,6 +2165,8 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(18))
         case .StaleTimestamp(_ /* message is ignored*/):
             writeInt(&buf, Int32(19))
+        case .FutureTimestamp(_ /* message is ignored*/):
+            writeInt(&buf, Int32(20))
 
         
         }
@@ -2810,6 +2619,36 @@ public func getPublicKey(secretKeyHex: String)throws  -> String  {
 })
 }
 /**
+ * Convert the base64url a UniFFI [`HpkeEnvelope`] carries back to wire-format
+ * hex. See [`mobile_hex_to_base64url`].
+ */
+public func mobileBase64urlToHex(b64: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(
+        FfiConverterString.lower(b64),$0
+    )
+})
+}
+/**
+ * Build the canonical auth message bytes — the one construction path, exposed
+ * so platform code never hand-builds the signed string.
+ *
+ * `nonce: None` selects the nonce-less shape (a different label); `Some(n)`
+ * the nonce-bearing one. Platform tests use this to pin byte-equality against
+ * the interop vectors.
+ */
+public func mobileBuildAuthMessage(pubkeyHex: String, timestamp: UInt64, method: String, path: String, nonce: String?) -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_llamenos_core_fn_func_mobile_build_auth_message(
+        FfiConverterString.lower(pubkeyHex),
+        FfiConverterUInt64.lower(timestamp),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(path),
+        FfiConverterOptionString.lower(nonce),$0
+    )
+})
+}
+/**
  * Clear the ephemeral key from state without performing ECDH.
  * Called when the device linking flow is cancelled.
  */
@@ -2843,6 +2682,22 @@ public func mobileClearWakeKey()  {try! rustCall() {
 }
 }
 /**
+ * `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.
+ *
+ * Exported over UniFFI so Kotlin and Swift derive the AAD from
+ * [`crate::envelope_aad`], the same definition `encryption.rs` and the
+ * server-side `packages/shared/envelope-aad.ts` use, instead of writing out
+ * `label` and `${label}:key-wrap` at each call site. Errors on a label that
+ * is not in the generated registry.
+ */
+public func mobileContentAadHex(label: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_content_aad_hex(
+        FfiConverterString.lower(label),$0
+    )
+})
+}
+/**
  * Create an Ed25519 auth token using the device signing key in mobile state.
  */
 public func mobileCreateAuthToken(timestamp: UInt64, method: String, path: String)throws  -> AuthToken  {
@@ -2865,6 +2720,25 @@ public func mobileCreateAuthTokenFromSigningKey(signingKeyHex: String, timestamp
     return try  FfiConverterTypeAuthToken_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_key(
         FfiConverterString.lower(signingKeyHex),
+        FfiConverterUInt64.lower(timestamp),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(path),$0
+    )
+})
+}
+/**
+ * Create an Ed25519 auth token with NO nonce, using the device signing key in
+ * mobile state.
+ *
+ * For the routes whose wire schema has no `nonce` field — today only
+ * `POST /api/invites/redeem`, whose body is `{ code, pubkey, timestamp, token }`.
+ * The message is signed under `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the
+ * server accepts only on routes that opt in, so this token is useless
+ * anywhere else. Every other call site must use `mobile_create_auth_token`.
+ */
+public func mobileCreateAuthTokenWithoutNonce(timestamp: UInt64, method: String, path: String)throws  -> AuthToken  {
+    return try  FfiConverterTypeAuthToken_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(
         FfiConverterUInt64.lower(timestamp),
         FfiConverterString.lower(method),
         FfiConverterString.lower(path),$0
@@ -3055,6 +2929,24 @@ public func mobileHasWakeKey() -> Bool  {
 })
 }
 /**
+ * Convert a wire-format hex string to the base64url the UniFFI
+ * [`HpkeEnvelope`] record carries.
+ *
+ * `PROTOCOL.md` §2.3/§2.4 specify `enc` and `ct` as **hex** on the wire, while
+ * `hpke_envelope.rs` encodes both as base64url inside the record. Mobile was
+ * handing wire hex straight to `mobile_hpke_open_key`, which base64url-decoded
+ * it into garbage — so even with a correct AAD the envelope could not open.
+ * Exported so the conversion is done once here rather than reimplemented in
+ * Kotlin and again in Swift.
+ */
+public func mobileHexToBase64url(hexStr: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_hex_to_base64url(
+        FfiConverterString.lower(hexStr),$0
+    )
+})
+}
+/**
  * HPKE open: decrypt an envelope using the device's X25519 key from mobile state.
  */
 public func mobileHpkeOpen(envelope: HpkeEnvelope, expectedLabel: String, aadHex: String)throws  -> String  {
@@ -3133,6 +3025,35 @@ public func mobileIsValidPin(pin: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_llamenos_core_fn_func_mobile_is_valid_pin(
         FfiConverterString.lower(pin),$0
+    )
+})
+}
+/**
+ * `UTF-8("{label}:key-wrap")` as hex — the AAD bound to an envelope's
+ * *key-wrap* layer. See [`mobile_content_aad_hex`].
+ */
+public func mobileKeyWrapAadHex(label: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_key_wrap_aad_hex(
+        FfiConverterString.lower(label),$0
+    )
+})
+}
+/**
+ * The numeric registry ID for a domain separation label.
+ *
+ * `HpkeEnvelope.labelId` is a wire field that must agree with the label the
+ * envelope is opened under — `hpke_open_key` rejects a mismatch before
+ * touching any key material (the Albrecht defense). Both mobile clients kept
+ * their own hand-written tables of these indices, and iOS's had drifted:
+ * `CryptoService.swift` built call-metadata and hub-key envelopes with
+ * `labelId: 0` (LABEL_NOTE_KEY), which that check rejects. Derive the ID from
+ * the label instead of transcribing the registry a third and fourth time.
+ */
+public func mobileLabelToId(label: String)throws  -> UInt8  {
+    return try  FfiConverterUInt8.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_label_to_id(
+        FfiConverterString.lower(label),$0
     )
 })
 }
@@ -3290,24 +3211,42 @@ public func mobileSign(messageHex: String)throws  -> String  {
 })
 }
 /**
- * Decrypt AES-256-GCM ciphertext. Input: hex(nonce_12 || ciphertext || tag_16), key_hex.
+ * Decrypt AES-256-GCM ciphertext, binding `aad_hex`.
+ * Input: hex(nonce_12 || ciphertext || tag_16), key_hex, aad_hex.
+ *
+ * The AAD must match the one bound at encryption byte for byte or the GCM tag
+ * check fails and this returns [`CryptoError::DecryptionFailed`]. That is the
+ * point: it is the only thing separating a key-wrap envelope from a content
+ * envelope carried under the same label. See [`crate::envelope_aad`].
  */
-public func mobileSymmetricDecrypt(ciphertextHex: String, keyHex: String)throws  -> String  {
+public func mobileSymmetricDecrypt(ciphertextHex: String, keyHex: String, aadHex: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_symmetric_decrypt(
         FfiConverterString.lower(ciphertextHex),
-        FfiConverterString.lower(keyHex),$0
+        FfiConverterString.lower(keyHex),
+        FfiConverterString.lower(aadHex),$0
     )
 })
 }
 /**
- * Encrypt plaintext with a random AES-256-GCM key.
+ * Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
  * Returns (ciphertext_hex, key_hex) where ciphertext = hex(nonce_12 || ciphertext || tag_16).
+ *
+ * `aad_hex` is required, not defaulted. `docs/protocol/PROTOCOL.md` §2.4
+ * binds `UTF-8(label)` to the content layer of every envelope the server
+ * writes; this function previously had no AAD parameter at all, so Android
+ * and iOS were structurally incapable of producing or reading a conformant
+ * content ciphertext. A defaulted empty AAD would have reproduced exactly
+ * that defect while appearing to fix it. Derive the value with
+ * [`crate::envelope_aad::content_aad_hex`] — exported to mobile as
+ * `mobile_content_aad_hex` — and pass `""` only where the spec says the
+ * ciphertext carries no AAD (§2.3, notes).
  */
-public func mobileSymmetricEncrypt(plaintextHex: String)throws  -> [String]  {
+public func mobileSymmetricEncrypt(plaintextHex: String, aadHex: String)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_symmetric_encrypt(
-        FfiConverterString.lower(plaintextHex),$0
+        FfiConverterString.lower(plaintextHex),
+        FfiConverterString.lower(aadHex),$0
     )
 })
 }
@@ -3320,6 +3259,22 @@ public func mobileUnlock(data: EncryptedDeviceKeys, pin: String)throws  -> Devic
     uniffi_llamenos_core_fn_func_mobile_unlock(
         FfiConverterTypeEncryptedDeviceKeys_lower(data),
         FfiConverterString.lower(pin),$0
+    )
+})
+}
+/**
+ * Verify an Ed25519 auth token (stateless).
+ *
+ * Exposed so platform tests can assert the domain-separation property
+ * directly: a nonce-less token verifies only under its own label, and a
+ * nonce-bearing token whose nonce was dropped does not verify at all.
+ */
+public func mobileVerifyAuthToken(token: AuthToken, method: String, path: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_verify_auth_token(
+        FfiConverterTypeAuthToken_lower(token),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(path),$0
     )
 })
 }
@@ -3423,6 +3378,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_get_public_key() != 4118) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex() != 33582) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key() != 9718) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3435,10 +3396,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_clear_wake_key() != 9240) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_content_aad_hex() != 6418) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token() != 23090) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token_from_signing_key() != 63368) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce() != 37994) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_draft() != 61700) {
@@ -3489,6 +3456,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_has_wake_key() != 11945) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_hex_to_base64url() != 50779) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_hpke_open() != 47930) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3508,6 +3478,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_is_valid_pin() != 59853) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_key_wrap_aad_hex() != 54336) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 11270) {
@@ -3552,13 +3528,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_sign() != 19728) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_symmetric_decrypt() != 47821) {
+    if (uniffi_llamenos_core_checksum_func_mobile_symmetric_decrypt() != 31396) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 12406) {
+    if (uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 22982) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_verify_auth_token() != 22646) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_wake_key_pubkey() != 39092) {

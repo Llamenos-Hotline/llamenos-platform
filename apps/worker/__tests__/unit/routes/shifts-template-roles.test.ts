@@ -44,10 +44,10 @@ function appFor(permissions: string[], services: Record<string, unknown>, scope:
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
     c.set('pubkey', SELF)
-    // Template roles are hub-scoped: hubContext resolves them into hubPermissions.
-    // DEFAULT_ROLES are global, and arrive on `permissions` instead — the two
-    // paths are different, so a role that works in one can still 403 in the other.
-    c.set('permissions', scope === 'global' ? permissions : [])
+    // Template roles are hub-scoped: under hubContext the hub-resolved set
+    // REPLACES `permissions` — that replacement is what this harness models.
+    // DEFAULT_ROLES are global and arrive on `permissions` without a hub.
+    c.set('permissions', permissions)
     c.set('hubPermissions', scope === 'global' ? [] : permissions)
     c.set('hubId', HUB)
     c.set('services', services as unknown as AppEnv['Variables']['services'])

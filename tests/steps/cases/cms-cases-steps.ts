@@ -307,7 +307,7 @@ Given('an arrest case exists with multiple field sections', async ({ backendRequ
   }
 })
 
-Given('a volunteer without cases:update permission is logged in', async ({ page, backendRequest: request, casesWorld }) => {
+Given('a volunteer without cases:update permission is logged in', async ({ page, backendRequest: request, casesWorld, workerHub }) => {
   // Create a custom role with cases:read-assigned but NO cases:update or cases:update-own
   const { createRoleViaApi, createVolunteerViaApi } = await import('../../api-helpers')
   const { loginAsVolunteer } = await import('../../helpers')
@@ -322,9 +322,12 @@ Given('a volunteer without cases:update permission is logged in', async ({ page,
       'settings:read',
     ],
   })
+  // A member of the worker hub: a global role that is not super-admin grants
+  // nothing inside a hub (#1037), so a hubless account would see no cases at all.
   const vol = await createVolunteerViaApi(request, {
     name: `CMS Restricted Vol ${Date.now()}`,
     roleIds: [role.id],
+    hubId: workerHub,
   })
   casesWorld.volunteerPubkey = vol.pubkey
   await loginAsVolunteer(page, vol.nsec)

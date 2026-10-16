@@ -10,12 +10,9 @@ function createTestApp(opts: {
   services?: Record<string, unknown>
   /** Set when the request is routed under /hubs/:hubId (hubContext sets it). */
   hubId?: string
-  /** Permissions granted only at hub scope (set by hubContext for hub members). */
-  hubPermissions?: string[]
 } = {}) {
   const {
     hubId,
-    hubPermissions,
     permissions = ['*'],
     pubkey = 'test-pubkey-' + '0'.repeat(50),
     services = {},
@@ -84,7 +81,6 @@ function createTestApp(opts: {
     c.set('allRoles', [])
     c.set('requestId', 'test-req-1')
     if (hubId) c.set('hubId', hubId)
-    if (hubPermissions) c.set('hubPermissions', hubPermissions)
     Object.defineProperty(c, 'executionCtx', {
       value: { waitUntil: vi.fn() },
       writable: true,
@@ -201,8 +197,25 @@ describe('settings route', () => {
     it('PATCH /spam under a hub writes that hub only, never the platform values (#1051)', async () => {
       const updateSpy = vi.fn().mockResolvedValue({ voiceCaptchaEnabled: true })
       const app = createTestApp({
-        permissions: [],
-        hubPermissions: ['settings:manage-spam'],
+        // hubContext replaces `permissions` with the hub-resolved set
+        permissions: ['settings:manage-spam'],
+        hubId: 'hub-a',
+        services: { settings: { updateSpamSettings: updateSpy } },
+      })
+      const res = await app.request('/spam', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceCaptchaEnabled: true }),
+      })
+      expect(res.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ voiceCaptchaEnabled: true }), 'hub-a')
+    })
+
+    it('PATCH /spam under a hub lets the path hub win over a ?hubId= aimed at another hub (#1044)', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({ voiceCaptchaEnabled: true })
+      const app = createTestApp({
+        // hubContext replaces `permissions` with the hub-resolved set
+        permissions: ['settings:manage-spam'],
         hubId: 'hub-a',
         services: { settings: { updateSpamSettings: updateSpy } },
       })
@@ -211,8 +224,8 @@ describe('settings route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ voiceCaptchaEnabled: true }),
       })
+      // The hub in the path always wins; the query cannot redirect the write.
       expect(res.status).toBe(200)
-      // hub context wins over a ?hubId= query aimed at another hub
       expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ voiceCaptchaEnabled: true }), 'hub-a')
     })
 
@@ -258,11 +271,28 @@ describe('settings route', () => {
         hubId: 'hub-a',
         services: { settings: { updateCallSettings: updateSpy } },
       })
+      const res = await app.request('/call', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queueTimeoutSeconds: 120 }),
+      })
+      expect(res.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ queueTimeoutSeconds: 120 }), 'hub-a')
+    })
+
+    it('PATCH /call under a hub lets the path hub win over a ?hubId= aimed at another hub (#1044)', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({ queueTimeoutSeconds: 120 })
+      const app = createTestApp({
+        permissions: ['settings:manage-calls'],
+        hubId: 'hub-a',
+        services: { settings: { updateCallSettings: updateSpy } },
+      })
       const res = await app.request('/call?hubId=hub-b', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ queueTimeoutSeconds: 120 }),
       })
+      // The hub in the path always wins; the query cannot redirect the write.
       expect(res.status).toBe(200)
       expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ queueTimeoutSeconds: 120 }), 'hub-a')
     })

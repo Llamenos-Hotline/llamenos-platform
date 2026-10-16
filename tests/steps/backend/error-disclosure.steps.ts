@@ -6,14 +6,15 @@
  * generic body. Unhandled server errors return generic 500.
  */
 import { expect } from '@playwright/test'
+import { devSurfaceSecret, devSurfaceHeaders } from '../../dev-surface-secret'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import {
   generateTestKeypair,
 } from '../../api-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { hexToBytes, bytesToHex } from '@shared/encoding'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -44,9 +45,10 @@ Given('a request with auth header {string}', async ({ world }, headerValue: stri
 Given('a request with an expired auth token', async ({ world }) => {
   const { seedHex, pubkey } = generateTestKeypair()
   const expiredTimestamp = Date.now() - 6 * 60 * 1000
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${expiredTimestamp}:GET:/api/auth/me`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, expiredTimestamp, 'GET', '/api/auth/me', nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
-  const token = JSON.stringify({ pubkey, timestamp: expiredTimestamp, token: bytesToHex(sig) })
+  const token = JSON.stringify({ pubkey, timestamp: expiredTimestamp, token: bytesToHex(sig), nonce })
   getEDState(world).authHeader = `Bearer ${token}`
 })
 
@@ -54,9 +56,10 @@ Given('a request with an auth token for an unknown pubkey', async ({ world }) =>
   // Fresh keypair not registered in the system
   const { seedHex, pubkey } = generateTestKeypair()
   const timestamp = Date.now()
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:GET:/api/auth/me`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, timestamp, 'GET', '/api/auth/me', nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
-  const token = JSON.stringify({ pubkey, timestamp, token: bytesToHex(sig) })
+  const token = JSON.stringify({ pubkey, timestamp, token: bytesToHex(sig), nonce })
   getEDState(world).authHeader = `Bearer ${token}`
 })
 
@@ -68,7 +71,12 @@ Given('a request with no Authorization header', async ({ world }) => {
 
 When('the request is sent to a protected endpoint', async ({ request, world }) => {
   const state = getEDState(world)
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  // `/api/auth/*` is the `strict` tier — 5/min per IP. These scenarios assert
+  // an exact 401 body, and on a deployed target (where every caller shares
+  // Caddy's address) the limiter answered 429 with
+  // `{"error":"Rate limit exceeded"}` long before the auth layer was reached
+  // (#1625). The harness header removes the limiter, not the auth check.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...devSurfaceHeaders() }
   if (state.authHeader) {
     headers['Authorization'] = state.authHeader
   }
@@ -90,7 +98,7 @@ When('a request triggers an unhandled server error', async ({ request, world }) 
   const res = await request.get(`${BASE_URL}${path}`, {
     headers: {
       'Content-Type': 'application/json',
-      'X-Test-Secret': process.env.DEV_RESET_SECRET || 'test-reset-secret',
+      'X-Test-Secret': devSurfaceSecret(),
     },
   })
   const rawBody = await res.text()

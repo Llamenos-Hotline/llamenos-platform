@@ -27,7 +27,7 @@
  */
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { callHistoryResponseSchema } from '@protocol/schemas/calls'
-import { apiGet, apiPost, apiPut, apiDelete } from '../api-helpers'
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '../api-helpers'
 import {
   requireAdminSeed,
   pacedWrite,
@@ -40,6 +40,16 @@ import {
   liveMarker,
   present,
   getLiveConfig,
+  pacedStrict,
+  freshIdentity,
+  redeemInvite,
+  retireLiveIdentity,
+  readTelephonyProvider,
+  inboundDriveRefusal,
+  postProviderWebhook,
+  liveCallSid,
+  liveCallerNumber,
+  type LiveTelephonyProvider,
 } from './helpers'
 
 interface Presence {
@@ -233,8 +243,24 @@ interface DemoTelephonyStatus { available: boolean; enabled: boolean }
 interface SimulateResult { callId?: string; volunteersNotified?: number }
 
 /**
+ * `GET /hubs/:id/calls/routing` — the read-only ring oracle (#1490).
+ *
+ * `volunteers` is the identity-bearing tier, served only to a caller holding
+ * `calls:read-presence`; the operator identity this block runs as holds it.
+ * Optional in the schema, never optional here — see `ringDecision`.
+ */
+interface RingDecision {
+  wouldRing: boolean
+  volunteerCount: number
+  usingFallbackGroup: boolean
+  scheduledNow: number
+  clockedIn: number
+  volunteers?: Array<{ pubkey: string }>
+}
+
+/**
  * R1's middle clause — "that volunteer clocks in, receives a call" — and the
- * one behaviour in this file that no read-only route can report.
+ * one behaviour in this file that depends on the deployment's live roster.
  *
  * The decision under test (#1469):
  *
@@ -247,66 +273,100 @@ interface SimulateResult { callId?: string; volunteersNotified?: number }
  *
  * ## How "would this ring?" is asked
  *
- * `resolveRingableVolunteers` has exactly three callers: the ringing path
- * (`startParallelRinging`), the answer route (`POST
- * /hubs/:id/calls/:callId/answer`, so "who may answer" cannot drift from "who
- * was rung"), and the dev router. No GET reports it, so the only way to read
- * the decision off a deployment is to make a call happen and see who it
- * reached. This block uses, in order:
+ * By `GET /hubs/:id/calls/routing`, which calls the same
+ * `resolveRingableVolunteers` the ringing path and the answer route call, and
+ * is **not demo-gated**.
  *
- *  1. `POST /hubs/:id/demo/telephony/simulate/incoming-call` — a REAL
- *     authenticated route (routes/demo-telephony.ts, not the /test-* dev
- *     router), which runs the ban check and `startParallelRinging` exactly as
- *     the Twilio webhook does. It answers 422 `no-volunteers` when the
- *     resolver found nobody, and 200 with a ringing `callId` when it did.
- *  2. `POST /hubs/:id/calls/:callId/answer` as the SUBJECT, on that ringing
- *     call: 403 "Not rung for this call" when the subject is not in
- *     `available`, 200 when they are. The 422/200 pair alone would be
- *     confounded by any other volunteer the hub happens to ring; this makes
- *     the oracle per-pubkey.
+ * These five cases used to decide the outcome with `POST
+ * /demo/telephony/simulate/incoming-call`, which needs `DEMO_MODE=true`. A VM
+ * runs `DEMO_MODE=false`, so on the only configuration that ships all five
+ * SKIPPED — and R1's readiness rested on a table that could not be read on the
+ * deployment it was declaring ready. A suite that skips on the configuration
+ * that counts is not coverage. The oracle now runs everywhere, and nothing in
+ * this block skips for anything but a missing credential.
+ *
+ * ## The oracle is per-pubkey, not a count
+ *
+ * `volunteers` names exactly who would ring. A count can be right while the
+ * wrong person is in the set — four of these five cases are about one
+ * volunteer's membership, not about how many — so the subject's pubkey is
+ * looked for by name, and a response that omits `volunteers` is a FAILURE
+ * (`present`), never a silently weaker assertion.
+ *
+ * ## Two oracles where the deployment offers two
+ *
+ * Where the demo oracle is also available (a staging or demo server) it is run
+ * as well and the two are asserted to AGREE: `simulate/incoming-call` actually
+ * rings, and `POST /calls/:callId/answer` as the subject answers 403 "Not rung
+ * for this call" or 200. Two independent oracles agreeing is stronger than
+ * either alone, and it is what proves the read-only route reports the same
+ * decision the ringing path takes rather than a second copy of the rule. On a
+ * `DEMO_MODE=false` deployment that half is simply absent and the routing
+ * oracle carries the block — see `demoOracleOff`.
  *
  * ## The subject is the operator's own identity
  *
- * Not a freshly invited volunteer: `IdentityService.redeemInvite` never calls
- * `setHubRole` (TODO #1037), so a redeemed volunteer has no hub role,
- * `hasHubAccess` rejects them, and every case below would read "does not
- * ring" for the wrong reason. volunteer-onboarding.spec.ts owns that defect.
+ * Deliberately, and it stays that way. A volunteer who joined by redeeming an
+ * invite has a hub-role situation of its own (#1037) and `hasHubAccess` can
+ * remove them from the ring set for a reason that has nothing to do with
+ * shifts or clock-ins — every case below would then read "does not ring" for
+ * the wrong reason, and four of the five would pass while measuring nothing.
+ * The operator holds a hub role unconditionally (`POST /hubs` makes its
+ * creator hub-admin), which is the property these cases need and the only one
+ * they need from the subject.
  *
- * ## Cost and safety
+ * ## Why a negative case cannot pass on absent data
  *
- * `simulate/incoming-call` requires DEMO_MODE=true + DEMO_MODE_CONFIRM and a
- * non-production ENVIRONMENT (telephony/mock.ts `mockTelephonyRefusalReason`),
- * which `deployment-readiness.spec.ts` asserts a hotline serving real callers
- * does NOT have. So this block measures the ring decision on a staging or
- * demo deployment and reports, on a production one, that it could not —
- * naming the server-side setting, which no test can create for itself. That
- * gap is the reason a read-only "who would this hub ring" route is worth
- * having; until there is one, the ring decision on a production deployment is
- * only ever covered by the real-call test at the end of this file.
+ * Every "does not ring" case asserts the half of the precondition it KEEPS,
+ * read back off the server, before it asserts the verdict:
  *
- * Writes, all reversed in afterAll: the mock provider is selected for the hub
- * (refused with 409 if the hub already has a real provider — that hub is left
- * alone, never switched), one all-day shift is created and deleted, the
- * subject is clocked in and out, the fallback group is saved and restored, and
- * each simulated call is hung up. The call records the simulated calls leave
- * behind are not deleted: they are the delta the history tests below want.
+ *  - scheduled-but-not-clocked-in asserts `/shifts/my-status` says the subject
+ *    is on shift AND `routing.scheduledNow >= 1`;
+ *  - clocked-in-but-not-scheduled asserts `/shifts/active` lists the subject
+ *    AND `routing.clockedIn >= 1`;
+ *  - neither-nor has no half to keep, so it asserts a TRANSITION instead: the
+ *    subject is driven into the ringing state, confirmed present in
+ *    `volunteers`, then taken out of both and confirmed gone. An empty roster
+ *    fails its first assertion rather than passing its second.
+ *
+ * So an empty roster, a wrong hub, or an oracle that answered without the
+ * `volunteers` tier all FAIL. "Nobody would ring" is only ever reported by a
+ * response that also demonstrated it can report somebody.
+ *
+ * Writes, all reversed in afterAll: one all-day shift created and deleted, the
+ * subject clocked in and out, the fallback group saved and restored, and —
+ * only where the demo oracle runs — the mock provider selected for the hub
+ * (refused with 409 if the hub already has a real provider; that hub is left
+ * alone, never switched) and each simulated call hung up.
  */
 test.describe('R1 — ringing requires both a shift and a clock-in', () => {
   test.skip(!adminSeed, 'STAGING_ADMIN_SEED is required: this block writes shifts and clock-ins')
   // NOT serial: each case drives the deployment into the state it is about and
   // is independently falsifiable. Serial mode would abort the remaining cases
-  // the moment one failed — and the one that fails today is the second of five,
-  // so the table would only ever report its first two rows.
+  // the moment one failed, so the table would only ever report its first rows.
   test.describe.configure({ timeout: 180_000 })
 
   const marker = liveMarker('ring')
   let seed: string
   let hubId: string
   let subject: string
-  /** Null until the oracle is confirmed usable; the reason it is not, when so. */
-  let unavailable: string | null = 'the ring oracle was never resolved'
+  /**
+   * Why the SECOND oracle is not running, or null when it is. Never a reason
+   * to skip: the routing oracle has no gate and always decides these cases.
+   */
+  let demoOracleOff: string | null = 'not resolved yet'
   let mockWasEnabled = false
+  /**
+   * The hub's fallback group as it was found, and whether it was ever read.
+   *
+   * The flag is load-bearing, not defensive noise: `afterAll` restores this
+   * list, and if `beforeAll` failed before the read it would restore the
+   * EMPTY default and wipe the operator's fallback group — turning a setup
+   * failure into a hotline that rings nobody. Nothing is written back unless
+   * something was read.
+   */
   let originalFallback: string[] = []
+  let fallbackRead = false
   let shiftId: string | null = null
   /** Whether THIS block has the subject clocked in — avoids a redundant write. */
   let clockedIn = false
@@ -316,49 +376,26 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
     hubId = await resolveHubId(request)
     subject = adminPubkeyFromSeed(seed)
 
-    const status = await apiGet<DemoTelephonyStatus>(request, `/hubs/${hubId}/demo/telephony/status`, seed)
-    expect(status.status, 'GET /api/hubs/:id/demo/telephony/status').toBe(200)
-    if (!status.data.available) {
-      unavailable =
-        'this deployment cannot be asked whether a call would ring: '
-        + '/demo/telephony/simulate/incoming-call needs DEMO_MODE=true, '
-        + 'DEMO_MODE_CONFIRM=DESTROY_ALL_DATA and ENVIRONMENT in '
-        + '{development,staging,demo} (telephony/mock.ts). No read-only route reports '
-        + 'resolveRingableVolunteers, so ring = scheduled ∩ clocked_in (#1469) is '
-        + 'UNMEASURED on this deployment — run the acceptance suite against a staging '
-        + 'deployment, or add a route that reports the ring set'
-      return
-    }
-    mockWasEnabled = status.data.enabled
-
-    if (!mockWasEnabled) {
-      const sel = await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () => apiPut(
-        request, `/hubs/${hubId}/demo/telephony/mock`,
-        { enabled: true, phoneNumber: MOCK_HOTLINE_NUMBER }, seed,
-      ))
-      if (sel.status === 409) {
-        unavailable =
-          'this hub already has a real telephony provider. Selecting the mock would take '
-          + 'the hotline off the air, so it is not done — the ring decision is unmeasured here'
-        return
-      }
-      expect(sel.status, 'PUT /api/hubs/:id/demo/telephony/mock').toBe(200)
-    }
-
     const fb = await apiGet<{ userPubkeys?: string[] }>(request, `/hubs/${hubId}/shifts/fallback`, seed)
     expect(fb.status, 'GET /api/hubs/:id/shifts/fallback').toBe(200)
     originalFallback = fb.data.userPubkeys ?? []
+    fallbackRead = true
 
     // The subject must be reachable ONLY through the path each case is about.
     // Left in the fallback group, "scheduled but not clocked in" would ring via
     // the fall-through and the case would be measuring the wrong thing. Other
     // members stay: the per-pubkey oracle is immune to them.
     await setFallback(request, originalFallback.filter(pk => pk !== subject))
-    unavailable = null
+
+    demoOracleOff = await enableDemoOracle(request)
+    if (demoOracleOff !== null) {
+      console.log(`[live] second (demo) ring oracle not running: ${demoOracleOff}`)
+    }
   })
 
   test.afterAll(async ({ request }) => {
-    if (!seed) return
+    // No hub means beforeAll never got far enough to write anything.
+    if (!seed || !hubId) return
     if (clockedIn) {
       await pacedWrite('POST /api/hubs/:id/shifts/clock-out', () =>
         apiPost(request, `/hubs/${hubId}/shifts/clock-out`, {}, seed))
@@ -369,14 +406,42 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
         apiDelete(request, `/hubs/${hubId}/shifts/${shiftId}`, seed))
       shiftId = null
     }
-    if (unavailable === null) {
-      await setFallback(request, originalFallback)
-      if (!mockWasEnabled) {
-        await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () =>
-          apiPut(request, `/hubs/${hubId}/demo/telephony/mock`, { enabled: false }, seed))
-      }
+    if (fallbackRead) await setFallback(request, originalFallback)
+    if (demoOracleOff === null && !mockWasEnabled) {
+      await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () =>
+        apiPut(request, `/hubs/${hubId}/demo/telephony/mock`, { enabled: false }, seed))
     }
   })
+
+  /**
+   * Try to bring up the second oracle. Returns the reason it cannot run, or
+   * null when it can. Never throws and never skips anything: a deployment
+   * without demo mode is the normal case, and the routing oracle covers it.
+   */
+  async function enableDemoOracle(request: APIRequestContext): Promise<string | null> {
+    const status = await apiGet<DemoTelephonyStatus>(request, `/hubs/${hubId}/demo/telephony/status`, seed)
+    if (status.status !== 200) {
+      return `GET /demo/telephony/status answered ${status.status}`
+    }
+    if (!status.data.available) {
+      return 'DEMO_MODE is not on (telephony/mock.ts) — the expected state for a deployment'
+    }
+    mockWasEnabled = status.data.enabled
+    if (mockWasEnabled) return null
+
+    const sel = await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () => apiPut(
+      request, `/hubs/${hubId}/demo/telephony/mock`,
+      { enabled: true, phoneNumber: MOCK_HOTLINE_NUMBER }, seed,
+    ))
+    if (sel.status === 409) {
+      return 'this hub already has a real telephony provider; selecting the mock would take '
+        + 'the hotline off the air, so it is not done'
+    }
+    if (sel.status !== 200) {
+      return `PUT /demo/telephony/mock answered ${sel.status}`
+    }
+    return null
+  }
 
   async function setFallback(request: APIRequestContext, userPubkeys: string[]): Promise<void> {
     const { status } = await pacedWrite('PUT /api/hubs/:id/shifts/fallback', () =>
@@ -476,14 +541,70 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
   }
 
   /**
-   * Would a call arriving now ring the subject? Decided by the server's own
-   * resolver — see this block's header for the two routes and why both are
-   * needed. Every simulated call is ended, answered or not.
+   * Would a call arriving now ring the SUBJECT, and on what basis?
+   *
+   * `GET /calls/routing` is read-only — it resolves, it does not ring — so it
+   * can be asked on any deployment and in any state, including states a test
+   * created a second earlier. It is asked FIRST, before the demo oracle, so
+   * the verdict is never read while a simulated call of this block's own is
+   * holding the subject busy.
+   *
+   * Self-consistency is checked on every call rather than once: a route that
+   * returns a `wouldRing` disagreeing with its own list is not an oracle, and
+   * a response with no `volunteers` is a permission tier this block cannot
+   * decide anything with — `present` fails loudly instead of degrading to a
+   * count that four of these five cases cannot be decided by.
    */
-  async function wouldRingSubject(request: APIRequestContext): Promise<boolean> {
+  async function ringDecision(request: APIRequestContext): Promise<RingDecision & { rings: boolean }> {
+    const res = await apiGet<RingDecision>(request, `/hubs/${hubId}/calls/routing`, seed)
+    expect(
+      res.status,
+      'GET /api/hubs/:id/calls/routing — the read-only ring oracle (#1490). Without it the '
+      + 'ring decision can only be read on a DEMO_MODE=true server, which is not what ships',
+    ).toBe(200)
+
+    const volunteers = present(
+      res.data.volunteers,
+      'the routing oracle\'s `volunteers` list — it is served only to a caller holding '
+      + '`calls:read-presence`, and these cases are about WHICH volunteer rings, not how many',
+    )
+    expect(res.data.volunteerCount, 'routing: volunteerCount disagrees with volunteers').toBe(volunteers.length)
+    expect(res.data.wouldRing, 'routing: wouldRing disagrees with volunteerCount').toBe(volunteers.length > 0)
+
+    const rings = volunteers.some(v => v.pubkey === subject)
+    if (demoOracleOff === null) {
+      const byRinging = await demoWouldRingSubject(request)
+      expect(
+        byRinging,
+        'the two oracles disagree about whether the subject would ring: GET /calls/routing says '
+        + `${rings}, actually ringing the hub says ${byRinging}. They are supposed to be the same `
+        + '`resolveRingableVolunteers`, so the read-only route has grown its own copy of the rule '
+        + '— or the ringing path has',
+      ).toBe(rings)
+    }
+    return { ...res.data, volunteers, rings }
+  }
+
+  /**
+   * The SECOND oracle, where the deployment has one: actually ring the hub.
+   *
+   *  1. `POST /hubs/:id/demo/telephony/simulate/incoming-call` — a real
+   *     authenticated route (routes/demo-telephony.ts, not the /test-* dev
+   *     router), which runs the ban check and `startParallelRinging` exactly
+   *     as the Twilio webhook does. 422 `no-volunteers` when the resolver
+   *     found nobody; 200 with a ringing `callId` when it did.
+   *  2. `POST /hubs/:id/calls/:callId/answer` as the SUBJECT: 403 "Not rung
+   *     for this call" when the subject is not in `available`, 200 when they
+   *     are. The 422/200 pair alone would be confounded by any other
+   *     volunteer the hub happens to ring; this makes it per-pubkey, like the
+   *     routing oracle it is being compared against.
+   *
+   * Every simulated call is ended, answered or not — an answered call left
+   * open would make the subject `busy` and change the next case's answer.
+   */
+  async function demoWouldRingSubject(request: APIRequestContext): Promise<boolean> {
     const sim = await pacedWrite('POST /api/hubs/:id/demo/telephony/simulate/incoming-call', () =>
       apiPost<SimulateResult>(request, `/hubs/${hubId}/demo/telephony/simulate/incoming-call`, {}, seed))
-    // 422 `no-volunteers`: the resolver found nobody at all, so not the subject.
     if (sim.status === 422) return false
     expect(
       sim.status,
@@ -495,7 +616,6 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
     try {
       const answer = await pacedWrite('POST /api/hubs/:id/calls/:callId/answer', () =>
         apiPost(request, `/hubs/${hubId}/calls/${callId}/answer`, {}, seed))
-      // 403 is the resolver's "Not rung for this call" — somebody else rang.
       if (answer.status === 403) return false
       expect(
         answer.status,
@@ -510,48 +630,87 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
   }
 
   test('scheduled and clocked in: the call rings', async ({ request }) => {
-    test.skip(unavailable !== null, unavailable ?? '')
     await setState(request, { scheduled: true, clockedIn: true })
+    const decision = await ringDecision(request)
 
     expect(
-      await wouldRingSubject(request),
+      decision.rings,
       'a volunteer who is both on a shift covering now AND clocked in was not rung. This is '
       + 'the one combination R1 promises works: "that volunteer clocks in, receives a call"',
     ).toBe(true)
+    // Through the intersection, not the fall-through. The subject was removed
+    // from the fallback group in beforeAll precisely so this can be asserted:
+    // a hub whose schedule is ignored but whose fallback group carries every
+    // call would otherwise satisfy the line above.
+    expect(
+      decision.usingFallbackGroup,
+      'the subject rang, but the hub reached them through its FALLBACK group rather than the '
+      + 'scheduled ∩ clocked-in intersection — so this case proves nothing about the schedule',
+    ).toBe(false)
+    expect(decision.scheduledNow, 'the subject is on shift but routing counts nobody scheduled now').toBeGreaterThanOrEqual(1)
+    expect(decision.clockedIn, 'the subject is clocked in but routing counts nobody clocked in').toBeGreaterThanOrEqual(1)
   })
 
   test('scheduled but not clocked in: the call does not ring', async ({ request }) => {
-    test.skip(unavailable !== null, unavailable ?? '')
     await setState(request, { scheduled: true, clockedIn: false })
+    const decision = await ringDecision(request)
+
+    // The half of the precondition this case KEEPS, read off the server. An
+    // empty roster fails HERE rather than passing the assertion below.
+    expect(
+      decision.scheduledNow,
+      'the subject was put on an all-day shift and `/shifts/my-status` agreed it covers now, '
+      + 'but routing counts nobody scheduled — there is no scheduled volunteer for this case '
+      + 'to be about, so "does not ring" would hold for the wrong reason',
+    ).toBeGreaterThanOrEqual(1)
 
     expect(
-      await wouldRingSubject(request),
+      decision.rings,
       'a volunteer who is rostered but has NOT clocked in was rung. Clocking in is the '
       + 'volunteer\'s own consent to take crisis calls and it must be required: '
-      + 'resolveRingableVolunteers reads only ShiftsService.getCurrentVolunteers, which '
-      + 'evaluates the recurring schedule and never touches the active_shifts table that '
-      + 'clock-in writes (#1469)',
+      + 'resolveRingableVolunteers must intersect ShiftsService.getCurrentVolunteers, which '
+      + 'evaluates the recurring schedule only, with the active_shifts rows clock-in writes '
+      + '(#1469)',
     ).toBe(false)
   })
 
   test('clocked in but not scheduled: the call does not ring', async ({ request }) => {
-    test.skip(unavailable !== null, unavailable ?? '')
     await setState(request, { scheduled: false, clockedIn: true })
+    const decision = await ringDecision(request)
 
     expect(
-      await wouldRingSubject(request),
+      decision.clockedIn,
+      'the subject clocked in and `/shifts/active` listed them, but routing counts nobody '
+      + 'clocked into this hub — there is no clocked-in volunteer for this case to be about',
+    ).toBeGreaterThanOrEqual(1)
+
+    expect(
+      decision.rings,
       'a volunteer who clocked in but is on no shift covering now was rung. Being rostered '
       + 'is the admin\'s consent and it must be required too — otherwise anyone who may '
       + 'clock in can put themselves in the ring set at any hour (#1469)',
     ).toBe(false)
   })
 
+  /**
+   * The fourth row has no half of the precondition to keep, so it asserts a
+   * TRANSITION instead of a state: the same subject, the same oracle, seconds
+   * apart, leaving the ring set because this test took both consents away.
+   * "Nobody would ring" is then not something the oracle could have said about
+   * an empty deployment — it had just said the opposite about this pubkey.
+   */
   test('neither scheduled nor clocked in: the call does not ring', async ({ request }) => {
-    test.skip(unavailable !== null, unavailable ?? '')
-    await setState(request, { scheduled: false, clockedIn: false })
-
+    await setState(request, { scheduled: true, clockedIn: true })
     expect(
-      await wouldRingSubject(request),
+      (await ringDecision(request)).rings,
+      'the subject could not be driven into the ringing state, so taking them out of it '
+      + 'proves nothing — this case cannot distinguish "removed from the ring set" from '
+      + '"never in it"',
+    ).toBe(true)
+
+    await setState(request, { scheduled: false, clockedIn: false })
+    expect(
+      (await ringDecision(request)).rings,
       'a volunteer who is neither rostered nor clocked in was rung',
     ).toBe(false)
   })
@@ -563,26 +722,504 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
    * silently drops the call.
    */
   test('an empty intersection falls through to the hub\'s fallback group', async ({ request }) => {
-    test.skip(unavailable !== null, unavailable ?? '')
     // Subject reachable ONLY via the fallback group: no shift, not clocked in.
     await setState(request, { scheduled: false, clockedIn: false })
     await setFallback(request, [...originalFallback.filter(pk => pk !== subject), subject])
 
-    const rang = await wouldRingSubject(request)
-    // Restored before the assertion, so a failure here cannot leave the
-    // operator's fallback group holding this suite's subject.
-    await setFallback(request, originalFallback.filter(pk => pk !== subject))
+    let decision: RingDecision & { rings: boolean }
+    try {
+      decision = await ringDecision(request)
+    } finally {
+      // Restored before anything can fail the test, so a failure here cannot
+      // leave the operator's fallback group holding this suite's subject.
+      await setFallback(request, originalFallback.filter(pk => pk !== subject))
+    }
 
     expect(
-      rang,
+      decision.rings,
       'the subject is in the hub\'s fallback group, is on no shift and is not clocked in, '
       + 'and the call still did not reach them. Either the fall-through is broken, or '
       + 'somebody else on this hub is both scheduled now and clocked in — in which case '
       + 'the resolver never consults the fallback group and this case cannot be measured '
       + 'while that volunteer is on shift',
     ).toBe(true)
+    // Which roster the ring came from, not merely that it happened. Without
+    // this the case would also pass if the subject rang through a schedule
+    // this block did not create.
+    expect(
+      decision.usingFallbackGroup,
+      'the subject rang, but routing says it was NOT through the fallback group — so this '
+      + 'case did not exercise the fall-through it exists to cover',
+    ).toBe(true)
   })
 })
+
+// ───────────────────────────────────────────────────────────────────
+// Answering
+//
+// This block is declared BEFORE the history block on purpose, and the
+// config runs the suite serially in one worker. R1's last clause is "an
+// admin sees the call in history", and the two tests that check the paging
+// and the per-ROW payload need the hub to HAVE call records — one of them
+// used to fail loudly on that precondition and the other used to skip. Two
+// completed calls land here, so by the time those run there is something
+// for them to read. Moving this below them silently takes both back to
+// reporting a missing precondition.
+// ───────────────────────────────────────────────────────────────────
+
+/**
+ * R1's middle clause, which nothing could reach before: a volunteer who is
+ * scheduled AND clocked in is rung by an inbound call, answers it, and the
+ * call becomes theirs.
+ *
+ * The inbound call is driven through the deployment's own webhook chain,
+ * signed with the credential its own PBX signs with — see
+ * `postProviderWebhook` in ./helpers for exactly which parts of that are the
+ * real thing (all of the worker's call handling) and which are not (SIP and
+ * RTP; no telephone is involved).
+ *
+ * ## Why this is safe to run against a live hotline
+ *
+ * The subject is the operator's own identity, as the ring block above
+ * explains — a volunteer who joined by invite is the wrong subject for a ring
+ * case. Three deliberate choices keep a real caller out of the way:
+ *
+ *  - the subject's `callPreference` is set to `browser` for the duration, so
+ *    `startParallelRinging` takes the relay/VoIP path and dials NO phone. On a
+ *    deployment with a working trunk, leaving it `phone` would ring the
+ *    operator's actual handset. It is restored afterwards.
+ *  - every driven call uses its own caller number, so it neither consumes nor
+ *    is refused by the hub's per-caller spam window (3/minute by default), and
+ *    a real caller's window is untouched.
+ *  - each call is ended before the next is driven, so the subject is never
+ *    left `busy` and a genuine caller arriving mid-run still rings them.
+ *
+ * Nothing is deleted. Two call records are left behind, identifiable by a
+ * `r1-live-` call id, which is what "write something identifiable" means here
+ * — and they are the records the history block then reads.
+ */
+test.describe('R1 — a rung volunteer answers an inbound call', () => {
+  test.skip(!adminSeed, 'STAGING_ADMIN_SEED is required: this block writes shifts and clock-ins')
+  test.describe.configure({ mode: 'serial', timeout: 240_000 })
+
+  let seed: string
+  let hubId: string
+  let subject: string
+  let provider: LiveTelephonyProvider | null = null
+  /** Why no call can be driven here, or null. An absent credential only. */
+  let refusal: string | null = null
+  /** The number a caller has to dial to reach this hub. */
+  let hotlineNumber = ''
+  let originalCallPreference: string | undefined
+  let shiftId: string | null = null
+  let clockedIn = false
+  /** The second identity, for first-pickup-wins. */
+  let second: { seedHex: string; pubkey: string } | null = null
+  /** Call ids this block drove and has not yet ended. */
+  const unfinished = new Set<string>()
+
+  /** The provider, narrowed. Only ever called after `refusal` is null. */
+  const signer = () => present(provider, 'the deployment\'s telephony provider')
+  /** The deployment under check, narrowed. */
+  const target = (baseURL: string | undefined) =>
+    present(baseURL, 'a baseURL — playwright.live.config.ts must set one')
+
+  test.beforeAll(async ({ request }) => {
+    seed = requireAdminSeed()
+    hubId = await resolveHubId(request)
+    subject = adminPubkeyFromSeed(seed)
+
+    provider = await readTelephonyProvider(request, seed, hubId)
+    refusal = inboundDriveRefusal(provider)
+    if (refusal) return
+
+    // The dialled number is how `/incoming` finds the hub (`getHubByPhone`, an
+    // exact match on an ACTIVE hub's `phone_number`). A hub without one cannot
+    // receive a call at all, which is a readiness failure rather than a
+    // credential this run lacks — so it is reported as one.
+    // Authenticated: the public `/api/config` no longer publishes hubs (#1710).
+    const { data: hubData } = await apiGet<{ hubs?: Array<{ id: string; phoneNumber?: string }> }>(
+      request, '/hubs', seed,
+    )
+    hotlineNumber = (hubData.hubs ?? []).find(h => h.id === hubId)?.phoneNumber ?? ''
+    expect(
+      hotlineNumber,
+      `hub ${hubId} has no phone number, so no inbound call can be routed to it: `
+      + '`/api/telephony/incoming` matches the dialled number against an active hub\'s '
+      + '`phoneNumber` exactly, and an unmatched number rings nobody and reaches no hub. '
+      + 'Set the hub\'s number on the hub settings screen',
+    ).not.toBe('')
+
+    // Captcha moves the ring to `/captcha`, which needs digits the server
+    // generates and never discloses — a deployment choice this suite cannot
+    // drive through, and the one legitimate non-credential refusal here.
+    const spam = await apiGet<{ voiceCaptchaEnabled?: boolean }>(
+      request, `/hubs/${hubId}/settings/spam`, seed)
+    expect(spam.status, 'GET /api/hubs/:id/settings/spam').toBe(200)
+    if (spam.data.voiceCaptchaEnabled) {
+      refusal = 'this hub has the voice CAPTCHA on, so ringing happens after a digit '
+        + 'challenge whose expected digits the server generates and never sends — no suite '
+        + 'can answer it. Turn the CAPTCHA off on the spam settings screen to check the '
+        + 'answer path, and see apps/worker/routes/telephony.ts /captcha'
+      return
+    }
+
+    // `browser` so no real handset is dialled; read back, because a preference
+    // that silently failed to change would mean the next call rings a phone.
+    const me = await apiGet<{ callPreference?: string }>(request, `/users/${subject}`, seed)
+    expect(me.status, 'GET /api/users/:pubkey').toBe(200)
+    originalCallPreference = me.data.callPreference
+    await setCallPreference(request, 'browser')
+
+    // The second volunteer exists BEFORE the shift, so both can be named on it.
+    // Both have to be genuinely RUNG for the first-pickup-wins test to be about
+    // first-pickup-wins: if only the first is rung, the answer route refuses
+    // the second at its `resolveRingableVolunteers` check (403 "Not rung for
+    // this call") and the 409 guard is never reached — so removing the guard
+    // would still leave the test passing on a refusal that means something
+    // else entirely.
+    second = await inviteSecondVolunteer(request)
+
+    await schedule(request, [subject, second.pubkey])
+    await setClockedIn(request, seed, true)
+    await setClockedIn(request, second.seedHex, true)
+  })
+
+  test.afterAll(async ({ request, baseURL }) => {
+    if (!seed || !hubId) return
+    // Never leave a driven call holding the subject busy: `getBusyPubkeys`
+    // would then remove them from the ring set for every real caller.
+    for (const callSid of unfinished) {
+      if (provider && baseURL) {
+        await postProviderWebhook(request, provider, baseURL,
+          `/api/telephony/call-status?parentCallSid=${callSid}`,
+          { callSid, status: 'completed' })
+      }
+    }
+    unfinished.clear()
+    // Captured into a const: `second` is a mutable binding, so narrowing it
+    // with `if (second)` does not survive into the deferred callback below.
+    const racer = second
+    if (racer) {
+      await pacedWrite('POST /api/hubs/:id/shifts/clock-out (second volunteer)', () =>
+        apiPost(request, `/hubs/${hubId}/shifts/clock-out`, {}, racer.seedHex))
+    }
+    if (clockedIn) {
+      await pacedWrite('POST /api/hubs/:id/shifts/clock-out', () =>
+        apiPost(request, `/hubs/${hubId}/shifts/clock-out`, {}, seed))
+      clockedIn = false
+    }
+    if (shiftId) {
+      await pacedWrite('DELETE /api/hubs/:id/shifts/:id', () =>
+        apiDelete(request, `/hubs/${hubId}/shifts/${shiftId}`, seed))
+      shiftId = null
+    }
+    if (originalCallPreference) await setCallPreference(request, originalCallPreference)
+    if (second) await retireLiveIdentity(request, seed, second.pubkey)
+  })
+
+  /**
+   * Set the subject's call preference, through the ADMIN user route rather
+   * than `PATCH /auth/me/profile`.
+   *
+   * Both can do it, but every `/api/auth/*` path — reads included — is in the
+   * `strict` rate-limit tier: 5 requests a minute shared with `/invites`,
+   * keyed by client IP. Reading the preference, writing it, reading it back
+   * and restoring it is four of those five before this block has created its
+   * invite, and the fifth request comes back 429. `/api/users/:pubkey` is in
+   * the ordinary `write` tier (30/min), which this costs two of.
+   */
+  async function setCallPreference(request: APIRequestContext, callPreference: string): Promise<void> {
+    const { status } = await pacedWrite('PATCH /api/users/:pubkey', () =>
+      apiPatch(request, `/users/${subject}`, { callPreference }, seed))
+    expect(status, 'PATCH /api/users/:pubkey').toBe(200)
+    const me = await apiGet<{ callPreference?: string }>(request, `/users/${subject}`, seed)
+    expect(
+      me.data.callPreference,
+      `callPreference did not become "${callPreference}" — with "phone" and a phone number on `
+      + 'file, driving a call would dial a real handset',
+    ).toBe(callPreference)
+  }
+
+  /** The subject on an all-day, every-day shift. `startTime === endTime` is
+   *  how `isShiftActive` expresses 24 hours; `00:00`–`23:59` is half-open and
+   *  leaves the volunteer off-shift for the last minute of every day. */
+  async function schedule(request: APIRequestContext, userPubkeys: string[]): Promise<void> {
+    const id = crypto.randomUUID()
+    const created = await pacedWrite('POST /api/hubs/:id/shifts', () =>
+      apiPost(request, `/hubs/${hubId}/shifts`, {
+        id,
+        encryptedName: liveMarker('answer'),
+        startTime: '00:00',
+        endTime: '00:00',
+        days: [0, 1, 2, 3, 4, 5, 6],
+        ringGroupId: null,
+        userPubkeys,
+      }, seed))
+    expect(created.status, 'POST /api/hubs/:id/shifts').toBe(201)
+    shiftId = id
+  }
+
+  /** Clock one identity in or out, as THAT identity — clocking in is the
+   *  volunteer's own consent and `role-volunteer` carries
+   *  `shifts:set-availability` to give it. */
+  async function setClockedIn(
+    request: APIRequestContext,
+    asSeed: string,
+    want: boolean,
+  ): Promise<void> {
+    const route = want ? 'clock-in' : 'clock-out'
+    const { status } = await pacedWrite(`POST /api/hubs/:id/shifts/${route}`, () =>
+      apiPost(request, `/hubs/${hubId}/shifts/${route}`, {}, asSeed))
+    // 404 on clock-out is the end state already holding.
+    if (!(status === 404 && !want)) {
+      expect(status, `POST /api/hubs/:id/shifts/${route}`).toBe(200)
+    }
+    if (asSeed === seed) clockedIn = want
+  }
+
+  /**
+   * Drive one inbound call to the point where it is ringing, and return its id.
+   *
+   * Both webhooks are asserted, not fired and forgotten. `/incoming` must come
+   * back naming THIS hub — that is the dialled-number lookup working, and a
+   * call that resolved to no hub rings nobody over the relay however healthy
+   * the rest looks. The record is then waited for rather than slept on:
+   * `startParallelRinging` runs as a background task, so the webhook returns
+   * before the row exists.
+   */
+  async function driveRingingCall(
+    request: APIRequestContext,
+    baseURL: string,
+  ): Promise<string> {
+    const callSid = liveCallSid()
+    const callerNumber = liveCallerNumber()
+
+    const incoming = await postProviderWebhook(
+      request, signer(), baseURL, '/api/telephony/incoming',
+      { callSid, callerNumber, calledNumber: hotlineNumber })
+    expect(
+      incoming.status,
+      'POST /api/telephony/incoming was refused. 403 means the signature this suite computed '
+      + 'from the provider credential did not match — for the bridge adapter the signed URL is '
+      + 'the RAW url the app process sees, which behind a TLS-terminating proxy is http://, and '
+      + 'for Twilio it is WEBHOOK_BASE_URL\'s origin, which this suite cannot read. Both '
+      + 'renderings were tried (helpers.ts signableUrls)',
+    ).toBe(200)
+    expect(
+      incoming.body,
+      `the IVR answered the call but its response does not carry hub ${hubId}, so the dialled `
+      + `number ${hotlineNumber} did not resolve to this hub — the call would reach no hub's `
+      + 'members and ring nobody (ringing.ts: "Call resolved to no hub")',
+    ).toContain(hubId)
+
+    const language = await postProviderWebhook(
+      request, signer(), baseURL, `/api/telephony/language-selected?hub=${hubId}`,
+      { callSid, callerNumber, digits: '2' })
+    expect(language.status, 'POST /api/telephony/language-selected').toBe(200)
+    unfinished.add(callSid)
+
+    // `startParallelRinging` creates the record before it looks anybody up, so
+    // this appearing is the call being registered, not the ring succeeding.
+    await expect.poll(
+      async () => {
+        const { data } = await apiGet<{ calls?: CallRecord[] }>(
+          request, `/hubs/${hubId}/calls/active`, seed)
+        return (data.calls ?? []).some(call => rowId(call) === callSid)
+      },
+      {
+        timeout: 30_000,
+        message: `the inbound webhooks were accepted but no call record appeared for ${callSid}. `
+          + '`startParallelRinging` registers the call before resolving anybody, so its absence '
+          + 'means the chain stopped earlier: the caller was banned, the hub\'s per-caller rate '
+          + 'limit refused the call, or the hub resolved to none',
+      },
+    ).toBe(true)
+
+    return callSid
+  }
+
+  /** This call as the hub currently holds it, active or finished. */
+  async function activeCall(request: APIRequestContext, callSid: string): Promise<CallRecord | undefined> {
+    const { data } = await apiGet<{ calls?: CallRecord[] }>(
+      request, `/hubs/${hubId}/calls/active`, seed)
+    return (data.calls ?? []).find(call => rowId(call) === callSid)
+  }
+
+  /** End a driven call the way the PBX reports a caller hanging up. */
+  async function endCall(request: APIRequestContext, baseURL: string, callSid: string): Promise<void> {
+    const res = await postProviderWebhook(
+      request, signer(), baseURL, `/api/telephony/call-status?parentCallSid=${callSid}`,
+      { callSid, status: 'completed' })
+    expect(res.status, 'POST /api/telephony/call-status').toBe(200)
+    unfinished.delete(callSid)
+  }
+
+  test('a volunteer who is scheduled and clocked in is rung, answers, and the call becomes theirs', async ({ request, baseURL }) => {
+    test.skip(!!refusal, refusal ?? '')
+
+    // The ring set first, read off the server's own resolver. Without this the
+    // answer below could succeed for a subject the deployment would never have
+    // rung, and the test would be about the route rather than about routing.
+    const routing = await apiGet<RingDecision>(request, `/hubs/${hubId}/calls/routing`, seed)
+    expect(routing.status, 'GET /api/hubs/:id/calls/routing').toBe(200)
+    expect(
+      present(routing.data.volunteers, 'the routing oracle\'s `volunteers` list')
+        .map(v => v.pubkey),
+      'the subject was put on an all-day shift and clocked in, but the server would not ring '
+      + 'them — so the answer below would prove nothing about a RUNG volunteer',
+    ).toContain(subject)
+
+    const callSid = await driveRingingCall(request, target(baseURL))
+
+    const ringing = present(await activeCall(request, callSid), 'the call this test drove')
+    expect(ringing.status, 'a newly rung call').toBe('ringing')
+    expect(ringing.answeredBy, 'a call nobody has answered yet').toBeFalsy()
+
+    // The volunteer's "Answer" button, on a call that genuinely exists and is
+    // genuinely ringing. 200 here is R1's middle clause, which until now had
+    // only ever been checked as a 404 for a call that did not exist.
+    const answered = await pacedWrite('POST /api/hubs/:id/calls/:callId/answer', () =>
+      apiPost<{ call?: CallRecord }>(request, `/hubs/${hubId}/calls/${callSid}/answer`, {}, seed))
+    expect(
+      answered.status,
+      'POST /api/hubs/:id/calls/:callId/answer for a call this volunteer was rung for',
+    ).toBe(200)
+    const call = present(answered.data.call, 'the answered call in the response')
+    expect(
+      call.answeredBy,
+      'the answer succeeded but the call did not become this volunteer\'s',
+    ).toBe(subject)
+    expect(call.status, 'an answered call').toBe('in-progress')
+
+    // ...and the server agrees when asked again, rather than only in the reply
+    // to the write.
+    const held = present(await activeCall(request, callSid), 'the call after it was answered')
+    expect(
+      held.answeredBy,
+      'the answer route reported the call as answered, but the hub\'s active calls still do '
+      + 'not show it belonging to the volunteer who answered',
+    ).toBe(subject)
+
+    await endCall(request, target(baseURL), callSid)
+  })
+
+  test('the second volunteer to answer is refused cleanly, and the call stays with the first', async ({ request, baseURL }) => {
+    test.skip(!!refusal, refusal ?? '')
+
+    // Both volunteers must be in the ring set, or the second's refusal below
+    // could come from the answer route's "Not rung for this call" check
+    // instead of from first-pickup-wins — and the test would still pass with
+    // the guard removed.
+    const routing = await apiGet<RingDecision>(request, `/hubs/${hubId}/calls/routing`, seed)
+    expect(routing.status, 'GET /api/hubs/:id/calls/routing').toBe(200)
+    const rung = present(routing.data.volunteers, 'the routing oracle\'s `volunteers` list')
+      .map(v => v.pubkey)
+    expect(
+      rung,
+      'the operator is not in the ring set, so they cannot be the FIRST to pick up',
+    ).toContain(subject)
+    expect(
+      rung,
+      'the second volunteer was put on the same all-day shift and clocked in, but the server '
+      + 'would not ring them — so their refusal below would prove nothing about first pickup '
+      + 'winning, only that an unrung volunteer is turned away',
+    ).toContain(present(second, 'the second volunteer').pubkey)
+
+    const callSid = await driveRingingCall(request, target(baseURL))
+
+    const first = await pacedWrite('POST answer (first)', () =>
+      apiPost<{ call?: CallRecord }>(request, `/hubs/${hubId}/calls/${callSid}/answer`, {}, seed))
+    expect(first.status, 'the first volunteer to answer').toBe(200)
+    expect(present(first.data.call, 'the answered call').answeredBy).toBe(subject)
+
+    const racer = present(second, 'the second volunteer')
+    const race = await pacedWrite('POST answer (second)', () => apiPost<{ error?: string }>(
+      request, `/hubs/${hubId}/calls/${callSid}/answer`, {}, racer.seedHex))
+    expect(
+      race.status,
+      'a second volunteer answering a call that is already answered must be refused with 409, '
+      + `and got ${race.status} (${JSON.stringify(race.data)}). What each other answer means: `
+      + '200 — first-pickup-wins does not hold and two volunteers are now on one caller, which '
+      + 'is the regression #1072 closed; 500 — the guard is a database error surfacing rather '
+      + 'than a decision the route made; 403 "Not rung for this call" — this volunteer dropped '
+      + 'out of the ring set between being clocked in and answering, so the race never ran; '
+      + '403 "Access denied" — they hold no role in this hub and never had `calls:answer`',
+    ).toBe(409)
+
+    const after = present(
+      await activeCall(request, callSid),
+      'the call after the second answer attempt',
+    )
+    expect(
+      after.answeredBy,
+      'the second answer was refused but the call changed hands anyway',
+    ).toBe(subject)
+    expect(after.status, 'the call after the refused second answer').toBe('in-progress')
+
+    await endCall(request, target(baseURL), callSid)
+
+    // The history row this leaves is the second of the two the history block
+    // needs; the assertions on its shape live there.
+    await expect.poll(
+      async () => (await apiGet<History>(request, `/hubs/${hubId}/calls/history?limit=1`, seed)).data.total,
+      {
+        timeout: 45_000,
+        message: 'the answered call was reported completed but never reached the admin\'s '
+          + 'history — `endCall` moves the row, so it is still sitting in active calls',
+      },
+    ).toBeGreaterThanOrEqual(2)
+
+    const newest = (await apiGet<History>(
+      request, `/hubs/${hubId}/calls/history?limit=1`, seed)).data.calls[0]
+    expect(
+      rowId(newest),
+      'the newest history row is not the call this test just completed',
+    ).toBe(callSid)
+    expect(
+      newest.answeredBy,
+      'the call reached history, but without the volunteer who answered it — an admin '
+      + 'reviewing this call cannot tell who took it',
+    ).toBe(subject)
+    expect(newest.status, 'an answered, completed call in history').toBe('completed')
+  })
+
+  /**
+   * A second volunteer, created the way the operator creates one: an invite
+   * naming `role-volunteer`, redeemed by a fresh identity.
+   *
+   * The role is named EXPLICITLY. An invite with no `roleIds` grants whatever
+   * the hub's template designates, which may be nothing (#1446) — and a member
+   * with no hub role is refused by `hubContext` before any call logic runs.
+   */
+  async function inviteSecondVolunteer(request: APIRequestContext): Promise<{ seedHex: string; pubkey: string }> {
+    const created = await pacedStrict('POST /api/invites', () =>
+      apiPost<{ invite?: { code?: string } }>(request, '/invites', {
+        name: liveMarker('second-volunteer'),
+        phone: '',
+        roleIds: ['role-volunteer'],
+        hubId,
+      }, seed))
+    expect(created.status, 'POST /api/invites').toBe(201)
+    const code = present(created.data.invite?.code, 'the created invite\'s code')
+
+    const identity = freshIdentity()
+    const redeemed = await redeemInvite(request, code, identity.seedHex)
+    expect(redeemed.status, 'POST /api/invites/redeem').toBe(200)
+
+    const hubRoles = (redeemed.body as { volunteer?: { hubRoles?: Array<{ hubId: string; roleIds: string[] }> } })
+      ?.volunteer?.hubRoles ?? []
+    expect(
+      hubRoles.find(r => r.hubId === hubId)?.roleIds ?? [],
+      `the redeemed volunteer holds no role in hub ${hubId}, so every hub-scoped route answers `
+      + '403 "Access denied" before reaching any call logic — the race below would be measuring '
+      + 'a permission refusal',
+    ).toContain('role-volunteer')
+
+    return identity
+  }
+})
+
 
 // ───────────────────────────────────────────────────────────────────
 // History
@@ -658,9 +1295,11 @@ test.describe('R1 — an admin sees the call in history', () => {
       'this hub has fewer than two call records, so neither the ?limit= paging nor the '
       + '?dateFrom= filter below can be exercised — every assertion about them would hold '
       + 'whether or not they work, which is how this test passed for months without '
-      + 'touching either. R1 claims "an admin sees the call in history"; take a couple of '
-      + 'calls on this deployment (the Twilio half of this suite places one, and the ring '
-      + 'block above leaves records where it can run) and re-run',
+      + 'touching either. R1 claims "an admin sees the call in history"; two completed '
+      + 'records normally arrive from the answering block above, which drives and answers '
+      + 'two calls — so this failing means THAT block was refused (it reports why: no '
+      + 'telephony provider, a provider whose signature cannot be produced, or the hub\'s '
+      + 'voice CAPTCHA). Take a couple of calls on this deployment and re-run',
     ).toBeGreaterThanOrEqual(2)
 
     expect(

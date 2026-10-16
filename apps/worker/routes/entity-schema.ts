@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
+import { resolveTargetHub } from '../lib/hub-scope'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import {
   createEntityTypeBodySchema,
@@ -197,9 +198,11 @@ entitySchema.get('/entity-types',
   requireAnyPermission('settings:read', 'cases:read-own', 'cases:read-assigned', 'cases:create'),
   async (c) => {
     const services = c.get('services')
-    // Support optional hubId query param for filtering by hub (or falls back to hub middleware context)
-    const hubId = c.req.query('hubId') ?? c.get('hubId')
-    const result = await services.settings.getEntityTypes(hubId)
+    // Optional hubId query param for filtering by hub; the path hub wins and a
+    // different hub is honoured only for a caller who can read there.
+    const target = resolveTargetHub(c, c.req.query('hubId'), ['settings:read', 'cases:read-own', 'cases:read-assigned', 'cases:create'])
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const result = await services.settings.getEntityTypes(target.hubId)
     return c.json(result)
   },
 )
@@ -580,8 +583,9 @@ entitySchema.get('/report-types',
   requirePermission('settings:read'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.req.query('hubId') ?? c.get('hubId')
-    const result = await services.settings.getCmsReportTypes(hubId)
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const result = await services.settings.getCmsReportTypes(target.hubId)
     return c.json(result)
   },
 )

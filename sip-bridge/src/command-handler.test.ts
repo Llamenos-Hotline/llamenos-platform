@@ -450,6 +450,64 @@ describe('CommandHandler', () => {
       ])
     })
 
+    it('originates an INVITE to a registered volunteer AOR, alongside their phone', async () => {
+      await queuedCaller()
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [{ pubkey: 'tok-phone', phone: '+15550200' }],
+        appTargets: [{ callToken: 'tok-app', sipAor: 'vol_0123456789abcdef' }],
+      })
+
+      // Two parallel legs for one volunteer: the phone through the trunk, and
+      // the app at its registered AOR — no trunk, and no caller number on the
+      // in-app leg (the app shows only the last four, from its push).
+      expect(legs).toHaveLength(2)
+      expect(pbx.of('originate')).toEqual([
+        [{ endpoint: 'PJSIP/+15550200@trunk', callerId: '+15557770001', timeout: 30, appArgs: `dialed,${CALLER},tok-phone` }],
+        [{ endpoint: 'PJSIP/vol_0123456789abcdef', callerId: 'Llamenos', timeout: 30, appArgs: `dialed,${CALLER},tok-app` }],
+      ])
+      expect(handler.getStatus().ringingChannels).toBe(2)
+    })
+
+    it('an in-app endpoint the PBX refuses costs that leg, not the ring', async () => {
+      await queuedCaller()
+      const logged = vi.spyOn(logger, 'error').mockImplementation(() => {})
+      let attempt = 0
+      pbx.client.originate = (async (opts: { endpoint: string }) => {
+        attempt += 1
+        if (opts.endpoint.startsWith('PJSIP/vol_')) throw new Error('endpoint unreachable')
+        return { id: `leg-ok-${attempt}` }
+      }) as BridgeClient['originate']
+
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [{ pubkey: 'tok-phone', phone: '+15550200' }],
+        appTargets: [{ callToken: 'tok-app', sipAor: 'vol_0123456789abcdef' }],
+      })
+
+      // The phone leg still rings, and the refusal is reported, not swallowed.
+      expect(legs).toEqual(['leg-ok-1'])
+      expect(logged.mock.calls.map((args) => args.join(' ')).join('\n')).toContain(
+        'Failed to ring in-app volunteer endpoint (PJSIP/vol_0123456789abcdef)'
+      )
+      logged.mockRestore()
+    })
+
+    it('an in-app leg is cancelled by another volunteer winning the call', async () => {
+      await queuedCaller()
+      const [phone, app] = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+1',
+        volunteers: [{ pubkey: 'tok-phone', phone: '+15550200' }],
+        appTargets: [{ callToken: 'tok-app', sipAor: 'vol_0123456789abcdef' }],
+      })
+      handler.cancelRinging([phone, app], phone)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(pbx.of('hangup')).toEqual([[app]])
+    })
+
     it('cancelRinging hangs up every leg but the one kept', async () => {
       await queuedCaller()
       const [a, b, c] = await handler.ringVolunteers({

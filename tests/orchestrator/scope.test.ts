@@ -2,6 +2,9 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { checkScope, checkScopeAcross } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
 import { trackedFiles } from './codeowners.js'
+import { readFileSync } from 'node:fs'
+import { NEVER_WRITE_PATHS } from '../../orchestrator/src/config.js'
+import { ISRG_ROOT_X1, ISRG_ROOT_X2, throwawayPrivateKeyPem } from './pem-fixtures.js'
 
 const IOS: LaneScope = { owned: ['apps/ios/', '.github/workflows/ios*.yml'], notOwned: [] }
 const NEVER = ['.env', 'deploy/', '.github/workflows/']
@@ -1148,10 +1151,30 @@ describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467
       'apps/worker/README.md',
       'packages/crypto/README.md',
       'packages/test-specs/README.md',
-      'orchestrator/README.md',
     ]
     for (const f of otherLanes) expect(files, `${f} is not tracked`).toContain(f)
     expect(checkScope(otherLanes, infra, []).strayed).toEqual(otherLanes)
+  })
+
+  /**
+   * `orchestrator/README.md` used to be listed above. It is infra's now, but
+   * NOT through the README grant — through the `orchestrator/` grant of #1836,
+   * which hands the lane the tree whose dispatcher it has to be able to fix,
+   * README included, so a change to the fleet that changes its own documented
+   * behaviour can land in one commit. Asserted as "strays once the
+   * orchestrator entry is removed" rather than dropped silently, because the
+   * rail this suite exists for is that the ROOT README grant adds nothing
+   * below the root, and that property is unchanged.
+   */
+  it('orchestrator/README.md is infra\'s via the orchestrator grant, not the README grant', () => {
+    expect(files).toContain('orchestrator/README.md')
+    expect(checkScope(['orchestrator/README.md'], infra, []).strayed).toEqual([])
+    const withoutOrchestrator: LaneScope = {
+      owned: infra.owned.filter((p) => p !== 'orchestrator/'),
+      notOwned: infra.notOwned,
+    }
+    expect(checkScope(['orchestrator/README.md'], withoutOrchestrator, []).strayed)
+      .toEqual(['orchestrator/README.md'])
   })
 
   it('and the lanes that owned those READMEs still do', () => {
@@ -1177,5 +1200,183 @@ describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467
     for (const [name, scope] of [['infra', infra], ['backend', backend], ['shared', shared]] as const) {
       expect(checkScope(self, scope, []).strayed, `${name} must not own the scope fragments`).toEqual(self)
     }
+  })
+})
+
+/**
+ * #1610 — the `*.pem` carve-out, exercised through the real gate rather than
+ * through `matchesSecretPath` alone (`fragments.test.ts` covers the predicate
+ * itself). These run `checkScope`/`checkScopeAcross` against the REAL
+ * `NEVER_WRITE_PATHS`, so a narrowing of the constant, a mis-threaded
+ * `contentOf`, or a carve-out that escaped `*.pem` all fail here.
+ *
+ * Verification is by BREAKING it (`feedback_audit_gates_by_breaking`): the
+ * permitted case is one test, and everything else injects the defect the gate
+ * claims to catch.
+ */
+describe('public certificates at *.pem paths (#1610)', () => {
+  const UNRESTRICTED: LaneScope = { owned: [], notOwned: [] }
+  const NEVER_ALL = [...NEVER_WRITE_PATHS]
+
+  // The two fixtures #1608 could not land. Real paths, real bytes.
+  const X1_PATH = 'apps/android/app/src/test/resources/certs/isrg-root-x1.pem'
+  const X2_PATH = 'apps/android/app/src/test/resources/certs/isrg-root-x2.pem'
+
+  const lookup = (contents: Record<string, string>) => (f: string) => contents[f]
+
+  it('the bug: both #1608 fixtures are forbidden with no content lookup, and permitted with one', () => {
+    const files = [X1_PATH, X2_PATH]
+    // Before: the gate sees only paths, so a public root CA is a secret.
+    expect(checkScope(files, UNRESTRICTED, NEVER_ALL).forbidden).toEqual(files)
+    // After: the same gate, handed the same files' real bytes.
+    const r = checkScope(files, UNRESTRICTED, NEVER_ALL, lookup({
+      [X1_PATH]: ISRG_ROOT_X1,
+      [X2_PATH]: ISRG_ROOT_X2,
+    }))
+    expect(r.forbidden).toEqual([])
+    expect(r.strayed).toEqual([])
+  })
+
+  it('a private key at the SAME path is still forbidden', () => {
+    // The name is identical; only the content differs. This is what makes
+    // the carve-out a content rule and not a path rule.
+    const r = checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({ [X1_PATH]: throwawayPrivateKeyPem() }))
+    expect(r.forbidden).toEqual([X1_PATH])
+  })
+
+  it('a certificate with a private key appended at that path is still forbidden', () => {
+    const mixed = `${ISRG_ROOT_X1}\n${throwawayPrivateKeyPem()}`
+    expect(checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({ [X1_PATH]: mixed })).forbidden)
+      .toEqual([X1_PATH])
+  })
+
+  it.each([
+    ['truncated', ISRG_ROOT_X1.replace('-----END CERTIFICATE-----\n', '')],
+    ['empty', ''],
+    ['not PEM', 'hello\n'],
+    ['mismatched labels', ISRG_ROOT_X1.replace('-----END CERTIFICATE-----', '-----END PUBLIC KEY-----')],
+  ])('a %s .pem is still forbidden', (_name, content) => {
+    expect(checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({ [X1_PATH]: content })).forbidden)
+      .toEqual([X1_PATH])
+  })
+
+  it('a .pem absent from the lookup is still forbidden — "could not read" is never "is safe"', () => {
+    // What `verifyMechanical` produces for a file deleted in the diff, or one
+    // whose object could not be read.
+    expect(checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({})).forbidden).toEqual([X1_PATH])
+  })
+
+  it('the exemption does not leak to another secret pattern whose content looks like a certificate', () => {
+    const impostors = ['deploy/docker/.env', 'deploy/tls/server.key', 'apps/android/release.jks', '.npmrc']
+    const contents = Object.fromEntries(impostors.map((f) => [f, ISRG_ROOT_X1]))
+    expect(checkScope(impostors, UNRESTRICTED, NEVER_ALL, lookup(contents)).forbidden).toEqual(impostors)
+  })
+
+  it('a certificate is still OWNED by the lane that owns its directory, so it is writable rather than strayed', () => {
+    // The template ruling, restated for certificates: ownership is a path
+    // question, and the carve-out must not make a permitted file strayed.
+    const android: LaneScope = { owned: ['apps/android/'], notOwned: [] }
+    const r = checkScope([X1_PATH], android, NEVER_ALL, lookup({ [X1_PATH]: ISRG_ROOT_X1 }))
+    expect(r).toEqual({ forbidden: [], strayed: [] })
+    // …and a lane that does NOT own it gets `strayed`, not `forbidden`.
+    const ios: LaneScope = { owned: ['apps/ios/'], notOwned: [] }
+    expect(checkScope([X1_PATH], ios, NEVER_ALL, lookup({ [X1_PATH]: ISRG_ROOT_X1 })).strayed).toEqual([X1_PATH])
+  })
+
+  it('checkScopeAcross threads the lookup too — a grant neither needs nor bypasses it', () => {
+    const backendLane: LaneScope = { owned: ['apps/worker/'], notOwned: [] }
+    const androidLane: LaneScope = { owned: ['apps/android/'], notOwned: [] }
+    // Forbidden with no lookup, on the lane that owns the path.
+    expect(checkScopeAcross([X1_PATH], androidLane, [], NEVER_ALL).forbidden).toEqual([X1_PATH])
+    // Permitted with one.
+    expect(checkScopeAcross([X1_PATH], androidLane, [], NEVER_ALL, [], lookup({ [X1_PATH]: ISRG_ROOT_X1 })))
+      .toEqual({ forbidden: [], strayed: [] })
+    // A private key is forbidden even when the lane owns the directory and a
+    // grant is in force — never-write still beats everything.
+    expect(checkScopeAcross(
+      [X1_PATH], backendLane, [androidLane], NEVER_ALL, [],
+      lookup({ [X1_PATH]: throwawayPrivateKeyPem() }),
+    ).forbidden).toEqual([X1_PATH])
+  })
+
+  it('every .pem tracked in this repo today is a public certificate, and all of them become writable', () => {
+    // The three vendored bundler root CAs the issue names. Read from the real
+    // tree, so this breaks the moment a tracked `.pem` stops being public —
+    // which is exactly when the carve-out would need re-examining.
+    const pems = trackedFiles().filter((f) => f.endsWith('.pem'))
+    expect(pems.length, 'no tracked .pem files — this assertion would pass vacuously').toBeGreaterThan(0)
+    const contents = Object.fromEntries(pems.map((f) => [f, readFileSync(f, 'utf8')]))
+    expect(checkScope(pems, UNRESTRICTED, NEVER_ALL, lookup(contents)).forbidden).toEqual([])
+    // And without the lookup every one of them is still refused — the state
+    // this issue reports.
+    expect(checkScope(pems, UNRESTRICTED, NEVER_ALL).forbidden).toEqual(pems)
+  })
+})
+
+/**
+ * #1836: the fleet could not modify itself. No lane's fragment declared
+ * `orchestrator/`, so a worker handed an issue whose fix lived there did the
+ * correct thing — reported BLOCKED for being out of scope — and the ledger
+ * records #1826 and #1813 each doing it three times, exhausting their dispatch
+ * attempts and being parked "for a human" permanently. Two more (#1512, #1322)
+ * were parked the same way.
+ *
+ * The grant is to AUTHORING only. Merging stays human-gated exactly as before:
+ * CODEOWNERS owns the orchestrator tree and `main` requires a code-owner
+ * review, so these assertions deliberately say nothing about merge rights —
+ * conflating the two is what kept the grant from being made for this long.
+ *
+ * The last assertion is the one that must never flip: the fragments directory
+ * declaring lane scope stays unowned, because a lane able to edit its own
+ * scope declaration could widen its authority inside a branch, before any
+ * reviewer sees the diff.
+ */
+describe('orchestrator/ ownership (#1836): infra may author the fleet that dispatches it', () => {
+  let scopes: Record<string, LaneScope>
+  let infra: LaneScope
+
+  beforeAll(async () => {
+    scopes = await loadLaneScopes(process.cwd())
+    const inf = scopes['infra']
+    if (!inf) throw new Error('expected an infra lane fragment to exist')
+    infra = inf
+  })
+
+  it.each([
+    'orchestrator/src/board.ts',
+    'orchestrator/src/tick.ts',
+    'orchestrator/src/engines.ts',
+    'orchestrator/src/config.ts',
+    'orchestrator/reviewer-readonly.agent.md',
+    'tests/orchestrator/board.test.ts',
+    'tests/orchestrator/scope.test.ts',
+  ])('infra may write %s', (file) => {
+    expect(checkScope([file], infra, []).strayed).toEqual([])
+  })
+
+  it('the exact #1832 board diff is in scope for infra', () => {
+    expect(
+      checkScope(['orchestrator/src/board.ts', 'tests/orchestrator/board.test.ts'], infra, []).strayed,
+    ).toEqual([])
+  })
+
+  it('every tracked file under orchestrator/ is owned by at least one lane', () => {
+    const orchFiles = trackedFiles().filter((f) => f.startsWith('orchestrator/'))
+    expect(orchFiles).toContain('orchestrator/src/tick.ts')
+    const unowned = orchFiles.filter(
+      (f) => !Object.values(scopes).some((s) => s.owned.length > 0 && checkScope([f], s, []).strayed.length === 0),
+    )
+    expect(unowned, `orchestrator/ files no lane may write:\n${unowned.join('\n')}`).toEqual([])
+  })
+
+  // Widens the narrower rail above (one fragment, three lanes) to every
+  // tracked fragment against every lane that declares any scope at all.
+  it('no lane may write the fragments that declare lane scope', () => {
+    const fragments = trackedFiles().filter((f) => f.startsWith('.claude/agents/fragments/'))
+    expect(fragments.length).toBeGreaterThan(0)
+    const writable = fragments.filter(
+      (f) => Object.values(scopes).some((s) => s.owned.length > 0 && checkScope([f], s, []).strayed.length === 0),
+    )
+    expect(writable, `lane-scope declarations a lane could rewrite:\n${writable.join('\n')}`).toEqual([])
   })
 })

@@ -2,8 +2,8 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { checkRateLimit } from '../lib/helpers'
-import { hashIP, getClientIp } from '../lib/crypto'
-import { verifyAuthToken } from '../lib/auth'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
+import { verifyAuthToken, consumeAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
 import { requirePermission } from '../middleware/permission-guard'
 import { redeemInviteBodySchema, createInviteBodySchema, inviteResponseSchema, inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
@@ -71,8 +71,7 @@ invites.get('/validate/:code',
     const services = c.get('services')
     const code = c.req.param('code')
     // Rate limit invite validation to prevent enumeration
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `invite-validate:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 5)
+    const limited = await checkRateLimit(services.settings, `invite-validate:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
     const result = await services.identity.validateInvite(code)
     return c.json(result)
@@ -100,16 +99,36 @@ invites.post('/redeem',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Verify Ed25519 auth token signature
+    // Verify the Ed25519 auth token signature, then burn it: a redemption binds a
+    // new device key to an identity, so each signed request is single-use (#1367).
+    // It is consumed before the rate limit and the redemption itself, so a signed
+    // request that is refused for any later reason still cannot be replayed.
+    //
+    // `nonce` is optional in `redeemInviteBodySchema`. A client that sends none
+    // signed the nonce-less message shape — a distinct domain-separation label
+    // (`LABEL_DEVICE_AUTH_NO_NONCE`, #1509), which is what makes that token
+    // useless against any other endpoint; this is the only route that opts into
+    // the nonce-less domain, and everywhere else a missing nonce is a hard
+    // rejection. A client that sends a nonce verifies in the canonical
+    // nonce-ful domain instead. Either way the verified token is consumed
+    // exactly once below.
     const inviteUrl = new URL(c.req.url)
-    const isValid = await verifyAuthToken({ pubkey: body.pubkey, timestamp: body.timestamp, token: body.token }, c.req.method, inviteUrl.pathname)
+    const authPayload = { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token, nonce: body.nonce }
+    const isValid = verifyAuthToken(
+      authPayload,
+      c.req.method,
+      inviteUrl.pathname,
+      { allowMissingNonce: true },
+    )
     if (!isValid) {
+      return c.json({ error: 'Authentication failed' }, 401)
+    }
+    if (!(await consumeAuthToken(authPayload, services.identity))) {
       return c.json({ error: 'Authentication failed' }, 401)
     }
 
     // Rate limit redemption attempts
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `invite-redeem:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 5)
+    const limited = await checkRateLimit(services.settings, `invite-redeem:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
 
     const result = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })

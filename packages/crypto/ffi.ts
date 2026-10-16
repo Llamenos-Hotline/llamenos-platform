@@ -60,6 +60,17 @@ const lib = dlopen(LIB_PATH, {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
   },
+  ffi_build_auth_message: {
+    args: [
+      FFIType.ptr, FFIType.u64, // pubkey_hex
+      FFIType.u64,              // timestamp
+      FFIType.ptr, FFIType.u64, // method
+      FFIType.ptr, FFIType.u64, // path
+      FFIType.ptr, FFIType.u64, // nonce (null = nonce-less shape)
+      FFIType.ptr, FFIType.u64, // out
+    ],
+    returns: FFIType.i32,
+  },
 })
 
 class CryptoError extends Error {
@@ -207,4 +218,37 @@ export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {
     ptr(out), 32,
   ))
   return out
+}
+
+/**
+ * Build the canonical device-auth message — the exact bytes that get signed.
+ *
+ * Delegates to `packages/crypto/src/auth.rs::build_auth_message`, the single
+ * construction path shared by every platform. Omit `nonce` for the nonce-less
+ * shape, which carries its own domain-separation label.
+ */
+export function buildAuthMessage(
+  pubkey: string,
+  timestamp: number,
+  method: string,
+  path: string,
+  nonce?: string,
+): Uint8Array {
+  const enc = new TextEncoder()
+  const pk = enc.encode(pubkey)
+  const m = enc.encode(method)
+  const p = enc.encode(path)
+  const n = nonce === undefined ? undefined : enc.encode(nonce)
+  // label (<= 64) + ':' separators + hex pubkey + digits + method + path + nonce
+  const out = new Uint8Array(128 + pk.length + m.length + p.length + (n?.length ?? 0))
+  const written = lib.symbols.ffi_build_auth_message(
+    ptr(pk), pk.length,
+    timestamp,
+    ptr(m), m.length,
+    ptr(p), p.length,
+    n ? ptr(n) : null, n ? n.length : 0,
+    ptr(out), out.length,
+  )
+  if (written < 0) checkResult(written)
+  return out.subarray(0, written)
 }

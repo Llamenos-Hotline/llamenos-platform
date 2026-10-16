@@ -57,7 +57,7 @@ Before({ tags: '@backend' }, async ({ world }) => {
 // scenarios are handled by that default without a duplicate step definition here.
 
 Given('I am authenticated as a volunteer', async ({ request, world }) => {
-  const vol = await createUserViaApi(request, { name: uniqueName('analytics-vol') })
+  const vol = await createUserViaApi(request, { name: uniqueName('analytics-vol'), hubId: getScenarioState(world).hubId })
   getAnalyticsState(world).actorSeedHex = vol.seedHex
   // Also set the cross-file canonical actor (shared-state.ts) so generic REST
   // steps defined in other step files (e.g. shifts.steps.ts) act as this
@@ -70,6 +70,7 @@ Given('I am authenticated as a volunteer without audit:read', async ({ request, 
   const vol = await createUserViaApi(request, {
     name: uniqueName('no-audit-vol'),
     roleIds: ['role-volunteer'],
+    hubId: getScenarioState(world).hubId,
   })
   getAnalyticsState(world).actorSeedHex = vol.seedHex
   setActorSeed(world, vol.seedHex)
@@ -139,7 +140,7 @@ Given('volunteers have answered calls and created notes', async ({ request, worl
 
 Given('I have answered {int} calls today', async ({ request, world }, count: number) => {
   const { hubId } = getScenarioState(world)
-  const vol = await createUserViaApi(request, { name: uniqueName('personal-vol') })
+  const vol = await createUserViaApi(request, { name: uniqueName('personal-vol'), hubId })
   // Update the actor seed so /me will return this user's stats
   getAnalyticsState(world).actorSeedHex = vol.seedHex
 

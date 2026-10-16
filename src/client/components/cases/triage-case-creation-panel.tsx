@@ -166,7 +166,7 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
                 </SelectTrigger>
                 <SelectContent>
                   {entityTypes.map(et => (
-                    <SelectItem key={et.id} value={et.id}>
+                    <SelectItem key={et.id} value={et.id} data-testid={`triage-entity-type-option-${et.name}`}>
                       <span className="flex items-center gap-2">
                         {et.color && (
                           <span

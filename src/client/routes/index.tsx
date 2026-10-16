@@ -6,6 +6,7 @@ import { useCalls, useCallTimer, useShiftStatus } from '@/lib/hooks'
 import { createNote, banAndHangup, getUserPresence, listUsers, type HubCall, type UserPresence, type User } from '@/lib/api'
 import { usePersonalStats } from '@/lib/queries/analytics'
 import { encryptNote } from '@/lib/platform'
+import { adminHpkeRecipient } from '@/lib/admin-recipient'
 import { useConfig } from '@/lib/config'
 import { useTranscription } from '@/lib/transcription'
 
@@ -367,7 +368,14 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
     if (!noteText.trim()) return
     setSaving(true)
     try {
-      const adminPub = adminDecryptionPubkey || authorPubkey
+      // No admin recipient means no admin could ever read this note. The old
+      // `adminDecryptionPubkey || authorPubkey` wrapped it twice to the author
+      // and left admins locked out silently (#1468). Refuse and say so.
+      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+      if (!adminPub) {
+        toast(t('notes.noAdminRecipient'), 'error')
+        return
+      }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify({ text: noteText }), authorPubkey, [adminPub])
       await createNote({ callId: call.id, encryptedContent, authorEnvelope, adminEnvelopes }, call.hubId)
       setSaved(true)
@@ -384,8 +392,16 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
     if (txSettings.enabled && (txStatus === 'capturing' || txStatus === 'finalizing')) {
       try {
         const text = await stopTranscription()
-        if (text.trim()) {
-          const adminPub = adminDecryptionPubkey || authorPubkey
+        // Same rule as handleSaveNote, and here it costs a transcript rather
+        // than a note: filing one no admin can read does not satisfy "admins
+        // can read every note", so the refusal is surfaced instead of a silent
+        // write (#1468). The volunteer learns the transcript was not kept,
+        // which the substituted key hid. Hanging up is never blocked — not by
+        // a transcription failure (see catch) and not by this.
+        const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+        if (text.trim() && !adminPub) {
+          toast(t('notes.noAdminRecipient'), 'error')
+        } else if (text.trim() && adminPub) {
           const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(
             JSON.stringify({ text: `[${t('transcription.title')}] ${text}` }),
             authorPubkey,

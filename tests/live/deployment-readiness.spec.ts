@@ -81,11 +81,18 @@ test.describe('deployment readiness', () => {
 
   test('development-only routes are absent', async ({ request }) => {
     // The single sharpest "is this a deployment or a dev box" question. These
-    // exist and are destructive on a development server; `devGuard` requires
-    // ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, and a deployment
-    // must satisfy neither. A 200 or a 400 here means dev surfaces are exposed
-    // to the internet — 400 would mean the route matched and only the body was
-    // rejected.
+    // exist and are destructive on a development server, and a deployment that
+    // serves real callers must satisfy none of the factors in
+    // apps/worker/lib/dev-surfaces.ts. A 200 or a 400 here means dev surfaces
+    // are exposed to the internet — 400 would mean the route matched and only
+    // the body was rejected.
+    //
+    // NOTE: this suite is for a PRODUCTION deployment. A staging target
+    // deliberately provisioned as the end-to-end suite's reset target
+    // (app_environment: staging + dev_routes_enabled + a >= 32-char
+    // dev_reset_secret — docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md) WILL fail
+    // this test, correctly: it is a dev-surfaced host and not a hotline. Point
+    // this suite at the deployment that takes calls, not at the test target.
     for (const path of ['/api/test-create-hub', '/api/test-reset', '/api/test-add-hub-member']) {
       const res = await request.post(path, {
         headers: { 'Content-Type': 'application/json' },
@@ -134,6 +141,22 @@ test.describe('deployment readiness', () => {
   test('an unauthenticated request for hub data is refused', async ({ request }) => {
     const res = await request.get('/api/hubs', { failOnStatusCode: false })
     expect(res.status(), 'GET /api/hubs must require authentication').toBe(401)
+  })
+
+  /**
+   * `/api/hubs` answering 401 was never the whole story: `/api/config` served
+   * the same hub objects — name, slug, description, `createdBy`, timestamps —
+   * to anyone who could reach the host (#1710). Asserted here because it is a
+   * property of the DEPLOYMENT as reached over the wire, which is the only
+   * place the two endpoints can be compared.
+   */
+  test('the public config does not publish the hub roster', async ({ request }) => {
+    const res = await request.get('/api/config')
+    expect(res.status()).toBe(200)
+    const body = await res.json() as Record<string, unknown>
+
+    expect(body, 'the unauthenticated config must not carry hub objects').not.toHaveProperty('hubs')
+    expect(body, 'the unauthenticated config must not name a hub').not.toHaveProperty('defaultHubId')
   })
 
   test.describe('with the admin identity', () => {

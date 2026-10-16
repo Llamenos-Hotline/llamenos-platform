@@ -67,6 +67,11 @@ data class AuthVectors(
     val path: String,
     val token: AuthTokenData,
     val valid: Boolean,
+    /** Hex of the exact canonical message bytes `token` signs (nonce-bearing). */
+    val messageHex: String = "",
+    /** The nonce-less shape for the same (timestamp, method, path). */
+    val noncelessToken: AuthTokenData? = null,
+    val noncelessMessageHex: String = "",
 )
 
 @Serializable
@@ -74,6 +79,8 @@ data class AuthTokenData(
     val pubkey: String,
     val timestamp: Long,
     val token: String,
+    /** Absent for the nonce-less shape, which is signed under its own label. */
+    val nonce: String? = null,
 )
 
 @Serializable

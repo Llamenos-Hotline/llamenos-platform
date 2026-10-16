@@ -1,0 +1,64 @@
+---
+# Prove Caddy actually HOLDS a certificate for every vhost it serves.
+#
+# Issue #1602, finding 8: a deploy run exited 0 with zero failed tasks while
+# Caddy had no certificate for either vhost and was retrying ACME in a loop
+# (`acme: HTTP 400 invalidContact`). Nothing anywhere in the deploy looked at
+# issuance, so "no TLS at all" and "TLS working" produced byte-identical green
+# output. templates/caddy.j2 pins acme_ca to Let's Encrypt with NO fallback
+# issuer precisely because a wrong issuer is a silent Android-wide outage —
+# a failed issuance rendering as success is the matching hole on the other
+# side of the same decision.
+#
+# Checked from Caddy's own storage rather than by probing the public name,
+# because the public probe needs working DNS from the control node and would
+# conflate "no certificate" with "DNS not pointed here yet". Caddy writes each
+# leaf to /data/caddy/certificates/<issuer>/<name>/<name>.crt on the caddy-data
+# volume the moment issuance succeeds, and writes nothing when it fails.
+#
+# NOT ignore_errors, and no `failed_when: false`: a deploy that could not get a
+# certificate must be red.
+
+- name: Determine the vhosts this Caddy must hold a certificate for
+  ansible.builtin.set_fact:
+    _caddy_expected_cert_hosts: >-
+      {{
+        (
+          ((([api_subdomain ~ '.' ~ domain, domain] if (api_subdomain | default('') | length > 0) else [domain])
+            if (_caddy_serves_app | bool) else [])
+           + ([ntfy_domain] if (_caddy_serves_ntfy | bool and (ntfy_domain | default('') | length > 0)) else [])
+           + ([updates_domain, releases_domain]
+              if (_caddy_serves_app | bool and (llamenos_update_server_enabled | default(false) | bool)) else []))
+        ) | select | unique | list
+      }}
+
+- name: Wait for Caddy to obtain a certificate for every vhost it serves
+  ansible.builtin.shell: |
+    set -eu
+    missing=''
+    for host in {{ _caddy_expected_cert_hosts | map('quote') | join(' ') }}; do
+      found=$(docker compose -f "{{ app_dir }}/services/caddy/docker-compose.yml" exec -T caddy \
+        find /data/caddy/certificates -type f -name "${host}.crt" -size +0c 2>/dev/null || true)
+      [ -n "${found}" ] || missing="${missing} ${host}"
+    done
+    if [ -n "${missing}" ]; then
+      echo "NO CERTIFICATE:${missing}"
+      exit 1
+    fi
+    echo "certificate present for:{{ ' ' }}{{ _caddy_expected_cert_hosts | join(' ') }}"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  register: _caddy_cert_check
+  # First deploy: Caddy is still completing the ACME order. The default budget
+  # (30 x 10s = 5 min) is the same one playbooks/tasks/verify-ntfy.yml allows
+  # the public health probe. Overridable so a test can exercise the failing
+  # branch without waiting five minutes for it.
+  retries: "{{ llamenos_cert_verify_retries | default(30) | int }}"
+  delay: "{{ llamenos_cert_verify_delay | default(10) | int }}"
+  until: _caddy_cert_check.rc == 0
+  when: _caddy_expected_cert_hosts | length > 0
+
+- name: Report the certificates Caddy holds
+  ansible.builtin.debug:
+    msg: "{{ _caddy_cert_check.stdout | default('no public vhosts on this host — nothing to verify') }}"

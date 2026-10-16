@@ -18,6 +18,7 @@ import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 import { aesGcmEncrypt, hpkeSealKey } from '@/lib/platform'
 import { LABEL_CONTACT_ID } from '@shared/crypto-labels'
+import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 import {
   getSignalContact,
   registerSignalContact,
@@ -78,13 +79,16 @@ async function encryptIdentifier(
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
   const keyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, '0')).join('')
 
-  // AES-256-GCM encrypt the identifier
-  const ciphertext = await aesGcmEncrypt(plaintext, keyHex)
+  // AES-256-GCM encrypt the identifier under the canonical content AAD for
+  // LABEL_CONTACT_ID; the key wrap below carries the matching key-wrap AAD —
+  // the same convention every other envelope in the system uses, so any
+  // implementation holding the admin X25519 secret can open it.
+  const ciphertext = await aesGcmEncrypt(plaintext, keyHex, contentAadHex(LABEL_CONTACT_ID))
 
   // HPKE-wrap the key for each admin
   const envelope = await Promise.all(
     adminPubkeys.map(async (pubkey) => {
-      const hpkeEnvelope = await hpkeSealKey(keyHex, pubkey, LABEL_CONTACT_ID, '')
+      const hpkeEnvelope = await hpkeSealKey(keyHex, pubkey, LABEL_CONTACT_ID, keyWrapAadHex(LABEL_CONTACT_ID))
       return {
         recipientPubkey: pubkey,
         encryptedKey: JSON.stringify(hpkeEnvelope),

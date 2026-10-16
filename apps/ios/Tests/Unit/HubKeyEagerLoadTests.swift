@@ -145,7 +145,7 @@ struct HubKeyEagerLoadTests {
 
         let hubs = [makeHub(id: "hub-001"), makeHub(id: "hub-002")]
 
-        // Must complete without throwing — errors are swallowed internally
+        // Must complete without throwing — a key failure is recorded, not raised
         await vm.eagerLoadHubKeys(for: hubs)
 
         // Fetches were attempted but nothing was loaded into cache
@@ -153,6 +153,8 @@ struct HubKeyEagerLoadTests {
         #expect(cryptoService.loadedHubIds.isEmpty)
         // The vm-level error must NOT be set — failures are per-key, not global
         #expect(vm.error == nil)
+        // ...but they must not vanish either: each hub is marked undecryptable.
+        #expect(vm.hubKeysUnavailable == ["hub-001", "hub-002"])
     }
 
     // MARK: - Cache-miss fallback in switchHub
@@ -181,6 +183,7 @@ struct HubKeyEagerLoadTests {
         // Hub context must have been updated
         #expect(ctx.activeHubId == "hub-on-demand")
         #expect(vm.error == nil)
+        #expect(vm.hasKey(hub) == true)
     }
 
     @Test func testSwitchHubSkipsFetchIfKeyCached() async {

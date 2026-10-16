@@ -1,8 +1,12 @@
 package org.llamenos.hotline.ui.admin
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -30,10 +34,7 @@ fun AdminSectionHost(
         )
     }
 
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
+    val content: @Composable () -> Unit = {
         when (section) {
             "location-lookup" -> Text(stringResource(R.string.admin_nav_items_location_lookup))
             "passkey-policy" -> Text(stringResource(R.string.admin_nav_items_passkey_policy))
@@ -53,20 +54,18 @@ fun AdminSectionHost(
             )
             "firehose" -> Text(stringResource(R.string.admin_nav_items_firehose))
             "call-settings" -> CallSettingsSection(
-                ringTimeout = uiState.ringTimeout,
-                maxCallDuration = uiState.maxCallDuration,
-                parallelRingCount = uiState.parallelRingCount,
+                queueTimeoutSeconds = uiState.queueTimeoutSeconds,
+                voicemailMaxSeconds = uiState.voicemailMaxSeconds,
                 isLoading = uiState.isLoadingCallSettings,
                 error = uiState.callSettingsError,
-                onRingTimeoutChange = { viewModel.updateRingTimeout(it) },
-                onMaxCallDurationChange = { viewModel.updateMaxCallDuration(it) },
-                onParallelRingCountChange = { viewModel.updateParallelRingCount(it) },
+                onQueueTimeoutChange = { viewModel.updateQueueTimeout(it) },
+                onVoicemailMaxChange = { viewModel.updateVoicemailMax(it) },
                 onSave = { viewModel.saveCallSettings() },
                 modifier = Modifier.padding(16.dp),
             )
             "voice-prompts" -> Text(stringResource(R.string.admin_nav_items_voice_prompts))
             "phone-menu-languages" -> IvrLanguagesSection(
-                languages = uiState.ivrLanguages,
+                enabledLanguages = uiState.ivrEnabledLanguages,
                 isLoading = uiState.isLoadingIvrLanguages,
                 error = uiState.ivrLanguagesError,
                 onToggleLanguage = { code, enabled -> viewModel.toggleIvrLanguage(code, enabled) },
@@ -81,14 +80,16 @@ fun AdminSectionHost(
                 modifier = Modifier.padding(16.dp),
             )
             "spam-protection" -> SpamSettingsSection(
-                maxCallsPerHour = uiState.maxCallsPerHour,
+                maxCallsPerMinute = uiState.maxCallsPerMinute,
+                blockDurationMinutes = uiState.blockDurationMinutes,
+                rateLimitEnabled = uiState.rateLimitEnabled,
                 voiceCaptchaEnabled = uiState.voiceCaptchaEnabled,
-                knownNumberBypass = uiState.knownNumberBypass,
                 isLoading = uiState.isLoadingSpamSettings,
                 error = uiState.spamSettingsError,
-                onMaxCallsPerHourChange = { viewModel.updateMaxCallsPerHour(it) },
+                onMaxCallsPerMinuteChange = { viewModel.updateMaxCallsPerMinute(it) },
+                onBlockDurationChange = { viewModel.updateBlockDuration(it) },
+                onToggleRateLimit = { viewModel.toggleRateLimit(it) },
                 onToggleVoiceCaptcha = { viewModel.toggleVoiceCaptcha(it) },
-                onToggleKnownNumberBypass = { viewModel.toggleKnownNumberBypass(it) },
                 onSave = { viewModel.saveSpamSettings() },
                 modifier = Modifier.padding(16.dp),
             )
@@ -127,4 +128,43 @@ fun AdminSectionHost(
             else -> Text(stringResource(R.string.common_loading))
         }
     }
+
+    if (section in SELF_SCROLLING_SECTIONS) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) { content() }
+    } else {
+        // Sections hosted here from the sidebar must be reachable by scrolling, exactly as they
+        // are in the tabbed AdminSettingsTab. `fillMaxSize()` before `verticalScroll` keeps short
+        // content (the placeholder labels) centred in the viewport instead of pinned to the top.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) { content() }
+    }
 }
+
+/**
+ * Sections whose composable already owns its scrolling (a LazyColumn or its own verticalScroll).
+ * Nesting those inside another vertical scroll container throws an infinite-height measure
+ * exception, so they are hosted in a plain non-scrolling Box.
+ */
+private val SELF_SCROLLING_SECTIONS = setOf(
+    "custom-fields",
+    "bans",
+    "audit",
+    "analytics",
+    "health",
+    "platform-bans",
+    "platform-audit",
+    "platform-analytics",
+    "platform-health",
+    "gdpr-erasure",
+    "erasure-queue",
+    "retention",
+    "platform-bans-manage",
+)

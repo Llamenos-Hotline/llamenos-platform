@@ -23,6 +23,7 @@ import { ed25519, x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
 import * as labels from '../packages/shared/crypto-labels'
+import { buildAuthMessage } from '../packages/shared/auth-message'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -129,18 +130,52 @@ test.describe('Cross-platform crypto interop', () => {
     expect(decoded).toBe(plaintextJson)
   })
 
-  test('JS can verify auth token produced by Rust', () => {
-    const { token, method, path } = vectors.auth
+  /**
+   * Three-way byte equality, leg one: the TypeScript builder in
+   * `@shared/auth-message` must reproduce, byte for byte, the message bytes
+   * REAL Rust produced (`packages/crypto/tests/interop.rs` emits `messageHex`
+   * from `build_auth_message`). Leg two is the generated Kotlin binding, which
+   * asserts the same `messageHex` through `mobileBuildAuthMessage` in
+   * `crypto-interop.feature`.
+   *
+   * This is the assertion that makes layout drift impossible rather than
+   * merely unlikely: change either implementation and these fail.
+   */
+  test('JS rebuilds the exact auth message bytes Rust signed (nonce-bearing)', () => {
+    const { token, method, path, messageHex } = vectors.auth
 
-    // Reconstruct the Ed25519 auth message — must match Rust build_auth_message_with_nonce():
-    // Format: LABEL_DEVICE_AUTH:pubkey:timestamp:method:path[:nonce]
-    // Signed as raw UTF-8 bytes (no SHA-256 pre-hash)
-    const base = `${labels.LABEL_DEVICE_AUTH}:${token.pubkey}:${token.timestamp}:${method}:${path}`
-    const message = token.nonce ? `${base}:${token.nonce}` : base
+    const message = buildAuthMessage(token.pubkey, token.timestamp, method, path, token.nonce)
+    expect(bytesToHex(message)).toBe(messageHex)
 
-    // Verify Ed25519 signature (signs raw message bytes, no SHA-256 pre-hash)
-    const valid = ed25519.verify(hexToBytes(token.token), utf8ToBytes(message), hexToBytes(token.pubkey))
-    expect(valid).toBe(true)
+    // And the signature over those bytes verifies — the bytes are the contract.
+    expect(ed25519.verify(hexToBytes(token.token), message, hexToBytes(token.pubkey))).toBe(true)
+  })
+
+  test('JS rebuilds the exact auth message bytes Rust signed (nonce-less)', () => {
+    const { noncelessToken, method, path, noncelessMessageHex } = vectors.auth
+
+    const message = buildAuthMessage(noncelessToken.pubkey, noncelessToken.timestamp, method, path)
+    expect(bytesToHex(message)).toBe(noncelessMessageHex)
+    expect(noncelessToken.nonce).toBeUndefined()
+    expect(ed25519.verify(hexToBytes(noncelessToken.token), message, hexToBytes(noncelessToken.pubkey))).toBe(true)
+  })
+
+  test('the two shapes are separate label domains in both implementations', () => {
+    const { token, noncelessToken, method, path, messageHex, noncelessMessageHex } = vectors.auth
+
+    // Rust said so:
+    expect(messageHex).not.toBe(noncelessMessageHex)
+    // and the labels are what differ:
+    expect(new TextDecoder().decode(hexToBytes(messageHex)).startsWith(`${labels.LABEL_DEVICE_AUTH}:`)).toBe(true)
+    expect(new TextDecoder().decode(hexToBytes(noncelessMessageHex)).startsWith(`${labels.LABEL_DEVICE_AUTH_NO_NONCE}:`)).toBe(true)
+
+    // Dropping the nonce from a nonce-bearing token does not downgrade it to a
+    // valid nonce-less token (#1389), and the reverse does not upgrade.
+    const strippedMessage = buildAuthMessage(token.pubkey, token.timestamp, method, path)
+    expect(ed25519.verify(hexToBytes(token.token), strippedMessage, hexToBytes(token.pubkey))).toBe(false)
+
+    const dressedMessage = buildAuthMessage(noncelessToken.pubkey, noncelessToken.timestamp, method, path, 'a'.repeat(32))
+    expect(ed25519.verify(hexToBytes(noncelessToken.token), dressedMessage, hexToBytes(noncelessToken.pubkey))).toBe(false)
   })
 
   test('JS can decrypt draft produced by Rust', () => {
@@ -338,8 +373,8 @@ test.describe('Cross-platform crypto interop', () => {
     const { validToken, validPath, wrongMethod } = vectors.adversarial.auth
 
     // New format: includes pubkey, raw UTF-8 (no SHA-256 pre-hash)
-    const message = `${labels.LABEL_DEVICE_AUTH}:${validToken.pubkey}:${validToken.timestamp}:${wrongMethod}:${validPath}`
-    const valid = ed25519.verify(hexToBytes(validToken.token), utf8ToBytes(message), hexToBytes(validToken.pubkey))
+    const message = buildAuthMessage(validToken.pubkey, validToken.timestamp, wrongMethod, validPath, validToken.nonce)
+    const valid = ed25519.verify(hexToBytes(validToken.token), message, hexToBytes(validToken.pubkey))
     expect(valid).toBe(false)
   })
 
@@ -347,8 +382,8 @@ test.describe('Cross-platform crypto interop', () => {
     const { validToken, validMethod, wrongPath } = vectors.adversarial.auth
 
     // New format: includes pubkey, raw UTF-8 (no SHA-256 pre-hash)
-    const message = `${labels.LABEL_DEVICE_AUTH}:${validToken.pubkey}:${validToken.timestamp}:${validMethod}:${wrongPath}`
-    const valid = ed25519.verify(hexToBytes(validToken.token), utf8ToBytes(message), hexToBytes(validToken.pubkey))
+    const message = buildAuthMessage(validToken.pubkey, validToken.timestamp, validMethod, wrongPath, validToken.nonce)
+    const valid = ed25519.verify(hexToBytes(validToken.token), message, hexToBytes(validToken.pubkey))
     expect(valid).toBe(false)
   })
 
@@ -361,6 +396,75 @@ test.describe('Cross-platform crypto interop', () => {
       (e: { pubkey: string }) => e.pubkey === wrongPubkey,
     )
     expect(wrongEnvelope).toBeUndefined()
+  })
+
+  // ─── Device provisioning key bundle (PROTOCOL.md 6.1.1) ─────
+
+  test('device provisioning bundle decrypts to BOTH device seeds', () => {
+    const p = vectors.provisioning
+
+    // Rust used the generated label constants, not ad-hoc strings.
+    expect(p.aadLabel).toBe(labels.LABEL_DEVICE_PROVISION_BUNDLE)
+    expect(p.hkdfSalt).toBe(labels.LABEL_PROVISIONING_SALT)
+    expect(p.hkdfInfo).toBe(labels.LABEL_DEVICE_PROVISION)
+
+    // New-device side: ECDH against the primary's published X25519 pubkey.
+    const shared = x25519.getSharedSecret(
+      hexToBytes(p.ephemeralSecretHex),
+      hexToBytes(p.primaryEncryptionPubkeyHex),
+    )
+    const provKey = hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32)
+
+    const data = hexToBytes(p.encryptedHex)
+    const plaintext = gcm(provKey, data.slice(0, 12), utf8ToBytes(p.aadLabel)).decrypt(data.slice(12))
+
+    // Bundle layout: version || signing seed || encryption seed
+    expect(plaintext.length).toBe(p.bundleLen)
+    expect(plaintext[0]).toBe(p.bundleVersion)
+    const signingSeed = plaintext.slice(1, 33)
+    const encryptionSeed = plaintext.slice(33, 65)
+    expect(bytesToHex(signingSeed)).toBe(p.primarySigningSeedHex)
+    expect(bytesToHex(encryptionSeed)).toBe(p.primaryEncryptionSeedHex)
+
+    // The linked device therefore holds the primary's keypairs — which is what
+    // lets it decrypt ciphertext wrapped to the primary before the link.
+    expect(bytesToHex(ed25519.getPublicKey(signingSeed))).toBe(p.primarySigningPubkeyHex)
+    expect(bytesToHex(x25519.getPublicKey(encryptionSeed))).toBe(p.primaryEncryptionPubkeyHex)
+
+    // The two seeds are independent (PROTOCOL.md 2.11): re-deriving the
+    // encryption seed from the signing seed produces a DIFFERENT key, i.e. a
+    // device that authenticates and then silently decrypts nothing.
+    const rederived = hkdf(sha256, signingSeed, new Uint8Array(0),
+      utf8ToBytes(labels.LABEL_DEVICE_ENCRYPTION_SEED), 32)
+    expect(bytesToHex(rederived)).not.toBe(p.primaryEncryptionSeedHex)
+  })
+
+  test('provisioning SAS matches the Rust-computed code', () => {
+    const p = vectors.provisioning
+    const shared = x25519.getSharedSecret(
+      hexToBytes(p.ephemeralSecretHex),
+      hexToBytes(p.primaryEncryptionPubkeyHex),
+    )
+    const sasBytes = hkdf(sha256, shared, utf8ToBytes(labels.SAS_SALT), utf8ToBytes(labels.SAS_INFO), 4)
+    const num = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
+    const code = (num % 1_000_000).toString().padStart(6, '0')
+    expect(`${code.slice(0, 3)} ${code.slice(3)}`).toBe(p.sasCode)
+  })
+
+  test('provisioning bundle does not authenticate under the pre-bundle AAD', () => {
+    // Domain separation is what prevents a silent downgrade to an older
+    // provisioning payload format.
+    const p = vectors.provisioning
+    const shared = x25519.getSharedSecret(
+      hexToBytes(p.ephemeralSecretHex),
+      hexToBytes(p.primaryEncryptionPubkeyHex),
+    )
+    const provKey = hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32)
+    const data = hexToBytes(p.encryptedHex)
+
+    expect(() =>
+      gcm(provKey, data.slice(0, 12), utf8ToBytes(labels.LABEL_DEVICE_PROVISION)).decrypt(data.slice(12)),
+    ).toThrow()
   })
 })
 

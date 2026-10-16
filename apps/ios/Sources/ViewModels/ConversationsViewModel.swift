@@ -167,7 +167,7 @@ final class ConversationsViewModel {
 
             let request = SendMessageRequest(
                 encryptedContent: encrypted.encryptedContent,
-                recipientEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes
             )
 
             let _: ConversationMessage = try await apiService.request(
@@ -254,34 +254,18 @@ final class ConversationsViewModel {
 
     // MARK: - Message Decryption
 
-    /// Decrypt a conversation message using the HPKE envelope for our encryption pubkey.
+    /// Decrypt a conversation message with whichever of its envelopes is ours.
     private func decryptConversationMessage(_ message: ConversationMessage) -> DecryptedMessage? {
-        guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-        // Find our envelope
-        guard let ourEnvelope = message.recipientEnvelopes.first(where: { $0.pubkey == ourPubkey }) else {
-            return nil
-        }
-
         do {
-            // Reconstruct HPKE envelope from the protocol wire format
-            let hpkeEnvelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: ourEnvelope.enc,
-                ct: ourEnvelope.ct
-            )
-
             let decryptedText = try cryptoService.decryptMessage(
                 encryptedContent: message.encryptedContent,
-                envelope: hpkeEnvelope
+                readerEnvelopes: message.readerEnvelopes
             )
 
             return DecryptedMessage(
                 id: message.id,
                 text: decryptedText,
                 direction: message.direction,
-                channelType: message.channelType,
                 createdAt: DateFormatting.parseISO(message.createdAt) ?? Date(),
                 isRead: message.isRead
             )
@@ -298,7 +282,10 @@ final class ConversationsViewModel {
         case .all:
             filteredConversations = allConversations
         case .active:
-            filteredConversations = allConversations.filter { $0.conversationStatus == .active }
+            // "Active" is every open conversation. A new inbound message arrives as
+            // `waiting` (unclaimed) and stays so until someone replies; filtering on
+            // `.active` alone hid exactly the conversations a volunteer needs to claim.
+            filteredConversations = allConversations.filter { $0.conversationStatus != .closed }
         case .closed:
             filteredConversations = allConversations.filter { $0.conversationStatus == .closed }
         }

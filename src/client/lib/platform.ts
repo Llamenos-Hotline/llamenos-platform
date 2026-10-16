@@ -12,6 +12,8 @@
  */
 
 import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
+import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
+import type { AdminHpkeRecipient } from './admin-recipient'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -47,6 +49,7 @@ export type TauriIpcCommand =
   | 'is_crypto_unlocked'
   | 'get_device_pubkeys'
   | 'create_auth_token_from_state'
+  | 'create_nonceless_auth_token_from_state'
   | 'ed25519_sign_from_state'
   | 'ed25519_verify'
   | 'hpke_seal'
@@ -77,6 +80,9 @@ export type TauriIpcCommand =
   | 'device_import_and_load'
   | 'generate_ephemeral_ed25519'
   | 'generate_backup_from_state'
+  | 'generate_recovery_key'
+  | 'backup_verify_credential'
+  | 'restore_backup_and_load'
   | 'wipe_keys'
   | 'provision_encrypt_for_device'
   | 'provision_create_session'
@@ -265,19 +271,47 @@ export async function getDevicePubkeys(): Promise<DeviceKeyState | null> {
 
 /**
  * Create an Ed25519 auth token using the device signing key in CryptoState.
+ *
+ * Rust generates the nonce and signs it into the message, so the returned JSON
+ * carries a `nonce` field that MUST be forwarded to the server alongside
+ * `timestamp` and `token` — dropping it means verifying a message that was
+ * never signed, which is a hard 401 (#1389). There is no nonce parameter:
+ * callers cannot supply one, and cannot ask for it to be left out.
  */
 export async function createAuthToken(
   timestamp: number,
   method: string,
   path: string,
-  nonce?: string,
 ): Promise<string> {
   if (useTauri) {
     return tauriInvoke<string>('create_auth_token_from_state', {
       timestamp,
       method,
       path,
-      nonce,
+    })
+  }
+  throw new Error('WASM auth token not yet implemented')
+}
+
+/**
+ * Create an Ed25519 auth token with NO nonce.
+ *
+ * Only for routes whose wire schema has no `nonce` field — today just
+ * `POST /api/invites/redeem`. The message is signed under a separate
+ * domain-separation label (`LABEL_DEVICE_AUTH_NO_NONCE`) that the server
+ * accepts on that route alone, so the token is useless elsewhere. Use
+ * `createAuthToken` for everything else.
+ */
+export async function createNoncelessAuthToken(
+  timestamp: number,
+  method: string,
+  path: string,
+): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('create_nonceless_auth_token_from_state', {
+      timestamp,
+      method,
+      path,
     })
   }
   throw new Error('WASM auth token not yet implemented')
@@ -878,24 +912,46 @@ function hexToBase64url(hex: string): string {
 
 // ── AES-256-GCM content encryption (WebCrypto) ─────────────────────
 
-export async function aesGcmEncrypt(plaintext: string, keyHex: string): Promise<string> {
+/**
+ * WebCrypto AES-GCM parameters, binding `aadHex` as `additionalData`.
+ *
+ * `aadHex` is required at every call site rather than defaulted: the
+ * canonical-AAD envelopes (notes, files, contacts) bind a non-empty AAD from
+ * `@shared/envelope-aad`, while stored records (messages, call metadata) bind
+ * none at all — main's #1393 format, empty AAD with the label as HPKE `info`.
+ * An explicit `''` is a deliberate statement that this ciphertext carries no
+ * AAD, not a forgotten one.
+ */
+function aesGcmParams(iv: Uint8Array<ArrayBuffer>, aadHex: string): AesGcmParams {
+  const params: AesGcmParams = { name: 'AES-GCM', iv }
+  if (aadHex.length > 0) {
+    const pairs = aadHex.match(/.{2}/g) ?? []
+    const aad = new Uint8Array(pairs.length)
+    pairs.forEach((b, i) => { aad[i] = parseInt(b, 16) })
+    params.additionalData = aad
+  }
+  return params
+}
+
+export async function aesGcmEncrypt(plaintext: string, keyHex: string, aadHex: string): Promise<string> {
   const keyBytes = new Uint8Array((keyHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt'])
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(plaintext)))
+  const params = aesGcmParams(iv, aadHex)
+  const ct = new Uint8Array(await crypto.subtle.encrypt(params, cryptoKey, new TextEncoder().encode(plaintext)))
   const packed = new Uint8Array(iv.length + ct.length)
   packed.set(iv)
   packed.set(ct, iv.length)
   return Array.from(packed, b => b.toString(16).padStart(2, '0')).join('')
 }
 
-export async function aesGcmDecrypt(ciphertextHex: string, keyHex: string): Promise<string> {
+export async function aesGcmDecrypt(ciphertextHex: string, keyHex: string, aadHex: string): Promise<string> {
   const data = new Uint8Array((ciphertextHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
   const iv = data.slice(0, 12)
   const ct = data.slice(12)
   const keyBytes = new Uint8Array((keyHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
   const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt'])
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, ct)
+  const plaintext = await crypto.subtle.decrypt(aesGcmParams(iv, aadHex), cryptoKey, ct)
   return new TextDecoder().decode(plaintext)
 }
 
@@ -915,9 +971,37 @@ async function resolveEncryptionPubkey(signingOrEncPubkey: string): Promise<stri
 }
 
 /**
+ * The wire form of a sealed key envelope: `enc` and `ct` BOTH hex.
+ *
+ * `docs/protocol/PROTOCOL.md` §2.4 specifies hex for both, and that is what
+ * `encryptMessageForStorage` writes and what `decryptMessage` is specified to
+ * read. The Tauri IPC `HpkeEnvelope` carries base64url instead (see
+ * `packages/crypto/src/hpke_envelope.rs`), so the two always need converting —
+ * and the conversion used to be written out per call site, which converted
+ * `enc` and left `ct` in whichever encoding it happened to arrive in. The
+ * desktop therefore wrote base64url `ct` and read base64url `ct`:
+ * self-consistent, and unreadable to every other implementation.
+ *
+ * These two functions are now the only crossing of that boundary.
+ */
+function toIpcEnvelope(labelId: number, wire: { enc: string; ct: string }): HpkeEnvelope {
+  return { v: 3, labelId, enc: hexToBase64url(wire.enc), ct: hexToBase64url(wire.ct) }
+}
+
+/** The wire form of an IPC envelope: hex `enc`, hex `ct`. */
+function toWireEnvelope(ipc: HpkeEnvelope): { enc: string; ct: string } {
+  return { enc: base64urlToHex(ipc.enc), ct: base64urlToHex(ipc.ct) }
+}
+
+/**
  * Wrap a symmetric key for a recipient using HPKE.
  * Resolves signing pubkey to encryption pubkey if needed,
  * and returns hex-encoded enc/ct wire format.
+ *
+ * The wrap is sealed under `keyWrapAad(label)` — the canonical convention
+ * Rust's `hpke_wrap_key` binds — for the canonical-AAD envelopes (file and
+ * metadata keys, notes, contacts). Stored records (messages, call metadata)
+ * do NOT go through here: they carry empty AAD (see `encryptMessage`).
  */
 export async function hpkeWrapKey(
   keyHex: string,
@@ -925,45 +1009,62 @@ export async function hpkeWrapKey(
   label: string,
 ): Promise<KeyEnvelope> {
   const encPubkey = await resolveEncryptionPubkey(recipientPubkey)
-  const envelope = await hpkeSealKey(keyHex, encPubkey, label, '')
-  return { enc: base64urlToHex(envelope.enc), ct: envelope.ct }
+  const envelope = await hpkeSealKey(keyHex, encPubkey, label, keyWrapAadHex(label))
+  return toWireEnvelope(envelope)
+}
+
+/**
+ * Log an envelope that was addressed to this device and still would not open.
+ *
+ * The callers return `null` so one unreadable row cannot blank a whole screen,
+ * but the failure must leave a trace: a crypto mismatch that produces no
+ * console output is indistinguishable from "you are not a reader of this", and
+ * that is how the server/desktop AAD disagreement survived undetected.
+ */
+function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
+  const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  console.error(`[crypto] ${kind} envelope addressed to this device failed to open — ${reason}`)
 }
 
 /**
  * Encrypt a note payload with per-note forward secrecy.
  * Generates a random AES-256-GCM key, encrypts content, then HPKE-wraps
  * the key for the author and each admin.
+ *
+ * `adminPubkeys` is branded (`AdminHpkeRecipient`, see `./admin-recipient`)
+ * because five call sites used to pass `adminDecryptionPubkey || authorPub`,
+ * which type-checked and silently produced notes no admin could read (#1468).
+ * A bare string — the author's own key above all — can no longer be passed
+ * here. Callers with no admin recipient must refuse to write the note.
+ *
+ * Both layers carry the canonical envelope AAD (`contentAad` / `keyWrapAad`
+ * for LABEL_NOTE_KEY) — the same convention Rust's `encrypt_note` binds, so a
+ * note sealed here opens there and vice versa. The previous empty AAD made the
+ * two implementations mutually unreadable.
  */
 export async function encryptNote(
   payloadJson: string,
   authorPubkey: string,
-  adminPubkeys: string[],
+  adminPubkeys: AdminHpkeRecipient[],
 ): Promise<EncryptedNoteResult> {
   // Generate random 32-byte content key
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
   const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
 
   // AES-256-GCM encrypt content
-  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex)
+  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex, contentAadHex(LABEL_NOTE_KEY))
 
   // HPKE-wrap key for author
   const authorEncPub = await resolveEncryptionPubkey(authorPubkey)
-  const authorHpke = await hpkeSealKey(keyHex, authorEncPub, LABEL_NOTE_KEY, '')
-  const authorEnvelope: KeyEnvelope = {
-    enc: base64urlToHex(authorHpke.enc),
-    ct: authorHpke.ct,
-  }
+  const authorHpke = await hpkeSealKey(keyHex, authorEncPub, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
+  const authorEnvelope: KeyEnvelope = toWireEnvelope(authorHpke)
 
   // HPKE-wrap key for each admin
   const adminEnvelopes: RecipientEnvelope[] = await Promise.all(
     adminPubkeys.map(async (pubkey) => {
       const encPub = await resolveEncryptionPubkey(pubkey)
-      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_NOTE_KEY, '')
-      return {
-        pubkey,
-        enc: base64urlToHex(hpke.enc),
-        ct: hpke.ct,
-      }
+      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
+      return { pubkey, ...toWireEnvelope(hpke) }
     }),
   )
 
@@ -979,15 +1080,11 @@ export async function decryptNote(
 ): Promise<string | null> {
   try {
     // Reconstruct HpkeEnvelope from the stored key envelope
-    const hpkeEnvelope: HpkeEnvelope = {
-      v: 3,
-      labelId: 0, // LABEL_NOTE_KEY index
-      enc: hexToBase64url(envelope.enc),
-      ct: envelope.ct,
-    }
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_NOTE_KEY, '')
-    return await aesGcmDecrypt(encryptedContent, keyHex)
-  } catch {
+    const hpkeEnvelope = toIpcEnvelope(0 /* LABEL_NOTE_KEY */, envelope)
+    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
+    return await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_NOTE_KEY))
+  } catch (err) {
+    reportEnvelopeOpenFailure('note', err)
     return null
   }
 }
@@ -1003,6 +1100,15 @@ export async function decryptLegacyNote(
 /**
  * Encrypt a message for multiple readers.
  * Random AES-256-GCM key, HPKE-wrapped per reader.
+ *
+ * Stored records (messages, call metadata) carry NO AAD on either layer — the
+ * label is bound as the HPKE `info` only. Client-sealed and server-sealed
+ * messages share a conversation with no format marker, so a reader cannot know
+ * which AAD to supply; main's #1393 adjudicated the format as empty AAD
+ * everywhere (worker `NO_AAD`, Rust `open_record_for_reader`, mobile
+ * `mobile_decrypt_message`). Sealing with the canonical `contentAad`/
+ * `keyWrapAad` here would make desktop-written messages unreadable on every
+ * other platform. Canonical AAD is for notes/files/contacts only.
  */
 export async function encryptMessage(
   plaintext: string,
@@ -1011,17 +1117,13 @@ export async function encryptMessage(
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
   const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
 
-  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex)
+  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex, '')
 
   const readerEnvelopes: RecipientEnvelope[] = await Promise.all(
     readerPubkeys.map(async (pubkey) => {
       const encPub = await resolveEncryptionPubkey(pubkey)
       const hpke = await hpkeSealKey(keyHex, encPub, LABEL_MESSAGE, '')
-      return {
-        pubkey,
-        enc: base64urlToHex(hpke.enc),
-        ct: hpke.ct,
-      }
+      return { pubkey, ...toWireEnvelope(hpke) }
     }),
   )
 
@@ -1045,15 +1147,15 @@ export async function decryptMessage(
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope: HpkeEnvelope = {
-      v: 3,
-      labelId: 5, // LABEL_MESSAGE index
-      enc: hexToBase64url(myEnvelope.enc),
-      ct: myEnvelope.ct,
-    }
+    const hpkeEnvelope = toIpcEnvelope(5 /* LABEL_MESSAGE */, myEnvelope)
     const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, '')
-    return await aesGcmDecrypt(encryptedContent, keyHex)
-  } catch {
+    return await aesGcmDecrypt(encryptedContent, keyHex, '')
+  } catch (err) {
+    // An envelope addressed to this device that will not open is a defect, not
+    // a permission boundary: either the writer sealed to the wrong key or the
+    // two sides disagree on the AAD. Returning a bare null made both look like
+    // "not a reader" and rendered as `[Encrypted]` with nothing in the console.
+    reportEnvelopeOpenFailure('message', err)
     return null
   }
 }
@@ -1061,6 +1163,10 @@ export async function decryptMessage(
 /**
  * Decrypt a call record by finding our admin envelope and decrypting.
  * Uses LABEL_CALL_META for key unwrapping (distinct from message label).
+ *
+ * Call records are stored records: empty AAD on both layers, label as HPKE
+ * `info` only — the same convention the server's
+ * `encryptCallRecordForStorage` and Rust `open_record_for_reader` bind.
  */
 export async function decryptCallRecord(
   encryptedContent: string,
@@ -1075,16 +1181,12 @@ export async function decryptCallRecord(
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope: HpkeEnvelope = {
-      v: 3,
-      labelId: 6, // LABEL_CALL_META index
-      enc: hexToBase64url(myEnvelope.enc),
-      ct: myEnvelope.ct,
-    }
+    const hpkeEnvelope = toIpcEnvelope(6 /* LABEL_CALL_META */, myEnvelope)
     const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_CALL_META, '')
-    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex)
+    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex, '')
     return JSON.parse(plaintext)
-  } catch {
+  } catch (err) {
+    reportEnvelopeOpenFailure('call-record', err)
     return null
   }
 }
@@ -1161,18 +1263,67 @@ export async function rewrapFileKey(
 }
 
 /**
- * Generate an encrypted backup from the current CryptoState.
- * In v3, wraps the device key material for offline recovery.
+ * Generate a fresh recovery key to display to the user.
+ *
+ * Base32, dash-grouped. The same string is handed straight back to
+ * `generateBackupFromState` — Rust owns both halves so there is no encoding to
+ * disagree about (#1709).
+ */
+export async function generateRecoveryKey(): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('generate_recovery_key')
+  }
+  throw new Error('WASM recovery key generation not yet implemented')
+}
+
+/**
+ * Generate an encrypted backup of the loaded device key, as a JSON string.
+ *
+ * `pin` and `recoveryKey` each independently protect the signing seed. Format
+ * and KDFs: `packages/crypto/src/backup.rs`.
  */
 export async function generateBackupFromState(
-  pubkey: string,
   pin: string,
   recoveryKey: string,
 ): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('generate_backup_from_state', { pubkey, pin, recoveryKey })
+    return tauriInvoke<string>('generate_backup_from_state', { pin, recoveryKey })
   }
   throw new Error('WASM backup generation not yet implemented')
+}
+
+/**
+ * Check that a recovery key or PIN opens a backup, without restoring it.
+ * Rejects with the Rust error when it does not.
+ */
+export async function verifyBackupCredential(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+): Promise<void> {
+  if (useTauri) {
+    return tauriInvoke<void>('backup_verify_credential', { backupJson, credential, isRecoveryKey })
+  }
+  throw new Error('WASM backup verification not yet implemented')
+}
+
+/**
+ * Restore a device key from a backup and load it into CryptoState under a new PIN.
+ * The recovered seed never enters the webview — only the re-encrypted blob comes back.
+ */
+export async function restoreBackupAndLoad(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+  newPin: string,
+  deviceId: string,
+): Promise<EncryptedDeviceKeys> {
+  if (useTauri) {
+    return tauriInvoke<EncryptedDeviceKeys>('restore_backup_and_load', {
+      backupJson, credential, isRecoveryKey, newPin, deviceId,
+    })
+  }
+  throw new Error('WASM backup restore not yet implemented')
 }
 
 /**

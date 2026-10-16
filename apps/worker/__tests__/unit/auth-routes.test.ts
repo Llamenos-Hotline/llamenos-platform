@@ -230,6 +230,22 @@ describe('auth routes', () => {
       expect(body.roles).toContain('role-volunteer')
     })
 
+    it('returns hub-scoped roles for a member with no global role', async () => {
+      mockVerifyAuthToken.mockResolvedValue(true)
+      const { app, user } = createApp()
+      Object.assign(user, { roles: [], hubRoles: [{ hubId: 'hub-a', roleIds: ['role-volunteer'] }] })
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'aabb1122eeff3344', timestamp: Date.now(), token: 'valid' }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.roles).toEqual(['role-volunteer'])
+    })
+
     it('rate limits in production', async () => {
       mockCheckRateLimit.mockResolvedValue(true)
       const { app } = createApp()
@@ -336,6 +352,21 @@ describe('auth routes', () => {
       expect(body.webauthnRegistered).toBe(false)
     })
 
+    it('describes a hub-only member by their hub roles, not as role-less', async () => {
+      // Hub invites and hub user creation grant only hub-scoped roles (#1037).
+      // Clients treat an empty `roles` list as "no account" and sign the user
+      // out, so roles/permissions/primaryRole must all be account-wide.
+      const { app, user } = createApp()
+      Object.assign(user, { roles: [], hubRoles: [{ hubId: 'hub-a', roleIds: ['role-volunteer'] }] })
+
+      const res = await app.request('/auth/me', {}, defaultEnv)
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.roles).toEqual(['role-volunteer'])
+      expect(body.permissions).toEqual(['calls:answer'])
+      expect(body.primaryRole).toMatchObject({ id: 'role-volunteer' })
+    })
+
     /**
      * `adminDecryptionPubkey` is not informational: it is the key every client
      * seals its admin envelopes to. These three tests pin the only three
@@ -350,6 +381,7 @@ describe('auth routes', () => {
     const ADMIN_X25519 = '27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177'
 
     it('returns ADMIN_DECRYPTION_PUBKEY as the admin HPKE recipient', async () => {
+
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, {
@@ -375,6 +407,7 @@ describe('auth routes', () => {
      * some other wrong key, so the Ed25519 key is named explicitly.
      */
     it('never substitutes the Ed25519 ADMIN_PUBKEY when no X25519 key is configured', async () => {
+
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, {
@@ -407,6 +440,7 @@ describe('auth routes', () => {
         const body = await res.json()
         expect(body.adminDecryptionPubkey, `forwarded malformed key ${malformed}`).toBeUndefined()
       }
+
     })
   })
 

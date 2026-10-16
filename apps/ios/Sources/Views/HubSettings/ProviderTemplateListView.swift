@@ -46,6 +46,7 @@ struct ProviderTemplateListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-template-list")
     }
 

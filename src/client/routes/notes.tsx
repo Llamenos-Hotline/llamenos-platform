@@ -5,9 +5,11 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { listNotes, createNote, updateNote, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
+import { adminHpkeRecipient } from '@/lib/admin-recipient'
 import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
+import { useConfig } from '@/lib/config'
 import type { NotePayload } from '@shared/types'
 import { StickyNote, Plus, Pencil, Lock, Mic, X, Search, ChevronLeft, ChevronRight, Download, MessageCircle, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -59,6 +61,7 @@ function NotesPage() {
   const [searchInput, setSearchInput] = useState(search)
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const { currentHubId } = useConfig()
   const limit = 50
 
   useEffect(() => {
@@ -150,7 +153,9 @@ function NotesPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, callId, hasDeviceKey, isAdmin])
+    // currentHubId: notes are hub-scoped, so switching hubs must re-read them
+    // rather than leave another hub's list on screen (#1708).
+  }, [page, callId, hasDeviceKey, isAdmin, currentHubId])
 
   useEffect(() => { loadNotes() }, [loadNotes])
 
@@ -161,7 +166,13 @@ function NotesPage() {
       const payload: NotePayload = { text }
       if (Object.keys(fields).length > 0) payload.fields = fields
       const authorPub = publicKey
-      const adminPub = adminDecryptionPubkey || authorPub
+      // Without an admin recipient this note would be wrapped to the author
+      // twice and readable by no admin at all (#1468). Refuse, don't substitute.
+      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+      if (!adminPub) {
+        toast(t('notes.noAdminRecipient'), 'error')
+        return
+      }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
       const res = await updateNote(noteId, { encryptedContent, authorEnvelope, adminEnvelopes })
       setNotes(prev => prev.map(n =>
@@ -182,7 +193,12 @@ function NotesPage() {
       const payload: NotePayload = { text }
       if (Object.keys(fields).length > 0) payload.fields = fields
       const authorPub = publicKey
-      const adminPub = adminDecryptionPubkey || authorPub
+      // See handleSaveEdit: no admin recipient means no admin reader (#1468).
+      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+      if (!adminPub) {
+        toast(t('notes.noAdminRecipient'), 'error')
+        return
+      }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
       const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes })
       setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
@@ -433,7 +449,7 @@ function NotesPage() {
                           <p className="text-xs text-muted-foreground">
                             {new Date(note.createdAt).toLocaleString()}
                             {note.authorPubkey && !note.authorPubkey.startsWith('system:') && (
-                              <span className="ml-1.5 font-mono opacity-60" title={note.authorPubkey}>
+                              <span data-testid="note-author" className="ml-1.5 font-mono opacity-60" title={note.authorPubkey}>
                                 {nameMap.get(note.authorPubkey) || note.authorPubkey.slice(0, 8)}
                               </span>
                             )}

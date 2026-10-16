@@ -8,7 +8,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
-import { Timeouts } from '../../helpers'
+import { Timeouts, useScenarioHub } from '../../helpers'
 import {
   ADMIN_NSEC,
   createCmsReportTypeViaApi,
@@ -39,6 +39,13 @@ Given('a triage-eligible report exists', async ({ backendRequest: request, cases
     hubId: workerHub,
   })
   casesWorld.triageReportId = report.id
+})
+
+Given('a hub whose triage queue is empty', async ({ page, backendRequest: request }) => {
+  // The worker hub accumulates triage-eligible reports from every scenario this
+  // Playwright worker runs, so "the queue is empty" is only assertable in a hub
+  // this scenario owns. Nothing is seeded into it — that is the point.
+  await useScenarioHub(page, request, 'triage-empty')
 })
 
 Given('a triage-eligible report with a linked case exists', async ({ backendRequest: request, casesWorld, workerHub }) => {
@@ -74,6 +81,28 @@ When('I click the {string} status tab', async ({ page }, tabLabel: string) => {
   }
   const key = keyMap[tabLabel] ?? tabLabel.toLowerCase().replace(/ /g, '_')
   await page.getByTestId(`triage-status-tab-${key}`).click()
+})
+
+When('I select a triage case type', async ({ page }) => {
+  // The panel renders exactly one of two mutually exclusive controls, the same way
+  // CreateRecordDialog does: a type select when the hub holds several entity types,
+  // or a single-type badge (auto-selected) when it holds exactly one. The title
+  // field, the schema fields and both action buttons render only once a type is
+  // selected — so with several types the panel is inert until a human picks one,
+  // which is what this step is. The hub's entity types accumulate across scenarios
+  // (see the "{string} template has been applied" step), so no specific type name
+  // is guaranteed to exist; this scenario does not care which type it converts to,
+  // only that conversion works, so it takes the first option offered.
+  const select = page.getByTestId('triage-entity-type-select')
+  const title = page.getByTestId('triage-case-title-input')
+  await expect(select.or(title)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  if (await select.count() > 0) {
+    await select.click()
+    const option = page.locator('[data-testid^="triage-entity-type-option-"]').first()
+    await expect(option).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await option.click()
+  }
+  await expect(title).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 When('I fill in the triage case title', async ({ page }) => {
