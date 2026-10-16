@@ -1854,7 +1854,6 @@ mod tests {
     /// is being passed without binding anything.
     #[test]
     fn hub_key_load_binds_the_key_wrap_aad() {
-        let _guard = state_guard();
         let label = crate::labels::LABEL_HUB_KEY_WRAP;
         let composite = crate::envelope_aad::key_wrap_aad(label);
         // The bytes §2.7 names, pinned here so a drift in the derivation is a
