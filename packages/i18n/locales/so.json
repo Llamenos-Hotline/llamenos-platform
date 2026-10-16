@@ -326,7 +326,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Samee fariin guud si aad hal mar u gaarto dhammaan macaamiisha is-diiwaangeliyay."
   },
   "callHistory": {
     "answeredBy": "Waxaa Jawaabay",
@@ -497,7 +498,8 @@
     "groupName": "Group name",
     "groups": "Groups",
     "members": "members",
-    "sectionBasic": "Basic Info"
+    "sectionBasic": "Basic Info",
+    "emptyMessage": "Diiwaannada xiriirka halkan ayay ka muuqan doonaan marka dadka soo wacaa la xiriiraan khadka caawimaadda."
   },
   "conversations": {
     "claim": "Claim",
@@ -558,7 +560,9 @@
     "searchPlaceholder": "Search conversations...",
     "unassign": "Unassign",
     "unassignError": "Failed to unassign conversation",
-    "unassigned": "Conversation unassigned"
+    "unassigned": "Conversation unassigned",
+    "emptyMessage": "Fariimaha ka imanaya SMS, WhatsApp iyo Signal halkan ayay ka muuqan doonaan.",
+    "unreadCount": "{{count}} fariimood oo aan la akhrin"
   },
   "customFields": {
     "addField": "Kudar Goob",
@@ -696,7 +700,9 @@
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Xarumahaada lama soo rarin",
-    "membershipLoadFailedBody": "Server-ku ma sheegin xarumaha aad ka tirsan tahay, sidaas darteed weli wax lama muujin karo. Hubi xiriirkaaga oo isku day mar kale."
+    "membershipLoadFailedBody": "Server-ku ma sheegin xarumaha aad ka tirsan tahay, sidaas darteed weli wax lama muujin karo. Hubi xiriirkaaga oo isku day mar kale.",
+    "phoneHelp": "Lambarka ugu muhiimsan ee khadka caawimaadda xaruntan. Waxaa loo isticmaalaa hagidda wicitaannada.",
+    "slugHelp": "Slug-ga waxaa lagu isticmaalaa URL-yada iyo tixraacyada API. Waxaa laga sameeyaa magaca."
   },
   "ivr": {
     "selfAnnouncement": "Soomaaliga, taabo [N].",
@@ -805,7 +811,8 @@
     "updated": "Qoraalkii waa la cusbooneysiiyay",
     "viewNotes": "Qoraallo",
     "detail": "Faahfaahinta Qoraalkii",
-    "replies": "Replies"
+    "replies": "Replies",
+    "emptyMessage": "Qoraalada aad samaysid inta lagu jiro wicitaannada halkan ayay ka muuqan doonaan."
   },
   "notifications": {
     "default": "Lama shixin",
@@ -1048,7 +1055,9 @@
     "videoNotSupported": "Biraawsarkaagu kuma taageerayo ciyaarista fiidiyowga.",
     "noTypes": "No report types available",
     "selectType": "Select a report type",
-    "typeLabel": "Report Type"
+    "typeLabel": "Report Type",
+    "emptyFiltered": "Ma jiraan warbixino xaaladdoodu tahay: {{status}}",
+    "emptyMessage": "Warbixinnada aad samaysid halkan ayay ka muuqan doonaan."
   },
   "retention": {
     "description": "Configure how long different types of records are retained before automatic deletion.",
@@ -1511,7 +1520,8 @@
       "startDate": "Start Date",
       "title": "Availability"
     },
-    "emptyMessage": "No shifts have been configured yet. Contact your administrator."
+    "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
+    "clockOutMessage": "Waad joojin doontaa helitaanka wicitaannada soo galaya."
   },
   "shortcuts": {
     "answerCall": "Ka jawaab wicitaanka",
@@ -2451,7 +2461,13 @@
     "title": "Events",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Maaraynta kiisaska waa in la shido si loo isticmaalo dhacdooyinka.",
+    "emptyMessage": "Weli dhacdo lama samayn.",
+    "encryptedDetails": "Faahfaahinta dhacdada waa la sireeyay",
+    "locationHelp": "Geli goob qiyaas ah. Ammaanka awgiis, isku-duwayaasha saxda ah weligood lama kaydiyo.",
+    "noResults": "Ma jirto dhacdo la mid ah raadintaada",
+    "pageIndicator": "Bogga {{page}} ee {{total}}"
   },
   "entityTemplates": {
     "fields": {
@@ -2827,7 +2843,28 @@
     "eventsMigrationComplete": "Events migration complete",
     "eventsMigrationError": "Migration failed",
     "checkingMigration": "Checking migration status...",
-    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}"
+    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}",
+    "activeInvitesHeader": "Firfircoon ({{count}})",
+    "claimedInvitesHeader": "La isticmaalay ({{count}})",
+    "expiredInvitesHeader": "Dhacay ({{count}})",
+    "auditTotal": "Wadarta diiwaannada: {{count}}",
+    "banFooter": "Geli hash-ka SHA-256 ee lambarka taleefanka ama aqoonsiga qofka soo wacay ee aad rabto inaad mamnuucdo.",
+    "bansHeader": "La mamnuucay ({{count}})",
+    "categoriesHeader": "Qaybaha ({{count}})",
+    "membersHeader": "Xubnaha ({{count}})",
+    "categoryCreated": "Qaybta warbixinta waa la sameeyay",
+    "categoryDeleted": "Qaybta warbixinta waa la tirtiray",
+    "categoryNameRequired": "Magaca qaybta waa qasab",
+    "deleteConfirmMessage": "Ma hubtaa inaad tirtirto shaygan? Tan dib looma celin karo.",
+    "healthUnavailableMessage": "Xogta caafimaadka nidaamka lama soo dejin karin.",
+    "inviteRoleFooter": "Dooro doorka qofka aad martiqaadayso. Maamulayaashu waxay leeyihiin awood maamul oo buuxda.",
+    "newCategoryMessage": "Geli magac qaybta warbixinta cusub.",
+    "noAuditMessage": "Ficilada nidaamka halkan ayaa lagu diiwaangelin doonaa.",
+    "noBansMessage": "Hadda ma jiro aqoonsi la mamnuucay.",
+    "noCategoriesMessage": "Qaybaha warbixinta waxay kaa caawiyaan kala soocidda dhacdooyinka.",
+    "noInvitesMessage": "Samee koodhadh martiqaad si aad ugu darto mutadawiciin cusub.",
+    "noSearchResults": "Ma jiro xubin la mid ah raadintaada.",
+    "noUsersMessage": "Weli xubin ma soo biirin."
   },
   "permissions": {
     "groups": {
@@ -3317,7 +3354,8 @@
     "unassign": "Unassign",
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
-    "updated": "Updated"
+    "updated": "Updated",
+    "noEntityTypesDescription": "Xaruntan looma habeeyn wax nooc hay'ad ah."
   },
   "help": {
     "securityReports": "Warbixinno",
@@ -3514,7 +3552,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "Ma jiraan warbixino ku jira safka kala-saaridda oo xaaladdoodu tahay: {{status}}"
   },
   "lock": {
     "app": "Xir Abka",
@@ -3575,7 +3614,13 @@
     "noHubSelected": "No hub selected",
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: {{reason}}"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "biometricLockout": "Furitaanka biometric-ka waa la xiray ka dib isku day badan oo fashilmay. Geli PIN-kaaga.",
+    "biometricNotEnrolled": "Xogta biometric-ka ee qalabkaagu way isbedeshay, sidaa darteed furitaanka biometric-ka waa la demiyay. Geli PIN-kaaga.",
+    "biometricPinMismatch": "Furitaanka biometric-ku wuu fashilmay. Geli PIN-kaaga.",
+    "httpNotAllowed": "Isku xirka HTTP ee aan ammaanka ahayn lama oggola. Isticmaal cinwaan HTTPS ah.",
+    "pinLockoutDuration": "Isku day badan oo fashilmay. Isku day mar kale {{seconds}} ilbiriqsi kadib.",
+    "pinWiped": "Isku day PIN oo badan ayaa fashilmay. Ammaankaaga awgiis, dhammaan furayaasha qalabkan waa la tirtiray."
   },
   "provider": {
     "status": {
@@ -3931,7 +3976,9 @@
       "subtitle": "Choose a report type to get started",
       "title": "Select Report Type"
     },
-    "validationErrors": "Please fix the errors above before submitting."
+    "validationErrors": "Please fix the errors above before submitting.",
+    "bodyHint": "Si faahfaahsan u sharax dhacdada...",
+    "closeConfirmMessage": "Ma hubtaa inaad xirto warbixintan? Tan dib looma celin karo."
   },
   "gettingStarted": {
     "setupWizard": "Setup Wizard",
@@ -4118,7 +4165,9 @@
     "statusActive": "Firfircoon",
     "loading": "Loading messages...",
     "replyPlaceholder": "Type a message...",
-    "send": "Send message"
+    "send": "Send message",
+    "closedMessage": "Wadahadalkan waa la xiray",
+    "noMessages": "Weli fariin ma jirto"
   },
   "filter": {
     "closed": "La xiray",
@@ -4237,7 +4286,8 @@
   },
   "logout": {
     "confirmAction": "Ka bax",
-    "confirmTitle": "Ka bax"
+    "confirmTitle": "Ka bax",
+    "confirmMessage": "Ma hubtaa inaad ka baxdo? Furayaashaada la sireeyay waa laga saari doonaa qalabkan."
   },
   "call": {
     "filterAll": "All",
@@ -4372,7 +4422,8 @@
     "empty": "No timeline events",
     "emptySubtitle": "Activity will appear here",
     "emptyTitle": "No Interactions",
-    "loading": "Loading timeline..."
+    "loading": "Loading timeline...",
+    "emptyMessage": "Wax isdhexgal ah looma diiwaangelin xiriirkan."
   },
   "activeCalls": "Wicitaannada Socda",
   "testConnection": "Tijaabi Isku xirka",
@@ -4419,11 +4470,15 @@
   "audioInput": {
     "permissionTitle": "Speech Recognition",
     "start": "Start voice input",
-    "stop": "Stop recording"
+    "stop": "Stop recording",
+    "micDenied": "Gelinta codka waxay u baahan tahay oggolaanshaha makarafoonka. Ka shid Settings > Privacy & Security > Microphone.",
+    "speechDenied": "Gelinta codka waxay u baahan tahay oggolaanshaha aqoonsiga hadalka. Ka shid Settings > Privacy & Security > Speech Recognition.",
+    "unavailable": "Aqoonsiga hadalka laguma heli karo qalabkan"
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Fur Llamenos"
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {

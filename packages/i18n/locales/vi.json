@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "Đang hoạt động ({{count}})",
+    "claimedInvitesHeader": "Đã sử dụng ({{count}})",
+    "expiredInvitesHeader": "Đã hết hạn ({{count}})",
+    "auditTotal": "Tổng cộng {{count}} mục",
+    "banFooter": "Nhập mã băm SHA-256 của số điện thoại hoặc mã định danh của người gọi cần chặn.",
+    "bansHeader": "Đã chặn ({{count}})",
+    "categoriesHeader": "Danh mục ({{count}})",
+    "membersHeader": "Thành viên ({{count}})",
+    "categoryCreated": "Đã tạo danh mục báo cáo",
+    "categoryDeleted": "Đã xóa danh mục báo cáo",
+    "categoryNameRequired": "Tên danh mục là bắt buộc",
+    "deleteConfirmMessage": "Bạn có chắc chắn muốn xóa mục này? Không thể hoàn tác thao tác này.",
+    "healthUnavailableMessage": "Không thể tải dữ liệu tình trạng hệ thống.",
+    "inviteRoleFooter": "Chọn vai trò cho người bạn mời. Quản trị viên có toàn quyền quản lý.",
+    "newCategoryMessage": "Nhập tên cho danh mục báo cáo mới.",
+    "noAuditMessage": "Các thao tác hệ thống sẽ được ghi lại tại đây.",
+    "noBansMessage": "Hiện không có mã định danh nào bị chặn.",
+    "noCategoriesMessage": "Danh mục báo cáo giúp phân loại sự việc.",
+    "noInvitesMessage": "Tạo mã mời để thêm tình nguyện viên mới.",
+    "noSearchResults": "Không có thành viên nào khớp với tìm kiếm của bạn.",
+    "noUsersMessage": "Chưa có thành viên nào tham gia."
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "Nhận dạng giọng nói",
     "start": "Bắt đầu nhập giọng nói",
-    "stop": "Dừng ghi âm"
+    "stop": "Dừng ghi âm",
+    "micDenied": "Cần quyền truy cập micrô để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Micrô.",
+    "speechDenied": "Cần quyền nhận dạng giọng nói để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Nhận dạng giọng nói.",
+    "unavailable": "Nhận dạng giọng nói không khả dụng trên thiết bị này"
   },
   "auditLog": {
     "actor": "Người thực hiện",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Mở khóa Llamenos"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Tạo tin nhắn hàng loạt để gửi đến tất cả người đăng ký cùng lúc."
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "Đã cập nhật",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "Chưa có loại thực thể nào được cấu hình cho hub này."
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "Hồ sơ liên hệ sẽ xuất hiện tại đây khi người gọi liên lạc với đường dây nóng."
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "Cuộc hội thoại này đã đóng",
+    "noMessages": "Chưa có tin nhắn"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "Không xác định",
     "waiting": "đang chờ",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "Tin nhắn đến từ SMS, WhatsApp và Signal sẽ xuất hiện tại đây.",
+    "unreadCount": "{{count}} tin nhắn chưa đọc"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "Mở khóa sinh trắc học đã bị khóa do thử sai quá nhiều lần. Hãy nhập mã PIN.",
+    "biometricNotEnrolled": "Dữ liệu sinh trắc học trên thiết bị của bạn đã thay đổi, vì vậy mở khóa sinh trắc học đã bị tắt. Hãy nhập mã PIN.",
+    "biometricPinMismatch": "Mở khóa sinh trắc học thất bại. Hãy nhập mã PIN.",
+    "httpNotAllowed": "Không cho phép kết nối HTTP không an toàn. Hãy dùng địa chỉ HTTPS.",
+    "pinLockoutDuration": "Thử sai quá nhiều lần. Hãy thử lại sau {{seconds}} giây.",
+    "pinWiped": "Nhập sai mã PIN quá nhiều lần. Để bảo vệ bạn, tất cả khóa trên thiết bị này đã bị xóa."
   },
   "eventType": {
     "call": "Cuộc gọi",
@@ -2109,7 +2147,13 @@
     "title": "Sự kiện",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Phải bật quản lý hồ sơ để sử dụng sự kiện.",
+    "emptyMessage": "Chưa có sự kiện nào được tạo.",
+    "encryptedDetails": "Chi tiết sự kiện đã được mã hóa",
+    "locationHelp": "Nhập vị trí gần đúng. Vì lý do an toàn, tọa độ chính xác không bao giờ được lưu.",
+    "noResults": "Không có sự kiện nào khớp với tìm kiếm của bạn",
+    "pageIndicator": "Trang {{page}} / {{total}}"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Không tải được các hub của bạn",
-    "membershipLoadFailedBody": "Máy chủ không cho biết bạn thuộc những hub nào, nên chưa thể hiển thị gì. Hãy kiểm tra kết nối và thử lại."
+    "membershipLoadFailedBody": "Máy chủ không cho biết bạn thuộc những hub nào, nên chưa thể hiển thị gì. Hãy kiểm tra kết nối và thử lại.",
+    "phoneHelp": "Số đường dây nóng chính của hub này. Dùng để định tuyến cuộc gọi.",
+    "slugHelp": "Slug được dùng trong URL và tham chiếu API. Slug được tạo từ tên."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "Bạn có chắc chắn muốn đăng xuất? Các khóa đã mã hóa của bạn sẽ bị xóa khỏi thiết bị này."
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "Ghi chú cuộc gọi",
     "updated": "Note updated",
-    "viewNotes": "Ghi chú"
+    "viewNotes": "Ghi chú",
+    "emptyMessage": "Ghi chú bạn tạo trong các cuộc gọi sẽ xuất hiện tại đây."
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "Mô tả chi tiết sự việc...",
+    "closeConfirmMessage": "Bạn có chắc chắn muốn đóng báo cáo này? Không thể hoàn tác thao tác này."
   },
   "reportLinks": {
     "alreadyLinked": "Báo cáo này đã liên kết với hồ sơ này.",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "Không có báo cáo nào ở trạng thái: {{status}}",
+    "emptyMessage": "Báo cáo bạn tạo sẽ xuất hiện tại đây."
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "đến",
     "users": "Tình nguyện viên",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "Bạn sẽ ngừng nhận cuộc gọi đến."
   },
   "shortcuts": {
     "answerCall": "Trả lời cuộc gọi",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "Chưa ghi nhận tương tác nào với liên hệ này."
   },
   "transcription": {
     "allowOptOut": "Cho phép tình nguyện viên tắt phiên âm",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "Không có báo cáo nào trong hàng đợi phân loại ở trạng thái: {{status}}"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

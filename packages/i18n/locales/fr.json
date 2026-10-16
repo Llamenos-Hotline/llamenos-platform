@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "Actives ({{count}})",
+    "claimedInvitesHeader": "Utilisées ({{count}})",
+    "expiredInvitesHeader": "Expirées ({{count}})",
+    "auditTotal": "{{count}} entrées au total",
+    "banFooter": "Saisissez le hachage SHA-256 du numéro de téléphone ou de l'identifiant de l'appelant à bloquer.",
+    "bansHeader": "Bloqués ({{count}})",
+    "categoriesHeader": "Catégories ({{count}})",
+    "membersHeader": "Membres ({{count}})",
+    "categoryCreated": "Catégorie de rapport créée",
+    "categoryDeleted": "Catégorie de rapport supprimée",
+    "categoryNameRequired": "Le nom de la catégorie est obligatoire",
+    "deleteConfirmMessage": "Voulez-vous vraiment supprimer cet élément ? Cette action est irréversible.",
+    "healthUnavailableMessage": "Impossible de charger les données d'état du système.",
+    "inviteRoleFooter": "Choisissez le rôle de la personne que vous invitez. Les administrateurs disposent d'un accès complet à la gestion.",
+    "newCategoryMessage": "Saisissez un nom pour la nouvelle catégorie de rapport.",
+    "noAuditMessage": "Les actions du système seront consignées ici.",
+    "noBansMessage": "Aucun identifiant n'est actuellement bloqué.",
+    "noCategoriesMessage": "Les catégories de rapport aident à classer les incidents.",
+    "noInvitesMessage": "Générez des codes d'invitation pour ajouter de nouveaux bénévoles.",
+    "noSearchResults": "Aucun membre ne correspond à votre recherche.",
+    "noUsersMessage": "Aucun membre n'a encore rejoint."
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "Reconnaissance Vocale",
     "start": "Démarrer l'entrée vocale",
-    "stop": "Arrêter l'enregistrement"
+    "stop": "Arrêter l'enregistrement",
+    "micDenied": "L'accès au micro est nécessaire pour la saisie vocale. Activez-le dans Réglages > Confidentialité et sécurité > Micro.",
+    "speechDenied": "L'autorisation de reconnaissance vocale est nécessaire pour la saisie vocale. Activez-la dans Réglages > Confidentialité et sécurité > Reconnaissance vocale.",
+    "unavailable": "La reconnaissance vocale n'est pas disponible sur cet appareil"
   },
   "auditLog": {
     "actor": "Acteur",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Déverrouiller Llamenos"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Créez un envoi groupé pour joindre tous les abonnés en une seule fois."
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "Mis à jour",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "Aucun type d'entité n'est configuré pour ce hub."
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "Les fiches de contact apparaîtront ici lorsque des appelants interagiront avec la ligne d'écoute."
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "Cette conversation est fermée",
+    "noMessages": "Aucun message pour l'instant"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "Inconnu",
     "waiting": "en attente",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "Les messages entrants par SMS, WhatsApp et Signal apparaîtront ici.",
+    "unreadCount": "{{count}} messages non lus"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "Le déverrouillage biométrique est bloqué après trop de tentatives échouées. Saisissez votre code PIN.",
+    "biometricNotEnrolled": "La biométrie de votre appareil a changé, le déverrouillage biométrique a donc été désactivé. Saisissez votre code PIN.",
+    "biometricPinMismatch": "Le déverrouillage biométrique a échoué. Saisissez votre code PIN.",
+    "httpNotAllowed": "Les connexions HTTP non sécurisées ne sont pas autorisées. Utilisez une adresse HTTPS.",
+    "pinLockoutDuration": "Trop de tentatives échouées. Réessayez dans {{seconds}} secondes.",
+    "pinWiped": "Trop de tentatives de code PIN échouées. Pour votre sécurité, toutes les clés de cet appareil ont été effacées."
   },
   "eventType": {
     "call": "Appel",
@@ -2109,7 +2147,13 @@
     "title": "Événements",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "La gestion des dossiers doit être activée pour utiliser les événements.",
+    "emptyMessage": "Aucun événement n'a encore été créé.",
+    "encryptedDetails": "Les détails de l'événement sont chiffrés",
+    "locationHelp": "Saisissez un lieu approximatif. Par sécurité, les coordonnées exactes ne sont jamais enregistrées.",
+    "noResults": "Aucun événement ne correspond à votre recherche",
+    "pageIndicator": "Page {{page}} sur {{total}}"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Impossible de charger vos hubs",
-    "membershipLoadFailedBody": "Le serveur n'a pas indiqué à quels hubs vous appartenez, rien ne peut donc encore être affiché. Vérifiez votre connexion et réessayez."
+    "membershipLoadFailedBody": "Le serveur n'a pas indiqué à quels hubs vous appartenez, rien ne peut donc encore être affiché. Vérifiez votre connexion et réessayez.",
+    "phoneHelp": "Le numéro principal de la ligne d'écoute de ce hub. Utilisé pour l'acheminement des appels.",
+    "slugHelp": "Le slug est utilisé dans les URL et les références d'API. Il est généré à partir du nom."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "Voulez-vous vraiment vous déconnecter ? Vos clés chiffrées seront supprimées de cet appareil."
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "Notes d'appel",
     "updated": "Note updated",
-    "viewNotes": "Notes"
+    "viewNotes": "Notes",
+    "emptyMessage": "Les notes que vous créez pendant les appels apparaîtront ici."
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "Décrivez l'incident en détail...",
+    "closeConfirmMessage": "Voulez-vous vraiment fermer ce rapport ? Cette action est irréversible."
   },
   "reportLinks": {
     "alreadyLinked": "Ce rapport est déjà lié à ce dossier.",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "Aucun rapport avec le statut : {{status}}",
+    "emptyMessage": "Les rapports que vous créez apparaîtront ici."
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "jusqu'à",
     "users": "Bénévoles",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "Vous ne recevrez plus d'appels entrants."
   },
   "shortcuts": {
     "answerCall": "Répondre à l'appel",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "Aucune interaction n'a été enregistrée pour ce contact."
   },
   "transcription": {
     "allowOptOut": "Permettre aux bénévoles de désactiver la transcription",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "Aucun rapport dans la file de triage avec le statut : {{status}}"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

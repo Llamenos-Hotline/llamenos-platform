@@ -326,7 +326,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "یک پیام همگانی بسازید تا همزمان به همه مشترکین برسد."
   },
   "callHistory": {
     "answeredBy": "پاسخ داده شده توسط",
@@ -497,7 +498,8 @@
     "groupName": "Group name",
     "groups": "Groups",
     "members": "members",
-    "sectionBasic": "Basic Info"
+    "sectionBasic": "Basic Info",
+    "emptyMessage": "وقتی تماس‌گیرندگان با خط کمک ارتباط بگیرند، سوابق مخاطبین اینجا نمایش داده می‌شوند."
   },
   "conversations": {
     "claim": "Claim",
@@ -558,7 +560,9 @@
     "searchPlaceholder": "Search conversations...",
     "unassign": "Unassign",
     "unassignError": "Failed to unassign conversation",
-    "unassigned": "Conversation unassigned"
+    "unassigned": "Conversation unassigned",
+    "emptyMessage": "پیام‌های دریافتی از پیامک، WhatsApp و Signal اینجا نمایش داده می‌شوند.",
+    "unreadCount": "پیام‌های خوانده‌نشده: {{count}}"
   },
   "customFields": {
     "addField": "افزودن فیلد",
@@ -696,7 +700,9 @@
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "هاب‌های شما بارگیری نشد",
-    "membershipLoadFailedBody": "سرور نگفت که عضو کدام هاب‌ها هستید، بنابراین هنوز چیزی نمایش داده نمی‌شود. اتصال خود را بررسی کنید و دوباره تلاش کنید."
+    "membershipLoadFailedBody": "سرور نگفت که عضو کدام هاب‌ها هستید، بنابراین هنوز چیزی نمایش داده نمی‌شود. اتصال خود را بررسی کنید و دوباره تلاش کنید.",
+    "phoneHelp": "شماره اصلی خط کمک این هاب. برای مسیریابی تماس‌ها استفاده می‌شود.",
+    "slugHelp": "شناسه کوتاه (slug) در نشانی‌های URL و ارجاع‌های API استفاده می‌شود و از روی نام ساخته می‌شود."
   },
   "ivr": {
     "selfAnnouncement": "برای فارسی، [N] را فشار دهید.",
@@ -805,7 +811,8 @@
     "updated": "یادداشت به‌روزرسانی شد",
     "viewNotes": "یادداشت‌ها",
     "detail": "جزئیات یادداشت",
-    "replies": "Replies"
+    "replies": "Replies",
+    "emptyMessage": "یادداشت‌هایی که هنگام تماس‌ها ایجاد می‌کنید اینجا نمایش داده می‌شوند."
   },
   "notifications": {
     "default": "فعال نشده",
@@ -1048,7 +1055,9 @@
     "videoNotSupported": "مرورگر شما از پخش ویدئو پشتیبانی نمی‌کند.",
     "noTypes": "No report types available",
     "selectType": "Select a report type",
-    "typeLabel": "Report Type"
+    "typeLabel": "Report Type",
+    "emptyFiltered": "هیچ گزارشی با وضعیت «{{status}}» وجود ندارد",
+    "emptyMessage": "گزارش‌هایی که ایجاد می‌کنید اینجا نمایش داده می‌شوند."
   },
   "retention": {
     "description": "Configure how long different types of records are retained before automatic deletion.",
@@ -1511,7 +1520,8 @@
       "startDate": "Start Date",
       "title": "Availability"
     },
-    "emptyMessage": "No shifts have been configured yet. Contact your administrator."
+    "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
+    "clockOutMessage": "دیگر تماس‌های ورودی را دریافت نخواهید کرد."
   },
   "shortcuts": {
     "answerCall": "پاسخ به تماس",
@@ -1915,7 +1925,9 @@
       "subtitle": "Choose a report type to get started",
       "title": "Select Report Type"
     },
-    "validationErrors": "Please fix the errors above before submitting."
+    "validationErrors": "Please fix the errors above before submitting.",
+    "bodyHint": "رویداد را با جزئیات شرح دهید...",
+    "closeConfirmMessage": "آیا مطمئن هستید که می‌خواهید این گزارش را ببندید؟ این کار قابل بازگشت نیست."
   },
   "help": {
     "shortcutSaveNote": "ذخیره یادداشت",
@@ -2431,7 +2443,28 @@
     "eventsMigrationComplete": "Events migration complete",
     "eventsMigrationError": "Migration failed",
     "checkingMigration": "Checking migration status...",
-    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}"
+    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}",
+    "activeInvitesHeader": "فعال ({{count}})",
+    "claimedInvitesHeader": "استفاده‌شده ({{count}})",
+    "expiredInvitesHeader": "منقضی‌شده ({{count}})",
+    "auditTotal": "مجموع ورودی‌ها: {{count}}",
+    "banFooter": "هش SHA-256 شماره تلفن یا شناسه تماس‌گیرنده‌ای را که می‌خواهید مسدود کنید وارد کنید.",
+    "bansHeader": "مسدودشده‌ها ({{count}})",
+    "categoriesHeader": "دسته‌ها ({{count}})",
+    "membersHeader": "اعضا ({{count}})",
+    "categoryCreated": "دسته‌بندی گزارش ایجاد شد",
+    "categoryDeleted": "دسته‌بندی گزارش حذف شد",
+    "categoryNameRequired": "نام دسته‌بندی الزامی است",
+    "deleteConfirmMessage": "آیا مطمئن هستید که می‌خواهید این مورد را حذف کنید؟ این کار قابل بازگشت نیست.",
+    "healthUnavailableMessage": "بارگیری داده‌های وضعیت سیستم ممکن نشد.",
+    "inviteRoleFooter": "نقش فردی را که دعوت می‌کنید انتخاب کنید. مدیران دسترسی کامل مدیریتی دارند.",
+    "newCategoryMessage": "نامی برای دسته‌بندی جدید گزارش وارد کنید.",
+    "noAuditMessage": "اقدامات سیستم در اینجا ثبت می‌شوند.",
+    "noBansMessage": "در حال حاضر هیچ شناسه‌ای مسدود نیست.",
+    "noCategoriesMessage": "دسته‌بندی‌های گزارش به طبقه‌بندی رویدادها کمک می‌کنند.",
+    "noInvitesMessage": "برای افزودن داوطلبان جدید، کد دعوت بسازید.",
+    "noSearchResults": "هیچ عضوی با جستجوی شما مطابقت ندارد.",
+    "noUsersMessage": "هنوز هیچ عضوی نپیوسته است."
   },
   "platformBans": {
     "reason": "دلیل",
@@ -2906,7 +2939,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "هیچ گزارشی با وضعیت «{{status}}» در صف بررسی اولیه نیست"
   },
   "cms": {
     "mergeContactSuccess": "Contacts merged successfully",
@@ -3425,7 +3459,13 @@
     "title": "Events",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "برای استفاده از رویدادها باید مدیریت پرونده فعال باشد.",
+    "emptyMessage": "هنوز هیچ رویدادی ایجاد نشده است.",
+    "encryptedDetails": "جزئیات رویداد رمزگذاری شده است",
+    "locationHelp": "یک مکان تقریبی وارد کنید. برای حفظ امنیت، مختصات دقیق هرگز ذخیره نمی‌شود.",
+    "noResults": "هیچ رویدادی با جستجوی شما مطابقت ندارد",
+    "pageIndicator": "صفحه {{page}} از {{total}}"
   },
   "entityTemplates": {
     "fields": {
@@ -3673,7 +3713,8 @@
     "unassign": "Unassign",
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
-    "updated": "Updated"
+    "updated": "Updated",
+    "noEntityTypesDescription": "هیچ نوع موجودیتی برای این هاب پیکربندی نشده است."
   },
   "contactDirectory": {
     "create": "ایجاد مخاطب",
@@ -3845,7 +3886,13 @@
     "noHubSelected": "No hub selected",
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: {{reason}}"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "biometricLockout": "باز کردن قفل بیومتریک پس از تلاش‌های ناموفق زیاد قفل شده است. پین خود را وارد کنید.",
+    "biometricNotEnrolled": "اطلاعات بیومتریک دستگاه شما تغییر کرده، بنابراین باز کردن قفل بیومتریک غیرفعال شد. پین خود را وارد کنید.",
+    "biometricPinMismatch": "باز کردن قفل بیومتریک ناموفق بود. پین خود را وارد کنید.",
+    "httpNotAllowed": "اتصال‌های ناامن HTTP مجاز نیستند. از یک نشانی HTTPS استفاده کنید.",
+    "pinLockoutDuration": "تعداد تلاش‌های ناموفق بیش از حد است. {{seconds}} ثانیه دیگر دوباره تلاش کنید.",
+    "pinWiped": "تعداد تلاش‌های ناموفق پین بیش از حد است. برای امنیت شما، همه کلیدهای این دستگاه پاک شدند."
   },
   "activeCalls": "تماس‌های فعال",
   "badge": {
@@ -3862,7 +3909,8 @@
     "empty": "No timeline events",
     "emptySubtitle": "Activity will appear here",
     "emptyTitle": "No Interactions",
-    "loading": "Loading timeline..."
+    "loading": "Loading timeline...",
+    "emptyMessage": "هیچ تعاملی برای این مخاطب ثبت نشده است."
   },
   "oauthConnectTitle": "Connect Provider",
   "oauthProvider": {
@@ -3968,7 +4016,9 @@
     "statusActive": "فعال",
     "loading": "Loading messages...",
     "replyPlaceholder": "Type a message...",
-    "send": "Send message"
+    "send": "Send message",
+    "closedMessage": "این مکالمه بسته شده است",
+    "noMessages": "هنوز پیامی نیست"
   },
   "eventType": {
     "conversation": "مکالمه",
@@ -4394,7 +4444,8 @@
   },
   "logout": {
     "confirmAction": "خروج",
-    "confirmTitle": "خروج"
+    "confirmTitle": "خروج",
+    "confirmMessage": "آیا مطمئن هستید که می‌خواهید خارج شوید؟ کلیدهای رمزگذاری‌شده شما از این دستگاه حذف می‌شوند."
   },
   "recovery": {
     "title": "Account Recovery",
@@ -4419,11 +4470,15 @@
   "audioInput": {
     "permissionTitle": "Speech Recognition",
     "start": "Start voice input",
-    "stop": "Stop recording"
+    "stop": "Stop recording",
+    "micDenied": "برای ورودی صوتی به دسترسی میکروفون نیاز است. آن را در تنظیمات > حریم خصوصی و امنیت > میکروفون فعال کنید.",
+    "speechDenied": "برای ورودی صوتی به مجوز تشخیص گفتار نیاز است. آن را در تنظیمات > حریم خصوصی و امنیت > تشخیص گفتار فعال کنید.",
+    "unavailable": "تشخیص گفتار در این دستگاه در دسترس نیست"
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "باز کردن قفل Llamenos"
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {

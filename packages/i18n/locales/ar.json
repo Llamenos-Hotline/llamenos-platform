@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "النشطة ({{count}})",
+    "claimedInvitesHeader": "المستخدمة ({{count}})",
+    "expiredInvitesHeader": "المنتهية ({{count}})",
+    "auditTotal": "إجمالي الإدخالات: {{count}}",
+    "banFooter": "أدخل تجزئة SHA-256 لرقم هاتف المتصل أو معرّفه الذي تريد حظره.",
+    "bansHeader": "المحظورون ({{count}})",
+    "categoriesHeader": "الفئات ({{count}})",
+    "membersHeader": "الأعضاء ({{count}})",
+    "categoryCreated": "تم إنشاء فئة التقارير",
+    "categoryDeleted": "تم حذف فئة التقارير",
+    "categoryNameRequired": "اسم الفئة مطلوب",
+    "deleteConfirmMessage": "هل أنت متأكد من أنك تريد حذف هذا العنصر؟ لا يمكن التراجع عن هذا الإجراء.",
+    "healthUnavailableMessage": "تعذّر تحميل بيانات حالة النظام.",
+    "inviteRoleFooter": "اختر دور الشخص الذي تدعوه. يملك المسؤولون صلاحية إدارة كاملة.",
+    "newCategoryMessage": "أدخل اسمًا لفئة التقارير الجديدة.",
+    "noAuditMessage": "سيتم تسجيل إجراءات النظام هنا.",
+    "noBansMessage": "لا توجد معرّفات محظورة حاليًا.",
+    "noCategoriesMessage": "تساعد فئات التقارير في تصنيف الحوادث.",
+    "noInvitesMessage": "أنشئ رموز دعوة لإضافة متطوعين جدد.",
+    "noSearchResults": "لا يوجد أعضاء يطابقون بحثك.",
+    "noUsersMessage": "لم ينضم أي عضو بعد."
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "التعرف على الكلام",
     "start": "بدء الإدخال الصوتي",
-    "stop": "إيقاف التسجيل"
+    "stop": "إيقاف التسجيل",
+    "micDenied": "يلزم الوصول إلى الميكروفون للإدخال الصوتي. فعّله من الإعدادات > الخصوصية والأمن > الميكروفون.",
+    "speechDenied": "يلزم إذن التعرف على الكلام للإدخال الصوتي. فعّله من الإعدادات > الخصوصية والأمن > التعرف على الكلام.",
+    "unavailable": "التعرف على الكلام غير متاح على هذا الجهاز"
   },
   "auditLog": {
     "actor": "الفاعل",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "فتح قفل Llamenos"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "أنشئ رسالة جماعية للوصول إلى جميع المشتركين دفعة واحدة."
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "تم التحديث",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "لا توجد أنواع كيانات مُعدّة لهذا المركز."
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "ستظهر سجلات جهات الاتصال هنا عندما يتواصل المتصلون مع خط المساعدة."
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "هذه المحادثة مغلقة",
+    "noMessages": "لا توجد رسائل بعد"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "غير معروف",
     "waiting": "في الانتظار",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "ستظهر هنا الرسائل الواردة من SMS وWhatsApp وSignal.",
+    "unreadCount": "رسائل غير مقروءة: {{count}}"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "تم قفل فتح القفل البيومتري بعد محاولات فاشلة كثيرة. أدخل رقم PIN.",
+    "biometricNotEnrolled": "تغيّرت بيانات القياسات الحيوية على جهازك، لذا تم إيقاف فتح القفل البيومتري. أدخل رقم PIN.",
+    "biometricPinMismatch": "فشل فتح القفل البيومتري. أدخل رقم PIN.",
+    "httpNotAllowed": "اتصالات HTTP غير الآمنة غير مسموح بها. استخدم عنوان HTTPS.",
+    "pinLockoutDuration": "محاولات فاشلة كثيرة جدًا. حاول مرة أخرى بعد {{seconds}} ثانية.",
+    "pinWiped": "محاولات PIN فاشلة كثيرة جدًا. حفاظًا على أمانك، تم مسح جميع المفاتيح من هذا الجهاز."
   },
   "eventType": {
     "call": "مكالمة",
@@ -2109,7 +2147,13 @@
     "title": "الأحداث",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "يجب تفعيل إدارة القضايا لاستخدام الأحداث.",
+    "emptyMessage": "لم يتم إنشاء أي أحداث بعد.",
+    "encryptedDetails": "تفاصيل الحدث مشفّرة",
+    "locationHelp": "أدخل موقعًا تقريبيًا. لا يتم تخزين الإحداثيات الدقيقة أبدًا حفاظًا على السلامة.",
+    "noResults": "لا توجد أحداث تطابق بحثك",
+    "pageIndicator": "الصفحة {{page}} من {{total}}"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "تعذّر تحميل المراكز الخاصة بك",
-    "membershipLoadFailedBody": "لم يذكر الخادم المراكز التي تنتمي إليها، لذا لا يمكن عرض أي شيء بعد. تحقّق من اتصالك وحاول مرة أخرى."
+    "membershipLoadFailedBody": "لم يذكر الخادم المراكز التي تنتمي إليها، لذا لا يمكن عرض أي شيء بعد. تحقّق من اتصالك وحاول مرة أخرى.",
+    "phoneHelp": "رقم خط المساعدة الرئيسي لهذا المركز. يُستخدم لتوجيه المكالمات.",
+    "slugHelp": "يُستخدم المعرّف المختصر (slug) في عناوين URL ومراجع API، ويُنشأ من الاسم."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "هل أنت متأكد من أنك تريد تسجيل الخروج؟ ستتم إزالة مفاتيحك المشفّرة من هذا الجهاز."
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "ملاحظات المكالمة",
     "updated": "Note updated",
-    "viewNotes": "ملاحظات"
+    "viewNotes": "ملاحظات",
+    "emptyMessage": "ستظهر هنا الملاحظات التي تنشئها أثناء المكالمات."
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "صف الحادثة بالتفصيل...",
+    "closeConfirmMessage": "هل أنت متأكد من أنك تريد إغلاق هذا التقرير؟ لا يمكن التراجع عن هذا الإجراء."
   },
   "reportLinks": {
     "alreadyLinked": "هذا التقرير مرتبط بالفعل بهذه القضية.",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "لا توجد تقارير بالحالة: {{status}}",
+    "emptyMessage": "ستظهر هنا التقارير التي تنشئها."
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "حتى",
     "users": "المتطوعون",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "ستتوقف عن تلقي المكالمات الواردة."
   },
   "shortcuts": {
     "answerCall": "الرد على المكالمة",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "لم تُسجَّل أي تفاعلات لجهة الاتصال هذه."
   },
   "transcription": {
     "allowOptOut": "السماح للمتطوعين بتعطيل النسخ",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "لا توجد تقارير في قائمة الفرز بالحالة: {{status}}"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

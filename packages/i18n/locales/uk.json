@@ -326,7 +326,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Створіть масову розсилку, щоб звернутися до всіх підписників одразу."
   },
   "callHistory": {
     "answeredBy": "Відповів",
@@ -497,7 +498,8 @@
     "groupName": "Group name",
     "groups": "Groups",
     "members": "members",
-    "sectionBasic": "Basic Info"
+    "sectionBasic": "Basic Info",
+    "emptyMessage": "Записи про контакти з'являться тут, коли абоненти звернуться на гарячу лінію."
   },
   "conversations": {
     "claim": "Claim",
@@ -558,7 +560,9 @@
     "searchPlaceholder": "Search conversations...",
     "unassign": "Unassign",
     "unassignError": "Failed to unassign conversation",
-    "unassigned": "Conversation unassigned"
+    "unassigned": "Conversation unassigned",
+    "emptyMessage": "Тут з'являтимуться вхідні повідомлення з SMS, WhatsApp і Signal.",
+    "unreadCount": "Непрочитаних повідомлень: {{count}}"
   },
   "customFields": {
     "addField": "Додати поле",
@@ -696,7 +700,9 @@
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Не вдалося завантажити ваші хаби",
-    "membershipLoadFailedBody": "Сервер не повідомив, до яких хабів ви належите, тому поки нічого не можна показати. Перевірте з'єднання та спробуйте ще раз."
+    "membershipLoadFailedBody": "Сервер не повідомив, до яких хабів ви належите, тому поки нічого не можна показати. Перевірте з'єднання та спробуйте ще раз.",
+    "phoneHelp": "Основний номер гарячої лінії цього хабу. Використовується для маршрутизації дзвінків.",
+    "slugHelp": "Slug використовується в URL-адресах і посиланнях API. Його створено з назви."
   },
   "ivr": {
     "selfAnnouncement": "Для української мови натисніть [N].",
@@ -805,7 +811,8 @@
     "updated": "Нотатку оновлено",
     "viewNotes": "Нотатки",
     "detail": "Деталі нотатки",
-    "replies": "Replies"
+    "replies": "Replies",
+    "emptyMessage": "Тут з'являться нотатки, які ви створюєте під час дзвінків."
   },
   "notifications": {
     "default": "Не увімкнено",
@@ -1048,7 +1055,9 @@
     "videoNotSupported": "Ваш браузер не підтримує відтворення відео.",
     "noTypes": "No report types available",
     "selectType": "Select a report type",
-    "typeLabel": "Report Type"
+    "typeLabel": "Report Type",
+    "emptyFiltered": "Немає звітів зі статусом: {{status}}",
+    "emptyMessage": "Тут з'являться створені вами звіти."
   },
   "retention": {
     "description": "Configure how long different types of records are retained before automatic deletion.",
@@ -1511,7 +1520,8 @@
       "startDate": "Start Date",
       "title": "Availability"
     },
-    "emptyMessage": "No shifts have been configured yet. Contact your administrator."
+    "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
+    "clockOutMessage": "Ви перестанете отримувати вхідні дзвінки."
   },
   "shortcuts": {
     "answerCall": "Відповісти на дзвінок",
@@ -2256,7 +2266,28 @@
     "eventsMigrationComplete": "Events migration complete",
     "eventsMigrationError": "Migration failed",
     "checkingMigration": "Checking migration status...",
-    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}"
+    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}",
+    "activeInvitesHeader": "Активні ({{count}})",
+    "claimedInvitesHeader": "Використані ({{count}})",
+    "expiredInvitesHeader": "Прострочені ({{count}})",
+    "auditTotal": "Усього записів: {{count}}",
+    "banFooter": "Введіть хеш SHA-256 номера телефону або ідентифікатора абонента, якого потрібно заблокувати.",
+    "bansHeader": "Заблоковані ({{count}})",
+    "categoriesHeader": "Категорії ({{count}})",
+    "membersHeader": "Учасники ({{count}})",
+    "categoryCreated": "Категорію звітів створено",
+    "categoryDeleted": "Категорію звітів видалено",
+    "categoryNameRequired": "Вкажіть назву категорії",
+    "deleteConfirmMessage": "Ви впевнені, що хочете видалити цей елемент? Цю дію неможливо скасувати.",
+    "healthUnavailableMessage": "Не вдалося завантажити дані про стан системи.",
+    "inviteRoleFooter": "Оберіть роль для людини, яку ви запрошуєте. Адміністратори мають повний доступ до керування.",
+    "newCategoryMessage": "Введіть назву нової категорії звітів.",
+    "noAuditMessage": "Тут реєструватимуться дії в системі.",
+    "noBansMessage": "Наразі немає заблокованих ідентифікаторів.",
+    "noCategoriesMessage": "Категорії звітів допомагають класифікувати інциденти.",
+    "noInvitesMessage": "Створіть коди запрошення, щоб додати нових волонтерів.",
+    "noSearchResults": "Немає учасників, що відповідають запиту.",
+    "noUsersMessage": "Поки що ніхто не приєднався."
   },
   "contactDirectory": {
     "editContact": "Редагувати контакт",
@@ -2426,7 +2457,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "У черзі сортування немає звітів зі статусом: {{status}}"
   },
   "platformBans": {
     "scopeHub": "Хаб",
@@ -2729,7 +2761,8 @@
     "unassign": "Unassign",
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
-    "updated": "Updated"
+    "updated": "Updated",
+    "noEntityTypesDescription": "Для цього хабу не налаштовано типів сутностей."
   },
   "connectionSuccess": "Зʼєднання успішне",
   "provider": {
@@ -3149,7 +3182,13 @@
     "title": "Events",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Щоб використовувати події, потрібно увімкнути керування справами.",
+    "emptyMessage": "Подій ще не створено.",
+    "encryptedDetails": "Відомості про подію зашифровано",
+    "locationHelp": "Вкажіть приблизне місцезнаходження. З міркувань безпеки точні координати ніколи не зберігаються.",
+    "noResults": "Немає подій, що відповідають запиту",
+    "pageIndicator": "Сторінка {{page}} з {{total}}"
   },
   "entityTemplates": {
     "fields": {
@@ -3346,7 +3385,9 @@
       "subtitle": "Choose a report type to get started",
       "title": "Select Report Type"
     },
-    "validationErrors": "Please fix the errors above before submitting."
+    "validationErrors": "Please fix the errors above before submitting.",
+    "bodyHint": "Детально опишіть інцидент...",
+    "closeConfirmMessage": "Ви впевнені, що хочете закрити цей звіт? Цю дію неможливо скасувати."
   },
   "notificationChannelCalls": "Дзвінки",
   "permissions": {
@@ -3907,7 +3948,8 @@
   },
   "logout": {
     "confirmAction": "Вийти",
-    "confirmTitle": "Вийти"
+    "confirmTitle": "Вийти",
+    "confirmMessage": "Ви впевнені, що хочете вийти? Ваші зашифровані ключі буде видалено з цього пристрою."
   },
   "cms": {
     "fields": "Поля",
@@ -4080,7 +4122,8 @@
     "empty": "No timeline events",
     "emptySubtitle": "Activity will appear here",
     "emptyTitle": "No Interactions",
-    "loading": "Loading timeline..."
+    "loading": "Loading timeline...",
+    "emptyMessage": "Для цього контакту не зареєстровано жодної взаємодії."
   },
   "error": {
     "emptyDisplayName": "Display name is required",
@@ -4118,7 +4161,13 @@
     "noHubSelected": "No hub selected",
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: {{reason}}"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "biometricLockout": "Біометричне розблокування заблоковано через забагато невдалих спроб. Введіть PIN-код.",
+    "biometricNotEnrolled": "Біометричні дані вашого пристрою змінилися, тому біометричне розблокування було вимкнено. Введіть PIN-код.",
+    "biometricPinMismatch": "Не вдалося виконати біометричне розблокування. Введіть PIN-код.",
+    "httpNotAllowed": "Небезпечні HTTP-з'єднання заборонено. Використовуйте адресу HTTPS.",
+    "pinLockoutDuration": "Забагато невдалих спроб. Спробуйте знову через {{seconds}} с.",
+    "pinWiped": "Забагато невдалих спроб введення PIN-коду. З міркувань безпеки всі ключі на цьому пристрої видалено."
   },
   "continueButton": "Продовжити",
   "conversation": {
@@ -4128,7 +4177,9 @@
     "title": "Розмова",
     "loading": "Loading messages...",
     "replyPlaceholder": "Type a message...",
-    "send": "Send message"
+    "send": "Send message",
+    "closedMessage": "Цю розмову закрито",
+    "noMessages": "Повідомлень поки немає"
   },
   "filter": {
     "active": "Активні",
@@ -4419,11 +4470,15 @@
   "audioInput": {
     "permissionTitle": "Speech Recognition",
     "start": "Start voice input",
-    "stop": "Stop recording"
+    "stop": "Stop recording",
+    "micDenied": "Для голосового введення потрібен доступ до мікрофона. Увімкніть його в Параметри > Приватність і безпека > Мікрофон.",
+    "speechDenied": "Для голосового введення потрібен дозвіл на розпізнавання мовлення. Увімкніть його в Параметри > Приватність і безпека > Розпізнавання мовлення.",
+    "unavailable": "Розпізнавання мовлення недоступне на цьому пристрої"
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Розблокувати Llamenos"
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {

@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "有效 ({{count}})",
+    "claimedInvitesHeader": "已使用 ({{count}})",
+    "expiredInvitesHeader": "已过期 ({{count}})",
+    "auditTotal": "共 {{count}} 条记录",
+    "banFooter": "输入要封禁的来电者电话号码或标识符的 SHA-256 哈希值。",
+    "bansHeader": "已封禁 ({{count}})",
+    "categoriesHeader": "分类 ({{count}})",
+    "membersHeader": "成员 ({{count}})",
+    "categoryCreated": "报告分类已创建",
+    "categoryDeleted": "报告分类已删除",
+    "categoryNameRequired": "分类名称为必填项",
+    "deleteConfirmMessage": "确定要删除此项吗？此操作无法撤销。",
+    "healthUnavailableMessage": "无法加载系统健康数据。",
+    "inviteRoleFooter": "选择被邀请人的角色。管理员拥有完整的管理权限。",
+    "newCategoryMessage": "输入新报告分类的名称。",
+    "noAuditMessage": "系统操作将记录在此处。",
+    "noBansMessage": "当前没有被封禁的标识符。",
+    "noCategoriesMessage": "报告分类有助于对事件进行归类。",
+    "noInvitesMessage": "生成邀请码以添加新的志愿者。",
+    "noSearchResults": "没有符合搜索条件的成员。",
+    "noUsersMessage": "还没有成员加入。"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "语音识别",
     "start": "开始语音输入",
-    "stop": "停止录音"
+    "stop": "停止录音",
+    "micDenied": "语音输入需要麦克风权限。请在“设置 > 隐私与安全性 > 麦克风”中开启。",
+    "speechDenied": "语音输入需要语音识别权限。请在“设置 > 隐私与安全性 > 语音识别”中开启。",
+    "unavailable": "此设备不支持语音识别"
   },
   "auditLog": {
     "actor": "操作者",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "解锁 Llamenos"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "创建群发消息，一次性联系所有订阅者。"
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "已更新",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "此枢纽尚未配置实体类型。"
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "当来电者与热线互动后，联系人记录将显示在此处。"
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "此对话已关闭",
+    "noMessages": "暂无消息"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "未知",
     "waiting": "等待中",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "来自短信、WhatsApp 和 Signal 的消息将显示在此处。",
+    "unreadCount": "{{count}} 条未读消息"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "失败次数过多，生物识别解锁已被锁定。请输入您的PIN码。",
+    "biometricNotEnrolled": "您设备的生物识别信息已更改，因此生物识别解锁已关闭。请输入您的PIN码。",
+    "biometricPinMismatch": "生物识别解锁失败。请输入您的PIN码。",
+    "httpNotAllowed": "不允许使用不安全的 HTTP 连接。请使用 HTTPS 地址。",
+    "pinLockoutDuration": "失败次数过多。请在 {{seconds}} 秒后重试。",
+    "pinWiped": "PIN码错误次数过多。为保障您的安全，此设备上的所有密钥均已被清除。"
   },
   "eventType": {
     "call": "通话",
@@ -2109,7 +2147,13 @@
     "title": "事件",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "必须启用案件管理才能使用事件。",
+    "emptyMessage": "尚未创建任何事件。",
+    "encryptedDetails": "事件详情已加密",
+    "locationHelp": "请输入大致位置。为保障安全，绝不存储精确坐标。",
+    "noResults": "没有符合搜索条件的事件",
+    "pageIndicator": "第 {{page}} 页，共 {{total}} 页"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "无法加载你的中心",
-    "membershipLoadFailedBody": "服务器没有说明你属于哪些中心，因此暂时无法显示任何内容。请检查网络连接后重试。"
+    "membershipLoadFailedBody": "服务器没有说明你属于哪些中心，因此暂时无法显示任何内容。请检查网络连接后重试。",
+    "phoneHelp": "此枢纽的主要热线号码，用于呼叫路由。",
+    "slugHelp": "Slug 用于 URL 和 API 引用，根据名称自动生成。"
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "确定要退出登录吗？您的加密密钥将从此设备中移除。"
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "通话笔记",
     "updated": "Note updated",
-    "viewNotes": "笔记"
+    "viewNotes": "笔记",
+    "emptyMessage": "您在通话中创建的笔记将显示在此处。"
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "请详细描述事件...",
+    "closeConfirmMessage": "确定要关闭此报告吗？此操作无法撤销。"
   },
   "reportLinks": {
     "alreadyLinked": "此报告已关联到此案件。",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "没有状态为“{{status}}”的报告",
+    "emptyMessage": "您创建的报告将显示在此处。"
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "直到",
     "users": "志愿者",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "您将不再接收来电。"
   },
   "shortcuts": {
     "answerCall": "接听电话",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "此联系人尚无互动记录。"
   },
   "transcription": {
     "allowOptOut": "允许志愿者禁用转录",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "分诊队列中没有状态为“{{status}}”的报告"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

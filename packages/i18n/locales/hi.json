@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "सक्रिय ({{count}})",
+    "claimedInvitesHeader": "उपयोग किए गए ({{count}})",
+    "expiredInvitesHeader": "समाप्त ({{count}})",
+    "auditTotal": "कुल {{count}} प्रविष्टियाँ",
+    "banFooter": "जिस कॉलर को प्रतिबंधित करना है, उसके फ़ोन नंबर या पहचानकर्ता का SHA-256 हैश दर्ज करें।",
+    "bansHeader": "प्रतिबंधित ({{count}})",
+    "categoriesHeader": "श्रेणियाँ ({{count}})",
+    "membersHeader": "सदस्य ({{count}})",
+    "categoryCreated": "रिपोर्ट श्रेणी बनाई गई",
+    "categoryDeleted": "रिपोर्ट श्रेणी हटाई गई",
+    "categoryNameRequired": "श्रेणी का नाम आवश्यक है",
+    "deleteConfirmMessage": "क्या आप वाकई इस आइटम को हटाना चाहते हैं? इसे पूर्ववत नहीं किया जा सकता।",
+    "healthUnavailableMessage": "सिस्टम स्वास्थ्य डेटा लोड नहीं हो सका।",
+    "inviteRoleFooter": "जिस व्यक्ति को आप आमंत्रित कर रहे हैं, उसकी भूमिका चुनें। व्यवस्थापकों के पास पूर्ण प्रबंधन पहुँच होती है।",
+    "newCategoryMessage": "नई रिपोर्ट श्रेणी के लिए नाम दर्ज करें।",
+    "noAuditMessage": "सिस्टम की कार्रवाइयाँ यहाँ दर्ज की जाएँगी।",
+    "noBansMessage": "अभी कोई पहचानकर्ता प्रतिबंधित नहीं है।",
+    "noCategoriesMessage": "रिपोर्ट श्रेणियाँ घटनाओं को वर्गीकृत करने में मदद करती हैं।",
+    "noInvitesMessage": "नए स्वयंसेवक जोड़ने के लिए आमंत्रण कोड बनाएँ।",
+    "noSearchResults": "आपकी खोज से कोई सदस्य मेल नहीं खाता।",
+    "noUsersMessage": "अभी तक कोई सदस्य शामिल नहीं हुआ है।"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "वाक् पहचान",
     "start": "ध्वनि इनपुट शुरू करें",
-    "stop": "रिकॉर्डिंग बंद करें"
+    "stop": "रिकॉर्डिंग बंद करें",
+    "micDenied": "वॉइस इनपुट के लिए माइक्रोफ़ोन की अनुमति आवश्यक है। इसे सेटिंग्स > गोपनीयता और सुरक्षा > माइक्रोफ़ोन में चालू करें।",
+    "speechDenied": "वॉइस इनपुट के लिए वाक् पहचान की अनुमति आवश्यक है। इसे सेटिंग्स > गोपनीयता और सुरक्षा > वाक् पहचान में चालू करें।",
+    "unavailable": "इस डिवाइस पर वाक् पहचान उपलब्ध नहीं है"
   },
   "auditLog": {
     "actor": "कर्ता",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Llamenos अनलॉक करें"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "सभी सब्सक्राइबर तक एक साथ पहुँचने के लिए सामूहिक संदेश बनाएँ।"
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "अपडेट हुआ",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "इस हब के लिए कोई इकाई प्रकार कॉन्फ़िगर नहीं है।"
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "जब कॉलर हॉटलाइन से संपर्क करेंगे, तो संपर्क रिकॉर्ड यहाँ दिखाई देंगे।"
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "यह बातचीत बंद है",
+    "noMessages": "अभी तक कोई संदेश नहीं"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "अज्ञात",
     "waiting": "प्रतीक्षा में",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "SMS, WhatsApp और Signal से आने वाले संदेश यहाँ दिखाई देंगे।",
+    "unreadCount": "{{count}} अपठित संदेश"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "बहुत अधिक असफल प्रयासों के बाद बायोमेट्रिक अनलॉक लॉक हो गया है। अपना पिन दर्ज करें।",
+    "biometricNotEnrolled": "आपके डिवाइस की बायोमेट्रिक जानकारी बदल गई, इसलिए बायोमेट्रिक अनलॉक बंद कर दिया गया। अपना पिन दर्ज करें।",
+    "biometricPinMismatch": "बायोमेट्रिक अनलॉक विफल रहा। अपना पिन दर्ज करें।",
+    "httpNotAllowed": "असुरक्षित HTTP कनेक्शन की अनुमति नहीं है। HTTPS पता उपयोग करें।",
+    "pinLockoutDuration": "बहुत अधिक असफल प्रयास। {{seconds}} सेकंड बाद पुनः प्रयास करें।",
+    "pinWiped": "बहुत अधिक असफल पिन प्रयास। आपकी सुरक्षा के लिए, इस डिवाइस की सभी कुंजियाँ मिटा दी गई हैं।"
   },
   "eventType": {
     "call": "कॉल",
@@ -2109,7 +2147,13 @@
     "title": "घटनाएँ",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "घटनाओं का उपयोग करने के लिए मामला प्रबंधन सक्षम होना चाहिए।",
+    "emptyMessage": "अभी तक कोई घटना नहीं बनाई गई है।",
+    "encryptedDetails": "घटना का विवरण एन्क्रिप्टेड है",
+    "locationHelp": "अनुमानित स्थान दर्ज करें। सुरक्षा के लिए, सटीक निर्देशांक कभी संग्रहीत नहीं किए जाते।",
+    "noResults": "आपकी खोज से कोई घटना मेल नहीं खाती",
+    "pageIndicator": "पृष्ठ {{page}} / {{total}}"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "आपके हब लोड नहीं हो सके",
-    "membershipLoadFailedBody": "सर्वर ने नहीं बताया कि आप किन हबों से जुड़े हैं, इसलिए अभी कुछ भी नहीं दिखाया जा सकता। अपना कनेक्शन जाँचें और फिर कोशिश करें।"
+    "membershipLoadFailedBody": "सर्वर ने नहीं बताया कि आप किन हबों से जुड़े हैं, इसलिए अभी कुछ भी नहीं दिखाया जा सकता। अपना कनेक्शन जाँचें और फिर कोशिश करें।",
+    "phoneHelp": "इस हब का मुख्य हॉटलाइन नंबर। कॉल रूटिंग के लिए उपयोग होता है।",
+    "slugHelp": "स्लग का उपयोग URL और API संदर्भों में होता है। यह नाम से बनाया जाता है।"
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "क्या आप वाकई लॉग आउट करना चाहते हैं? आपकी एन्क्रिप्टेड कुंजियाँ इस डिवाइस से हटा दी जाएँगी।"
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "कॉल नोट्स",
     "updated": "Note updated",
-    "viewNotes": "नोट्स"
+    "viewNotes": "नोट्स",
+    "emptyMessage": "कॉल के दौरान आपके बनाए नोट यहाँ दिखाई देंगे।"
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "घटना का विस्तार से वर्णन करें...",
+    "closeConfirmMessage": "क्या आप वाकई इस रिपोर्ट को बंद करना चाहते हैं? इसे पूर्ववत नहीं किया जा सकता।"
   },
   "reportLinks": {
     "alreadyLinked": "यह रिपोर्ट पहले से इस मामले से जुड़ी है।",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "स्थिति \"{{status}}\" वाली कोई रिपोर्ट नहीं",
+    "emptyMessage": "आपकी बनाई रिपोर्ट यहाँ दिखाई देंगी।"
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "तक",
     "users": "स्वयंसेवक",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "आपको आने वाली कॉल मिलना बंद हो जाएगा।"
   },
   "shortcuts": {
     "answerCall": "कॉल का उत्तर दें",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "इस संपर्क के लिए कोई बातचीत दर्ज नहीं की गई है।"
   },
   "transcription": {
     "allowOptOut": "स्वयंसेवकों को ट्रांसक्रिप्शन अक्षम करने की अनुमति दें",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "ट्रायज कतार में स्थिति \"{{status}}\" वाली कोई रिपोर्ट नहीं"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",
