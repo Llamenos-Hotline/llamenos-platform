@@ -13,8 +13,8 @@ Feature: Ring Group Management
       | id            | a valid UUID          |
       | encryptedName | "encrypted-name-data" |
     Then the response status should be 200
-    And the response body should contain "id"
-    And the response body should contain "encryptedName"
+    And the response body "id" should not be null
+    And the response body "encryptedName" should not be null
     And the response body "members" array should be empty
 
   Scenario: List ring groups

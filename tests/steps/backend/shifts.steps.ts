@@ -17,7 +17,6 @@ import {
   getSharedState,
   setLastResponse,
   getActorSeed,
-  setActorSeed,
   setPathParam,
   resolvePathParams,
 } from './shared-state'
@@ -81,10 +80,13 @@ async function resolveVolunteerLabel(
   request: APIRequestContext,
   s: ShiftsEP07State,
   label: string,
+  hubId: string,
 ): Promise<{ pubkey: string; seedHex: string }> {
   const existing = s.registeredVolunteers[label]
   if (existing) return existing
-  const vol = await createUserViaApi(request, { name: `shift-vol-${label}` })
+  // Hub-scoped creation: clock-in requires hub membership, so a global user
+  // would be rejected on the hub's /shifts/clock-in route.
+  const vol = await createUserViaApi(request, { name: `shift-vol-${label}`, hubId })
   const entry = { pubkey: vol.pubkey, seedHex: vol.seedHex }
   s.registeredVolunteers[label] = entry
   s.pubkeyLabels[label] = vol.pubkey
@@ -123,10 +125,9 @@ function resolveAssertionValue(s: ShiftsEP07State, value: string): string {
 }
 
 // ── Background steps shared by every shifts/*.feature file ────────────────
-
-Given('I am authenticated as an admin', ({ world }) => {
-  setActorSeed(world, ADMIN_SEED)
-})
+// "I am authenticated as an admin" is intentionally NOT defined here either —
+// it lives in access-control-epic-e.steps.ts, which also sets the shared actor
+// seed this file reads via getActorSeed().
 
 Given('I have an active hub', () => {
   // No-op: the workerHub fixture (tests/steps/backend/fixtures.ts) already
@@ -261,8 +262,9 @@ Given('I am clocked in', async ({ request, world, workerHub }) => {
 
 Given('volunteer {string} is clocked in', async ({ request, world, workerHub }, label: string) => {
   const s = getEP07State(world)
-  const vol = await resolveVolunteerLabel(request, s, label)
-  await apiPost(request, `/hubs/${workerHub}/shifts/clock-in`, {}, vol.seedHex)
+  const vol = await resolveVolunteerLabel(request, s, label, workerHub)
+  const { status } = await apiPost(request, `/hubs/${workerHub}/shifts/clock-in`, {}, vol.seedHex)
+  expect(status).toBe(200)
 })
 
 // ── Availability Givens ───────────────────────────────────────────────────────
@@ -360,11 +362,9 @@ Given('I already have a pending join request for {string}', async ({ request, wo
 
 // ── EP07-specific Then assertions ─────────────────────────────────────────────
 
-Then('the response body should contain {string}', async ({ world }, field: string) => {
-  const data = getSharedState(world).lastResponse?.data as Record<string, unknown> | null
-  expect(data).toBeTruthy()
-  expect(data?.[field]).not.toBeUndefined()
-})
+// "the response body should contain {string}" is defined in assertions.steps.ts
+// (substring match over the JSON body); field-presence checks here use
+// "the response body {string} should not be null" instead.
 
 Then('the response body {string} should equal {string}', async ({ world }, field: string, expected: string) => {
   const data = getSharedState(world).lastResponse?.data as Record<string, unknown> | null

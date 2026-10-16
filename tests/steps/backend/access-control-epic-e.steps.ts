@@ -16,7 +16,7 @@
  */
 import { expect, type APIRequestContext } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
-import { setLastResponse, getSharedState } from './shared-state'
+import { setLastResponse, getSharedState, setActorSeed } from './shared-state'
 import {
   ADMIN_SEED,
   apiGet,
@@ -462,6 +462,9 @@ Then('the error code is {string}', ({ world }, code: string) => {
 
 Given('I am authenticated as an admin', ({ world }) => {
   getS(world).currentActorSeed = ADMIN_SEED
+  // Also set the cross-file canonical actor so generic REST steps in other
+  // step files (shifts.steps.ts, channel-config.steps.ts) act as the admin.
+  setActorSeed(world, ADMIN_SEED)
 })
 
 async function postBlast(
