@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { LANGUAGE_CODES } from '@shared/languages'
 import { IVR_PROMPTS } from '@shared/voice-prompts'
 import { ivrAudioFormatError } from '@worker/lib/helpers'
-import { signIvrMediaPath } from '@worker/lib/ivr-media-url'
+import { ivrMediaKeyedName, signIvrMediaPath, verifyIvrMediaPath } from '@worker/lib/ivr-media-url'
 import { IvrSpeechService, type SpeechEngine } from '@worker/services/ivr-speech'
 import { readPcm16Wav, resample, toIvrWav, writePcm16Wav } from '@worker/services/ivr-speech/audio'
 import {
@@ -213,5 +213,64 @@ describe('IvrSpeechService', () => {
     expect(engine.synthesize).not.toHaveBeenCalled()
     await fetch('dos')
     expect(engine.synthesize).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('IvrSpeechService CAPTCHA digits (#1352)', () => {
+  const digitUrl = async (service: IvrSpeechService, digit: string, locale = 'es') =>
+    new URL((await service.urlBuilder(ORIGIN)).captchaDigit(digit, locale))
+
+  it('names a digit clip by a keyed hash, and serves that digit', async () => {
+    const engine = fakeEngine()
+    const service = new IvrSpeechService(SECRET, engine)
+    const url = await digitUrl(service, '7')
+    expect(url.pathname).toMatch(/^\/api\/ivr-speech\/[0-9a-f]{12}\/es\/digit\/[0-9a-f]{64}\.wav$/)
+
+    const clip = await service.audioFor(url.pathname, url.searchParams)
+    expect(clip).not.toBeNull()
+    expect(ivrAudioFormatError(clip!.wav)).toBeNull()
+    expect(engine.synthesize).toHaveBeenCalledWith('7', espeakVoiceFor('es'))
+    // The ETag is stored by the PBX with the clip: it is the keyed name, never
+    // the unkeyed content hash anyone could compute for ten digits.
+    expect(clip!.etag).toBe(url.pathname.match(/([0-9a-f]{64})\.wav$/)![1])
+  })
+
+  it('gives every digit its own name, and the same name on every call', async () => {
+    const service = new IvrSpeechService(SECRET, fakeEngine())
+    const names = await Promise.all('0123456789'.split('').map(async (d) => (await digitUrl(service, d)).pathname))
+    expect(new Set(names).size).toBe(10)
+    expect((await digitUrl(service, '3')).pathname).toBe(names[3])
+    // Per locale, since the clip is spoken in that locale's voice.
+    expect((await digitUrl(service, '3', 'en')).pathname).not.toBe(names[3])
+  })
+
+  it('serves nothing for a digit name it did not mint', async () => {
+    const engine = fakeEngine()
+    const service = new IvrSpeechService(SECRET, engine)
+    const url = await digitUrl(service, '5')
+    engine.synthesize.mockClear()
+
+    // A well-formed name nobody minted, correctly signed: no digit matches it.
+    const forged = url.pathname.replace(/[0-9a-f]{64}\.wav$/, `${'0'.repeat(64)}.wav`)
+    const signedForged = new URL(`${ORIGIN}${signIvrMediaPath(SECRET, forged)}`)
+    expect(await service.audioFor(signedForged.pathname, signedForged.searchParams)).toBeNull()
+    // Unsigned, or minted under another secret.
+    expect(await service.audioFor(url.pathname, new URLSearchParams())).toBeNull()
+    const foreign = await digitUrl(new IvrSpeechService('9d'.repeat(32), fakeEngine()), '5')
+    expect(await service.audioFor(foreign.pathname, foreign.searchParams)).toBeNull()
+    expect(engine.synthesize).not.toHaveBeenCalled()
+  })
+
+  it('mints digit clips only for a single digit', async () => {
+    const build = await new IvrSpeechService(SECRET, fakeEngine()).urlBuilder(ORIGIN)
+    for (const bad of ['12', '', 'a', ' 1', '١']) expect(() => build.captchaDigit(bad, 'es'), bad).toThrow(/one digit/)
+  })
+
+  it('refuses to key a path: that name would be the path\'s URL signature', () => {
+    const path = '/api/ivr-speech/0123456789ab/es/digit'
+    expect(() => ivrMediaKeyedName(SECRET, path)).toThrow(/not be a path/)
+    // What the guard prevents: a MAC over a path under this key IS its signature.
+    const sig = new URL(`${ORIGIN}${signIvrMediaPath(SECRET, path)}`).searchParams.get('sig')!
+    expect(verifyIvrMediaPath(SECRET, path, new URLSearchParams({ sig }), { requireExpiry: false })).toBe(true)
   })
 })

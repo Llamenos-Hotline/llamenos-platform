@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
+import { finalLine, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
   diffHash, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
@@ -808,8 +808,29 @@ export interface ReviewCiDeps extends CiDeps {
    * (`stripExport`) is an unsafe one. Only the second may stop the gate.
    */
   exportBase?(repoDir: string, sha: string): Promise<{ dir: string; cleanup(): Promise<void> }>
-  /** Runs ONE resolved profile, read-only, against the same export. */
-  profileReview(profile: ReviewerProfile, diff: string, changedFiles: readonly string[]): Promise<SecondOpinionResult>
+  /**
+   * The PR's own stated intent — title and body — read LIVE from the PR, for
+   * the `## Pull request` section of every reviewer's prompt
+   * (`prClaimSection`, review.ts). `undefined` means the read FAILED, and
+   * the prompt then says plainly that no claim was stated (#1696).
+   *
+   * OPTIONAL and fail-soft, for the same reason as `exportBase` above: a
+   * missing claim is a WORSE review (the reviewer is back to judging "does
+   * the diff do what the PR claims" against a bare PR number), never an
+   * UNSAFE one. Only a missing security control may stop the gate.
+   *
+   * Deliberately NOT part of the review cache key (`ReviewCacheKey` is the
+   * PR plus the diff hash): an edited description does not change the code
+   * under judgement, and re-running every reviewer on a typo fix in a body
+   * is the review churn this gate's cache exists to avoid.
+   */
+  prClaim?(): Promise<PrClaim | undefined>
+  /** Runs ONE resolved profile, read-only, against the same export. The
+   *  claim travels to the profile too — see `buildProfileReviewPrompt`'s own
+   *  comment for why the profile half is the load-bearing one (#1696). */
+  profileReview(
+    profile: ReviewerProfile, diff: string, changedFiles: readonly string[], claim?: PrClaim,
+  ): Promise<SecondOpinionResult>
   /**
    * Hands every reviewer's FULL text somewhere the PR itself will show it.
    * Required, not optional, and the reason is a measured failure: two real
@@ -1032,6 +1053,143 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Composing N reviewers into ONE verdict (#1637).
+// ---------------------------------------------------------------------------
+
+/** One reviewer's contribution to a composed verdict. */
+export interface ComposedReviewer {
+  name: string
+  verdict: 'PASS' | 'FAIL' | 'UNREADABLE'
+  /** The one-line form the composed summary leads with. */
+  headline: string
+  /** The reviewer's own text in full. */
+  text: string
+  failureKind: EngineFailureKind | undefined
+  partial: PartialReview | undefined
+}
+
+export interface ComposedReview {
+  ok: boolean
+  /** The single verdict the whole SET composes to — what a producer of the
+   *  `fleet/review` check posts as its conclusion. `PASS` only when every
+   *  member passed; `FAIL` when any member substantively failed; otherwise
+   *  `UNREADABLE`. */
+  verdict: 'PASS' | 'FAIL' | 'UNREADABLE'
+  summary: string
+  result: ReviewCiResult
+  results: ComposedReviewer[]
+}
+
+/**
+ * THE composition rule for a review set, in ONE function: ANY FAIL FAILS,
+ * and an UNREADABLE is a failure too, so a profile's verdict can never be
+ * outranked by the general reviewer's PASS.
+ *
+ * Shared, deliberately, by both producers of the `fleet/review` check —
+ * `runReviewCi` below (the CI gate) and `review-and-merge.ts`'s operator
+ * command (#1637). Those two post the SAME check-run name against the same
+ * commit, so a divergence between them is a verdict that means one thing
+ * when CI produced it and another when the operator did. `decideReviewSet`
+ * already has exactly one implementation for the same reason; this is its
+ * other half — deciding WHAT to review and composing WHAT THEY SAID are the
+ * two places the two paths could drift, and neither has a second copy.
+ *
+ * Pure: `names` positionally matches `settled`, and a REJECTED entry is that
+ * reviewer's own UNREADABLE rather than an opaque crash — which is why every
+ * caller must use `Promise.allSettled`, so one reviewer throwing cannot
+ * discard the verdicts of the others.
+ */
+export function composeReviewSet(
+  names: readonly string[],
+  settled: readonly PromiseSettledResult<SecondOpinionResult>[],
+): ComposedReview {
+  const results: ComposedReviewer[] = settled.map((s, i) => {
+    const name = names[i] as string
+    // The general reviewer says "review unavailable"/"review misconfigured",
+    // exactly as it did before this job learned to batch — that wording is
+    // what an operator scans a red check for. A profile says its own name.
+    const who = name === GENERAL_REVIEWER ? 'review' : name
+    if (s.status === 'rejected') {
+      const detail = s.reason instanceof Error ? s.reason.message : String(s.reason)
+      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail, failureKind: undefined, partial: undefined }
+    }
+    const r = s.value
+    // UNREADABLE and FAIL both fail, but they are different facts and the
+    // summary says which: "the reviewer could not be run" is not "the
+    // reviewer found a problem". Within UNREADABLE, `failureKind` draws one
+    // more distinction: `'engine-misconfigured'` (a `--model`/engine id the
+    // reviewer refuses outright) is a MISCONFIGURATION — a defect retrying
+    // will never fix — not an AVAILABILITY problem, which is what
+    // "unavailable" implies to a human reading the check. #866 hit exactly
+    // this: the engine was reachable and ran, and still produced an opaque
+    // `review unavailable: {"name":"UnknownError",...}` for what was,
+    // underneath, a bad model id — the wrong diagnostic sent whoever read
+    // it looking for an outage that was never happening.
+    //
+    // A PARTIAL review (review.ts's `PartialReview`) is still UNREADABLE as
+    // far as the gate is concerned, but "ran out of turns" undersells it: a
+    // reviewer that ran out AFTER finding something has told us a fact about
+    // the code, and the headline says which part of the diff that fact
+    // covers. The verdict itself is in the text's final line, which
+    // `verdictSummary` picks up — stamped `VERDICT (partial):`, never
+    // `VERDICT:`.
+    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured`
+      : r.partial !== undefined ? `${who} ran out of turns \u2014 PARTIAL ${r.partial.verdict}, not a full review`
+      : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
+      : `${who} unavailable`
+    const headline = r.verdict === 'UNREADABLE'
+      ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
+      : verdictSummary(r.text)
+    return { name, verdict: r.verdict, headline, text: r.text, failureKind: r.failureKind, partial: r.partial }
+  })
+
+  const ok = results.every((r) => r.verdict === 'PASS')
+  // A set of exactly one is the general reviewer on its own — the ordinary
+  // case — and its summary is spelled EXACTLY as it was before this job
+  // learned to batch, so the common check output did not change shape for a
+  // feature most PRs never use. More than one gets a roll-call line first
+  // (which reviewer said what, scannable without scrolling) and then every
+  // reviewer's full text under its own heading.
+  const summary = results.length === 1
+    ? `${(results[0] as { headline: string }).headline}\n\n${(results[0] as { text: string }).text}`
+    : `${results.length} reviews \u2014 ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n` +
+      results.map((r) => `### ${r.name}\n\n${r.headline}\n\n${r.text}`).join('\n\n---\n\n')
+  // A substantive rejection outranks an UNREADABLE beside it: somebody DID
+  // read this diff and reject it, so the outcome to report is "fix the
+  // code", not "re-run the reviewer" — see `REVIEW_CI_RESULTS`.
+  // A substantive FAIL still outranks everything. Among the non-FAIL
+  // failures, an exhausted budget is reported as itself: it is the one whose
+  // remedy is NOT "re-request" (that re-runs the same diff under the same
+  // budget), so collapsing it into `unreadable` hands the reader advice that
+  // cannot work.
+  //
+  // The two PARTIAL outcomes sit between a substantive FAIL and a bare
+  // exhaustion, in that order, for the same "report the most actionable true
+  // thing" reason the rest of this ladder follows. A full FAIL outranks a
+  // partial one (it rests on the whole diff); a partial FAIL outranks a
+  // partial PASS (a found problem outranks a narrow absence of one); and
+  // both outrank `budget-exhausted`, which is the case where even the
+  // salvage call came back with nothing. None of them is ever `ok`: `ok` is
+  // computed above from `verdict === 'PASS'`, and a partial review's verdict
+  // is UNREADABLE by construction (`toSecondOpinion`), so there is no path
+  // from here to a green check — which is the point.
+  const result: ReviewCiResult = ok
+    ? 'pass'
+    : results.some((r) => r.verdict === 'FAIL') ? 'fail'
+    : results.some((r) => r.partial?.verdict === 'FAIL') ? 'partial-fail'
+    : results.some((r) => r.partial?.verdict === 'PASS') ? 'partial-pass'
+    : results.some((r) => r.failureKind === 'budget-exhausted') ? 'budget-exhausted'
+    : 'unreadable'
+  // The one verdict the SET composes to. `PASS` iff `ok`, so a producer that
+  // posts this can never post green on a set that did not all pass; a
+  // substantive FAIL is reported as a FAIL and everything else as
+  // UNREADABLE, which is the same two-way distinction `result` draws above
+  // in more detail.
+  const verdict = ok ? 'PASS' as const : results.some((r) => r.verdict === 'FAIL') ? 'FAIL' as const : 'UNREADABLE' as const
+  return { ok, verdict, summary, result, results }
+}
+
 /**
  * `fleet/review` — the non-author review of EVERY pull request, produced on
  * the runner against the exact head commit from a `.git`-less snapshot the
@@ -1204,12 +1362,22 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // judged commit's code anywhere in this job — which is what lets it hold
   // the key, and what every reviewer in this batch inherits.
   const names = [GENERAL_REVIEWER, ...profiles.map((p) => p.agent)]
+  // Read ONCE and shared by every reviewer in the batch, so the generalist
+  // and every profile judge the diff against the SAME stated intent — two
+  // reviewers disagreeing because they read the PR at different moments
+  // would be the worst possible shape for this. Fail-soft: an unreadable
+  // claim is `undefined` and the prompt says so (see `ReviewCiDeps.prClaim`).
+  const claim = await deps.prClaim?.().catch(() => undefined)
+  if (claim === undefined) {
+    deps.log(`no PR title/body available for pr=${deps.ctx.pr} — every reviewer is told plainly that ` +
+      'this PR stated no claim, rather than being shown a bare PR number as if it were one')
+  }
   const settled = await Promise.allSettled([
     deps.secondOpinion({
       authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir,
-      baseDir: baseExport?.dir, diff, report,
+      baseDir: baseExport?.dir, diff, report, claim,
     }),
-    ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles)),
+    ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles, claim)),
   ])
   // Every reviewer has finished (`allSettled` never rejects), so the base
   // tree has no readers left. Removed here rather than in a `finally`
@@ -1218,84 +1386,9 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // self-hosted runner.
   if (baseExport !== undefined) await baseExport.cleanup().catch(() => {})
 
-  const results = settled.map((s, i) => {
-    const name = names[i] as string
-    // The general reviewer says "review unavailable"/"review misconfigured",
-    // exactly as it did before this job learned to batch — that wording is
-    // what an operator scans a red check for. A profile says its own name.
-    const who = name === GENERAL_REVIEWER ? 'review' : name
-    if (s.status === 'rejected') {
-      const detail = s.reason instanceof Error ? s.reason.message : String(s.reason)
-      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail, failureKind: undefined as EngineFailureKind | undefined, partial: undefined as PartialReview | undefined }
-    }
-    const r = s.value
-    // UNREADABLE and FAIL both fail, but they are different facts and the
-    // summary says which: "the reviewer could not be run" is not "the
-    // reviewer found a problem". Within UNREADABLE, `failureKind` draws one
-    // more distinction: `'engine-misconfigured'` (a `--model`/engine id the
-    // reviewer refuses outright) is a MISCONFIGURATION — a defect retrying
-    // will never fix — not an AVAILABILITY problem, which is what
-    // "unavailable" implies to a human reading the check. #866 hit exactly
-    // this: the engine was reachable and ran, and still produced an opaque
-    // `review unavailable: {"name":"UnknownError",...}` for what was,
-    // underneath, a bad model id — the wrong diagnostic sent whoever read
-    // it looking for an outage that was never happening.
-    //
-    // A PARTIAL review (review.ts's `PartialReview`) is still UNREADABLE as
-    // far as the gate is concerned, but "ran out of turns" undersells it: a
-    // reviewer that ran out AFTER finding something has told us a fact about
-    // the code, and the headline says which part of the diff that fact
-    // covers. The verdict itself is in the text's final line, which
-    // `verdictSummary` picks up — stamped `VERDICT (partial):`, never
-    // `VERDICT:`.
-    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured`
-      : r.partial !== undefined ? `${who} ran out of turns \u2014 PARTIAL ${r.partial.verdict}, not a full review`
-      : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
-      : `${who} unavailable`
-    const headline = r.verdict === 'UNREADABLE'
-      ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
-      : verdictSummary(r.text)
-    return { name, verdict: r.verdict, headline, text: r.text, failureKind: r.failureKind, partial: r.partial }
-  })
-
-  const ok = results.every((r) => r.verdict === 'PASS')
-  // A set of exactly one is the general reviewer on its own — the ordinary
-  // case — and its summary is spelled EXACTLY as it was before this job
-  // learned to batch, so the common check output did not change shape for a
-  // feature most PRs never use. More than one gets a roll-call line first
-  // (which reviewer said what, scannable without scrolling) and then every
-  // reviewer's full text under its own heading.
-  const summary = results.length === 1
-    ? `${(results[0] as { headline: string }).headline}\n\n${(results[0] as { text: string }).text}`
-    : `${results.length} reviews — ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n` +
-      results.map((r) => `### ${r.name}\n\n${r.headline}\n\n${r.text}`).join('\n\n---\n\n')
-  // A substantive rejection outranks an UNREADABLE beside it: somebody DID
-  // read this diff and reject it, so the outcome to report is "fix the
-  // code", not "re-run the reviewer" — see `REVIEW_CI_RESULTS`.
-  // A substantive FAIL still outranks everything. Among the non-FAIL
-  // failures, an exhausted budget is reported as itself: it is the one whose
-  // remedy is NOT "re-request" (that re-runs the same diff under the same
-  // budget), so collapsing it into `unreadable` hands the reader advice that
-  // cannot work.
-  //
-  // The two PARTIAL outcomes sit between a substantive FAIL and a bare
-  // exhaustion, in that order, for the same "report the most actionable true
-  // thing" reason the rest of this ladder follows. A full FAIL outranks a
-  // partial one (it rests on the whole diff); a partial FAIL outranks a
-  // partial PASS (a found problem outranks a narrow absence of one); and
-  // both outrank `budget-exhausted`, which is the case where even the
-  // salvage call came back with nothing. None of them is ever `ok`: `ok` is
-  // computed above from `verdict === 'PASS'`, and a partial review's verdict
-  // is UNREADABLE by construction (`toSecondOpinion`), so there is no path
-  // from here to a green check — which is the point.
-  const result: ReviewCiResult = ok
-    ? 'pass'
-    : results.some((r) => r.verdict === 'FAIL') ? 'fail'
-    : results.some((r) => r.partial?.verdict === 'FAIL') ? 'partial-fail'
-    : results.some((r) => r.partial?.verdict === 'PASS') ? 'partial-pass'
-    : results.some((r) => r.failureKind === 'budget-exhausted') ? 'budget-exhausted'
-    : 'unreadable'
-  const verdict: ReviewCiVerdict = { ok, summary, result }
+  const composed = composeReviewSet(names, settled)
+  const results = composed.results
+  const verdict: ReviewCiVerdict = { ok: composed.ok, summary: composed.summary, result: composed.result }
 
   // Only a FRESH, SUBSTANTIVE verdict this process itself just produced is
   // ever recorded — never a cache hit being re-published (that would just

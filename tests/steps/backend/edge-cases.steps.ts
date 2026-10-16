@@ -27,7 +27,9 @@ import {
   generateTestKeypair,
   uniquePhone,
   uniqueName,
+  simulatedClientIp,
 } from '../../api-helpers'
+import { harnessClientHeaders } from '../../dev-surface-secret'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -289,13 +291,17 @@ Then('the response should include CORS headers', async ({ world }) => {
 // ─── Rate Limiting ──────────────────────────────────────────────────
 
 When('{int} invite validation requests are sent rapidly', async ({ request, world }, count: number) => {
-  // Use a unique fake IP per scenario so each parallel worker gets its own rate limit bucket.
-  // The server rate-limits invite validation by hashed IP (X-Forwarded-For header).
-  const fakeIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
+  // One client address for the whole flood, distinct from every other
+  // scenario's, so the 5/min invite-validate limiter fires on THIS flood.
+  // `harnessClientHeaders` also carries the secret that gets the `strict`-tier
+  // middleware out of the way, which on a deployed target would otherwise 429
+  // first at the same threshold and from a bucket shared with every other
+  // scenario (#1625).
+  const clientAddress = simulatedClientIp()
   getEdgeState(world).rateLimit429Count = 0
   for (let i = 0; i < count; i++) {
     const res = await request.get(`${BASE_URL}/api/invites/validate/fake-code-${i}`, {
-      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
+      headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(clientAddress) },
     })
     if (res.status() === 429) {
       getEdgeState(world).rateLimit429Count++

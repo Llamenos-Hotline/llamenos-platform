@@ -32,3 +32,17 @@ data class RegisterDeviceRequest(
 data class ClearPushTokenRequest(
     val pushToken: String,
 )
+
+/**
+ * Request body for POST /api/devices/voip-token.
+ *
+ * Registers the token the backend's incoming-call ring path reads
+ * (`getVoipTokens()` only returns devices with a non-null voipToken).
+ * On Android the "token" is the same UnifiedPush endpoint URL registered
+ * as [RegisterDeviceRequest.pushToken]; iOS uses a PushKit device token.
+ */
+@Serializable
+data class VoipTokenRequest(
+    val platform: String = "android",
+    val voipToken: String,
+)

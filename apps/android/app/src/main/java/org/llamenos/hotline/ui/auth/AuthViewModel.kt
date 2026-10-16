@@ -22,6 +22,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.model.InviteCodeParser
+import org.llamenos.hotline.service.PushRegistrationManager
 import java.io.IOException
 import javax.inject.Inject
 
@@ -129,6 +130,7 @@ class AuthViewModel @Inject constructor(
     private val keystoreService: KeyValueStore,
     private val biometricKeyStore: BiometricKeyStore,
     private val inviteRepository: InviteRepository,
+    private val pushRegistrationManager: PushRegistrationManager,
 ) : ViewModel() {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -188,6 +190,7 @@ class AuthViewModel @Inject constructor(
         val code = _uiState.value.inviteCode
         if (InviteCodeParser.extract(code) == null) {
             _uiState.update { it.copy(isAuthenticated = true) }
+            onAuthenticated()
             return
         }
         redeemInvite(code)
@@ -211,6 +214,7 @@ class AuthViewModel @Inject constructor(
                             isAuthenticated = true,
                         )
                     }
+                    onAuthenticated()
                 }
                 .onFailure { e ->
                     _uiState.update {
@@ -235,6 +239,17 @@ class AuthViewModel @Inject constructor(
         _uiState.update {
             it.copy(enrollment = EnrollmentState.Skipped, isAuthenticated = true)
         }
+        onAuthenticated()
+    }
+
+    /**
+     * Every path that resolves `isAuthenticated = true` funnels here.
+     * UnifiedPush registration is per-device and hub-neutral (multi-hub
+     * axiom): one registration serves every member hub, so it is kicked off
+     * at authentication time rather than at hub selection.
+     */
+    private fun onAuthenticated() {
+        pushRegistrationManager.ensureRegistered()
     }
 
     private fun classifyRedeemFailure(e: Throwable): EnrollmentError = when (e) {
@@ -433,6 +448,7 @@ class AuthViewModel @Inject constructor(
                         failedAttempts = 0,
                     )
                 }
+                onAuthenticated()
             } catch (e: Exception) {
                 // Record failed attempt for lockout tracking
                 val lockoutState = ks?.recordFailedAttempt()

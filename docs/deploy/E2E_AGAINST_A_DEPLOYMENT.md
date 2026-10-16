@@ -284,44 +284,118 @@ it (`Failed to delete hub: 401`). Forgetting to opt *in* costs a visible `429`;
 forgetting to opt *out* costs a destroyed database and a security assertion
 that passes while asserting nothing. So the default is an ordinary caller.
 
-Two limiters are *not* affected, on purpose:
+Of the ~75 raw `request.*(…)` calls in step definitions, the ones that opt in
+are the ones whose endpoint is behind a limiter the scenario is not asserting:
+`/api/auth/me` in `auth.steps.ts` and `error-disclosure.steps.ts` (`strict`
+tier, and these scenarios assert an exact `401` body), `/api/provision/*` in
+`race-condition.steps.ts`, the `strict`-tier paths in `permission-matrix`'s
+unauthenticated examples table, and the files listed in the next section.
+Everything else is left as an ordinary caller on purpose — including every call
+that asserts the dev surface is refused (`network-security.steps.ts`,
+`access-control-epic-e.steps.ts`, `contracts.steps.ts`) and every webhook or
+unauthenticated-tier path where the limiter is keyed on a pubkey the request
+does not have, and therefore skipped.
 
-- the per-endpoint brute-force counters inside `routes/auth.ts`
-  (`/auth/login`, `/auth/bootstrap`) and the WebAuthn equivalents, which use
-  `lib/helpers.ts#checkRateLimit` and are always enforced. The scenarios in
-  `packages/test-specs/features/security/auth-rate-limiting.feature` assert
-  those, and they still do. (They were, in fact, *un*runnable against a staging
-  target before this change: the `strict`-tier middleware 429'd first with the
-  wrong body, so the assertion on `"Too many login attempts"` could not pass.)
-- the ban/spam controls on inbound calls, which are not API rate limits at all.
+### The eight in-route limiters: isolation, not exemption
 
-### What this does *not* fix: per-IP buckets on an Ansible-deployed host
+A previous version of this runbook said two limiters were "not affected, on
+purpose" and that the auth brute-force scenarios "still do" assert their
+bodies. **Both claims were false on a deployed target**, and they are recorded
+here because the second one was measurable and nobody measured it (#1625):
 
-`TRUST_PROXY_HEADERS=true` is set by `scripts/dev-bun.sh` and by
-`deploy/docker/docker-compose.production.yml`, and by **nothing in
-`deploy/ansible/`** — which is the path both surviving deployment profiles take.
-So on an Ansible-deployed instance `lib/client-ip.ts` ignores the
-`X-Forwarded-For` Caddy sets and falls back to the socket address, which is
-Caddy's container address for *every* caller.
+```
+POST /api/auth/login ×7, no secret   401×5 429 429  {"error":"Rate limit exceeded"}
+POST /api/auth/login ×7, WITH secret 401×5 429 429  {"error":"Too many login attempts..."}
+```
 
-Two consequences. For the suite: the step definitions give each scenario its
-own `CF-Connecting-IP` so that parallel scenarios get their own buckets, and on
-a deployed target that header is ignored, so all three workers share one
-5/min bucket on each per-endpoint limiter inside the route handlers (invites,
-WebAuthn, recovery-group, auth, security-events). Those limiters are *not*
-affected by the exemption above, by design, and they account for 22 of the
-remaining failures. Verified directly: three requests with three different
-`CF-Connecting-IP` values all answered `429` from one shared bucket.
+The `strict` middleware is 5/min per IP and the in-route `auth-login` counter
+is also 5/min, so **without the harness header the middleware wins, at the same
+threshold, with the wrong body**. The assertion on `"Too many login attempts"`
+could not pass — not flakily, ever. Two scenarios failed on exactly that.
 
-For production, the same omission means the per-IP controls behind Caddy are
-in fact a single global bucket — five logins a minute for the whole internet.
-It is not fixed here because the fix is not a one-liner: `getClientIp()`
-returns a client-supplied `CF-Connecting-IP` verbatim when proxy headers are
-trusted, and this deployment has no Cloudflare in front (TLS terminates on the
-origin host), so simply setting the variable would let any caller choose their
-own bucket. Caddy must strip the forwarded-for headers it does not set — or
-`getClientIp()` must stop honouring `CF-Connecting-IP` outside a Cloudflare
-deployment — before the variable is turned on.
+Eight limiters live inside route handlers, use `lib/helpers.ts#checkRateLimit`,
+and are enforced for everybody including on `development`:
+
+| Site | Key | Limit |
+|---|---|---|
+| `routes/auth.ts` | `auth-login` | 5/min |
+| `routes/auth.ts` | `auth-bootstrap` | 3/min |
+| `routes/invites.ts` | `invite-validate` | 5/min |
+| `routes/invites.ts` | `invite-redeem` | 5/min |
+| `routes/webauthn.ts` | `webauthn` | 5/min |
+| `routes/webauthn.ts` | `webauthn-verify` | 5/min |
+| `routes/recovery-group.ts` | `recovery-initiate` | 2/min |
+| `routes/security-events.ts` | `security-events-submit` | 5/min |
+
+**None of them is exempt for the harness, and none of them should be.** Each is
+a named brute-force control and eight scenarios exist to assert that one of
+them fires; an exemption would make the suite's view of all eight vacuous — the
+scenarios asserting a 429 would stop seeing one, and the scenarios that merely
+trip over a control would lose the ability to tell "bounded" from "absent".
+
+What the harness gets instead is **isolation**. It names the client a request
+is from, in `X-Test-Client-Address`, and the limiter buckets on that
+(`apps/worker/lib/route-rate-limit.ts`) — so every scenario floods a bucket of
+its own while the production threshold still binds inside it. The header is
+honoured *only* for a request that already carries the dev surface's shared
+secret, so the authority it grants ("choose your bucket") is strictly less than
+what the same credential buys one section above (total exemption from the API
+rate limiter) and far less than `POST /api/test-reset`. Without the secret the
+header is ignored outright and the real address is used, exactly as on
+production. `apps/worker/__tests__/unit/route-rate-limit-client.test.ts`
+asserts that from all four directions, including that three different named
+addresses from a secret-less caller collapse into one bucket.
+
+The step definitions already had the right shape for this: they gave each
+scenario its own `simulatedClientIp()` in `X-Forwarded-For`, which works
+against a directly reachable dev server and stops working behind Caddy (next
+section). They now send it through `harnessClientHeaders()`, which adds the
+header the proxy does not rewrite. `tests/dev-surface-secret.ts` is the one
+place that builds both.
+
+One limiter genuinely *is* unaffected, and two look like causes and are not:
+
+- the ban/spam controls on inbound calls are not API rate limits at all;
+- `routes/provisioning.ts`'s `provision:room:<id>` cap is cross-IP *per room*
+  by design, and each scenario makes its own room, so it is already isolated.
+  Exempting it would delete the control the concurrency scenario tests;
+- `routes/security-events.ts`'s `security-events-admin-alert` is a fixed-key
+  global throttle on admin Signal alerts, called fire-and-forget, so it can
+  never produce a `429` and no scenario asserts the alert.
+
+### One scenario is not runnable against a deployed target as written
+
+`security/auth-rate-limiting` › *Login rate limit uses unique client buckets*
+sends three logins from each of two addresses and expects all six to succeed.
+One process cannot be two real callers once Caddy sets the address, so on a
+deployed target this can only ever be a claim about the *simulated* client
+identities above — which is worth something (it rules out the single global
+bucket described below) but is not evidence that two real callers are told
+apart. The scenario carries that caveat in its own comment; derivation of the
+real address is covered by `lib/client-ip.ts`'s tests and by the Caddy
+template. Showing it end to end would need two clients on the proxy network,
+and that is not what the scenario is for.
+
+### Per-client buckets on an Ansible-deployed host
+
+Fixed, as of #1606/#1609 — this section used to say it was not, and the
+sequence is worth keeping because the wrong half was the obvious one.
+
+`deploy/ansible/templates/env/_worker-required-env.j2` now sets
+`TRUST_PROXY_HEADERS=true`, and
+`deploy/ansible/roles/llamenos-caddy/templates/caddy.j2` makes that safe: it
+SETS `X-Forwarded-For: {remote_host}` rather than appending, and deletes
+`CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`, `X-Client-IP` and
+`Forwarded`. `lib/client-ip.ts` reads the right-most `X-Forwarded-For` entry
+and never consults `CF-Connecting-IP` at all. So every caller behind the proxy
+gets its own bucket from an address it cannot choose, and the per-IP controls
+are per-IP again rather than one global bucket.
+
+The consequence for the suite is the one the previous section mis-stated: the
+address Caddy produces is the same for every request the harness makes, which
+is correct — the harness *is* one client — and is why its per-scenario
+isolation has to come from a credentialed header rather than from pretending to
+be many addresses.
 
 ## Related
 

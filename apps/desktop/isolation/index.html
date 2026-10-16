@@ -132,6 +132,9 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'plugin:log|log',
     // Backup generation (device-state export during admin bootstrap)
     'generate_backup_from_state',
+    'generate_recovery_key',
+    'backup_verify_credential',
+    'restore_backup_and_load',
     // Path plugin commands (store/stronghold resolve the app data directory)
     'plugin:path|resolve_directory',
     // Process plugin commands (for quit only)

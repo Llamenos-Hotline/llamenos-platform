@@ -167,7 +167,7 @@ final class ConversationsViewModel {
 
             let request = SendMessageRequest(
                 encryptedContent: encrypted.encryptedContent,
-                recipientEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes
             )
 
             let _: ConversationMessage = try await apiService.request(
@@ -259,14 +259,13 @@ final class ConversationsViewModel {
         do {
             let decryptedText = try cryptoService.decryptMessage(
                 encryptedContent: message.encryptedContent,
-                readerEnvelopes: message.recipientEnvelopes
+                readerEnvelopes: message.readerEnvelopes
             )
 
             return DecryptedMessage(
                 id: message.id,
                 text: decryptedText,
                 direction: message.direction,
-                channelType: message.channelType,
                 createdAt: DateFormatting.parseISO(message.createdAt) ?? Date(),
                 isRead: message.isRead
             )
@@ -283,7 +282,10 @@ final class ConversationsViewModel {
         case .all:
             filteredConversations = allConversations
         case .active:
-            filteredConversations = allConversations.filter { $0.conversationStatus == .active }
+            // "Active" is every open conversation. A new inbound message arrives as
+            // `waiting` (unclaimed) and stays so until someone replies; filtering on
+            // `.active` alone hid exactly the conversations a volunteer needs to claim.
+            filteredConversations = allConversations.filter { $0.conversationStatus != .closed }
         case .closed:
             filteredConversations = allConversations.filter { $0.conversationStatus == .closed }
         }

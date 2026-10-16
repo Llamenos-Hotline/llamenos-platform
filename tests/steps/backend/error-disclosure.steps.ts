@@ -6,7 +6,7 @@
  * generic body. Unhandled server errors return generic 500.
  */
 import { expect } from '@playwright/test'
-import { devSurfaceSecret } from '../../dev-surface-secret'
+import { devSurfaceSecret, devSurfaceHeaders } from '../../dev-surface-secret'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import {
@@ -71,7 +71,12 @@ Given('a request with no Authorization header', async ({ world }) => {
 
 When('the request is sent to a protected endpoint', async ({ request, world }) => {
   const state = getEDState(world)
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  // `/api/auth/*` is the `strict` tier — 5/min per IP. These scenarios assert
+  // an exact 401 body, and on a deployed target (where every caller shares
+  // Caddy's address) the limiter answered 429 with
+  // `{"error":"Rate limit exceeded"}` long before the auth layer was reached
+  // (#1625). The harness header removes the limiter, not the auth check.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...devSurfaceHeaders() }
   if (state.authHeader) {
     headers['Authorization'] = state.authHeader
   }

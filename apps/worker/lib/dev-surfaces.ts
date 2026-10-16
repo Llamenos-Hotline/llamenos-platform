@@ -222,6 +222,70 @@ export function devSurfaceRequestAuthorized(
 }
 
 /**
+ * Header through which the harness states which client a request is from, for
+ * the per-client rate limiters INSIDE route handlers
+ * (`lib/route-rate-limit.ts`).
+ *
+ * Why a second header and not the rate-limiter exemption above
+ * ------------------------------------------------------------
+ * `devSurfaceRequestAuthorized` switches the API rate-limit MIDDLEWARE off for
+ * the harness, and that is the right shape there: those tiers bound ordinary
+ * API traffic, which is all the suite's own setup is. The limiters inside
+ * `routes/auth.ts`, `routes/invites.ts`, `routes/webauthn.ts`,
+ * `routes/recovery-group.ts` and `routes/security-events.ts` are different —
+ * each is a named brute-force control, and eight scenarios exist to assert that
+ * one of them FIRES. Exempting the harness from those would make the suite's
+ * own view of them vacuous: the scenarios asserting a 429 would stop seeing
+ * one, and the scenarios that merely trip over the control would stop being
+ * able to tell the difference between "bounded" and "absent".
+ *
+ * So the harness gets ISOLATION rather than an exemption. It already presents
+ * itself as many clients on a directly-reachable server by setting
+ * `X-Forwarded-For` (`tests/api-helpers.ts#simulatedClientIp`); behind the
+ * deployed Caddy that does not survive, because Caddy SETS
+ * `X-Forwarded-For: {remote_host}` and strips every other forwarded-for header
+ * (#1606) precisely so no caller can choose its own bucket. This header is a
+ * channel that does survive, and it is honoured only for a request that already
+ * carries the dev surface's shared secret.
+ *
+ * Authority granted: a caller that holds `DEV_RESET_SECRET` may choose which
+ * bucket its request counts against. That is strictly LESS than what the same
+ * credential already buys one line above — total exemption from the API rate
+ * limiter — and far less than `POST /api/test-reset`, which wipes the database.
+ * Without the secret the header is ignored entirely, so the limiters an
+ * anonymous caller on the same reachable host meets are exactly the production
+ * ones.
+ */
+export const DEV_SURFACE_CLIENT_ADDRESS_HEADER = 'X-Test-Client-Address'
+
+/**
+ * Shape a simulated address must have to be honoured: IPv4, IPv6 and short
+ * opaque labels, nothing that could enlarge a rate-limit key beyond what a real
+ * address produces. `SettingsService.checkRateLimit` validates key length and
+ * charset of its own accord; this is the earlier, narrower gate so a malformed
+ * value is ignored rather than turned into a key that is rejected downstream.
+ */
+const SIMULATED_CLIENT_ADDRESS = /^[A-Za-z0-9.:_-]{1,64}$/
+
+/**
+ * The address the harness says this request is from, or `null` for every
+ * request that is not the harness's own or does not name one.
+ *
+ * `null` — not `''` and not a fallback value — so a caller cannot accidentally
+ * treat "no simulated address" as a usable bucket component.
+ */
+export function devSurfaceSimulatedClientAddress(
+  env: DevSurfacesEnv,
+  presentedSecret: string | undefined,
+  presentedAddress: string | undefined,
+): string | null {
+  if (!presentedAddress) return null
+  if (!devSurfaceRequestAuthorized(env, presentedSecret)) return null
+  const address = presentedAddress.trim()
+  return SIMULATED_CLIENT_ADDRESS.test(address) ? address : null
+}
+
+/**
  * The DEMO surfaces — minting the fictional demo cast's signing seeds
  * (`lib/demo-identities.ts`), handing them to the login picker
  * (`routes/config.ts` `GET /api/config/demo/credentials`, unauthenticated), the

@@ -13,7 +13,7 @@
  */
 
 import { type APIRequestContext } from '@playwright/test'
-import { devSurfaceSecret, devSurfaceHeaders } from './dev-surface-secret'
+import { devSurfaceSecret, devSurfaceHeaders, harnessClientHeaders } from './dev-surface-secret'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
@@ -489,11 +489,18 @@ export function generateTestKeypair(): { seedHex: string; pubkey: string } {
  * worker falls into the single bucket for 127.0.0.1, so the suite's own
  * parallelism — not the behaviour under test — decides who gets a 429.
  *
- * This only works against a directly-reachable server. A deployed instance
- * sits behind Caddy, which overwrites X-Forwarded-For with the real remote
+ * `X-Forwarded-For` alone only works against a directly-reachable server. A
+ * deployed instance sits behind Caddy, which overwrites it with the real remote
  * address and strips every other forwarded-for header (#1606) — deliberately,
  * so that no caller can choose its own bucket. Against such a target the whole
- * suite IS one client, and the limits are real.
+ * suite was one client sharing one 5/min bucket per endpoint, which is 18 of
+ * the 27 deployed-target failures in #1625.
+ *
+ * So the address is now presented through `harnessClientHeaders()`, which sends
+ * it in `X-Test-Client-Address` as well — a channel the proxy does not rewrite,
+ * honoured only for a request carrying the dev surface's shared secret
+ * (`apps/worker/lib/route-rate-limit.ts`). The limiter still enforces its
+ * production threshold inside the bucket the harness names; nothing is exempt.
  */
 export function simulatedClientIp(): string {
   const octet = () => 1 + Math.floor(Math.random() * 254)
@@ -527,7 +534,7 @@ export async function redeemInviteViaApi<T = unknown>(
     ed25519.sign(buildAuthMessage(pubkey, timestamp, 'POST', path), hexToBytes(seedHex)),
   )
   const res = await request.post(path, {
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': clientIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(clientIp) },
     data: { code, pubkey, timestamp, token },
   })
   return { status: res.status(), data: (await safeJson(res)) as T }

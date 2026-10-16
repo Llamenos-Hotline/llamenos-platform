@@ -82,7 +82,10 @@ function makeApp(opts: {
   })
   app.route('/', signalRoutes)
 
-  return { app, auditLog }
+  const request = (input: string, init?: RequestInit) =>
+    app.request(input, init, { HMAC_SECRET: 'a'.repeat(64) })
+
+  return { app, request, auditLog }
 }
 
 beforeEach(() => {
@@ -229,8 +232,8 @@ describe('GET /signal/queue/stats', () => {
   it('returns queue statistics', async () => {
     mockQueue.getStats.mockResolvedValue({ pending: 3, processing: 1, dead: 2 })
 
-    const { app } = makeApp()
-    const res = await app.request('/queue/stats')
+    const { request } = makeApp()
+    const res = await request('/queue/stats')
 
     expect(res.status).toBe(200)
     const json = await res.json() as Record<string, unknown>
@@ -239,14 +242,14 @@ describe('GET /signal/queue/stats', () => {
   })
 
   it('passes hub query param to queue', async () => {
-    const { app } = makeApp()
-    await app.request('/queue/stats?hub=hub-1')
+    const { request } = makeApp()
+    await request('/queue/stats?hub=hub-1')
     expect(mockQueue.getStats).toHaveBeenCalledWith('hub-1')
   })
 
   it('passes undefined when hub not specified', async () => {
-    const { app } = makeApp()
-    await app.request('/queue/stats')
+    const { request } = makeApp()
+    await request('/queue/stats')
     expect(mockQueue.getStats).toHaveBeenCalledWith(undefined)
   })
 
@@ -266,8 +269,8 @@ describe('GET /signal/queue/dead-letters', () => {
     const deadLetter = { id: 'msg-1', to: '+15550001234', body: '...', failedAt: new Date().toISOString() }
     mockQueue.getDeadLetters.mockResolvedValue([deadLetter])
 
-    const { app } = makeApp()
-    const res = await app.request('/queue/dead-letters')
+    const { request } = makeApp()
+    const res = await request('/queue/dead-letters')
 
     expect(res.status).toBe(200)
     const json = await res.json() as Record<string, unknown>
@@ -289,8 +292,8 @@ describe('POST /signal/queue/retry/:id', () => {
   it('retries dead-letter message and audits', async () => {
     mockQueue.retryDeadLetter.mockResolvedValue(true)
 
-    const { app, auditLog } = makeApp()
-    const res = await app.request('/queue/retry/msg-1', { method: 'POST' })
+    const { request, auditLog } = makeApp()
+    const res = await request('/queue/retry/msg-1', { method: 'POST' })
 
     expect(res.status).toBe(200)
     const json = await res.json() as Record<string, unknown>
@@ -302,8 +305,8 @@ describe('POST /signal/queue/retry/:id', () => {
   it('returns success:false when retry returns false', async () => {
     mockQueue.retryDeadLetter.mockResolvedValue(false)
 
-    const { app, auditLog } = makeApp()
-    const res = await app.request('/queue/retry/msg-missing', { method: 'POST' })
+    const { request, auditLog } = makeApp()
+    const res = await request('/queue/retry/msg-missing', { method: 'POST' })
 
     expect(res.status).toBe(200)
     const json = await res.json() as Record<string, unknown>

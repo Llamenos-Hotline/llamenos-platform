@@ -23,16 +23,8 @@ struct CaseDetailView: View {
                 tabBar
 
                 // Tab content
-                TabView(selection: Binding(
-                    get: { viewModel.activeTab },
-                    set: { viewModel.activeTab = $0 }
-                )) {
-                    detailsTab.tag(DetailTab.details)
-                    timelineTab.tag(DetailTab.timeline)
-                    contactsTab.tag(DetailTab.contacts)
-                    evidenceTab.tag(DetailTab.evidence)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
+                tabContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -302,6 +294,25 @@ struct CaseDetailView: View {
         }
     }
 
+    // MARK: - Tab Content
+
+    /// Only the active tab exists in the view tree. A paged TabView hosts its
+    /// pages lazily in a UICollectionView, and a programmatic jump of more
+    /// than one page (Details → Contacts) can leave it hosting the wrong cell:
+    /// the Contacts tab rendered none of its states — no cards, no empty
+    /// state — while the only hosted cell showed the Evidence page, even
+    /// though the contacts fetch had already returned 200 (#1246).
+    /// EventDetailView switches tab content the same way.
+    @ViewBuilder
+    private var tabContent: some View {
+        switch viewModel.activeTab {
+        case .details: detailsTab
+        case .timeline: timelineTab
+        case .contacts: contactsTab
+        case .evidence: evidenceTab
+        }
+    }
+
     private func tabIcon(_ tab: DetailTab) -> String {
         switch tab {
         case .details: return "doc.text"
@@ -561,6 +572,10 @@ struct CaseDetailView: View {
             // Comment input bar
             commentInputBar
         }
+        // The tab body is a plain stack/group, not an accessibility element, so SwiftUI
+        // pushes a bare identifier down onto every child and overwrites theirs. As a
+        // container it keeps each child's own id (see `tabBar`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-timeline-tab")
     }
 
@@ -686,6 +701,10 @@ struct CaseDetailView: View {
                 .listStyle(.plain)
             }
         }
+        // The tab body is a plain stack/group, not an accessibility element, so SwiftUI
+        // pushes a bare identifier down onto every child and overwrites theirs. As a
+        // container it keeps each child's own id (see `tabBar`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-contacts-tab")
     }
 
@@ -754,6 +773,10 @@ struct CaseDetailView: View {
                 .listStyle(.plain)
             }
         }
+        // The tab body is a plain stack/group, not an accessibility element, so SwiftUI
+        // pushes a bare identifier down onto every child and overwrites theirs. As a
+        // container it keeps each child's own id (see `tabBar`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-evidence-tab")
     }
 

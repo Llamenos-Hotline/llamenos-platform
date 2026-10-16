@@ -1,64 +1,112 @@
 [advisories]
-# ── libcrux advisories reachable only via openmls → hpke-rs ────────────────
+# ── libcrux-kem 0.0.9: lockfile-only, never compiled ──────────────────────────
 #
-# Dependency chain for every ignore below:
-#   llamenos-core -> openmls / openmls_rust_crypto 0.5.1 -> hpke-rs 0.6.1
-#     -> hpke-rs-libcrux 0.6.1 -> libcrux-aead 0.0.7 -> libcrux-* 0.0.x
+# WHY THESE ARE HERE
 #
-# NO UPGRADE PATH EXISTS. openmls_rust_crypto 0.5.1 (latest on crates.io)
-# requires hpke-rs ^0.6.0, and hpke-rs 0.6.1 requires libcrux-sha3 "^0.0.8" /
-# libcrux-aead "=0.0.7". Under Cargo semver, 0.0.x releases are mutually
-# incompatible, so `cargo update --precise 0.0.10` is rejected outright:
+# `cargo audit` scans Cargo.lock, which is feature-agnostic: it records every
+# optional dependency in the resolved graph whether or not any feature enables
+# it. `libcrux-kem` 0.0.9 is such an entry. It is in the lockfile and in NO
+# build — not even `--features mls`.
 #
-#   error: failed to select a version for the requirement `libcrux-sha3 = "^0.0.8"`
-#   candidate versions found which didn't match: 0.0.10
+# Resolution chain (each arrow is an exact pin, not a range):
+#   llamenos-core
+#     -> openmls 0.9 / openmls_rust_crypto 0.6   (optional, `mls` feature)
+#       -> hpke-rs 0.7.0
+#         -> hpke-rs-libcrux =0.7.0   <-- OPTIONAL dependency of hpke-rs,
+#                                         never enabled by openmls_rust_crypto
+#           -> libcrux-kem =0.0.9
 #
-# Patching hpke-rs / hpke-rs-libcrux to the celabshq git fork was evaluated and
-# rejected: it advances libcrux-sha3 0.0.8 -> 0.0.9 (still below the fixed
-# 0.0.10) and pulls in libcrux-aesgcm 0.0.8, leaving the same number of unfixed
-# advisories while adding an unpinned git source to the supply chain.
+# NO UPGRADE PATH EXISTS (verified 2026-10-07, the day 0.0.10 was published):
+#   * hpke-rs-libcrux 0.7.0 pins `libcrux-kem = "=0.0.9"` exactly, so
+#     `cargo update -p libcrux-kem --precise 0.0.10` is rejected outright:
+#       error: failed to select a version for the requirement `libcrux-kem = "=0.0.9"`
+#       candidate versions found which didn't match: 0.0.10
+#   * The fixed 0.0.10 is pinned only by hpke-rs-libcrux 0.8.0, which needs
+#     hpke-rs 0.8.0 — but openmls_rust_crypto 0.6.0 (latest on crates.io)
+#     requires `hpke-rs ^0.7`, and openmls 0.9.1 (latest) still requires
+#     `openmls_rust_crypto ^0.6.0`. Under Cargo semver 0.0.x releases are
+#     mutually incompatible, so nothing in the published openmls line can
+#     reach the fix.
+#   * A `[patch.crates-io]` cannot help: patching cannot relax
+#     openmls_rust_crypto's own `^0.7` requirement, and a git fork would add an
+#     unpinned source to the supply chain for a crate we do not compile.
 #
-# REACHABILITY: our MLS ciphersuite is fixed at
-#   MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
-# (see `CIPHERSUITE` in src/mls.rs). That is X25519 + ChaCha20-Poly1305 +
-# SHA-256 + Ed25519 — it invokes neither SHA-3/SHAKE, nor AES-GCM, nor ML-KEM.
-# All advisories below are confined to code paths this crate never executes.
-# Our own AES-GCM operations (PIN storage, items_key, content encryption) use
-# the RustCrypto `aes-gcm` crate, not libcrux.
+# NOT REACHABLE — four independent layers, each verified by artefact:
 #
-# REVISIT: remove each ignore as soon as openmls_rust_crypto ships a release
-# depending on hpke-rs >=0.7, which pulls the fixed libcrux crates.
+#   1. `openmls`, `openmls_rust_crypto` and `openmls_basic_credential` are
+#      `optional = true` behind the `mls` feature, and `default = []`. No build
+#      enables `mls`: build-mobile.sh uses `--features mobile`,
+#      `mobile,test-kdf` and `uniffi-bindgen`; apps/desktop takes
+#      llamenos-core with default features. `apps/desktop/Cargo.lock` contains
+#      ZERO libcrux and ZERO openmls entries.
+#        cargo tree -e normal | grep -c libcrux                    -> 0
+#        cargo tree -e normal --features mobile | grep -c libcrux   -> 0
+#        cargo tree -e normal --features server | grep -c libcrux   -> 0
+#
+#   2. Even with `--features mls`, libcrux-kem is still not built.
+#      `hpke-rs-libcrux` is an optional *backend* of hpke-rs;
+#      openmls_rust_crypto selects `hpke-rs-rust-crypto` (RustCrypto) instead.
+#      Under `--features mls` the tree contains libcrux-sha3/-traits/-secrets/
+#      -intrinsics/-platform (direct deps of hpke-rs itself) but NOT
+#      libcrux-kem and NOT hpke-rs-libcrux:
+#        cargo tree -e normal --features mls | grep -c libcrux-kem  -> 0
+#        cargo build --features mls  produces no liblibcrux_kem* artefact,
+#        and `nm` on the resulting rlib reports 0 `libcrux_kem` symbols.
+#
+#   3. Both advisories are confined to HYBRID POST-QUANTUM KEM key types:
+#      RUSTSEC-2026-0331 affects `PrivateKey::decode`/`PublicKey::decode` for
+#      X25519MlKem768Draft00 and XWingKemDraft06; RUSTSEC-2026-0330 affects
+#      `PublicKey::encapsulate_derand` for WingKemDraft06 and
+#      X25519MlKem768Draft06. Our MLS ciphersuite is a single const —
+#      MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 (`CIPHERSUITE` in
+#      src/mls.rs) — i.e. classical X25519, ChaCha20-Poly1305, SHA-256,
+#      Ed25519. It instantiates neither ML-KEM nor X-Wing.
+#
+#   4. RUSTSEC-2026-0330 additionally requires an attacker-controlled
+#      encapsulation seed. The advisory itself notes the seed is a secret of
+#      the encapsulating party and must never come from an untrusted source.
+#
+# RESIDUAL RISK ACCEPTED: both advisories are availability-only (panic/DoS;
+# CVSS v4 VC:N/VI:N/VA:H — no confidentiality or integrity impact, no memory
+# unsafety). They would become reachable only if someone simultaneously (a)
+# enabled the `mls` feature, (b) switched hpke-rs to the `hpke-rs-libcrux`
+# backend, and (c) changed `CIPHERSUITE` to a hybrid PQ suite. Any one of
+# those is a deliberate, reviewable edit to this crate. No key material is
+# exposed and no cryptographic property is weakened in the meantime.
+#
+# REVISIT (review by 2026-12-01, tracked in #1713): remove both ignores as
+# soon as openmls_rust_crypto publishes a release depending on `hpke-rs >=0.8`,
+# which pins the fixed libcrux-kem 0.0.10. Re-check with:
+#   cargo update -p libcrux-kem --precise 0.0.10
+#
+# HOW TO CHECK THESE IGNORES ARE STILL NEEDED: empty the list below and run
+# `cargo audit`. Anything that no longer fires is dead config and must be
+# deleted — six stale ignores (RUSTSEC-2026-0124, -0207, -0208, -0209, -0211,
+# -0212) were removed this way, all resolved by the openmls 0.9 / hpke-rs 0.7
+# bump which dropped libcrux-aead/-aesgcm/-chacha20poly1305 from the graph
+# entirely and advanced libcrux-sha3 to 0.0.10 and libcrux-secrets to 0.0.6.
 
 ignore = [
-  # Potential Panic on Overlong Ciphertext Buffer in libcrux-chacha20poly1305
-  # 0.0.7. hpke-rs-libcrux 0.6.1 hard-pins libcrux-aead "=0.0.7", which pins
-  # libcrux-chacha20poly1305 "=0.0.7". Ciphertext buffers on this path are
-  # produced by the library itself (RFC 9180 outputs) rather than taken as
-  # untrusted lengths at this layer.
-  "RUSTSEC-2026-0124",
+  # Panic on Decoding Short Hybrid Keys (libcrux-kem <=0.0.9, fixed 0.0.10).
+  # Hybrid PQ key decode only; not compiled in any build. See above.
+  "RUSTSEC-2026-0331",
 
-  # Incorrect Output of Incremental Portable SHAKE API on Multiple Squeeze
-  # Calls (libcrux-sha3 0.0.8; fixed in 0.0.10, unreachable — see above).
-  # Not reachable: our ciphersuite hashes with SHA-256, never SHA-3/SHAKE.
-  "RUSTSEC-2026-0207",
-
-  # Potential Panic in AVX2 SHAKE-256 (libcrux-sha3 0.0.8; fixed in 0.0.10,
-  # unreachable — see above). Not reachable: no SHAKE usage.
-  "RUSTSEC-2026-0208",
-
-  # AES-GCM did not enforce limits on AAD length (libcrux-aesgcm 0.0.7).
-  # No fixed release exists upstream. Not reachable: our MLS ciphersuite is
-  # ChaCha20-Poly1305, and our own AES-GCM uses the RustCrypto `aes-gcm` crate.
-  "RUSTSEC-2026-0209",
-
-  # Non-constant time Authentication Tag Check in AES-GCM Decryption
-  # (libcrux-aesgcm 0.0.7). No fixed release exists upstream. Not reachable
-  # for the same reason as RUSTSEC-2026-0209.
-  "RUSTSEC-2026-0211",
-
-  # Potentially Incorrect Output of Constant-Time Swap/Select on Aarch64
-  # (libcrux-secrets 0.0.5; fixed in 0.0.6, unreachable — see above).
-  # Pulled in via libcrux-traits -> libcrux-sha3. The affected constant-time
-  # primitives back ML-KEM and SHA-3, neither of which our ciphersuite uses.
-  "RUSTSEC-2026-0212",
+  # Hybrid Encapsulation from Seed Panics on Short Seed (libcrux-kem <=0.0.9,
+  # fixed 0.0.10). Hybrid PQ encapsulate_derand only, and requires an
+  # attacker-controlled secret seed; not compiled in any build. See above.
+  "RUSTSEC-2026-0330",
 ]
+
+# NOTE ON WARNINGS (informational advisories — these do NOT fail `cargo audit`,
+# which is what CI runs, with no `-D warnings`):
+#
+#   * RUSTSEC-2026-0190 (anyhow `Error::downcast_mut()` unsoundness) was FIXED
+#     rather than ignored: anyhow 1.0.102 -> 1.0.104 (patched >= 1.0.103). This
+#     one did ship, via uniffi in the `mobile` builds, so it mattered.
+#
+#   * RUSTSEC-2026-0173 (proc-macro-error2 unmaintained) has `patched = []` —
+#     no fixed release exists, the author has retired the crate. It reaches us
+#     only as a build-time proc-macro via hax-lib-macros -> libcrux-sha3, i.e.
+#     only under `--features mls`, and emits no runtime code into any shipped
+#     binary. It stays an unignored warning so it remains visible; silencing it
+#     would only hide the day it becomes actionable.

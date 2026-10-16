@@ -9,6 +9,7 @@ import { Given, When, Then, Before, getState, setState } from './fixtures'
 // Status assertions (Then) are in assertions.steps.ts
 import { getSharedState, setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
+import { devSurfaceHeaders } from '../../dev-surface-secret'
 import {
   apiGet,
   apiPost,
@@ -507,31 +508,28 @@ When('the {string} user sends {string} to {string} with valid report body', asyn
 
 When('an unauthenticated request is sent to {string} {string}', async ({request, world}, method: string, path: string) => {
   const url = `${BASE_URL}${path}`
+  // Deliberately NO Authorization header — that is the thing under test. The
+  // harness header is unrelated to authentication: some of the paths in the
+  // examples table (`/api/invites`) are on the `strict` tier at 5/min per IP,
+  // and on a deployed target every scenario shares Caddy's address, so the
+  // limiter answered 429 instead of the 401 these scenarios assert (#1625).
+  const headers = { 'Content-Type': 'application/json', ...devSurfaceHeaders() }
   let res
   switch (method) {
     case 'GET':
-      res = await request.get(url, { headers: { 'Content-Type': 'application/json' } })
+      res = await request.get(url, { headers })
       break
     case 'POST':
-      res = await request.post(url, {
-        headers: { 'Content-Type': 'application/json' },
-        data: {},
-      })
+      res = await request.post(url, { headers, data: {} })
       break
     case 'PATCH':
-      res = await request.patch(url, {
-        headers: { 'Content-Type': 'application/json' },
-        data: {},
-      })
+      res = await request.patch(url, { headers, data: {} })
       break
     case 'PUT':
-      res = await request.put(url, {
-        headers: { 'Content-Type': 'application/json' },
-        data: {},
-      })
+      res = await request.put(url, { headers, data: {} })
       break
     case 'DELETE':
-      res = await request.delete(url, { headers: { 'Content-Type': 'application/json' } })
+      res = await request.delete(url, { headers })
       break
     default:
       throw new Error(`Unknown method: ${method}`)

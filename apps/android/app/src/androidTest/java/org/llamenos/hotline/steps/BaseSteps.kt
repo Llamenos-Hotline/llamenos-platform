@@ -1,13 +1,18 @@
 package org.llamenos.hotline.steps
 
 import android.util.Log
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsNodeInteractionCollection
 import androidx.compose.ui.test.SemanticsNodeInteractionsProvider
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -209,6 +214,45 @@ abstract class BaseSteps : SemanticsNodeInteractionsProvider {
         } catch (_: Throwable) {
             // Section header not available
         }
+    }
+
+    /**
+     * Matcher for the Switch inside a tagged SettingsToggleRow. The test tag
+     * sits on the row, which has no click action of its own; the Switch child
+     * carries it, and the row's semantics do not merge the child away.
+     * Clicking the tagged row directly throws — which is how
+     * "I toggle transcription on" silently never toggled anything (#1743).
+     */
+    protected fun switchInRowMatcher(rowTag: String) = hasClickAction() and
+        hasAnyAncestor(hasTestTag(rowTag)) and
+        SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
+
+    /**
+     * Wait until the Switch inside [rowTag] shows [checked]. Failing means the
+     * screen never reflected the state the server reported — i.e. the settings
+     * GET failed — so the message says that, not "tag not displayed".
+     */
+    protected fun awaitSwitchState(rowTag: String, checked: Boolean, timeoutMillis: Long = 10_000) {
+        val expected = if (checked) ToggleableState.On else ToggleableState.Off
+        try {
+            composeRule.waitUntil(timeoutMillis) {
+                composeRule.onAllNodes(switchInRowMatcher(rowTag)).fetchSemanticsNodes()
+                    .firstOrNull()
+                    ?.config?.get(SemanticsProperties.ToggleableState) == expected
+            }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError(
+                "'$rowTag' never showed state $expected — the screen did not load the server's value",
+                e,
+            )
+        }
+    }
+
+    protected fun clickSwitchInRow(rowTag: String) {
+        waitForNode(rowTag, timeoutMillis = 10_000)
+        onNodeWithTag(rowTag).performScrollTo()
+        onNode(switchInRowMatcher(rowTag)).performClick()
+        composeRule.waitForIdle()
     }
 
     /**

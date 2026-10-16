@@ -64,3 +64,47 @@ export function devSurfaceSecret(): string {
 export function devSurfaceHeaders(): Record<string, string> {
   return { 'X-Test-Secret': devSurfaceSecret() }
 }
+
+/**
+ * The header through which the harness tells the server which client a request
+ * is from, for the per-client rate limiters inside the route handlers
+ * (`apps/worker/lib/route-rate-limit.ts`). Mirrors
+ * `DEV_SURFACE_CLIENT_ADDRESS_HEADER` on the server.
+ */
+export const CLIENT_ADDRESS_HEADER = 'X-Test-Client-Address'
+
+/**
+ * Headers that make this request the harness, FROM a named client.
+ *
+ * Two different mechanisms, which is why they belong together in one place:
+ *
+ *   - `X-Test-Secret` exempts the request from the API rate-limit MIDDLEWARE
+ *     (`middleware/rate-limit.ts`). Without it the `strict` tier — 5/min per
+ *     IP on `/api/auth/*`, `/api/webauthn/*`, `/api/invites/*`,
+ *     `/api/provision/*`, `/api/recovery-group/*` — answers 429 first, with the
+ *     body `{"error":"Rate limit exceeded"}`. That is why the auth brute-force
+ *     scenarios could not assert their own bodies against a deployed target:
+ *     the middleware fired at the same threshold of 5 as the in-route limiter
+ *     and won, so `"Too many login attempts"` was never the body anyone saw
+ *     (#1625).
+ *   - `X-Test-Client-Address` does NOT exempt anything. The limiters inside
+ *     the route handlers are named brute-force controls and eight scenarios
+ *     assert that one of them fires, so the harness gets a bucket of its own
+ *     rather than a way past them — the limit still binds inside that bucket,
+ *     at the production threshold. `X-Forwarded-For` is sent alongside because
+ *     it is what a directly reachable dev server reads
+ *     (`TRUST_PROXY_HEADERS=true`, no proxy in front); the deployed Caddy
+ *     overwrites it with the real remote address, which is what the second
+ *     header is for.
+ *
+ * Pass the SAME address twice when two requests must look like one client (two
+ * redemptions of one invite code), and different addresses when they must look
+ * like different people.
+ */
+export function harnessClientHeaders(address: string): Record<string, string> {
+  return {
+    'X-Forwarded-For': address,
+    [CLIENT_ADDRESS_HEADER]: address,
+    ...devSurfaceHeaders(),
+  }
+}

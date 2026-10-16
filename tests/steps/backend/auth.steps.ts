@@ -15,6 +15,7 @@ import {
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+import { devSurfaceHeaders } from '../../dev-surface-secret'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -94,6 +95,12 @@ When('the user presents a token older than 5 minutes', async ({request, world}) 
     headers: {
       'Authorization': `Bearer ${JSON.stringify(token)}`,
       'Content-Type': 'application/json',
+      // `/api/auth/*` is the `strict` tier — 5/min per IP. Locally that is a
+      // skipped limiter on `development`; against a deployed target every
+      // scenario in every worker shares Caddy's address, so without the harness
+      // header this answered 429 and the assertion on 401 could not hold
+      // (#1625). It changes nothing about the authentication being tested.
+      ...devSurfaceHeaders(),
     },
   })
   getAuthTestState(world).authResult = { status: res.status(), data: null }
@@ -123,6 +130,8 @@ When('the token is presented to the server', async ({request, world}) => {
     headers: {
       'Authorization': `Bearer ${getAuthTestState(world).tamperedToken}`,
       'Content-Type': 'application/json',
+      // See above: the `strict` tier, not the auth layer, is what answered 429.
+      ...devSurfaceHeaders(),
     },
   })
   getAuthTestState(world).authResult = { status: res.status(), data: null }
@@ -158,7 +167,9 @@ Then('the server should accept the session', async ({ world }) => {
 
 When('a request is made without any auth header', async ({request, world}) => {
   const res = await request.get(`${BASE_URL}/api/auth/me`, {
-    headers: { 'Content-Type': 'application/json' },
+    // Deliberately no Authorization header — that is the thing under test. The
+    // harness header is only about the `strict`-tier limiter (see above).
+    headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() },
   })
   getAuthTestState(world).authResult = { status: res.status(), data: null }
 })

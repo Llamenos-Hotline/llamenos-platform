@@ -1,6 +1,6 @@
 # Continuous Integration
 #
-# On push to main or desktop, and on pull requests:
+# On push to desktop, on pull requests, and on merge groups:
 #   1. Detect changed files — skip tests for docs-only changes
 #   2. Build & validate (codegen, typecheck, vite build, esbuild)
 #   3. Crypto tests (Rust)
@@ -9,13 +9,27 @@
 #   6. Android build & test
 #   7. iOS build & test
 #
-# Version bump, release, and deploys only run on main.
+# This workflow deliberately does NOT trigger on `push` to `main` (#1830):
+# the merge queue is the gate — a tree cannot reach `main` without passing
+# `ci-status` on the merge group, and the tree the group validated IS the
+# tree that lands on `main`, byte for byte. A post-merge `push: main` run
+# re-executed the entire suite over bytes that had already passed; it could
+# not reject anything, only discover a flake, and it cost a full duplicate
+# run per merge on a runner pool the queue itself needs.
+#
+# The post-merge Docker canary image that used to ride this workflow's
+# `push: main` run moved to docker-canary.yml — a standalone publish job,
+# not the full matrix. CodeQL keeps its own `push: main` trigger in
+# codeql.yml (code scanning alerts are tracked against the default branch;
+# dropping that one would silently empty the security tab). Version bump,
+# release, and deploys run in their own workflows on main.
 
 name: CI
 
 on:
   push:
-    branches: [main, desktop]
+    # `desktop` only — NOT `main`, see the header comment (#1830).
+    branches: [desktop]
   pull_request:
   # The merge queue's own ref. Neither `fleet/verify` (fleet-verify.yml) nor
   # `fleet/review` (fleet-review.yml) is defined in THIS file any more — see
@@ -124,11 +138,31 @@ jobs:
       # on `pull_request` (it is deliberately NOT gated here), unit suites still
       # run everywhere, and `lint`/`build`/`typecheck` are untouched.
       #
+      # As of #1762 the mobile platforms are not blind on PR heads either:
+      # `ios-compile-check` / `android-compile-check` gate on `pr_gate` (the
+      # pull_request arm below) plus the platform flag, and compile EVERY
+      # source set — including the test bundles, where the two 2026-10-09
+      # defects (#1754, #1758) lived — on every PR whose diff can change
+      # those binaries. The full suites stay queue-only; what changed is
+      # that a COMPILE error no longer first surfaces as a queue ejection
+      # that discards the whole batch.
+      #
       # Unit suites (backend-unit, desktop-unit, crypto-tests) and
-      # migration-drift are deliberately NOT gated on this: they are cheap, they
-      # contend for nothing scarce, and they keep `ci-status` a real signal on
-      # main for `docker-canary` rather than a near-vacuous one.
+      # migration-drift are deliberately NOT gated on this: they are cheap and
+      # they contend for nothing scarce. (Until #1830 they also ran on
+      # `push: main` to keep `ci-status` there a real signal for the
+      # docker-canary job; that trigger — and the canary, now in
+      # docker-canary.yml — no longer rides this workflow.)
       revalidate: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
+      # The `pull_request` arm of the same event question — true exactly when
+      # a PR head is being checked. The PR-head compile gates (#1762) read
+      # this output rather than naming the event in their own `if:`, for the
+      # same reason `revalidate` exists as an output: which EVENT pays for
+      # which suite is answered once, here. It also keeps the gates' `if:`
+      # free of any event name, which the "every job ci-status depends on can
+      # report on merge_group" rail in tests/orchestrator/guards.test.ts
+      # requires of everything in ci-status's `needs`.
+      pr_gate: ${{ github.event_name == 'pull_request' }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -149,19 +183,72 @@ jobs:
 
       - name: Detect changes
         id: filter
+        env:
+          # The queue's target branch ref (`refs/heads/main`), via env rather
+          # than inline `${{ }}`: it is the one value here that is a NAME
+          # flowing into a git command rather than a SHA, so it is quoted as
+          # data and never spliced into the script text.
+          TARGET_REF: ${{ github.event.merge_group.base_ref }}
         run: |
           # Diff against the PR's actual base, not HEAD^ — HEAD^ only agrees
           # with the base by coincidence on `pull_request` (today's merge-ref
           # commit happens to have the base as its parent) and is flatly
           # wrong on `merge_group`, where HEAD is the queue's own synthetic
-          # merge commit. Mirrors the base/head resolution the `lint` job's
-          # "Determine changed files" step already uses.
+          # merge commit.
+          #
+          # On `merge_group` this deliberately does NOT mirror the `lint`
+          # job's base — see the merge_group branch below for why platform
+          # detection and lint want different bases (#1594).
+          FALLBACK_ALL=false
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE="${{ github.event.pull_request.base.sha }}"
             HEAD="${{ github.event.pull_request.head.sha }}"
           elif [[ "${{ github.event_name }}" == "merge_group" ]]; then
-            BASE="${{ github.event.merge_group.base_sha }}"
+            # NOT `merge_group.base_sha` (#1594). The queue stacks each entry
+            # on the PREVIOUS entry's group head, so for any entry but the
+            # first, base_sha already contains the earlier entries' files —
+            # and a diff against it therefore reports only THIS entry's
+            # files. The suites the earlier entry's own changes require then
+            # evaluate false and are filtered out, and the group reports
+            # `ci-status: success` having never run them. Measured: group
+            # `pr-1556-b1801eb8` (run 37467885061, base = main) saw
+            # `packages/crypto/src/labels.rs` and ran android-e2e + ios-e2e;
+            # group `pr-1482-35d61e96` (run 37467923375), whose base WAS that
+            # group's head, saw three backend files, skipped
+            # android-build-test, ios-build-test, android-e2e and ios-e2e,
+            # and went green — while its tree still carried #1556's Android
+            # and iOS changes. The suite was not bypassed by anyone's
+            # decision; it was filtered away by arithmetic.
+            #
+            # The right base is the branch the group will LAND on: the
+            # queue's target (`base_ref`, i.e. refs/heads/main). Everything a
+            # group is about to merge is new to `main`, which is the question
+            # the gate actually needs answered — and these suites validate
+            # the group's whole TREE, not a per-file verdict, so running one
+            # against an earlier, shorter prefix's tree is not evidence about
+            # this one. (`lint` is the opposite case and keeps `base_sha`
+            # on purpose: eslint's verdict is per file, every entry's own
+            # group lints exactly its own files, so the union across the
+            # chain already covers everything that lands.)
+            #
+            # actions/checkout only fetches the queue ref, so `main` is not
+            # present as a remote-tracking ref and has to be fetched here.
             HEAD="${{ github.event.merge_group.head_sha }}"
+            BASE=""
+            if [[ -n "$TARGET_REF" ]] && \
+               git fetch --no-tags --quiet origin "+${TARGET_REF}:refs/ci/queue-target"; then
+              BASE="$(git rev-parse refs/ci/queue-target)"
+            fi
+            if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
+              # Never silently narrow the gate: an unresolvable queue target
+              # falls back to "every file in the group's own tree changed",
+              # so every suite runs. HEAD^ would be exactly `base_sha` here
+              # (the queue stacks one commit per entry) — i.e. the bug above
+              # — and a hard failure would stall the queue on a transient
+              # fetch error rather than fail it loudly. Over-running costs
+              # minutes; under-running costs a regression nobody sees.
+              FALLBACK_ALL=true
+            fi
           else
             BASE="${{ github.event.before }}"
             HEAD="${{ github.event.after }}"
@@ -170,9 +257,12 @@ jobs:
           # Fall back to a single-commit diff if before/base is unavailable
           # (e.g. force-push, first commit on a branch, or workflow_dispatch
           # with no PR/push context at all).
-          if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
+          if [[ "$FALLBACK_ALL" == "false" ]] \
+             && { [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; }; then
             BASE="HEAD^"
           fi
+          # Unconditional: the FALLBACK_ALL path enumerates $HEAD's tree, so
+          # it needs a resolvable HEAD too.
           if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then
             HEAD="HEAD"
           fi
@@ -180,14 +270,27 @@ jobs:
           # Three-dot on pull_request so only the PR's own changes pick
           # platforms, not everything the base moved since the fork — see
           # the `lint` job's "Determine changed files" step for why each
-          # event gets the diff it does (#1396).
+          # event gets the diff it does (#1396). Two-dot on `merge_group`
+          # even though the target is now a branch tip: `git diff A..B`
+          # compares the two TREES, so it stays correct even once `main`
+          # has moved on to squashed commits the group's history does not
+          # contain, and a `main` that moved by something NOT in the group
+          # only ever adds files (over-runs), never drops them.
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             RANGE="$BASE...$HEAD"
           else
             RANGE="$BASE..$HEAD"
           fi
 
-          CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          if [[ "$FALLBACK_ALL" == "true" ]]; then
+            echo "::warning title=Queue target unresolved::Could not resolve the merge queue's target branch (${TARGET_REF:-<empty>}); treating every file in the group's tree as changed so no suite is filtered away."
+            RANGE="every file in ${HEAD}"
+            # The group head's own tree, not `git ls-files` (the index of
+            # whatever happens to be checked out).
+            CHANGED=$(git ls-tree -r --name-only "$HEAD")
+          else
+            CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          fi
           echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
@@ -997,6 +1100,17 @@ jobs:
       - name: Check no result test reads a skipped task as a pass
         run: python3 deploy/ansible/scripts/check-succeeded-as-pass.py
 
+      # Issue #1636: before it, the suite had three behaviours and named one.
+      # A FAIL stopped the deploy except where it quietly did not (the Kamailio
+      # probe reported NOT READY and the deploy succeeded), so "Smoke check
+      # FAILED" did not tell an operator whether anything had stopped. Every
+      # check now declares fatal or advisory. The recorder defaults an
+      # undeclared severity to fatal, so a forgotten one is too strict rather
+      # than silently advisory — this keeps the ruling readable in the playbook
+      # instead of living in that default.
+      - name: Check every smoke check declares a severity
+        run: python3 deploy/ansible/scripts/check-smoke-severity.py --list
+
       # The rail above rejects the pattern; this proves the replacement
       # actually records SKIPPED for a probe that did not run, PASS only when
       # the measurement holds, and FAIL when a probe reports itself fine while
@@ -1004,8 +1118,10 @@ jobs:
       # synthesized probe results in ~1s, no services needed.
       #
       # The end-to-end counterpart, scripts/check-smoke-verdicts.py, drives the
-      # whole smoke suite against stub binaries and real sockets in a private
-      # network namespace (25 cases, ~5 min). Like
+      # whole smoke suite against stub binaries and real sockets — including a
+      # real TLS listener, and a bare TCP acceptor for the false green a
+      # reachability probe reports as healthy — in a private network
+      # namespace. Like
       # scripts/check-disk-tier-guards.py it is run by hand rather than in CI;
       # `--compare-old <ref>` replays identical fixtures against an older
       # playbook and prints the verdicts side by side.
@@ -1070,7 +1186,7 @@ jobs:
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       - name: Setup Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: 17
@@ -1097,6 +1213,53 @@ jobs:
           name: android-unit-test-results
           path: apps/android/app/build/test-results/
           retention-days: 7
+
+  # ─── PR-head Android compile gate (#1762) ────────────────────
+  # `android-build-test` above is queue-gated (`revalidate`, #1426), and the
+  # generated Kotlin types (quicktype, gitignored) are exactly as invisible
+  # in a diff as the Swift ones — on #1744's head this suite was `skipped`
+  # while `ci-status` reported success. A compile error against those types
+  # must surface on the PR head, not as a queue ejection that discards the
+  # whole batch. Unlike the macOS runners, ubuntu runners contend for
+  # nothing scarce, so this runs on every Android-touching PR head.
+  #
+  # Compile-only by construction: `assembleDebug` covers the app sources,
+  # `compileDebugUnitTestKotlin` the unit test sources (assemble never
+  # compiles them), `assembleDebugAndroidTest` the instrumented test
+  # sources. No test executes, no emulator boots, no lint — the full
+  # android-build-test verdict still gates in the merge queue.
+  android-compile-check:
+    needs: changes
+    if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun (for codegen)
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies and run codegen
+        run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
+
+      - name: Setup Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Compile every Kotlin source set (no tests run)
+        working-directory: apps/android
+        run: ./gradlew assembleDebug compileDebugUnitTestKotlin assembleDebugAndroidTest --console=plain
 
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
@@ -1131,7 +1294,7 @@ jobs:
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       - name: Setup Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: 17
@@ -1448,6 +1611,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Disk headroom, before anything expensive and before this job creates a
+      # simulator or a build product.
+      #
+      # #1665: this host's shared data volume filled up mid-run and the runner
+      # AGENT died — not the job — throwing `IOException: No space left on
+      # device` from its own `_diag` tracing writer. Both agents on the host
+      # went within one second of each other, because they share one volume.
+      # The consequence is why this step is worth a minute of every iOS job:
+      # no job log was uploaded at all (`BlobNotFound`), every step from the
+      # test onward recorded a `null` conclusion, and the merge queue ejected
+      # a PR that needed no code change — with the only evidence in the
+      # check-run annotations. A job that REFUSES is a red check somebody can
+      # read; an agent that crashes produces nothing.
+      #
+      # The same step reclaims, and that half has to live HERE rather than in
+      # a teardown step: a crashed or cancelled job runs no `if: always()`, so
+      # its simulator (2.4-2.6 GiB of device data, measured) leaks permanently
+      # and the volume ratchets down ~5 GiB per incident. Job start is the only
+      # point guaranteed to run however the previous job died — the same
+      # reasoning #1639 applies to the backend port it leaks for the same
+      # reason. It deletes only what it can prove CI created; read the script
+      # header for what it refuses to touch and why.
+      #
+      # A no-op on a GitHub-hosted runner: that VM is thrown away after the
+      # job and shares nothing with anybody.
+      - name: Guard the runner's disk headroom
+        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
         with:
@@ -1570,6 +1761,138 @@ jobs:
           name: ios-test-results
           path: test-results/
           retention-days: 7
+
+  # ─── PR-head iOS compile gate (#1762) ────────────────────────
+  #
+  # WHY THIS JOB EXISTS. `ios-build-test` above is deliberately queue-gated
+  # (`revalidate`, #1426) — but it is the only suite that COMPILES the Swift
+  # sources, and the types most likely to break a compile are
+  # quicktype-generated into gitignored `Types.swift`, invisible in the
+  # diff. Two PRs on 2026-10-09 (#1754, #1758) reached the merge queue with
+  # build-breaking compile errors against generated types, green `ci-status`
+  # and passing unit tests, and were caught only by a reviewer reasoning
+  # through codegen by hand. A queue ejection discards the whole batch,
+  # including unrelated healthy PRs; a compile check is cheap next to that.
+  #
+  # WHAT IT IS: `xcodebuild build-for-testing` and nothing else. Compiles
+  # the app AND both test bundles — #1758's failure was in a UNIT TEST
+  # source, which a plain `build` never compiles. No simulator is created
+  # or booted (generic destination), no test runs. The full verdict (unit
+  # tests, then UI tests) still gates in the merge queue.
+  #
+  # WHERE IT RUNS — the recorded runner-cost decision:
+  #   - GitHub-hosted `macos-15`: free on this public repo, capped at 5
+  #     concurrent macOS jobs repo-wide. ios-e2e.yml's hosted build leg does
+  #     the same build-for-testing in ~4 minutes; this job takes ONE slot
+  #     for roughly that per iOS-touching PR push (XCFramework cache hit;
+  #     ~15-20 min only when packages/crypto changes and the Rust build
+  #     re-runs). PR runs are cancel-in-progress, so a re-pushed PR does
+  #     not stack slots.
+  #   - The self-hosted Mac mini was REJECTED for this job: its two runners
+  #     are the merge queue's gating capacity (#1225, #1407), and #1761's
+  #     disk guard would refuse PR checks en masse whenever the shared
+  #     volume fills — turning a cheap gate into a flaky one.
+  # The merge queue still runs the FULL ios-build-test on the Mac mini;
+  # this job changes nothing about that.
+  ios-compile-check:
+    needs: changes
+    if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.ios == 'true'
+    runs-on: macos-15
+    permissions:
+      contents: read
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun (for codegen)
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies and run codegen
+        run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
+
+      # Same cache, same key as ios-build-test: the XCFramework is a Rust
+      # artifact (cargo, not Xcode), so sharing it between this hosted
+      # runner and the Mac mini is safe — ios-e2e.yml already shares it
+      # across both runner classes.
+      - name: Cache crypto XCFramework + bindings
+        id: xcframework-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/ios/LlamenosCoreFFI.xcframework
+            packages/crypto/dist/ios/LlamenosCore.swift
+          key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
+
+      - name: Install Rust stable (for crypto xcframework)
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Rust cache
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/crypto
+
+      - name: Build crypto XCFramework
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/crypto
+          ./scripts/build-mobile.sh ios
+          cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
+
+      - name: Copy UniFFI bindings (from build or cache)
+        run: |
+          cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
+
+      - name: Install xcodegen
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      # No DerivedData cache, deliberately: the key ios-build-test uses is
+      # written by the Mac mini on Xcode 27 while this image is on Xcode 26,
+      # and restoring module caches across compiler versions fails the
+      # build for reasons that have nothing to do with the PR. A cold
+      # compile here costs the same ~4 minutes ios-e2e.yml's hosted build
+      # leg already pays.
+      - name: Compile app and every test bundle (nothing runs)
+        working-directory: apps/ios
+        run: |
+          if ! xcodebuild build-for-testing \
+              -project Llamenos.xcodeproj \
+              -scheme Llamenos \
+              -destination 'generic/platform=iOS Simulator' \
+              -derivedDataPath "$RUNNER_TEMP/llamenos-build" \
+              -parallelizeTargets \
+              EAGER_LINKING=YES \
+              DEBUG_INFORMATION_FORMAT=dwarf \
+              >"$RUNNER_TEMP/compile-check.log" 2>&1; then
+            grep -E "error:" "$RUNNER_TEMP/compile-check.log" | head -50
+            tail -40 "$RUNNER_TEMP/compile-check.log"
+            exit 1
+          fi
+          grep -E "\*\* TEST BUILD" "$RUNNER_TEMP/compile-check.log"
+
+      # A build that "succeeds" while producing no test bundles is the #168
+      # scheme regression in a new coat — this gate would then pass having
+      # compiled none of the sources the #1754/#1758 defects lived in. The
+      # .xctestrun plist names every bundle the scheme's test action built.
+      - name: Assert both test bundles were compiled
+        run: |
+          XCTESTRUN=$(find "$RUNNER_TEMP/llamenos-build" -name "*.xctestrun" -print -quit)
+          test -n "$XCTESTRUN" || { echo "::error::build-for-testing produced no .xctestrun — the scheme's test action is empty"; exit 1; }
+          grep -q "LlamenosTests" "$XCTESTRUN" || { echo "::error::LlamenosTests bundle missing from $XCTESTRUN"; exit 1; }
+          grep -q "LlamenosUITests" "$XCTESTRUN" || { echo "::error::LlamenosUITests bundle missing from $XCTESTRUN — the #168 scheme shape"; exit 1; }
+          echo "both test bundles present in $XCTESTRUN"
 
   # iOS UI tests (LlamenosUITests) against a native backend — see
   # ios-e2e.yml's header for why this was dark from May to September 2026.
@@ -2037,79 +2360,6 @@ jobs:
         if: always()
         run: docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml --profile signal down -v --remove-orphans || true
 
-  docker-canary:
-    needs: ci-status
-    if: github.ref == 'refs/heads/main' && needs.ci-status.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-
-    env:
-      REGISTRY: docker.io
-      IMAGE_NAME: llamenos
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Compute canary tags
-        id: meta
-        run: |
-          SHORT_SHA=${GITHUB_SHA::7}
-          {
-            echo "tags<<EOF"
-            echo "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:canary"
-            echo "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:canary-${SHORT_SHA}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push canary image
-        id: build-push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: deploy/docker/Dockerfile
-          # `deploy/docker/Dockerfile` is multi-stage and its LAST stage is
-          # `static` (the Caddy image that serves the SPA, consumed by
-          # docker-compose.production.yml's `caddy` service). Docker defaults
-          # to the last stage, so without an explicit target this would
-          # publish the Caddy static-file server under the app image tags.
-          target: app
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Generate SBOM attestation
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v2.1.0
-        with:
-          subject-name: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build-push.outputs.digest }}
-          push-to-registry: true
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Sign container image (keyless)
-        env:
-          DIGEST: ${{ steps.build-push.outputs.digest }}
-        run: |
-          cosign sign --yes \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
-          echo "Signed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
-
   # ─── Fleet gates: the ONLY place the fleet's verdicts become enforceable ──
   #
   # Both jobs compute the fleet's gates on GitHub's runners against the PR's
@@ -2144,8 +2394,113 @@ jobs:
   # repo's own CI verdict, these are the fleet's, so a reader can tell which
   # one refused.
 
+  # ─── Platform-suite coverage audit (#1762) ───────────────────
+  # `ci-status` treats `skipped` as success — it has to, or every push to
+  # main would fail on the queue-only suites (#1426). The price of that is
+  # the gap #1762 was filed for: on a PR head the mobile suites were
+  # skipped, `ci-status` reported plain success, and "green" meant "never
+  # compiled". This job makes a skip LEGIBLE instead:
+  #
+  #   pull_request — for each platform whose paths changed, the PR-head
+  #     compile gate MUST have run (a skip means the gate's `if:` drifted
+  #     from the path map: fail loudly, never paper over it), and every
+  #     heavy suite whose full verdict is deferred to the merge queue is
+  #     NAMED in a warning annotation and the job summary. A green
+  #     `ci-status` on a PR now means "compiled", and says so.
+  #
+  #   merge_group / workflow_dispatch — `revalidate` is true there by
+  #     construction, so every changed-path suite must have RUN. A skip on
+  #     the queue ref is the invisible-gap bug itself (the #1594 shape)
+  #     and fails here.
+  #
+  # A separate job rather than a ci-status step because ci-status cannot
+  # read these flags: adding `changes` to its `needs` trips the
+  # required-context rail in tests/orchestrator/guards.test.ts (`changes`'s
+  # own `if:` names `event_name` without `merge_group`), and that rail is
+  # load-bearing. This job's `if:` names no event, so the rail passes.
+  platform-suite-coverage:
+    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 2
+
+    steps:
+      - name: Audit suite coverage for the changed paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IOS: ${{ needs.changes.outputs.ios }}
+          ANDROID: ${{ needs.changes.outputs.android }}
+          DESKTOP: ${{ needs.changes.outputs.desktop }}
+          BACKEND: ${{ needs.changes.outputs.backend }}
+          R_IOS_COMPILE: ${{ needs.ios-compile-check.result }}
+          R_ANDROID_COMPILE: ${{ needs.android-compile-check.result }}
+          R_IOS_BUILD: ${{ needs.ios-build-test.result }}
+          R_ANDROID_BUILD: ${{ needs.android-build-test.result }}
+          R_IOS_E2E: ${{ needs.ios-e2e.result }}
+          R_ANDROID_E2E: ${{ needs.android-e2e.result }}
+          R_E2E: ${{ needs.e2e.result }}
+          R_BACKEND_BDD: ${{ needs.backend-bdd.result }}
+        run: |
+          set -euo pipefail
+          gap=""
+          deferred=""
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # The compile gates must never be skipped when their platform's
+            # paths changed — a skip here is wiring drift between the gate's
+            # `if:` and the path map, and ci-status would otherwise report
+            # plain success for a platform nothing verified.
+            if [ "$IOS" = "true" ]; then
+              if [ "$R_IOS_COMPILE" = "skipped" ]; then gap="$gap ios-compile-check"; fi
+              if [ "$R_IOS_BUILD" = "skipped" ]; then deferred="$deferred ios-build-test(full)"; fi
+              if [ "$R_IOS_E2E" = "skipped" ]; then deferred="$deferred ios-e2e"; fi
+            fi
+            if [ "$ANDROID" = "true" ]; then
+              if [ "$R_ANDROID_COMPILE" = "skipped" ]; then gap="$gap android-compile-check"; fi
+              if [ "$R_ANDROID_BUILD" = "skipped" ]; then deferred="$deferred android-build-test(full)"; fi
+              if [ "$R_ANDROID_E2E" = "skipped" ]; then deferred="$deferred android-e2e"; fi
+            fi
+            if [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; then
+              if [ "$R_E2E" = "skipped" ]; then deferred="$deferred e2e"; fi
+            fi
+            if [ "$BACKEND" = "true" ]; then
+              if [ "$R_BACKEND_BDD" = "skipped" ]; then deferred="$deferred backend-bdd"; fi
+            fi
+          fi
+
+          if [ "$EVENT_NAME" = "merge_group" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # revalidate is true on these events by construction; a skip here
+            # is the invisible-gap bug itself (#1594's shape), not a deferral.
+            if [ "$IOS" = "true" ] && [ "$R_IOS_BUILD" = "skipped" ]; then gap="$gap ios-build-test"; fi
+            if [ "$IOS" = "true" ] && [ "$R_IOS_E2E" = "skipped" ]; then gap="$gap ios-e2e"; fi
+            if [ "$ANDROID" = "true" ] && [ "$R_ANDROID_BUILD" = "skipped" ]; then gap="$gap android-build-test"; fi
+            if [ "$ANDROID" = "true" ] && [ "$R_ANDROID_E2E" = "skipped" ]; then gap="$gap android-e2e"; fi
+            if { [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; } && [ "$R_E2E" = "skipped" ]; then gap="$gap e2e"; fi
+            if [ "$BACKEND" = "true" ] && [ "$R_BACKEND_BDD" = "skipped" ]; then gap="$gap backend-bdd"; fi
+          fi
+
+          if [ -n "$gap" ]; then
+            echo "::error::Platform suites for the changed paths were SKIPPED on $EVENT_NAME:$gap — ci-status must not report success for a platform nothing verified (#1762). This is a CI wiring defect, not a code failure; check the gate's if: against detect-changed-platforms.sh."
+            exit 1
+          fi
+
+          if [ -n "$deferred" ]; then
+            echo "::warning title=Platform suites deferred to the merge queue::This diff touches paths these suites cover, but their full verdicts only run in the merge queue (#1426's recorded trade):$deferred. The PR-head compile gates DID run, so green here means compiled, not fully tested."
+            {
+              echo "### Platform suites deferred to the merge queue"
+              echo ""
+              echo "This run's green \`ci-status\` covers PR-head compilation for the changed paths; the full verdicts of:$deferred"
+              echo ""
+              echo "only run when the PR enters the merge queue (#1426). If the queue ejects, read those suites' logs first."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "coverage audit: event=$EVENT_NAME gap='${gap:-none}' deferred='${deferred:-none}'"
+
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-compile-check, android-e2e, e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke, platform-suite-coverage]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2173,14 +2528,17 @@ jobs:
           check_job "backend-integration-bun" "${{ needs.backend-integration-bun.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
+          check_job "android-compile-check" "${{ needs.android-compile-check.result }}"
           check_job "android-e2e" "${{ needs.android-e2e.result }}"
           check_job "ios-build-test" "${{ needs.ios-build-test.result }}"
+          check_job "ios-compile-check" "${{ needs.ios-compile-check.result }}"
           check_job "ios-e2e" "${{ needs.ios-e2e.result }}"
           check_job "crypto-guardrails" "${{ needs.crypto-guardrails.result }}"
           check_job "migration-drift" "${{ needs.migration-drift.result }}"
           check_job "ansible-validate" "${{ needs.ansible-validate.result }}"
           check_job "production-smoke" "${{ needs.production-smoke.result }}"
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
+          check_job "platform-suite-coverage" "${{ needs.platform-suite-coverage.result }}"
 
           if [[ -n "$FAILED" ]]; then
             echo "Failed jobs:$FAILED"

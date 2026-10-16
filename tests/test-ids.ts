@@ -198,6 +198,11 @@ export const TestIds = {
   GO_TO_SETUP_BTN: 'go-to-setup-btn',
   LOCK_BTN: 'lock-btn',
   RECOVERY_OPTIONS_BTN: 'recovery-options-btn',
+  BACKUP_FILE_INPUT: 'backup-file-input',
+  RECOVERY_KEY_INPUT: 'recovery-key-input',
+  RECOVERY_PIN_INPUT: 'recovery-pin-input',
+  DECRYPT_BACKUP_BTN: 'decrypt-backup-btn',
+  BACKUP_ERROR: 'backup-error',
 
   // ============ Security ============
   PANIC_WIPE_OVERLAY: 'panic-wipe-overlay',

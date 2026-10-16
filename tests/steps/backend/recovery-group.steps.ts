@@ -27,7 +27,9 @@ import {
   ADMIN_SEED,
   seedHexToPubkey,
   uniqueName,
+  simulatedClientIp,
 } from '../../api-helpers'
+import { harnessClientHeaders } from '../../dev-surface-secret'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
@@ -394,13 +396,19 @@ When('an unauthenticated client initiates recovery for a nonexistent user in the
   const s = getS(world)
   expect(s.hubId).toBeDefined()
 
+  // `recovery-initiate` is capped at 2/min per client inside the route handler
+  // (and sits behind the `strict`-tier middleware). Name a client of our own so
+  // this scenario's single request is not the third one some other scenario's
+  // bucket has seen — on a deployed target every caller shares Caddy's address,
+  // so two unrelated scenarios were enough to 429 this one (#1625). The cap
+  // still applies inside the named bucket.
   const res = await request.post(`${BASE_URL}/api/recovery-group/initiate`, {
     data: {
       hubId: s.hubId!,
       userIdentifier: `nonexistent-user-${Date.now()}@nowhere.invalid`,
       newDevicePubkey: 'a'.repeat(64),
     },
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(simulatedClientIp()) },
   })
 
   const body = await res.json().catch(() => ({})) as Record<string, unknown>

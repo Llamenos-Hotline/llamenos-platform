@@ -456,6 +456,110 @@
         success_msg: "bridge_secret: [set, {{ bridge_secret | length }} chars]"
       when: llamenos_asterisk_enabled | default(false) | bool
 
+    - name: Assert sip_registrar_secret is set when Asterisk is enabled
+      ansible.builtin.assert:
+        that:
+          - sip_registrar_secret is defined
+          - (sip_registrar_secret | trim) | length >= 32
+        fail_msg: |
+          REQUIRED: 'sip_registrar_secret' must be at least 32 characters when
+          Asterisk PBX is enabled.
+
+          It is the master secret every volunteer's PJSIP endpoint password is
+          derived from (apps/worker/telephony/registrar.ts
+          deriveVolunteerSipSecret). Without it the worker derives every
+          volunteer secret from an empty string: /api/telephony/sip-token
+          still returns 200, the endpoint is still provisioned, and the
+          credential is one an attacker who reads this source can compute. That
+          is why this fails rather than warns.
+
+          Length seen: {{ (sip_registrar_secret | default('') | trim) | length }} chars (expected: >= 32)
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "sip_registrar_secret: [set, {{ (sip_registrar_secret | trim) | length }} chars]"
+      when: llamenos_asterisk_enabled | default(false) | bool
+
+    - name: Assert the TURN relay is configured when coturn is enabled
+      ansible.builtin.assert:
+        that:
+          - turn_secret is defined
+          - (turn_secret | trim) | length >= 32
+          - turn_host is defined
+          - (turn_host | trim) | length > 0
+        fail_msg: |
+          REQUIRED when llamenos_coturn_enabled is true:
+            turn_secret — the shared secret the worker mints time-limited TURN
+                          credentials under and coturn verifies them against.
+                          One value renders into both, so they cannot drift —
+                          but an EMPTY one renders `--static-auth-secret=` and
+                          every relay allocation is then refused, silently.
+            turn_host   — the hostname clients are told to reach the relay on.
+                          It must resolve, from a volunteer's network, to the
+                          host running coturn. A relay candidate naming an
+                          unreachable address is worse than no relay candidate:
+                          ICE spends its connectivity-check budget on it.
+
+          Seen: turn_secret {{ (turn_secret | default('') | trim) | length }} chars (expected: >= 32),
+                turn_host '{{ turn_host | default('') }}'
+
+          To generate the secret:
+            openssl rand -hex 32
+        success_msg: "turn_secret: [set, {{ (turn_secret | trim) | length }} chars], turn_host: {{ turn_host }}"
+      when: llamenos_coturn_enabled | default(false) | bool
+
+    # A WARNING, not an assertion, and the distinction is deliberate (#1617:
+    # a check that reports without enforcing is worse than none, so say which
+    # this is and why).
+    #
+    # It cannot be an error: a host can legitimately serve in-app audio with no
+    # relay — two volunteers on cone NATs connect on the server-reflexive
+    # candidate, and a self-hoster testing on one LAN needs nothing. So refusing
+    # the deploy would block a working configuration.
+    #
+    # It must not be silent either, which is the state this replaces: before
+    # this, a deployment with a PBX and no relay rendered no TURN variables, and
+    # /api/telephony/sip-token returned 200 with STUN-only ICE. A volunteer on a
+    # mobile carrier's symmetric NAT then rings and carries no audio, and
+    # nothing anywhere — deploy log, smoke check, or app — said the relay was
+    # missing. The deployment could pass a smoke test, pass a manual call test
+    # on an office network, and fail for every volunteer on a phone.
+    - name: Warn when in-app calling is configured without a TURN relay
+      ansible.builtin.debug:
+        msg: |
+          WARNING: in-app calling is enabled (llamenos_asterisk_enabled) but no
+          TURN relay is (llamenos_coturn_enabled is false).
+
+          /api/telephony/sip-token will hand clients STUN-only ICE. Two peers
+          behind symmetric NAT — which is what most mobile carriers do — will
+          then have NO media path: the call rings, it connects at the
+          signalling layer, and no audio flows. Volunteers on cone NATs and on
+          the same LAN are unaffected, which is why this is a warning.
+
+          Set llamenos_coturn_enabled: true and turn_secret to serve them.
+      when:
+        - llamenos_asterisk_enabled | default(false) | bool
+        - not (llamenos_coturn_enabled | default(false) | bool)
+
+    # Same shape, same reason: optional, but never invisible.
+    - name: Warn when a PBX is deployed with no SIP edge
+      ansible.builtin.debug:
+        msg: |
+          WARNING: llamenos_asterisk_enabled is true but kamailio_enabled is
+          false.
+
+          roles/llamenos-asterisk publishes NO SIP port — its compose attaches
+          the container to the internal network only — so with no SIP edge
+          there is nothing for a volunteer's client to register against, and
+          no trust anchor is published for one to verify. In-app audio cannot
+          work in this configuration; phone routing is unaffected.
+
+          Set kamailio_enabled: true (and kamailio_tls_sans to every name a
+          volunteer may dial) to serve in-app audio.
+      when:
+        - llamenos_asterisk_enabled | default(false) | bool
+        - not (kamailio_enabled | default(false) | bool)
+
     - name: Assert ntfy_domain is set when ntfy is enabled
       ansible.builtin.assert:
         that:
