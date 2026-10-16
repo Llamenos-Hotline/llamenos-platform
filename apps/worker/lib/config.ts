@@ -217,4 +217,21 @@ export function validateConfig(env: ConfigInput = process.env): void {
   warnIfAbsent(env, 'APNS_KEY_P8', 'iOS push notifications disabled')
   warnIfAbsent(env, 'APNS_KEY_ID', 'iOS push notifications disabled')
   warnIfAbsent(env, 'APNS_TEAM_ID', 'iOS push notifications disabled')
+
+  // --- Webhook IP allowlist (#1622) ---
+  // middleware/webhook-auth.ts, middleware/webhook-ip-allowlist.ts and
+  // messaging/router.ts each read `<PROVIDER>_WEBHOOK_IPS` and return next()
+  // when it is absent, so an unconfigured allowlist is indistinguishable at
+  // request time from one that passed. Nothing rendered the var on any deploy
+  // path before #1624, so the control had never run anywhere, and nothing
+  // said so. This does not change the semantics -- whether unset should fail
+  // closed, or require an explicit opt-out, is #1622's decision -- it only
+  // makes the state visible at boot, where an operator can act on it.
+  if (!Object.keys(env).some((k) => k.endsWith('_WEBHOOK_IPS') && env[k]?.trim())) {
+    logger.warn(
+      'No <PROVIDER>_WEBHOOK_IPS configured — inbound webhooks are authenticated by ' +
+      'provider signature alone and the IP allowlist middleware is inert. Set it per ' +
+      'provider (Ansible: webhook_ip_allowlists) to switch the control on.',
+    )
+  }
 }

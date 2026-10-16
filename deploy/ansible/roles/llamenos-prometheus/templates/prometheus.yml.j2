@@ -26,8 +26,30 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   # ── Llamenos application ──────────────────────────────
+  #
+  # Two things were wrong here until #1624, and each alone made this job
+  # collect nothing — measured against a live deployment:
+  #
+  #   path  /api/metrics is the ADMIN-ONLY JSON summary (metrics.get('/') in
+  #         apps/worker/routes/metrics.ts). The Prometheus text endpoint is
+  #         /api/metrics/prometheus (metrics.get('/prometheus')), and only it
+  #         has a scrape-token branch at all.
+  #   auth  that endpoint takes METRICS_SCRAPE_TOKEN as a bearer, or falls
+  #         back to requiring a signed-in admin holding `metrics:read`. A
+  #         scrape is never that, so an unauthenticated scrape got a 401.
+  #
+  # The token is the same `metrics_scrape_token` the worker's .env renders
+  # (templates/env/_worker-required-env.j2) — set it in one place and both
+  # sides pick it up. Left empty, this job still scrapes and still 401s;
+  # that is deliberate rather than a silent omission, because inventing a
+  # token here would put a credential in a file the worker never reads.
   - job_name: llamenos-app
-    metrics_path: /api/metrics
+    metrics_path: /api/metrics/prometheus
+{% if (metrics_scrape_token | default('')) | length > 0 %}
+    authorization:
+      type: Bearer
+      credentials: {{ metrics_scrape_token }}
+{% endif %}
     static_configs:
       - targets: ["app:3000"]
         labels:

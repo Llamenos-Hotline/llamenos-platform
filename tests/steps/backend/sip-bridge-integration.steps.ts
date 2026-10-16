@@ -148,6 +148,11 @@ When('the SIP bridge health endpoint is requested', async ({ request, world }) =
   // step throws so the scenario fails rather than silently passing. Environments that
   // intentionally omit the telephony sidecar must exclude this scenario via
   // `--grep-invert @telephony` rather than rely on a vacuous pass here.
+  // Default 3001 = docker-compose.ci.yml's `${BRIDGE_PORT:-3001}:3000` publish,
+  // which is also what ci.yml exports. An Ansible-deployed host publishes the
+  // same container port on 127.0.0.1:{{ sip_bridge_local_port }} — 3101 by
+  // default (roles/llamenos-asterisk) — so a deployed-target run must pass
+  // SIP_BRIDGE_URL; there is no port that is right for both (#1624).
   const sipBridgeUrl = process.env.SIP_BRIDGE_URL || 'http://localhost:3001'
   let healthStatus: number
   try {
@@ -156,8 +161,11 @@ When('the SIP bridge health endpoint is requested', async ({ request, world }) =
   } catch (err) {
     throw new Error(
       `sip-bridge sidecar unavailable at ${sipBridgeUrl}/health — this scenario is tagged ` +
-        '@telephony and requires the sidecar (docker compose --profile asterisk) to be up ' +
-        `and healthy; it cannot be verified without it. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+        '@telephony and requires the sidecar to be up and healthy; it cannot be verified ' +
+        'without it. Locally/in CI: docker compose --profile asterisk (published on 3001). ' +
+        'Against a deployed host: set SIP_BRIDGE_URL — roles/llamenos-asterisk publishes ' +
+        'the bridge on 127.0.0.1:{sip_bridge_local_port}, 3101 by default, not 3001. ' +
+        `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
   const sipState = getSipState(world) ?? ({ callerNumber: '' } as SipBridgeState)

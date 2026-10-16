@@ -179,7 +179,16 @@ When('I start OAuth for provider {string} under hub {string}', async ({ request,
     `/hubs/${hubId}/provider-setup/oauth/start`,
     {
       provider,
-      redirectUrl: 'http://localhost:3000/callback',
+      // The `llamenos://` deep link, not a hardcoded http origin. This
+      // scenario is about the OAuth state being bound to hubId; the redirect
+      // target is incidental to it. `http://localhost:3000/callback` passed
+      // lib/redirect-guard.ts only via its development-and-no-allowlist
+      // branch, so against any deployed host the step 400'd before reaching
+      // what it was meant to assert (#1624). The deep link is what the Tauri
+      // client actually supplies and is allowed unconditionally, so this now
+      // tests the same thing everywhere instead of testing the dev escape
+      // hatch locally and nothing at all when deployed.
+      redirectUrl: 'llamenos://provider-setup/callback',
       hubId,
     },
     seed,

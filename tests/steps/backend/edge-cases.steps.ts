@@ -4,7 +4,7 @@
  * Tests pagination, duplicates, boundary values, error consistency,
  * CORS, rate limiting, and concurrent state.
  */
-import { expect } from '@playwright/test'
+import { expect, type APIRequestContext } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { getSharedState, setLastResponse } from './shared-state'
@@ -262,22 +262,53 @@ When('an admin requests note replies for {string}', async ({ request, world }, n
 
 // ─── CORS ───────────────────────────────────────────────────────────
 
-When('a CORS preflight request is sent to {string}', async ({ request, world }, path: string) => {
+/**
+ * The origin the target deployment actually allows.
+ *
+ * This used to be a hardcoded `http://localhost:8788`, which only ever passed
+ * through apps/worker/middleware/cors.ts's development-and-no-allowlist
+ * branch — so the scenario tested the dev escape hatch locally and returned
+ * 403 against every deployed host (#1624). A deployment renders
+ * CORS_ALLOWED_ORIGINS from the vhosts it serves, so the origin to assert
+ * with is a property of the target, not a constant: default to the target's
+ * own origin (true in dev and in CI, where the API host is in its own
+ * allowlist) and let a run through a proxy or port-forward name the real one.
+ */
+const ALLOWED_TEST_ORIGIN = process.env.TEST_CORS_ORIGIN || new URL(BASE_URL).origin
+
+async function preflight(
+  request: APIRequestContext,
+  path: string,
+  origin: string,
+): Promise<{ status: number; headers: Record<string, string> }> {
   const res = await request.fetch(`${BASE_URL}${path}`, {
     method: 'OPTIONS',
-    headers: {
-      'Origin': 'http://localhost:8788',
-      'Access-Control-Request-Method': 'GET',
-    },
+    headers: { 'Origin': origin, 'Access-Control-Request-Method': 'GET' },
   })
-  setLastResponse(world, { status: res.status(), data: null })
-  // Store headers for assertion
   const headers: Record<string, string> = {}
-  const rawHeaders = res.headers()
-  for (const [key, value] of Object.entries(rawHeaders)) {
+  for (const [key, value] of Object.entries(res.headers())) {
     headers[key.toLowerCase()] = value
   }
-  getSharedState(world).lastResponse!.data = headers
+  return { status: res.status(), headers }
+}
+
+When('a CORS preflight request is sent to {string}', async ({ request, world }, path: string) => {
+  const { status, headers } = await preflight(request, path, ALLOWED_TEST_ORIGIN)
+  setLastResponse(world, { status, data: headers })
+})
+
+When('a CORS preflight request from an unlisted origin is sent to {string}', async ({ request, world }, path: string) => {
+  // The assertion that actually proves a policy exists. It holds in every
+  // environment: this origin is in no allowlist and is not localhost, so not
+  // even the development branch can admit it.
+  const { status, headers } = await preflight(request, path, 'https://evil.example.com')
+  setLastResponse(world, { status, data: headers })
+})
+
+Then('the preflight should be refused', async ({ world }) => {
+  const res = getSharedState(world).lastResponse!
+  expect(res.status).toBe(403)
+  expect((res.data as Record<string, string>)['access-control-allow-origin']).toBeUndefined()
 })
 
 Then('the response should include CORS headers', async ({ world }) => {
