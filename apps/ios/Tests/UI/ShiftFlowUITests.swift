@@ -3,177 +3,176 @@ import XCTest
 /// XCUITest suite for the shifts workflow: viewing the shift schedule,
 /// clock in/out toggle, and shift signup interactions.
 ///
-/// These tests require the app to be in an authenticated state with a valid hub connection.
+/// Offline tests launch authenticated with no hub; the schedule and clock tests connect to the
+/// live backend and seed what they assert on through `TestAdminAPI`.
 final class ShiftFlowUITests: BaseUITest {
-
-    override func setUp() {
-        super.setUp()
-        launchAuthenticated()
-    }
 
     // MARK: - Tab Navigation
 
+    /// Offline (no hub configured) the schedule cannot load: the tab settles on the
+    /// empty state, still shows the clock card, and neither spins nor reports an error.
     func testShiftsTabExists() {
-        given("I am authenticated and on the dashboard") {
-            // Already launched authenticated
+        given("I am authenticated without a hub connection") {
+            launchAuthenticated()
         }
         when("I navigate to the Shifts tab") {
             navigateToShifts()
         }
-        then("I should see shifts content") {
-            // Shifts content should appear (loading, empty, or schedule with clock button)
-            // empty-state and loading come first — they appear in offline/no-hub mode
-            let found = anyElementExists([
-                "shifts-empty-state", "shifts-loading",
-                "clock-in-button", "clock-out-button",
-            ])
-            XCTAssertTrue(found, "Shifts view should show clock button, empty state, or loading")
+        then("the clock card and the empty schedule are shown, with nothing loading") {
+            XCTAssertTrue(
+                find("clock-in-button").waitForExistence(timeout: 20),
+                "The clock card is rendered whenever the Shifts tab is up"
+            )
+            XCTAssertTrue(
+                find("shifts-empty-state").waitForExistence(timeout: 10),
+                "With no hub there is no schedule, so the empty state is shown"
+            )
+            XCTAssertFalse(find("shifts-loading").exists, "The Shifts tab should have finished loading")
+            XCTAssertFalse(find("shifts-error").exists, "No hub configured is not an error")
         }
     }
 
     // MARK: - Clock In/Out
 
-    func testClockInButtonOrEmptyState() {
-        given("I am authenticated") {
-            // Already launched
+    func testClockInButtonShownWhenOffShift() {
+        given("I am authenticated and not on shift") {
+            launchAuthenticated()
         }
         when("I navigate to shifts") {
             navigateToShifts()
         }
-        then("I should see a clock button or empty state") {
-            // Without an API connection, the shifts view shows empty state.
-            // With shifts data, the clock in/out button appears.
-            // empty-state first — it's the expected state without a hub connection
-            let found = anyElementExists([
-                "shifts-empty-state",
-                "clock-in-button", "clock-out-button",
-            ])
-            XCTAssertTrue(found, "Clock in/out button or empty state should exist")
+        then("I am offered Clock In, not Clock Out") {
+            XCTAssertTrue(
+                find("clock-in-button").waitForExistence(timeout: 20),
+                "An off-shift volunteer should see the clock-in button"
+            )
+            XCTAssertFalse(find("clock-out-button").exists, "An off-shift volunteer has nothing to clock out of")
         }
     }
 
-    func testShiftStatusOrEmptyState() {
-        given("I am authenticated") {
-            // Already launched
+    func testShiftStatusShowsOffShift() {
+        given("I am authenticated and not on shift") {
+            launchAuthenticated()
         }
         when("I navigate to shifts") {
             navigateToShifts()
         }
-        then("I should see shift status or empty state") {
-            // Shift status label only appears in the shift list (not empty state)
-            // empty-state first — it's the expected state without a hub connection
-            let found = anyElementExists([
-                "shifts-empty-state",
-                "shift-status-label",
-            ])
-            XCTAssertTrue(found, "Shift status label or empty state should exist")
+        then("the status label reads Off Shift") {
+            let status = find("shift-status-label")
+            XCTAssertTrue(status.waitForExistence(timeout: 20), "The shift status label should be shown")
+            XCTAssertEqual(status.label, "Off Shift", "A volunteer who has not clocked in is off shift")
+            XCTAssertFalse(find("shift-elapsed-time").exists, "There is no elapsed timer off shift")
         }
     }
 
     func testClockOutShowsConfirmation() {
-        given("I am authenticated") {
-            // Already launched
-        }
-        when("I navigate to shifts") {
+        given("I am connected to the API and clocked in") {
+            launchAsVolunteerWithAPI()
             navigateToShifts()
+            let clockIn = find("clock-in-button")
+            XCTAssertTrue(clockIn.waitForExistence(timeout: 20), "The clock-in button should exist")
+            clockIn.tap()
+            XCTAssertTrue(
+                find("clock-out-button").waitForExistence(timeout: 20),
+                "Clocking in should put the volunteer on shift"
+            )
         }
-        then("if on shift, clock out should show confirmation") {
-            // If we're on shift, the clock out button exists
-            let clockOutButton = find("clock-out-button")
-            guard clockOutButton.waitForExistence(timeout: 5) else {
-                // Not on shift — try clocking in first
-                let clockInButton = find("clock-in-button")
-                guard clockInButton.waitForExistence(timeout: 5) else { return }
-                clockInButton.tap()
+        when("I tap Clock Out") {
+            find("clock-out-button").tap()
+        }
+        then("I am asked to confirm before the shift ends") {
+            let alert = app.alerts["End Shift?"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 5), "Clock out should ask for confirmation")
+            XCTAssertTrue(alert.buttons["Cancel"].exists, "The confirmation should offer Cancel")
+            XCTAssertTrue(alert.buttons["Clock Out"].exists, "The confirmation should offer Clock Out")
 
-                // Wait for clock out button to appear (shift started)
-                guard find("clock-out-button").waitForExistence(timeout: 10) else { return }
-                find("clock-out-button").tap()
-
-                // Confirmation dialog should appear
-                let alertExists = app.alerts.firstMatch.waitForExistence(timeout: 5)
-                if alertExists {
-                    // Cancel to not actually clock out
-                    let cancelButton = app.alerts.firstMatch.buttons.firstMatch
-                    cancelButton.tap()
-                }
-                return
-            }
-
-            clockOutButton.tap()
-
-            // Confirmation dialog should appear
-            let alertExists = app.alerts.firstMatch.waitForExistence(timeout: 5)
-            if alertExists {
-                XCTAssertTrue(true, "Clock out confirmation dialog appeared")
-                // Cancel
-                let cancelButton = app.alerts.firstMatch.buttons.element(boundBy: 0)
-                if cancelButton.exists {
-                    cancelButton.tap()
-                }
-            }
+            // Cancelling must leave the volunteer on shift.
+            alert.buttons["Cancel"].tap()
+            XCTAssertFalse(alert.waitForExistence(timeout: 2), "Cancel should dismiss the confirmation")
+            XCTAssertTrue(
+                find("clock-out-button").exists,
+                "Cancelling the confirmation should not end the shift"
+            )
         }
     }
 
     // MARK: - Weekly Schedule
 
+    /// Put a shift that runs every day on the class hub and return its id.
+    private func seedShiftEveryDay() -> String {
+        let shiftId = UUID().uuidString.lowercased()
+        TestAdminAPI.send(
+            "POST", "/api/hubs/\(testHubId)/shifts",
+            [
+                "id": shiftId,
+                "encryptedName": "Schedule \(shiftId.prefix(8))",
+                "startTime": "00:00",
+                "endTime": "23:59",
+                "days": [0, 1, 2, 3, 4, 5, 6],
+                "userPubkeys": [],
+            ],
+            baseURL: testHubURL
+        )
+        return shiftId
+    }
+
     func testWeeklyScheduleHeader() {
-        given("I am authenticated") {
-            // Already launched
+        var shiftId = ""
+        given("the hub has a shift scheduled every day") {
+            shiftId = seedShiftEveryDay()
         }
-        when("I navigate to shifts") {
+        when("I connect as a volunteer and open the shifts tab") {
+            launchAsVolunteerWithAPI()
             navigateToShifts()
         }
-        then("I should see the schedule or empty state") {
-            // Wait for content to load
-            // empty-state first — it's the expected state without a hub connection
-            let found = anyElementExists([
-                "shifts-empty-state", "weekly-schedule-header",
-            ])
-            // It's okay if the schedule is empty (no shifts configured)
-            XCTAssertTrue(found, "Weekly schedule header or empty state should exist")
+        then("the weekly schedule is shown and lists that shift") {
+            let header = scrollToFind("weekly-schedule-header", maxSwipes: 6, timeout: 20)
+            XCTAssertTrue(header.exists, "A hub with a schedule should show the weekly schedule")
+            let card = scrollToFind("shift-card-\(shiftId)", maxSwipes: 6, timeout: 10)
+            XCTAssertTrue(card.exists, "The seeded shift should be listed in the schedule")
+            XCTAssertFalse(find("shifts-empty-state").exists, "A loaded schedule is not the empty state")
         }
     }
 
     func testTodayBadgeExists() {
-        given("I am authenticated") {
-            // Already launched
+        given("I am connected as a volunteer") {
+            launchAsVolunteerWithAPI()
         }
-        when("I navigate to shifts") {
+        when("I open the shifts tab") {
             navigateToShifts()
         }
-        then("today's section should exist if schedule is showing") {
-            // If the weekly schedule is showing, today's day section should be highlighted
-            let emptyState = find("shifts-empty-state")
-            guard !emptyState.waitForExistence(timeout: 3) else { return }
-
+        then("today's day section carries the Today badge") {
             let today = Calendar.current.component(.weekday, from: Date()) - 1  // 0-indexed
-            let todaySection = find("shift-day-\(today)")
-
-            if todaySection.waitForExistence(timeout: 3) {
-                XCTAssertTrue(true, "Today's day section exists in the schedule")
-            }
+            let todaySection = scrollToFind("shift-day-\(today)", maxSwipes: 10, timeout: 15)
+            XCTAssertTrue(todaySection.exists, "Today's day section should exist in the schedule")
+            let badge = app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Today")).firstMatch
+            XCTAssertTrue(badge.waitForExistence(timeout: 5), "Today's section should be marked with the Today badge")
         }
     }
 
     // MARK: - Error State
 
+    /// A hub that cannot be reached is an error, not an empty schedule: the volunteer is
+    /// told the schedule failed to load. Port 9 (discard) has no listener, so the
+    /// request is refused at the socket.
     func testErrorMessageDisplays() {
-        given("I am authenticated") {
-            // Already launched
+        given("I am authenticated against a hub that cannot be reached") {
+            app.launchArguments.append(contentsOf: [
+                "--reset-keychain", "--test-authenticated",
+                "--test-hub-url", "http://127.0.0.1:9",
+            ])
+            app.launchAnsweringSystemPrompts()
+            XCTAssertTrue(find("main-tab-view").waitForExistence(timeout: 60))
         }
         when("I navigate to shifts") {
             navigateToShifts()
         }
-        then("an error or empty state should display without API") {
-            // If there's an error (e.g., hub not configured), it should display
-            let found = anyElementExists([
-                "shifts-error", "shifts-empty-state",
-            ])
-            if found {
-                XCTAssertTrue(true, "Error or empty state displayed when hub connection fails")
-            }
-            // If neither, that's fine — hub might be configured
+        then("the failure is reported and no schedule is shown") {
+            XCTAssertTrue(
+                find("shifts-error").waitForExistence(timeout: 30),
+                "A hub connection failure should be reported on the Shifts tab"
+            )
+            XCTAssertTrue(find("shifts-empty-state").exists, "No schedule could be loaded")
         }
     }
 
@@ -181,7 +180,7 @@ final class ShiftFlowUITests: BaseUITest {
 
     func testSettingsTabShowsIdentity() {
         given("I am authenticated") {
-            // Already launched
+            launchAuthenticated()
         }
         when("I navigate to settings") {
             navigateToSettings()
@@ -195,7 +194,7 @@ final class ShiftFlowUITests: BaseUITest {
 
     func testSettingsLockButton() {
         given("I am authenticated") {
-            // Already launched
+            launchAuthenticated()
         }
         when("I navigate to settings") {
             navigateToSettings()
@@ -208,7 +207,7 @@ final class ShiftFlowUITests: BaseUITest {
 
     func testSettingsLogoutButton() {
         given("I am authenticated") {
-            // Already launched
+            launchAuthenticated()
         }
         when("I navigate to settings") {
             navigateToSettings()

@@ -35,6 +35,10 @@ struct ConversationDetailView: View {
         .task {
             await vm.loadMessages(for: conversationId)
         }
+        // The screen is a plain VStack, not an accessibility element, so SwiftUI pushes a
+        // bare identifier down onto every child and overwrites theirs (the reply field,
+        // the send button). As a container it keeps each child's own id.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversation-detail-view")
     }
 
@@ -66,6 +70,7 @@ struct ConversationDetailView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color.brandCard)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("conversation-channel-header")
         }
     }
