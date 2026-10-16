@@ -64,6 +64,77 @@ function flattenKeysSnake(obj: Record<string, unknown>, prefix = ''): Record<str
 const RAW_FORMAT_SPECIFIER =
   /%(?:\d+\$)?[-+ #0]*[\d.*]*(?:hh|h|ll|l|L|z|j|t|q)?[diouxXeEfgGaAcsp@]/
 
+// Positional specifiers are numbered by placeholder NAME, from the en source.
+//
+// Call sites pass their arguments in the order the en string first uses each
+// placeholder. A translation that reorders clauses -- Korean "{{total}} 중
+// {{page}} 페이지" for "Page {{page}} of {{total}}" -- must therefore keep each
+// name bound to its en position: {{page}} is %1$ in every locale, wherever it
+// sits in the sentence. Numbering by occurrence in the translated string
+// instead silently swapped the arguments ("Page 50 of 1"; issue #1899).
+//
+// A name used twice in one string resolves to the same index both times.
+type PlaceholderIndex = ReadonlyMap<string, number>
+
+const PLACEHOLDER = /\{\{(\w+)\}\}/g
+
+/** Placeholder names in first-occurrence order, de-duplicated. */
+function placeholderNames(value: string): string[] {
+  return [...new Set(Array.from(value.matchAll(PLACEHOLDER), m => m[1]))]
+}
+
+/** name -> 1-based argument position, taken from the en source string of a key. */
+function placeholderIndex(enSource: string): PlaceholderIndex {
+  return new Map(placeholderNames(enSource).map((name, i) => [name, i + 1]))
+}
+
+/** Replace each {{name}} with the specifier for its en argument position. */
+function substitutePlaceholders(
+  value: string,
+  index: PlaceholderIndex,
+  specifier: (position: number) => string
+): string {
+  return value.replace(PLACEHOLDER, (_, name: string) => {
+    const position = index.get(name)
+    // checkPlaceholderNames rejects this before generation; reaching it is a bug.
+    if (position === undefined) throw new Error(`placeholder {{${name}}} has no en argument position in ${JSON.stringify(value)}`)
+    return specifier(position)
+  })
+}
+
+// Every locale must use exactly the placeholder names its en source uses.
+//
+//   - A name en does not have has no argument to bind to: the call site never
+//     passes it, so it would read past the end of the argument list.
+//   - A name en has but the translation drops leaves a gap in the positional
+//     sequence (%1$@ ... %3$@ with no %2$@). NSString cannot infer the type of
+//     a skipped argument, so iOS behaviour is undefined, and the value the
+//     user needed -- a lockout countdown, a page number -- silently vanishes.
+//
+// Order is free (that is what name-based numbering is for); repetition is fine.
+function checkPlaceholderNames(
+  locale: string,
+  keys: Record<string, string>,
+  enKeys: Record<string, string>
+): string[] {
+  const offenders: string[] = []
+  for (const [key, value] of Object.entries(keys)) {
+    const source = enKeys[key]
+    if (source === undefined) continue
+    const expected = placeholderNames(source)
+    const actual = placeholderNames(value)
+    const extra = actual.filter(n => !expected.includes(n))
+    const missing = expected.filter(n => !actual.includes(n))
+    if (extra.length > 0) {
+      offenders.push(`${locale}: ${key} uses {{${extra.join('}}, {{')}}} which en does not have -- no argument is passed for it (${JSON.stringify(value)})`)
+    }
+    if (missing.length > 0) {
+      offenders.push(`${locale}: ${key} drops {{${missing.join('}}, {{')}}} that en has -- every placeholder must appear in every locale (${JSON.stringify(value)})`)
+    }
+  }
+  return offenders
+}
+
 // Convert i18next interpolation to iOS format and escape special characters.
 //
 // Every {{placeholder}} becomes a *positional object* specifier (`%1$@`, `%2$@`, ...).
@@ -76,16 +147,33 @@ const RAW_FORMAT_SPECIFIER =
 //     replaces: `String(format: "%ld", "lots")` prints a garbage integer silently.
 //   - Positional, never bare: translators reorder clauses, and a bare `%@`
 //     followed by `%2$@` mixes the two addressing modes in one string.
-function toIOSString(value: string): string {
-  let index = 0
-  return value
-    .replace(/\\/g, '\\\\')     // escape backslashes first
-    .replace(/"/g, '\\"')       // escape double quotes
-    .replace(/\n/g, '\\n')      // escape newlines
-    .replace(/\{\{(\w+)\}\}/g, () => {
-      index++
-      return `%${index}$@`
-    })
+//   - Numbered by name from the en source (see placeholderIndex above).
+//
+// No escaping here: generateIOS escapes the finished value exactly once with
+// escapeIOSString. Escaping in both places rendered a literal backslash on
+// iOS for every quote and newline in the catalogue ("What does \\"On Break\\" do?").
+function toIOSString(value: string, index: PlaceholderIndex): string {
+  return substitutePlaceholders(value, index, position => `%${position}$@`)
+}
+
+// Prove the name-based numbering on every run: a reordered translation must keep
+// each name on its en position, a repeated name must reuse its index, and both
+// guards in checkPlaceholderNames must fire. Returns failure descriptions.
+function selfTestPlaceholders(): string[] {
+  const failures: string[] = []
+  const expect = (name: string, got: unknown, want: unknown) => {
+    if (JSON.stringify(got) !== JSON.stringify(want)) failures.push(`${name}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`)
+  }
+  const en = 'Page {{page}} of {{total}}'
+  const index = placeholderIndex(en)
+  expect('iOS reordered translation', toIOSString('{{total}} 중 {{page}} 페이지', index), '%2$@ 중 %1$@ 페이지')
+  expect('Android reordered translation', toAndroidString('{{total}} 중 {{page}} 페이지', index), '%2$s 중 %1$s 페이지')
+  expect('repeated name reuses its index', toIOSString('{{page}}/{{total}} ({{page}})', index), '%1$@/%2$@ (%1$@)')
+  const enKeys = { page_info: en }
+  expect('extra placeholder is rejected', checkPlaceholderNames('xx', { page_info: '{{page}} {{total}} {{count}}' }, enKeys).length, 1)
+  expect('dropped placeholder is rejected', checkPlaceholderNames('xx', { page_info: 'Page {{page}}' }, enKeys).length, 1)
+  expect('reordering is accepted', checkPlaceholderNames('xx', { page_info: '{{total}} 중 {{page}}' }, enKeys).length, 0)
+  return failures
 }
 
 // Fail codegen if any locale string carries a hand-written printf specifier.
@@ -110,12 +198,8 @@ function escapeIOSString(s: string): string {
 }
 
 // Convert i18next interpolation to Android format
-function toAndroidString(value: string): string {
-  let index = 0
-  const interpolated = value.replace(/\{\{(\w+)\}\}/g, () => {
-    index++
-    return `%${index}$s`
-  })
+function toAndroidString(value: string, index: PlaceholderIndex): string {
+  const interpolated = substitutePlaceholders(value, index, position => `%${position}$s`)
   // Single-pass XML/Android escaping avoids incomplete sanitization
   // (chained .replace() with &→&amp; reintroduces the target character)
   return interpolated.replace(/[&<>"'\\]/g, (ch) => {
@@ -132,18 +216,20 @@ function toAndroidString(value: string): string {
 }
 
 // Generate iOS Localizable.strings
-function generateIOS(keys: Record<string, string>): string {
+function generateIOS(keys: Record<string, string>, enKeys: Record<string, string>): string {
   const lines = Object.entries(keys)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `"${escapeIOSString(key)}" = "${escapeIOSString(toIOSString(value))}";`)
+    .map(([key, value]) =>
+      `"${escapeIOSString(key)}" = "${escapeIOSString(toIOSString(value, placeholderIndex(enKeys[key] ?? value)))}";`
+    )
   return lines.join('\n') + '\n'
 }
 
 // Generate Android strings.xml
-function generateAndroid(keys: Record<string, string>): string {
+function generateAndroid(keys: Record<string, string>, enKeys: Record<string, string>): string {
   const entries = Object.entries(keys)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `    <string name="${key}">${toAndroidString(value)}</string>`)
+    .map(([key, value]) => `    <string name="${key}">${toAndroidString(value, placeholderIndex(enKeys[key] ?? value))}</string>`)
   return `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n${entries.join('\n')}\n</resources>\n`
 }
 
@@ -183,9 +269,17 @@ function main() {
 
   console.log(`Source: ${enKeyCount} keys in English`)
 
+  const selfTestFailures = selfTestPlaceholders()
+  if (selfTestFailures.length > 0) {
+    console.error('Placeholder numbering self-test FAILED:')
+    selfTestFailures.forEach(f => console.error(`  - ${f}`))
+    process.exit(1)
+  }
+
   const localeFiles = readdirSync(LOCALES_DIR).filter(f => f.endsWith('.json'))
   let hasErrors = false
   let rawSpecifierErrors = 0
+  let placeholderNameErrors = 0
 
   for (const file of localeFiles) {
     const locale = file.replace('.json', '')
@@ -203,6 +297,17 @@ function main() {
       hasErrors = true
     }
 
+    // Guard: every locale uses exactly en's placeholder names (issue #1899).
+    // A locale that fails is not generated -- its specifiers would bind to the
+    // wrong arguments or to none.
+    const placeholderOffenders = checkPlaceholderNames(locale, keys, enKeys)
+    if (placeholderOffenders.length > 0) {
+      console.error(`  ${locale}: ${placeholderOffenders.length} placeholder mismatch(es) against en:`)
+      placeholderOffenders.forEach(o => console.error(`    - ${o}`))
+      placeholderNameErrors += placeholderOffenders.length
+      hasErrors = true
+    }
+
     // Validate coverage
     if (locale !== 'en') {
       const missing = Object.keys(enKeys).filter(k => !(k in keys))
@@ -215,11 +320,11 @@ function main() {
       }
     }
 
-    if (validate) continue
+    if (validate || placeholderOffenders.length > 0) continue
 
     // Generate iOS
     const iosLocale = IOS_LOCALE_MAP[locale] || locale
-    const iosContent = generateIOS(keys)
+    const iosContent = generateIOS(keys, enKeys)
     // Write to generated dir (for CI validation)
     const iosGenDir = join(GENERATED_DIR, 'ios', `${iosLocale}.lproj`)
     mkdirSync(iosGenDir, { recursive: true })
@@ -231,7 +336,7 @@ function main() {
 
     // Generate Android
     const androidLocale = ANDROID_LOCALE_MAP[locale] || locale
-    const androidContent = generateAndroid(keys)
+    const androidContent = generateAndroid(keys, enKeys)
     // Write to generated dir (for CI validation)
     const androidGenDir = join(GENERATED_DIR, 'android', locale === 'en' ? 'values' : `values-${androidLocale}`)
     mkdirSync(androidGenDir, { recursive: true })
@@ -247,6 +352,15 @@ function main() {
       `\n${rawSpecifierErrors} raw printf specifier(s) in packages/i18n/locales. ` +
       `Substitutions must be written as {{placeholder}} so each platform's codegen ` +
       `emits a specifier matching the argument type it is handed (issue #1413).`
+    )
+    process.exit(1)
+  }
+
+  if (placeholderNameErrors > 0) {
+    console.error(
+      `\n${placeholderNameErrors} placeholder mismatch(es) against en. Each translation must use ` +
+      `exactly the {{placeholder}} names of its en source -- in any order -- because the ` +
+      `positional specifiers are numbered from en (issue #1899).`
     )
     process.exit(1)
   }

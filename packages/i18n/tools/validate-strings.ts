@@ -442,9 +442,13 @@ function validateLocaleCompleteness(): number {
 // string has placeholders.
 // ---------------------------------------------------------------------------
 
-/** Count {{placeholder}} occurrences in an en.json source string. */
+/**
+ * Number of arguments an en.json source string consumes: its DISTINCT
+ * {{placeholder}} names. Codegen numbers specifiers by name, so a name used
+ * twice binds one argument, not two (issue #1899).
+ */
 function placeholderCount(value: string): number {
-  return (value.match(/\{\{\w+\}\}/g) ?? []).length
+  return new Set(Array.from(value.matchAll(/\{\{(\w+)\}\}/g), m => m[1])).size
 }
 
 type SourceLang = 'swift' | 'kotlin' | 'ts'
