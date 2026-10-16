@@ -485,8 +485,10 @@ final class CaseManagementUITests: BaseUITest {
         then("I should see the loaded timeline, not a spinner") {
             // `case-timeline-tab` is the container and is present while loading, so it
             // proves nothing; only the two loaded states count.
+            let loaded = anyElementExists(["timeline-empty", "case-timeline"], timeout: 10)
+            if !loaded { print("DEBUG-1884 timeline hierarchy:\n\(app.debugDescription)") }
             XCTAssertTrue(
-                anyElementExists(["timeline-empty", "case-timeline"], timeout: 10),
+                loaded,
                 "Timeline tab should show interactions or its empty state once loaded"
             )
             XCTAssertFalse(find("timeline-loading").exists, "Timeline should have finished loading")

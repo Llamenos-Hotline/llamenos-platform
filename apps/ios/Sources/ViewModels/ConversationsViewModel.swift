@@ -282,7 +282,10 @@ final class ConversationsViewModel {
         case .all:
             filteredConversations = allConversations
         case .active:
-            filteredConversations = allConversations.filter { $0.conversationStatus == .active }
+            // "Active" is every open conversation. A new inbound message arrives as
+            // `waiting` (unclaimed) and stays so until someone replies; filtering on
+            // `.active` alone hid exactly the conversations a volunteer needs to claim.
+            filteredConversations = allConversations.filter { $0.conversationStatus != .closed }
         case .closed:
             filteredConversations = allConversations.filter { $0.conversationStatus == .closed }
         }
