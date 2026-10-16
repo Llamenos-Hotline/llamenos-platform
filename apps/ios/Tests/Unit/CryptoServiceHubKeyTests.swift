@@ -64,3 +64,113 @@ struct CryptoServiceHubKeyTests {
         #expect(result == nil)
     }
 }
+
+/// The hub-key envelope's AAD, exercised rather than asserted about.
+///
+/// `docs/protocol/PROTOCOL.md` §2.7 binds `UTF-8("llamenos:hub-key-wrap:key-wrap")`
+/// to both the seal and the open. iOS passed an empty AAD until #1631 — as did
+/// the desktop and Android, so the three agreed with each other and with
+/// neither the spec nor the Rust crate's own `hpke_wrap_key`. These cases are
+/// written so that reverting the fix fails them: one proves the composite AAD
+/// round-trips, one proves an empty-AAD wrap no longer opens, and one proves
+/// the AAD is binding rather than merely passed.
+struct CryptoServiceHubKeyAadTests {
+
+    /// A wrap sealed by the caller, converted to the hex wire form
+    /// `loadHubKey` consumes (`toFfiEnvelope` maps hex -> base64url again).
+    private func wireEnvelope(
+        _ crypto: CryptoService,
+        hubKeyHex: String,
+        recipientPubkeyHex: String,
+        label: String,
+        aadHex: String
+    ) throws -> HubKeyEnvelopeResponse {
+        let sealed = try crypto.hpkeSealKey(
+            keyHex: hubKeyHex,
+            recipientPubkeyHex: recipientPubkeyHex,
+            label: label,
+            aadHex: aadHex
+        )
+        return HubKeyEnvelopeResponse(
+            envelope: SharedAdminEnvelope(
+                ct: try mobileBase64urlToHex(b64: sealed.ct),
+                enc: try mobileBase64urlToHex(b64: sealed.enc),
+                pubkey: recipientPubkeyHex
+            )
+        )
+    }
+
+    private func unlockedService() throws -> (CryptoService, String) {
+        let crypto = CryptoService()
+        crypto.lock()
+        _ = try crypto.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
+        guard let pubkey = crypto.encryptionPubkeyHex else {
+            throw CryptoServiceError.noKeyLoaded
+        }
+        return (crypto, pubkey)
+    }
+
+    /// Case 1 — wrap and unwrap under the composite AAD succeeds.
+    @Test func compositeAadRoundTrips() throws {
+        let (crypto, pubkey) = try unlockedService()
+        defer { crypto.lock() }
+        let envelope = try wireEnvelope(
+            crypto,
+            hubKeyHex: String(repeating: "7a", count: 32),
+            recipientPubkeyHex: pubkey,
+            label: CryptoLabels.LABEL_HUB_KEY_WRAP,
+            aadHex: try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_HUB_KEY_WRAP)
+        )
+        try crypto.loadHubKey(hubId: "hub-aad-composite", envelope: envelope)
+        #expect(crypto.hasHubKey(hubId: "hub-aad-composite") == true)
+    }
+
+    /// Case 2 — the wire break. A wrap sealed with an EMPTY AAD, which is what
+    /// every pre-#1631 client wrote, must no longer open. Pre-production, so
+    /// invalidating those envelopes is the fix, not a regression.
+    @Test func emptyAadWrapNoLongerOpens() throws {
+        let (crypto, pubkey) = try unlockedService()
+        defer { crypto.lock() }
+        let envelope = try wireEnvelope(
+            crypto,
+            hubKeyHex: String(repeating: "7a", count: 32),
+            recipientPubkeyHex: pubkey,
+            label: CryptoLabels.LABEL_HUB_KEY_WRAP,
+            aadHex: ""
+        )
+        #expect(throws: (any Error).self) {
+            try crypto.loadHubKey(hubId: "hub-aad-empty", envelope: envelope)
+        }
+        #expect(crypto.hasHubKey(hubId: "hub-aad-empty") == false)
+    }
+
+    /// Case 3 — the AAD is binding, not decorative: a wrap sealed under a
+    /// *different* label's composite AAD does not open as a hub key, even
+    /// though the bytes are a perfectly well-formed key-wrap AAD.
+    @Test func anotherLabelsCompositeAadDoesNotOpen() throws {
+        let (crypto, pubkey) = try unlockedService()
+        defer { crypto.lock() }
+        let envelope = try wireEnvelope(
+            crypto,
+            hubKeyHex: String(repeating: "7a", count: 32),
+            recipientPubkeyHex: pubkey,
+            label: CryptoLabels.LABEL_HUB_KEY_WRAP,
+            aadHex: try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_NOTE_KEY)
+        )
+        #expect(throws: (any Error).self) {
+            try crypto.loadHubKey(hubId: "hub-aad-wrong-label", envelope: envelope)
+        }
+        #expect(crypto.hasHubKey(hubId: "hub-aad-wrong-label") == false)
+    }
+
+    /// Case 4 — the AAD bytes iOS binds are the bytes PROTOCOL.md §2.7 names.
+    /// The desktop derives the same string from `@shared/envelope-aad` and
+    /// Android from the same Rust function, so a divergence here is the one
+    /// cross-language failure this envelope can still have.
+    @Test func aadBytesMatchTheProtocolSpelling() throws {
+        let expected = Data("llamenos:hub-key-wrap:key-wrap".utf8)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        #expect(try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_HUB_KEY_WRAP) == expected)
+    }
+}

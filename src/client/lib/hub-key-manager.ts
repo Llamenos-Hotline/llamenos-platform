@@ -25,6 +25,17 @@ import {
 } from './platform'
 import type { HpkeEnvelope, RecipientEnvelope } from './platform'
 import { LABEL_HUB_KEY_WRAP } from '@shared/crypto-labels'
+import { keyWrapAadHex } from '@shared/envelope-aad'
+
+/**
+ * The AAD every hub-key envelope binds, on every platform.
+ *
+ * `docs/protocol/PROTOCOL.md` §2.7 specifies `UTF-8("llamenos:hub-key-wrap:key-wrap")`
+ * on both the seal and the open. Derived here from the one definition in
+ * `@shared/envelope-aad` rather than spelled out, for the reason that module's
+ * docblock gives: two hands writing the same wire rule is how they diverge.
+ */
+const HUB_KEY_WRAP_AAD_HEX = keyWrapAadHex(LABEL_HUB_KEY_WRAP)
 
 /**
  * Generate a random 32-byte hub key and store it in Rust CryptoState.
@@ -36,19 +47,26 @@ export async function generateHubKey(): Promise<void> {
 
 /**
  * Wrap the hub key (stored in CryptoState) for a specific member using HPKE via Rust.
- * Uses LABEL_HUB_KEY_WRAP domain separation to prevent cross-context attacks.
  * The hub key NEVER enters JavaScript — Rust wraps it directly.
  *
- * The empty AAD is deliberate and load-bearing: iOS and Android unwrap hub
- * keys with an empty AAD too, so the pair interoperates across platforms.
- * This is the one envelope family that does NOT use the canonical
- * `contentAad`/`keyWrapAad` convention — changing only one side would make
- * every hub key unreadable on the others.
+ * `LABEL_HUB_KEY_WRAP` is bound twice: as the HPKE `info` (the Albrecht
+ * defense, enforced at open by `packages/crypto/src/hpke_envelope.rs`) and
+ * inside the AAD, which additionally separates this key-wrap envelope from a
+ * content envelope carried under the same label. Desktop, iOS and Android all
+ * passed an EMPTY AAD here (#1631) and so agreed with each other while
+ * disagreeing with the spec, with `hpke_wrap_key`/`hpke_unwrap_key` in the
+ * Rust crate, and with the interop vectors — all three of which already bound
+ * the composite. The weaker behaviour being unanimous made it a defect three
+ * times over, not a convention.
  */
 export async function wrapHubKeyForMember(
   memberPubkeyHex: string,
 ): Promise<RecipientEnvelope> {
-  const envelope = await platformWrapHubKeyForMember(memberPubkeyHex, LABEL_HUB_KEY_WRAP, '')
+  const envelope = await platformWrapHubKeyForMember(
+    memberPubkeyHex,
+    LABEL_HUB_KEY_WRAP,
+    HUB_KEY_WRAP_AAD_HEX,
+  )
   return {
     pubkey: memberPubkeyHex,
     enc: envelope.enc,
@@ -70,13 +88,14 @@ export async function wrapHubKeyForMembers(
  * Unwrap a hub key from an HPKE envelope and store it in Rust CryptoState.
  * The hub key NEVER enters JavaScript — it goes from HPKE decryption straight to state.
  *
- * Empty AAD — must stay in lockstep with `wrapHubKeyForMember` above and the
- * mobile clients; see the note there.
+ * Binds the same AAD `wrapHubKeyForMember` seals under, and the same one iOS
+ * (`CryptoService.loadHubKey`) and Android (`mobile_load_hub_key`) bind; see
+ * the note there.
  */
 export async function unwrapHubKey(
   envelope: HpkeEnvelope,
 ): Promise<void> {
-  await hpkeUnwrapAndSetHubKey(envelope, LABEL_HUB_KEY_WRAP, '')
+  await hpkeUnwrapAndSetHubKey(envelope, LABEL_HUB_KEY_WRAP, HUB_KEY_WRAP_AAD_HEX)
 }
 
 /**
