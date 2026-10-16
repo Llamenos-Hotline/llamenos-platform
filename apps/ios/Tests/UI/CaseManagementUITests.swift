@@ -774,3 +774,7 @@ final class CaseManagementUITests: BaseUITest {
         }
     }
 }
+
+extension CaseManagementUITests {
+    func testBreakIt() { XCTAssertTrue(true) }
+}
