@@ -572,6 +572,10 @@ struct CaseDetailView: View {
             // Comment input bar
             commentInputBar
         }
+        // The tab body is a plain stack/group, not an accessibility element, so SwiftUI
+        // pushes a bare identifier down onto every child and overwrites theirs. As a
+        // container it keeps each child's own id (see `tabBar`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-timeline-tab")
     }
 
@@ -697,6 +701,10 @@ struct CaseDetailView: View {
                 .listStyle(.plain)
             }
         }
+        // The tab body is a plain stack/group, not an accessibility element, so SwiftUI
+        // pushes a bare identifier down onto every child and overwrites theirs. As a
+        // container it keeps each child's own id (see `tabBar`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-contacts-tab")
     }
 
@@ -765,6 +773,10 @@ struct CaseDetailView: View {
                 .listStyle(.plain)
             }
         }
+        // The tab body is a plain stack/group, not an accessibility element, so SwiftUI
+        // pushes a bare identifier down onto every child and overwrites theirs. As a
+        // container it keeps each child's own id (see `tabBar`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-evidence-tab")
     }
 

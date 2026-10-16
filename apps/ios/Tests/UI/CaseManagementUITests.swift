@@ -28,27 +28,23 @@ final class CaseManagementUITests: BaseUITest {
         }
     }
 
-    /// Scenario: Navigating to Cases shows appropriate initial state.
-    /// Without API connection, should show CMS disabled, loading, or empty state.
+    /// Scenario: Navigating to Cases without an API connection says case management is off.
+    /// With no hub configured the CMS request cannot succeed, so the view resolves to the
+    /// not-enabled state — not a spinner, and not a list.
     func testCaseListShowsInitialState() {
-        given("I am authenticated") {
+        given("I am authenticated without an API connection") {
             launchAuthenticated()
         }
         when("I navigate to the Cases tab") {
             navigateToCases()
         }
-        then("I should see loading, empty state, or CMS disabled") {
-            let found = anyElementExists([
-                "case-loading",
-                "case-empty-state",
-                "cms-not-enabled",
-                "case-list",
-                "case-type-tabs",
-            ])
+        then("I should see that case management is not enabled") {
             XCTAssertTrue(
-                found,
-                "Cases view should show loading, empty state, CMS disabled, or case list"
+                find("cms-not-enabled").waitForExistence(timeout: 15),
+                "Cases view should settle on the not-enabled state when no hub is reachable"
             )
+            XCTAssertFalse(find("case-loading").exists, "Cases view should not still be loading")
+            XCTAssertFalse(find("case-list").exists, "There is no case list without case management")
         }
     }
 
@@ -148,6 +144,37 @@ final class CaseManagementUITests: BaseUITest {
         }
     }
 
+    /// Put the server in the state the case scenarios describe — case management on, the
+    /// jail-support template applied, and one case — then launch as admin and leave the
+    /// app on the Cases tab. Returns the new case's title.
+    private func launchWithSeededCase() -> String {
+        configureCaseManagementWithTwoTypes()
+        launchAsAdminWithAPI()
+        navigateToCases()
+        let title = "Seeded case \(UUID().uuidString.prefix(8))"
+        createCase(title: title, entityTypeName: "arrest_case")
+        navigateToCases()
+        return title
+    }
+
+    /// The list row text for a case, matched on its decrypted title.
+    private func caseTitle(_ title: String) -> XCUIElement {
+        find("case-list").staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", title)
+        ).firstMatch
+    }
+
+    /// Open the case with this title from the list, failing the test if it cannot be opened.
+    private func openCase(titled title: String) {
+        let row = caseTitle(title)
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "The case '\(title)' should be in the list")
+        row.tap()
+        XCTAssertTrue(
+            find("case-detail-header").waitForExistence(timeout: 10),
+            "Tapping the case should open its detail"
+        )
+    }
+
     private let entityTabsCaseTitle = "Entity tabs \(UUID().uuidString.prefix(8))"
 
     private func configureCaseManagementWithTwoTypes() {
@@ -230,102 +257,80 @@ final class CaseManagementUITests: BaseUITest {
         XCTAssertFalse(find("case-create-error").exists, "Case creation should not report an error")
     }
 
-    /// Scenario: Case list shows case cards when records exist.
-    /// Verifies the list renders actual case card rows with data.
+    /// Scenario: Case list shows a card for a case that exists.
     func testCaseListShowsCaseCards() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("case management is on and a case exists") {
+            title = launchWithSeededCase()
         }
         when("I navigate to the Cases tab") {
             navigateToCases()
         }
-        then("I should see case cards if records exist, or empty/disabled state") {
-            let caseList = find("case-list")
-            let emptyState = find("case-empty-state")
-            let cmsDisabled = find("cms-not-enabled")
-
-            if caseList.waitForExistence(timeout: 10) {
-                // Case list is visible — verify at least one card exists by checking
-                // for any case-list row with its stable, record-specific identifier.
-                let firstCard = caseList.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'case-list-row-'"))
-                    .firstMatch
-                XCTAssertTrue(
-                    firstCard.waitForExistence(timeout: 5),
-                    "Case list should contain at least one case card"
-                )
-            } else if emptyState.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Empty state shown — no records exist")
-            } else if cmsDisabled.waitForExistence(timeout: 3) {
-                XCTAssertTrue(true, "CMS is not enabled on this server")
-            } else {
-                XCTFail("Should see case list, empty state, or CMS disabled")
-            }
+        then("the list should contain a card for that case") {
+            XCTAssertTrue(
+                find("case-list").waitForExistence(timeout: 15),
+                "Cases view should show the case list once a case exists"
+            )
+            XCTAssertTrue(
+                caseTitle(title).waitForExistence(timeout: 15),
+                "The case list should show the case titled '\(title)'"
+            )
+            XCTAssertFalse(find("case-empty-state").exists, "A hub with a case is not empty")
         }
     }
 
     /// Scenario: Empty state displays when no records exist.
+    ///
+    /// The class hub is shared with tests that create cases, so this one runs against a hub
+    /// of its own: case management on, a template applied, and no records.
     func testCaseListEmptyState() {
-        given("I am authenticated as admin with API and fresh state") {
-            launchAsAdminWithAPI()
+        given("case management is on in a hub with no cases") {
+            guard let hubId = TestAdminAPI.createHub(
+                name: "ios-cases-empty-\(UUID().uuidString.prefix(8))", baseURL: testHubURL
+            ) else { return }
+            TestAdminAPI.setCaseManagement(enabled: true, hubId: hubId, baseURL: testHubURL)
+            TestAdminAPI.applyTemplate("jail-support", hubId: hubId, baseURL: testHubURL)
+            launchAsAdminWithAPI(hubId: hubId)
         }
         when("I navigate to the Cases tab") {
             navigateToCases()
         }
-        then("I should see the empty state or CMS disabled if no records") {
-            let emptyState = find("case-empty-state")
-            let caseList = find("case-list")
-            let cmsDisabled = find("cms-not-enabled")
-
-            // With a freshly reset server, there should be no case records.
-            // If CMS is enabled → empty state. If not enabled → cms-not-enabled.
-            let foundSomething = anyElementExists([
-                "case-empty-state",
-                "case-list",
-                "cms-not-enabled",
-                "case-loading",
-            ], timeout: 10)
-            XCTAssertTrue(foundSomething, "Cases view should render some state after loading")
-
-            if emptyState.exists {
-                // Verify the empty state is meaningful — not just a blank screen
-                XCTAssertTrue(emptyState.exists, "Empty state should be displayed when no records exist")
-            } else if cmsDisabled.exists {
-                XCTAssertTrue(true, "CMS not enabled — valid state for fresh server")
-            } else if caseList.exists {
-                // Records already exist (server wasn't fully reset) — still valid
-                XCTAssertTrue(true, "Case list visible — records exist on server")
-            }
+        then("I should see the empty state with a way to create a case") {
+            XCTAssertTrue(
+                find("case-empty-state").waitForExistence(timeout: 15),
+                "A hub with case management on and no cases should show the empty state"
+            )
+            XCTAssertTrue(
+                find("case-empty-create-btn").exists,
+                "The empty state should offer to create the first case"
+            )
+            XCTAssertFalse(find("case-list").exists, "There are no cases to list")
+            XCTAssertFalse(find("cms-not-enabled").exists, "Case management is on in this hub")
         }
     }
 
-    /// Scenario: Status filter chips are visible when CMS is enabled.
+    /// Scenario: Status filter chips are visible when the entity types define statuses.
     func testStatusFilterChips() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        given("case management is on with a template that defines statuses, and a case exists") {
+            _ = launchWithSeededCase()
         }
         when("I navigate to Cases") {
             navigateToCases()
         }
-        then("status filter section should appear when entity types have statuses") {
-            let statusFilter = find("case-status-filter")
-            let caseList = find("case-list")
-            let cmsDisabled = find("cms-not-enabled")
-
-            // Status filter only shows when allStatuses is non-empty
-            if caseList.waitForExistence(timeout: 10) || statusFilter.waitForExistence(timeout: 5) {
-                if statusFilter.exists {
-                    // Verify the "All" status filter button exists
-                    let allStatusFilter = find("case-status-filter-all")
-                    XCTAssertTrue(
-                        allStatusFilter.waitForExistence(timeout: 3),
-                        "Status filter should include an 'All' option"
-                    )
-                }
-                // If no status filter, entity types may not have defined statuses yet
-            } else if cmsDisabled.waitForExistence(timeout: 3) {
-                XCTAssertTrue(true, "CMS not enabled — no status filters")
-            }
+        then("the status filter should offer All and each status of the template") {
+            XCTAssertTrue(
+                find("case-status-filter").waitForExistence(timeout: 15),
+                "Status filter should appear when the entity types define statuses"
+            )
+            XCTAssertTrue(
+                find("case-status-filter-all").exists,
+                "Status filter should include an 'All' option"
+            )
+            // jail-support: arrest_case runs reported → … → case_closed.
+            XCTAssertTrue(
+                find("case-status-filter-reported").exists,
+                "Status filter should include the template's 'reported' status"
+            )
         }
     }
 
@@ -445,135 +450,91 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Details tab renders field rows from entity type schema.
     func testDetailsTabShowsFields() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case of a type with fields exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail on the Details tab") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case on the Details tab") {
+            openCase(titled: title)
         }
-        then("the details tab should show field content or metadata") {
-            let detailsTab = find("case-details-tab")
-            if detailsTab.waitForExistence(timeout: 5) {
-                XCTAssertTrue(
-                    detailsTab.exists,
-                    "Details tab content should be visible"
-                )
-
-                // Verify metadata section renders (always present regardless of fields)
-                // The metadata row shows "Created" and "Updated" timestamps
-                let fieldElements = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'case-field-' OR identifier BEGINSWITH 'case-section-'"))
-                // If entity type has fields, at least one case-field-* should exist
-                // If no fields defined, metadata section is still present
-                _ = fieldElements.count  // Access to verify query runs
-                XCTAssertTrue(true, "Details tab rendered successfully")
-            }
+        then("the details tab should show the entity type's fields") {
+            XCTAssertTrue(
+                find("case-details-tab").waitForExistence(timeout: 10),
+                "Details tab content should be visible"
+            )
+            // arrest_case defines arrest_datetime as its first field (jail-support template).
+            XCTAssertTrue(
+                find("case-field-arrest_datetime").waitForExistence(timeout: 5),
+                "Details tab should render a row for each field of the entity type"
+            )
         }
     }
 
     /// Scenario: Timeline tab shows interactions or empty state.
     func testTimelineTabShowsInteractions() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail and tap the Timeline tab") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case and tap the Timeline tab") {
+            openCase(titled: title)
             let timelineTab = find("case-tab-timeline")
-            if timelineTab.waitForExistence(timeout: 5) {
-                timelineTab.tap()
-            }
+            XCTAssertTrue(timelineTab.waitForExistence(timeout: 5), "Timeline tab should exist")
+            timelineTab.tap()
         }
-        then("I should see timeline content or empty state") {
-            guard find("case-detail-header").exists else { return }
-
-            let found = anyElementExists([
-                "case-timeline",
-                "timeline-empty",
-                "timeline-loading",
-                "case-timeline-tab",
-            ], timeout: 5)
+        then("I should see the loaded timeline, not a spinner") {
+            // `case-timeline-tab` is the container and is present while loading, so it
+            // proves nothing; only the two loaded states count.
             XCTAssertTrue(
-                found,
-                "Timeline tab should show interactions, empty state, or loading indicator"
+                anyElementExists(["timeline-empty", "case-timeline"], timeout: 10),
+                "Timeline tab should show interactions or its empty state once loaded"
             )
+            XCTAssertFalse(find("timeline-loading").exists, "Timeline should have finished loading")
         }
     }
 
     /// Scenario: Contacts tab shows linked contacts or empty state.
     func testContactsTabShowsLinkedContacts() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case with no linked contacts exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail and tap the Contacts tab") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case and tap the Contacts tab") {
+            openCase(titled: title)
             let contactsTab = find("case-tab-contacts")
-            if contactsTab.waitForExistence(timeout: 5) {
-                contactsTab.tap()
-            }
+            XCTAssertTrue(contactsTab.waitForExistence(timeout: 5), "Contacts tab should exist")
+            contactsTab.tap()
         }
-        then("I should see contacts content or empty state") {
-            guard find("case-detail-header").exists else { return }
-
-            let found = anyElementExists([
-                "case-contact-card",
-                "case-contacts-empty",
-                "case-contacts-tab",
-            ], timeout: 5)
+        then("I should see the contacts empty state") {
+            // `case-contacts-tab` is the container and exists while loading; only the
+            // loaded state counts.
             XCTAssertTrue(
-                found,
-                "Contacts tab should show contact cards or empty state"
+                find("case-contacts-empty").waitForExistence(timeout: 10),
+                "A case with no linked contacts should show the contacts empty state"
             )
-
-            // If contacts exist, verify role badges
-            let roleCard = find("case-contact-card")
-            if roleCard.exists {
-                let roleBadge = find("contact-role-badge")
-                XCTAssertTrue(
-                    roleBadge.exists,
-                    "Contact cards should display role badges"
-                )
-            }
+            XCTAssertFalse(find("case-contact-card").exists, "No contacts are linked to this case")
+            XCTAssertFalse(find("case-contacts-loading").exists, "Contacts should have finished loading")
         }
     }
 
     /// Scenario: Evidence tab shows evidence items or empty state.
     func testEvidenceTabShowsItems() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case with no evidence exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail and tap the Evidence tab") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case and tap the Evidence tab") {
+            openCase(titled: title)
             let evidenceTab = find("case-tab-evidence")
-            if evidenceTab.waitForExistence(timeout: 5) {
-                evidenceTab.tap()
-            }
+            XCTAssertTrue(evidenceTab.waitForExistence(timeout: 5), "Evidence tab should exist")
+            evidenceTab.tap()
         }
-        then("I should see evidence content or empty state") {
-            guard find("case-detail-header").exists else { return }
-
-            let found = anyElementExists([
-                "case-evidence-empty",
-                "case-evidence-tab",
-            ], timeout: 5)
+        then("I should see the evidence empty state") {
             XCTAssertTrue(
-                found,
-                "Evidence tab should show evidence items or empty state"
+                find("case-evidence-empty").waitForExistence(timeout: 10),
+                "A case with no evidence should show the evidence empty state"
             )
-
-            // If evidence items exist, verify classification badges
-            let evidenceItems = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'evidence-item-'"))
-            if evidenceItems.count > 0 {
-                let classificationBadge = find("evidence-classification-badge")
-                XCTAssertTrue(
-                    classificationBadge.exists,
-                    "Evidence items should display classification badges"
-                )
-            }
+            XCTAssertFalse(find("case-evidence-loading").exists, "Evidence should have finished loading")
         }
     }
 
@@ -779,72 +740,31 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Switching between all 4 detail tabs renders the correct content.
     func testDetailTabSwitching() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case") {
+            openCase(titled: title)
         }
         then("switching between tabs should render the correct content areas") {
-            guard find("case-detail-header").waitForExistence(timeout: 5) else { return }
-
-            // Details tab (default)
-            let detailsTab = find("case-tab-details")
-            let detailsContent = find("case-details-tab")
-            if detailsTab.waitForExistence(timeout: 3) {
-                detailsTab.tap()
+            let tabs: [(tab: String, loaded: [String], loading: String, name: String)] = [
+                ("case-tab-details", ["case-details-tab"], "", "Details"),
+                ("case-tab-timeline", ["timeline-empty", "case-timeline"], "timeline-loading", "Timeline"),
+                ("case-tab-contacts", ["case-contacts-empty", "case-contact-card"], "case-contacts-loading", "Contacts"),
+                ("case-tab-evidence", ["case-evidence-empty"], "case-evidence-loading", "Evidence"),
+            ]
+            for entry in tabs {
+                let tab = find(entry.tab)
+                XCTAssertTrue(tab.waitForExistence(timeout: 5), "\(entry.name) tab should exist")
+                tab.tap()
                 XCTAssertTrue(
-                    detailsContent.waitForExistence(timeout: 3),
-                    "Details tab content should render when Details tab is selected"
+                    anyElementExists(entry.loaded, timeout: 10),
+                    "\(entry.name) tab content should render once loaded"
                 )
-            }
-
-            // Timeline tab
-            let timelineTab = find("case-tab-timeline")
-            if timelineTab.waitForExistence(timeout: 3) {
-                timelineTab.tap()
-                let timelineContent = anyElementExists([
-                    "case-timeline-tab",
-                    "case-timeline",
-                    "timeline-empty",
-                    "timeline-loading",
-                ], timeout: 5)
-                XCTAssertTrue(
-                    timelineContent,
-                    "Timeline tab content should render when Timeline tab is selected"
-                )
-            }
-
-            // Contacts tab
-            let contactsTab = find("case-tab-contacts")
-            if contactsTab.waitForExistence(timeout: 3) {
-                contactsTab.tap()
-                let contactsContent = anyElementExists([
-                    "case-contacts-tab",
-                    "case-contact-card",
-                    "case-contacts-empty",
-                    "case-contacts-loading",
-                ], timeout: 5)
-                XCTAssertTrue(
-                    contactsContent,
-                    "Contacts tab content should render when Contacts tab is selected"
-                )
-            }
-
-            // Evidence tab
-            let evidenceTab = find("case-tab-evidence")
-            if evidenceTab.waitForExistence(timeout: 3) {
-                evidenceTab.tap()
-                let evidenceContent = anyElementExists([
-                    "case-evidence-tab",
-                    "case-evidence-empty",
-                    "case-evidence-loading",
-                ], timeout: 5)
-                XCTAssertTrue(
-                    evidenceContent,
-                    "Evidence tab content should render when Evidence tab is selected"
-                )
+                if !entry.loading.isEmpty {
+                    XCTAssertFalse(find(entry.loading).exists, "\(entry.name) tab should have finished loading")
+                }
             }
         }
     }

@@ -222,8 +222,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the shift clock UI or empty state") {
             let found = anyElementExists([
-                "clock-in-button", "clock-out-button",
-                "shifts-empty-state", "shifts-loading",
+                "clock-in-button", "clock-out-button", "shifts-empty-state",
             ])
             XCTAssertTrue(found, "Shifts tab should load with API data or show empty state")
         }
@@ -457,7 +456,6 @@ final class APIConnectedUITests: BaseUITest {
         then("I should see conversations list or empty state") {
             let found = anyElementExists([
                 "conversations-list", "conversations-empty-state",
-                "conversations-loading", "conversations-error",
             ])
             XCTAssertTrue(found, "Conversations should load from API")
         }
@@ -475,7 +473,6 @@ final class APIConnectedUITests: BaseUITest {
             // Wait for content to load
             _ = anyElementExists([
                 "conversations-list", "conversations-empty-state",
-                "conversations-loading", "conversations-error",
             ])
         }
         then("I should see the filter button") {
@@ -522,9 +519,9 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the volunteers list or empty state") {
             let found = anyElementExists([
-                "volunteers-list", "volunteers-empty-state", "volunteers-loading",
+                "volunteers-list", "volunteers-empty-state",
             ])
-            XCTAssertTrue(found, "Volunteers view should show list, empty state, or loading via API")
+            XCTAssertTrue(found, "Volunteers view should show list or empty state via API")
         }
     }
 
@@ -543,9 +540,9 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the ban list or empty state") {
             let found = anyElementExists([
-                "ban-list", "bans-empty-state", "bans-loading",
+                "ban-list", "bans-empty-state",
             ])
-            XCTAssertTrue(found, "Ban list view should show list, empty state, or loading via API")
+            XCTAssertTrue(found, "Ban list view should show list or empty state via API")
         }
     }
 
@@ -562,7 +559,7 @@ final class APIConnectedUITests: BaseUITest {
             guard bansLink.waitForExistence(timeout: 5) else { return }
             bansLink.tap()
 
-            _ = anyElementExists(["ban-list", "bans-empty-state", "bans-loading"])
+            _ = anyElementExists(["ban-list", "bans-empty-state"])
         }
         then("I should see the add ban button") {
             let found = anyElementExists(["add-ban-button", "add-first-ban"], timeout: 5)
@@ -585,7 +582,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the audit log or empty state") {
             let found = anyElementExists([
-                "audit-log-list", "audit-empty-state", "audit-loading",
+                "audit-log-list", "audit-empty-state",
             ])
             XCTAssertTrue(found, "Audit log view should load via API")
         }
@@ -606,7 +603,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the invites list or empty state") {
             let found = anyElementExists([
-                "invites-list", "invites-empty-state", "invites-loading",
+                "invites-list", "invites-empty-state",
             ])
             XCTAssertTrue(found, "Invites view should load via API")
         }
@@ -625,7 +622,7 @@ final class APIConnectedUITests: BaseUITest {
             guard invitesLink.waitForExistence(timeout: 5) else { return }
             invitesLink.tap()
 
-            _ = anyElementExists(["invites-list", "invites-empty-state", "invites-loading"])
+            _ = anyElementExists(["invites-list", "invites-empty-state"])
         }
         then("I should see the create invite button") {
             let found = anyElementExists(["create-invite-button", "create-first-invite"], timeout: 5)
@@ -651,7 +648,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the custom fields list or empty state") {
             let found = anyElementExists([
-                "custom-fields-list", "custom-fields-empty-state", "custom-fields-loading",
+                "custom-fields-list", "custom-fields-empty-state",
             ])
             XCTAssertTrue(found, "Custom fields view should load via API")
         }
@@ -671,7 +668,7 @@ final class APIConnectedUITests: BaseUITest {
             customFieldsLink.tap()
 
             _ = anyElementExists([
-                "custom-fields-list", "custom-fields-empty-state", "custom-fields-loading",
+                "custom-fields-list", "custom-fields-empty-state",
             ])
         }
         then("I should see the add field button") {
@@ -708,7 +705,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the reports list or empty state") {
             let found = anyElementExists([
-                "reports-list", "reports-empty-state", "reports-loading", "reports-error",
+                "reports-list", "reports-empty-state",
             ])
             XCTAssertTrue(found, "Reports view should load via API")
         }
@@ -723,7 +720,7 @@ final class APIConnectedUITests: BaseUITest {
         when("I navigate to reports and tap create") {
             scrollAndTap("dashboard-reports-action")
             _ = anyElementExists([
-                "reports-list", "reports-empty-state", "reports-loading",
+                "reports-list", "reports-empty-state",
             ])
 
             let createButton = find("create-report-button")
@@ -805,7 +802,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("I should see the blasts list or empty state") {
             let found = anyElementExists([
-                "blasts-list", "blasts-empty-state", "blasts-loading", "blasts-error",
+                "blasts-list", "blasts-empty-state",
             ])
             XCTAssertTrue(found, "Blasts view should load via API")
         }
@@ -819,7 +816,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         when("I navigate to blasts") {
             scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"])
+            _ = anyElementExists(["blasts-list", "blasts-empty-state"])
         }
         then("I should see the create blast button") {
             let found = anyElementExists(["create-blast-button", "create-first-blast"], timeout: 5)
@@ -981,6 +978,7 @@ final class APIConnectedUITests: BaseUITest {
     // MARK: - Message Simulation Tests
 
     func testSimulateIncomingMessageAppearsInConversations() {
+        var conversationId = ""
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -994,33 +992,16 @@ final class APIConnectedUITests: BaseUITest {
             )
             XCTAssertFalse(result.conversationId.isEmpty, "Should return a conversationId")
             XCTAssertFalse(result.messageId.isEmpty, "Should return a messageId")
+            conversationId = result.conversationId
         }
         then("the conversations tab should show the new conversation") {
             navigateToConversations()
-
-            // Allow time for the server to propagate and WebSocket to deliver
-            let found = anyElementExists([
-                "conversations-list", "conversations-empty-state",
-                "conversations-loading", "conversations-error",
-            ], timeout: 15)
-            XCTAssertTrue(found, "Conversations tab should load after message simulation")
-
-            // If error state appeared, the API call failed — log but don't block
-            let errorState = find("conversations-error")
-            if errorState.exists {
-                print("⚠️ Conversations loaded with error state — API may not be fully ready")
-                return
-            }
-
-            // The conversations list should now have at least one item
-            let list = find("conversations-list")
-            if list.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Conversations list appeared with simulated message")
-            }
+            assertConversationRow(conversationId)
         }
     }
 
     func testSimulateMultipleMessagesFromSameSender() {
+        var conversationId = ""
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -1048,19 +1029,16 @@ final class APIConnectedUITests: BaseUITest {
                 result1.conversationId, result2.conversationId,
                 "Messages from same sender should be in the same conversation"
             )
+            conversationId = result2.conversationId
         }
         then("the conversations tab should show the conversation") {
             navigateToConversations()
-
-            let found = anyElementExists([
-                "conversations-list", "conversations-empty-state",
-                "conversations-loading", "conversations-error",
-            ], timeout: 15)
-            XCTAssertTrue(found, "Conversations should load after multiple message simulation")
+            assertConversationRow(conversationId)
         }
     }
 
     func testSimulateWhatsAppMessage() {
+        var conversationId = ""
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -1074,15 +1052,11 @@ final class APIConnectedUITests: BaseUITest {
             )
             XCTAssertFalse(result.conversationId.isEmpty, "Should return a conversationId for WhatsApp")
             XCTAssertFalse(result.messageId.isEmpty, "Should return a messageId for WhatsApp")
+            conversationId = result.conversationId
         }
         then("the conversations tab should show the conversation") {
             navigateToConversations()
-
-            let found = anyElementExists([
-                "conversations-list", "conversations-empty-state",
-                "conversations-loading", "conversations-error",
-            ], timeout: 15)
-            XCTAssertTrue(found, "Conversations should load after WhatsApp message simulation")
+            assertConversationRow(conversationId)
         }
     }
 
@@ -1127,6 +1101,20 @@ final class APIConnectedUITests: BaseUITest {
     }
 
     // MARK: - Helpers
+
+    /// The conversation the server just created for a simulated message has a row in the
+    /// list. An error screen, an empty list or a spinner all fail this: the list is only
+    /// rendered once the conversations have loaded, and the row is only rendered if the
+    /// one we created is among them.
+    private func assertConversationRow(
+        _ conversationId: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            find("conversation-row-\(conversationId)").waitForExistence(timeout: 20),
+            "Conversation \(conversationId) should be listed after its message was simulated",
+            file: file, line: line
+        )
+    }
 
     private func anyElement(_ identifiers: [String]) -> XCUIElement {
         for id in identifiers {
