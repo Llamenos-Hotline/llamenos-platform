@@ -250,7 +250,10 @@ export class ShiftRequestsService {
     const [row] = await this.db
       .update(shiftJoinRequests)
       .set({
-        status: 'rejected',
+        // Must match requestStatusSchema (@protocol/schemas/shift-request):
+        // z.enum(['pending', 'approved', 'denied']). 'rejected' isn't a member
+        // of that enum — every client-facing type expects 'denied' here.
+        status: 'denied',
         reviewedBy,
         reviewedAt: new Date(),
       })

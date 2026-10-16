@@ -16,6 +16,7 @@ import {
   ADMIN_SEED,
   uniqueName,
 } from '../../api-helpers'
+import { setActorSeed } from './shared-state'
 import {
   simulateIncomingCall,
   simulateAnswerCall,
@@ -58,6 +59,10 @@ Before({ tags: '@backend' }, async ({ world }) => {
 Given('I am authenticated as a volunteer', async ({ request, world }) => {
   const vol = await createUserViaApi(request, { name: uniqueName('analytics-vol'), hubId: getScenarioState(world).hubId })
   getAnalyticsState(world).actorSeedHex = vol.seedHex
+  // Also set the cross-file canonical actor (shared-state.ts) so generic REST
+  // steps defined in other step files (e.g. shifts.steps.ts) act as this
+  // volunteer too, not just this file's own When/Then steps.
+  setActorSeed(world, vol.seedHex)
 })
 
 Given('I am authenticated as a volunteer without audit:read', async ({ request, world }) => {
@@ -68,11 +73,13 @@ Given('I am authenticated as a volunteer without audit:read', async ({ request, 
     hubId: getScenarioState(world).hubId,
   })
   getAnalyticsState(world).actorSeedHex = vol.seedHex
+  setActorSeed(world, vol.seedHex)
 })
 
 Given('I am authenticated as a platform admin', async ({ world }) => {
   // Platform admin = super admin (default ADMIN_SEED) — has all permissions
   getAnalyticsState(world).actorSeedHex = ADMIN_SEED
+  setActorSeed(world, ADMIN_SEED)
 })
 
 // ── Data Setup Steps ─────────────────────────────────────────────────

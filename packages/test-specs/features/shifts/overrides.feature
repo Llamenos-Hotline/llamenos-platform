@@ -1,5 +1,4 @@
-# @wip: Background steps and REST vocabulary have no backend definitions — #1122
-@backend @desktop @ios @wip
+@backend @desktop @ios
 Feature: Shift Overrides
   As an admin
   I want to create shift overrides
@@ -28,7 +27,7 @@ Feature: Shift Overrides
     And the response body "type" should equal "substitute"
 
   Scenario: List overrides by date range
-    Given overrides exist for 2026-06-01 to 2026-06-30
+    Given overrides exist for "2026-06-01" to "2026-06-30"
     When I GET "/hubs/{hubId}/shifts/overrides?from=2026-06-01&to=2026-06-30"
     Then the response status should be 200
     And the response body "overrides" should be an array

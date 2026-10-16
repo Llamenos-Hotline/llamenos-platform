@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import { apiGet, apiPost, apiPatch, ADMIN_SEED, createUserViaApi, uniqueName } from '../../api-helpers'
+import { getActorSeed, setActorSeed, setLastResponse, resolvePathParams } from './shared-state'
 
 interface ChannelConfigState {
   lastStatus: number
@@ -27,6 +28,7 @@ interface DataTable {
 
 Given('I am authenticated as a hub admin', ({ world }) => {
   setCS(world, { actorSeed: ADMIN_SEED })
+  setActorSeed(world, ADMIN_SEED)
 })
 
 Given('I have the {string} permission', ({ world }, _permission: string) => {
@@ -40,6 +42,7 @@ Given('I am authenticated as a regular volunteer', async ({ request, world }) =>
     roleIds: ['role-volunteer'],
   })
   setCS(world, { actorSeed: user.seedHex })
+  setActorSeed(world, user.seedHex)
 })
 
 Given('I do not have the {string} permission', ({ world }, _permission: string) => {
@@ -82,13 +85,18 @@ When('I POST {string} with:', async ({ request, world, workerHub }, path: string
   setCS(world, { lastStatus: status, lastData: data })
 })
 
-When('I GET {string}', async ({ request, world, workerHub }, path: string) => {
+When('I GET {string}', async ({ request, world, workerHub }, rawPath: string) => {
+  // Resolve "{hubId}"/"{ringGroupId}"/etc. path placeholders set by other step
+  // files (e.g. the shifts/ring-groups REST vocabulary) before any
+  // endpoint-specific query-param handling below.
+  const path = resolvePathParams(world, rawPath, workerHub)
   // Append hubId query param for endpoints that need it
   const pathWithHub = (path.includes('/a2p/') || path.includes('/provider-setup/'))
     ? `${path}${path.includes('?') ? '&' : '?'}hubId=${workerHub}`
     : path
-  const { status, data } = await apiGet(request, pathWithHub, getCS(world).actorSeed)
+  const { status, data } = await apiGet(request, pathWithHub, getActorSeed(world))
   setCS(world, { lastStatus: status, lastData: data })
+  setLastResponse(world, { status, data })
 })
 
 // ── Assertions ─────────────────────────────────────────────────────────────
