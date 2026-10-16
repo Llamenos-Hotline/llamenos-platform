@@ -2329,6 +2329,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Swift is not linted in this repo (#1876), so nothing else stops an iOS test
+      # from asserting a constant. `XCTAssertTrue(true…)` can never fail: it reads as a
+      # check in the report and proves nothing (#1884, #1888). This step FAILS the job —
+      # it is not a warning and has no allowlist, because a warning in an allowlist is
+      # how #1506's defect survived. `lint` runs on pull_request, merge_group and
+      # workflow_dispatch with no path filter or `needs`, so it cannot be skipped away
+      # the way the iOS suites are on a PR head. Matches across line breaks, so
+      # `XCTAssertTrue(\n    true,` is caught too.
+      - name: Reject constant XCTest assertions
+        run: |
+          set -euo pipefail
+          FOUND=$(find apps/ios/Tests -name '*.swift' -print0 | sort -z | xargs -0 perl -0777 -ne '
+            while (/\bXCTAssert(?:True\(\s*true|False\(\s*false|\(\s*true)\b/g) {
+              my $line = 1 + (substr($_, 0, $-[0]) =~ tr/\n//);
+              print "$ARGV:$line\n";
+            }
+            close ARGV if eof;
+          ')
+          if [ -n "$FOUND" ]; then
+            echo "::error::Constant XCTest assertions can never fail. Assert the state the step claims, or delete the line:"
+            while IFS= read -r hit; do
+              echo "::error file=${hit%%:*},line=${hit##*:}::constant assertion (XCTAssertTrue(true…) / XCTAssertFalse(false…) / XCTAssert(true…))"
+            done <<< "$FOUND"
+            exit 1
+          fi
+          echo "No constant XCTest assertions under apps/ios/Tests"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
         with:
