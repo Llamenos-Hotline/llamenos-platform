@@ -5,6 +5,29 @@
 # email (SMTP), ntfy (push notifications), or generic webhook.
 # Receives alerts from Prometheus and routes them to the configured receiver.
 
+# A no-op receiver is worse than none: it reads as alert coverage while
+# delivering nothing, and the old default (a guessable public ntfy.sh topic) was
+# an opsec leak on top of that (#1148). Fail loudly instead.
+- name: Preflight — a receiver must be configured for the selected notification method
+  ansible.builtin.assert:
+    that:
+      - >-
+        (alert_notification_method | default('ntfy') != 'ntfy') or
+        ((alert_ntfy_url | default('')) | length > 0 and (alert_ntfy_topic | default('')) | length > 0)
+      - >-
+        (alert_notification_method | default('ntfy') != 'email') or
+        ((alert_smtp_host | default('')) | length > 0 and (alert_smtp_to | default('')) | length > 0)
+      - >-
+        (alert_notification_method | default('ntfy') != 'webhook') or
+        (alert_webhook_url | default('')) | length > 0
+    fail_msg: >-
+      alertmanager_enabled is true with alert_notification_method=
+      {{ alert_notification_method | default('ntfy') }}, but no receiver is
+      configured for it. Set alert_ntfy_url + alert_ntfy_topic (ntfy),
+      alert_smtp_host + alert_smtp_to (email), or alert_webhook_url (webhook) --
+      or set alertmanager_enabled: false.
+    quiet: true
+
 - name: Create Alertmanager directories
   ansible.builtin.file:
     path: "{{ app_dir }}/observability/alertmanager/{{ item }}"

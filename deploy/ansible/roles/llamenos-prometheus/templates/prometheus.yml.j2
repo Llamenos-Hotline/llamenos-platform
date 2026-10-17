@@ -36,24 +36,26 @@ scrape_configs:
   #         has a scrape-token branch at all.
   #   auth  that endpoint takes METRICS_SCRAPE_TOKEN as a bearer, or falls
   #         back to requiring a signed-in admin holding `metrics:read`. A
-  #         scrape is never that, so an unauthenticated scrape got a 401.
+  #         scrape is never that, so an unauthenticated scrape got a 401 and
+  #         up{job="llamenos-app"} sat at 0 with AppDown firing forever.
   #
   # The token is the same `metrics_scrape_token` the worker's .env renders
   # (templates/env/_worker-required-env.j2) — set it in one place and both
-  # sides pick it up. Left empty, this job still scrapes and still 401s;
-  # that is deliberate rather than a silent omission, because inventing a
-  # token here would put a credential in a file the worker never reads.
+  # sides pick it up. It is asserted non-empty by playbooks/preflight.yml
+  # whenever this job is active (#1148), so there is no "scrape without a
+  # token" branch to render: an empty token is a refused deploy, not a job
+  # that silently 401s.
+{% if llamenos_app_enabled | default(true) %}
   - job_name: llamenos-app
     metrics_path: /api/metrics/prometheus
-{% if (metrics_scrape_token | default('')) | length > 0 %}
     authorization:
       type: Bearer
-      credentials: {{ metrics_scrape_token }}
-{% endif %}
+      credentials: {{ metrics_scrape_token | to_json }}
     static_configs:
       - targets: ["app:3000"]
         labels:
           service: app
+{% endif %}
 
   # ── Node exporter (host metrics) ─────────────────────
 {% if node_exporter_enabled | default(true) %}
@@ -64,19 +66,28 @@ scrape_configs:
           service: node
 {% endif %}
 
-  # ── Caddy reverse proxy ──────────────────────────────
+  # ── Caddy reverse proxy ───────────────────────────────
+  # Caddy's admin API (port 2019) binds to loopback INSIDE its own container by
+  # default and is never reachable from here -- this job was permanently down
+  # from any host (#1148). roles/llamenos-caddy instead enables the dedicated
+  # `metrics` HTTP handler on a plain, unauthenticated internal-only listener
+  # (no public port mapping) that this job scrapes directly.
+{% if llamenos_caddy_enabled | default(true) %}
   - job_name: caddy
     static_configs:
-      - targets: ["caddy:2019"]
+      - targets: ["caddy:9091"]
         labels:
           service: caddy
+{% endif %}
 
   # ── PostgreSQL ───────────────────────────────────────
+{% if postgres_exporter_enabled | default(true) and llamenos_postgres_enabled | default(true) %}
   - job_name: postgres
     static_configs:
       - targets: ["postgres-exporter:9187"]
         labels:
           service: postgres
+{% endif %}
 
 {% if loki_enabled | default(true) %}
   # ── Loki ─────────────────────────────────────────────

@@ -15,3 +15,5 @@ inventory-demo.yml
 demo_vars.yml.*
 inventory-demo.yml.*
 .roundtrip-inventory.yml
+# Python bytecode Ansible writes the first time it loads filter_plugins/.
+__pycache__/

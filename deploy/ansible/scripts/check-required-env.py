@@ -118,6 +118,9 @@ ENV_LOOKUP_RE = re.compile(r"env\['([A-Z_][A-Z0-9_]*)'\]")
 #   SIGNAL_NOTIFIER_BEARER_TOKEN         -> signal-notifier/ sidecar auth
 #   DEMO_RESET_CRON                      -> apps/worker/routes/config.ts -> demoResetSchedule
 #                                            -> src/client/components/demo-banner.tsx (display only)
+#   METRICS_SCRAPE_TOKEN                 -> apps/worker/routes/metrics.ts (bearer auth for
+#                                            /api/metrics/prometheus; without it the Prometheus
+#                                            `llamenos-app` scrape can never authenticate, #1148)
 #
 # Verified in review round 2 (PR #771): the first four groups already had
 # real consumers AND unit test coverage (push-dispatch.test.ts,
@@ -137,6 +140,7 @@ OPTIONAL_VARS_WITH_CONSUMERS = [
     "GLITCHTIP_DSN",
     "SIGNAL_NOTIFIER_BEARER_TOKEN",
     "DEMO_RESET_CRON",
+    "METRICS_SCRAPE_TOKEN",
 ]
 
 

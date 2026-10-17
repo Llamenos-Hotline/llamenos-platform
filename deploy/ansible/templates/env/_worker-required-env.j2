@@ -36,7 +36,11 @@ PORT=3000
 # set it on any host where the app port is reachable without passing through
 # Caddy.
 TRUST_PROXY_HEADERS=true
-DATABASE_URL=postgresql://llamenos:{{ pg_password }}@postgres:5432/llamenos
+{# pg_password is percent-encoded (filter_plugins/url_userinfo.py): postgres.js
+   ends the URL authority at the first `/` or `?` before decoding, so a raw
+   base64 password containing `/` would point the worker at a host named after
+   half the password and the container would never boot. #}
+DATABASE_URL=postgresql://llamenos:{{ pg_password | url_userinfo }}@postgres:5432/llamenos
 PG_POOL_SIZE={{ pg_pool_size | default(10) }}
 {% if (admin_pubkey | default('')) | length > 0 %}
 ADMIN_PUBKEY={{ admin_pubkey }}
@@ -112,6 +116,9 @@ CORS_ALLOWED_ORIGINS={{ cors_allowed_origins | default(
   the admin-only JSON summary; only /api/metrics/prometheus has a scrape-token
   branch), so the app job collected nothing for two independent reasons. The
   same value is rendered into that scrape config — change it in one place.
+  playbooks/preflight.yml refuses a deploy that enables Prometheus with this
+  token empty (#1148), so the guard below only ever skips it on a host that
+  runs no scraper.
 #}
 {% if (metrics_scrape_token | default('')) | length > 0 %}
 METRICS_SCRAPE_TOKEN={{ metrics_scrape_token }}

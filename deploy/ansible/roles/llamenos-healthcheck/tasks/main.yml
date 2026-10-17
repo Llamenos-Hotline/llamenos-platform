@@ -3,8 +3,10 @@
 #
 # Lightweight alternative to the full Prometheus/Grafana/Loki stack.
 # Deploys a small container that polls configured endpoints at a fixed interval
-# and sends failure notifications via ntfy push notifications.
-# Suitable for low-resource VPS deployments that still need basic alerting.
+# and sends ntfy notifications on healthy<->failing transitions (requires
+# healthcheck_ntfy_url + healthcheck_ntfy_topic to be set -- empty by default,
+# see defaults/main.yml). Suitable for low-resource VPS deployments that still
+# need basic alerting.
 
 - name: Create healthcheck directory
   ansible.builtin.file:

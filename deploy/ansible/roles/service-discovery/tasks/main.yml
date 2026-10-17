@@ -73,7 +73,7 @@
 
 - name: Compute DATABASE_URL for app service
   ansible.builtin.set_fact:
-    llamenos_database_url: "postgresql://llamenos:{{ pg_password }}@{{ llamenos_pg_host | trim }}:{{ llamenos_pg_port | trim }}/llamenos"
+    llamenos_database_url: "postgresql://llamenos:{{ pg_password | url_userinfo }}@{{ llamenos_pg_host | trim }}:{{ llamenos_pg_port | trim }}/llamenos"
 
 - name: Display service topology
   ansible.builtin.debug:

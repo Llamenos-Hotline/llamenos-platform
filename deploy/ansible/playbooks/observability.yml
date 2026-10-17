@@ -82,6 +82,13 @@
         - loki_enabled | default(true) | bool
       tags: [promtail, observability]
 
+    - role: llamenos-postgres-exporter
+      when:
+        - not (healthcheck_only | default(false) | bool)
+        - postgres_exporter_enabled | default(true) | bool
+        - llamenos_postgres_enabled | default(true) | bool
+      tags: [postgres-exporter, observability]
+
     - role: llamenos-prometheus
       when:
         - not (healthcheck_only | default(false) | bool)
