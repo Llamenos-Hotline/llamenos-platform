@@ -149,6 +149,18 @@ final class EventsViewModel {
         await loadEvents()
     }
 
+    /// Entry point for the screen's `.task`, which re-runs every time the screen
+    /// reappears — e.g. coming back from an event's detail. A screen that is already
+    /// ready refreshes its current page in place rather than dropping back to the
+    /// loading state and losing the list it is showing.
+    func loadOnAppear() async {
+        if loadState == .ready {
+            await loadEvents()
+        } else {
+            await loadInitial()
+        }
+    }
+
     // MARK: - Load Events
 
     /// Fetch events with current pagination.
