@@ -15,6 +15,9 @@
 Copied from the spec; these bind every task below.
 
 - **IPC boundary (spec §1.4).** Never crosses, in either direction: the SIP username/password, the TURN credential pair, the TLS trust anchor, RTP or decoded PCM audio, DTLS/SRTP key material, SFrame keys, device private keys. The webview receives registration state and call snapshots only.
+- **Credentials never touch disk — by construction, not by cleanup.** The liblinphone core is created with **no config path** (`linphone_factory_create_core_3(factory, NULL, NULL, NULL)`), exactly as both mobile clients do (`apps/ios/Sources/Services/LinphoneService.swift` `createCore(configPath: nil, …)`; `apps/android/.../telephony/LinphoneService.kt` `createCore(null, null, context)`). liblinphone keeps account and auth-info sections in its in-memory config only, so a crash, SIGKILL, force-quit or power loss leaves no `linphonerc` holding the SIP password or TURN credential. No task may introduce a writable `linphonerc`, a `linphone_config_sync`, or any other file that holds `password`/`credential` — a seized or restarted device is in this repo's threat model (it is why `packages/crypto/src/erasure.rs` and device-wipe exist). "Delete it on shutdown" is not an acceptable substitute: shutdown is precisely the step that does not run in the cases that matter.
+- **Secret-bearing Rust types (spec §1.2).** Every field holding the SIP password or a TURN credential is `zeroize::Zeroizing<String>`, so the whole heap buffer — capacity, not just `len` — is cleared on drop on **every** exit path (error returns, panics that unwind, early `?`, credential replacement on TURN refresh), not only lock/quit. No `unsafe` byte-filling of a `String`. No secret-bearing type derives `Debug`: through zeroize 1.9.0 — the version `apps/desktop/Cargo.lock` resolves today — `Zeroizing<T>`'s `Debug` is derived and prints its contents (1.9.1 started redacting), so the wrapper alone is not enough and redaction must not hinge on a lockfile patch version — each such type gets a hand-written `fmt::Debug` that prints `<redacted>` for `password`/`credential` and only the byte length of `tlsTrustAnchorPem` (the shape of iOS's `SipAccountParams.redactedDescription`).
+- **No SIP messages in logs.** belle-sip prints whole SIP messages (From/To/Contact — once calls flow, the caller's number) at liblinphone's Message level and below. The voice crate pins the liblinphone log mask to `Error | Fatal` before the core is created, mirroring iOS's `quietLogMask`; it is never raised in a release build.
 - **Four-layer IPC rule (spec §1.4).** Every new IPC command lands in all four of: `tauri::generate_handler!` in `apps/desktop/src/lib.rs`, `ALLOWED_COMMANDS` in `apps/desktop/isolation/index.html`, the `TauriIpcCommand` union in `src/client/lib/platform.ts`, and the `commands` record in `tests/mocks/tauri-core.ts`. `src/client/lib/desktop-ipc-boundary.test.ts` parses all four and fails on disagreement.
 - **Version pins.** `tauri = "=2.11.1"` in `apps/desktop/Cargo.toml` stays aligned with `@tauri-apps/api` in `package.json` (`tests/tauri-version-alignment.spec.ts` enforces). liblinphone is consumed ONLY as a version- and checksum-pinned prebuilt artifact per target, recorded in `apps/desktop/linphone-sdk-checksums.txt` and the SBOM. **Never build liblinphone from source in CI** (spec §3.1).
 - **Multi-hub axiom (spec §5.3).** One SIP registration per volunteer device — the identity is per-volunteer (`vol_<pubkey16>`), not per-hub. Hub attribution rides the relay channel (`call:ring` carries `hubId`), never SIP. Incoming call handling is never gated on active-hub state; `setActiveHub` moves with the answer, never the ring.
@@ -404,8 +407,12 @@ liblinphone is pump-driven: `linphone_core_iterate` on a ~20 ms timer, and ALL C
 
 ```rust
 pub struct VoiceConfig {
-    /// Directory for the linphone config file; created 0700, file 0600.
-    pub config_dir: std::path::PathBuf,
+    /// App-owned directory liblinphone's factory `data_dir`/`config_dir` point at
+    /// (created 0700), so its compiled-in stores land somewhere we chose instead
+    /// of the ambient `~/.local/share/linphone` (see the iOS precedent's
+    /// `prepareStateDirectory()`). It is NOT a config path: the core is created
+    /// with config path NULL and no `linphonerc` is ever written here or anywhere.
+    pub state_dir: std::path::PathBuf,
     /// Sink for everything the stack reports. Called on the pump thread;
     /// implementations must not block (the shell forwards to AppHandle::emit).
     pub on_event: std::sync::Arc<dyn Fn(VoiceEvent) + Send + Sync>,
@@ -444,9 +451,11 @@ impl VoiceCore {
     pub fn start(config: VoiceConfig) -> Result<Self, VoiceError>;
     pub fn post(&self, cmd: VoiceCommand);           // non-blocking, any thread
     pub fn list_audio_devices(&self) -> AudioDevices; // posted + answered on channel
-    pub fn shutdown(self);                            // unregisters, joins pump, wipes config file
+    pub fn shutdown(self);                            // unregisters, clears auth info, joins pump
 }
 ```
+
+`VoiceCommand` does **not** derive `Debug` (its `Register` arm carries the SIP password); if a `Debug` impl is needed for diagnostics, write it by hand and print the `Register` arm as `Register(<redacted>)`.
 
 - [ ] **Step 1: Write the manifest and event types**
 
@@ -464,6 +473,9 @@ publish = false
 [dependencies]
 llamenos-voice-sys = { path = "sys" }
 serde = { version = "1", features = ["derive"] }
+# `std` for `impl Zeroize for CString` (the FFI copies of the password);
+# `serde` so `Zeroizing<String>` deserializes directly in the shell's wire type.
+zeroize = { version = "1", features = ["std", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -490,16 +502,16 @@ pub struct VoiceCore {
 }
 
 pub fn start(config: VoiceConfig) -> Result<VoiceCore, VoiceError> {
-    std::fs::create_dir_all(&config.config_dir).map_err(VoiceError::Io)?;
-    set_dir_permissions_0700(&config.config_dir)?; // platform cfg blocks
-    let config_path = config.config_dir.join("linphonerc");
+    std::fs::create_dir_all(&config.state_dir).map_err(VoiceError::Io)?;
+    set_dir_permissions_0700(&config.state_dir)?; // platform cfg blocks
+    let state_dir = config.state_dir.clone();
 
     let (cmd_tx, cmd_rx) = channel::<VoiceCommand>();
     let (ready_tx, ready_rx) = channel::<Result<(), VoiceError>>();
 
     let pump = std::thread::Builder::new()
         .name("llamenos-voice-pump".into())
-        .spawn(move || pump_main(config_path, config.on_event, cmd_rx, ready_tx))
+        .spawn(move || pump_main(state_dir, config.on_event, cmd_rx, ready_tx))
         .map_err(VoiceError::Io)?;
 
     ready_rx.recv().map_err(|_| VoiceError::PumpDied)??;
@@ -507,26 +519,55 @@ pub fn start(config: VoiceConfig) -> Result<VoiceCore, VoiceError> {
 }
 
 fn pump_main(
-    config_path: std::path::PathBuf,
+    state_dir: std::path::PathBuf,
     on_event: std::sync::Arc<dyn Fn(VoiceEvent) + Send + Sync>,
     cmd_rx: Receiver<VoiceCommand>,
     ready_tx: Sender<Result<(), VoiceError>>,
 ) {
     unsafe {
+        // Log mask FIRST, before anything can log: belle-sip prints whole SIP
+        // messages at Message and below (Global Constraints; iOS quietLogMask).
+        ffi::linphone_logging_service_set_log_level_mask(
+            ffi::linphone_logging_service_get(),
+            (ffi::LinphoneLogLevel::LinphoneLogLevelError as u32)
+                | (ffi::LinphoneLogLevel::LinphoneLogLevelFatal as u32),
+        );
+
         let factory = ffi::linphone_factory_get();
-        let cbs = ffi::linphone_factory_create_core_cbs(factory);
-        // Callbacks wired in Task 4 (registration) and Task 5/8 (calls).
-        let path = std::ffi::CString::new(config_path.to_string_lossy().into_owned()).unwrap();
-        let core = ffi::linphone_factory_create_core_with_config_3(
-            factory, cbs, path.as_ptr(), std::ptr::null(), std::ptr::null_mut(),
+        // The compiled-in stores (call-history/friends/zrtp sqlite) follow the
+        // factory dirs, NOT the config path — point them at our 0700 dir.
+        let dir = std::ffi::CString::new(state_dir.to_string_lossy().into_owned()).unwrap();
+        ffi::linphone_factory_set_data_dir(factory, dir.as_ptr());
+        ffi::linphone_factory_set_config_dir(factory, dir.as_ptr());
+
+        // NO CONFIG PATH (Global Constraints; finding on PR #1798). With a NULL
+        // config path liblinphone holds its config — including the [auth_info_N]
+        // and [nat_policy_N] sections the SIP password and TURN credential land
+        // in — in memory only. There is nothing on disk for a crash, SIGKILL,
+        // force-quit or best-effort quit (Task 8 Step 3) to leave behind, and
+        // therefore nothing for shutdown to wipe. Same call shape as iOS
+        // (`createCore(configPath: nil, factoryConfigPath: nil, systemContext: nil)`)
+        // and Android (`createCore(null, null, context)`).
+        let core = ffi::linphone_factory_create_core_3(
+            factory, std::ptr::null(), std::ptr::null(), std::ptr::null_mut(),
         );
         if core.is_null() {
             let _ = ready_tx.send(Err(VoiceError::CoreCreate));
             return;
         }
-        // Hygiene defaults (spec §7.3) — liblinphone violates each by default:
+        let cbs = ffi::linphone_factory_create_core_cbs(factory);
+        // Callbacks wired in Task 4 (registration) and Task 5/8 (calls).
+        ffi::linphone_core_add_callbacks(core, cbs);
+
+        // Hygiene defaults (spec §7.3) — liblinphone violates each by default.
+        // Set BEFORE linphone_core_start: the stores are opened during start.
         ffi::linphone_core_enable_call_log_database(core, 0);   // no call history
         ffi::linphone_core_set_max_calls(core, 1);              // one call at a time
+        if ffi::linphone_core_start(core) != 0 {
+            ffi::linphone_core_unref(core);
+            let _ = ready_tx.send(Err(VoiceError::CoreCreate));
+            return;
+        }
         let _ = ready_tx.send(Ok(()));
 
         // Drain every queued command, then iterate once. Commands execute
@@ -543,9 +584,14 @@ fn pump_main(
                 }
             }
             if disconnected {
+                // Drop the in-memory copies of the credential before the core
+                // goes: accounts first (REGISTER Expires: 0), then auth info.
+                // There is deliberately no remove_file here — no config file
+                // exists to remove (see core creation above).
+                ffi::linphone_core_clear_accounts(core);
+                ffi::linphone_core_clear_all_auth_info(core);
                 ffi::linphone_core_stop(core);
                 ffi::linphone_core_unref(core);
-                let _ = std::fs::remove_file(&config_path); // §7.3 rule 3
                 return;
             }
             ffi::linphone_core_iterate(core);
@@ -554,6 +600,10 @@ fn pump_main(
     }
 }
 ```
+
+Function names above are the liblinphone 5.x C API; confirm each against the bindgen output for the pinned SDK (`grep -n 'pub fn linphone_factory_create_core_3' target/*/build/llamenos-voice-sys-*/out/bindings.rs`). If a name differs in the pinned header, use the pinned header's equivalent — **but the config-path argument stays NULL**. If the pinned SDK genuinely cannot run without a config path, stop and report on #1770 rather than adding one: the fallback (a writable `linphonerc` wiped at start and at shutdown) still leaves the credential on disk for the whole session and across any crash, and was rejected for that reason.
+
+**UnregisterAll** (implemented in this task, used by Task 8's lock/quit path) must do the same two clears as the disconnect path — `linphone_core_clear_accounts` then `linphone_core_clear_all_auth_info` — so a locked desktop's Core stops holding the SIP password and TURN credential in memory, mirroring iOS's `releaseAuthInfo`.
 
 - [ ] **Step 3: Write the failing lifecycle test**
 
@@ -565,26 +615,39 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// Every regular file under `dir`, recursively.
+    pub(crate) fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_dir() { out.extend(files_under(&p)); } else { out.push(p); }
+        }
+        out
+    }
+
     #[test]
-    fn core_starts_and_shuts_down_without_a_config_file_left_behind() {
+    fn core_never_writes_a_config_file_even_without_shutdown() {
+        // The credential-on-disk invariant must hold while the core is RUNNING
+        // and if shutdown never happens (crash / SIGKILL / force-quit) — so the
+        // assertion is made before shutdown, not after it. A test that only
+        // checked "gone after shutdown" would pass on the vulnerable design.
         let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("linphonerc");
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = {
             let events = events.clone();
             Arc::new(move |e: VoiceEvent| events.lock().unwrap().push(e))
         };
         let core = VoiceCore::start(VoiceConfig {
-            config_dir: dir.path().to_path_buf(),
+            state_dir: dir.path().to_path_buf(),
             on_event: sink,
         })
         .expect("core starts with no network and no sound hardware");
-        assert!(config_path.exists(), "linphone wrote its config under the app dir");
+        std::thread::sleep(std::time::Duration::from_millis(200)); // let it iterate
+        let rc: Vec<_> = files_under(dir.path()).into_iter()
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().contains("linphonerc")))
+            .collect();
+        assert!(rc.is_empty(), "core created with a NULL config path wrote {rc:?}");
         core.shutdown();
-        assert!(
-            !config_path.exists(),
-            "shutdown wipes the config file (spec §7.3 rule 3 — it persists credentials)"
-        );
     }
 
     #[test]
@@ -596,7 +659,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = { let e = events.clone(); Arc::new(move |ev: VoiceEvent| e.lock().unwrap().push(ev)) };
-        let core = VoiceCore::start(VoiceConfig { config_dir: dir.path().into(), on_event: sink }).unwrap();
+        let core = VoiceCore::start(VoiceConfig { state_dir: dir.path().into(), on_event: sink }).unwrap();
         let caller = std::thread::spawn(move || {
             core.post(VoiceCommand::UnregisterAll); // no-op, must not block or panic
             core
@@ -613,7 +676,7 @@ mod tests {
 cargo test --manifest-path apps/desktop/voice/Cargo.toml
 ```
 
-Expected on first run: compile errors around the shutdown/disconnect placeholder and the callback-less core — implement `dispatch` (match arms calling `unreachable!()` for the not-yet-bound commands, `UnregisterAll` implemented), the disconnect-driven exit, and config-file deletion in `shutdown`. Iterate until both tests pass.
+Expected on first run: compile errors around the shutdown/disconnect placeholder and the callback-less core — implement `dispatch` (match arms calling `unreachable!()` for the not-yet-bound commands, `UnregisterAll` implemented as the two clears above), and the disconnect-driven exit. Iterate until both tests pass. (The decisive break-it proof for the no-config-path invariant is Task 4's credential sentinel scan, which runs after a credential has actually been handed to the core; this test is the cheap early tripwire.)
 
 - [ ] **Step 5: Commit**
 
@@ -636,18 +699,52 @@ Turn a `/sip-token` response into a liblinphone account, with every policy from 
 - Produces:
 
 ```rust
+use zeroize::Zeroizing;
+
 /// Mirror of `sipTokenResponseSchema.sip` (packages/protocol/schemas/webrtc.ts).
 /// Deserialized in the shell; never serialized toward the webview.
+/// NO `#[derive(Debug)]` — see the manual impl below.
 pub struct SipRegistrationParams {
     pub domain: String,
-    pub username: String,            // vol_<pubkey16>
-    pub password: String,            // confined: never leaves the Rust process
+    pub username: String,              // vol_<pubkey16>
+    pub password: Zeroizing<String>,   // confined: never leaves the Rust process; cleared on every drop
     pub ice_servers: Vec<IceServer>,
     pub tls_trust_anchor_pem: Option<String>,
-    pub requested_expiry_secs: u32,  // caller passes 600; clamped, never raised
+    pub requested_expiry_secs: u32,    // caller passes 600; clamped, never raised
 }
 
-pub struct IceServer { pub urls: Vec<String>, pub username: Option<String>, pub credential: Option<String> }
+/// NO `#[derive(Debug)]` — see the manual impl below.
+pub struct IceServer {
+    pub urls: Vec<String>,
+    pub username: Option<String>,
+    pub credential: Option<Zeroizing<String>>, // TURN credential: same confinement as the SIP password
+}
+
+// Through zeroize 1.9.0 (what apps/desktop/Cargo.lock resolves today)
+// `Zeroizing<T>`'s Debug is derived and PRINTS ITS CONTENTS; only 1.9.1+
+// redacts. Redaction must not depend on a lockfile patch version, so these
+// impls are the only Debug these types have.
+impl std::fmt::Debug for SipRegistrationParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SipRegistrationParams")
+            .field("domain", &self.domain)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("ice_servers", &self.ice_servers)
+            .field("tls_trust_anchor_pem", &self.tls_trust_anchor_pem.as_ref().map(|p| format!("<{} bytes>", p.len())))
+            .field("requested_expiry_secs", &self.requested_expiry_secs)
+            .finish()
+    }
+}
+impl std::fmt::Debug for IceServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IceServer")
+            .field("urls", &self.urls)
+            .field("username", &self.username)
+            .field("credential", &self.credential.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
 
 pub fn apply_registration(
     core: *mut ffi::LinphoneCore,
@@ -667,12 +764,12 @@ fn registration_policy_is_enforced_in_the_params() {
     let dir = tempfile::tempdir().unwrap();
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = { let e = events.clone(); Arc::new(move |ev: VoiceEvent| e.lock().unwrap().push(ev)) };
-    let core = VoiceCore::start(VoiceConfig { config_dir: dir.path().into(), on_event: sink }).unwrap();
+    let core = VoiceCore::start(VoiceConfig { state_dir: dir.path().into(), on_event: sink }).unwrap();
 
     let params = SipRegistrationParams {
         domain: "edge.invalid".into(),
         username: "vol_0123456789abcdef".into(),
-        password: "secret".into(),
+        password: Zeroizing::new("secret".into()),
         ice_servers: vec![IceServer {
             urls: vec!["stun:relay.invalid:3478".into()],
             username: None, credential: None,
@@ -691,6 +788,67 @@ fn registration_policy_is_enforced_in_the_params() {
 ```
 
 `with_account_params_for_test` is a `#[cfg(test)]`-only method that posts a closure to the pump thread and reads back the configured `LinphoneAccountParams` getters (`linphone_account_params_get_expires`, `linphone_account_params_get_media_encryption`, transport parsed out of `linphone_account_params_get_server_addr`).
+
+Two more failing tests in the same module — the credential-confinement half of this task:
+
+```rust
+#[test]
+fn no_file_ever_holds_the_credential_while_registered() {
+    // Finding 1 on PR #1798: the credential must not be on disk at ANY point —
+    // the assertion runs while the account is configured and BEFORE shutdown,
+    // which is the state a crash / SIGKILL / force-quit freezes.
+    const SIP_SENTINEL: &str = "sip-pw-SENTINEL-7f3c9a";
+    const TURN_SENTINEL: &str = "turn-cred-SENTINEL-41be0d";
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(|_: VoiceEvent| {});
+    let core = VoiceCore::start(VoiceConfig { state_dir: dir.path().into(), on_event: sink }).unwrap();
+    core.post(VoiceCommand::Register(SipRegistrationParams {
+        domain: "edge.invalid".into(),
+        username: "vol_0123456789abcdef".into(),
+        password: Zeroizing::new(SIP_SENTINEL.into()),
+        ice_servers: vec![IceServer {
+            urls: vec!["turn:relay.invalid:3478".into()],
+            username: Some("1767225600:vol_0123456789abcdef".into()),
+            credential: Some(Zeroizing::new(TURN_SENTINEL.into())),
+        }],
+        tls_trust_anchor_pem: None,
+        requested_expiry_secs: 600,
+    }));
+    std::thread::sleep(std::time::Duration::from_secs(2)); // many iterations; any config sync has happened
+    for f in crate::tests::files_under(dir.path()) {
+        let bytes = std::fs::read(&f).unwrap();
+        for s in [SIP_SENTINEL, TURN_SENTINEL] {
+            assert!(
+                !bytes.windows(s.len()).any(|w| w == s.as_bytes()),
+                "{} contains a credential — the core must have no writable config path",
+                f.display()
+            );
+        }
+    }
+    core.shutdown();
+}
+
+#[test]
+fn debug_never_prints_a_secret() {
+    let p = SipRegistrationParams {
+        domain: "edge.invalid".into(),
+        username: "vol_0123456789abcdef".into(),
+        password: Zeroizing::new("sip-pw-SENTINEL".into()),
+        ice_servers: vec![IceServer {
+            urls: vec![], username: Some("u".into()),
+            credential: Some(Zeroizing::new("turn-cred-SENTINEL".into())),
+        }],
+        tls_trust_anchor_pem: Some("-----BEGIN CERTIFICATE-----\nPEM-SENTINEL\n-----END CERTIFICATE-----\n".into()),
+        requested_expiry_secs: 600,
+    };
+    let out = format!("{p:?} {p:#?}");
+    for s in ["sip-pw-SENTINEL", "turn-cred-SENTINEL", "PEM-SENTINEL"] {
+        assert!(!out.contains(s), "Debug leaked {s}: {out}");
+    }
+}
+```
+
+**Break-it before you trust them** (the repo's rule: verify a guard by injecting the defect it claims to catch). Temporarily pass `dir.path().join("linphonerc")` as the config path in `pump_main` and confirm `no_file_ever_holds_the_credential_while_registered` FAILS; temporarily replace the manual `Debug` with `#[derive(Debug)]` and confirm `debug_never_prints_a_secret` FAILS. Restore both. If the first does not fail with a real config path, the 2 s window is too short for the pinned SDK's sync cadence — lengthen it until it does, never ship it unproven.
 
 - [ ] **Step 2: Implement `apply_registration`**
 
@@ -736,39 +894,69 @@ pub fn apply_registration(
         }
 
         // ICE policy from the issued servers (TURN creds confined with the SIP
-        // secret — they exist only inside this struct, only in this process).
+        // secret — they exist only inside this struct, only in this process,
+        // and only in the core's in-memory auth-info list: no config path).
         let nat = ffi::linphone_account_params_get_nat_policy(account_params);
         for srv in &params.ice_servers {
             for url in &srv.urls {
                 let u = c_string(url.clone());
                 ffi::linphone_nat_policy_set_stun_server(nat, u.as_ptr());
-                if let (Some(user), Some(pass)) = (&srv.username, &srv.credential) {
-                    let (u, p) = (c_string(user.clone()), c_string(pass.clone()));
-                    ffi::linphone_nat_policy_set_stun_server_username(nat, u.as_ptr());
-                    // TURN credential rides the auth-info DB keyed by realm;
-                    // add via linphone_core_add_auth_info on the core.
-                    let _ = p; // wired in the auth-info step below
+                if let (Some(user), Some(cred)) = (&srv.username, &srv.credential) {
+                    let user_c = c_string(user.clone());
+                    ffi::linphone_nat_policy_set_stun_server_username(nat, user_c.as_ptr());
+                    // liblinphone resolves the TURN password through a SECOND
+                    // AuthInfo keyed on the TURN username (the iOS precedent's
+                    // `turnAuthInfo`), never on the policy itself.
+                    let cred_c = secret_c_string(cred);
+                    let turn_auth = ffi::linphone_factory_create_auth_info(
+                        factory, user_c.as_ptr(), std::ptr::null(), cred_c.as_ptr(),
+                        std::ptr::null(), std::ptr::null(), std::ptr::null(),
+                    );
+                    ffi::linphone_core_add_auth_info(core, turn_auth);
+                    ffi::linphone_auth_info_unref(turn_auth);
+                    // cred_c: Zeroizing<CString> — cleared here, at end of scope.
                 }
             }
         }
         ffi::linphone_nat_policy_enable_ice(nat, 1);
 
+        let username_c = c_string(params.username.clone());
+        let domain_c = c_string(params.domain.clone());
+        let password_c = secret_c_string(&params.password); // never a plain-String copy of the secret
         let auth = ffi::linphone_factory_create_auth_info(
             factory,
-            c_string(params.username.clone()).as_ptr(),
+            username_c.as_ptr(),
             std::ptr::null(),
-            c_string(params.password.clone()).as_ptr(),
+            password_c.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            c_string(params.domain.clone()).as_ptr(),
+            domain_c.as_ptr(),
         );
         ffi::linphone_core_add_auth_info(core, auth);
+        ffi::linphone_auth_info_unref(auth);
+        drop(password_c); // explicit: the FFI copy is zeroized as soon as liblinphone has its own
         ffi::linphone_core_add_account(core, account_params);
         ffi::linphone_core_set_default_account(core, account_params);
         Ok(())
     }
 }
+
+/// The only way a secret becomes a C string. Cloning the secret would mint a
+/// plain `String` that is freed without being cleared; this copies
+/// straight from the borrowed secret into a `Zeroizing<CString>`, which zeroes
+/// its whole buffer on drop (zeroize's `impl Zeroize for CString`, `std` feature).
+fn secret_c_string(secret: &Zeroizing<String>) -> Zeroizing<std::ffi::CString> {
+    Zeroizing::new(std::ffi::CString::new(secret.as_bytes()).expect("secret has no NUL"))
+}
 ```
+
+Every copy of the password or TURN credential this crate makes is either a `Zeroizing<String>` or a `Zeroizing<CString>`. Grep for it before committing — this must print nothing:
+
+```bash
+grep -nE '(password|credential)\.clone\(\)|as_bytes_mut' apps/desktop/voice/src/
+```
+
+The copy liblinphone keeps inside its `LinphoneAuthInfo` is outside Rust's reach; it is released by `linphone_core_clear_all_auth_info` on `UnregisterAll` and on shutdown (Task 3), and — because there is no config path — it never reaches disk.
 
 Wire the registration-state callback installed in Task 3's `linphone_factory_create_core_cbs`:
 
@@ -799,7 +987,7 @@ unsafe extern "C" fn on_registration_state_changed(
 cargo test --manifest-path apps/desktop/voice/Cargo.toml
 ```
 
-Expected: `registration_policy_is_enforced_in_the_params` passes; the pump-thread tests from Task 3 still pass.
+Expected: `registration_policy_is_enforced_in_the_params`, `no_file_ever_holds_the_credential_while_registered` and `debug_never_prints_a_secret` pass (each having been seen to fail under its injected defect — Step 1); the pump-thread tests from Task 3 still pass.
 
 - [ ] **Step 4: Commit**
 
@@ -829,26 +1017,35 @@ The tier that de-risks decision (A) before any UI exists (spec §8 Tier 2). Mirr
 
 ```rust
 //! Headless desktop SIP e2e (spec §8 Tier 2). No Tauri, no display.
-//! Args: <domain> <username> <password> <stun-url> [trust-anchor-pem-path]
+//! Args: <state-dir> <domain> <username> <stun-url> [trust-anchor-pem-path]
+//! Env:  SIP_E2E_PASSWORD — the SIP password. Never argv: argv is readable by
+//!       every user on the runner via /proc/<pid>/cmdline and `ps`.
+//!       SIP_E2E_ABORT_AFTER_REGISTER=1 — crash mode (see below).
 //! Exits 0 when: registration reached Registered, an INVITE to the echo
 //! target was answered, and media reached Active — observed as VoiceEvents.
+//! In crash mode it instead calls std::process::abort() the moment
+//! registration succeeds: no shutdown, no destructors — the state a SIGKILL
+//! or force-quit leaves, which the runner then searches for the credential.
 
 use llamenos_voice::*;
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        eprintln!("usage: sip_e2e <domain> <user> <pass> <stun> [anchor.pem]");
+        eprintln!("usage: SIP_E2E_PASSWORD=… sip_e2e <state-dir> <domain> <user> <stun> [anchor.pem]");
         std::process::exit(2);
     }
-    let (domain, user, pass, stun) = (args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone());
+    let (state_dir, domain, user, stun) = (args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone());
     let anchor = args.get(4).map(|p| std::fs::read_to_string(p).unwrap());
+    let pass = Zeroizing::new(std::env::var("SIP_E2E_PASSWORD").expect("SIP_E2E_PASSWORD unset"));
+    let abort_after_register = std::env::var_os("SIP_E2E_ABORT_AFTER_REGISTER").is_some();
 
     let (tx, rx) = channel::<VoiceEvent>();
     let core = VoiceCore::start(VoiceConfig {
-        config_dir: std::env::temp_dir().join(format!("sip-e2e-{}", std::process::id())),
+        state_dir: state_dir.into(),
         on_event: std::sync::Arc::new(move |e| { let _ = tx.send(e); }),
     })
     .expect("core starts");
@@ -869,6 +1066,10 @@ fn main() {
             Ok(VoiceEvent::Registration(ev)) => match ev.state {
                 RegistrationState::Registered => {
                     registered = true;
+                    if abort_after_register {
+                        println!("SIP_E2E_REGISTERED_ABORTING");
+                        std::process::abort(); // deliberately no shutdown()
+                    }
                     // Place the echo call: the harness dialplan target the
                     // android harness already uses (run-android-sip-e2e.sh).
                     core.post(VoiceCommand::PlaceTestCall { uri: format!("sip:echo@{domain}") });
@@ -915,9 +1116,31 @@ scripts/fetch-linphone-sdk.sh linux-x86_64
 cargo build --manifest-path apps/desktop/voice/Cargo.toml --features e2e --example sip_e2e
 export LD_LIBRARY_PATH="$ROOT/apps/desktop/vendor/linphone-sdk/linux-x86_64/lib:${LD_LIBRARY_PATH:-}"
 
-./apps/desktop/voice/target/debug/examples/sip_e2e \
-  "$SIP_DOMAIN" "$SIP_USERNAME" "$SIP_PASSWORD" "stun:$COTURN_HOST:3478" \
-  ${ANCHOR_FILE:+"$ANCHOR_FILE"}
+ulimit -c 0   # the crash-mode run below must not drop a core file (it would hold the password) into the cwd
+# Run with a throwaway HOME/XDG tree so ANY file liblinphone writes — inside
+# the state dir or at an ambient default path — is somewhere we then search.
+E2E_HOME="$(mktemp -d)"; STATE_DIR="$E2E_HOME/voice-state"
+run_client() {
+  HOME="$E2E_HOME" XDG_DATA_HOME="$E2E_HOME/.local/share" XDG_CONFIG_HOME="$E2E_HOME/.config" \
+  SIP_E2E_PASSWORD="$SIP_PASSWORD" \
+  ./apps/desktop/voice/target/debug/examples/sip_e2e \
+    "$STATE_DIR" "$SIP_DOMAIN" "$SIP_USERNAME" "stun:$COTURN_HOST:3478" \
+    ${ANCHOR_FILE:+"$ANCHOR_FILE"}
+}
+
+# --- Credential-on-disk check: crash mode ----------------------------------
+# Register, then abort() with no shutdown — what SIGKILL / force-quit / power
+# loss leaves. Not one file anywhere under the client's HOME may contain the
+# SIP password (finding 1 on PR #1798). The abort's non-zero exit is expected.
+SIP_E2E_ABORT_AFTER_REGISTER=1 run_client | tee "$EVIDENCE_DIR/abort-run.log" || true
+grep -q SIP_E2E_REGISTERED_ABORTING "$EVIDENCE_DIR/abort-run.log" \
+  || { echo "FAIL: crash-mode run never registered, so the disk check proves nothing" >&2; exit 1; }
+if grep -rlF -- "$SIP_PASSWORD" "$E2E_HOME"; then
+  echo "FAIL: SIP password found on disk after an unclean exit (files listed above)" >&2; exit 1
+fi
+
+# --- Normal run: register + echo call ---------------------------------------
+run_client
 
 # --- Receiving-end evidence off Asterisk's own log -------------------------
 # The client believes what it believes; the PBX is the witness (spec §8 Tier 2).
@@ -941,7 +1164,7 @@ echo "desktop SIP e2e: OK"
 deploy/docker/tests/telephony/run-desktop-sip-e2e.sh
 ```
 
-Expected: `desktop SIP e2e: OK`. If registration fails with `tlsv1 alert unknown ca`, the trust-anchor path in Task 4 is wrong — the android harness hit exactly this (the runner script's header comment lists it); do not disable verification, fix the anchor plumbing.
+Expected: `desktop SIP e2e: OK`, preceded by a crash-mode run that registered and left no file containing the password. Break-it once before trusting the disk check: temporarily give `pump_main` a real config path, rerun, and confirm the runner fails with `SIP password found on disk`; restore NULL. If registration fails with `tlsv1 alert unknown ca`, the trust-anchor path in Task 4 is wrong — the android harness hit exactly this (the runner script's header comment lists it); do not disable verification, fix the anchor plumbing.
 
 - [ ] **Step 4: Add the CI job**
 
@@ -974,28 +1197,80 @@ The webview never sees the credential (spec §1.2): the shell mints the auth tok
 **Files:**
 - Create: `apps/desktop/src/voice.rs` (this task writes the fetch half; Task 7 adds the IPC half; Task 8 adds lifecycle)
 - Modify: `apps/desktop/src/lib.rs` (module declaration only)
+- Modify: `apps/desktop/Cargo.toml` — `zeroize = { version = "1", features = ["std", "serde"] }` (same features as the voice crate; `serde` is what lets `Zeroizing<String>` deserialize in place)
 
 **Interfaces:**
 - Produces:
 
 ```rust
+use zeroize::Zeroizing;
+
 /// What the shell fetches and holds. `serde::Deserialize` only — this type is
 /// never serialized, never crosses IPC (spec §1.4).
-#[derive(Debug, serde::Deserialize)]
+///
+/// NO `#[derive(Debug)]` on any of these three types. A derived Debug puts the
+/// SIP password and TURN credential one `tracing::debug!("{wire:?}")`, `dbg!`,
+/// `{:?}` in an `anyhow` context, or `.unwrap()` panic message away from the
+/// log file — and through zeroize 1.9.0 `Zeroizing<T>`'s derived Debug prints
+/// its contents, so the wrapper does not reliably help. Each type has the
+/// hand-written impl below.
+#[derive(serde::Deserialize)]
 pub struct SipTokenResponseWire {
     pub provider: String,
     pub sip: SipWire,
 }
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct SipWire {
     pub domain: String,
     pub transport: String,                 // validated == "tls" below
     pub username: String,
-    pub password: String,
+    pub password: Zeroizing<String>,       // whole buffer cleared on every drop path
     #[serde(rename = "iceServers")] pub ice_servers: Vec<IceServerWire>,
     #[serde(rename = "mediaEncryption")] pub media_encryption: String, // validated == "dtls-srtp"
     #[serde(rename = "tlsTrustAnchorPem")] pub tls_trust_anchor_pem: Option<String>,
 }
+#[derive(serde::Deserialize)]
+pub struct IceServerWire {
+    pub urls: Vec<String>,
+    pub username: Option<String>,
+    pub credential: Option<Zeroizing<String>>,
+}
+
+impl std::fmt::Debug for SipTokenResponseWire {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SipTokenResponseWire")
+            .field("provider", &self.provider)
+            .field("sip", &self.sip)
+            .finish()
+    }
+}
+impl std::fmt::Debug for SipWire {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SipWire")
+            .field("domain", &self.domain)
+            .field("transport", &self.transport)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("ice_servers", &self.ice_servers)
+            .field("media_encryption", &self.media_encryption)
+            .field("tls_trust_anchor_pem", &self.tls_trust_anchor_pem.as_ref().map(|p| format!("<{} bytes>", p.len())))
+            .finish()
+    }
+}
+impl std::fmt::Debug for IceServerWire {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IceServerWire")
+            .field("urls", &self.urls)
+            .field("username", &self.username)
+            .field("credential", &self.credential.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+/// Wire → voice-crate params by MOVE. The `Zeroizing<String>` values are moved,
+/// never cloned into a plain `String`, so there is exactly one copy of each
+/// secret on the Rust heap and it is cleared when its owner drops.
+impl From<SipWire> for llamenos_voice::SipRegistrationParams { /* field-by-field move; requested_expiry_secs: 600 */ }
 
 pub enum SipTokenFetchError {
     Unavailable(String),   // 400/403/503 — fail closed, show reason, no retry loop
@@ -1046,8 +1321,12 @@ pub async fn fetch_sip_token(app: &tauri::AppHandle) -> Result<SipTokenResponseW
         s => return Err(SipTokenFetchError::Transport(format!("unexpected {s}"))),
     }
 
+    // A fixed message, NOT `format!("decode: {e}")`: serde_json errors quote
+    // the offending value ("invalid type: string \"…\"") and this reason is
+    // emitted to the webview as `voice:registration.reason` and may be logged.
+    // A decode failure on a 200 is by definition a body carrying the credential.
     let wire: SipTokenResponseWire = resp.json().await
-        .map_err(|e| SipTokenFetchError::Transport(format!("decode: {e}")))?;
+        .map_err(|_| SipTokenFetchError::Transport("sip-token response did not decode".into()))?;
 
     // Policy at the boundary (spec §7.1): only tls, only dtls-srtp. Anything
     // else is a server misconfiguration to SURFACE, never to follow.
@@ -1093,6 +1372,44 @@ async fn non_tls_transport_is_rejected_as_misconfiguration() {
 
 (`fetch_sip_token_from(client, origin)` is the testable inner function; `fetch_sip_token` is the AppHandle wrapper.)
 
+And the redaction + type guards, in the same module:
+
+```rust
+#[test]
+fn wire_debug_never_prints_a_secret() {
+    let wire: SipTokenResponseWire = serde_json::from_str(r#"{"provider":"asterisk","sip":{
+        "domain":"edge.test","transport":"tls","username":"vol_x","password":"sip-pw-SENTINEL",
+        "iceServers":[{"urls":["turn:r.test:3478"],"username":"u","credential":"turn-cred-SENTINEL"}],
+        "mediaEncryption":"dtls-srtp",
+        "tlsTrustAnchorPem":"-----BEGIN CERTIFICATE-----\nPEM-SENTINEL\n-----END CERTIFICATE-----\n"}}"#).unwrap();
+    let out = format!("{wire:?} {wire:#?}");
+    for s in ["sip-pw-SENTINEL", "turn-cred-SENTINEL", "PEM-SENTINEL"] {
+        assert!(!out.contains(s), "Debug leaked {s}: {out}");
+    }
+}
+
+#[test]
+fn malformed_200_body_never_echoes_into_the_reason() {
+    // A 200 whose body carries the password but fails to decode (`domain` is
+    // a number): the error reason must not quote any of the body.
+    let body = r#"{"provider":"asterisk","sip":{"password":"sip-pw-SENTINEL","domain":7}}"#;
+    let server = TestTlsServer::responding(200, body).await;
+    let err = fetch_sip_token_from(&server.client(), &server.origin()).await.unwrap_err();
+    let (SipTokenFetchError::Transport(r) | SipTokenFetchError::Unavailable(r)) = err;
+    assert!(!r.contains("SENTINEL"), "reason leaked the body: {r}");
+}
+
+/// Compile-time guard: if someone "simplifies" a secret field back to `String`,
+/// this stops compiling. Never called.
+#[allow(dead_code)]
+fn _secret_fields_are_zeroizing<'a>(w: &'a SipWire, i: &'a IceServerWire)
+    -> (&'a Zeroizing<String>, Option<&'a Zeroizing<String>>) {
+    (&w.password, i.credential.as_ref())
+}
+```
+
+(`malformed_200_body_never_echoes_into_the_reason` is `#[tokio::test] async`. Break-it: swap the decode `map_err` back to `format!("decode: {e}")` and the `Debug` impls back to `#[derive(Debug)]`; both tests must fail; restore.)
+
 - [ ] **Step 4: Run the desktop crate tests**
 
 ```bash
@@ -1104,7 +1421,7 @@ Expected: new tests pass; existing `net`/`cert_pin` tests untouched and passing.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/desktop/src/voice.rs apps/desktop/src/lib.rs apps/desktop/src/net.rs apps/desktop/src/api_config.rs
+git add apps/desktop/src/voice.rs apps/desktop/src/lib.rs apps/desktop/src/net.rs apps/desktop/src/api_config.rs apps/desktop/Cargo.toml apps/desktop/Cargo.lock
 git commit -m "feat(desktop): shell-side /sip-token fetch over the pinned TLS stack (#1770)"
 ```
 
@@ -1352,16 +1669,19 @@ Spec §5.3, implemented in `VoiceManager`. One registration per device; re-regis
 - Produces:
 
 ```rust
-pub struct VoiceManager { /* core: VoiceCore, credential: Option<SipTokenResponseWire>, refresh: JoinHandle */ }
+pub struct VoiceManager { /* core: VoiceCore, policy: LifecyclePolicy, refresh: JoinHandle — and NO credential field */ }
 impl VoiceManager {
     pub fn new(app: AppHandle) -> Self;
     /// Idempotent desired-state signal. Safe to call on every clock-in,
     /// shift-status sync, and app start (spec §5.1 step 1).
     pub fn request_sync(&mut self);
-    /// Lock/quit path: unregister, zeroize the credential, stop the refresh task.
+    /// Lock/quit path: stop the refresh task, unregister, and clear the
+    /// core's in-memory auth info (Task 3's UnregisterAll).
     pub fn unregister_and_zeroize(&mut self);
 }
 ```
+
+**The manager does not retain the credential.** A fetched `SipTokenResponseWire` is converted by move (`From<SipWire>`, Task 6) into `SipRegistrationParams`, which is moved into `VoiceCommand::Register` and owned by the pump thread; `dispatch` drops it as soon as `apply_registration` returns, and `Zeroizing` clears the password and TURN credential then — on success, on `Err`, and on unwind alike. The TURN refresh (2880 s) re-fetches rather than re-reading a cached copy, so there is no long-lived Rust-heap copy to forget to clear. The one remaining copy is inside liblinphone's in-memory auth-info list, released by `UnregisterAll`.
 
 - Consumed by: `lib.rs` hooks and Task 9's webview triggers.
 
@@ -1418,7 +1738,8 @@ impl VoiceManager {
         let app = self.app.clone();
         tokio::spawn(async move {
             match fetch_sip_token(&app).await {
-                Ok(wire) => { /* post VoiceCommand::Register(convert(wire)); arm the 2880 s TURN-refresh timer */ }
+                // MOVE, never clone: `wire` is consumed here and not stored on `self`.
+                Ok(wire) => { /* post VoiceCommand::Register(wire.sip.into()); arm the 2880 s TURN-refresh timer */ }
                 Err(e) => { /* policy.on_fetch_result(e); emit voice:registration unavailable/credential-revoked */ }
             }
         });
@@ -1426,15 +1747,16 @@ impl VoiceManager {
 
     pub fn unregister_and_zeroize(&mut self) {
         self.refresh.abort();
+        // UnregisterAll clears accounts AND auth info inside the core (Task 3),
+        // so liblinphone stops holding the SIP password and TURN credential.
+        // There is no Rust-side credential to clear here: the manager never
+        // stores one, and every transient copy is `Zeroizing` and was cleared
+        // when it dropped (see "The manager does not retain the credential").
+        // NOT an unsafe byte-fill of each String — that clears only `len`
+        // bytes (not the allocation's spare capacity), runs only on this path,
+        // and reaches for `unsafe` where the workspace uses `zeroize`
+        // (packages/crypto/src/ffi_v3.rs).
         self.core.post(VoiceCommand::UnregisterAll);
-        if let Some(mut cred) = self.credential.take() {
-            // zeroize every secret field before drop — the credential is a
-            // live receive-calls capability (spec §1.2).
-            unsafe { cred.sip.password.as_bytes_mut().fill(0) };
-            for s in &mut cred.sip.ice_servers {
-                if let Some(c) = &mut s.credential { unsafe { c.as_bytes_mut().fill(0) } }
-            }
-        }
         let _ = self.app.emit("voice:registration", VoiceRegistrationPayload {
             state: "unregistered", reason: None,
         });
@@ -1446,7 +1768,7 @@ The TURN refresh task: `tokio::time::sleep(TURN_REFRESH_AFTER)` then `request_sy
 
 - [ ] **Step 3: Hook lock and quit in `lib.rs`**
 
-Crypto lock: find where `lock_crypto` succeeds (`apps/desktop/src/crypto.rs` command) and, after it, call `voice_unregister_and_zeroize` via the managed `VoiceState` — a locked desktop cannot render the call workspace, and server-side reachability excludes the endpoint so the caller is unaffected (spec §5.3). Process quit: in the `RunEvent::ExitRequested` handler (or the existing single-instance/exit path), call `unregister_and_zeroize` best-effort with a short timeout; the residual binding dies by the ≤600 s expiry plus the PBX's 60 s qualify either way.
+Crypto lock: find where `lock_crypto` succeeds (`apps/desktop/src/crypto.rs` command) and, after it, call `voice_unregister_and_zeroize` via the managed `VoiceState` — a locked desktop cannot render the call workspace, and server-side reachability excludes the endpoint so the caller is unaffected (spec §5.3). Process quit: in the `RunEvent::ExitRequested` handler (or the existing single-instance/exit path), call `unregister_and_zeroize` best-effort with a short timeout; the residual binding dies by the ≤600 s expiry plus the PBX's 60 s qualify either way. Best-effort is acceptable here **only because** this path no longer guards anything on disk: with no config path (Task 3) there is no credential file for a skipped or timed-out quit to leave behind, and a process that exits takes its memory with it. Best-effort governs the network `REGISTER Expires: 0` only. If a later change ever reintroduces on-disk state, this path must become blocking — say so in that change.
 
 - [ ] **Step 4: Run tests**
 
@@ -1454,7 +1776,12 @@ Crypto lock: find where `lock_crypto` succeeds (`apps/desktop/src/crypto.rs` com
 cargo test --manifest-path apps/desktop/Cargo.toml voice
 ```
 
-Expected: the four lifecycle tests pass.
+Expected: the four lifecycle tests pass. Then confirm no hand-zeroing or retained credential crept in — this must print nothing:
+
+```bash
+grep -nE 'as_bytes_mut|SipTokenResponseWire>|(password|credential)\.clone\(\)' apps/desktop/src/voice.rs
+grep -B2 -nE 'pub struct (SipTokenResponseWire|SipWire|IceServerWire)' apps/desktop/src/voice.rs | grep Debug
+```
 
 - [ ] **Step 5: Commit**
 
@@ -1926,6 +2253,7 @@ git commit -m "docs: document /api/telephony/sip-token; Tier 4 desktop voice che
 - **Transcoding CPU at concurrency** on the target PBX hardware — assumed, not measured.
 - **Multi-device behaviour** — `max_contacts=1` means two devices evict each other's binding; deferred deliberately for the single-device pilot (spec §9.3), not silently shipped as correct.
 - **Interop with hub providers other than our own Asterisk** — the #1203 gate is inherited, neither widened nor narrowed.
+- **Secret residue this plan cannot clear** (stated, not hidden): `Zeroizing` covers every copy of the SIP password and TURN credential that *our* code owns. It does not reach the HTTP/TLS stack's own receive buffers for the `/sip-token` body (hyper/rustls, the same limit every Rust HTTP client has), nor liblinphone's internal copy between `add_auth_info` and `clear_all_auth_info`. And a crash *core dump* of the live shell holds whatever is in memory at that instant; on Linux, systemd-coredump may persist it. Disabling dumps for the shell process (`prctl(PR_SET_DUMPABLE, 0)` on Linux, the equivalents elsewhere) is the control for that, and it protects device keys in `CryptoState` as much as the SIP credential — so it belongs to a desktop-wide hardening change, not to this feature. File it as a follow-up when this plan lands.
 
 ## Follow-ups explicitly NOT in this plan
 
