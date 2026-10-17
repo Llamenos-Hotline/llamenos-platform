@@ -8,12 +8,29 @@
  * Usage:
  *   bun run i18n:codegen              # Generate iOS + Android strings
  *   bun run i18n:validate             # Check coverage only (no file output)
- *   bun run i18n:validate --verbose   # Show missing keys
+ *   bun run i18n:validate --verbose   # Show missing/unrecorded/stale keys
+ *   bun run i18n:codegen --sync-deferral  # Rewrite deferred.json from the catalogue
+ *
+ * Coverage is a three-state gate (see tools/deferral.ts): every key x locale
+ * pair is missing (error), deferred (verbatim English AND listed in
+ * packages/i18n/deferred.json), or translated. A verbatim-English value with
+ * no record entry fails --validate as an unrecorded English copy; a translated
+ * value still listed in the record fails as a stale deferral.
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import {
+  DEFERRED_RECORD_PATH,
+  checkRecordHygiene,
+  classifyLocale,
+  flattenKeysDotted,
+  loadDeferralRecord,
+  serializeDeferralRecord,
+  syncLocaleDeferrals,
+  type DeferralRecord,
+} from './deferral'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -262,9 +279,12 @@ function generateKotlinConstants(keys: Record<string, string>): string {
 function main() {
   const validate = process.argv.includes('--validate')
   const verbose = process.argv.includes('--verbose')
+  const syncDeferral = process.argv.includes('--sync-deferral')
 
   // Read English as reference
-  const enKeys = flattenKeysSnake(JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8')))
+  const enData = JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8'))
+  const enKeys = flattenKeysSnake(enData)
+  const enDotted = flattenKeysDotted(enData)
   const enKeyCount = Object.keys(enKeys).length
 
   console.log(`Source: ${enKeyCount} keys in English`)
@@ -276,10 +296,65 @@ function main() {
     process.exit(1)
   }
 
-  const localeFiles = readdirSync(LOCALES_DIR).filter(f => f.endsWith('.json'))
+  const parsedRecord = loadDeferralRecord()
+  const record = parsedRecord.record
   let hasErrors = false
   let rawSpecifierErrors = 0
   let placeholderNameErrors = 0
+
+  if (parsedRecord.errors.length > 0) {
+    console.error(`  deferral record: ${parsedRecord.errors.length} structural error(s):`)
+    parsedRecord.errors.forEach(e => console.error(`    - ${e}`))
+    hasErrors = true
+  }
+
+  const localeFiles = readdirSync(LOCALES_DIR).filter(f => f.endsWith('.json'))
+
+  // --sync-deferral: rewrite deferred.json so every locale's entry set is
+  // exactly its verbatim-English keys, then stop. This is the deliberate,
+  // reviewable act that records deferral — run it after intentionally copying
+  // en text into a locale (e.g. `cp en.json <new-locale>.json`), never to
+  // silence a regression you have not looked at.
+  if (syncDeferral) {
+    const blockingErrors = parsedRecord.errors.filter(e => !e.includes('ENOENT'))
+    if (blockingErrors.length > 0) {
+      console.error('Refusing to sync on top of a structurally broken deferred.json — fix it first.')
+      process.exit(1)
+    }
+    const next: DeferralRecord = new Map()
+    let totalAdded = 0
+    let totalRemoved = 0
+    for (const file of localeFiles) {
+      const locale = file.replace('.json', '')
+      if (locale === 'en') continue
+      const data = JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))
+      const result = syncLocaleDeferrals(enDotted, flattenKeysDotted(data), record.get(locale) ?? new Set())
+      next.set(locale, result.keys)
+      totalAdded += result.added
+      totalRemoved += result.removed
+      console.log(`  ${locale}: ${result.keys.size} deferred (+${result.added}, -${result.removed})`)
+    }
+    writeFileSync(DEFERRED_RECORD_PATH, serializeDeferralRecord(next))
+    console.log(`deferred.json rewritten: +${totalAdded} new deferral(s), -${totalRemoved} retired (${[...next.values()].reduce((n, s) => n + s.size, 0)} total)`)
+    process.exit(0)
+  }
+
+  const localeKeysDotted = new Map<string, Set<string>>()
+  for (const file of localeFiles) {
+    const locale = file.replace('.json', '')
+    if (locale === 'en') continue
+    const data = JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))
+    localeKeysDotted.set(locale, new Set(Object.keys(flattenKeysDotted(data))))
+  }
+  const hygieneErrors = checkRecordHygiene(record, new Set(Object.keys(enDotted)), localeKeysDotted)
+  if (hygieneErrors.length > 0) {
+    console.error(`  deferral record: ${hygieneErrors.length} stale entrie(s):`)
+    hygieneErrors.slice(0, verbose ? hygieneErrors.length : 10).forEach(e => console.error(`    - ${e}`))
+    if (!verbose && hygieneErrors.length > 10) console.error(`    ... and ${hygieneErrors.length - 10} more (run with --verbose)`)
+    hasErrors = true
+  }
+
+  const totals = { translated: 0, deferred: 0, missing: 0, unrecordedEnglish: 0, staleDeferral: 0 }
 
   for (const file of localeFiles) {
     const locale = file.replace('.json', '')
@@ -308,15 +383,32 @@ function main() {
       hasErrors = true
     }
 
-    // Validate coverage
+    // Validate coverage as a three-state gate (missing / deferred / translated).
     if (locale !== 'en') {
-      const missing = Object.keys(enKeys).filter(k => !(k in keys))
-      if (missing.length > 0) {
-        console.warn(`  ${locale}: ${missing.length} missing keys`)
-        if (verbose) missing.slice(0, 10).forEach(k => console.warn(`    - ${k}`))
+      const c = classifyLocale(enDotted, flattenKeysDotted(data), record.get(locale) ?? new Set())
+      totals.translated += c.translated.length
+      totals.deferred += c.deferred.length
+      totals.missing += c.missing.length
+      totals.unrecordedEnglish += c.unrecordedEnglish.length
+      totals.staleDeferral += c.staleDeferral.length
+
+      const problems: string[] = []
+      if (c.missing.length > 0) problems.push(`${c.missing.length} missing`)
+      if (c.unrecordedEnglish.length > 0) problems.push(`${c.unrecordedEnglish.length} UNRECORDED ENGLISH`)
+      if (c.staleDeferral.length > 0) problems.push(`${c.staleDeferral.length} STALE DEFERRAL`)
+      const line =
+        `  ${locale}: ${Object.keys(enDotted).length} keys — ${c.translated.length} translated, ${c.deferred.length} deferred` +
+        (problems.length > 0 ? `, ${problems.join(', ')}` : ', 0 missing')
+      if (problems.length > 0) {
+        console.warn(line)
         hasErrors = true
+        if (verbose) {
+          c.missing.slice(0, 10).forEach(k => console.warn(`    missing: ${k}`))
+          c.unrecordedEnglish.slice(0, 10).forEach(k => console.warn(`    unrecorded English: ${k}`))
+          c.staleDeferral.slice(0, 10).forEach(k => console.warn(`    stale deferral: ${k}`))
+        }
       } else {
-        console.log(`  ${locale}: ${Object.keys(keys).length} keys (complete)`)
+        console.log(line)
       }
     }
 
@@ -365,7 +457,26 @@ function main() {
     process.exit(1)
   }
 
+  console.log(
+    `Totals across ${localeFiles.length - 1} non-en locales: ` +
+    `${totals.translated} translated, ${totals.deferred} deferred, ${totals.missing} missing, ` +
+    `${totals.unrecordedEnglish} unrecorded English, ${totals.staleDeferral} stale deferral`
+  )
+
   if (validate && hasErrors) {
+    if (totals.unrecordedEnglish > 0) {
+      console.error(
+        `${totals.unrecordedEnglish} key(s) carry verbatim English with no deferral record. Either translate them, ` +
+        `or -- if the English is deliberate -- record the deferral in packages/i18n/deferred.json ` +
+        `(\`bun run i18n:codegen --sync-deferral\` rewrites the record from the catalogue).`
+      )
+    }
+    if (totals.staleDeferral > 0) {
+      console.error(
+        `${totals.staleDeferral} key(s) are translated but still listed in deferred.json. ` +
+        `Remove the record entries -- the record must not rot.`
+      )
+    }
     process.exit(1)
   }
 
