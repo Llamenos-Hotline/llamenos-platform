@@ -1,0 +1,450 @@
+{
+  "pr": {
+    "baseRefName": "main",
+    "headRefName": "fix/1709-backup-format",
+    "headRefOid": "447578fbe8b6436134fe35355901b65758cc3461",
+    "mergeStateStatus": "CLEAN",
+    "number": 1718
+  },
+  "checkRuns": [
+    {
+      "id": 113123420992,
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:45:32Z"
+    },
+    {
+      "id": 113122575381,
+      "name": "fleet-review/publish",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:42:18Z"
+    },
+    {
+      "id": 113122146893,
+      "name": "docker-canary",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:40:36Z"
+    },
+    {
+      "id": 113122118342,
+      "name": "ci-status",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:40:33Z"
+    },
+    {
+      "id": 113121555679,
+      "name": "e2e",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:38:16Z"
+    },
+    {
+      "id": 113121509765,
+      "name": "E2E (Linux)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:38:10Z"
+    },
+    {
+      "id": 113121368294,
+      "name": "fleet/review",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:35Z"
+    },
+    {
+      "id": 113121367954,
+      "name": "fleet/verify",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:35Z"
+    },
+    {
+      "id": 113121274272,
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-advanced-security",
+      "startedAt": "2026-10-08T02:37:11Z"
+    },
+    {
+      "id": 113121259883,
+      "name": "fleet-review/publish",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:22Z"
+    },
+    {
+      "id": 113121224614,
+      "name": "semgrep",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-advanced-security",
+      "startedAt": "2026-10-08T02:37:00Z"
+    },
+    {
+      "id": 113121210467,
+      "name": "ios-build-test",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:57Z"
+    },
+    {
+      "id": 113121210371,
+      "name": "android-build-test",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:57Z"
+    },
+    {
+      "id": 113121210249,
+      "name": "backend-bdd",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:57Z"
+    },
+    {
+      "id": 113121210160,
+      "name": "android-e2e",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:57Z"
+    },
+    {
+      "id": 113121209990,
+      "name": "audit",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:57Z"
+    },
+    {
+      "id": 113121209780,
+      "name": "ios-e2e",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:57Z"
+    },
+    {
+      "id": 113121209287,
+      "name": "migration-drift",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:14Z"
+    },
+    {
+      "id": 113121209218,
+      "name": "backend-unit",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:10Z"
+    },
+    {
+      "id": 113121209112,
+      "name": "production-smoke",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:59Z"
+    },
+    {
+      "id": 113121209110,
+      "name": "crypto-guardrails",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:10Z"
+    },
+    {
+      "id": 113121209068,
+      "name": "ansible-validate",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:37:11Z"
+    },
+    {
+      "id": 113121209062,
+      "name": "desktop-unit",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:59Z"
+    },
+    {
+      "id": 113121208803,
+      "name": "backend-integration-bun",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:59Z"
+    },
+    {
+      "id": 113121208779,
+      "name": "build",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:59Z"
+    },
+    {
+      "id": 113121208716,
+      "name": "crypto-tests",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:59Z"
+    },
+    {
+      "id": 113121208185,
+      "name": "build",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:59Z"
+    },
+    {
+      "id": 113121148674,
+      "name": "docs-guard",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:46Z"
+    },
+    {
+      "id": 113121148637,
+      "name": "Updater pubkey is set",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121148577,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121148574,
+      "name": "changes",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121148343,
+      "name": "No generated files in git",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121147768,
+      "name": "Analyze staged (swift)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:42Z"
+    },
+    {
+      "id": 113121147618,
+      "name": "Analyze staged (java-kotlin)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:42Z"
+    },
+    {
+      "id": 113121147392,
+      "name": "gitleaks",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121146830,
+      "name": "fleet/verify",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121146635,
+      "name": "fleet/review",
+      "status": "completed",
+      "conclusion": "failure",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121146622,
+      "name": "Analyze advanced (python)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:46Z"
+    },
+    {
+      "id": 113121146414,
+      "name": "Analyze advanced (actions)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:44Z"
+    },
+    {
+      "id": 113121146390,
+      "name": "Analyze advanced (ruby)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121146376,
+      "name": "Analyze advanced (javascript-typescript)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:44Z"
+    },
+    {
+      "id": 113121146366,
+      "name": "Scan",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121146277,
+      "name": "changes",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:45Z"
+    },
+    {
+      "id": 113121146211,
+      "name": "Analyze advanced (rust)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-08T02:36:46Z"
+    }
+  ],
+  "statuses": [],
+  "runs": [
+    {
+      "id": 37718785272,
+      "name": "Fleet Verify",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718785333,
+      "name": "Fleet Review",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718715318,
+      "name": "Secret Scanning",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718715387,
+      "name": "CI",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718715095,
+      "name": "Semgrep",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718715099,
+      "name": "Fleet Verify",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718715014,
+      "name": "Fleet Review",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "failure",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718714959,
+      "name": "CodeQL",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37718715024,
+      "name": "Desktop E2E Tests",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    }
+  ],
+  "jobsByRun": {
+    "37718715014": [
+      {
+        "name": "fleet/review",
+        "conclusion": "failure"
+      },
+      {
+        "name": "fleet-review/publish",
+        "conclusion": "success"
+      }
+    ]
+  }
+}
