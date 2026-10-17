@@ -153,9 +153,12 @@ struct ConversationDetailView: View {
                 Image(systemName: "lock.fill")
                     .font(.caption)
                     .foregroundStyle(Color.brandMutedForeground)
-                Text(NSLocalizedString("conversations_closed", comment: "Conversation closed"))
-                    .font(.brand(.footnote))
-                    .foregroundStyle(Color.brandMutedForeground)
+                Text(NSLocalizedString(
+                    "conversation_closed_message",
+                    comment: "This conversation is closed"
+                ))
+                .font(.brand(.footnote))
+                .foregroundStyle(Color.brandMutedForeground)
             }
             .padding(12)
             .frame(maxWidth: .infinity)
@@ -247,7 +250,10 @@ struct ConversationDetailView: View {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
-            Text(NSLocalizedString("conversations_no_messages", comment: "No messages yet"))
+            Text(NSLocalizedString(
+                "conversation_no_messages",
+                comment: "No messages yet"
+            ))
             .font(.brand(.subheadline))
             .foregroundStyle(.secondary)
         }
