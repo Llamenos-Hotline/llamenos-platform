@@ -36,7 +36,11 @@ PORT=3000
 # set it on any host where the app port is reachable without passing through
 # Caddy.
 TRUST_PROXY_HEADERS=true
-DATABASE_URL=postgresql://llamenos:{{ pg_password }}@postgres:5432/llamenos
+{# pg_password is percent-encoded (filter_plugins/url_userinfo.py): postgres.js
+   ends the URL authority at the first `/` or `?` before decoding, so a raw
+   base64 password containing `/` would point the worker at a host named after
+   half the password and the container would never boot. #}
+DATABASE_URL=postgresql://llamenos:{{ pg_password | url_userinfo }}@postgres:5432/llamenos
 PG_POOL_SIZE={{ pg_pool_size | default(10) }}
 {% if (admin_pubkey | default('')) | length > 0 %}
 ADMIN_PUBKEY={{ admin_pubkey }}
@@ -112,6 +116,9 @@ CORS_ALLOWED_ORIGINS={{ cors_allowed_origins | default(
   the admin-only JSON summary; only /api/metrics/prometheus has a scrape-token
   branch), so the app job collected nothing for two independent reasons. The
   same value is rendered into that scrape config — change it in one place.
+  playbooks/preflight.yml refuses a deploy that enables Prometheus with this
+  token empty (#1148), so the guard below only ever skips it on a host that
+  runs no scraper.
 #}
 {% if (metrics_scrape_token | default('')) | length > 0 %}
 METRICS_SCRAPE_TOKEN={{ metrics_scrape_token }}
@@ -262,16 +269,6 @@ SIP_TLS_CA_FILE={{ sip_tls_anchor_container_path | default('/var/lib/llamenos/si
 {% endif %}
 {% if (glitchtip_dsn | default('')) | length > 0 %}
 GLITCHTIP_DSN={{ glitchtip_dsn }}
-{% endif %}
-{# METRICS_SCRAPE_TOKEN gates apps/worker/routes/metrics.ts's /api/metrics/prometheus
-   route: with it set, Prometheus authenticates via a bearer token instead of a
-   logged-in admin session (which a scraper can never have). Leaving it unset does
-   NOT disable the route -- it falls through to requiring c.get('pubkey'), which is
-   only ever populated by the `auth` middleware that this route deliberately does
-   NOT run, so an unset token makes the scrape permanently un-authenticatable (#1148).
-   Render it whenever observability is enabled so the two configs can never drift. #}
-{% if (metrics_scrape_token | default('')) | length > 0 %}
-METRICS_SCRAPE_TOKEN={{ metrics_scrape_token }}
 {% endif %}
 {% if llamenos_signal_enabled | default(false) | bool %}
 SIGNAL_NOTIFIER_BEARER_TOKEN={{ signal_notifier_bearer_token }}

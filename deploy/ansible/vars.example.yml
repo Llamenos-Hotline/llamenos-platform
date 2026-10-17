@@ -49,10 +49,13 @@ acme_email: admin@yourdomain.org
 # cors_allowed_origins: []              # replaces them entirely
 
 # ─── Metrics scrape token ────────────────────────────────────────
-# Bearer token Prometheus presents to /api/metrics. Without it the endpoint
-# requires a signed-in admin with `metrics:read`, which a scrape never is, so
-# the app job collects nothing (#1624). Rendered into BOTH the worker's .env
-# and roles/llamenos-prometheus' scrape config from this one value.
+# Bearer token Prometheus presents to /api/metrics/prometheus. Without it the
+# endpoint requires a signed-in admin with `metrics:read`, which a scrape never
+# is, so the app job collects nothing (#1624). Rendered into BOTH the worker's
+# .env and roles/llamenos-prometheus' scrape config from this one value.
+# REQUIRED whenever Prometheus is enabled: preflight refuses the deploy without
+# it, because an unauthenticated scrape leaves up{job="llamenos-app"} at 0 and
+# AppDown firing forever (#1148).
 # Generate with: openssl rand -hex 32
 metrics_scrape_token: ""
 
@@ -193,7 +196,9 @@ admin_decryption_pubkey: ""
 hmac_secret: ""
 
 # ─── PostgreSQL ──────────────────────────────────────────────────
-# Database password (generate with: openssl rand -base64 24)
+# Database password (generate with: openssl rand -hex 24). Any value works --
+# templates URL-encode it into DATABASE_URL (filter_plugins/url_userinfo.py) --
+# but hex keeps it legible wherever an operator has to paste it.
 pg_password: ""
 
 # Connection pool size
@@ -513,12 +518,6 @@ postgres_exporter_enabled: true
 # and uses a simple HTTP health poller with ntfy notifications instead
 healthcheck_only: false
 
-# Bearer token the Prometheus `llamenos-app` scrape job authenticates with
-# against /api/metrics/prometheus. REQUIRED for the scrape to succeed -- without
-# it, `up{job="llamenos-app"}` is permanently 0 and AppDown fires forever (#1148).
-# Generate with: openssl rand -hex 32
-metrics_scrape_token: ""
-
 # Prometheus settings
 prometheus_image: prom/prometheus:v3.2.1
 prometheus_retention: 15d
@@ -530,7 +529,7 @@ postgres_exporter_image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
 # Password for the DEDICATED postgres_exporter DB role (pg_monitor privilege
 # only -- created/synced automatically by roles/llamenos-postgres-exporter).
 # Never reuse pg_password: that role can read/write every table.
-postgres_exporter_password: "" # openssl rand -base64 24
+postgres_exporter_password: "" # openssl rand -hex 24 (>= 16 chars)
 
 # Grafana settings
 grafana_image: grafana/grafana-oss:11.5.2

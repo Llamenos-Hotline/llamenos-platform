@@ -11,7 +11,14 @@ services:
       # Authenticates as the dedicated `postgres_exporter` role (pg_monitor
       # privilege only, created by tasks/main.yml) -- NOT as `llamenos`, the
       # application's own role, which can read/write every table.
-      - DATA_SOURCE_NAME=postgresql://postgres_exporter:{{ postgres_exporter_password }}@postgres:5432/llamenos?sslmode=disable
+      #
+      # The password is percent-encoded by `url_userinfo`
+      # (filter_plugins/url_userinfo.py), never interpolated raw: the
+      # documented generator emits `/` and `+`, and a raw `/` ends the URL
+      # authority, so the exporter cannot connect -- and says so only in its
+      # log while it keeps serving pg_up 0. The encoded alphabet is also inert
+      # here as a YAML plain scalar and under compose `$` interpolation.
+      - DATA_SOURCE_NAME=postgresql://postgres_exporter:{{ postgres_exporter_password | url_userinfo }}@postgres:5432/llamenos?sslmode=disable
     networks:
       - llamenos-internal
       - llamenos-observability

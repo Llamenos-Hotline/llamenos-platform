@@ -33,6 +33,13 @@
 # then ensures CONNECT on the llamenos database specifically (pg_monitor
 # itself grants no CONNECT). no_log on this task AND the compose-template task
 # below: both carry postgres_exporter_password in their module args.
+#
+# The password is a SQL string literal here, so its single quotes are doubled
+# (standard_conforming_strings is on by default, so a backslash is literal and
+# needs nothing). Interpolated raw, a `'` in the value ends the literal early:
+# the ALTER fails, or -- for a crafted value -- runs whatever follows it as the
+# `llamenos` superuser. The compose template URL-encodes the same value
+# separately (url_userinfo); the two encodings are for two different parsers.
 - name: Create/sync the least-privilege postgres_exporter role (pg_monitor only)
   community.docker.docker_container_exec:
     container: llamenos-postgres-postgres-1
@@ -40,7 +47,7 @@
     stdin: |
       SELECT 'CREATE ROLE postgres_exporter LOGIN IN ROLE pg_monitor'
       WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'postgres_exporter')\gexec
-      ALTER ROLE postgres_exporter WITH PASSWORD '{{ postgres_exporter_password }}';
+      ALTER ROLE postgres_exporter WITH PASSWORD '{{ postgres_exporter_password | replace("'", "''") }}';
       GRANT CONNECT ON DATABASE llamenos TO postgres_exporter;
   no_log: true
   changed_when: false

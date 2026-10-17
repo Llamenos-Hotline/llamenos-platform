@@ -120,16 +120,19 @@ llamenos_caddy_image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7
 # ─── Secrets — generate each on your workstation ─────────────────
 hmac_secret: ""                  # openssl rand -hex 32   (>= 32 chars)
 server_secret: ""                # openssl rand -hex 32   (exactly 64 hex chars)
-pg_password: ""                  # openssl rand -base64 24 (>= 16 chars)
+pg_password: ""                  # openssl rand -hex 24   (>= 16 chars)
 storage_access_key: ""           # openssl rand -hex 16
 storage_secret_key: ""           # openssl rand -base64 24 (>= 16 chars)
 # signal_notifier_bearer_token: ""   # openssl rand -hex 32 — only if llamenos_signal_enabled
 # REQUIRED when observability_enabled (true by default for this profile, see
-# above): without it Prometheus can never authenticate the app scrape (#1148).
+# above): the bearer Prometheus presents to /api/metrics/prometheus. Without
+# it the endpoint demands a signed-in admin holding `metrics:read`, which a
+# scrape never is (#1624), so preflight refuses the deploy (#1148). Rendered
+# into BOTH the worker's .env and the Prometheus scrape config from this value.
 metrics_scrape_token: ""         # openssl rand -hex 32
 # Password for the DEDICATED postgres_exporter DB role (pg_monitor only) --
 # never reuse pg_password, which can read/write every table.
-postgres_exporter_password: ""   # openssl rand -base64 24
+postgres_exporter_password: ""   # openssl rand -hex 24   (>= 16 chars)
 
 # ─── Alert receiver (required when observability/alerting is enabled) ────
 # Pick ONE: an unguessable ntfy topic (self-hosted ntfy strongly preferred over
@@ -169,14 +172,6 @@ backup_rclone_remote: ""
 #
 # cors_allowed_origins_extra: []        # appended to the two defaults
 # cors_allowed_origins: []              # replaces them entirely
-
-# ─── Metrics scrape token ────────────────────────────────────────
-# Bearer token Prometheus presents to /api/metrics. Without it the endpoint
-# requires a signed-in admin with `metrics:read`, which a scrape never is, so
-# the app job collects nothing (#1624). Rendered into BOTH the worker's .env
-# and roles/llamenos-prometheus' scrape config from this one value.
-# Generate with: openssl rand -hex 32
-metrics_scrape_token: ""
 
 # ─── Signal queue retention ──────────────────────────────────────
 # Days the Signal delivery queue keeps rows before cleanup (1-3650). Unset
