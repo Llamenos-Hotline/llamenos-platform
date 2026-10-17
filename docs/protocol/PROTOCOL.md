@@ -952,6 +952,53 @@ PIN Encryption (Phase 6):
 
 New devices are authorized via an append-only hash-chained sigchain. Each sigchain entry is Ed25519-signed by an existing authorized device and contains the new device's Ed25519 + X25519 public keys. The PUK (Per-User Key) is wrapped for each authorized device via `LABEL_PUK_WRAP_TO_DEVICE`.
 
+Link hashing, signing and verification are implemented once in `packages/crypto` (`sigchain::create_sigchain_link`, `sigchain::verify_sigchain`):
+
+```
+entryHash = hex(SHA-256(compact JSON of
+  { payload, prevHash, seq, signerDeviceId, signerPubkey, timestamp }
+  with object keys sorted by UTF-8 bytes at every level;
+  prevHash = null for the first link)))
+signature = hex(Ed25519.sign(signing_key, bytes(entryHash)))
+```
+
+`verify_sigchain` requires the first link to be `seq = 1`, `prevHash = null`, `payload.type = "user_init"` and self-signed; its signer is the first authorized device. Each later link must be `seq = prev + 1`, chain to the previous `entryHash` and be signed by a device in the authorized set; `device_add` / `device_remove` payloads add / remove `payload.devicePubkey`. Pinned test vectors: `packages/crypto/tests/identity_init.rs`.
+
+Wire payloads (Zod: `packages/protocol/schemas/sigchain.ts`):
+
+| `linkType` | `payload.type` | Payload fields |
+|------------|----------------|----------------|
+| `genesis` | `user_init` | `deviceId`, `devicePubkey` (Ed25519 hex), `deviceEncryptionPubkey` (X25519 hex) |
+| `device_add` | `device_add` | `deviceId`, `devicePubkey`, `deviceEncryptionPubkey` |
+| `device_remove` | `device_remove` | `deviceId`, `devicePubkey` |
+| `puk_epoch` | `puk_epoch` | `generation` (≥ 1), `signPubkey` (Ed25519 hex, `LABEL_PUK_SIGN`), `dhPubkey` (X25519 hex, `LABEL_PUK_DH`) |
+| `key_rotate` | `key_rotate` | — |
+
+#### Identity Initialisation
+
+Every user is created with the same sigchain and PUK state, produced by the device that creates the user (invite onboarding, or admin bootstrap) once the user exists server-side and before the client commits its logged-in session (requests are signed with the device key):
+
+```
+1. POST /api/users/:self/sigchain   seq 1, linkType "genesis"
+     payload { type: "user_init", deviceId, devicePubkey, deviceEncryptionPubkey }
+     signed by the new device (devicePubkey = signerPubkey = the user's pubkey)
+
+2. (pukState, seed, envelope) = puk::create_initial_puk(deviceEncryptionPubkey, deviceId)
+     seed: random 32 bytes, kept in CryptoState — never exposed to the UI layer
+     envelope: HPKE v3 seal of seed, label LABEL_PUK_WRAP_TO_DEVICE,
+               AAD = UTF-8("<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>")
+   POST /api/puk/envelopes { envelopes: [{ deviceId, generation: 1, envelope }] }
+
+3. POST /api/users/:self/sigchain   seq 2, linkType "puk_epoch"
+     payload { type: "puk_epoch", generation: 1, signPubkey, dhPubkey }
+
+4. GET /api/users/:self/sigchain → verify_sigchain → must authorise the device
+```
+
+The envelope is stored before the chain names the PUK, so a chain never binds a PUK whose seed was lost. Each step is keyed off the server's current chain, so a retry after a partial failure resumes where it stopped. Until step 4 succeeds the client does not proceed. The server accepts the identity-initialisation routes from a session that has not yet registered a passkey (they are self-only).
+
+PUK envelopes are addressed by the **sigchain** `deviceId` (the ID the envelope's AAD binds), not by the push-registry device ID, and the server rejects any address the user's sigchain does not currently authorise.
+
 #### Relationship to WebSocket Identity
 
 WebSocket events are signed by the server's derived event keypair. Clients verify the server signature on all WebSocket events. Device Ed25519 keys handle application-level auth and sigchain. Device X25519 keys handle HPKE encryption. These are NOT derived from the server event key.

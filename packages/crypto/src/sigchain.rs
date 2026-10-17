@@ -726,8 +726,12 @@ mod tests {
             hex::encode(h)
         };
         assert_eq!(hash1, expected_hash1);
-        // Pin the expected hash so other platforms can hardcode it
-        assert_eq!(hash1, expected_hash1, "vector 1: genesis entry hash");
+        // Pinned literal — other platforms (tests/mocks/sigchain-mock.ts,
+        // apps/worker computeEntryHash) assert these exact bytes.
+        assert_eq!(
+            hash1, "7993a9e36114d2dff4fd882aa7261231beed2d5109aa84e01c8f46ee49e896a4",
+            "vector 1: genesis entry hash"
+        );
 
         // Vector 2: Chained entry (prevHash = some hex string)
         //
@@ -761,6 +765,10 @@ mod tests {
             hex::encode(h)
         };
         assert_eq!(hash2, expected_hash2, "vector 2: chained entry hash");
+        assert_eq!(
+            hash2, "2944558cc144bc39d1910a5ac26f5811cacd8678a70f88655e8baa37ecff0c2e",
+            "vector 2: pinned"
+        );
 
         // Vector 3: Nested payload with multiple keys (verifies recursive sort)
         let hash3 = compute_entry_hash(
@@ -792,6 +800,10 @@ mod tests {
             hex::encode(h)
         };
         assert_eq!(hash3, expected_hash3, "vector 3: nested payload hash");
+        assert_eq!(
+            hash3, "9fa457d087b537494dd0761ff5f5ec1651f844229cccda9f8cbb92342d618e2e",
+            "vector 3: pinned"
+        );
 
         // Print vectors for cross-platform implementers (visible in test output with --nocapture)
         eprintln!("=== SIGCHAIN CROSS-LANGUAGE TEST VECTORS ===");
