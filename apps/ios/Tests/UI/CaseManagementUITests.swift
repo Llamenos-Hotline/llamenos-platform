@@ -28,9 +28,11 @@ final class CaseManagementUITests: BaseUITest {
         }
     }
 
-    /// Scenario: Navigating to Cases without an API connection says case management is off.
-    /// With no hub configured the CMS request cannot succeed, so the view resolves to the
-    /// not-enabled state — not a spinner, and not a list.
+    /// Scenario: Navigating to Cases without an API connection says the load failed.
+    /// With no hub configured the CMS request cannot be made at all. That is a failure,
+    /// and the screen must say so with a way to retry — it used to render the same
+    /// "case management is not enabled" state a hub answers with, so a broken
+    /// connection and a deliberately disabled feature looked identical (#1918).
     func testCaseListShowsInitialState() {
         given("I am authenticated without an API connection") {
             launchAuthenticated()
@@ -38,13 +40,19 @@ final class CaseManagementUITests: BaseUITest {
         when("I navigate to the Cases tab") {
             navigateToCases()
         }
-        then("I should see that case management is not enabled") {
-            XCTAssertTrue(
-                find("cms-not-enabled").waitForExistence(timeout: 15),
-                "Cases view should settle on the not-enabled state when no hub is reachable"
+        then("I should see that the cases could not be loaded") {
+            XCTAssertEqual(
+                waitForCasesScreenToSettle(), "case-load-error",
+                "Cases view should settle on its load error when no hub is reachable"
             )
+            XCTAssertTrue(find("case-load-retry").exists, "A failed load should offer a retry")
+            XCTAssertFalse(find("cms-not-enabled").exists, "A failed request is not 'case management is off'")
             XCTAssertFalse(find("case-loading").exists, "Cases view should not still be loading")
-            XCTAssertFalse(find("case-list").exists, "There is no case list without case management")
+            XCTAssertFalse(find("case-list").exists, "There is no case list without a hub")
+            XCTAssertFalse(
+                app.buttons["case-new-btn"].isEnabled,
+                "New Case cannot be offered when case management state is unknown"
+            )
         }
     }
 
@@ -196,28 +204,49 @@ final class CaseManagementUITests: BaseUITest {
         ) == .completed
     }
 
-    private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval = 15) -> Bool {
-        XCTWaiter.wait(
-            for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "isEnabled == true"),
-                object: element
-            )],
-            timeout: timeout
-        ) == .completed
+    /// The states the Cases screen settles on once it knows what it can show. While
+    /// `case-loading` is up it has not decided; each of these is a decision.
+    private static let casesSettledStates = ["case-list", "case-empty-state", "cms-not-enabled", "case-load-error"]
+
+    /// Wait until the Cases screen leaves its loading state and return the identifier of
+    /// the state it settled on, or nil if it never settled. One query over all of them,
+    /// so no state is given a shorter wait than another.
+    private func waitForCasesScreenToSettle(timeout: TimeInterval = 15) -> String? {
+        let settled = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier IN %@", Self.casesSettledStates)
+        ).firstMatch
+        guard settled.waitForExistence(timeout: timeout) else { return nil }
+        return Self.casesSettledStates.first { find($0).exists }
+    }
+
+    /// Wait for the Cases screen to be ready for a new case, failing with what it showed
+    /// instead: still loading, case management off, or the load error and its message.
+    private func waitForCasesReady(file: StaticString = #filePath, line: UInt = #line) {
+        let state = waitForCasesScreenToSettle()
+        switch state {
+        case "case-list", "case-empty-state":
+            break
+        case "case-load-error":
+            let shown = find("case-load-error").staticTexts.allElementsBoundByIndex.map(\.label)
+            XCTFail("Cases failed to load: \(shown.joined(separator: " — "))", file: file, line: line)
+        case "cms-not-enabled":
+            XCTFail("Case management should be on for this hub", file: file, line: line)
+        default:
+            XCTFail("Cases screen was still loading after 15s", file: file, line: line)
+        }
     }
 
     /// Create a case through the create-case sheet and wait for the sheet to close.
     private func createCase(title: String, entityTypeName: String) {
         // `case-new-btn` is a toolbar Button — query the button itself, not its
-        // container. It is present from the first toolbar resolution and starts
-        // disabled, becoming enabled once CMS state and entity types have loaded
-        // over the API, so wait on `isEnabled` rather than on existence.
+        // container. It exists from the first toolbar resolution and is disabled until
+        // the screen is ready, which the content area signals: wait for that, then New
+        // Case must already be offered. Its readiness and the content's come from one
+        // model update, so a button still disabled here is a defect, not slowness.
+        waitForCasesReady()
         let newCase = app.buttons["case-new-btn"]
-        XCTAssertTrue(newCase.waitForExistence(timeout: 15), "New Case should be present in the Cases toolbar")
-        XCTAssertTrue(
-            waitForEnabled(newCase),
-            "New Case should be offered once case management is on"
-        )
+        XCTAssertTrue(newCase.exists, "New Case should be present in the Cases toolbar")
+        XCTAssertTrue(newCase.isEnabled, "New Case should be offered once the Cases screen is ready")
         newCase.tap()
 
         let sheet = find("create-case-sheet")
