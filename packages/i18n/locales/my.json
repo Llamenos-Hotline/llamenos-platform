@@ -191,7 +191,11 @@
     "selectBackupFile": "အရန်ဖိုင်ကို ရွေးချယ်ပါ",
     "passkeyLoginFailed": "Passkey ဝင်ရောက်မှု မအောင်မြင်ပါ",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "ဖိတ်ကြားမှုကုဒ် ရှိပါသည်",
+    "redeemInviteCodeLabel": "ဖိတ်ကြားမှုကုဒ်",
+    "redeemInviteCodePlaceholder": "သင်၏ ဖိတ်ကြားမှုကုဒ်ကို ကူးထည့်ပါ",
+    "redeemInviteSubmit": "ဆက်လက်လုပ်ဆောင်ရန်"
   },
   "banList": {
     "add": "ပိတ်ပင်ချက် ထည့်မည်",
