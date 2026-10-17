@@ -14,3 +14,4 @@ demo_vars.yml
 inventory-demo.yml
 demo_vars.yml.*
 inventory-demo.yml.*
+.roundtrip-inventory.yml

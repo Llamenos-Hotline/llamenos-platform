@@ -9,12 +9,12 @@ Recover the Llamenos platform from a complete server loss.
 | Metric | Target |
 |---|---|
 | RTO (Recovery Time Objective) | 2 hours |
-| RPO (Recovery Point Objective) | 24 hours (daily backups) |
+| RPO (Recovery Point Objective) | 24 hours (daily backups; there is no WAL archiving, so there is no finer-grained recovery) |
 
 ## Prerequisites
 
 - Access to backup storage (rclone remote configured)
-- 1984 Hosting account (or alternative VPS provider)
+- An account with your VPS provider
 - Ansible vault password
 - SSH key for deployment
 
@@ -22,10 +22,13 @@ Recover the Llamenos platform from a complete server loss.
 
 ### 1. Provision new VPS
 
-Follow the OpenTofu module docs at `deploy/opentofu/modules/1984hosting/main.tf`:
-- Order VPS at 1984 Hosting (Debian 13, 4GB+ RAM)
-- Add SSH key
-- Note public IPv4/IPv6
+Follow the OpenTofu module docs under `deploy/opentofu/modules/` for
+your provider:
+- Order a VPS (Debian 13, 4GB+ RAM) with full-disk encryption — the
+  backup and restore plays refuse to write data at rest on a host that
+  declares `llamenos_disk_encrypted: false`
+- Add the deploy SSH key
+- Note the public IPv4/IPv6
 
 ### 2. Update DNS
 
@@ -47,24 +50,31 @@ rclone copy <remote>:llamenos-backups/<latest_date>/ /tmp/restore/
 ./deploy/scripts/deploy-official.sh
 ```
 
-### 5. Restore database
+### 5. Restore database, object store and config
+
+Do not hand-roll this. `restore.yml` decrypts the archives, drops and
+recreates the database, runs `pg_restore`, writes the object store back
+into its Docker volume, restores every service's config, and brings the
+stack up again — and it brings the stack up even if a step fails.
 
 ```bash
-# Copy backup to server
-scp /tmp/restore/postgres-backup.sql.gz deploy@<new_ip>:/tmp/
+# Put the backups where the new host can read them
+rsync -av /tmp/restore/ deploy@<new_ip>:/tmp/llamenos-backups/
 
-# Restore
-ssh deploy@<new_ip>
-docker exec -i $(docker ps -q -f name=postgres) \
-  sh -c 'gunzip -c /tmp/postgres-backup.sql.gz | psql -U llamenos'
+cd deploy/ansible
+ansible-playbook playbooks/restore.yml --ask-vault-pass \
+  -e restore_source_dir=/tmp/llamenos-backups \
+  -e backup_age_private_key_path=/path/to/backup-key.txt
 ```
 
-### 6. Restore file storage
+The private key must be reachable for the decrypt step; remove it from
+the host again afterwards.
 
-```bash
-# Copy RustFS data
-rsync -avz /tmp/restore/rustfs-data/ deploy@<new_ip>:/opt/llamenos/data/rustfs/
-```
+> **The previous version of this runbook was wrong and would have failed
+> during an incident.** It told you to `gunzip | psql` a file called
+> `postgres-backup.sql.gz` — a name no script has ever produced, in a
+> format `psql` cannot read. Backups are `pg_dump --format=custom`,
+> age-encrypted, named `llamenos-postgres-<ts>.dump.age`.
 
 ### 7. Verify
 
@@ -79,24 +89,58 @@ ansible-playbook playbooks/smoke-check.yml -i inventory-production.yml -e "@vars
 
 ## Backup Verification
 
-The Ansible `backup` role runs daily encrypted backups to off-site storage via rclone. Verify backups are running:
+`setup.yml` installs the backup scripts and a daily 03:00 UTC cron on
+every deploy, and encryption is mandatory (the scripts refuse to run
+without an age recipient; preflight fails the deploy without one).
+
+Offsite copies are **not** automatic: they happen only if
+`backup_rclone_remote` is set. Until it is, every backup sits on the
+same disk as the database it protects. Check which state you are in:
 
 ```bash
 ssh deploy@<server>
 
-# Check last backup timestamp
-ls -la /opt/llamenos/backups/
+# Latest artifacts (all must end in .age)
+find /opt/llamenos/backups -type f -name 'llamenos-*' -printf '%T@ %p\n' \
+  | sort -rn | head -5 | cut -d' ' -f2-
 
-# Check rclone sync status
-rclone ls <remote>:llamenos-backups/ | tail -5
+# Backup monitor verdict
+tail -20 /opt/llamenos/backups/monitor.log
+```
+
+```bash
+cd deploy/ansible
+just backup-status
 ```
 
 ## Restore Testing
 
-Test the restore procedure quarterly using `deploy/ansible/playbooks/test-restore.yml`:
+Two different tests. Run both; they prove different things.
+
+**Monthly — does *this host's actual backup* restore?** Restores the
+latest real backup into a throwaway container on the host and asserts it
+yields a non-empty schema. Non-destructive; production is untouched.
 
 ```bash
-ansible-playbook playbooks/test-restore.yml -i inventory.yml -e "@vars.yml"
+cd deploy/ansible
+just test-restore
 ```
+
+**On every change — does the *mechanism* still work?** Backs up known
+content, destroys it, runs the real `restore.yml`, asserts the content
+came back, and asserts no artifact leaks a secret. Runs entirely against
+throwaway containers; touches no host. CI runs it on every change under
+`deploy/ansible/`.
+
+```bash
+cd deploy/ansible
+just verify-backup-restore
+```
+
+The second test exists because every defect found in the 2026-09-27 audit
+of this area — a justfile that did not parse, a restore that validated
+against a table dropped years earlier, backups that no deploy installed —
+was found by running the playbooks, and none of them by reading the
+playbooks. Read-only review of this area has a poor track record. Run it.
 
 This provisions a temporary server, restores from backup, runs health checks, and tears down.

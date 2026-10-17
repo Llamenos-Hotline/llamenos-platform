@@ -1,205 +1,267 @@
 # Backup and Restore
 
-This document covers the Llamenos backup and restore procedures. Backups are managed by Ansible playbooks in `deploy/ansible/playbooks/`.
+Backups are installed and run by the Ansible playbooks in
+`deploy/ansible/playbooks/`. This document describes the procedures as
+they were **actually executed and verified**, not as designed — every
+command below is one the round-trip test runs.
+
+> **Verified round trip.** `deploy/ansible/scripts/verify-backup-restore.sh`
+> backs up a database with known content, destroys it, runs the real
+> `playbooks/restore.yml`, and asserts the content came back. It runs in
+> CI on every change under `deploy/ansible/`. Run it yourself with
+> `just verify-backup-restore`. If you change anything in this document's
+> subject matter, change that test first.
 
 ## What Gets Backed Up
 
 | Service | Data | Criticality |
 |---------|------|-------------|
 | **PostgreSQL** | All application data (calls, notes, volunteers, shifts, audit logs, key material) | Critical |
-| **WebSocket relay** | WebSocket relay events (real-time presence, hub events) | High |
-| **RustFS** | File attachments | Medium |
-| **Config** | `docker-compose.yml`, `.env`, `Caddyfile` | Critical |
+| **RustFS** | File attachments (the `/data` Docker volume, archived directly) | Medium |
+| **Config** | `{{ app_dir }}/services/` — every service's Compose file and `.env` — plus the Caddyfile | Critical |
+
+The config archive contains **every service secret**: the database
+password, the server identity secret, and every provider credential.
+That is why encryption is mandatory (below) and why the archive must
+never be handled as an ordinary file.
+
+### What is *not* backed up
+
+- **The Ansible vault.** It lives on your control node, not on the
+  server, so no server-side role can reach it. Back it up where it lives.
+- **Write-ahead logs.** There is no WAL archiving and therefore no
+  point-in-time recovery. RPO is the backup interval — 24 hours by
+  default. (A `backup_postgres_wal_enabled` flag used to exist and only
+  ever created an empty directory; it was removed rather than left to
+  imply a capability that did not exist.)
 
 ## Prerequisites
 
-- Ansible 2.15+ installed: `pip install ansible`
-- Ansible inventory configured at `deploy/ansible/inventory.yml`
-- (Optional) `age` installed for encrypted backups — strongly recommended for production
-- (Optional) `rclone` configured for remote storage offsite copies
+- Ansible installed on the control node
+- Inventory configured at `deploy/ansible/inventory.yml`
+- **An age keypair.** This is required, not optional — see below.
+- (Optional but strongly recommended) `rclone` configured for offsite copies
+
+`age` itself is installed on the server by the backup roles.
+
+## Encryption is mandatory
+
+There is no unencrypted backup path. The backup scripts refuse to run
+without a recipient key, and `playbooks/preflight.yml` fails the deploy
+if `backup_enabled` is true and `backup_age_public_key` is unset.
+
+Generate the keypair **on your admin machine, never on the server**:
+
+```bash
+age-keygen -o backup-key.txt
+# public key: age1...
+```
+
+Put the `age1...` public half in `backup_age_public_key` in
+`deploy/ansible/vars.yml`. Store `backup-key.txt` somewhere safe and off
+the server — a private key sitting next to the backups it decrypts
+protects nothing, and both the database dump and the archive holding
+every `.env` go to the same offsite remote.
+
+Every artifact is written as `*.age`. The round-trip test asserts this,
+and additionally greps every artifact (and its gunzipped form) for the
+database password to prove nothing readable escapes.
 
 ## Backup Procedure
 
-### Automated (Recommended)
+### Automated — part of every deploy
 
-The backup playbook deploys scripts and a daily cron job to the server. Run it once to set up automated backups:
+`setup.yml` imports `playbooks/backup.yml`, so a deployed host always has
+the backup scripts and the daily cron. Nothing extra to remember.
 
 ```bash
 cd deploy/ansible
-ansible-playbook playbooks/backup.yml --ask-vault-pass
+just setup-all           # or: ansible-playbook setup.yml --ask-vault-pass
 ```
 
-This installs scripts under `{{ app_dir }}/scripts/` and schedules a daily backup at 03:00 UTC via cron. The cron runs `backup-all.sh`, which calls each service script in dependency order and produces a unified manifest file with checksums.
-
-### Manual / On-Demand
-
-SSH to the server and run the orchestrator directly:
+To install or refresh only the backup layer:
 
 ```bash
-ssh deploy@YOUR_SERVER -p 2222
+just backup              # ansible-playbook playbooks/backup.yml --ask-vault-pass
+```
+
+This installs scripts under `{{ app_dir }}/scripts/` and schedules a
+daily run at 03:00 UTC. The cron runs `backup-all.sh`, which calls each
+service script in dependency order and writes a manifest with SHA-256
+checksums.
+
+### Manual / on-demand
+
+```bash
+ssh deploy@YOUR_SERVER
 /opt/llamenos/scripts/backup-all.sh
 ```
 
-To backup a single service:
+Single service:
 
 ```bash
 /opt/llamenos/scripts/backup-postgres.sh   # PostgreSQL only
-/opt/llamenos/scripts/backup-WebSocket relay.sh     # WebSocket relay only
 /opt/llamenos/scripts/backup-rustfs.sh     # RustFS objects only
-/opt/llamenos/scripts/backup-config.sh     # Config files only
+/opt/llamenos/scripts/backup-config.sh     # Service configs only
 ```
 
-Via Ansible with a tag:
+Or via Ansible tags:
 
 ```bash
-ansible-playbook playbooks/backup.yml --ask-vault-pass --tags postgres
-ansible-playbook playbooks/backup.yml --ask-vault-pass --tags WebSocket relay
-ansible-playbook playbooks/backup.yml --ask-vault-pass --tags rustfs
-ansible-playbook playbooks/backup.yml --ask-vault-pass --tags config
+just backup-service postgres
+just backup-service rustfs
+just backup-service config
 ```
 
-### Backup Retention
-
-Backups are stored on-server at `{{ app_dir }}/backups/`:
+### Layout and retention
 
 ```
-backups/
-  postgres/{daily,weekly,monthly}/
-  WebSocket relay/{daily,weekly,monthly}/
-  rustfs/{daily,weekly,monthly}/
-  config/{daily,weekly,monthly}/
-  manifest-YYYYMMDD-HHMMSS.txt    # Unified checksums, kept for 30 runs
+{{ app_dir }}/backups/
+  postgres/{daily,weekly,monthly}/llamenos-postgres-<ts>.dump.age
+  rustfs/{daily,weekly,monthly}/llamenos-rustfs-<ts>.tar.gz.age
+  config/{daily,weekly,monthly}/llamenos-config-<ts>.tar.gz.age
+  manifest-YYYYMMDD-HHMMSS.txt    # checksums, last 30 runs
+  manifest.log
   backup.log
 ```
 
-### Encryption
+PostgreSQL is dumped with `pg_dump --format=custom` from inside the
+container — a consistent logical snapshot, restored with `pg_restore`.
+It is **not** a `.sql.gz` and `psql` cannot read it.
 
-Production deployments should encrypt backups with `age`. Set `backup_age_public_key` in `deploy/ansible/vars.yml`. Each backup file is encrypted before being written to disk.
+RustFS is archived by streaming a tarball of the Docker volume behind the
+container's `/data` mount. This needs no S3 client and no credentials.
 
-### Remote Offsite Copies
+### Offsite copies
 
-Set `backup_rclone_remote` in `vars.yml` to automatically sync backups to a remote storage destination after each run (Backblaze B2, S3-compatible, SFTP, etc.). `rclone` is installed automatically if this is configured.
+Set `backup_rclone_remote` in `vars.yml`. Without it, every copy sits on
+the same disk as the database it protects, so host loss is total data
+loss. Preflight warns when it is empty.
+
+Note: retention pruning currently applies to the local directories only.
+An offsite remote needs its own lifecycle policy.
 
 ### Monitoring
 
-Set `backup_monitor_webhook_url` in `vars.yml` to send a POST notification to a webhook (Healthchecks.io, ntfy, etc.) after each backup run. The `backup-monitor` role handles this automatically.
+Set `backup_monitor_webhook_url` in `vars.yml`. Without it the daily
+health check still runs, but writes only to
+`{{ app_dir }}/backups/monitor.log`, which nobody reads — a missed backup
+is then discovered during the incident that needs it. Preflight warns
+when it is empty.
 
 ---
 
 ## Restore Procedure
 
-**WARNING**: Restore is destructive. It drops and recreates the database. Always verify backups are intact before restoring to a production system. Test restores with `restore_dry_run=true` first.
+**Restore is destructive**: it drops and recreates the database. Do a dry
+run first.
 
-### Dry Run (Verify Without Restoring)
+Restoring brings the stack back up **even if the restore fails part
+way**. The start-the-stack step lives in the playbook's `always` block
+precisely so that a failed recovery cannot also leave the application
+down.
 
-```bash
-cd deploy/ansible
-ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_dry_run=true
-```
-
-This logs what would be restored without touching any data.
-
-### Full Restore (Latest Backup)
+### Dry run
 
 ```bash
 cd deploy/ansible
-ansible-playbook playbooks/restore.yml --ask-vault-pass
+just restore-dry-run
 ```
 
-Restore order is fixed:
-1. Stop all services
-2. Restore config (`docker-compose.yml`, `.env`, `Caddyfile`)
-3. Start PostgreSQL only, restore database (drop + recreate + pg_restore)
-4. Start WebSocket relay, import WebSocket events
-5. Start RustFS, sync file attachments
-6. Start full stack
-7. Wait for `/api/health` to return 200
+### Full restore from the latest backup
 
-### Point-in-Time Restore
+```bash
+cd deploy/ansible
+just restore
+# equivalently:
+# ansible-playbook playbooks/restore.yml --ask-vault-pass \
+#   -e backup_age_private_key_path=/path/to/backup-key.txt
+```
 
-To restore from a specific timestamp (format: `YYYYMMDD-HHMMSS`):
+Order:
+
+1. Stop every service Compose project under `{{ app_dir }}/services/*/`
+2. Decrypt and restore the config archive (the whole `services/` tree, plus the Caddyfile)
+3. Start PostgreSQL only; drop, recreate and `pg_restore` the database
+4. Validate — count tables in the `public` schema; **fail loudly if zero**
+5. Stop RustFS, write the restored objects back into its data volume, start it
+6. Start every service Compose project and wait for `/api/health`
+
+### Point-in-time (from a specific backup)
 
 ```bash
 ansible-playbook playbooks/restore.yml --ask-vault-pass \
   -e restore_timestamp=20260308-030000
 ```
 
-### Restore a Single Service
+### A single service
 
 ```bash
 ansible-playbook playbooks/restore.yml --ask-vault-pass --tags postgres
-ansible-playbook playbooks/restore.yml --ask-vault-pass --tags WebSocket relay
 ansible-playbook playbooks/restore.yml --ask-vault-pass --tags rustfs
 ansible-playbook playbooks/restore.yml --ask-vault-pass --tags config
 ```
 
-### Cross-Host Restore (Disaster Recovery)
-
-To restore to a new server from backups copied from the old server:
+### Cross-host restore
 
 ```bash
-# Copy backups to new server first
 rsync -av deploy@OLD_SERVER:/opt/llamenos/backups/ /tmp/llamenos-backups/
 
-# Restore using the copied backup directory
 ansible-playbook playbooks/restore.yml --ask-vault-pass \
-  -e restore_source_dir=/tmp/llamenos-backups
+  -e restore_source_dir=/tmp/llamenos-backups \
+  -e backup_age_private_key_path=/path/to/backup-key.txt
 ```
 
-Or use `restore_source_host` if the playbook has direct SSH access to the old server.
-
-### Encrypted Backups
-
-If backups are encrypted with `age`, provide the private key path:
-
-```bash
-ansible-playbook playbooks/restore.yml --ask-vault-pass \
-  -e restore_age_key_path=/path/to/age-private-key.txt
-```
+The private key must be reachable from the target host for the decrypt
+step. Remove it again when the restore finishes.
 
 ---
 
-## Verification Steps
+## Verification
 
-After any restore, verify data integrity before resuming operations:
-
-```bash
-# Check application health
-curl -s https://hotline.yourorg.org/api/health
-# Expected: {"status":"ok"}
-
-# Check Kubernetes/Docker health probes
-curl -s http://localhost:3000/health/ready
-curl -s http://localhost:3000/health/live
-
-# Check all services are running
-docker compose ps
-
-# Verify PostgreSQL row counts (spot check)
-docker compose exec postgres psql -U llamenos -d llamenos \
-  -c "SELECT COUNT(*) FROM kv_store;"
-
-# Check WebSocket relay
-curl -sI https://hotline.yourorg.org/WebSocket
-# Expected: 426 Upgrade Required
-
-# Check RustFS
-curl -sf http://localhost:9000/health
-```
-
-Also run the backup-status playbook to confirm the backup monitor is healthy:
+### After a restore
 
 ```bash
-ansible-playbook playbooks/backup-status.yml --ask-vault-pass
+# Tables actually present (the restore playbook asserts this is non-zero)
+docker compose -f /opt/llamenos/services/postgres/docker-compose.yml \
+  exec -T postgres psql -U llamenos -d llamenos -tAc \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
+
+# Spot-check a table you expect to have rows
+docker compose -f /opt/llamenos/services/postgres/docker-compose.yml \
+  exec -T postgres psql -U llamenos -d llamenos -tAc \
+  "SELECT count(*) FROM hubs"
+
+# Application health
+curl -sf http://localhost:3000/api/health
+curl -sf http://localhost:3000/health/ready
+
+# Every service Compose project
+for f in /opt/llamenos/services/*/docker-compose.yml; do
+  echo "== $f"; docker compose -f "$f" ps
+done
 ```
+
+### Ongoing
+
+```bash
+just backup-status          # is the backup monitor healthy?
+just test-restore           # monthly: restore the host's latest REAL backup
+                            # into a scratch container and assert a schema
+just verify-backup-restore  # local: full round trip, no host involved
+```
+
+`just verify-backup-restore` is the one that proves the *mechanism*;
+`just test-restore` is the one that proves *this host's actual backups*
+are restorable. Do both.
 
 ---
 
 ## See Also
 
-- `deploy/ansible/playbooks/backup.yml` — full backup orchestration playbook
-- `deploy/ansible/playbooks/restore.yml` — full restore playbook
-- `deploy/ansible/playbooks/test-restore.yml` — automated restore test playbook (runs dry-run + integrity checks)
-- `deploy/ansible/playbooks/dr-test.yml` — disaster recovery drill playbook
-- `docs/DR_SCENARIOS.md` — disaster recovery scenarios and runbook
-- `docs/RUNBOOK.md` — operational runbook including backup monitoring alerts
+- `deploy/ansible/scripts/verify-backup-restore.sh` — the verified round trip (CI runs this)
+- `deploy/ansible/playbooks/backup.yml` — backup orchestration, imported by `setup.yml`
+- `deploy/ansible/playbooks/restore.yml` — restore
+- `deploy/ansible/playbooks/test-restore.yml` — on-host restore drill
+- `deploy/ansible/group_vars/all/compose.yml` — canonical per-service Compose paths
+- `docs/runbooks/disaster-recovery.md` — full server-loss recovery

@@ -4,14 +4,13 @@
 backup_base_dir: "{{ app_dir }}/backups"
 backup_rustfs_dir: "{{ backup_base_dir }}/rustfs"
 
-# RustFS connection (S3-compatible bucket)
-backup_rustfs_container: llamenos-rustfs-1
+# The backup reads the Docker volume behind the rustfs container's /data
+# mount, so it needs no S3 endpoint, alias or credentials. Only the bucket
+# name is still recorded, for the manifest and the restore summary.
 backup_rustfs_bucket: llamenos-files
-backup_rustfs_alias: local # s3 alias name
 
-# S3 mirror options
-backup_rustfs_remove_deleted: false # mirror --remove (sync deletes)
-backup_rustfs_overwrite: false # mirror --overwrite (re-copy changed)
+# Image used as the volume reader/writer. Needs only a shell and cp/tar.
+backup_rustfs_helper_image: "alpine:3.22"
 
 # Retention policy
 backup_rustfs_retain_daily: 7
@@ -24,5 +23,6 @@ backup_age_public_key: ""
 # Remote storage via rclone
 backup_rclone_remote: ""
 
-# Docker compose file path
-backup_compose_file: "{{ app_dir }}/docker-compose.yml"
+# Docker compose file path -- the rustfs service's own Compose project.
+# See group_vars/all/compose.yml.
+backup_compose_file: "{{ llamenos_compose_rustfs }}"

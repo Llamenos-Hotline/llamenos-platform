@@ -124,12 +124,26 @@
 
         # ── Stop services ──────────────────────────────────────────────
 
-        - name: Stop Docker Compose stack
-          ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml down
+        # Every service has its own Compose project under
+        # {{ llamenos_services_dir }}/<service>/ (see group_vars/all/compose.yml).
+        # There is no aggregate {{ app_dir }}/docker-compose.yml on a
+        # production host, which is why none of this playbook could run
+        # before (#1121). Iterating the directory also means a host that
+        # runs only some of the optional services needs no special casing.
+        - name: Stop every service Compose project
+          ansible.builtin.shell: |
+            set -u
+            shopt -s nullglob
+            for f in {{ llamenos_compose_glob }}; do
+              echo "down: ${f}"
+              docker compose -f "${f}" down || true
+            done
+          args:
+            executable: /bin/bash
+          register: stack_down
+          changed_when: true
           when: not restore_dry_run
           tags: [postgres, rustfs, config]
-          ignore_errors: true
 
         - name: "[DRY RUN] Would stop Docker Compose stack"
           ansible.builtin.debug:
@@ -160,22 +174,42 @@
             - not restore_dry_run
           tags: [config]
 
+        # The archive stores paths relative to /, so extracting it
+        # reproduces {{ llamenos_services_dir }}/<svc>/{docker-compose.yml,.env.<svc>}
+        # and the Caddyfile under the temp dir. Copy the whole service tree
+        # back rather than the three hardcoded filenames the single-compose
+        # layout used to have (#1121).
         - name: Extract and restore config files
           ansible.builtin.shell: |
+            set -euo pipefail
             cd {{ restore_tmpdir.path }}
             tar -xzf config.tar.gz
-            # Restore docker-compose.yml, .env, Caddyfile (preserve ownership)
-            for f in {{ app_dir }}/docker-compose.yml {{ app_dir }}/.env {{ app_dir }}/Caddyfile; do
-              relpath="${f}"
-              if [ -f "{{ restore_tmpdir.path }}${relpath}" ]; then
-                cp "{{ restore_tmpdir.path }}${relpath}" "${f}"
+            restored=0
+            if [ -d "{{ restore_tmpdir.path }}{{ llamenos_services_dir }}" ]; then
+              mkdir -p "{{ llamenos_services_dir }}"
+              cp -a "{{ restore_tmpdir.path }}{{ llamenos_services_dir }}/." "{{ llamenos_services_dir }}/"
+              echo "Restored: {{ llamenos_services_dir }}"
+              restored=1
+            fi
+            for f in {{ app_dir }}/Caddyfile {{ app_dir }}/caddy/Caddyfile; do
+              if [ -f "{{ restore_tmpdir.path }}${f}" ]; then
+                mkdir -p "$(dirname "${f}")"
+                cp -a "{{ restore_tmpdir.path }}${f}" "${f}"
                 echo "Restored: ${f}"
+                restored=1
               fi
             done
+            if [ "${restored}" -eq 0 ]; then
+              echo "ERROR: the config archive contained none of the expected paths" >&2
+              exit 1
+            fi
+          args:
+            executable: /bin/bash
           when:
             - config_backup_file is defined
             - not restore_dry_run
           register: config_restore_result
+          changed_when: true
           tags: [config]
 
         - name: "[DRY RUN] Would restore config from {{ config_backup_file | default('N/A') }}"
@@ -188,13 +222,13 @@
 
         - name: Start PostgreSQL container only
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d postgres
+            cmd: docker compose -f {{ llamenos_compose_postgres }} up -d postgres
           when: not restore_dry_run and (pg_backup_file is defined or rustfs_backup_file is defined)
           tags: [postgres, rustfs]
 
         - name: Wait for PostgreSQL to be ready
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres pg_isready -U llamenos -d llamenos
+            cmd: docker compose -f {{ llamenos_compose_postgres }} exec -T postgres pg_isready -U llamenos -d llamenos
           register: pg_ready
           retries: 15
           delay: 2
@@ -219,9 +253,9 @@
 
         - name: Drop and recreate database
           ansible.builtin.shell: |
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres \
+            docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
               psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS llamenos;"
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres \
+            docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
               psql -U llamenos -d postgres -c "CREATE DATABASE llamenos OWNER llamenos;"
           when:
             - pg_backup_file is defined
@@ -230,7 +264,7 @@
 
         - name: Restore PostgreSQL from backup
           ansible.builtin.shell: |
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres \
+            docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
               pg_restore -U llamenos -d llamenos --no-owner --no-privileges \
               < {{ restore_tmpdir.path }}/pg.dump
           register: pg_restore_result
@@ -240,21 +274,54 @@
           tags: [postgres]
           ignore_errors: true
 
-        - name: Validate PostgreSQL restore
+        # This used to query kv_store -- a Durable-Objects-era table that has
+        # not existed in any migration for a long time -- with no
+        # failed_when, so the play died here and skipped "Start full stack",
+        # leaving the operator mid-recovery with the application down
+        # (#1125). information_schema is schema-version independent, so this
+        # check cannot rot the same way.
+        - name: Validate PostgreSQL restore (table count)
           ansible.builtin.command:
             cmd: >
-              docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres
-              psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM kv_store"
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
+              psql -U llamenos -d llamenos -tAc
+              "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
           register: pg_validate
+          changed_when: false
+          failed_when: false
           when:
             - pg_backup_file is defined
             - not restore_dry_run
           tags: [postgres]
 
+        - name: Record restored table count
+          ansible.builtin.set_fact:
+            pg_restored_tables: "{{ pg_validate.stdout | default('0') | trim | int }}"
+          when: pg_validate is defined and pg_validate.stdout is defined
+          tags: [postgres]
+
         - name: Display PostgreSQL restore result
           ansible.builtin.debug:
-            msg: "PostgreSQL restore: kv_store rows = {{ pg_validate.stdout | trim }}"
-          when: pg_validate is defined and pg_validate.stdout is defined
+            msg: >-
+              PostgreSQL restore: {{ pg_restored_tables | default(0) }} tables
+              in schema "public"
+          when: pg_restored_tables is defined
+          tags: [postgres]
+
+        # A restore that produced an empty schema is a failed restore, and the
+        # operator must be told so rather than reading a success summary. This
+        # is deliberately the LAST thing that can fail inside the block: the
+        # stack is brought back up from the always: section regardless.
+        - name: Fail if the restored database has no tables
+          ansible.builtin.fail:
+            msg: >-
+              PostgreSQL restore produced an empty schema (0 tables in
+              "public"). pg_restore output:
+              {{ pg_restore_result.stderr | default(pg_restore_result.stdout) | default('no output') }}
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+            - (pg_restored_tables | default(0) | int) == 0
           tags: [postgres]
 
         - name: "[DRY RUN] Would restore PostgreSQL from {{ pg_backup_file | default('N/A') }}"
@@ -267,16 +334,16 @@
 
         - name: Start RustFS container
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d rustfs
+            cmd: docker compose -f {{ llamenos_compose_rustfs }} up -d rustfs
           when: not restore_dry_run and rustfs_backup_file is defined
           tags: [rustfs]
 
         - name: Wait for RustFS to be healthy
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml exec -T rustfs curl -sf http://localhost:9000/health
+            cmd: docker compose -f {{ llamenos_compose_rustfs }} exec -T rustfs curl -sf http://localhost:9000/health
           register: rustfs_ready
-          retries: 10
-          delay: 2
+          retries: "{{ restore_rustfs_retries | default(10) }}"
+          delay: "{{ restore_rustfs_delay | default(2) }}"
           until: rustfs_ready.rc == 0
           when: not restore_dry_run and rustfs_backup_file is defined
           tags: [rustfs]
@@ -295,19 +362,52 @@
             - not restore_dry_run
           tags: [rustfs]
 
-        - name: Copy restored files into RustFS container
+        # This used to `aws s3 sync` inside the rustfs image, which has no
+        # AWS CLI, under ignore_errors -- so attachments were never restored
+        # and the summary said "RESTORED" anyway (#1125). The backup now
+        # archives the /data volume, so the restore writes that volume back
+        # with the same helper container. RustFS must be stopped while its
+        # data directory is replaced underneath it.
+        - name: Stop RustFS before replacing its data volume
+          ansible.builtin.command:
+            cmd: docker compose -f {{ llamenos_compose_rustfs }} stop rustfs
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+          changed_when: true
+          tags: [rustfs]
+
+        - name: Write restored objects back into the RustFS data volume
           ansible.builtin.shell: |
-            CONTAINER_NAME="$(docker compose -f {{ app_dir }}/docker-compose.yml ps -q rustfs)"
-            docker cp {{ restore_tmpdir.path }}/rustfs-restore/. "${CONTAINER_NAME}:/tmp/rustfs-restore/"
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T rustfs \
-              sh -c "aws s3 sync /tmp/rustfs-restore/ s3://{{ backup_rustfs_bucket | default('llamenos-files') }}/ --endpoint-url http://localhost:9000; \
-                     rm -rf /tmp/rustfs-restore"
+            set -euo pipefail
+            CONTAINER_ID="$(docker compose -f {{ llamenos_compose_rustfs }} ps -aq rustfs)"
+            if [ -z "${CONTAINER_ID}" ]; then
+              echo "ERROR: no rustfs container under {{ llamenos_compose_rustfs }}" >&2
+              exit 1
+            fi
+            {% raw %}
+            DATA_VOLUME="$(docker inspect \
+              --format '{{ range .Mounts }}{{ if eq .Destination "/data" }}{{ .Name }}{{ end }}{{ end }}' \
+              "${CONTAINER_ID}")"
+            {% endraw %}
+            if [ -z "${DATA_VOLUME}" ]; then
+              echo "ERROR: could not resolve the volume behind rustfs /data" >&2
+              exit 1
+            fi
+            docker run --rm \
+              -v "${DATA_VOLUME}:/data" \
+              -v "{{ restore_tmpdir.path }}/rustfs-restore:/in:ro" \
+              "{{ backup_rustfs_helper_image | default('alpine:3.22') }}" \
+              sh -c 'rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null || true; cp -a /in/. /data/'
+            echo "Restored $(find {{ restore_tmpdir.path }}/rustfs-restore -type f | wc -l) files into ${DATA_VOLUME}"
+          args:
+            executable: /bin/bash
           register: rustfs_restore_result
+          changed_when: true
           when:
             - rustfs_backup_file is defined
             - not restore_dry_run
           tags: [rustfs]
-          ignore_errors: true
 
         - name: Display RustFS restore result
           ansible.builtin.debug:
@@ -321,13 +421,30 @@
           when: restore_dry_run and rustfs_backup_file is defined
           tags: [rustfs]
 
-        # ── Start full stack ───────────────────────────────────────────
-
-        - name: Start full Docker Compose stack
-          ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d
+      # Bringing the stack back up lives in `always`, not in the block.
+      # Every one of these tasks used to sit after the validation step, so
+      # any failure during the restore -- including the validation query
+      # itself, which referenced a table that no longer exists -- skipped
+      # them and left the operator with a restored database, postgres up
+      # and the application down (#1125). Recovery must never be the thing
+      # that takes the app offline permanently.
+      always:
+        - name: Start every service Compose project
+          ansible.builtin.shell: |
+            set -u
+            shopt -s nullglob
+            rc=0
+            for f in {{ llamenos_compose_glob }}; do
+              echo "up: ${f}"
+              docker compose -f "${f}" up -d || rc=1
+            done
+            exit "${rc}"
+          args:
+            executable: /bin/bash
+          register: stack_up
+          changed_when: true
           when: not restore_dry_run
-          tags: [postgres, rustfs, config]
+          tags: always
 
         - name: Wait for application health check
           ansible.builtin.uri:
@@ -336,31 +453,31 @@
             status_code: 200
             return_content: true
           register: health_check
-          retries: 20
-          delay: 5
+          retries: "{{ restore_health_retries | default(20) }}"
+          delay: "{{ restore_health_delay | default(5) }}"
           until: health_check.status == 200
           when: not restore_dry_run
-          tags: [postgres, rustfs, config]
+          tags: always
           ignore_errors: true
+
+        - name: Clean up temp directory
+          ansible.builtin.file:
+            path: "{{ restore_tmpdir.path }}"
+            state: absent
+          when: restore_tmpdir is defined
+          tags: always
 
         - name: Display restore summary
           ansible.builtin.debug:
             msg: |
               Restore {{ 'DRY RUN ' if restore_dry_run else '' }}complete.
 
-               PostgreSQL: {{ 'RESTORED' if pg_backup_file is defined and not restore_dry_run else 'SKIPPED' }}
-               RustFS:     {{ 'RESTORED' if rustfs_backup_file is defined and not restore_dry_run else 'SKIPPED' }}
-               Config:     {{ 'RESTORED' if config_backup_file is defined and not restore_dry_run else 'SKIPPED' }}
+               PostgreSQL: {{ 'RESTORED (' ~ (pg_restored_tables | default(0)) ~ ' tables)' if pg_restored_tables is defined else ('ATTEMPTED' if pg_backup_file is defined and not restore_dry_run else 'SKIPPED') }}
+               RustFS:     {{ 'RESTORED' if rustfs_restore_result is defined and not (rustfs_restore_result.failed | default(false)) else ('FAILED' if rustfs_backup_file is defined and not restore_dry_run else 'SKIPPED') }}
+               Config:     {{ 'RESTORED' if config_restore_result is defined and not (config_restore_result.failed | default(false)) else ('FAILED' if config_backup_file is defined and not restore_dry_run else 'SKIPPED') }}
 
+              Stack restarted: {{ 'yes' if stack_up is defined and not (stack_up.failed | default(false)) else 'NO -- check the Compose projects by hand' }}
               Health check: {{ health_check.json | default('N/A') }}
 
-              ⚠ Verify data integrity manually before resuming operations.
-          tags: always
-
-      always:
-        - name: Clean up temp directory
-          ansible.builtin.file:
-            path: "{{ restore_tmpdir.path }}"
-            state: absent
-          when: restore_tmpdir is defined
+              Verify data integrity before resuming operations.
           tags: always
