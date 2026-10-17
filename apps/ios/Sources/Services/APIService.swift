@@ -145,7 +145,11 @@ final class APIService: @unchecked Sendable {
     private(set) var baseURL: URL?
     private let cryptoService: CryptoService
     private let hubContext: HubContext
+    /// Every request a screen awaits goes through this session. It fails fast (#1915).
     private let session: URLSession
+    /// Background bootstrap only — `fetchAppConfig`, whose callers retry or degrade
+    /// silently and drive no loading state. See `init` for why it waits.
+    private let bootstrapSession: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
@@ -169,12 +173,35 @@ final class APIService: @unchecked Sendable {
         let config = sessionConfiguration
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
-        config.waitsForConnectivity = true
+        // #1915: never wait for connectivity on the request path. With
+        // `waitsForConnectivity = true` a refused or unroutable connection is not an
+        // error — the task parks until the 60s resource timeout, so every screen sat on
+        // its spinner for a full minute before an unreachable hub was reported (Shifts
+        // showed "Loading schedule..." for 60.12s against a closed port).
+        //
+        // Reads must fail fast so the screen can say so. Writes lose nothing either:
+        // `request` hands a write that fails on the network to `OfflineQueue`, which
+        // persists it and replays it when NWPathMonitor reports the path satisfied.
+        // Waiting inside URLSession only delayed that hand-off by up to a minute while
+        // the Send/Save button spun.
+        config.waitsForConnectivity = false
         // Hub API responses carry E2EE envelopes, hub rosters and call history. None of
         // it may be written to a response cache, where it would outlive logout (#1658).
         ResponseCachePolicy.harden(config)
+
+        // `GET /api/config` is the one call nothing on screen waits for: its callers are
+        // relay bootstrap (`AppState.resolveRelayURL`, five tries with a 15s total
+        // backoff, then no relay until the next unlock) and the version check (degrades
+        // to `.unknown`). Waiting for connectivity there is what lets a device that is
+        // unlocked while offline still find its relay once the network returns, so that
+        // path keeps it. A copy, so a stub `URLProtocol` in tests reaches both sessions.
+        let bootstrapConfig = (config.copy() as? URLSessionConfiguration) ?? config
+        bootstrapConfig.waitsForConnectivity = true
+        ResponseCachePolicy.harden(bootstrapConfig)
+
         // H14: Use certificate pinning delegate for all API requests
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
+        self.bootstrapSession = URLSession(configuration: bootstrapConfig, delegate: pinningDelegate, delegateQueue: nil)
 
         // The wire protocol is camelCase end to end: every input schema under
         // `packages/protocol/schemas/` declares camelCase fields, and the generated
@@ -236,6 +263,7 @@ final class APIService: @unchecked Sendable {
     /// `invalidateAndCancel` so a request already in flight still completes.
     deinit {
         session.finishTasksAndInvalidate()
+        bootstrapSession.finishTasksAndInvalidate()
     }
 
     /// Set or update the hub base URL.
@@ -587,7 +615,7 @@ final class APIService: @unchecked Sendable {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await bootstrapSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
         }

@@ -161,7 +161,7 @@ final class WebSocketService: @unchecked Sendable {
     private var typedContinuations: [UUID: AsyncStream<AttributedHubEvent>.Continuation] = [:]
     private let typedContinuationsLock = NSLock()
 
-    private let maxReconnectAttempts = 10
+    private let exponentialBackoffAttempts = 10
     private let baseReconnectDelay: TimeInterval = 1.0
     private let maxReconnectDelay: TimeInterval = 60.0
 
@@ -173,7 +173,14 @@ final class WebSocketService: @unchecked Sendable {
     init(cryptoService: CryptoService) {
         self.cryptoService = cryptoService
         let config = URLSessionConfiguration.default
-        config.waitsForConnectivity = true
+        // #1915: the relay owns its own retry policy (`handleDisconnect`: exponential
+        // backoff with jitter, surfaced as `.reconnecting(attempt:)`). With
+        // `waitsForConnectivity = true` a connect to an unreachable relay never failed —
+        // a WebSocket task's default resource timeout is seven days — so `receive()`
+        // never threw, the backoff never ran, and the state sat on `.connecting`
+        // indefinitely instead of reporting that rings cannot arrive. Fail fast and let
+        // the backoff drive reconnection.
+        config.waitsForConnectivity = false
         // `.default` shares `URLCache.shared`; relay traffic must never reach it (#1658).
         ResponseCachePolicy.harden(config)
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
@@ -522,15 +529,17 @@ final class WebSocketService: @unchecked Sendable {
         authenticated = false
         reconnectAttempt += 1
 
-        guard reconnectAttempt <= maxReconnectAttempts else {
-            connectionState = .disconnected
-            return
-        }
-
         connectionState = .reconnecting(attempt: reconnectAttempt)
 
+        // Never give up while the disconnect was not intentional: the relay is how a
+        // ring reaches an on-shift volunteer. Back off exponentially for the first
+        // `exponentialBackoffAttempts`, then keep trying at `maxReconnectDelay`. (This used to
+        // stop for good after ten attempts — about five minutes — which was only
+        // survivable while URLSession waited for connectivity on our behalf; now that
+        // a connect fails fast, a phone offline for longer would never reconnect.)
+        let exponent = Double(min(reconnectAttempt, exponentialBackoffAttempts) - 1)
         let delay = min(
-            baseReconnectDelay * pow(2.0, Double(reconnectAttempt - 1)),
+            baseReconnectDelay * pow(2.0, exponent),
             maxReconnectDelay
         )
         let jitter = Double.random(in: 0...(delay * 0.3))
