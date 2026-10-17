@@ -550,6 +550,44 @@ pub fn mobile_decrypt_message(
     with_secrets(|secrets, ds| open_message(secrets, ds, &encrypted_content, &envelopes))
 }
 
+/// Seal a conversation message (`LABEL_MESSAGE`) for several readers in the
+/// stored-record format — the writer half of [`mobile_decrypt_message`].
+///
+/// `reader_pubkeys` are X25519 encryption keys; each is both the envelope's
+/// `pubkey` address and the key the wrap is sealed to. The result is
+/// byte-compatible with the server's `encryptMessageForStorage` and the
+/// desktop's `encryptMessage`: empty AAD on both layers, label as HPKE `info`
+/// (PROTOCOL.md §2.4). The AAD is chosen here, not by the caller, because the
+/// caller choosing it is how both mobile clients came to seal messages with
+/// the canonical notes AAD that no other reader supplies.
+///
+/// An empty reader list is refused, as on the server: the record would be
+/// ciphertext nobody can ever open.
+#[uniffi::export]
+pub fn mobile_encrypt_message(
+    plaintext: String,
+    reader_pubkeys: Vec<String>,
+) -> Result<encryption::EncryptedMessage, CryptoError> {
+    if reader_pubkeys.is_empty() {
+        return Err(CryptoError::InvalidInput(
+            "mobile_encrypt_message: no readers — the message would be undecryptable by everyone"
+                .into(),
+        ));
+    }
+    let readers: Vec<encryption::RecordReader> = reader_pubkeys
+        .into_iter()
+        .map(|pk| encryption::RecordReader {
+            address: pk.clone(),
+            encryption_pubkey: pk,
+        })
+        .collect();
+    encryption::seal_record_for_readers(
+        plaintext.as_bytes(),
+        &readers,
+        crate::labels::LABEL_MESSAGE,
+    )
+}
+
 // ── Envelope AAD derivation (exported so mobile never re-spells the rule) ──
 
 /// `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.
@@ -2093,5 +2131,272 @@ mod tests {
         assert_eq!(verified.head_seq, 1);
 
         mobile_lock();
+    }
+}
+
+/// The server's stored records, opened through the mobile FFI surface.
+///
+/// `tests/fixtures/stored-record-vectors.json` holds bytes the **server**
+/// wrote (`packages/crypto/scripts/gen-stored-record-vectors.ts` runs
+/// `apps/worker/lib/crypto.ts` on the real library). These tests open those
+/// bytes the way the mobile clients do, instead of sealing and opening with
+/// one implementation — which agrees with itself whatever AAD it binds, and is
+/// how the mobile and server halves of `LABEL_MESSAGE` drifted apart unseen.
+#[cfg(test)]
+mod stored_record_vector_tests {
+    use super::*;
+    use crate::labels::{LABEL_CALL_META, LABEL_MESSAGE};
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/stored-record-vectors.json");
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Fixture {
+        aad_hex: FixtureAad,
+        readers: Vec<FixtureReader>,
+        records: Vec<FixtureRecord>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureAad {
+        content: String,
+        key_wrap: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureReader {
+        name: String,
+        x25519_secret_hex: String,
+        x25519_pubkey_hex: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureRecord {
+        name: String,
+        label: String,
+        plaintext: String,
+        encrypted_content: String,
+        reader_envelopes: Vec<RecipientKeyEnvelope>,
+    }
+
+    fn fixture() -> Fixture {
+        serde_json::from_str(FIXTURE).expect("stored-record-vectors.json does not parse")
+    }
+
+    fn record<'a>(f: &'a Fixture, label: &str) -> &'a FixtureRecord {
+        f.records
+            .iter()
+            .find(|r| r.label == label)
+            .unwrap_or_else(|| panic!("the fixture has no {label} record"))
+    }
+
+    /// Load `reader` into this thread's mobile state, as an unlocked device.
+    fn load_reader(reader: &FixtureReader) {
+        let mut encryption_seed = [0u8; 32];
+        encryption_seed.copy_from_slice(&hex::decode(&reader.x25519_secret_hex).unwrap());
+        let secrets = DeviceSecrets {
+            signing_seed: [0x5au8; 32],
+            encryption_seed,
+        };
+        let ds = DeviceKeyState {
+            device_id: format!("vector-{}", reader.name),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        // The fixture's published pubkey must be the one its secret derives.
+        assert_eq!(ds.encryption_pubkey_hex, reader.x25519_pubkey_hex);
+        let mut guard = state().lock().unwrap();
+        guard.secrets = Some(secrets);
+        guard.device_state = Some(ds);
+    }
+
+    /// Open one reader's envelope the way a mobile `CryptoService` builds the
+    /// call by hand: wire hex → `HpkeEnvelope` → `mobile_hpke_open_key`, then
+    /// `mobile_symmetric_decrypt`, each under a caller-chosen AAD.
+    fn open_by_hand(
+        rec: &FixtureRecord,
+        reader: &FixtureReader,
+        key_wrap_aad_hex: &str,
+        content_aad_hex: &str,
+    ) -> Result<String, CryptoError> {
+        let wire = rec
+            .reader_envelopes
+            .iter()
+            .find(|e| e.pubkey == reader.x25519_pubkey_hex)
+            .expect("the fixture sealed no envelope to this reader");
+        let envelope = HpkeEnvelope {
+            v: 3,
+            label_id: mobile_label_to_id(rec.label.clone())?,
+            enc: mobile_hex_to_base64url(wire.enc.clone())?,
+            ct: mobile_hex_to_base64url(wire.ct.clone())?,
+        };
+        let key_hex = mobile_hpke_open_key(envelope, rec.label.clone(), key_wrap_aad_hex.into())?;
+        let pt_hex = mobile_symmetric_decrypt(
+            rec.encrypted_content.clone(),
+            key_hex,
+            content_aad_hex.into(),
+        )?;
+        Ok(String::from_utf8(hex::decode(pt_hex).unwrap()).unwrap())
+    }
+
+    #[test]
+    fn the_fixture_declares_the_stored_record_aad_as_empty() {
+        // PROTOCOL.md §2.4/§2.5. The fixture is server output; this pins that
+        // the generator still describes it truthfully.
+        let f = fixture();
+        assert_eq!(f.aad_hex.content, "");
+        assert_eq!(f.aad_hex.key_wrap, "");
+        for label in [LABEL_MESSAGE, LABEL_CALL_META] {
+            let rec = record(&f, label);
+            assert_eq!(rec.reader_envelopes.len(), f.readers.len(), "{}", rec.name);
+        }
+    }
+
+    #[test]
+    fn every_reader_opens_server_written_messages_and_call_metadata() {
+        let f = fixture();
+        for reader in &f.readers {
+            load_reader(reader);
+            let msg = record(&f, LABEL_MESSAGE);
+            assert_eq!(
+                mobile_decrypt_message(msg.encrypted_content.clone(), msg.reader_envelopes.clone())
+                    .unwrap(),
+                msg.plaintext,
+                "{} cannot open the server's message",
+                reader.name
+            );
+            let meta = record(&f, LABEL_CALL_META);
+            assert_eq!(
+                mobile_decrypt_call_metadata(
+                    meta.encrypted_content.clone(),
+                    meta.reader_envelopes.clone()
+                )
+                .unwrap(),
+                meta.plaintext,
+                "{} cannot open the server's call metadata",
+                reader.name
+            );
+            // The hand-built path opens it too — but only under the AAD the
+            // fixture declares, which is the server's.
+            for rec in [msg, meta] {
+                assert_eq!(
+                    open_by_hand(rec, reader, &f.aad_hex.key_wrap, &f.aad_hex.content).unwrap(),
+                    rec.plaintext
+                );
+            }
+        }
+    }
+
+    /// The canonical `label` / `label:key-wrap` AAD is the notes/files/contacts
+    /// convention. Applied to a stored record it must not open — this is the
+    /// shape every mobile `decryptMessage(envelope:)` had (#1528's derivation
+    /// meeting #1393's empty-AAD server).
+    #[test]
+    fn the_canonical_aad_does_not_open_a_server_written_record() {
+        let f = fixture();
+        let reader = &f.readers[0];
+        load_reader(reader);
+        for label in [LABEL_MESSAGE, LABEL_CALL_META] {
+            let rec = record(&f, label);
+            let wrap = mobile_key_wrap_aad_hex(label.into()).unwrap();
+            let content = mobile_content_aad_hex(label.into()).unwrap();
+            assert!(
+                open_by_hand(rec, reader, &wrap, &content).is_err(),
+                "{} opened under the canonical AAD — the fixture no longer pins the stored-record format",
+                rec.name
+            );
+            assert!(open_by_hand(rec, reader, &wrap, "").is_err());
+            assert!(open_by_hand(rec, reader, "", &content).is_err());
+        }
+    }
+
+    /// The mobile writer must produce what the server's reader convention —
+    /// the one the fixture records — opens. Every reader below also opened
+    /// the server's own bytes in the test above, so agreement here is
+    /// agreement with the server, not with this crate.
+    #[test]
+    fn mobile_encrypt_message_writes_the_servers_format() {
+        let f = fixture();
+        let plaintext = "volunteer: estoy aquí, I'm listening";
+        let sealed = mobile_encrypt_message(
+            plaintext.into(),
+            f.readers
+                .iter()
+                .map(|r| r.x25519_pubkey_hex.clone())
+                .collect(),
+        )
+        .unwrap();
+        let rec = FixtureRecord {
+            name: "mobile-sealed".into(),
+            label: LABEL_MESSAGE.into(),
+            plaintext: plaintext.into(),
+            encrypted_content: sealed.encrypted_content.clone(),
+            reader_envelopes: sealed.reader_envelopes.clone(),
+        };
+        for reader in &f.readers {
+            load_reader(reader);
+            assert_eq!(
+                mobile_decrypt_message(rec.encrypted_content.clone(), rec.reader_envelopes.clone())
+                    .unwrap(),
+                plaintext
+            );
+            assert_eq!(
+                open_by_hand(&rec, reader, &f.aad_hex.key_wrap, &f.aad_hex.content).unwrap(),
+                plaintext
+            );
+            let wrap = mobile_key_wrap_aad_hex(LABEL_MESSAGE.into()).unwrap();
+            let content = mobile_content_aad_hex(LABEL_MESSAGE.into()).unwrap();
+            assert!(open_by_hand(&rec, reader, &wrap, &content).is_err());
+        }
+        // Wire shape the server writes: hex enc (32 B) and hex ct (48 B).
+        for env in &sealed.reader_envelopes {
+            assert_eq!(env.enc.len(), 64);
+            assert_eq!(env.ct.len(), 96);
+        }
+    }
+
+    #[test]
+    fn mobile_encrypt_message_refuses_an_empty_reader_list() {
+        assert!(matches!(
+            mobile_encrypt_message("x".into(), vec![]),
+            Err(CryptoError::InvalidInput(_))
+        ));
+    }
+
+    /// What `encryptMessage` on iOS and Android sealed before
+    /// `mobile_encrypt_message` existed: the canonical AAD on both layers,
+    /// chosen at the call site. The stored-record reader — the one iOS's own
+    /// conversation screen, the desktop and the server use — cannot open it.
+    #[test]
+    fn a_message_sealed_with_the_canonical_aad_is_unreadable_by_the_stored_record_reader() {
+        let f = fixture();
+        let reader = &f.readers[0];
+        load_reader(reader);
+        let plaintext = "sealed the pre-fix mobile way";
+        let pt_hex = hex::encode(plaintext.as_bytes());
+        let out = mobile_symmetric_encrypt(
+            pt_hex,
+            mobile_content_aad_hex(LABEL_MESSAGE.into()).unwrap(),
+        )
+        .unwrap();
+        let env = mobile_hpke_seal_key(
+            out[1].clone(),
+            reader.x25519_pubkey_hex.clone(),
+            LABEL_MESSAGE.into(),
+            mobile_key_wrap_aad_hex(LABEL_MESSAGE.into()).unwrap(),
+        )
+        .unwrap();
+        let envelopes = vec![RecipientKeyEnvelope {
+            pubkey: reader.x25519_pubkey_hex.clone(),
+            enc: mobile_base64url_to_hex(env.enc).unwrap(),
+            ct: mobile_base64url_to_hex(env.ct).unwrap(),
+        }];
+        assert!(matches!(
+            mobile_decrypt_message(out[0].clone(), envelopes),
+            Err(CryptoError::DecryptionFailed)
+        ));
     }
 }

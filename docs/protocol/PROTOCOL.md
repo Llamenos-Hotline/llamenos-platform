@@ -573,6 +573,35 @@ encryptMessage(plaintext_string, reader_x25519_pubkey_hexes[]):
 > `LABEL_MESSAGE` or `LABEL_CALL_META`. (This section previously specified
 > `UTF-8(label)` / `UTF-8("{label}:key-wrap")` here; that spelling is retired
 > and must be refused, not accepted.)
+>
+> **Mobile writers must not choose the AAD (#1927).** iOS and Android once
+> sealed `LABEL_MESSAGE` with the retired canonical pair, and Android also
+> opened with it. Every message the server wrote was then unreadable on
+> Android, and every reply a phone wrote was unreadable everywhere. Mobile
+> seals with `mobile_encrypt_message` and opens with `mobile_decrypt_message`.
+> Both take the record whole, and Rust binds the AAD. Neither builds this
+> envelope from `mobile_symmetric_encrypt` / `mobile_hpke_seal_key` with a
+> caller-supplied `aadHex`.
+
+#### Conformance vector
+
+`packages/crypto/tests/fixtures/stored-record-vectors.json` holds a
+`LABEL_MESSAGE` record and a `LABEL_CALL_META` record. Both were **written by the
+server**: `packages/crypto/scripts/gen-stored-record-vectors.ts` runs
+`encryptMessageForStorage` / `encryptCallRecordForStorage` on the real crypto
+library. They are sealed to two fixed X25519 test keys, and the file lists those
+keys' secrets. A conforming reader on any platform MUST:
+
+1. open each record, through its production decrypt path, to the recorded
+   `plaintext`;
+2. FAIL to open it under the canonical `UTF-8(label)` /
+   `UTF-8("{label}:key-wrap")` AAD.
+
+A conforming writer's output MUST open under the same reader that opens the
+fixture. The vector is regenerated, never edited by hand. Its ciphertext is
+randomised per run, so a consumer opens the recorded bytes and never compares
+them against a fresh seal. Rust checks it in
+`ffi_v3::stored_record_vector_tests` (`cargo test --features mobile`).
 
 #### Decryption
 

@@ -21,6 +21,12 @@
 //! reader cannot tell which AAD to supply, so the only viable AAD is empty
 //! (worker `NO_AAD`, [`crate::encryption::open_record_for_reader`]. Never
 //! derive an AAD from this module for `LABEL_MESSAGE` or `LABEL_CALL_META`.
+//! On mobile those records go through `mobile_encrypt_message` /
+//! `mobile_decrypt_message`, which take no AAD at all. Both iOS and Android
+//! derived the canonical pair here for `LABEL_MESSAGE` instead, and so could
+//! not exchange messages with the server or the desktop (#1927). The
+//! server-written vectors in `tests/fixtures/stored-record-vectors.json` are
+//! what each platform checks itself against.
 //!
 //! This module mirrors `packages/shared/envelope-aad.ts`, which is the
 //! definition every TypeScript surface imports. Two languages cannot share one

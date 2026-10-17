@@ -1,0 +1,58 @@
+{
+  "description": "Stored records exactly as the server writes them (PROTOCOL.md §2.4, §2.5): NO AAD on the AES-256-GCM content layer and NO AAD on the HPKE key wrap; the label is bound as the HPKE info only. Every platform must open these bytes through its production reader, and must fail to open them under the canonical label / label:key-wrap AAD. Regenerate with packages/crypto/scripts/gen-stored-record-vectors.ts — never edit by hand.",
+  "generator": "apps/worker/lib/crypto.ts encryptMessageForStorage / encryptCallRecordForStorage via bun:ffi",
+  "aadHex": {
+    "content": "",
+    "keyWrap": ""
+  },
+  "readers": [
+    {
+      "name": "volunteer",
+      "x25519SecretHex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "x25519PubkeyHex": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252"
+    },
+    {
+      "name": "admin",
+      "x25519SecretHex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "x25519PubkeyHex": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a"
+    }
+  ],
+  "records": [
+    {
+      "name": "conversation-message",
+      "label": "llamenos:message",
+      "plaintext": "caller: are you there? necesito ayuda — stored-record vector",
+      "encryptedContent": "fea8f68efa2f0ddcdd9e5790d5484a09f3421af6a8369ae96f6a8ea46e2c2d7468bb811881c0a268badfe2369df217b891f87ecd0cd8c37bb5648f4da050e49bf72be12f6f6d478febf092bbf4c20e87f7693cd0d481f2ab2a07",
+      "readerEnvelopes": [
+        {
+          "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+          "enc": "1f8111774b1229be1743ac60ec2ffb397c514371af9b8558850fec0e186b3432",
+          "ct": "23d8021d735e7ac995c61eea219f46096c176a60e9a8a49fd9a8eb24bc1dfba1ffd5e19d5fdf3413c8cfadd5d7823786"
+        },
+        {
+          "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
+          "enc": "73cb9a1a0d14cc4dfc7eefd133965155f888b85ea3a282c9d2ad91f599b4236f",
+          "ct": "ffe338edb1138318f9be2018ff74ec381e4de98242a739d6ebb2eccc3d719831b3453efc3ed88b42c1d0d6f8f9358afc"
+        }
+      ]
+    },
+    {
+      "name": "call-metadata",
+      "label": "llamenos:call-meta",
+      "plaintext": "{\"answeredBy\":null,\"callerNumber\":\"+15555550142\"}",
+      "encryptedContent": "1d940d902065bb3e83e8fa2e09e7eebd387c445d16a6e71a55cf0b88159d91085dd4a997471fa1a7a477f9a8099a0aa9b76f17eedd30343698da5c741d58e3a77f928f0f7e578163f2f00dda40",
+      "readerEnvelopes": [
+        {
+          "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+          "enc": "b3cf9469f2d2f0feacef4ea791103dfcbaecc30c7ac3f1b1fe3e4a667daa7501",
+          "ct": "7722af55142933af58da044757947a7f8ed2b4b07db10cbbcd6526d519203fa42736ac7ac360ca9bfd3e38bc72498da1"
+        },
+        {
+          "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
+          "enc": "5566e0ea8602d144c168d3266d3fed1d9183ee4a377e7b79a1c14a8291cd6b46",
+          "ct": "b15a8a6423a0dfbb666b6950a89f45db1f14b126d91e8d2b48b367a1d077519f3a30858b9c39eb85c1f2ec2f6907193f"
+        }
+      ]
+    }
+  ]
+}

@@ -705,6 +705,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_call_metadata(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_draft(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_event_with_attribution(
@@ -712,6 +714,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_message(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event(
     ): Short
@@ -722,6 +726,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_ed25519_verify(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_encrypt_draft(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_encrypt_message(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_export_wake_key_hex(
     ): Short
@@ -878,6 +884,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_decrypt_call_metadata(`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_draft(`packedHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_event_with_attribution(`ciphertextHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -885,6 +893,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_decrypt_event_with_attribution(
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event(`ciphertextHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(`encryptedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_decrypt_message(`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_server_event(`encryptedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -895,6 +905,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_ecdh_complete(`theirPubkeyHex`:
 external fun uniffi_llamenos_core_fn_func_mobile_ed25519_verify(`messageHex`: RustBuffer.ByValue,`signatureHex`: RustBuffer.ByValue,`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_encrypt_draft(`plaintext`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_encrypt_message(`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_export_wake_key_hex(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1120,7 +1132,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_server_event_hex() != 59916.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 62417.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 38820.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_encrypt_message_for_readers() != 62867.toShort()) {
@@ -1192,6 +1204,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce() != 37994.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_call_metadata() != 6684.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_draft() != 61700.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1202,6 +1217,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial() != 46122.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event() != 16015.toShort()) {
@@ -1217,6 +1235,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_encrypt_draft() != 30232.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_encrypt_message() != 47681.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_export_wake_key_hex() != 57742.toShort()) {
@@ -1270,7 +1291,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 11270.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 63290.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_load_wake_key() != 41647.toShort()) {
@@ -1315,7 +1336,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_symmetric_decrypt() != 31396.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 22982.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 33330.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233.toShort()) {
@@ -3079,10 +3100,18 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Decrypt data that was encrypted with a provisioning shared key.
+         * Decrypt a UTF-8 payload that was encrypted with a provisioning shared key.
          *
          * `ciphertext_hex`: hex(nonce_12 + ciphertext + tag_16) — AES-256-GCM (provisioning protocol)
          * `shared_x_hex`: 64-char hex shared secret from `compute_shared_x_hex`
+         *
+         * NOT a device-linking import path. This uses `LABEL_DEVICE_PROVISION` as
+         * associated data, so it cannot open a device key bundle
+         * (`LABEL_DEVICE_PROVISION_BUNDLE`, PROTOCOL.md §6.7.2) — a bundle fails the
+         * tag check here rather than decoding. Device linking must go through
+         * `provisioning::decrypt_provisioned_bundle`, which returns both seeds as a
+         * `DeviceSecrets` that zeroizes on drop; mobile has no such path yet, so
+         * mobile device linking is not implemented.
          */
     @Throws(CryptoException::class) fun `decryptWithSharedKeyHex`(`ciphertextHex`: kotlin.String, `sharedXHex`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -3449,6 +3478,21 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Decrypt a call record's metadata (`LABEL_CALL_META`) as this device.
+         * Takes the record's `encryptedContent` and all of its `adminEnvelopes`.
+         */
+    @Throws(CryptoException::class) fun `mobileDecryptCallMetadata`(`encryptedContent`: kotlin.String, `envelopes`: List<RecipientKeyEnvelope>): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_call_metadata(
+    
+        FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Decrypt a draft using the stored hub key for the given hub.
          * The hub key is looked up from MOBILE_STATE and passed to `decrypt_draft`.
          */
@@ -3504,6 +3548,21 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(
     
         FfiConverterString.lower(`encryptedHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Decrypt a conversation message (`LABEL_MESSAGE`) as this device, whether a
+         * client or the server sealed it. Takes all of the message's reader envelopes.
+         */
+    @Throws(CryptoException::class) fun `mobileDecryptMessage`(`encryptedContent`: kotlin.String, `envelopes`: List<RecipientKeyEnvelope>): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_message(
+    
+        FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
 }
     )
     }
@@ -3585,6 +3644,32 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_encrypt_draft(
     
         FfiConverterString.lower(`plaintext`),FfiConverterString.lower(`hubId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal a conversation message (`LABEL_MESSAGE`) for several readers in the
+         * stored-record format — the writer half of [`mobile_decrypt_message`].
+         *
+         * `reader_pubkeys` are X25519 encryption keys; each is both the envelope's
+         * `pubkey` address and the key the wrap is sealed to. The result is
+         * byte-compatible with the server's `encryptMessageForStorage` and the
+         * desktop's `encryptMessage`: empty AAD on both layers, label as HPKE `info`
+         * (PROTOCOL.md §2.4). The AAD is chosen here, not by the caller, because the
+         * caller choosing it is how both mobile clients came to seal messages with
+         * the canonical notes AAD that no other reader supplies.
+         *
+         * An empty reader list is refused, as on the server: the record would be
+         * ciphertext nobody can ever open.
+         */
+    @Throws(CryptoException::class) fun `mobileEncryptMessage`(`plaintext`: kotlin.String, `readerPubkeys`: List<kotlin.String>): EncryptedMessage {
+            return FfiConverterTypeEncryptedMessage.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_encrypt_message(
+    
+        FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
 }
     )
     }
@@ -3853,6 +3938,12 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
          * The caller provides only `enc` and `ct` from the server response. The envelope
          * version and label ID are constructed by Rust from the label registry — clients
          * never need to hardcode protocol constants.
+         *
+         * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
+         * what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
+         * desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
+         * with the other two clients and with none of the spec, the crate's own
+         * wrap/unwrap pair, or the interop vectors.
          */
     @Throws(CryptoException::class) fun `mobileLoadHubKey`(`hubId`: kotlin.String, `enc`: kotlin.String, `ct`: kotlin.String)
         = 
@@ -4067,15 +4158,18 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
          * Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
          * Returns (ciphertext_hex, key_hex) where ciphertext = hex(nonce_12 || ciphertext || tag_16).
          *
-         * `aad_hex` is required, not defaulted. `docs/protocol/PROTOCOL.md` §2.4
-         * binds `UTF-8(label)` to the content layer of every envelope the server
-         * writes; this function previously had no AAD parameter at all, so Android
+         * `aad_hex` is required, not defaulted. The canonical-AAD envelopes (notes,
+         * files, contact identifiers — `docs/protocol/PROTOCOL.md` §2.3) bind
+         * `UTF-8(label)` to the content layer and `UTF-8("{label}:key-wrap")` to the
+         * key wrap; this function previously had no AAD parameter at all, so Android
          * and iOS were structurally incapable of producing or reading a conformant
          * content ciphertext. A defaulted empty AAD would have reproduced exactly
          * that defect while appearing to fix it. Derive the value with
          * [`crate::envelope_aad::content_aad_hex`] — exported to mobile as
-         * `mobile_content_aad_hex` — and pass `""` only where the spec says the
-         * ciphertext carries no AAD (§2.3, notes).
+         * `mobile_content_aad_hex` — and pass `""` for the envelopes every
+         * implementation agrees carry no AAD: stored records (messages, call
+         * metadata — #1393, read by `open_record_for_reader` / `mobile_decrypt_message`)
+         * and the hub-key/PUK flows. Never pass `""` beside a canonical label.
          */
     @Throws(CryptoException::class) fun `mobileSymmetricEncrypt`(`plaintextHex`: kotlin.String, `aadHex`: kotlin.String): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
