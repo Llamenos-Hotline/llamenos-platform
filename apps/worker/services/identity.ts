@@ -39,7 +39,14 @@ import type { DemoIdentity } from '../lib/demo-identities'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
-import { resolveHubRoleIds, type Role } from '@shared/permissions'
+import {
+  permissionGranted,
+  resolveAllRoleIds,
+  resolveHubPermissions,
+  resolveHubRoleIds,
+  resolvePermissions,
+  type Role,
+} from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
 
 const log = createLogger('services.identity')
@@ -128,6 +135,51 @@ function platformAdminRow(pubkey: string): typeof users.$inferInsert {
 /** Strip encryptedSecretKey from volunteer for external responses */
 function sanitizeUser(vol: User): Omit<User, 'encryptedSecretKey'> & { encryptedSecretKey?: undefined } {
   return { ...vol, encryptedSecretKey: undefined }
+}
+
+/**
+ * One row of the admin member directory (`GET /api/identity/members`, #1701) —
+ * the shape the iOS admin Volunteers screen decodes (`ClientUser`).
+ *
+ * Deliberately narrower than the user record. It carries no `phone`, and no
+ * `hubRoles` and no role ids or role names: which hubs a person belongs to
+ * and which (possibly custom, possibly implicating) roles they hold there is
+ * org structure, and the screen needs only the admin/volunteer distinction.
+ */
+export interface MemberDirectoryEntry {
+  id: string
+  pubkey: string
+  displayName: string | null
+  role: 'admin' | 'volunteer'
+  status: 'active' | 'inactive'
+  createdAt: string
+}
+
+/**
+ * "Admin" is the same predicate the auth middleware uses for the admin
+ * passkey requirement: the roles grant `settings:manage`. From inside a hub
+ * only the roles that carry authority THERE count (`resolveHubPermissions`),
+ * so a hub never learns that one of its volunteers administers another hub.
+ * Outside a hub — the instance view, readable only by a global `users:read`
+ * holder — it is an admin anywhere (`resolveAllRoleIds`).
+ */
+function toMemberDirectoryEntry(
+  user: Pick<User, 'pubkey' | 'name' | 'roles' | 'hubRoles' | 'active' | 'createdAt'>,
+  allRoles: Role[],
+  hubId: string | undefined,
+): MemberDirectoryEntry {
+  const hubRoles = user.hubRoles ?? []
+  const permissions = hubId
+    ? resolveHubPermissions(user.roles, hubRoles, allRoles, hubId)
+    : resolvePermissions(resolveAllRoleIds(user.roles, hubRoles), allRoles)
+  return {
+    id: user.pubkey,
+    pubkey: user.pubkey,
+    displayName: user.name ? user.name : null,
+    role: permissionGranted(permissions, 'settings:manage') ? 'admin' : 'volunteer',
+    status: user.active ? 'active' : 'inactive',
+    createdAt: user.createdAt,
+  }
 }
 
 /**
@@ -494,6 +546,16 @@ export class IdentityService {
     return {
       users: rows.map(r => sanitizeUserForHub(rowToUser(r), hubId, allRoles)),
     }
+  }
+
+  /**
+   * The admin member directory (#1701). The same people `getUsers` lists —
+   * a hub's members under a hub, every user on the instance without one, and
+   * never a revoked signing key — projected to {@link MemberDirectoryEntry}.
+   */
+  async getMemberDirectory(allRoles: Role[], hubId?: string): Promise<{ members: MemberDirectoryEntry[] }> {
+    const { users: listed } = await this.getUsers(hubId)
+    return { members: listed.map(u => toMemberDirectoryEntry(u, allRoles, hubId)) }
   }
 
   /**

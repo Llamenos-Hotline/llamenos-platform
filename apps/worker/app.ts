@@ -10,6 +10,7 @@ import devRoutes from './routes/dev'
 import authRoutes from './routes/auth'
 import webauthnRoutes from './routes/webauthn'
 import usersRoutes from './routes/users'
+import identityRoutes from './routes/identity'
 import invitesRoutes from './routes/invites'
 import shiftsRoutes from './routes/shifts'
 import bansRoutes from './routes/bans'
@@ -245,6 +246,7 @@ authenticated.use('*', async (c, next) => {
 })
 authenticated.route('/users', usersRoutes)
 authenticated.route('/volunteers', usersRoutes)
+authenticated.route('/identity', identityRoutes)
 authenticated.route('/shifts', shiftsRoutes)
 authenticated.route('/bans', bansRoutes)
 authenticated.route('/notes', notesRoutes)
@@ -297,6 +299,7 @@ const hubScoped = new Hono<AppEnv>()
 hubScoped.use('*', hubContext)
 hubScoped.route('/users', usersRoutes)
 hubScoped.route('/volunteers', usersRoutes)
+hubScoped.route('/identity', identityRoutes)
 hubScoped.route('/shifts', shiftsRoutes)
 hubScoped.route('/bans', bansRoutes)
 hubScoped.route('/notes', notesRoutes)

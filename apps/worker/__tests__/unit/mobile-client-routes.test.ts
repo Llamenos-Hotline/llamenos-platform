@@ -214,9 +214,9 @@ function distinct(sites: CallSite[]): Map<string, string> {
  */
 const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
   iOS: {
-    // #1701 — iOS admin screens against routes that do not exist. The members
-    // and invite endpoints live under /api/users and /api/invites.
-    'GET /api/identity/members': '#1701',
+    // #1701 — iOS admin screens against routes that do not exist. The invite
+    // endpoints live under /api/invites. (GET /api/identity/members is now
+    // mounted — routes/identity.ts.)
     'GET /api/identity/invites': '#1701',
     'POST /api/identity/invite': '#1701',
     'GET /api/recovery-group/shares/my': '#1701',
