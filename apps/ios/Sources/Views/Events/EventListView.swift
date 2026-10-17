@@ -4,6 +4,13 @@ import SwiftUI
 
 /// Main events screen. Lists CMS events with search, pull-to-refresh, and navigation
 /// to event details. Events are CMS records with category='event'.
+///
+/// Pushed onto the presenting screen's navigation stack (Admin panel → Events, inside
+/// Settings' `NavigationStack`), so it must not own a `NavigationStack` of its own, nor
+/// register a `navigationDestination(for: String.self)`. It used to do both: the nested
+/// stack is unsupported, and its String destination collided with the String routes
+/// Settings already registers ("admin", "hubs", …), so tapping Events popped the whole
+/// admin panel straight back to Settings and the screen was unreachable (#1245).
 struct EventListView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModelBox = ViewModelBox<EventsViewModel>()
@@ -22,49 +29,54 @@ struct EventListView: View {
     var body: some View {
         let vm = self.vm
 
-        NavigationStack {
-            Group {
-                if vm.cmsEnabled == nil {
+        Group {
+            switch vm.loadState {
+            case .loading:
+                loadingView
+            case .disabled:
+                cmsDisabledView
+            case .failed(let message):
+                loadErrorView(message: message, vm: vm)
+            case .ready:
+                if vm.isLoading && vm.events.isEmpty {
                     loadingView
-                } else if vm.cmsEnabled == false {
-                    cmsDisabledView
-                } else if vm.isLoading && vm.events.isEmpty {
-                    loadingView
+                } else if vm.events.isEmpty, let eventsError = vm.eventsLoadError {
+                    // Without this, a failed fetch rendered as "No events".
+                    loadErrorView(message: eventsError, vm: vm)
                 } else if vm.events.isEmpty {
                     emptyStateView(vm: vm)
                 } else {
                     eventListContent(vm: vm)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle(NSLocalizedString("events_title", comment: "Events"))
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    if vm.cmsEnabled == true && !vm.eventEntityTypes.isEmpty {
-                        Button {
-                            showCreateEvent = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityIdentifier("events-create-btn")
-                    }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle(NSLocalizedString("events_title", comment: "Events"))
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                // Rendered unconditionally, as in `CaseListView`: SwiftUI does not
+                // reliably rebuild a ToolbarItem whose body flips EmptyView ->
+                // Button after the first toolbar pass, so a conditional body loses
+                // the button whenever the API answers after that pass. While
+                // disabled, the content area says why.
+                Button {
+                    showCreateEvent = true
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .disabled(!vm.canCreateEvent)
+                .accessibilityIdentifier("events-create-btn")
             }
-            .task {
-                await vm.loadInitial()
-            }
-            .refreshable {
-                await vm.refresh()
-            }
-            .sheet(isPresented: $showCreateEvent) {
-                CreateEventView(viewModel: vm) {
-                    showCreateEvent = false
-                }
-            }
-            .navigationDestination(for: String.self) { eventId in
-                if let event = vm.events.first(where: { $0.id == eventId }) {
-                    EventDetailView(event: event, viewModel: vm)
-                }
+        }
+        .task {
+            await vm.loadOnAppear()
+        }
+        .refreshable {
+            await vm.refresh()
+        }
+        .sheet(isPresented: $showCreateEvent) {
+            CreateEventView(viewModel: vm) {
+                showCreateEvent = false
             }
         }
     }
@@ -81,6 +93,24 @@ struct EventListView: View {
         .accessibilityIdentifier("events-loading")
     }
 
+    // MARK: - Load Error
+
+    /// A required load failed. Shows the error itself and a retry, so a request that
+    /// failed never looks like an empty hub or a hub without case management.
+    private func loadErrorView(message: String, vm: EventsViewModel) -> some View {
+        BrandEmptyState(
+            icon: "exclamationmark.triangle",
+            title: NSLocalizedString("events_load_error", comment: "Failed to load events"),
+            message: message,
+            action: {
+                Task { await vm.loadInitial() }
+            },
+            actionLabel: NSLocalizedString("common_retry", comment: "Retry"),
+            actionAccessibilityID: "events-load-retry",
+            accessibilityID: "events-load-error"
+        )
+    }
+
     // MARK: - CMS Disabled
 
     private var cmsDisabledView: some View {
@@ -90,7 +120,8 @@ struct EventListView: View {
             message: NSLocalizedString(
                 "events_cms_disabled_message",
                 comment: "Case management must be enabled to use events."
-            )
+            ),
+            accessibilityID: "events-cms-disabled"
         )
     }
 
@@ -104,9 +135,11 @@ struct EventListView: View {
                 "events_empty_message",
                 comment: "No events have been created yet."
             ),
-            action: { showCreateEvent = true },
+            // No event entity types means there is nothing to create an event of.
+            action: vm.canCreateEvent ? { showCreateEvent = true } : nil,
             actionLabel: NSLocalizedString("events_new_event", comment: "New Event"),
-            actionAccessibilityID: "events-empty-create-btn"
+            actionAccessibilityID: "events-empty-create-btn",
+            accessibilityID: "events-empty"
         )
     }
 
@@ -163,7 +196,9 @@ struct EventListView: View {
                     }
                 } else {
                     ForEach(filteredEvents) { event in
-                        NavigationLink(value: event.id) {
+                        NavigationLink {
+                            EventDetailView(event: event, viewModel: vm)
+                        } label: {
                             EventRow(event: event, viewModel: vm)
                         }
                         .accessibilityIdentifier("event-row-\(event.id)")
@@ -354,7 +389,9 @@ private struct EventRow: View {
 
 #if DEBUG
 #Preview("Events List") {
-    EventListView()
-        .environment(AppState(hubContext: HubContext()))
+    NavigationStack {
+        EventListView()
+    }
+    .environment(AppState(hubContext: HubContext()))
 }
 #endif
