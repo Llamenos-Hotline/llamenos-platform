@@ -118,11 +118,11 @@ llamenos_postgres_image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2
 llamenos_caddy_image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
 
 # ─── Secrets — generate each on your workstation ─────────────────
-hmac_secret: ""                  # openssl rand -hex 32   (>= 32 chars)
+hmac_secret: ""                  # openssl rand -hex 32   (exactly 64 lowercase hex)
 server_secret: ""                # openssl rand -hex 32   (exactly 64 hex chars)
 pg_password: ""                  # openssl rand -hex 24   (>= 16 chars)
 storage_access_key: ""           # openssl rand -hex 16
-storage_secret_key: ""           # openssl rand -base64 24 (>= 16 chars)
+storage_secret_key: ""           # openssl rand -hex 24   (>= 16 chars)
 # signal_notifier_bearer_token: ""   # openssl rand -hex 32 — only if llamenos_signal_enabled
 # REQUIRED when observability_enabled (true by default for this profile, see
 # above): the bearer Prometheus presents to /api/metrics/prometheus. Without
