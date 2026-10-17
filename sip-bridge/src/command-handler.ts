@@ -81,6 +81,9 @@ export class CommandHandler {
   /** Recordings in progress by recording name. Pruned on finish/failure, or past their deadline. */
   private readonly recordings = new Map<string, PendingRecording>()
 
+  /** Channels present on the PBX at last reconcile that this handler holds no state for. */
+  private untrackedChannelCount = 0
+
   /** Configured hotline number (fallback calledNumber when the dialplan provides none) */
   private hotlineNumber = ''
 
@@ -115,6 +118,7 @@ export class CommandHandler {
       activeBridges: this.bridges.size,
       ringingChannels: [...this.legs.values()].filter((l) => !l.answered).length,
       pendingRecordings: this.recordings.size,
+      untrackedChannels: this.untrackedChannelCount,
     }
   }
 
@@ -152,6 +156,95 @@ export class CommandHandler {
       case 'playback_finished':
         await this.onPlaybackFinished(event)
         break
+      case 'connection_reset':
+        await this.reconcileWithPbx()
+        break
+    }
+  }
+
+  // ================================================================
+  // PBX reconciliation (connection loss / process restart)
+  // ================================================================
+
+  /** Every channel ID this handler holds any state for. */
+  private trackedChannelIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const id of this.calls.keys()) ids.add(id)
+    // `queues` is keyed by queue name; its VALUES are the queued caller's channel.
+    for (const id of this.queues.values()) ids.add(id)
+    for (const id of this.legs.keys()) ids.add(id)
+    for (const b of this.bridges.values()) {
+      ids.add(b.callerChannelId)
+      ids.add(b.volunteerChannelId)
+    }
+    return ids
+  }
+
+  /**
+   * All live-call state lives in this process's memory, so after a PBX
+   * disconnect (events dropped) or a bridge restart (state gone) it can disagree
+   * with what the PBX is actually doing. Reconcile instead of silently mis-serving:
+   *
+   * - state we track for a channel the PBX no longer has -> the hangup event was
+   *   missed: run the normal hangup path (queue-exit / call-status webhooks, timers,
+   *   bridge and recording cleanup).
+   * - the PBX cannot be enumerated -> we cannot trust ANY tracked state: hang up
+   *   the tracked channels and tear their state down.
+   * - channels present on the PBX that we hold no state for -> cannot be served
+   *   (e.g. callers left on hold by a previous process). Reported loudly and in
+   *   `getStatus().untrackedChannels`; not hung up, because on Asterisk the channel
+   *   list also contains channels this bridge does not own.
+   */
+  async reconcileWithPbx(): Promise<void> {
+    // Snapshot tracked state BEFORE listing: anything tracked before the listing was
+    // taken must appear in it if still alive; calls that begin during the await are
+    // not in this snapshot and are never mistaken for vanished.
+    const trackedBefore = this.trackedChannelIds()
+
+    let live: Set<string> | null
+    try {
+      live = new Set((await this.client.listChannels()).map((c) => c.id))
+    } catch (err) {
+      logger.error('[handler]', 'Cannot enumerate PBX channels — tearing down tracked call state', err)
+      live = null
+    }
+
+    let tornDown = 0
+    for (const channelId of trackedBefore) {
+      if (live?.has(channelId)) continue
+      // Skip if the normal event path already cleaned it up while we were listing.
+      if (!this.trackedChannelIds().has(channelId)) continue
+      if (live === null) {
+        try {
+          await this.client.hangup(channelId)
+        } catch {
+          /* may already be gone */
+        }
+      }
+      tornDown++
+      await this.onChannelHangup({
+        type: 'channel_hangup',
+        channelId,
+        cause: 38, // network out of order — synthesized, the real hangup event was lost
+        causeText: 'CONNECTION_RESET',
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    if (tornDown > 0) {
+      logger.warn('[handler]', `PBX reconnect: tore down state for ${tornDown} channel(s) that no longer exist`)
+    }
+
+    if (live) {
+      const trackedNow = this.trackedChannelIds()
+      this.untrackedChannelCount = [...live].filter((id) => !trackedNow.has(id)).length
+      if (this.untrackedChannelCount > 0) {
+        logger.error(
+          '[handler]',
+          `${this.untrackedChannelCount} channel(s) exist on the PBX with no bridge state ` +
+            '(bridge restarted or events were lost) — they cannot be served'
+        )
+      }
     }
   }
 
@@ -793,7 +886,8 @@ export class CommandHandler {
       }
       await this.client.hangup(other).catch(() => {})
       await this.client.destroyBridge(bridgeId).catch(() => {})
-      return
+      // `continue`, not `return`: a channel should only ever be in one bridge, but if
+      // stale state ever puts it in two, leaving the second behind leaks a live leg.
     }
   }
 

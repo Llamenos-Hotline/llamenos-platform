@@ -138,6 +138,9 @@ export class AriClient implements BridgeClient {
         this.hasConnected = true
         this.connectionDeadline = null
         resolve()
+        // Events may have been missed while the socket was down (or a previous bridge
+        // process may have left calls behind) — have the handler reconcile with the PBX.
+        this.emitBridgeEvent({ type: 'connection_reset', timestamp: new Date().toISOString() })
       })
 
       ws.addEventListener('message', (event) => {
@@ -287,6 +290,18 @@ export class AriClient implements BridgeClient {
     }
   }
 
+  private emitBridgeEvent(event: BridgeEvent): void {
+    // Snapshot-before-fanout: copy Set before iterating
+    const snapshot = [...this.eventHandlers]
+    for (const handler of snapshot) {
+      try {
+        handler(event)
+      } catch (err) {
+        logger.error('[ari]', 'Event handler error', err)
+      }
+    }
+  }
+
   /**
    * Keep receiving a channel's events after it leaves Stasis. The subscription
    * that comes with entering Stasis ends at StasisEnd — which a hangup emits
@@ -305,8 +320,9 @@ export class AriClient implements BridgeClient {
     if (this.reconnectTimer !== null) return
     this.exitIfPastDeadline()
 
-    const delay = this.reconnectDelay
-    this.reconnectDelay = Math.min(delay * 2, this.maxReconnectDelay)
+    // +/-20% jitter so a fleet of bridges does not reconnect in lockstep.
+    const delay = Math.round(this.reconnectDelay * (0.8 + Math.random() * 0.4))
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
     const remaining = this.connectionDeadline
       ? ` (${Math.round((this.connectionDeadline - Date.now()) / 1000)}s until timeout)`
       : ''
