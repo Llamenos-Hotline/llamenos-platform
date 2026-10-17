@@ -2,8 +2,13 @@ apiVersion: v2
 name: llamenos
 description: Secure crisis response hotline application
 type: application
-version: 0.2.0
-appVersion: "0.19.2"
+version: 0.3.0
+# Kept in lockstep with package.json's version by knope (see knope.toml's
+# `versioned_files` — Chart.yaml was missing from that list, which is why
+# this drifted 16 releases behind before #1120). `app.image.tag` falls back
+# to this value (see _helpers.tpl's `llamenos.appImageTag`), so a drifted
+# appVersion silently requests an image tag that was never published.
+appVersion: "0.19.18"
 keywords:
   - hotline
   - crisis-response
@@ -11,6 +16,6 @@ keywords:
   - telephony
 home: https://llamenos-platform.com
 sources:
-  - https://github.com/your-org/llamenos
+  - https://github.com/Llamenos-Hotline/llamenos-platform
 maintainers:
   - name: Llamenos Team
