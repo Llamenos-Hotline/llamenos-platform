@@ -2446,10 +2446,18 @@ public func decryptServerEventHex(encryptedHex: String, keyHex: String)throws  -
 })
 }
 /**
- * Decrypt data that was encrypted with a provisioning shared key.
+ * Decrypt a UTF-8 payload that was encrypted with a provisioning shared key.
  *
  * `ciphertext_hex`: hex(nonce_12 + ciphertext + tag_16) — AES-256-GCM (provisioning protocol)
  * `shared_x_hex`: 64-char hex shared secret from `compute_shared_x_hex`
+ *
+ * NOT a device-linking import path. This uses `LABEL_DEVICE_PROVISION` as
+ * associated data, so it cannot open a device key bundle
+ * (`LABEL_DEVICE_PROVISION_BUNDLE`, PROTOCOL.md §6.7.2) — a bundle fails the
+ * tag check here rather than decoding. Device linking must go through
+ * `provisioning::decrypt_provisioned_bundle`, which returns both seeds as a
+ * `DeviceSecrets` that zeroizes on drop; mobile has no such path yet, so
+ * mobile device linking is not implemented.
  */
 public func decryptWithSharedKeyHex(ciphertextHex: String, sharedXHex: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
@@ -2746,6 +2754,18 @@ public func mobileCreateAuthTokenWithoutNonce(timestamp: UInt64, method: String,
 })
 }
 /**
+ * Decrypt a call record's metadata (`LABEL_CALL_META`) as this device.
+ * Takes the record's `encryptedContent` and all of its `adminEnvelopes`.
+ */
+public func mobileDecryptCallMetadata(encryptedContent: String, envelopes: [RecipientKeyEnvelope])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_decrypt_call_metadata(
+        FfiConverterString.lower(encryptedContent),
+        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
+    )
+})
+}
+/**
  * Decrypt a draft using the stored hub key for the given hub.
  * The hub key is looked up from MOBILE_STATE and passed to `decrypt_draft`.
  */
@@ -2789,6 +2809,18 @@ public func mobileDecryptHubEventTrial(encryptedHex: String)throws  -> [String] 
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(
         FfiConverterString.lower(encryptedHex),$0
+    )
+})
+}
+/**
+ * Decrypt a conversation message (`LABEL_MESSAGE`) as this device, whether a
+ * client or the server sealed it. Takes all of the message's reader envelopes.
+ */
+public func mobileDecryptMessage(encryptedContent: String, envelopes: [RecipientKeyEnvelope])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_decrypt_message(
+        FfiConverterString.lower(encryptedContent),
+        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
     )
 })
 }
@@ -2854,6 +2886,29 @@ public func mobileEncryptDraft(plaintext: String, hubId: String)throws  -> Strin
     uniffi_llamenos_core_fn_func_mobile_encrypt_draft(
         FfiConverterString.lower(plaintext),
         FfiConverterString.lower(hubId),$0
+    )
+})
+}
+/**
+ * Seal a conversation message (`LABEL_MESSAGE`) for several readers in the
+ * stored-record format — the writer half of [`mobile_decrypt_message`].
+ *
+ * `reader_pubkeys` are X25519 encryption keys; each is both the envelope's
+ * `pubkey` address and the key the wrap is sealed to. The result is
+ * byte-compatible with the server's `encryptMessageForStorage` and the
+ * desktop's `encryptMessage`: empty AAD on both layers, label as HPKE `info`
+ * (PROTOCOL.md §2.4). The AAD is chosen here, not by the caller, because the
+ * caller choosing it is how both mobile clients came to seal messages with
+ * the canonical notes AAD that no other reader supplies.
+ *
+ * An empty reader list is refused, as on the server: the record would be
+ * ciphertext nobody can ever open.
+ */
+public func mobileEncryptMessage(plaintext: String, readerPubkeys: [String])throws  -> EncryptedMessage  {
+    return try  FfiConverterTypeEncryptedMessage_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_encrypt_message(
+        FfiConverterString.lower(plaintext),
+        FfiConverterSequenceString.lower(readerPubkeys),$0
     )
 })
 }
@@ -3063,6 +3118,12 @@ public func mobileLabelToId(label: String)throws  -> UInt8  {
  * The caller provides only `enc` and `ct` from the server response. The envelope
  * version and label ID are constructed by Rust from the label registry — clients
  * never need to hardcode protocol constants.
+ *
+ * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
+ * what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
+ * desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
+ * with the other two clients and with none of the spec, the crate's own
+ * wrap/unwrap pair, or the interop vectors.
  */
 public func mobileLoadHubKey(hubId: String, enc: String, ct: String)throws   {try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_load_hub_key(
@@ -3232,15 +3293,18 @@ public func mobileSymmetricDecrypt(ciphertextHex: String, keyHex: String, aadHex
  * Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
  * Returns (ciphertext_hex, key_hex) where ciphertext = hex(nonce_12 || ciphertext || tag_16).
  *
- * `aad_hex` is required, not defaulted. `docs/protocol/PROTOCOL.md` §2.4
- * binds `UTF-8(label)` to the content layer of every envelope the server
- * writes; this function previously had no AAD parameter at all, so Android
+ * `aad_hex` is required, not defaulted. The canonical-AAD envelopes (notes,
+ * files, contact identifiers — `docs/protocol/PROTOCOL.md` §2.3) bind
+ * `UTF-8(label)` to the content layer and `UTF-8("{label}:key-wrap")` to the
+ * key wrap; this function previously had no AAD parameter at all, so Android
  * and iOS were structurally incapable of producing or reading a conformant
  * content ciphertext. A defaulted empty AAD would have reproduced exactly
  * that defect while appearing to fix it. Derive the value with
  * [`crate::envelope_aad::content_aad_hex`] — exported to mobile as
- * `mobile_content_aad_hex` — and pass `""` only where the spec says the
- * ciphertext carries no AAD (§2.3, notes).
+ * `mobile_content_aad_hex` — and pass `""` for the envelopes every
+ * implementation agrees carry no AAD: stored records (messages, call
+ * metadata — #1393, read by `open_record_for_reader` / `mobile_decrypt_message`)
+ * and the hub-key/PUK flows. Never pass `""` beside a canonical label.
  */
 public func mobileSymmetricEncrypt(plaintextHex: String, aadHex: String)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
@@ -3336,7 +3400,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_decrypt_server_event_hex() != 59916) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 62417) {
+    if (uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 38820) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_encrypt_message_for_readers() != 62867) {
@@ -3408,6 +3472,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce() != 37994) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_decrypt_call_metadata() != 6684) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_draft() != 61700) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3418,6 +3485,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial() != 46122) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event() != 16015) {
@@ -3433,6 +3503,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_encrypt_draft() != 30232) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_encrypt_message() != 47681) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_export_wake_key_hex() != 57742) {
@@ -3486,7 +3559,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 11270) {
+    if (uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 63290) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_load_wake_key() != 41647) {
@@ -3531,7 +3604,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_symmetric_decrypt() != 31396) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 22982) {
+    if (uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 33330) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233) {
