@@ -81,12 +81,12 @@ afterEach(() => { rmSync(work, { recursive: true, force: true }) })
 
 interface Run { status: number | null; stdout: string; stderr: string }
 
-function runScript(script: string, env: Record<string, string>, opts: { path?: string } = {}): Run {
+function runScript(script: string, env: Record<string, string>, opts: { path?: string; cwd?: string } = {}): Run {
   const dir = mkdtempSync(join(work, 'step-'))
   const file = join(dir, 'step.sh')
   writeFileSync(file, script)
   const r = spawnSync('bash', ['-e', file], {
-    cwd: process.cwd(),
+    cwd: opts.cwd ?? process.cwd(),
     encoding: 'utf8',
     env: {
       PATH: opts.path ?? process.env['PATH'] ?? '',
@@ -235,6 +235,17 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['the engine is not logged in', smokeFailed('engine-auth'), 'NO-VERDICT:engine-auth'],
   ['the engine or model id is misconfigured', smokeFailed('engine-misconfigured'), 'NO-VERDICT:engine-misconfigured'],
   ['the engine could not be run', smokeFailed('engine-unavailable'), 'NO-VERDICT:engine-unavailable'],
+  // A PR whose BASE predates code the gate runs from the base checkout. It
+  // used to be named `engine-misconfigured` (smoke fallback mismatch) or
+  // `did-not-run` (a base-guard step failing) — both send the reader after an
+  // engine/model-id fault that does not exist. The remedy is a rebase.
+  ['the base is too old — the smoke test recorded base-stale', smokeFailed('base-stale'), 'NO-VERDICT:base-stale'],
+  ['the base is too old — a base guard step failed and left base-stale, the smoke test never ran',
+    { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success', OUTCOME: 'run-engine', SMOKE_OUTCOME: 'skipped', REVIEW_OUTCOME: 'skipped', engineFailure: 'base-stale' },
+    'NO-VERDICT:base-stale'],
+  ['the base is too old — the base-gate guard after the smoke test failed and left base-stale',
+    { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success', OUTCOME: 'run-engine', SMOKE_OUTCOME: 'success', REVIEW_OUTCOME: 'skipped', engineFailure: 'base-stale' },
+    'NO-VERDICT:base-stale'],
   ['the branch names a lane that does not exist', reviewed('unknown-lane', 'failure'), 'NO-VERDICT:unknown-lane'],
   ['the review key is not configured', reviewed('review-disabled', 'failure'), 'NO-VERDICT:review-disabled'],
   ['the head export could not be made safe to read', reviewed('export-unsafe', 'failure'), 'NO-VERDICT:export-unsafe'],
@@ -476,6 +487,69 @@ describe('rail: an engine failure is named by its class, end to end', () => {
     const recorded = readFileSync(join(temp, 'fleet-review-engine-failure'), 'utf8').trim()
     expect(recorded).toBe('engine-quota')
     expect(reviewOutcomeToken(name(smokeFailed(recorded)).title)).toBe('NO-VERDICT:engine-quota')
+  })
+
+  // The incident (run 39063670637): a PR whose BASE predates
+  // `reviewPrimaryEngine` has a `reviewerInvocationFor` that ignores
+  // FLEET_REVIEW_PRIMARY, so the kimi fallback resolves to claude. The smoke
+  // step used to call that `engine-misconfigured` and send two investigations
+  // after an engine/model fault that did not exist. The base here is a scratch
+  // checkout holding only a stale review.ts, because the gate runs the smoke
+  // step against the BASE tree, never the PR's.
+  const baseWith = (reviewTs: string): string => {
+    const base = mkdtempSync(join(work, 'base-'))
+    mkdirSync(join(base, 'orchestrator', 'src'), { recursive: true })
+    writeFileSync(join(base, 'orchestrator', 'src', 'review.ts'), reviewTs)
+    return base
+  }
+  const STALE_RESOLVER = `export function reviewerInvocationFor(_author: string) {
+  return { engine: 'claude', binary: 'claude', model: 'sonnet' }
+}
+`
+  const smokeAgainst = (base: string): { r: Run; temp: string } => {
+    const temp = mkdtempSync(join(work, 'smoke-temp-'))
+    const r = runScript(
+      step('fleet-review', SMOKE_STEP).run,
+      { ...jobEnv('fleet-review'), RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet', FLEET_REVIEW_PRIMARY: 'kimi', FLEET_REVIEW_FALLBACK: 'on' },
+      { cwd: base },
+    )
+    return { r, temp }
+  }
+
+  it('a base that predates reviewPrimaryEngine is named base-stale, not engine-misconfigured', () => {
+    const { r, temp } = smokeAgainst(baseWith(STALE_RESOLVER))
+    expect(r.status, r.stdout + r.stderr).toBe(1)
+    expect(r.stdout).toContain('base-stale')
+    expect(r.stdout).not.toContain('engine-misconfigured')
+    const recorded = readFileSync(join(temp, 'fleet-review-engine-failure'), 'utf8').trim()
+    expect(recorded).toBe('base-stale')
+    expect(reviewOutcomeToken(name(smokeFailed(recorded)).title)).toBe('NO-VERDICT:base-stale')
+  })
+
+  it('the same mismatch on a base that DOES have reviewPrimaryEngine is still engine-misconfigured — the new name is keyed on the stale symbol, not on the mismatch', () => {
+    const { r, temp } = smokeAgainst(baseWith(`export function reviewPrimaryEngine() { return 'claude' }\n${STALE_RESOLVER}`))
+    expect(r.status, r.stdout + r.stderr).toBe(1)
+    expect(r.stdout).toContain('engine-misconfigured')
+    expect(readFileSync(join(temp, 'fleet-review-engine-failure'), 'utf8').trim()).toBe('engine-misconfigured')
+  })
+
+  it('both base guard steps leave the base-stale marker and still fail the step', () => {
+    for (const [stepName, setup] of [
+      ['Check the base provides reviewerInvocationFor', (base: string) => mkdirSync(join(base, 'orchestrator', 'src'), { recursive: true })],
+      ['Check the base provides the gate', (base: string) => {
+        mkdirSync(join(base, 'orchestrator', 'src'), { recursive: true })
+        writeFileSync(join(base, 'orchestrator', 'src', 'cli.ts'), 'console.log("usage: nothing")\n')
+      }],
+    ] as const) {
+      const base = mkdtempSync(join(work, 'base-'))
+      setup(base)
+      writeFileSync(join(base, 'orchestrator', 'src', 'review.ts'), '// stale\n')
+      const temp = mkdtempSync(join(work, 'guard-temp-'))
+      const r = runScript(step('fleet-review', stepName).run, { RUNNER_TEMP: temp }, { cwd: base })
+      expect(r.status, `${stepName}: ${r.stdout}${r.stderr}`).toBe(1)
+      expect(r.stdout, stepName).toContain('too old')
+      expect(readFileSync(join(temp, 'fleet-review-engine-failure'), 'utf8').trim(), stepName).toBe('base-stale')
+    }
   })
 })
 

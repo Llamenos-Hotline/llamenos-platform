@@ -511,7 +511,7 @@ jobs:
       # the run red, so `fleet-review/publish` can say on the PR itself that
       # an engine outage is the fleet's own problem, not a rejection of the
       # diff. Empty on every successful path.
-      engine_failure: ${{ steps.smoke.outputs.engine_failure }}
+      engine_failure: ${{ steps.smoke.outputs.engine_failure || steps.base_riv.outputs.engine_failure || steps.base_ci.outputs.engine_failure }}
     permissions:
       # contents: read — the reviewer runs inside this job, so the
       # containment that matters is that NOTHING from the commit under
@@ -1090,6 +1090,7 @@ jobs:
       # now-trusted, merged engine-resolution code, because base will then
       # actually provide the symbol this checks for.
       - name: Check the base provides reviewerInvocationFor
+        id: base_riv
         if: steps.gate.outputs.outcome == 'run-engine'
         run: |
           set -euo pipefail
@@ -1099,6 +1100,11 @@ jobs:
             echo "This is expected for the PR that INTRODUCES reviewerInvocationFor (#866) — merge"
             echo "that one PR with this check not yet required by the ruleset; every later PR is"
             echo "judged by the now-trusted, merged engine-resolution code."
+            echo "Nothing about the review engine or any model id is misconfigured: this PR's base is too old. Rebase (or merge main into) the PR branch, then re-request the review."
+            # Named `NO-VERDICT:base-stale` by "Name this run's outcome", which
+            # reads this marker (the same one the smoke test's `fail()` writes).
+            printf 'base-stale\n' > "$RUNNER_TEMP/fleet-review-engine-failure"
+            if [ -n "${GITHUB_OUTPUT:-}" ]; then printf 'engine_failure=base-stale\n' >> "$GITHUB_OUTPUT"; fi
             exit 1
           fi
 
@@ -1185,7 +1191,9 @@ jobs:
           rev_model=""
 
           # $1: engine-misconfigured | engine-quota | engine-auth |
-          # engine-unavailable. $2: the raw engine text to print for a
+          # engine-unavailable | base-stale (the PR's base is too old to
+          # resolve the engines — not an engine fault). $2: the raw engine
+          # text to print for a
           # human, then always exits 1 — this function is the only way the
           # step fails, and it always fails. The class is also written where
           # "Name this run's outcome" reads it (#1230), so a usage limit is
@@ -1353,6 +1361,17 @@ jobs:
           fb_model="$(printf '%s' "$fb_json" | jq -r '.model')"
           if [ "$fb_model" = "null" ]; then fb_model=""; fi
           if [ "$fb_engine" != "$fb_want" ] || [ -z "$fb_binary" ] || [ "$fb_binary" = "null" ]; then
+            # A base that predates `reviewPrimaryEngine` ignores
+            # FLEET_REVIEW_PRIMARY altogether, so it can only ever resolve one
+            # engine and the fallback comes back as the primary. That is the
+            # PR's base being too old — not the engine, not a model id — and
+            # reporting it as `engine-misconfigured` sent two investigations
+            # after a misconfiguration that did not exist. Still a failure
+            # (the smoke test cannot run); only the NAME differs.
+            if ! grep -q '^export function reviewPrimaryEngine' orchestrator/src/review.ts 2>/dev/null; then
+              echo "::error::fleet/review FAILED: base-stale — the base commit's orchestrator/src/review.ts has no 'reviewPrimaryEngine', so it ignores FLEET_REVIEW_PRIMARY and cannot resolve the fallback engine this smoke test needs. This PR's base is too old; the review engine and its model id are fine. Rebase (or merge main into) the PR branch, then re-request the review."
+              fail "base-stale" "reviewerInvocationFor resolved fallback $fb_want to something else (FLEET_REVIEW_PRIMARY=$primary_setting_display, primary=$rev_engine) because the base predates reviewPrimaryEngine: $fb_json"$'\n'"$fb_err"
+            fi
             fail "engine-misconfigured" "reviewerInvocationFor resolved fallback $fb_want to something else (FLEET_REVIEW_PRIMARY=$primary_setting_display, primary=$rev_engine): $fb_json"$'\n'"$fb_err"
           fi
           # claude requires a tier and the shared function always provides
@@ -1837,6 +1856,7 @@ jobs:
       # without it means someone removed it from `main` — and that must stop
       # every PR until a human looks, never silently wave them through.
       - name: Check the base provides the gate
+        id: base_ci
         if: steps.gate.outputs.outcome == 'run-engine'
         run: |
           set -eu
@@ -1849,6 +1869,9 @@ jobs:
               echo "The PR that INTRODUCES the gate therefore cannot pass it. Merge that one PR"
               echo "with these checks not yet required by the ruleset; every later PR is judged"
               echo "by the now-trusted, merged gate."
+              echo "Nothing about the review engine or any model id is misconfigured: this PR's base is too old. Rebase (or merge main into) the PR branch, then re-request the review."
+              printf 'base-stale\n' > "$RUNNER_TEMP/fleet-review-engine-failure"
+              if [ -n "${GITHUB_OUTPUT:-}" ]; then printf 'engine_failure=base-stale\n' >> "$GITHUB_OUTPUT"; fi
               exit 1
               ;;
           esac
@@ -2181,6 +2204,11 @@ jobs:
                     # reason; anything else did not run for a reason only
                     # the log has.
                     case "$SMOKE_OUTCOME:$engine_failure" in
+                      # The PR's base is too old to run the gate's engine
+                      # steps. Matched on the marker alone: the guard steps
+                      # around the smoke test record it and fail the job
+                      # without the smoke step itself failing.
+                      *:base-stale) token="NO-VERDICT:base-stale" ;;
                       failure:engine-quota) token="NO-VERDICT:engine-quota" ;;
                       failure:engine-auth) token="NO-VERDICT:engine-auth" ;;
                       failure:engine-misconfigured) token="NO-VERDICT:engine-misconfigured" ;;
@@ -2221,6 +2249,7 @@ jobs:
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
             NO-VERDICT:engine-misconfigured) detail="the review engine or its model id is misconfigured" ;;
             NO-VERDICT:engine-unavailable) detail="the review engine could not be run" ;;
+            NO-VERDICT:base-stale) detail="the PR's base is too old to run the review engine steps (the engine and its model id are fine); rebase onto main and re-request the review" ;;
             NO-VERDICT:unknown-lane) detail="the branch names a fleet lane that does not exist" ;;
             NO-VERDICT:review-disabled) detail="FLEET_REVIEW_API_KEY is not configured on this repository" ;;
             NO-VERDICT:export-unsafe) detail="the PR head export could not be made safe for a reviewer to read" ;;
@@ -2522,6 +2551,25 @@ jobs:
                     printf '### `fleet/review` — **NO VERDICT**: the review engine could not run (`%s`)\n\n' "$ENGINE_FAILURE"
                     printf 'This red check is the fleet'\''s own review infrastructure failing closed, **not a reviewer rejecting this diff** — no reviewer read this code. Do not change the code on review grounds. When the engine is healthy again, request a review (or re-run this workflow) to have the diff actually judged.\n\n'
                     printf 'The check log names the failing engine, its model, and why it failed.\n'
+                  } > "$RUNNER_TEMP/no-verdict-comment.md"
+                  post_comment "$RUNNER_TEMP/no-verdict-comment.md" "$nv_marker"
+                  echo "posted: no-verdict notice ($ENGINE_FAILURE)"
+                fi
+                ;;
+              base-stale)
+                # Not an engine outage at all: the PR's BASE predates code
+                # the gate runs from the base checkout. The remedy is a
+                # rebase, not waiting for the engine, so it gets its own
+                # notice rather than the engine-outage one above.
+                nv_marker="<!-- fleet-review:no-verdict:$ENGINE_FAILURE -->"
+                if grep -qF -- "$nv_marker" "$RUNNER_TEMP/existing.txt"; then
+                  echo "already posted: no-verdict notice ($ENGINE_FAILURE)"
+                else
+                  {
+                    printf '%s\n\n' "$nv_marker"
+                    printf "### \`fleet/review\` — **NO VERDICT**: this PR's base is too old (\`base-stale\`)\n\n"
+                    printf "The gate deliberately runs from the PR's **base** commit, and that commit predates review-engine code the gate needs. The review engine and its model id are fine, and no reviewer read this code. Do not change the code on review grounds: rebase (or merge \`main\` into) this branch, then request a review.\n\n"
+                    printf 'The check log names the missing piece.\n'
                   } > "$RUNNER_TEMP/no-verdict-comment.md"
                   post_comment "$RUNNER_TEMP/no-verdict-comment.md" "$nv_marker"
                   echo "posted: no-verdict notice ($ENGINE_FAILURE)"
