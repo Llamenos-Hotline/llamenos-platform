@@ -24,16 +24,24 @@ struct CaseListView: View {
 
         NavigationStack {
             Group {
-                if vm.cmsEnabled == nil {
+                switch vm.loadState {
+                case .loading:
                     loadingView
-                } else if vm.cmsEnabled == false {
+                case .disabled:
                     cmsDisabledView
-                } else if vm.isLoading && vm.records.isEmpty {
-                    loadingView
-                } else if vm.records.isEmpty && vm.entityTypeFilter == nil && vm.statusFilter == nil {
-                    emptyStateView(vm: vm)
-                } else {
-                    caseListContent(vm: vm)
+                case .failed(let message):
+                    loadErrorView(message: message, vm: vm)
+                case .ready:
+                    if vm.isLoading && vm.records.isEmpty {
+                        loadingView
+                    } else if vm.records.isEmpty, let recordsError = vm.recordsLoadError {
+                        // Without this, a failed fetch rendered as "No cases yet".
+                        loadErrorView(message: recordsError, vm: vm)
+                    } else if vm.records.isEmpty && vm.entityTypeFilter == nil && vm.statusFilter == nil {
+                        emptyStateView(vm: vm)
+                    } else {
+                        caseListContent(vm: vm)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,17 +49,19 @@ struct CaseListView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     // The Button renders unconditionally so the toolbar item exists
-                    // from the first toolbar resolution. `cmsEnabled` is nil until
-                    // the CMS/entity-type responses land, and SwiftUI does not
+                    // from the first toolbar resolution. `loadState` is `.loading`
+                    // until the CMS/entity-type responses land, and SwiftUI does not
                     // reliably rebuild a ToolbarItem whose body flips EmptyView ->
                     // Button afterwards, so a conditional body loses the button
                     // entirely whenever the API answers after that first pass.
+                    // While disabled, the content area says why: loading, not
+                    // enabled, or the load error.
                     Button {
                         vm.showCreateSheet = true
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .disabled(!(vm.cmsEnabled == true && !vm.entityTypes.isEmpty))
+                    .disabled(!vm.canCreateCase)
                     .accessibilityIdentifier("case-new-btn")
                 }
                 ToolbarItem(placement: .secondaryAction) {
@@ -115,6 +125,24 @@ struct CaseListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("case-loading")
+    }
+
+    // MARK: - Load Error
+
+    /// A required load failed. Shows the error itself and a retry, so a request that
+    /// failed never looks like an empty hub or a hub without case management.
+    private func loadErrorView(message: String, vm: CaseManagementViewModel) -> some View {
+        BrandEmptyState(
+            icon: "exclamationmark.triangle",
+            title: NSLocalizedString("cases_load_error", comment: "Failed to load cases"),
+            message: message,
+            action: {
+                Task { await vm.loadInitial() }
+            },
+            actionLabel: NSLocalizedString("common_retry", comment: "Retry"),
+            actionAccessibilityID: "case-load-retry",
+            accessibilityID: "case-load-error"
+        )
     }
 
     // MARK: - CMS Disabled

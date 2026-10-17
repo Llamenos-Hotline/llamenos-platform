@@ -6,6 +6,18 @@ import UIKit
 /// View model for CMS case management. Fetches entity types, records, interactions,
 /// contacts, and evidence from the API. Handles status changes, comments, assignment,
 /// summary decryption, and field decryption.
+///
+/// Main-actor isolated. SwiftUI reads every property here from the main thread, so every
+/// write must happen there too. Without the isolation each `async` method ran on the
+/// global executor (Swift 5.9 semantics for a nonisolated async function), and the view
+/// raced its own model: Thread Sanitizer reports `loadRecords()` writing `isLoading` on a
+/// GCD worker while `CaseListView.body` reads it, a hosted CI runner crashed reading
+/// `decryptedSummaries` mid-write (`-[__NSTaggedDate objectForKey:]` in
+/// `decryptedTitle(for:)`), and a write landing while the body was being evaluated was
+/// never observed at all — which is how New Case stayed disabled for 15s after both of
+/// its loads had answered in under a second. Network calls still suspend off the main
+/// thread inside `APIService`; only the state changes are pinned here.
+@MainActor
 @Observable
 final class CaseManagementViewModel {
     private let apiService: APIService
@@ -13,11 +25,17 @@ final class CaseManagementViewModel {
 
     // MARK: - Public State
 
-    /// Whether CMS is enabled for this hub.
-    var cmsEnabled: Bool?
+    /// Where the screen is in establishing what it can show. Starts `.loading`, and
+    /// `loadInitial()` always settles it on one of the other three — a failed request
+    /// is `.failed`, never mistaken for "case management is off".
+    var loadState: CaseListLoadState = .loading
 
     /// Entity type definitions from the template.
     var entityTypes: [CaseEntityTypeDefinition] = []
+
+    /// Why the last records fetch failed, while there are no records to show instead.
+    /// Cleared by the next successful fetch.
+    var recordsLoadError: String?
 
     /// Case records from the current query.
     var records: [CaseRecord] = []
@@ -102,6 +120,16 @@ final class CaseManagementViewModel {
 
     // MARK: - Computed
 
+    /// Whether New Case can be offered. Both halves are genuine requirements, not an
+    /// artefact of load order: case management must be on for the hub (the server
+    /// refuses records otherwise), and creating a case means choosing one of the hub's
+    /// entity types — the sheet's type picker, the record's `entityTypeId` and its
+    /// default status all come from them. Records are NOT required, so a failed records
+    /// fetch leaves New Case available.
+    var canCreateCase: Bool {
+        loadState == .ready && !entityTypes.isEmpty
+    }
+
     /// All unique statuses across entity types (for filter dropdown).
     var allStatuses: [CaseEnumOption] {
         var seen = Set<String>()
@@ -149,28 +177,53 @@ final class CaseManagementViewModel {
 
     // MARK: - Data Loading
 
-    /// Load CMS enabled status + entity types on initial mount.
+    /// Establish what the screen can show: whether case management is on for the hub,
+    /// and its entity types. Settles `loadState` on `.ready`, `.disabled` or `.failed`,
+    /// then loads the first page of records when ready.
+    ///
+    /// The two requests are independent — the entity-types route is not gated on case
+    /// management being on — so they run concurrently, and readiness costs one round
+    /// trip rather than two.
     func loadInitial() async {
+        loadState = .loading
+        entityTypes = []
+        recordsLoadError = nil
+
+        async let enabledRequest: CaseManagementEnabledResponse = apiService.request(
+            method: "GET", path: apiService.hp("/api/settings/cms/case-management")
+        )
+        async let typesRequest: EntityTypesResponse = apiService.request(
+            method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
+        )
+
+        let enabled: Bool
         do {
-            let enabled: CaseManagementEnabledResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/settings/cms/case-management")
-            )
-            cmsEnabled = enabled.enabled
+            enabled = try await enabledRequest.enabled
         } catch {
-            cmsEnabled = false
+            // A superseded load (the hub changed and `.task(id:)` restarted it) must not
+            // overwrite the state its replacement is establishing.
+            guard !Task.isCancelled else { return }
+            loadState = .failed(error.localizedDescription)
+            return
+        }
+        guard enabled else {
+            // Entity types are irrelevant to a hub without case management; the
+            // pending request is cancelled when this scope exits.
+            loadState = .disabled
+            return
         }
 
-        guard cmsEnabled == true else { return }
-
         do {
-            let response: EntityTypesResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
-            )
+            let response = try await typesRequest
             entityTypes = response.entityTypes.filter { $0.isArchived != true }
         } catch {
-            errorMessage = error.localizedDescription
+            guard !Task.isCancelled else { return }
+            loadState = .failed(error.localizedDescription)
+            return
         }
+        guard !Task.isCancelled else { return }
 
+        loadState = .ready
         await loadRecords()
     }
 
@@ -196,11 +249,14 @@ final class CaseManagementViewModel {
             )
             records = response.records
             totalRecords = response.total
+            recordsLoadError = nil
 
             // Decrypt summaries for all loaded records
             await decryptRecordSummaries(response.records)
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
+            recordsLoadError = error.localizedDescription
         }
     }
 
@@ -217,8 +273,13 @@ final class CaseManagementViewModel {
         await loadInteractions(for: record.id)
     }
 
-    /// Refresh all data.
+    /// Refresh all data. A screen that never became ready retries its readiness load
+    /// rather than fetching records it has no entity types to show.
     func refresh() async {
+        guard loadState == .ready else {
+            await loadInitial()
+            return
+        }
         await loadRecords()
         if let selected = selectedRecord {
             await selectRecord(selected)
@@ -513,6 +574,23 @@ final class CaseManagementViewModel {
         currentPage = 1
         await loadRecords()
     }
+}
+
+// MARK: - CaseListLoadState
+
+/// What the Cases screen has established about the active hub. Each case renders a
+/// distinct, identifiable view in `CaseListView`, so a user — and a UI test — can tell a
+/// screen that is still loading from one whose load failed and one where case
+/// management is simply off.
+enum CaseListLoadState: Equatable, Sendable {
+    /// The case-management status or entity types have not answered yet.
+    case loading
+    /// The hub answered that case management is off.
+    case disabled
+    /// Case management is on and the hub's entity types are loaded.
+    case ready
+    /// A required request failed; carries the error to show.
+    case failed(String)
 }
 
 // MARK: - CaseDisplayType
