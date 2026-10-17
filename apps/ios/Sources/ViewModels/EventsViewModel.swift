@@ -9,10 +9,11 @@ import UIKit
 /// Main-actor isolated for the same reason as `CaseManagementViewModel` (#1918):
 /// SwiftUI reads every property here on the main thread, and without the isolation
 /// each `async` method ran on the global executor and wrote `@Observable` state from a
-/// GCD worker — `decryptEventDetails` filling `decryptedDetails` while
-/// `EventListView` reads it through `decryptedTitle(for:)` is the exact dictionary
-/// race that crashed the Cases screen. Network calls still suspend off the main thread
-/// inside `APIService`; only the state changes are pinned here.
+/// GCD worker. Thread Sanitizer reports `loadInitial()` writing `loadState` on a worker
+/// while the main thread reads it; `decryptEventDetails` filling `decryptedDetails`
+/// while `EventListView` reads it through `decryptedTitle(for:)` is the same
+/// dictionary pattern that crashed the Cases screen. Network calls still suspend off
+/// the main thread inside `APIService`; only the state changes are pinned here.
 @MainActor
 @Observable
 final class EventsViewModel {
