@@ -2792,7 +2792,10 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Yo envite ou pou w vin volontè, {{volunteerName}}",
-    "welcomeTitle": "Byenveni nan {{name}}"
+    "welcomeTitle": "Byenveni nan {{name}}",
+    "tryAgain": "Eseye ankò",
+    "validateRetryAfter": "Nou pa t kapab tcheke envitasyon ou kounye a. Tanpri eseye ankò nan {{seconds}} segonn.",
+    "validateUnavailable": "Nou pa t kapab tcheke envitasyon ou kounye a. Sa a pa yon pwoblèm ak envitasyon ou — tanpri eseye ankò."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

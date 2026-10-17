@@ -874,7 +874,10 @@
     "subtitle": "Güvenli kriz müdahale hattı",
     "title": "Gizli Anahtarınız",
     "welcomeDescription": "Gönüllü olarak katılmaya davet edildiniz, {{volunteerName}}",
-    "welcomeTitle": "{{name}} uygulamasına hoş geldiniz"
+    "welcomeTitle": "{{name}} uygulamasına hoş geldiniz",
+    "tryAgain": "Tekrar dene",
+    "validateRetryAfter": "Davetinizi şu anda kontrol edemedik. Lütfen {{seconds}} saniye sonra tekrar deneyin.",
+    "validateUnavailable": "Davetinizi şu anda kontrol edemedik. Bu, davetinizle ilgili bir sorun değil — lütfen tekrar deneyin."
   },
   "panicWipe": {
     "confirm": "Tüm Verileri Sil",

@@ -874,7 +874,10 @@
     "subtitle": "Xeta krîzê ya ewle",
     "title": "Kilîda Te ya Nepenî",
     "welcomeDescription": "Tu wekî xwebexş hatiyî vexwendin, {{volunteerName}}",
-    "welcomeTitle": "Bi xêr hatî {{name}}"
+    "welcomeTitle": "Bi xêr hatî {{name}}",
+    "tryAgain": "Dîsa biceribîne",
+    "validateRetryAfter": "Me nikarî niha vexwendina te kontrol bike. Ji kerema xwe piştî {{seconds}} saniyeyan dîsa biceribîne.",
+    "validateUnavailable": "Me nikarî niha vexwendina te kontrol bike. Ev ne pirsgirêka vexwendina te ye — ji kerema xwe dîsa biceribîne."
   },
   "panicWipe": {
     "confirm": "Hemû Daneyan Paqij Bike",

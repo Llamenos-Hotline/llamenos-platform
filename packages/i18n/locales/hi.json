@@ -2792,7 +2792,10 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "आपको स्वयंसेवक के रूप में आमंत्रित किया गया है, {{volunteerName}}",
-    "welcomeTitle": "{{name}} में आपका स्वागत है"
+    "welcomeTitle": "{{name}} में आपका स्वागत है",
+    "tryAgain": "पुनः प्रयास करें",
+    "validateRetryAfter": "हम अभी आपका आमंत्रण जाँच नहीं सके। कृपया {{seconds}} सेकंड बाद पुनः प्रयास करें।",
+    "validateUnavailable": "हम अभी आपका आमंत्रण जाँच नहीं सके। यह आपके आमंत्रण की समस्या नहीं है — कृपया पुनः प्रयास करें।"
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

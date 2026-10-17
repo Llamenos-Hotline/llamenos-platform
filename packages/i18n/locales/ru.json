@@ -2792,7 +2792,10 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Вы приглашены как волонтёр, {{volunteerName}}",
-    "welcomeTitle": "Добро пожаловать в {{name}}"
+    "welcomeTitle": "Добро пожаловать в {{name}}",
+    "tryAgain": "Повторить",
+    "validateRetryAfter": "Сейчас не удалось проверить ваше приглашение. Попробуйте снова через {{seconds}} секунд.",
+    "validateUnavailable": "Сейчас не удалось проверить ваше приглашение. Проблема не в приглашении — попробуйте снова."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

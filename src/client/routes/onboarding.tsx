@@ -37,6 +37,9 @@ function OnboardingPage() {
   const [step, setStep] = useState<Step>('loading')
   const [inviteData, setInviteData] = useState<{ name: string; roleIds: string[] } | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
+  /** A failure the invitee can retry (rate limit, 5xx, dropped connection) —
+   *  as opposed to the server's verdict that the invite itself is no good. */
+  const [errorRetryable, setErrorRetryable] = useState(false)
   const [uiLang, setUiLang] = useState(i18n.language || 'en')
 
   // PIN state
@@ -75,60 +78,59 @@ function OnboardingPage() {
     }
   }, [])
 
-  // Validate invite on initial mount only (ref survives re-renders but not re-mounts)
-  const [errorRetryable, setErrorRetryable] = useState(false)
+  // Validate invite on initial mount only (ref survives re-renders but not re-mounts).
+  // `retryInvite` clears the ref so an explicitly retryable failure can be retried
+  // without a reload — the old code left `step === 'error'` terminal for a 429 (#1712).
   const validatingRef = useRef(false)
 
   const runValidation = useCallback(() => {
+    if (validatingRef.current) return
+    validatingRef.current = true
+
     if (!inviteCode) {
-      setErrorRetryable(false)
       setStep('error')
+      setErrorRetryable(false)
       setErrorMsg(t('onboarding.noCode'))
       return
     }
-    validateInvite(inviteCode).then(result => {
+    void validateInvite(inviteCode).then(result => {
       if (result.outcome === 'valid') {
         setInviteData({ name: result.name, roleIds: result.roleIds || ['role-volunteer'] })
         setStep('welcome')
-      } else if (result.outcome === 'invalid') {
-        setErrorRetryable(false)
-        setStep('error')
-        setErrorMsg(
-          result.error === 'expired' ? t('onboarding.expired') :
-          result.error === 'already_used' ? t('onboarding.alreadyUsed') :
-          t('onboarding.invalidCode')
-        )
-      } else {
-        // Rate limit, server error, or network failure (#1712) — transient,
-        // so the screen offers a retry instead of a terminal verdict.
-        setErrorRetryable(true)
-        setStep('error')
-        setErrorMsg(
-          result.retryAfterSeconds
-            ? t('onboarding.rateLimitedRetry', { seconds: result.retryAfterSeconds })
-            : t('onboarding.validationUnavailable')
-        )
+        return
       }
-    }).catch(() => {
-      // validateInvite already converts network failures into `retryable`;
-      // this arm is purely defensive.
-      setErrorRetryable(true)
       setStep('error')
-      setErrorMsg(t('onboarding.validationUnavailable'))
+      if (result.outcome === 'retryable') {
+        // The server said nothing about the invite. Say so, and let them retry.
+        setErrorRetryable(true)
+        setErrorMsg(
+          result.retryAfterSeconds !== undefined
+            ? t('onboarding.rateLimitedRetry', { seconds: result.retryAfterSeconds })
+            : t('onboarding.validationUnavailable'),
+        )
+        return
+      }
+      setErrorRetryable(false)
+      setErrorMsg(
+        result.reason === 'expired' ? t('onboarding.expired') :
+        result.reason === 'already_used' ? t('onboarding.alreadyUsed') :
+        t('onboarding.invalidCode')
+      )
     })
   }, [inviteCode, t])
 
-  useEffect(() => {
-    // Skip if already validated or currently validating
-    if (validatingRef.current || step !== 'loading') return
-    validatingRef.current = true
-    runValidation()
-  }, [inviteCode, step, runValidation])
-
-  function handleRetryValidation() {
+  function retryInvite() {
     validatingRef.current = false
+    setErrorRetryable(false)
+    setErrorMsg('')
     setStep('loading')
+    runValidation()
   }
+
+  useEffect(() => {
+    if (validatingRef.current || step !== 'loading') return
+    runValidation()
+  }, [inviteCode, runValidation, step])
 
   function handlePinComplete(enteredPin: string) {
     if (pinStep === 'create') {
@@ -278,10 +280,10 @@ function OnboardingPage() {
             <CardTitle>{t('onboarding.errorTitle')}</CardTitle>
             <CardDescription data-testid="onboarding-error-message">{errorMsg}</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2 text-center">
+          <CardContent className="flex flex-col items-center gap-2 text-center">
             {errorRetryable && (
-              <Button data-testid="onboarding-retry" onClick={handleRetryValidation}>
-                {t('common.retry')}
+              <Button data-testid="onboarding-retry" onClick={retryInvite} className="w-full">
+                {t('onboarding.tryAgain')}
               </Button>
             )}
             <Button variant="outline" data-testid="onboarding-go-to-login" onClick={() => navigate({ to: '/login' })}>

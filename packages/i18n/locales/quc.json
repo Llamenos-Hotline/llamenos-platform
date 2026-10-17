@@ -874,7 +874,10 @@
     "subtitle": "Ruchajixik oyonem tzij rech k'ayewal",
     "title": "Ri Awewan Etal",
     "welcomeDescription": "Xat sik'ixik rech yatok achi'el aj samajel, {{volunteerName}}",
-    "welcomeTitle": "Utz apetik pa {{name}}"
+    "welcomeTitle": "Utz apetik pa {{name}}",
+    "tryAgain": "Chatij chik",
+    "validateRetryAfter": "Man xojkwin ta kamik chuchomaxik ri asik'ixik. Chatij chik are k'o chik {{seconds}} segundos.",
+    "validateUnavailable": "Man xojkwin ta kamik chuchomaxik ri asik'ixik. Man are ta k'ax rech ri asik'ixik — chatij chik."
   },
   "panicWipe": {
     "confirm": "Keyujux Ronojel Etamab'al",

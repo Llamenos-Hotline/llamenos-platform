@@ -874,7 +874,10 @@
     "subtitle": "Khadka taleefanka xiisadda ee amaan ah",
     "title": "Furuhaaga Sirta ah",
     "welcomeDescription": "Waxaa lagu martiqaaday inaad ka qayb gasho mutadawwic ahaan, {{volunteerName}}",
-    "welcomeTitle": "Ku soo dhawoow {{name}}"
+    "welcomeTitle": "Ku soo dhawoow {{name}}",
+    "tryAgain": "Isku day mar kale",
+    "validateRetryAfter": "Hadda waan hubin kari weynay casuumaaddaada. Fadlan isku day mar kale {{seconds}} ilbiriqsi kadib.",
+    "validateUnavailable": "Hadda waan hubin kari weynay casuumaaddaada. Tani ma aha dhibaato casuumaaddaada — fadlan isku day mar kale."
   },
   "panicWipe": {
     "confirm": "Tirtir Dhammaan Xogta",

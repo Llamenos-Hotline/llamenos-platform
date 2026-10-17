@@ -2792,7 +2792,10 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Has sido invitado a unirte como voluntario, {{volunteerName}}",
-    "welcomeTitle": "Bienvenido a {{name}}"
+    "welcomeTitle": "Bienvenido a {{name}}",
+    "tryAgain": "Intentar de nuevo",
+    "validateRetryAfter": "No pudimos verificar tu invitación en este momento. Inténtalo de nuevo en {{seconds}} segundos.",
+    "validateUnavailable": "No pudimos verificar tu invitación en este momento. No es un problema con tu invitación: inténtalo de nuevo."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

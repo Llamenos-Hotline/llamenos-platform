@@ -2728,7 +2728,10 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "You've been invited to join as a volunteer, {{volunteerName}}",
-    "welcomeTitle": "Welcome to {{name}}"
+    "welcomeTitle": "Welcome to {{name}}",
+    "tryAgain": "Try again",
+    "validateRetryAfter": "We couldn't check your invite just now. Please try again in {{seconds}} seconds.",
+    "validateUnavailable": "We couldn't check your invite just now. This isn't a problem with your invite — please try again."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

@@ -2792,7 +2792,10 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Inimbitahan kang sumali bilang boluntaryo, {{volunteerName}}",
-    "welcomeTitle": "Maligayang pagdating sa {{name}}"
+    "welcomeTitle": "Maligayang pagdating sa {{name}}",
+    "tryAgain": "Subukan muli",
+    "validateRetryAfter": "Hindi namin masuri ang inyong imbitasyon ngayon. Subukan muli pagkalipas ng {{seconds}} segundo.",
+    "validateUnavailable": "Hindi namin masuri ang inyong imbitasyon ngayon. Hindi ito problema sa imbitasyon — subukan muli."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

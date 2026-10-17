@@ -874,7 +874,10 @@
     "subtitle": "Línea de ayuda segura nu̱ú crisis",
     "title": "Llave Secreta Miíún",
     "welcomeDescription": "Ni̱ invitar miíún ña kivi voluntario, {{volunteerName}}",
-    "welcomeTitle": "¡Nda̱kú kivi nu̱ú {{name}}!"
+    "welcomeTitle": "¡Nda̱kú kivi nu̱ú {{name}}!",
+    "tryAgain": "Kundi'i tuku",
+    "validateRetryAfter": "Tu ni kuu ndakanda'yi ña kana ñaa vitin. Kundi'i tuku nuu {{seconds}} segundo.",
+    "validateUnavailable": "Tu ni kuu ndakanda'yi ña kana ñaa vitin. Ña kúú ña kuálí nuu kana ñaa — kundi'i tuku."
   },
   "panicWipe": {
     "confirm": "Xíta Ndiꞌi Datos",

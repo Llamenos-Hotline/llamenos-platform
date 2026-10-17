@@ -874,7 +874,10 @@
     "subtitle": "ደህንነቱ የተጠበቀ የቀውስ ምላሽ የስልክ መስመር",
     "title": "ሚስጥራዊ ቁልፍዎ",
     "welcomeDescription": "{{volunteerName}}፣ እንደ ፈቃደኛ እንዲቀላቀሉ ተጋብዘዋል",
-    "welcomeTitle": "እንኳን ወደ {{name}} በደህና መጡ"
+    "welcomeTitle": "እንኳን ወደ {{name}} በደህና መጡ",
+    "tryAgain": "እንደገና ይሞክሩ",
+    "validateRetryAfter": "በዚህ ጊዜ ግብዣዎን ማረጋገጥ አልቻልንም። እባክዎ ከ{{seconds}} ሰከንድ በኋላ እንደገና ይሞክሩ።",
+    "validateUnavailable": "በዚህ ጊዜ ግብዣዎን ማረጋገጥ አልቻልንም። ይህ የግብዣዎ ችግር አይደለም — እባክዎ እንደገና ይሞክሩ።"
   },
   "panicWipe": {
     "confirm": "ሁሉንም ውሂብ አጥፋ",
