@@ -201,12 +201,37 @@ jobs:
       - name: Guard the runner's disk headroom
         run: bash scripts/ci/mac-runner-disk-guard.sh guard
 
+      # TMPDIR is pinned to the runner's temp dir on EVERY step that runs bun
+      # or node — here, in `ui` below, and in ci.yml's ios-build-test — for
+      # the same co-tenancy reason every file this workflow controls already
+      # lives under RUNNER_TEMP.
+      #
+      # Without it bun inherits launchd's per-user TMPDIR
+      # (/var/folders/<..>/T/, shared by every runner on the host and by the
+      # operator's own session), and macOS reaps /var/folders content on its
+      # own schedule. bun 1.3.5 opens that directory ONCE and later creates
+      # its node-gyp shim dir relative to the open handle; if the directory
+      # was reaped in between, mkdirat returns ENOENT and the install dies
+      # with `error: FileNotFound creating node-gyp tempdir` — which is how
+      # `ui (3)` on mac-mini-ios-1 ejected #1910 (run 39026934332) with 21 GiB
+      # free. RUNNER_TEMP is per-runner, created before the job and cleared
+      # after it, so nothing else reaps it mid-job. It is on the same volume
+      # as ~/.bun/install/cache on the Mac, so bun's extract-then-rename into
+      # the cache still works without its fallback.
+      #
+      # `${{ runner.temp }}`, not `$RUNNER_TEMP`: an `env:` value is not
+      # shell-expanded, and the `runner` context is only available at STEP
+      # level — a job-level `env:` cannot read it.
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies and run codegen
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       # Fails fast, before the expensive build, the moment a test references
@@ -591,12 +616,17 @@ jobs:
       - name: Reclaim this runner's backend ports
         run: apps/ios/scripts/native-backend.sh reclaim
 
+      # TMPDIR pinned on every bun/node step — see `build` for why.
       - name: Setup Bun
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bun install --frozen-lockfile
 
       - name: Download test build
@@ -611,9 +641,12 @@ jobs:
           name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}
           path: packages/crypto/dist/server/
 
+      # Runs bun twice (the migration script, then the server, which keeps
+      # this TMPDIR for its whole life) — so it is pinned like the install.
       - name: Start native backend
         env:
           SHARD: ${{ matrix.shard }}
+          TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
           echo "shard $SHARD on $RUNNER_NAME -> http $NATIVE_BACKEND_PORT / pg $NATIVE_BACKEND_PGPORT"

@@ -1761,12 +1761,22 @@ jobs:
       - name: Guard the runner's disk headroom
         run: bash scripts/ci/mac-runner-disk-guard.sh guard
 
+      # TMPDIR pinned to the runner's temp dir on every bun/node step: this
+      # job shares the self-hosted Mac with ios-e2e.yml, and launchd's
+      # per-user /var/folders TMPDIR is reaped by macOS underneath a running
+      # `bun install` ("FileNotFound creating node-gyp tempdir", run
+      # 39026934332). The full reasoning is on the matching steps in
+      # ios-e2e.yml's `build` job.
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies and run codegen
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       # Cache the XCFramework AND generated Swift bindings together.
