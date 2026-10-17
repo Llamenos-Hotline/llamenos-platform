@@ -233,6 +233,39 @@ describe('SettingsService.getCallSettings', () => {
     expect(result.queueTimeoutSeconds).toBe(90)
     expect(result.voicemailMaxSeconds).toBe(120)
   })
+
+  // #1505 — a crisis call must not be written to a third party's disk unless a
+  // hub deliberately opted in, so the default has to be off.
+  it('defaults recordCalls to false when callSettings is null', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ callSettings: null })])
+
+    expect((await service.getCallSettings()).recordCalls).toBe(false)
+  })
+
+  it('defaults recordCalls to false for settings that predate the field', async () => {
+    const { db, service } = setup()
+    // The shape every existing hub has today: call settings, no recordCalls.
+    db.$setSelectResult([makeSettingsRow({ callSettings: { queueTimeoutSeconds: 60, voicemailMaxSeconds: 90 } })])
+
+    expect((await service.getCallSettings()).recordCalls).toBe(false)
+  })
+
+  it('a hub that opted in reads back recordCalls true, and its neighbour does not', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow({ callSettings: { queueTimeoutSeconds: 90 } })],
+      [{ hubId: 'hub-a', settings: { callSettings: { recordCalls: true } } }],
+    ])
+    expect((await service.getCallSettings('hub-a')).recordCalls).toBe(true)
+
+    const second = setup()
+    second.db.$setSelectResults([
+      [makeSettingsRow({ callSettings: { queueTimeoutSeconds: 90 } })],
+      [{ hubId: 'hub-b', settings: { callSettings: {} } }],
+    ])
+    expect((await second.service.getCallSettings('hub-b')).recordCalls).toBe(false)
+  })
 })
 
 describe('SettingsService.updateCallSettings', () => {
@@ -275,6 +308,28 @@ describe('SettingsService.updateCallSettings', () => {
 
     await service.updateCallSettings({ queueTimeoutSeconds: 100 })
     expect(db.update).toHaveBeenCalled()
+  })
+
+  // #1505 — updateCallSettings copies fields explicitly and silently drops any it
+  // does not know, so an unhandled recordCalls would be unsettable (and, worse,
+  // un-unsettable once on).
+  it('round-trips recordCalls on and back off again', async () => {
+    const on = setup()
+    on.db.$setSelectResult([makeSettingsRow()])
+    expect((await on.service.updateCallSettings({ recordCalls: true })).recordCalls).toBe(true)
+
+    const off = setup()
+    off.db.$setSelectResult([makeSettingsRow({ callSettings: { recordCalls: true } })])
+    expect((await off.service.updateCallSettings({ recordCalls: false })).recordCalls).toBe(false)
+  })
+
+  it('leaves recordCalls alone when an unrelated field is updated', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ callSettings: { recordCalls: true, queueTimeoutSeconds: 60 } })])
+
+    const result = await service.updateCallSettings({ queueTimeoutSeconds: 120 })
+    expect(result.recordCalls).toBe(true)
+    expect(result.queueTimeoutSeconds).toBe(120)
   })
 })
 

@@ -93,6 +93,7 @@ describe('FreeSwitchAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns hangup XML when rate limited', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         rateLimited: true,
         voiceCaptchaEnabled: false,
         callerLanguage: 'en',
@@ -108,6 +109,7 @@ describe('FreeSwitchAdapter', () => {
 
     it('returns captcha XML when captcha enabled', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         rateLimited: false,
         voiceCaptchaEnabled: true,
         captchaDigits: '5678',

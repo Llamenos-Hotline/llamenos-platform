@@ -77,6 +77,7 @@ describe('TwilioAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited response when rateLimited=true', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -90,6 +91,7 @@ describe('TwilioAdapter', () => {
 
     it('returns CAPTCHA gather when voiceCaptchaEnabled and captchaDigits provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -106,6 +108,7 @@ describe('TwilioAdapter', () => {
 
     it('returns enqueue response for normal call', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -120,6 +123,7 @@ describe('TwilioAdapter', () => {
 
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -157,17 +161,56 @@ describe('TwilioAdapter', () => {
     })
   })
 
+  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    it('returns Dial with Queue and recording callback', async () => {
-      const res = await adapter.handleCallAnswered({
+    const answer = (recordCall: boolean) =>
+      adapter.handleCallAnswered({
+        recordCall,
         parentCallSid: 'CA-parent',
         callbackUrl: 'https://example.com',
         userPubkey: 'pk123',
       })
+
+    it('emits no recording directive at all when recording is off', async () => {
+      const res = await answer(false)
+      // Still bridges the caller to the volunteer...
+      expect(res.body).toContain('<Dial')
+      expect(res.body).toContain('<Queue>CA-parent</Queue>')
+      // ...but nothing that would make Twilio write the audio to disk.
+      expect(res.body).not.toContain('record')
+      expect(res.body).not.toContain('record="record-from-answer"')
+      expect(res.body).not.toContain('recordingStatusCallback')
+      expect(res.body).not.toContain('/api/telephony/call-recording')
+    })
+
+    it('records and posts the recording callback when recording is on', async () => {
+      const res = await answer(true)
       expect(res.body).toContain('<Dial')
       expect(res.body).toContain('record="record-from-answer"')
       expect(res.body).toContain('<Queue>CA-parent</Queue>')
       expect(res.body).toContain('/api/telephony/call-recording')
+    })
+
+    // SignalWire inherits this method rather than overriding it, which is how it
+    // was silently recording every call too. Pin the inherited behaviour.
+    it('SignalWire inherits the same opt-in, not an unconditional record', async () => {
+      const sw = new SignalWireAdapter('11111111-2222-3333-4444-555555555555', 'tok', '+15551234567', 'space')
+      const off = await sw.handleCallAnswered({
+        recordCall: false,
+        parentCallSid: 'CA-parent',
+        callbackUrl: 'https://example.com',
+        userPubkey: 'pk123',
+      })
+      expect(off.body).toContain('<Dial')
+      expect(off.body).not.toContain('record')
+
+      const on = await sw.handleCallAnswered({
+        recordCall: true,
+        parentCallSid: 'CA-parent',
+        callbackUrl: 'https://example.com',
+        userPubkey: 'pk123',
+      })
+      expect(on.body).toContain('record="record-from-answer"')
     })
   })
 
@@ -808,6 +851,7 @@ describe('SignalWireAdapter', () => {
 
   it('inherits Twilio IVR behavior', async () => {
     const res = await adapter.handleIncomingCall({
+      callRecordingEnabled: false,
       callSid: 'CA123',
       callerNumber: '+15559876543',
       voiceCaptchaEnabled: false,

@@ -74,6 +74,7 @@ describe('PlivoAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited response when rateLimited=true', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -87,6 +88,7 @@ describe('PlivoAdapter', () => {
 
     it('returns CAPTCHA gather when voiceCaptchaEnabled and captchaDigits provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -103,6 +105,7 @@ describe('PlivoAdapter', () => {
 
     it('returns Conference enqueue response for normal call', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -119,6 +122,7 @@ describe('PlivoAdapter', () => {
 
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -156,13 +160,31 @@ describe('PlivoAdapter', () => {
     })
   })
 
+  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    it('returns Conference with record=true and recording callback', async () => {
-      const res = await adapter.handleCallAnswered({
+    const answer = (recordCall: boolean) =>
+      adapter.handleCallAnswered({
+        recordCall,
         parentCallSid: 'CA-parent',
         callbackUrl: 'https://example.com',
         userPubkey: 'pk123',
       })
+
+    it('emits no recording directive at all when recording is off', async () => {
+      const res = await answer(false)
+      expect(res.body).toContain('<Conference')
+      expect(res.body).toContain('CA-parent')
+      expect(res.body).toContain('startConferenceOnEnter="true"')
+      expect(res.body).toContain('endConferenceOnExit="true"')
+      // Nothing that would make Plivo write the mixed audio to disk.
+      expect(res.body).not.toContain('record')
+      expect(res.body).not.toContain('record="true"')
+      expect(res.body).not.toContain('recordFileFormat')
+      expect(res.body).not.toContain('/api/telephony/call-recording')
+    })
+
+    it('records as mp3 and posts the recording callback when recording is on', async () => {
+      const res = await answer(true)
       expect(res.body).toContain('<Conference')
       expect(res.body).toContain('record="true"')
       expect(res.body).toContain('recordFileFormat="mp3"')
@@ -689,6 +711,7 @@ describe('PlivoAdapter', () => {
   describe('escapeXml', () => {
     it('escapes special characters in generated XML', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,

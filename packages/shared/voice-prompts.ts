@@ -15,6 +15,7 @@ import { DEFAULT_LANGUAGE, LANGUAGE_CODES } from './languages'
 
 const VOICE_PROMPT_KEYS = [
   'greeting',
+  'recordingNotice',
   'rateLimited',
   'captchaPrompt',
   'captchaTimeout',
