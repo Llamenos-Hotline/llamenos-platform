@@ -41,6 +41,16 @@ function deps(over: Partial<ReviewLoopDeps> = {}): ReviewLoopDeps {
 }
 
 describe('runReviewLoop', () => {
+  it('forwards allLanes to verifyMechanical so a scope refusal can name its remedy', async () => {
+    const d = deps()
+    const allLanes: Lane[] = [lane, { ...lane, id: 'infra' }]
+    await runReviewLoop({ ...input, allLanes }, d)
+
+    expect(d.verifyMechanical).toHaveBeenCalledWith(
+      expect.objectContaining({ allLanes }),
+    )
+  })
+
   it('a PASS on round one runs no second round', async () => {
     const d = deps()
     const result = await runReviewLoop(input, d)

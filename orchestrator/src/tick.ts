@@ -341,7 +341,7 @@ async function runLiveDispatch(
       // and is never retried — both handled entirely inside the loop, not
       // here.
       const loop = await runReviewLoop(
-        { authorEngine: lane.engine, pr, worktree, branch, lane },
+        { authorEngine: lane.engine, pr, worktree, branch, lane, allLanes: deps.lanes },
         {
           verifyMechanical: deps.verifyMechanical,
           prDiff: deps.prDiff,

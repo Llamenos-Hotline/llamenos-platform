@@ -2938,6 +2938,11 @@ export interface ReviewLoopInput {
   worktree: string
   branch: string
   lane: Lane
+  /** Forwarded to `verifyMechanical` so a mechanical scope refusal names its
+   *  remedy (grant / grant-excluded / unowned) in the reasons the worker
+   *  sees — see `VerifyInput.allLanes`. Optional for the same reason: text
+   *  only, never the verdict. */
+  allLanes?: Lane[]
 }
 
 export interface ReviewLoopDeps {
@@ -3045,7 +3050,7 @@ export async function runReviewLoop(input: ReviewLoopInput, deps: ReviewLoopDeps
   for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
     rounds = round
 
-    const report = await deps.verifyMechanical({ worktree: input.worktree, branch: input.branch, lane: input.lane })
+    const report = await deps.verifyMechanical({ worktree: input.worktree, branch: input.branch, lane: input.lane, allLanes: input.allLanes })
     lastReport = report
     if (!report.passed) {
       deps.log(`review loop: mechanical verification failed on round ${round} for PR ${input.pr} — ending the loop, no review requested`)
