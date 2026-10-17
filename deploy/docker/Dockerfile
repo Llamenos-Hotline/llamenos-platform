@@ -22,7 +22,7 @@
 ARG TARGETARCH
 
 # Stage 1: Install runtime deps
-FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS deps
+FROM oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598 AS deps
 # This runtime base is pinned independently of .mise.toml's `bun = "1.3.5"`.
 # .mise.toml pins the *developer/CI tool* version (kept in sync with
 # .github/workflows/ci.yml's bun-version input); this image is the
@@ -56,7 +56,7 @@ RUN cargo build --release --manifest-path packages/crypto/Cargo.toml --features 
     && cp packages/crypto/target/release/libllamenos_core.so packages/crypto/dist/server/
 
 # Stage 3: Production
-FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS app-base
+FROM oven/bun:1.4.3-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288 AS app-base
 # Pinned independently of .mise.toml's dev/CI `bun = "1.3.5"` — see the
 # `deps` stage comment above for why the two are allowed to diverge. Update
 # via Dependabot.
@@ -172,7 +172,7 @@ FROM app-${TARGETARCH} AS app
 
 # Stage 4: Install full JS deps (incl. devDependencies) for the SPA build.
 # Separate from the `deps` stage above, which installs --production only.
-FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS frontend-deps
+FROM oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598 AS frontend-deps
 WORKDIR /app
 COPY package.json bun.lockb ./
 COPY packages/crypto/package.json packages/crypto/package.json
@@ -209,7 +209,7 @@ RUN bun run build
 # Digest bump (issue #650, 2026-09-20): refreshes the Alpine package layer
 # (curl/c-ares/libcrypto3/libssl3 CVEs) under the same 2.11.4 tag — same Caddy
 # version, no behavior change. See the `static` stage below for the matching bump.
-FROM caddy:2.11.4-builder-alpine@sha256:0aa610043dab5da82ad0a0268e46bb852785e6f5160f12f1c6fe3f42903d7e1b AS caddy-builder
+FROM caddy:2.11.7-builder-alpine@sha256:d6161a2c82fd58b3205048958fb6246d0c5d892beee8a47e90944610c4efd100 AS caddy-builder
 RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 
 # Stage 7 (`static`): Caddy image serving the built SPA. Matches the
@@ -222,7 +222,7 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # this bump — they come from the Caddy 2.11.4 release's resolved dependency set,
 # not the Alpine base, and need a Caddy version bump to clear (follow-up, needs
 # Caddyfile.production + caddy-ratelimit plugin compat validation first).
-FROM caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b AS static
+FROM caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f AS static
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
 # NOTE: /srv/crypto (the Tier-4 sandboxed-crypto-iframe origin referenced by
