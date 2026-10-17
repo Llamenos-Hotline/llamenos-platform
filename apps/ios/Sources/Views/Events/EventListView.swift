@@ -24,30 +24,42 @@ struct EventListView: View {
 
         NavigationStack {
             Group {
-                if vm.cmsEnabled == nil {
+                switch vm.loadState {
+                case .loading:
                     loadingView
-                } else if vm.cmsEnabled == false {
+                case .disabled:
                     cmsDisabledView
-                } else if vm.isLoading && vm.events.isEmpty {
-                    loadingView
-                } else if vm.events.isEmpty {
-                    emptyStateView(vm: vm)
-                } else {
-                    eventListContent(vm: vm)
+                case .failed(let message):
+                    loadErrorView(message: message, vm: vm)
+                case .ready:
+                    if vm.isLoading && vm.events.isEmpty {
+                        loadingView
+                    } else if vm.events.isEmpty, let eventsError = vm.eventsLoadError {
+                        // Without this, a failed fetch rendered as "No events".
+                        loadErrorView(message: eventsError, vm: vm)
+                    } else if vm.events.isEmpty {
+                        emptyStateView(vm: vm)
+                    } else {
+                        eventListContent(vm: vm)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle(NSLocalizedString("events_title", comment: "Events"))
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    if vm.cmsEnabled == true && !vm.eventEntityTypes.isEmpty {
-                        Button {
-                            showCreateEvent = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityIdentifier("events-create-btn")
+                    // Rendered unconditionally, as in `CaseListView`: SwiftUI does not
+                    // reliably rebuild a ToolbarItem whose body flips EmptyView ->
+                    // Button after the first toolbar pass, so a conditional body loses
+                    // the button whenever the API answers after that pass. While
+                    // disabled, the content area says why.
+                    Button {
+                        showCreateEvent = true
+                    } label: {
+                        Image(systemName: "plus")
                     }
+                    .disabled(!vm.canCreateEvent)
+                    .accessibilityIdentifier("events-create-btn")
                 }
             }
             .task {
@@ -81,6 +93,24 @@ struct EventListView: View {
         .accessibilityIdentifier("events-loading")
     }
 
+    // MARK: - Load Error
+
+    /// A required load failed. Shows the error itself and a retry, so a request that
+    /// failed never looks like an empty hub or a hub without case management.
+    private func loadErrorView(message: String, vm: EventsViewModel) -> some View {
+        BrandEmptyState(
+            icon: "exclamationmark.triangle",
+            title: NSLocalizedString("events_load_error", comment: "Failed to load events"),
+            message: message,
+            action: {
+                Task { await vm.loadInitial() }
+            },
+            actionLabel: NSLocalizedString("common_retry", comment: "Retry"),
+            actionAccessibilityID: "events-load-retry",
+            accessibilityID: "events-load-error"
+        )
+    }
+
     // MARK: - CMS Disabled
 
     private var cmsDisabledView: some View {
@@ -90,7 +120,8 @@ struct EventListView: View {
             message: NSLocalizedString(
                 "events_cms_disabled_message",
                 comment: "Case management must be enabled to use events."
-            )
+            ),
+            accessibilityID: "events-cms-disabled"
         )
     }
 
@@ -104,9 +135,11 @@ struct EventListView: View {
                 "events_empty_message",
                 comment: "No events have been created yet."
             ),
-            action: { showCreateEvent = true },
+            // No event entity types means there is nothing to create an event of.
+            action: vm.canCreateEvent ? { showCreateEvent = true } : nil,
             actionLabel: NSLocalizedString("events_new_event", comment: "New Event"),
-            actionAccessibilityID: "events-empty-create-btn"
+            actionAccessibilityID: "events-empty-create-btn",
+            accessibilityID: "events-empty"
         )
     }
 

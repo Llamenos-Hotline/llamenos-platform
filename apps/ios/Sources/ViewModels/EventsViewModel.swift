@@ -5,6 +5,15 @@ import UIKit
 
 /// View model for the Events screen. Loads events (CMS records with category='event'),
 /// handles pagination, search, and detail selection.
+///
+/// Main-actor isolated for the same reason as `CaseManagementViewModel` (#1918):
+/// SwiftUI reads every property here on the main thread, and without the isolation
+/// each `async` method ran on the global executor and wrote `@Observable` state from a
+/// GCD worker — `decryptEventDetails` filling `decryptedDetails` while
+/// `EventListView` reads it through `decryptedTitle(for:)` is the exact dictionary
+/// race that crashed the Cases screen. Network calls still suspend off the main thread
+/// inside `APIService`; only the state changes are pinned here.
+@MainActor
 @Observable
 final class EventsViewModel {
     private let apiService: APIService
@@ -26,8 +35,14 @@ final class EventsViewModel {
     /// All entity types (for reference).
     var allEntityTypes: [CaseEntityTypeDefinition] = []
 
-    /// Whether CMS is enabled.
-    var cmsEnabled: Bool?
+    /// Where the screen is in establishing what it can show. Starts `.loading`, and
+    /// `loadInitial()` always settles it on one of the other three — a failed request
+    /// is `.failed`, never mistaken for "case management is off".
+    var loadState: EventListLoadState = .loading
+
+    /// Why the last events fetch failed, while there are no events to show instead.
+    /// Cleared by the next successful fetch.
+    var eventsLoadError: String?
 
     /// Decrypted event details keyed by event ID.
     var decryptedDetails: [String: DecryptedEventDetails] = [:]
@@ -47,6 +62,12 @@ final class EventsViewModel {
     var searchQuery: String = ""
 
     // MARK: - Computed
+
+    /// Whether New Event can be offered: case management is on for the hub and it has
+    /// at least one event entity type to create an event of.
+    var canCreateEvent: Bool {
+        loadState == .ready && !eventEntityTypes.isEmpty
+    }
 
     var hasMorePages: Bool {
         totalEvents > currentPage * pageSize
@@ -77,31 +98,54 @@ final class EventsViewModel {
 
     // MARK: - Initial Load
 
-    /// Load CMS status, entity types, and initial events.
+    /// Establish what the screen can show: whether case management is on for the hub,
+    /// and its entity types. Settles `loadState` on `.ready`, `.disabled` or `.failed`,
+    /// then loads the first page of events when ready.
+    ///
+    /// The two requests are independent — the entity-types route is not gated on case
+    /// management being on — so they run concurrently.
     func loadInitial() async {
-        // Check CMS enabled
+        loadState = .loading
+        allEntityTypes = []
+        eventEntityTypes = []
+        eventsLoadError = nil
+
+        async let enabledRequest: CaseManagementEnabledResponse = apiService.request(
+            method: "GET", path: apiService.hp("/api/settings/cms/case-management")
+        )
+        async let typesRequest: EntityTypesResponse = apiService.request(
+            method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
+        )
+
+        let enabled: Bool
         do {
-            let enabled: CaseManagementEnabledResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/settings/cms/case-management")
-            )
-            cmsEnabled = enabled.enabled
+            enabled = try await enabledRequest.enabled
         } catch {
-            cmsEnabled = false
+            // A superseded load must not overwrite the state its replacement is
+            // establishing.
+            guard !Task.isCancelled else { return }
+            loadState = .failed(error.localizedDescription)
+            return
+        }
+        guard enabled else {
+            // Entity types are irrelevant to a hub without case management; the
+            // pending request is cancelled when this scope exits.
+            loadState = .disabled
+            return
         }
 
-        guard cmsEnabled == true else { return }
-
-        // Load entity types
         do {
-            let response: EntityTypesResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
-            )
+            let response = try await typesRequest
             allEntityTypes = response.entityTypes.filter { $0.isArchived != true }
             eventEntityTypes = allEntityTypes.filter { $0.category == "event" }
         } catch {
-            errorMessage = error.localizedDescription
+            guard !Task.isCancelled else { return }
+            loadState = .failed(error.localizedDescription)
+            return
         }
+        guard !Task.isCancelled else { return }
 
+        loadState = .ready
         await loadEvents()
     }
 
@@ -124,17 +168,26 @@ final class EventsViewModel {
             )
             events = response.events
             totalEvents = response.total
+            eventsLoadError = nil
 
             // Decrypt details for display
             await decryptEventDetails(response.events)
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
+            eventsLoadError = error.localizedDescription
         }
     }
 
     // MARK: - Refresh
 
+    /// Refresh the event list. A screen that never became ready retries its readiness
+    /// load rather than fetching events it has no entity types for.
     func refresh() async {
+        guard loadState == .ready else {
+            await loadInitial()
+            return
+        }
         currentPage = 1
         await loadEvents()
     }
@@ -327,6 +380,23 @@ final class EventsViewModel {
         currentPage -= 1
         await loadEvents()
     }
+}
+
+// MARK: - EventListLoadState
+
+/// What the Events screen has established about the active hub. Each case renders a
+/// distinct, identifiable view in `EventListView`, so a user — and a UI test — can
+/// tell a screen that is still loading from one whose load failed and one where case
+/// management is simply off.
+enum EventListLoadState: Equatable, Sendable {
+    /// The case-management status or entity types have not answered yet.
+    case loading
+    /// The hub answered that case management is off.
+    case disabled
+    /// Case management is on and the hub's entity types are loaded.
+    case ready
+    /// A required request failed; carries the error to show.
+    case failed(String)
 }
 
 // MARK: - DecryptedEventDetails

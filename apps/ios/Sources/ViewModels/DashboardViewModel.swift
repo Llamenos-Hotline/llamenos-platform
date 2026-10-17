@@ -35,6 +35,18 @@ struct RecentNotePreview: Identifiable, Sendable {
 
 /// View model for the main dashboard. Loads shift status, recent note previews,
 /// and subscribes to WebSocket events for real-time updates.
+///
+/// Main-actor isolated, like `CaseManagementViewModel` (#1918). `DashboardView` reads
+/// every property here on the main thread, so every write must happen there too.
+/// Without the isolation each `async` method ran on the global executor (Swift 5.9
+/// semantics for a nonisolated async function): Thread Sanitizer reports
+/// `fetchRecentNotes()` writing `recentNoteCount` on a GCD worker while
+/// `DashboardView.activityStatsRow` reads it, and `shiftStatus` / `activeCallCount`
+/// read mid-write in the hero card. A write that lands while the body is being
+/// evaluated is not reliably observed, so the dashboard could keep showing stale shift
+/// state after the server had answered. Network calls still suspend off the main
+/// thread inside `APIService`; only the state changes are pinned here.
+@MainActor
 @Observable
 final class DashboardViewModel {
     private let apiService: APIService
@@ -82,11 +94,17 @@ final class DashboardViewModel {
         return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
     }
 
-    /// Background tasks
-    private var eventTask: Task<Void, Never>?
-    private var timerTask: Task<Void, Never>?
+    /// Background tasks. Exempt from main-actor isolation only so the nonisolated
+    /// `deinit` can cancel them: a `Task` handle is `Sendable` and `cancel()` is
+    /// thread-safe, every other read and write happens on the main actor, and `deinit`
+    /// runs once the last reference is gone, so nothing can race it. Not observed —
+    /// no view reads them.
+    @ObservationIgnored nonisolated(unsafe) private var eventTask: Task<Void, Never>?
+    @ObservationIgnored nonisolated(unsafe) private var timerTask: Task<Void, Never>?
 
-    init(apiService: APIService, cryptoService: CryptoService, webSocketService: WebSocketService, hubContext: HubContext) {
+    /// Nonisolated: it only stores its arguments, so the model can be built anywhere —
+    /// every state change after construction still happens on the main actor.
+    nonisolated init(apiService: APIService, cryptoService: CryptoService, webSocketService: WebSocketService, hubContext: HubContext) {
         self.apiService = apiService
         self.cryptoService = cryptoService
         self.webSocketService = webSocketService
@@ -145,7 +163,6 @@ final class DashboardViewModel {
     }
 
     /// Handle a decrypted, hub-attributed event and refresh only relevant data.
-    @MainActor
     private func handleTypedEvent(_ attributed: AttributedHubEvent) {
         switch attributed.event {
         case .callRing, .callAnswered, .callUpdate, .voicemailNew, .presenceSummary, .presenceDetail:
@@ -181,7 +198,7 @@ final class DashboardViewModel {
 
     func startTimer() {
         stopTimer()
-        timerTask = Task { @MainActor [weak self] in
+        timerTask = Task { [weak self] in
             while !Task.isCancelled {
                 // Touch a property to trigger @Observable re-evaluation
                 self?.shiftStartedAt = self?.shiftStartedAt
@@ -338,7 +355,11 @@ final class DashboardViewModel {
     /// Internal (not private) so unit tests can drive it directly — constructing the
     /// view model needs no network. Envelope selection is by trial, never by comparing
     /// `authorPubkey` — see `NoteResponse.decryptionCandidates` (#1024).
-    func decryptRecentNote(_ encrypted: NoteResponse) -> RecentNotePreview? {
+    ///
+    /// Nonisolated: a pure function of its argument and the immutable `cryptoService`.
+    /// It reads and writes no observed state; `fetchRecentNotes()` assigns its result on
+    /// the main actor.
+    nonisolated func decryptRecentNote(_ encrypted: NoteResponse) -> RecentNotePreview? {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
         for envelope in encrypted.decryptionCandidates(encryptionPubkey: ourPubkey) {
