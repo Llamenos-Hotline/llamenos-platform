@@ -2240,9 +2240,15 @@ Response: { "devices": DeviceDetail[] }
 
 POST   /api/devices/register
 Auth: Required
-Body: { "platform": "ios"|"android", "pushToken": string, "wakeKeyPublic": hex66, "ed25519Pubkey"?: hex64, "x25519Pubkey"?: hex64, "deviceName"?: string, "deviceModel"?: string, "osVersion"?: string, "appVersion"?: string }
+Body: { "platform": "ios"|"android", "pushToken": string, "wakeKeyPublic": hex66, "ed25519Pubkey"?: hex64, "x25519Pubkey"?: hex64, "deviceId"?: string, "deviceName"?: string, "deviceModel"?: string, "osVersion"?: string, "appVersion"?: string }
 Response: 204 No Content
 Rate limit: strict (5/hour)
+
+`deviceId` (#1716): the client's own identifier for this installation (e.g. a UUID
+iOS mints and keeps in the Keychain). Optional — not every client sends one yet.
+Carried by the contract so a future per-device operation (eviction, re-registration
+dedup) has a client-supplied handle to name; the server does not yet persist or act
+on it.
 
 POST   /api/devices/voip-token
 Auth: Required

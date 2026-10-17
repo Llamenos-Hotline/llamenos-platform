@@ -22,6 +22,19 @@ const x25519PubkeySchema = z.string().regex(/^[0-9a-f]{64}$/i, 'Must be 32-byte 
  * register: a push endpoint (`pushToken` + its wake key) or an identity
  * (`x25519Pubkey`). One that carries neither is refused rather than stored as
  * an empty row.
+ *
+ * `deviceId` (#1716): the client's own identifier for this installation —
+ * iOS mints a UUID in `WakeKeyService.registerDevice`, persists it to the
+ * Keychain, and has sent it on every registration since that code existed.
+ * The schema used to omit the field, so it was silently stripped by
+ * `safeParse` and the server's notion of "this device" and the client's
+ * never met — no per-device operation (eviction, re-registration dedup) had
+ * a client-supplied handle to name. This is the protocol decision: the
+ * contract now carries it. It is optional because older/other clients
+ * (desktop, Android) do not send one yet, and deliberately opaque (no UUID
+ * format requirement) so it is not tied to one platform's ID scheme.
+ * Persisting it, keying eviction off it, and deduplicating re-registration
+ * by it are server-side follow-up work — out of scope for this package.
  */
 export const registerDeviceBodySchema = z.object({
   platform: z.enum(['ios', 'android', 'desktop']),
@@ -29,6 +42,7 @@ export const registerDeviceBodySchema = z.object({
   wakeKeyPublic: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be 32-byte X25519 public key in hex').optional(),
   ed25519Pubkey: ed25519PubkeySchema.optional(),
   x25519Pubkey: x25519PubkeySchema.optional(),
+  deviceId: z.string().min(1).max(200).optional(),
   deviceName: z.string().max(100).optional(),
   deviceModel: z.string().max(100).optional(),
   osVersion: z.string().max(50).optional(),
