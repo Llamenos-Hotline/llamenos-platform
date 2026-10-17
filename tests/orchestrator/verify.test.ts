@@ -8,7 +8,7 @@ import { delimiter, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   changedFilesFrom, addedLinesFrom, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
-  judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases,
+  judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases, scopeStrayAdvice,
 } from '../../orchestrator/src/verify.js'
 import type { TargetOutcome, TestRunResult } from '../../orchestrator/src/verify.js'
 import type { Lane } from '../../orchestrator/src/config.js'
@@ -207,6 +207,32 @@ describe('verifyMechanical', () => {
     })()
   })
 
+  it('appends ownership advice to a scope failure when allLanes is provided', async () => {
+    const { dir } = makeRepoWithDivergedMain()
+    const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
+    const notesOwner: Lane = { ...testLane, id: 'docs', scope: { owned: ['notes.md'], notOwned: [] } }
+    const report = await verifyMechanical({
+      worktree: dir, branch: 'main', lane: outOfScopeLane, allLanes: [outOfScopeLane, notesOwner],
+    })
+
+    expect(report.passed).toBe(false)
+    expect(report.reasons).toContain('touched files outside lane "test"\'s scope: notes.md')
+    const advice = report.reasons.filter((r) => r.startsWith('scope advice:'))
+    expect(advice).toHaveLength(1)
+    expect(advice[0]).toContain('notes.md')
+    expect(advice[0]).toContain('owned by lane "docs"')
+    expect(advice[0]).toContain('scope:docs')
+  })
+
+  it('adds no advice when allLanes is omitted — the legacy failure text is unchanged', async () => {
+    const { dir } = makeRepoWithDivergedMain()
+    const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: outOfScopeLane })
+
+    expect(report.passed).toBe(false)
+    expect(report.reasons).toEqual(['touched files outside lane "test"\'s scope: notes.md'])
+  })
+
   // `skipTests` exists for the `fleet/review` CI job, where `fleet/verify` is
   // the job that runs the suites. The property that has to hold is that a
   // skipped run is INDISTINGUISHABLE FROM "nothing ran" and can never be
@@ -248,6 +274,95 @@ describe('verifyMechanical', () => {
     // The route this diff maps to is real — so the empty testsRun above is
     // `skipTests` doing its job, not the diff mapping to nothing.
     expect(testTargetsFor(['orchestrator/src/thing.ts'])).toEqual(['orchestrator'])
+  })
+})
+
+// --- scopeStrayAdvice: the remedy half of a scope failure. The bare stray
+// line cannot tell "apply a scope: label" from "no grant can reach this
+// file", and the four NO-VERDICT:scope PRs of 2026-10 (#1837, #1838, #1785,
+// #1766) needed three different remedies under one identical message. These
+// pin the classification: grantable, grant-excluded, unowned.
+
+describe('scopeStrayAdvice', () => {
+  const laneOf = (id: string, owned: string[], notOwned: string[] = []): Lane => ({
+    id, mode: 'live', cap: 1, engine: 'claude',
+    requireLabel: 'agent-dispatchable', vetoLabels: [],
+    scope: { owned, notOwned },
+  })
+  const android = laneOf('android', ['apps/android/', 'packages/i18n/locales/'])
+  const backend = laneOf('backend', ['apps/worker/'])
+  const ios = laneOf('ios', ['apps/ios/', '.github/workflows/ios*.yml'])
+  const all = [android, backend, ios]
+
+  it('names the owning lane and the scope: label for a grantable stray', () => {
+    const lines = scopeStrayAdvice(['apps/worker/__tests__/unit/mobile-client-routes.test.ts'], android, all)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('scope advice: apps/worker/__tests__/unit/mobile-client-routes.test.ts')
+    expect(lines[0]).toContain('owned by lane "backend"')
+    expect(lines[0]).toContain('scope:backend')
+    expect(lines[0]).not.toContain('grant-excluded')
+  })
+
+  it('says "owned by no lane" for a stray no lane owns — a grant cannot help there', () => {
+    const lines = scopeStrayAdvice(['docs/epics/epic-237.md'], android, all)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('owned by no lane (#1115)')
+    // It names the remedy that CANNOT work (a grant) rather than offering one.
+    expect(lines[0]).not.toContain('apply a scope:')
+    expect(lines[0]).not.toContain('re-request review')
+  })
+
+  it('classifies a grant-excluded stray as unreachable by label even when a lane owns it', () => {
+    // ios owns `.github/workflows/ios*.yml`, but GRANT_EXCLUDED_PATHS refuses
+    // every workflow to a grant — advising `scope:ios` here would name a
+    // remedy that provably cannot work.
+    const lines = scopeStrayAdvice(['.github/workflows/ios-e2e.yml'], android, all)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('grant-excluded')
+    expect(lines[0]).toContain('owned by lane "ios"')
+    expect(lines[0]).not.toContain('scope:ios label and re-request')
+  })
+
+  it('never offers a lane with an empty owned list — "no ownership check" is not ownership', () => {
+    const offLane = laneOf('offlane', [])
+    const lines = scopeStrayAdvice(['anything/at/all.ts'], android, [android, offLane])
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('owned by no lane')
+  })
+
+  it('never offers the PR its own lane as a grant candidate', () => {
+    const lines = scopeStrayAdvice(['apps/android/x.kt'], android, all)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('owned by no lane')
+  })
+
+  it('returns [] when allLanes is absent, keeping the legacy message byte-identical', () => {
+    expect(scopeStrayAdvice(['apps/worker/x.ts'], android, undefined)).toEqual([])
+    expect(scopeStrayAdvice([], android, all)).toEqual([])
+  })
+
+  it('groups files that share an owner set onto one advice line', () => {
+    const lines = scopeStrayAdvice(['apps/worker/a.ts', 'apps/worker/b.ts'], android, all)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('apps/worker/a.ts, apps/worker/b.ts')
+  })
+
+  it('emits one line per class when a stray list mixes all three', () => {
+    const lines = scopeStrayAdvice(
+      ['apps/worker/a.ts', 'docs/epics/x.md', '.github/workflows/ios-e2e.yml'],
+      android,
+      all,
+    )
+    expect(lines).toHaveLength(3)
+    expect(lines.some((l) => l.includes('owned by lane "backend"'))).toBe(true)
+    expect(lines.some((l) => l.includes('owned by no lane'))).toBe(true)
+    expect(lines.some((l) => l.includes('grant-excluded'))).toBe(true)
+    // The trace prefixes must not match the advice lines — buildGateTrace
+    // filters reasons by them, and advice in the one-line trace is noise.
+    for (const l of lines) {
+      expect(l.startsWith('touched files outside lane')).toBe(false)
+      expect(l.startsWith('touched never-write paths')).toBe(false)
+    }
   })
 })
 

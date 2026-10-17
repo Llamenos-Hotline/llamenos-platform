@@ -3,7 +3,7 @@ import { promisify } from 'node:util'
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
-import { checkScopeAcross } from './scope.js'
+import { checkScope, checkScopeAcross } from './scope.js'
 import { CERTIFICATE_ONLY_PATTERNS, matchesPath } from './fragments.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
@@ -42,6 +42,26 @@ export interface VerifyInput {
    * fails closed (no grants) when they cannot be read.
    */
   grantedLanes?: Lane[]
+  /**
+   * Every configured lane, so a strayed file can be classified by whether
+   * another real lane owns it — the difference between "apply a
+   * `scope:<lane>` label and re-request review" and "no grant can ever reach
+   * this file, it must leave the PR". Both remedies exist in the fleet
+   * (#1115), but the bare `touched files outside lane …` line cannot tell
+   * the reader which one applies, and four PRs sat at `NO-VERDICT:scope`
+   * over exactly that ambiguity (#1837's strays were already owned by its
+   * own lane on current main, #1785/#1766's were one `scope:backend` label
+   * away from legal, #1838's was owned by no lane at all — three different
+   * remedies, one identical message).
+   *
+   * Optional, and it changes TEXT ONLY, never the verdict: callers that
+   * cannot enumerate lanes (the dispatcher's own verify, the review loop)
+   * omit it and the failure message is exactly what it was before. The
+   * advice lines carry a `scope advice:` prefix that deliberately matches
+   * none of `trace.ts`'s `SCOPE_REASON_PREFIXES`, so the one-line gate
+   * trace stays as compact as it was.
+   */
+  allLanes?: Lane[]
   /**
    * Scope and impact only — used by the `fleet/review` CI job, where
    * `fleet/verify` is the job that runs the diff-targeted tests and running
@@ -870,6 +890,73 @@ async function readCertificateCandidates(
  *    "Could not tell" is never "passed" — a required check that goes green
  *    when its runner dies is no check at all.
  */
+/**
+ * The remedy half of a scope failure, classified per strayed file. The bare
+ * `touched files outside lane …` reason names the offenders but cannot say
+ * WHICH of the three remedies applies, and they are not interchangeable:
+ *
+ * - **grantable** — another real lane (non-empty `owned`, never the PR's
+ *   own) owns the file. The remedy is a `scope:<lane>` label plus a review
+ *   re-request for a genuinely atomic cross-lane change, or moving the file
+ *   into that lane's own PR. A lane with an empty `owned` list is excluded
+ *   as a candidate for the same reason `checkScopeAcross` discards it as a
+ *   grant: "no ownership check" must never read as "owns this file".
+ * - **grant-excluded** — the file matches `GRANT_EXCLUDED_PATHS`
+ *   (CI/deploy/supply chain). Checked BEFORE ownership, because ownership is
+ *   a red herring there: a `scope:` label is refused those paths even when
+ *   the granted lane owns them, so advising one would send the reader to a
+ *   remedy that cannot work. Only the owning lane's own PR may write them.
+ * - **unowned** — no lane owns the file at all (the #1115 gap: 772 of 4165
+ *   tracked files). No grant can reach an unowned path; the file must leave
+ *   the PR or wait for a lane-ownership assignment.
+ *
+ * Pure and exported for direct unit testing: the caller passes exactly what
+ * `verifyMechanical` already computed, so the classification the tests pin
+ * is the one the gate emits. Returns [] when `allLanes` is absent — the
+ * message then stays byte-identical to what it was before this existed.
+ */
+export function scopeStrayAdvice(strayed: string[], own: Lane, allLanes: Lane[] | undefined): string[] {
+  if (allLanes === undefined || strayed.length === 0) return []
+  const candidates = allLanes.filter((l) => l.id !== own.id && l.scope.owned.length > 0)
+  const ownersOf = (f: string): string[] =>
+    candidates.filter((l) => checkScope([f], l.scope, []).strayed.length === 0).map((l) => l.id).sort()
+  // Files sharing an owner set share one advice line — a forty-file stray
+  // list must not produce forty lines.
+  const grantable = new Map<string, string[]>()
+  const excluded = new Map<string, string[]>()
+  const unowned: string[] = []
+  const group = (map: Map<string, string[]>, key: string, f: string) => map.set(key, [...(map.get(key) ?? []), f])
+  for (const f of [...strayed].sort()) {
+    const owners = ownersOf(f)
+    if (GRANT_EXCLUDED_PATHS.some((p) => matchesPath(f, p))) group(excluded, owners.join('", "'), f)
+    else if (owners.length === 0) unowned.push(f)
+    else group(grantable, owners.join('", "'), f)
+  }
+  const lines: string[] = []
+  for (const [lanes, files] of [...grantable.entries()].sort()) {
+    lines.push(
+      `scope advice: ${files.join(', ')} — owned by lane "${lanes}"; if this is one atomic cross-lane ` +
+      `change, apply a scope:${lanes.split('", "')[0]} label and re-request review — otherwise move ` +
+      `${files.length === 1 ? 'that file' : 'those files'} into that lane's own PR (#1115)`,
+    )
+  }
+  for (const [lanes, files] of [...excluded.entries()].sort()) {
+    lines.push(
+      `scope advice: ${files.join(', ')} — grant-excluded (CI/deploy/supply chain)` +
+      (lanes.length > 0 ? ` and owned by lane "${lanes}"` : '') +
+      `; no scope: label can reach them, so they must leave this PR (#1115)`,
+    )
+  }
+  if (unowned.length > 0) {
+    lines.push(
+      `scope advice: ${unowned.join(', ')} — owned by no lane (#1115); no scope: grant can reach an ` +
+      `unowned path, so ${unowned.length === 1 ? 'it must' : 'they must'} leave this PR or wait for a ` +
+      `lane-ownership assignment`,
+    )
+  }
+  return lines
+}
+
 export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport> {
   const { worktree, branch, lane } = input
   const range = `${input.base ?? 'origin/main'}...${branch}`
@@ -937,6 +1024,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
       ? `lane "${lane.id}"'s scope (granted also: ${granted.map((g) => g.id).join(', ')})`
       : `lane "${lane.id}"'s scope`
     reasons.push(`touched files outside ${scopeDesc}: ${strayed.join(', ')}`)
+    reasons.push(...scopeStrayAdvice(strayed, lane, input.allLanes))
   }
   const scopeFailed = forbidden.length > 0 || strayed.length > 0
 
