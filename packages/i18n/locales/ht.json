@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "Aktif ({{count}})",
+    "claimedInvitesHeader": "Itilize ({{count}})",
+    "expiredInvitesHeader": "Ekspire ({{count}})",
+    "auditTotal": "{{count}} antre an total",
+    "banFooter": "Antre hash SHA-256 nimewo telefòn oswa idantifyan moun k ap rele a pou w bloke l.",
+    "bansHeader": "Bloke ({{count}})",
+    "categoriesHeader": "Kategori ({{count}})",
+    "membersHeader": "Manm ({{count}})",
+    "categoryCreated": "Kategori rapò a kreye",
+    "categoryDeleted": "Kategori rapò a efase",
+    "categoryNameRequired": "Non kategori a obligatwa",
+    "deleteConfirmMessage": "Èske ou sèten ou vle efase eleman sa a? Ou p ap ka anile aksyon sa a.",
+    "healthUnavailableMessage": "Nou pa t ka chaje done sou eta sistèm nan.",
+    "inviteRoleFooter": "Chwazi wòl moun w ap envite a. Admin yo gen aksè konplè pou jere.",
+    "newCategoryMessage": "Antre yon non pou nouvo kategori rapò a.",
+    "noAuditMessage": "Aksyon sistèm yo ap anrejistre isit la.",
+    "noBansMessage": "Pa gen okenn idantifyan ki bloke kounye a.",
+    "noCategoriesMessage": "Kategori rapò yo ede klase ensidan yo.",
+    "noInvitesMessage": "Kreye kòd envitasyon pou ajoute nouvo volontè.",
+    "noSearchResults": "Pa gen okenn manm ki koresponn ak rechèch ou a.",
+    "noUsersMessage": "Pa gen okenn manm ki antre ankò."
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "Rekonesans Vwa",
     "start": "Kòmanse antre vwa",
-    "stop": "Kanpe anrejistreman"
+    "stop": "Kanpe anrejistreman",
+    "micDenied": "Ou bezwen bay aksè mikwofòn nan pou antre vwa. Aktive l nan Settings > Privacy & Security > Microphone.",
+    "speechDenied": "Ou bezwen bay pèmisyon rekonesans vwa pou antre vwa. Aktive l nan Settings > Privacy & Security > Speech Recognition.",
+    "unavailable": "Rekonesans vwa pa disponib sou aparèy sa a"
   },
   "auditLog": {
     "actor": "Aktè",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Debloke Llamenos"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Kreye yon mesaj an mas pou rive jwenn tout abonne yo an menm tan."
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "Mete ajou",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "Pa gen okenn kalite antite ki konfigire pou hub sa a."
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "Dosye kontak yo ap parèt isit la lè moun k ap rele yo kontakte liy dirèk la."
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "Konvèsasyon sa a fèmen",
+    "noMessages": "Pa gen mesaj ankò"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "Enkoni",
     "waiting": "ap tann",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "Mesaj k ap antre pa SMS, WhatsApp ak Signal ap parèt isit la.",
+    "unreadCount": "{{count}} mesaj ou poko li"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "Deblokaj byometrik bloke apre twòp tantativ ki echwe. Antre PIN ou.",
+    "biometricNotEnrolled": "Byometri aparèy ou a chanje, kidonk deblokaj byometrik la dezaktive. Antre PIN ou.",
+    "biometricPinMismatch": "Deblokaj byometrik la echwe. Antre PIN ou.",
+    "httpNotAllowed": "Koneksyon HTTP ki pa an sekirite pa otorize. Sèvi ak yon adrès HTTPS.",
+    "pinLockoutDuration": "Twòp tantativ ki echwe. Eseye ankò nan {{seconds}} segonn.",
+    "pinWiped": "Twòp tantativ PIN ki echwe. Pou sekirite ou, tout kle ki sou aparèy sa a efase."
   },
   "eventType": {
     "call": "Apèl",
@@ -2109,7 +2147,13 @@
     "title": "Evènman",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Fòk jesyon dosye aktive pou w ka itilize evènman.",
+    "emptyMessage": "Pa gen okenn evènman ki kreye ankò.",
+    "encryptedDetails": "Detay evènman an chifre",
+    "locationHelp": "Antre yon kote apeprè. Pou sekirite, nou pa janm konsève kowòdone egzak.",
+    "noResults": "Pa gen okenn evènman ki koresponn ak rechèch ou a",
+    "pageIndicator": "Paj {{page}} sou {{total}}"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Nou pa t kapab chaje hub ou yo",
-    "membershipLoadFailedBody": "Sèvè a pa t di nan ki hub ou ye, konsa nou pa ka montre anyen ankò. Tcheke koneksyon ou epi eseye ankò."
+    "membershipLoadFailedBody": "Sèvè a pa t di nan ki hub ou ye, konsa nou pa ka montre anyen ankò. Tcheke koneksyon ou epi eseye ankò.",
+    "phoneHelp": "Nimewo prensipal liy dirèk hub sa a. Li sèvi pou dirije apèl yo.",
+    "slugHelp": "Slug la sèvi nan URL ak referans API yo. Li fèt apati non an."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "Èske ou sèten ou vle dekonekte? Kle chifre ou yo ap retire sou aparèy sa a."
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "Nòt Apèl",
     "updated": "Note updated",
-    "viewNotes": "Nòt"
+    "viewNotes": "Nòt",
+    "emptyMessage": "Nòt ou kreye pandan apèl yo ap parèt isit la."
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "Dekri ensidan an an detay...",
+    "closeConfirmMessage": "Èske ou sèten ou vle fèmen rapò sa a? Ou p ap ka anile aksyon sa a."
   },
   "reportLinks": {
     "alreadyLinked": "Rapò sa a deja lye ak dosye sa a.",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "Pa gen rapò ak estati: {{status}}",
+    "emptyMessage": "Rapò ou kreye yo ap parèt isit la."
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "jiska",
     "users": "Volontè",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "Ou p ap resevwa apèl k ap antre ankò."
   },
   "shortcuts": {
     "answerCall": "Reponn apèl",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "Pa gen okenn entèraksyon ki anrejistre pou kontak sa a."
   },
   "transcription": {
     "allowOptOut": "Pèmèt volontè yo dezaktive transkripsyon",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "Pa gen rapò nan fil triaj la ak estati: {{status}}"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

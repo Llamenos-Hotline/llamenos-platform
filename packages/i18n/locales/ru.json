@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "Активные ({{count}})",
+    "claimedInvitesHeader": "Использованные ({{count}})",
+    "expiredInvitesHeader": "Истёкшие ({{count}})",
+    "auditTotal": "Всего записей: {{count}}",
+    "banFooter": "Введите хеш SHA-256 номера телефона или идентификатора звонящего, которого нужно заблокировать.",
+    "bansHeader": "Заблокированные ({{count}})",
+    "categoriesHeader": "Категории ({{count}})",
+    "membersHeader": "Участники ({{count}})",
+    "categoryCreated": "Категория отчётов создана",
+    "categoryDeleted": "Категория отчётов удалена",
+    "categoryNameRequired": "Укажите название категории",
+    "deleteConfirmMessage": "Вы уверены, что хотите удалить этот элемент? Это действие нельзя отменить.",
+    "healthUnavailableMessage": "Не удалось загрузить данные о состоянии системы.",
+    "inviteRoleFooter": "Выберите роль для приглашаемого человека. Администраторы имеют полный доступ к управлению.",
+    "newCategoryMessage": "Введите название новой категории отчётов.",
+    "noAuditMessage": "Здесь будут регистрироваться действия в системе.",
+    "noBansMessage": "Сейчас нет заблокированных идентификаторов.",
+    "noCategoriesMessage": "Категории отчётов помогают классифицировать инциденты.",
+    "noInvitesMessage": "Создайте коды приглашения, чтобы добавить новых волонтёров.",
+    "noSearchResults": "Нет участников, соответствующих запросу.",
+    "noUsersMessage": "Пока никто не присоединился."
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "Распознавание речи",
     "start": "Начать голосовой ввод",
-    "stop": "Остановить запись"
+    "stop": "Остановить запись",
+    "micDenied": "Для голосового ввода нужен доступ к микрофону. Включите его в Настройки > Конфиденциальность и безопасность > Микрофон.",
+    "speechDenied": "Для голосового ввода нужно разрешение на распознавание речи. Включите его в Настройки > Конфиденциальность и безопасность > Распознавание речи.",
+    "unavailable": "Распознавание речи недоступно на этом устройстве"
   },
   "auditLog": {
     "actor": "Исполнитель",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Разблокировать Llamenos"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Создайте массовую рассылку, чтобы связаться со всеми подписчиками сразу."
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "Обновлено",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "Для этого хаба не настроены типы сущностей."
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "Записи о контактах появятся здесь, когда звонящие обратятся на горячую линию."
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "Этот разговор закрыт",
+    "noMessages": "Сообщений пока нет"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "Неизвестный",
     "waiting": "ожидание",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "Здесь появятся входящие сообщения из SMS, WhatsApp и Signal.",
+    "unreadCount": "Непрочитанных сообщений: {{count}}"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "Биометрическая разблокировка заблокирована из-за слишком большого числа неудачных попыток. Введите PIN-код.",
+    "biometricNotEnrolled": "Биометрия вашего устройства изменилась, поэтому биометрическая разблокировка была отключена. Введите PIN-код.",
+    "biometricPinMismatch": "Не удалось выполнить биометрическую разблокировку. Введите PIN-код.",
+    "httpNotAllowed": "Небезопасные HTTP-подключения запрещены. Используйте адрес HTTPS.",
+    "pinLockoutDuration": "Слишком много неудачных попыток. Повторите через {{seconds}} сек.",
+    "pinWiped": "Слишком много неверных попыток ввода PIN-кода. В целях безопасности все ключи на этом устройстве удалены."
   },
   "eventType": {
     "call": "Звонок",
@@ -2109,7 +2147,13 @@
     "title": "События",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Чтобы использовать события, нужно включить управление делами.",
+    "emptyMessage": "События ещё не созданы.",
+    "encryptedDetails": "Сведения о событии зашифрованы",
+    "locationHelp": "Укажите приблизительное местоположение. В целях безопасности точные координаты никогда не сохраняются.",
+    "noResults": "Нет событий, соответствующих запросу",
+    "pageIndicator": "Страница {{page}} из {{total}}"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Не удалось загрузить ваши хабы",
-    "membershipLoadFailedBody": "Сервер не сообщил, к каким хабам вы относитесь, поэтому пока ничего нельзя показать. Проверьте подключение и попробуйте снова."
+    "membershipLoadFailedBody": "Сервер не сообщил, к каким хабам вы относитесь, поэтому пока ничего нельзя показать. Проверьте подключение и попробуйте снова.",
+    "phoneHelp": "Основной номер горячей линии этого хаба. Используется для маршрутизации звонков.",
+    "slugHelp": "Slug используется в URL-адресах и ссылках API. Он создаётся из названия."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "Вы уверены, что хотите выйти? Ваши зашифрованные ключи будут удалены с этого устройства."
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "Заметки по звонку",
     "updated": "Note updated",
-    "viewNotes": "Заметки"
+    "viewNotes": "Заметки",
+    "emptyMessage": "Здесь появятся заметки, которые вы создаёте во время звонков."
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "Подробно опишите инцидент...",
+    "closeConfirmMessage": "Вы уверены, что хотите закрыть этот отчёт? Это действие нельзя отменить."
   },
   "reportLinks": {
     "alreadyLinked": "Этот отчёт уже привязан к этому делу.",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "Нет отчётов со статусом: {{status}}",
+    "emptyMessage": "Здесь появятся созданные вами отчёты."
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "до",
     "users": "Волонтёры",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "Вы перестанете получать входящие звонки."
   },
   "shortcuts": {
     "answerCall": "Ответить на звонок",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "Для этого контакта не зарегистрировано ни одного взаимодействия."
   },
   "transcription": {
     "allowOptOut": "Разрешить волонтёрам отключать транскрипцию",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "В очереди сортировки нет отчётов со статусом: {{status}}"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

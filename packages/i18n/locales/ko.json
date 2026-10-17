@@ -292,7 +292,28 @@
       "testing": "Testing…",
       "connected": "Connected ({{latency}}ms)",
       "connectionFailed": "Connection failed ({{latency}}ms)"
-    }
+    },
+    "activeInvitesHeader": "활성 ({{count}})",
+    "claimedInvitesHeader": "사용됨 ({{count}})",
+    "expiredInvitesHeader": "만료됨 ({{count}})",
+    "auditTotal": "총 {{count}}개 항목",
+    "banFooter": "차단할 발신자 전화번호 또는 식별자의 SHA-256 해시를 입력하세요.",
+    "bansHeader": "차단됨 ({{count}})",
+    "categoriesHeader": "범주 ({{count}})",
+    "membersHeader": "멤버 ({{count}})",
+    "categoryCreated": "보고서 범주가 생성되었습니다",
+    "categoryDeleted": "보고서 범주가 삭제되었습니다",
+    "categoryNameRequired": "범주 이름은 필수입니다",
+    "deleteConfirmMessage": "이 항목을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+    "healthUnavailableMessage": "시스템 상태 데이터를 불러올 수 없습니다.",
+    "inviteRoleFooter": "초대할 사람의 역할을 선택하세요. 관리자는 모든 관리 권한을 가집니다.",
+    "newCategoryMessage": "새 보고서 범주의 이름을 입력하세요.",
+    "noAuditMessage": "시스템 작업이 여기에 기록됩니다.",
+    "noBansMessage": "현재 차단된 식별자가 없습니다.",
+    "noCategoriesMessage": "보고서 범주는 사건을 분류하는 데 도움이 됩니다.",
+    "noInvitesMessage": "새 자원봉사자를 추가하려면 초대 코드를 생성하세요.",
+    "noSearchResults": "검색과 일치하는 멤버가 없습니다.",
+    "noUsersMessage": "아직 가입한 멤버가 없습니다."
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -448,7 +469,10 @@
   "audioInput": {
     "permissionTitle": "음성 인식",
     "start": "음성 입력 시작",
-    "stop": "녹음 중지"
+    "stop": "녹음 중지",
+    "micDenied": "음성 입력을 사용하려면 마이크 접근 권한이 필요합니다. 설정 > 개인정보 보호 및 보안 > 마이크에서 허용하세요.",
+    "speechDenied": "음성 입력을 사용하려면 음성 인식 권한이 필요합니다. 설정 > 개인정보 보호 및 보안 > 음성 인식에서 허용하세요.",
+    "unavailable": "이 기기에서는 음성 인식을 사용할 수 없습니다"
   },
   "auditLog": {
     "actor": "수행자",
@@ -539,7 +563,8 @@
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Llamenos 잠금 해제"
   },
   "blast": {
     "channelSignal": "Signal",
@@ -692,7 +717,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "대량 메시지를 만들어 모든 구독자에게 한 번에 보내세요."
   },
   "bridgeUrlLabel": "Bridge URL",
   "call": {
@@ -1194,7 +1220,8 @@
     "updated": "업데이트됨",
     "error": {
       "noKey": "Encryption key not available"
-    }
+    },
+    "noEntityTypesDescription": "이 허브에 구성된 엔티티 유형이 없습니다."
   },
   "channels": {
     "a2p": {
@@ -1591,7 +1618,8 @@
     "members": "members",
     "phone": "Phone",
     "sectionBasic": "Basic Info",
-    "sectionNotes": "Notes"
+    "sectionNotes": "Notes",
+    "emptyMessage": "발신자가 핫라인과 연락하면 연락처 기록이 여기에 표시됩니다."
   },
   "containsLabel": "Contains",
   "continueButton": "Continue",
@@ -1602,7 +1630,9 @@
     "statusActive": "Active",
     "statusClosed": "Closed",
     "statusWaiting": "Waiting",
-    "title": "Conversation"
+    "title": "Conversation",
+    "closedMessage": "이 대화는 종료되었습니다",
+    "noMessages": "아직 메시지가 없습니다"
   },
   "conversations": {
     "activeConversations": "Active Conversations",
@@ -1663,7 +1693,9 @@
     "unknownContact": "알 수 없음",
     "waiting": "대기 중",
     "waitingSection": "Waiting",
-    "whatsapp": "WhatsApp"
+    "whatsapp": "WhatsApp",
+    "emptyMessage": "SMS, WhatsApp, Signal로 수신된 메시지가 여기에 표시됩니다.",
+    "unreadCount": "읽지 않은 메시지 {{count}}개"
   },
   "copied": {
     "toClipboard": "Copied to clipboard"
@@ -2039,7 +2071,13 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
-    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
+    "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
+    "biometricLockout": "실패 횟수가 너무 많아 생체 인식 잠금 해제가 잠겼습니다. PIN을 입력하세요.",
+    "biometricNotEnrolled": "기기의 생체 인식 정보가 변경되어 생체 인식 잠금 해제가 꺼졌습니다. PIN을 입력하세요.",
+    "biometricPinMismatch": "생체 인식 잠금 해제에 실패했습니다. PIN을 입력하세요.",
+    "httpNotAllowed": "안전하지 않은 HTTP 연결은 허용되지 않습니다. HTTPS 주소를 사용하세요.",
+    "pinLockoutDuration": "실패 횟수가 너무 많습니다. {{seconds}}초 후에 다시 시도하세요.",
+    "pinWiped": "PIN 입력 실패 횟수가 너무 많습니다. 보안을 위해 이 기기의 모든 키가 삭제되었습니다."
   },
   "eventType": {
     "call": "통화",
@@ -2109,7 +2147,13 @@
     "title": "이벤트",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "이벤트를 사용하려면 사건 관리를 활성화해야 합니다.",
+    "emptyMessage": "아직 생성된 이벤트가 없습니다.",
+    "encryptedDetails": "이벤트 세부 정보가 암호화되어 있습니다",
+    "locationHelp": "대략적인 위치를 입력하세요. 안전을 위해 정확한 좌표는 절대 저장되지 않습니다.",
+    "noResults": "검색과 일치하는 이벤트가 없습니다",
+    "pageIndicator": "{{page}}/{{total}} 페이지"
   },
   "field": {
     "add": "Add Field",
@@ -2431,7 +2475,9 @@
     "urlPlaceholder": "https://hub.example.com",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "허브를 불러올 수 없습니다",
-    "membershipLoadFailedBody": "서버가 어느 허브에 소속되어 있는지 알려주지 않아 아직 아무것도 표시할 수 없습니다. 연결을 확인한 후 다시 시도하세요."
+    "membershipLoadFailedBody": "서버가 어느 허브에 소속되어 있는지 알려주지 않아 아직 아무것도 표시할 수 없습니다. 연결을 확인한 후 다시 시도하세요.",
+    "phoneHelp": "이 허브의 대표 핫라인 번호입니다. 통화 라우팅에 사용됩니다.",
+    "slugHelp": "슬러그는 URL과 API 참조에 사용되며, 이름에서 자동으로 생성됩니다."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2521,7 +2567,8 @@
   },
   "logout": {
     "confirmAction": "Logout",
-    "confirmTitle": "Logout"
+    "confirmTitle": "Logout",
+    "confirmMessage": "로그아웃하시겠습니까? 암호화된 키가 이 기기에서 삭제됩니다."
   },
   "managePhoneNumbers": "Manage Phone Numbers",
   "message": {
@@ -2645,7 +2692,8 @@
     "textHint": "Write your note...",
     "title": "통화 메모",
     "updated": "Note updated",
-    "viewNotes": "메모"
+    "viewNotes": "메모",
+    "emptyMessage": "통화 중에 작성한 메모가 여기에 표시됩니다."
   },
   "notification": {
     "callBody": "A caller needs assistance",
@@ -3274,7 +3322,9 @@
     "fileUploaded": "Encrypted & uploaded",
     "fileSelect": "Select file...",
     "fileE2ee": "Files are encrypted before upload",
-    "fileAccessDenied": "Cannot access this file"
+    "fileAccessDenied": "Cannot access this file",
+    "bodyHint": "사건을 자세히 설명하세요...",
+    "closeConfirmMessage": "이 보고서를 닫으시겠습니까? 이 작업은 되돌릴 수 없습니다."
   },
   "reportLinks": {
     "alreadyLinked": "이 보고서는 이미 이 사건에 연결되어 있습니다.",
@@ -3384,7 +3434,9 @@
     "uploadComplete": "Complete",
     "uploadError": "Failed to upload {{name}}",
     "uploadFailed": "Failed",
-    "videoNotSupported": "Your browser does not support video playback."
+    "videoNotSupported": "Your browser does not support video playback.",
+    "emptyFiltered": "상태가 '{{status}}'인 보고서가 없습니다",
+    "emptyMessage": "작성한 보고서가 여기에 표시됩니다."
   },
   "resetIdentity": "Reset Identity",
   "retention": {
@@ -4006,7 +4058,8 @@
     "today": "Today",
     "until": "까지",
     "users": "자원봉사자",
-    "weeklySchedule": "Weekly Schedule"
+    "weeklySchedule": "Weekly Schedule",
+    "clockOutMessage": "더 이상 수신 전화를 받지 않습니다."
   },
   "shortcuts": {
     "answerCall": "전화 받기",
@@ -4322,7 +4375,8 @@
     "emptyTitle": "No Interactions",
     "errorTitle": "Unable to Load",
     "loading": "Loading timeline...",
-    "title": "Timeline"
+    "title": "Timeline",
+    "emptyMessage": "이 연락처에 대해 기록된 상호작용이 없습니다."
   },
   "transcription": {
     "allowOptOut": "자원봉사자가 전사를 비활성화하도록 허용",
@@ -4429,7 +4483,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "트리아지 대기열에 상태가 '{{status}}'인 보고서가 없습니다"
   },
   "unlock": {
     "biometricReason": "Unlock Llamenos",

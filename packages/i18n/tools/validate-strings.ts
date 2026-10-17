@@ -125,37 +125,40 @@ function collectFiles(dir: string, extensions: string[]): string[] {
   return results
 }
 
-/** Check if a position in a line is inside a line comment */
-function isInLineComment(line: string, matchIndex: number, commentPrefix: string): boolean {
-  const commentStart = line.indexOf(commentPrefix)
-  return commentStart !== -1 && commentStart < matchIndex
-}
-
-/** Check if a line is inside a block comment (simple heuristic) */
-function isInBlockComment(lines: string[], lineIndex: number): boolean {
-  let inBlock = false
-  for (let i = 0; i <= lineIndex; i++) {
-    const line = lines[i]
-    let pos = 0
-    while (pos < line.length) {
-      if (inBlock) {
-        const end = line.indexOf('*/', pos)
-        if (end === -1) break
-        inBlock = false
-        pos = end + 2
-      } else {
-        const start = line.indexOf('/*', pos)
-        if (start === -1) break
-        const end = line.indexOf('*/', start + 2)
-        if (end === -1) {
-          inBlock = true
-          break
-        }
-        pos = end + 2
-      }
+/**
+ * Every key reference a pattern finds in one source file, comments excluded.
+ *
+ * The scan runs over the WHOLE file, never line by line: a call written across
+ * lines --
+ *
+ *     NSLocalizedString(
+ *         "error_http_not_allowed",
+ *         comment: "..."
+ *     )
+ *
+ * -- has no single line that contains both the callee and the key, so a
+ * line-scoped matcher never sees it. That blind spot hid 84 iOS keys that
+ * existed in no locale file, and the app rendered them as raw identifiers
+ * (issue #1897). Comments are blanked out first (offsets and line numbers
+ * preserved), so commented-out calls -- single- or multi-line -- are ignored.
+ */
+function findKeyRefs(
+  rawSource: string,
+  lang: SourceLang,
+  patterns: RegExp[]
+): Array<{ line: number; ref: string }> {
+  const src = blankComments(rawSource, lang)
+  const locate = lineLocator(src)
+  const refs: Array<{ line: number; ref: string; index: number }> = []
+  for (const pattern of patterns) {
+    if (!pattern.global) throw new Error(`findKeyRefs pattern must be global: ${pattern}`)
+    pattern.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(src)) !== null) {
+      refs.push({ line: locate(match.index), ref: match[1], index: match.index })
     }
   }
-  return inBlock
+  return refs.sort((a, b) => a.index - b.index).map(({ line, ref }) => ({ line, ref }))
 }
 
 /** Format and print mismatches, return count of errors */
@@ -200,25 +203,12 @@ function validateAndroid(): number {
   )
 
   const mismatches: Mismatch[] = []
-  const pattern = /R\.string\.(\w+)/g
+  const patterns = [/\bR\.string\.(\w+)/g]
 
   for (const file of files) {
-    const content = readFileSync(file, 'utf-8')
-    const lines = content.split('\n')
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      pattern.lastIndex = 0
-      let match: RegExpExecArray | null
-
-      while ((match = pattern.exec(line)) !== null) {
-        if (isInLineComment(line, match.index, '//')) continue
-        if (isInBlockComment(lines, i)) continue
-
-        const ref = match[1]
-        if (!canonicalKeys.has(ref) && !allowlist.has(ref)) {
-          mismatches.push({ file, line: i + 1, ref, kind: 'missing' })
-        }
+    for (const { line, ref } of findKeyRefs(readFileSync(file, 'utf-8'), 'kotlin', patterns)) {
+      if (!canonicalKeys.has(ref) && !allowlist.has(ref)) {
+        mismatches.push({ file, line, ref, kind: 'missing' })
       }
     }
   }
@@ -240,34 +230,20 @@ function validateIOS(): number {
 
   const mismatches: Mismatch[] = []
 
+  // Every literal-key lookup form in the app. `L10n.format` resolves its key
+  // through NSLocalizedString, so a missing key renders raw exactly as a bare
+  // lookup does -- it is an existence check like the others.
   const patterns: RegExp[] = [
-    /NSLocalizedString\("([^"]+)"/g,
-    /String\(localized:\s*"([^"]+)"/g,
-    /LocalizedStringKey\("([^"]+)"/g,
+    /\bNSLocalizedString\(\s*"([^"]+)"/g,
+    /\bString\(\s*localized:\s*"([^"]+)"/g,
+    /\bLocalizedStringKey\(\s*"([^"]+)"/g,
+    /\bL10n\.format\(\s*"([^"]+)"/g,
   ]
 
   for (const file of files) {
-    const content = readFileSync(file, 'utf-8')
-    const lines = content.split('\n')
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      const trimmed = line.trimStart()
-      if (trimmed.startsWith('//')) continue
-      if (isInBlockComment(lines, i)) continue
-
-      for (const p of patterns) {
-        p.lastIndex = 0
-        let match: RegExpExecArray | null
-        while ((match = p.exec(line)) !== null) {
-          if (isInLineComment(line, match.index, '//')) continue
-
-          const ref = match[1]
-          if (!canonicalKeys.has(ref) && !allowlist.has(ref)) {
-            mismatches.push({ file, line: i + 1, ref, kind: 'missing' })
-          }
-        }
+    for (const { line, ref } of findKeyRefs(readFileSync(file, 'utf-8'), 'swift', patterns)) {
+      if (!canonicalKeys.has(ref) && !allowlist.has(ref)) {
+        mismatches.push({ file, line, ref, kind: 'missing' })
       }
     }
   }
@@ -296,40 +272,21 @@ function validateDesktop(): number {
 
   for (const file of files) {
     const content = readFileSync(file, 'utf-8')
-    const lines = content.split('\n')
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      const trimmed = line.trimStart()
-      if (trimmed.startsWith('//')) continue
-      if (isInBlockComment(lines, i)) continue
-
-      // Check static keys
-      staticPattern.lastIndex = 0
-      let match: RegExpExecArray | null
-      while ((match = staticPattern.exec(line)) !== null) {
-        if (isInLineComment(line, match.index, '//')) continue
-
-        const ref = match[1]
-        // Keys ending with '.' are prefixes used with concatenation — treat as dynamic
-        if (ref.endsWith('.')) {
-          mismatches.push({ file, line: i + 1, ref, kind: 'warning' })
-          continue
-        }
-        if (!canonicalKeys.has(ref) && !allowlist.has(ref)) {
-          mismatches.push({ file, line: i + 1, ref, kind: 'missing' })
-        }
+    for (const { line, ref } of findKeyRefs(content, 'ts', [staticPattern])) {
+      // Keys ending with '.' are prefixes used with concatenation — treat as dynamic
+      if (ref.endsWith('.')) {
+        mismatches.push({ file, line, ref, kind: 'warning' })
+        continue
       }
-
-      // Check dynamic keys (warn only)
-      dynamicPattern.lastIndex = 0
-      while ((match = dynamicPattern.exec(line)) !== null) {
-        if (isInLineComment(line, match.index, '//')) continue
-
-        const ref = match[1]
-        mismatches.push({ file, line: i + 1, ref, kind: 'warning' })
+      if (!canonicalKeys.has(ref) && !allowlist.has(ref)) {
+        mismatches.push({ file, line, ref, kind: 'missing' })
       }
+    }
+
+    // Dynamic keys are not statically checkable (warn only)
+    for (const { line, ref } of findKeyRefs(content, 'ts', [dynamicPattern])) {
+      mismatches.push({ file, line, ref, kind: 'warning' })
     }
   }
 
@@ -485,24 +442,61 @@ function validateLocaleCompleteness(): number {
 // string has placeholders.
 // ---------------------------------------------------------------------------
 
-/** Count {{placeholder}} occurrences in an en.json source string. */
+/**
+ * Number of arguments an en.json source string consumes: its DISTINCT
+ * {{placeholder}} names. Codegen numbers specifiers by name, so a name used
+ * twice binds one argument, not two (issue #1899).
+ */
 function placeholderCount(value: string): number {
-  return (value.match(/\{\{\w+\}\}/g) ?? []).length
+  return new Set(Array.from(value.matchAll(/\{\{(\w+)\}\}/g), m => m[1])).size
 }
 
-/** Blank out line and block comments, preserving byte offsets and line numbers. */
-function blankComments(src: string): string {
+type SourceLang = 'swift' | 'kotlin' | 'ts'
+
+/**
+ * String-literal delimiters per language. A `//` or `/*` inside a literal is
+ * text, not a comment, so the blanker has to step over literals to stay correct
+ * (`"https://..."` must not swallow the rest of its line).
+ *   - swift:  "..." and """..."""
+ *   - kotlin: "...", """...""" and 'c' char literals (so '"' does not open a string)
+ *   - ts:     '...', "..." and `...` template literals
+ */
+const STRING_DELIMITERS: Record<SourceLang, string[]> = {
+  swift: ['"'],
+  kotlin: ['"', "'"],
+  ts: ['"', "'", '`'],
+}
+
+/**
+ * Blank out line and block comments, preserving byte offsets and line numbers.
+ *
+ * Single-line literals ('...' / "...") end at a newline even when unterminated,
+ * so one mis-parsed literal (e.g. a quote inside a TS regex literal) can only
+ * cost the rest of its own line, never the rest of the file.
+ */
+function blankComments(src: string, lang: SourceLang): string {
+  const delimiters = STRING_DELIMITERS[lang]
+  const tripleQuote = lang === 'swift' || lang === 'kotlin'
   let out = ''
   let i = 0
   while (i < src.length) {
     const c = src[i]
-    if (c === '"') {
+    if (tripleQuote && src.startsWith('"""', i)) {
+      const close = src.indexOf('"""', i + 3)
+      const stop = close === -1 ? src.length : close + 3
+      out += src.slice(i, stop)
+      i = stop
+      continue
+    }
+    if (delimiters.includes(c)) {
+      const multiline = c === '`'
       out += c
       i++
       while (i < src.length) {
         if (src[i] === '\\') { out += src.slice(i, i + 2); i += 2; continue }
+        if (src[i] === '\n' && !multiline) break
         out += src[i]
-        if (src[i] === '"') { i++; break }
+        if (src[i] === c) { i++; break }
         i++
       }
       continue
@@ -639,6 +633,22 @@ interface FormatFinding { file: string; line: number; message: string; backlogge
 
 const lineOf = (src: string, index: number) => src.slice(0, index).split('\n').length
 
+/** A 1-based line-number lookup for offsets into `src` (binary search over newline offsets). */
+function lineLocator(src: string): (index: number) => number {
+  const newlines: number[] = []
+  for (let i = src.indexOf('\n'); i !== -1; i = src.indexOf('\n', i + 1)) newlines.push(i)
+  return (index: number) => {
+    let lo = 0
+    let hi = newlines.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (newlines[mid] < index) lo = mid + 1
+      else hi = mid
+    }
+    return lo + 1
+  }
+}
+
 /**
  * iOS: reject `String(format:)` on a non-literal format string, and check the
  * argument arity of every `L10n.format` call.
@@ -649,7 +659,7 @@ function checkSwiftSource(
   sources: Record<string, string>
 ): FormatFinding[] {
   const findings: FormatFinding[] = []
-  const src = blankComments(rawSource)
+  const src = blankComments(rawSource, 'swift')
 
   // Rule 1: the format string handed to String(format:) must be a literal.
   const formatCall = /String\(\s*format:\s*/g
@@ -724,7 +734,7 @@ function checkKotlinSource(
   sources: Record<string, string>
 ): FormatFinding[] {
   const findings: FormatFinding[] = []
-  const src = blankComments(rawSource)
+  const src = blankComments(rawSource, 'kotlin')
 
   const call = /\b(?:stringResource|getString)\(\s*R\.string\.(\w+)/g
   let m: RegExpExecArray | null
@@ -922,6 +932,93 @@ function selfTestFormatArguments(): number {
   return failures
 }
 
+/**
+ * Prove the key-reference scanner sees what it must and ignores what it must.
+ *
+ * The line-scoped scanner this replaced passed CI for months while missing every
+ * multi-line call (issue #1897) -- a scanner nobody has watched fail cannot be
+ * trusted to be looking. These cases run on every invocation.
+ */
+function selfTestKeyRefs(): number {
+  const ios = [
+    /\bNSLocalizedString\(\s*"([^"]+)"/g,
+    /\bL10n\.format\(\s*"([^"]+)"/g,
+  ]
+  const android = [/\bR\.string\.(\w+)/g]
+  const desktop = [/\bt\(\s*['"]([a-zA-Z0-9_.]+)['"]/g]
+
+  interface Case { name: string; lang: SourceLang; patterns: RegExp[]; source: string; expect: Array<{ line: number; ref: string }> }
+  const cases: Case[] = [
+    {
+      name: 'swift: single-line NSLocalizedString',
+      lang: 'swift', patterns: ios,
+      source: 'Text(NSLocalizedString("probe_one", comment: ""))',
+      expect: [{ line: 1, ref: 'probe_one' }],
+    },
+    {
+      name: 'swift: multi-line NSLocalizedString reports the line of the call',
+      lang: 'swift', patterns: ios,
+      source: 'let a = 1\n_ = NSLocalizedString(\n    "probe_multi",\n    comment: "break-it probe"\n)',
+      expect: [{ line: 2, ref: 'probe_multi' }],
+    },
+    {
+      name: 'swift: multi-line L10n.format',
+      lang: 'swift', patterns: ios,
+      source: 'Text(L10n.format(\n    "probe_format",\n    page\n))',
+      expect: [{ line: 1, ref: 'probe_format' }],
+    },
+    {
+      name: 'swift: commented-out multi-line call is ignored',
+      lang: 'swift', patterns: ios,
+      source: '// _ = NSLocalizedString(\n//     "probe_line_comment",\n//     comment: ""\n// )\n/* _ = NSLocalizedString(\n    "probe_block_comment",\n    comment: ""\n) */',
+      expect: [],
+    },
+    {
+      name: 'swift: a // inside a string literal does not hide a later call',
+      lang: 'swift', patterns: ios,
+      source: 'let u = "https://example.org"; _ = NSLocalizedString("probe_after_url", comment: "")',
+      expect: [{ line: 1, ref: 'probe_after_url' }],
+    },
+    {
+      name: 'kotlin: R.string after a char literal quote is still seen',
+      lang: 'kotlin', patterns: android,
+      source: "val q = '\"'\nText(stringResource(\n    R.string.probe_kt\n))",
+      expect: [{ line: 3, ref: 'probe_kt' }],
+    },
+    {
+      name: 'kotlin: KDoc reference is ignored',
+      lang: 'kotlin', patterns: android,
+      source: '/**\n * See [R.string.probe_kdoc].\n */\nfun f() {}',
+      expect: [],
+    },
+    {
+      name: 'desktop: multi-line t() call',
+      lang: 'ts', patterns: desktop,
+      source: "const a = t(\n  'probe.multi',\n  { count }\n)",
+      expect: [{ line: 1, ref: 'probe.multi' }],
+    },
+    {
+      name: 'desktop: commented-out multi-line t() call is ignored',
+      lang: 'ts', patterns: desktop,
+      source: "// t(\n//   'probe.commented'\n// )\nconst url = 'http://x' // t('probe.trailing')",
+      expect: [],
+    },
+  ]
+
+  let failures = 0
+  for (const c of cases) {
+    const got = findKeyRefs(c.source, c.lang, c.patterns)
+    if (JSON.stringify(got) !== JSON.stringify(c.expect)) {
+      failures++
+      console.error(`  key-ref self-test FAILED: ${c.name} -- expected ${JSON.stringify(c.expect)}, got ${JSON.stringify(got)}`)
+    }
+  }
+  if (failures === 0) {
+    console.log(`  Key-reference scanner self-test: ${cases.length}/${cases.length} cases behave as specified`)
+  }
+  return failures
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -945,6 +1042,7 @@ function main() {
   totalErrors += validateLocaleCoverage()
   totalErrors += validateLocaleCompleteness()
   totalErrors += selfTestFormatArguments()
+  totalErrors += selfTestKeyRefs()
 
   if (command === 'android' || command === 'all') {
     totalErrors += validateAndroid()

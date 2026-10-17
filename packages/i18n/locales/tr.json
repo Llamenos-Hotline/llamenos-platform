@@ -326,7 +326,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Tüm abonelere tek seferde ulaşmak için bir toplu mesaj oluşturun."
   },
   "callHistory": {
     "answeredBy": "Cevaplayan",
@@ -497,7 +498,8 @@
     "groupName": "Group name",
     "groups": "Groups",
     "members": "members",
-    "sectionBasic": "Basic Info"
+    "sectionBasic": "Basic Info",
+    "emptyMessage": "Arayanlar yardım hattıyla iletişime geçtiğinde kişi kayıtları burada görünür."
   },
   "conversations": {
     "claim": "Claim",
@@ -558,7 +560,9 @@
     "searchPlaceholder": "Search conversations...",
     "unassign": "Unassign",
     "unassignError": "Failed to unassign conversation",
-    "unassigned": "Conversation unassigned"
+    "unassigned": "Conversation unassigned",
+    "emptyMessage": "SMS, WhatsApp ve Signal'den gelen mesajlar burada görünür.",
+    "unreadCount": "{{count}} okunmamış mesaj"
   },
   "customFields": {
     "addField": "Alan Ekle",
@@ -696,7 +700,9 @@
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Merkezleriniz yüklenemedi",
-    "membershipLoadFailedBody": "Sunucu hangi merkezlere ait olduğunuzu bildirmedi, bu yüzden henüz hiçbir şey gösterilemiyor. Bağlantınızı kontrol edip tekrar deneyin."
+    "membershipLoadFailedBody": "Sunucu hangi merkezlere ait olduğunuzu bildirmedi, bu yüzden henüz hiçbir şey gösterilemiyor. Bağlantınızı kontrol edip tekrar deneyin.",
+    "phoneHelp": "Bu merkezin ana yardım hattı numarası. Çağrı yönlendirmede kullanılır.",
+    "slugHelp": "Kısa ad (slug) URL'lerde ve API başvurularında kullanılır. Addan oluşturulur."
   },
   "ivr": {
     "selfAnnouncement": "Türkçe için [N] tuşuna basın.",
@@ -805,7 +811,8 @@
     "updated": "Not güncellendi",
     "viewNotes": "Notlar",
     "detail": "Not Detayları",
-    "replies": "Replies"
+    "replies": "Replies",
+    "emptyMessage": "Görüşmeler sırasında oluşturduğunuz notlar burada görünür."
   },
   "notifications": {
     "default": "Etkinleştirilmedi",
@@ -1048,7 +1055,9 @@
     "videoNotSupported": "Tarayıcınız video oynatmayı desteklemiyor.",
     "noTypes": "No report types available",
     "selectType": "Select a report type",
-    "typeLabel": "Report Type"
+    "typeLabel": "Report Type",
+    "emptyFiltered": "Durumu \"{{status}}\" olan rapor yok",
+    "emptyMessage": "Oluşturduğunuz raporlar burada görünür."
   },
   "retention": {
     "description": "Configure how long different types of records are retained before automatic deletion.",
@@ -1511,7 +1520,8 @@
       "startDate": "Start Date",
       "title": "Availability"
     },
-    "emptyMessage": "No shifts have been configured yet. Contact your administrator."
+    "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
+    "clockOutMessage": "Gelen aramaları almayı bırakacaksınız."
   },
   "shortcuts": {
     "answerCall": "Aramayı cevapla",
@@ -2122,7 +2132,28 @@
     "eventsMigrationComplete": "Events migration complete",
     "eventsMigrationError": "Migration failed",
     "checkingMigration": "Checking migration status...",
-    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}"
+    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}",
+    "activeInvitesHeader": "Aktif ({{count}})",
+    "claimedInvitesHeader": "Kullanılmış ({{count}})",
+    "expiredInvitesHeader": "Süresi dolmuş ({{count}})",
+    "auditTotal": "Toplam {{count}} kayıt",
+    "banFooter": "Engellenecek arayanın telefon numarasının veya tanımlayıcısının SHA-256 özetini girin.",
+    "bansHeader": "Engellenenler ({{count}})",
+    "categoriesHeader": "Kategoriler ({{count}})",
+    "membersHeader": "Üyeler ({{count}})",
+    "categoryCreated": "Rapor kategorisi oluşturuldu",
+    "categoryDeleted": "Rapor kategorisi silindi",
+    "categoryNameRequired": "Kategori adı zorunludur",
+    "deleteConfirmMessage": "Bu öğeyi silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
+    "healthUnavailableMessage": "Sistem durumu verileri yüklenemedi.",
+    "inviteRoleFooter": "Davet ettiğiniz kişinin rolünü seçin. Yöneticiler tam yönetim erişimine sahiptir.",
+    "newCategoryMessage": "Yeni rapor kategorisi için bir ad girin.",
+    "noAuditMessage": "Sistem işlemleri burada kaydedilecek.",
+    "noBansMessage": "Şu anda engellenmiş tanımlayıcı yok.",
+    "noCategoriesMessage": "Rapor kategorileri olayları sınıflandırmaya yardımcı olur.",
+    "noInvitesMessage": "Yeni gönüllü eklemek için davet kodu oluşturun.",
+    "noSearchResults": "Aramanızla eşleşen üye yok.",
+    "noUsersMessage": "Henüz katılan üye yok."
   },
   "cases": {
     "assignedSuffix": "Atanmış",
@@ -2309,7 +2340,8 @@
     "unassign": "Unassign",
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
-    "updated": "Updated"
+    "updated": "Updated",
+    "noEntityTypesDescription": "Bu merkez için yapılandırılmış varlık türü yok."
   },
   "channels": {
     "whatsapp": {
@@ -2649,7 +2681,9 @@
     "statusClosed": "Kapalı",
     "loading": "Loading messages...",
     "replyPlaceholder": "Type a message...",
-    "send": "Send message"
+    "send": "Send message",
+    "closedMessage": "Bu görüşme kapatıldı",
+    "noMessages": "Henüz mesaj yok"
   },
   "report": {
     "statusWaiting": "Bekliyor",
@@ -2704,7 +2738,9 @@
       "subtitle": "Choose a report type to get started",
       "title": "Select Report Type"
     },
-    "validationErrors": "Please fix the errors above before submitting."
+    "validationErrors": "Please fix the errors above before submitting.",
+    "bodyHint": "Olayı ayrıntılı olarak açıklayın...",
+    "closeConfirmMessage": "Bu raporu kapatmak istediğinizden emin misiniz? Bu işlem geri alınamaz."
   },
   "caseManagement": {
     "general": "Genel",
@@ -3033,7 +3069,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "Ön değerlendirme kuyruğunda durumu \"{{status}}\" olan rapor yok"
   },
   "permissions": {
     "groups": {
@@ -3492,7 +3529,13 @@
     "title": "Events",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Etkinlikleri kullanmak için vaka yönetimi etkinleştirilmelidir.",
+    "emptyMessage": "Henüz etkinlik oluşturulmadı.",
+    "encryptedDetails": "Etkinlik ayrıntıları şifreli",
+    "locationHelp": "Yaklaşık bir konum girin. Güvenlik için kesin koordinatlar asla saklanmaz.",
+    "noResults": "Aramanızla eşleşen etkinlik yok",
+    "pageIndicator": "Sayfa {{page}} / {{total}}"
   },
   "reportTypes": {
     "typeDescription": "Açıklama",
@@ -3827,7 +3870,8 @@
     "empty": "No timeline events",
     "emptySubtitle": "Activity will appear here",
     "emptyTitle": "No Interactions",
-    "loading": "Loading timeline..."
+    "loading": "Loading timeline...",
+    "emptyMessage": "Bu kişi için kaydedilmiş etkileşim yok."
   },
   "smsWebhook": "SMS Webhook",
   "webhook": {
@@ -3942,7 +3986,13 @@
     "noHubSelected": "No hub selected",
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: {{reason}}"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "biometricLockout": "Çok fazla başarısız denemeden sonra biyometrik kilit açma kilitlendi. PIN'inizi girin.",
+    "biometricNotEnrolled": "Cihazınızın biyometrik verileri değiştiği için biyometrik kilit açma kapatıldı. PIN'inizi girin.",
+    "biometricPinMismatch": "Biyometrik kilit açma başarısız oldu. PIN'inizi girin.",
+    "httpNotAllowed": "Güvenli olmayan HTTP bağlantılarına izin verilmez. HTTPS adresi kullanın.",
+    "pinLockoutDuration": "Çok fazla başarısız deneme. {{seconds}} saniye sonra yeniden deneyin.",
+    "pinWiped": "Çok fazla başarısız PIN denemesi. Güvenliğiniz için bu cihazdaki tüm anahtarlar silindi."
   },
   "call": {
     "statusAnswered": "Cevaplanan",
@@ -4394,7 +4444,8 @@
   "retry": "Tekrar dene",
   "logout": {
     "confirmAction": "Çıkış Yap",
-    "confirmTitle": "Çıkış Yap"
+    "confirmTitle": "Çıkış Yap",
+    "confirmMessage": "Çıkış yapmak istediğinizden emin misiniz? Şifreli anahtarlarınız bu cihazdan kaldırılacak."
   },
   "unlock": {
     "subtitle": "Kilidini açmak için PIN kodunuzu girin",
@@ -4419,11 +4470,15 @@
   "audioInput": {
     "permissionTitle": "Speech Recognition",
     "start": "Start voice input",
-    "stop": "Stop recording"
+    "stop": "Stop recording",
+    "micDenied": "Sesli giriş için mikrofon erişimi gerekir. Ayarlar > Gizlilik ve Güvenlik > Mikrofon bölümünden etkinleştirin.",
+    "speechDenied": "Sesli giriş için konuşma tanıma izni gerekir. Ayarlar > Gizlilik ve Güvenlik > Konuşma Tanıma bölümünden etkinleştirin.",
+    "unavailable": "Bu cihazda konuşma tanıma kullanılamıyor"
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Llamenos kilidini aç"
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {

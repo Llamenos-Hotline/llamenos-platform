@@ -326,7 +326,8 @@
     "removeLanguage": "Remove language",
     "default": "default",
     "defaultLanguage": "Default Language",
-    "defaultLanguageHint": "Subscribers whose language is not included will receive this version"
+    "defaultLanguageHint": "Subscribers whose language is not included will receive this version",
+    "emptyMessage": "Create a message blast to reach all subscribers at once."
   },
   "callHistory": {
     "answeredBy": "Ni̱ Nakuiin",
@@ -497,7 +498,8 @@
     "groupName": "Group name",
     "groups": "Groups",
     "members": "members",
-    "sectionBasic": "Basic Info"
+    "sectionBasic": "Basic Info",
+    "emptyMessage": "Contact records will appear here when callers interact with the hotline."
   },
   "conversations": {
     "claim": "Claim",
@@ -558,7 +560,9 @@
     "searchPlaceholder": "Search conversations...",
     "unassign": "Unassign",
     "unassignError": "Failed to unassign conversation",
-    "unassigned": "Conversation unassigned"
+    "unassigned": "Conversation unassigned",
+    "emptyMessage": "Incoming messages from SMS, WhatsApp and Signal will appear here.",
+    "unreadCount": "{{count}} unread messages"
   },
   "customFields": {
     "addField": "Chikaa Campo",
@@ -696,7 +700,9 @@
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs",
     "membershipLoadFailedTitle": "Couldn't load your hubs",
-    "membershipLoadFailedBody": "The server didn't say which hubs you belong to, so nothing can be shown yet. Check your connection and try again."
+    "membershipLoadFailedBody": "The server didn't say which hubs you belong to, so nothing can be shown yet. Check your connection and try again.",
+    "phoneHelp": "The main hotline number for this hub. Used for call routing.",
+    "slugHelp": "The slug is used in URLs and API references. It is generated from the name."
   },
   "ivr": {
     "selfAnnouncement": "Tu'un savi ndáto, chu̱ʼun [N].",
@@ -805,7 +811,8 @@
     "updated": "Ni̱ nasama nota",
     "viewNotes": "Nota",
     "detail": "Detalle de Nota",
-    "replies": "Replies"
+    "replies": "Replies",
+    "emptyMessage": "Notes you create during calls will appear here."
   },
   "notifications": {
     "default": "Ñá xíni̱ñúꞌú",
@@ -1048,7 +1055,9 @@
     "videoNotSupported": "Navegador miíún ña xáꞌnda chiꞌña video.",
     "noTypes": "No report types available",
     "selectType": "Select a report type",
-    "typeLabel": "Report Type"
+    "typeLabel": "Report Type",
+    "emptyFiltered": "No reports with status: {{status}}",
+    "emptyMessage": "Reports you create will appear here."
   },
   "retention": {
     "description": "Configure how long different types of records are retained before automatic deletion.",
@@ -1511,7 +1520,8 @@
       "startDate": "Start Date",
       "title": "Availability"
     },
-    "emptyMessage": "No shifts have been configured yet. Contact your administrator."
+    "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
+    "clockOutMessage": "You will stop receiving incoming calls."
   },
   "shortcuts": {
     "answerCall": "Nakuiin llamada",
@@ -2113,7 +2123,8 @@
     "unassign": "Unassign",
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
-    "updated": "Updated"
+    "updated": "Updated",
+    "noEntityTypesDescription": "No entity types are configured for this hub."
   },
   "contactDirectory": {
     "noKeyPair": "Llave de cifrado ñá íyo",
@@ -2691,7 +2702,28 @@
     "eventsMigrationComplete": "Events migration complete",
     "eventsMigrationError": "Migration failed",
     "checkingMigration": "Checking migration status...",
-    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}"
+    "eventsMigratingProgress": "Migrating... {{migrated}} of {{count}}",
+    "activeInvitesHeader": "Active ({{count}})",
+    "claimedInvitesHeader": "Claimed ({{count}})",
+    "expiredInvitesHeader": "Expired ({{count}})",
+    "auditTotal": "{{count}} total entries",
+    "banFooter": "Enter the SHA-256 hash of the caller's phone number or identifier to ban.",
+    "bansHeader": "Banned ({{count}})",
+    "categoriesHeader": "Categories ({{count}})",
+    "membersHeader": "Members ({{count}})",
+    "categoryCreated": "Report category created",
+    "categoryDeleted": "Report category deleted",
+    "categoryNameRequired": "Category name is required",
+    "deleteConfirmMessage": "Are you sure you want to delete this item? This cannot be undone.",
+    "healthUnavailableMessage": "Could not load system health data.",
+    "inviteRoleFooter": "Choose the role for the person you are inviting. Admins have full management access.",
+    "newCategoryMessage": "Enter a name for the new report category.",
+    "noAuditMessage": "System actions will be logged here.",
+    "noBansMessage": "No identifiers are currently banned.",
+    "noCategoriesMessage": "Report categories help classify incidents.",
+    "noInvitesMessage": "Generate invite codes to add new volunteers.",
+    "noSearchResults": "No members match your search.",
+    "noUsersMessage": "No members have joined yet."
   },
   "recovery": {
     "title": "Account Recovery",
@@ -2985,7 +3017,9 @@
       "subtitle": "Choose a report type to get started",
       "title": "Select Report Type"
     },
-    "validationErrors": "Please fix the errors above before submitting."
+    "validationErrors": "Please fix the errors above before submitting.",
+    "bodyHint": "Describe the incident in detail...",
+    "closeConfirmMessage": "Are you sure you want to close this report? This cannot be undone."
   },
   "triage": {
     "emptyTitle": "Ñá Íyo Reporte",
@@ -3042,7 +3076,8 @@
     "statusDismissed": "Dismissed",
     "noReportsHint": "No reports match this filter.",
     "reportDetail": "Report Detail",
-    "filter": "Filter"
+    "filter": "Filter",
+    "emptyFiltered": "No reports in the triage queue with status: {{status}}"
   },
   "call": {
     "filterAll": "All",
@@ -3629,7 +3664,13 @@
     "title": "Events",
     "titlePlaceholder": "Event title",
     "updated": "Updated",
-    "updatedAt": "Updated {{time}}"
+    "updatedAt": "Updated {{time}}",
+    "cmsDisabledMessage": "Case management must be enabled to use events.",
+    "emptyMessage": "No events have been created yet.",
+    "encryptedDetails": "Event details are encrypted",
+    "locationHelp": "Enter an approximate location. Exact coordinates are never stored, for safety.",
+    "noResults": "No events match your search",
+    "pageIndicator": "Page {{page}} of {{total}}"
   },
   "roles": {
     "description": "Descripción",
@@ -3753,7 +3794,9 @@
     "statusActive": "Activo",
     "loading": "Loading messages...",
     "replyPlaceholder": "Type a message...",
-    "send": "Send message"
+    "send": "Send message",
+    "closedMessage": "This conversation is closed",
+    "noMessages": "No messages yet"
   },
   "timeline": {
     "errorTitle": "Ñá ni̱ kúu Ndaskíꞌin",
@@ -3762,7 +3805,8 @@
     "empty": "No timeline events",
     "emptySubtitle": "Activity will appear here",
     "emptyTitle": "No Interactions",
-    "loading": "Loading timeline..."
+    "loading": "Loading timeline...",
+    "emptyMessage": "No interactions have been recorded for this contact."
   },
   "help": {
     "securityReports": "Reporte",
@@ -3906,7 +3950,8 @@
   },
   "logout": {
     "confirmAction": "Keta",
-    "confirmTitle": "Keta"
+    "confirmTitle": "Keta",
+    "confirmMessage": "Are you sure you want to log out? Your encrypted keys will be removed from this device."
   },
   "callActions": {
     "openNotes": "Nota",
@@ -4323,7 +4368,13 @@
     "noHubSelected": "No hub selected",
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: {{reason}}"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "biometricLockout": "Biometric unlock is locked after too many failed attempts. Enter your PIN.",
+    "biometricNotEnrolled": "Your device's biometrics changed, so biometric unlock was turned off. Enter your PIN.",
+    "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
+    "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
+    "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "identityLabel": "Identidad",
   "back": "Noꞌó",
@@ -4419,11 +4470,15 @@
   "audioInput": {
     "permissionTitle": "Speech Recognition",
     "start": "Start voice input",
-    "stop": "Stop recording"
+    "stop": "Stop recording",
+    "micDenied": "Microphone access is required for voice input. Enable it in Settings > Privacy & Security > Microphone.",
+    "speechDenied": "Speech recognition permission is required for voice input. Enable it in Settings > Privacy & Security > Speech Recognition.",
+    "unavailable": "Speech recognition is not available on this device"
   },
   "biometric": {
     "cancel": "Use PIN",
-    "none": "No biometrics"
+    "none": "No biometrics",
+    "unlockReason": "Unlock Llamenos"
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
