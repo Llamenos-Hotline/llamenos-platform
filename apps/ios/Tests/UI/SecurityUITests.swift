@@ -178,35 +178,29 @@ final class SecurityUITests: BaseUITest {
 
     // MARK: - Epic 260: Biometric Unlock (C5)
 
-    func testBiometricUnlockButtonVisibleOnLockScreen() {
-        given("I am authenticated with biometric enabled") {
+    /// The biometric button is offered only when biometric unlock is enabled for the
+    /// identity AND the device has biometry enrolled. An authenticated test launch
+    /// enables neither (a simulator has no enrolment, and `--test-authenticated` never
+    /// turns the preference on), so the lock screen must offer the PIN pad alone —
+    /// the button is not a maybe, it must be absent.
+    func testBiometricUnlockButtonHiddenWhenBiometricUnlockIsOff() {
+        given("I am authenticated with biometric unlock off") {
             launchAuthenticated()
         }
         when("I lock the app") {
             let lockButton = find("lock-app")
-            if lockButton.waitForExistence(timeout: 10) {
-                lockButton.tap()
-            } else {
-                navigateToSettings()
-                let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else { return }
-                settingsLock.tap()
-            }
+            XCTAssertTrue(lockButton.waitForExistence(timeout: 10), "The lock button should exist on the dashboard")
+            lockButton.tap()
         }
-        then("I should see the biometric unlock button if biometrics are available") {
-            // On devices with biometrics, the button should appear.
-            // On simulators without biometrics, this is expected to not exist.
-            let biometricButton = find("biometric-unlock")
-            let pinPad = find("pin-pad")
-            // At minimum, the PIN pad should be visible as fallback
+        then("I should see the PIN pad and no biometric unlock button") {
             XCTAssertTrue(
-                pinPad.waitForExistence(timeout: 5),
+                find("pin-pad").waitForExistence(timeout: 5),
                 "PIN pad should always be available as fallback"
             )
-            // Biometric button is optional — depends on device capabilities
-            if biometricButton.waitForExistence(timeout: 2) {
-                XCTAssertTrue(true, "Biometric unlock button is displayed")
-            }
+            XCTAssertFalse(
+                find("biometric-unlock").exists,
+                "Biometric unlock must not be offered when it is not enabled for this identity"
+            )
         }
     }
 
@@ -218,32 +212,26 @@ final class SecurityUITests: BaseUITest {
         }
         when("I enter an HTTP hub URL and try to create identity") {
             let hubInput = find("hub-url-input")
-            guard hubInput.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(hubInput.waitForExistence(timeout: 5), "The hub URL field should exist on the login screen")
             hubInput.tap()
             hubInput.typeText("http://insecure.example.org")
 
             dismissKeyboard()
 
             let createButton = find("create-identity")
-            guard createButton.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "The create identity button should exist")
             createButton.tap()
         }
         then("I should see an error about insecure connection") {
-            // "auth-error" was a stale identifier — LoginView surfaces
-            // AuthViewModel.errorMessage under "login-error" (see LoginView.swift).
+            // LoginView surfaces AuthViewModel.errorMessage under "login-error";
+            // APIService.configure rejects http:// with the HTTPS-required message.
             let errorElement = find("login-error")
-            if errorElement.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "HTTP rejection error is displayed")
-            } else {
-                // Check for any error text on screen
-                let errorText = app.staticTexts.matching(
-                    NSPredicate(format: "label CONTAINS[c] 'HTTP' OR label CONTAINS[c] 'HTTPS'")
-                ).firstMatch
-                XCTAssertTrue(
-                    errorText.waitForExistence(timeout: 3),
-                    "An error about HTTP/HTTPS should be displayed"
-                )
-            }
+            XCTAssertTrue(errorElement.waitForExistence(timeout: 5), "An HTTP hub URL should be rejected with an error")
+            XCTAssertTrue(
+                errorElement.label.localizedCaseInsensitiveContains("HTTPS"),
+                "The error should say HTTPS is required, not just that something failed (got '\(errorElement.label)')"
+            )
+            XCTAssertFalse(find("pin-input").exists, "A rejected hub URL must not advance to setting a PIN")
         }
     }
 

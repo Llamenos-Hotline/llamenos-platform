@@ -1,191 +1,156 @@
 import XCTest
 
 /// XCUITest suite for the conversations workflow: navigating to conversations,
-/// opening a conversation detail, sending a message, and verifying the list.
+/// opening a conversation detail, composing a message, and verifying the list.
 ///
-/// These tests require the app to be in an authenticated state with a valid hub connection.
-/// They use the `--test-authenticated` launch argument to skip auth flow.
-final class ConversationFlowUITests: XCTestCase {
+/// Scenarios that need conversations connect to the live backend and create them
+/// through the test simulation API (`simulateIncomingMessage`); the empty-state
+/// scenario launches with no hub, where there can be none.
+final class ConversationFlowUITests: BaseUITest {
 
-    private var app: XCUIApplication!
+    // MARK: - Helpers
 
-    override func setUp() {
-        super.setUp()
-        continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launchAnsweringSystemPrompts()
+    /// Connect to the backend, receive a message, and leave the app on the
+    /// Conversations tab. Returns the new conversation's id.
+    private func launchWithConversation(channel: String = "sms") -> String {
+        launchWithAPI()
+        let result = simulateIncomingMessage(
+            senderNumber: "+1555\(Int.random(in: 1_000_000...9_999_999))",
+            body: "Hello from the UI test \(UUID().uuidString.prefix(8))",
+            channel: channel
+        )
+        XCTAssertFalse(result.conversationId.isEmpty, "The simulated message should create a conversation")
+        navigateToConversations()
+        return result.conversationId
     }
 
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    /// Find any element by accessibility identifier, regardless of XCUIElement type.
-    private func find(_ identifier: String) -> XCUIElement {
-        return app.descendants(matching: .any)[identifier].firstMatch
-    }
-
-    private func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
+    /// Open the conversation's detail from the list.
+    private func openConversation(_ conversationId: String) {
+        let row = find("conversation-row-\(conversationId)")
+        XCTAssertTrue(
+            row.waitForExistence(timeout: 20),
+            "Conversation \(conversationId) should be listed after its message was received"
+        )
+        row.tap()
+        XCTAssertTrue(
+            find("conversation-detail-view").waitForExistence(timeout: 10),
+            "Conversation detail view should appear when tapping a conversation"
+        )
     }
 
     // MARK: - Tab Navigation
 
     func testConversationsTabExists() {
-        let tabView = find("main-tab-view")
-        XCTAssertTrue(
-            tabView.waitForExistence(timeout: 10),
-            "Main tab view should be visible after authentication"
-        )
-
-        navigateToConversationsTab()
-
-        // Conversations list, empty state, loading, or error should appear
-        let found = anyElementExists([
-            "conversations-list", "conversations-empty-state",
-            "conversations-loading", "conversations-error",
-        ])
-        XCTAssertTrue(found, "Conversations view should show list, empty state, or loading")
+        var conversationId = ""
+        given("I am connected and a message has arrived") {
+            conversationId = launchWithConversation()
+        }
+        then("the Conversations tab lists that conversation") {
+            XCTAssertTrue(find("conversations-list").waitForExistence(timeout: 20), "A received message should produce a conversation list")
+            XCTAssertTrue(
+                find("conversation-row-\(conversationId)").waitForExistence(timeout: 10),
+                "The conversation for the received message should be listed"
+            )
+            XCTAssertFalse(find("conversations-error").exists, "Conversations should have loaded without error")
+        }
     }
 
     // MARK: - Empty State
 
     func testEmptyStateShowsMessage() {
-        navigateToConversationsTab()
-
-        let emptyState = find("conversations-empty-state")
-        if emptyState.waitForExistence(timeout: 10) {
-            XCTAssertTrue(true, "Empty state is displayed when no conversations exist")
+        given("I am authenticated without a hub connection, so there are no conversations") {
+            launchAuthenticated()
         }
-        // If conversations exist, that's fine too
+        when("I open the Conversations tab") {
+            navigateToConversations()
+        }
+        then("the empty state is displayed instead of a list") {
+            XCTAssertTrue(
+                find("conversations-empty-state").waitForExistence(timeout: 20),
+                "Empty state is displayed when no conversations exist"
+            )
+            XCTAssertFalse(find("conversations-list").exists, "There is no list without conversations")
+            XCTAssertFalse(find("conversations-error").exists, "No hub configured is not an error")
+        }
     }
 
     // MARK: - Filter Menu
 
     func testFilterButtonExists() {
-        navigateToConversationsTab()
-
-        // Wait for content to load
-        _ = anyElementExists([
-            "conversations-list", "conversations-empty-state",
-            "conversations-loading", "conversations-error",
-        ])
-
-        let filterButton = find("conversations-filter-button")
-        XCTAssertTrue(
-            filterButton.waitForExistence(timeout: 5),
-            "Filter button should exist in the toolbar"
-        )
+        given("I am authenticated") {
+            launchAuthenticated()
+        }
+        when("I open the Conversations tab") {
+            navigateToConversations()
+            XCTAssertTrue(find("conversations-empty-state").waitForExistence(timeout: 20))
+        }
+        then("the filter button is in the toolbar") {
+            XCTAssertTrue(
+                find("conversations-filter-button").waitForExistence(timeout: 5),
+                "Filter button should exist in the toolbar"
+            )
+        }
     }
 
     // MARK: - Conversation Detail
 
     func testConversationDetailOpens() {
-        navigateToConversationsTab()
-
-        // Wait for the conversations list to load
-        let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else {
-            // No conversations to test detail on — skip
-            return
+        var conversationId = ""
+        given("a conversation exists") {
+            conversationId = launchWithConversation()
         }
-
-        // Tap the first conversation row
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        // Detail view should appear
-        let detailView = find("conversation-detail-view")
-        XCTAssertTrue(
-            detailView.waitForExistence(timeout: 5),
-            "Conversation detail view should appear when tapping a conversation"
-        )
-
-        // Reply text field should exist
-        let replyField = find("reply-text-field")
-        XCTAssertTrue(
-            replyField.waitForExistence(timeout: 3),
-            "Reply text field should exist in conversation detail"
-        )
-
-        // Send button should exist
-        let sendButton = find("send-message-button")
-        XCTAssertTrue(
-            sendButton.exists,
-            "Send button should exist in conversation detail"
-        )
+        when("I open it") {
+            openConversation(conversationId)
+        }
+        then("I can reply to it") {
+            XCTAssertTrue(
+                find("reply-text-field").waitForExistence(timeout: 5),
+                "Reply text field should exist in conversation detail"
+            )
+            XCTAssertTrue(
+                find("send-message-button").exists,
+                "Send button should exist in conversation detail"
+            )
+        }
     }
 
     func testSendMessageButton() {
-        navigateToConversationsTab()
+        var conversationId = ""
+        given("I have a conversation open") {
+            conversationId = launchWithConversation()
+            openConversation(conversationId)
+        }
+        then("Send is disabled until I type a message") {
+            let sendButton = app.buttons["send-message-button"]
+            XCTAssertTrue(sendButton.waitForExistence(timeout: 5), "Send button should exist")
+            XCTAssertFalse(sendButton.isEnabled, "Send should be disabled while the reply field is empty")
 
-        let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else { return }
-
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        let detailView = find("conversation-detail-view")
-        guard detailView.waitForExistence(timeout: 5) else { return }
-
-        // Send button should be disabled when reply field is empty
-        let sendButton = find("send-message-button")
-        XCTAssertTrue(sendButton.exists, "Send button should exist")
-
-        // Type a message
-        let replyField = find("reply-text-field")
-        if replyField.exists {
+            let replyField = find("reply-text-field")
+            XCTAssertTrue(replyField.waitForExistence(timeout: 5), "Reply field should exist")
             replyField.tap()
             replyField.typeText("Test message from UI test - \(Date().timeIntervalSince1970)")
 
-            XCTAssertTrue(sendButton.exists, "Send button should still exist after typing")
+            XCTAssertTrue(sendButton.isEnabled, "Send should be enabled once there is a message to send")
         }
     }
 
     // MARK: - Channel Header
 
     func testChannelHeaderVisible() {
-        navigateToConversationsTab()
-
-        let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else { return }
-
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        let channelHeader = find("conversation-channel-header")
-        if channelHeader.waitForExistence(timeout: 5) {
-            XCTAssertTrue(true, "Channel header is visible in conversation detail")
+        var conversationId = ""
+        given("a WhatsApp conversation exists") {
+            conversationId = launchWithConversation(channel: "whatsapp")
         }
-    }
-
-    // MARK: - Navigation Helpers
-
-    private func navigateToConversationsTab() {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
-            XCTFail("Main tab view should be visible")
-            return
+        when("I open it") {
+            openConversation(conversationId)
         }
-
-        let tabBar = app.tabBars.firstMatch
-        guard tabBar.waitForExistence(timeout: 5) else { return }
-        // Tab order: 0=Dashboard, 1=Notes, 2=Cases, 3=Conversations, 4=Shifts, 5=Settings
-        let conversationsTabButton = tabBar.buttons.element(boundBy: 3)
-        if conversationsTabButton.exists {
-            conversationsTabButton.tap()
+        then("the channel header names the channel") {
+            let header = find("conversation-channel-header")
+            XCTAssertTrue(header.waitForExistence(timeout: 5), "Channel header is visible in conversation detail")
+            XCTAssertTrue(
+                app.staticTexts["WhatsApp"].exists,
+                "The channel header should name the conversation's channel"
+            )
         }
     }
 }
