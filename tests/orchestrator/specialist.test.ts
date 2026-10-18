@@ -139,7 +139,7 @@ describe('buildProfileReviewPrompt', () => {
     expect(p).toContain('DIFF')
   })
 
-  it('omits locale patches and adds the base-to-head key summary for profile reviewers', () => {
+  it('omits locale patches and shows the base-to-head value changes for profile reviewers', () => {
     const baseDir = mkdtempSync(join(tmpdir(), 'llamenos-profile-locale-base-'))
     const headDir = mkdtempSync(join(tmpdir(), 'llamenos-profile-locale-head-'))
     const localePath = 'packages/i18n/locales/en.json'
@@ -160,7 +160,7 @@ describe('buildProfileReviewPrompt', () => {
         { agent: 'x-reviewer', instructions: 'EXPERTISE' }, '7', diff, [localePath], headDir, undefined, baseDir,
       )
       expect(prompt).not.toContain('LOCALE-CHURN')
-      expect(prompt).toContain('- en: added none; removed none; changed onboarding.tryAgain')
+      expect(prompt).toContain('~ "onboarding.tryAgain": "old" -> "new"')
     } finally {
       rmSync(baseDir, { recursive: true, force: true })
       rmSync(headDir, { recursive: true, force: true })

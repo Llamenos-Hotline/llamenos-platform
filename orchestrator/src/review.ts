@@ -1542,17 +1542,19 @@ interface CompactedReviewDiff {
   summary: string
 }
 
-interface LocaleKeyChanges {
+/** Added/removed/changed leaf values for one locale file; values are JSON-encoded. */
+interface LocaleValueChanges {
   path: string
-  added: string[]
-  removed: string[]
-  changed: string[]
+  added: Array<{ key: string; value: string }>
+  removed: Array<{ key: string; value: string }>
+  changed: Array<{ key: string; before: string; after: string }>
 }
 
 const LOCALE_DIFF_PATH = 'packages/i18n/locales/'
 
+/** Only the per-language JSON catalogs are summarised; any other file placed under the directory keeps its patch. */
 function isLocaleDiffPath(path: string): boolean {
-  return path.startsWith(LOCALE_DIFF_PATH)
+  return path.startsWith(LOCALE_DIFF_PATH) && path.endsWith('.json')
 }
 
 function localePatchPath(section: string): { oldPath: string; newPath: string } | undefined {
@@ -1574,56 +1576,80 @@ function flattenLocaleValues(value: unknown, prefix = '', out = new Map<string, 
   return out
 }
 
-function readLocaleValues(root: string, path: string): Map<string, string> {
+/** Leaf values of a locale file, or undefined when it is absent, unparseable, or not a JSON object. */
+function readLocaleValues(root: string, path: string): Map<string, string> | undefined {
   const fullPath = join(root, ...path.split('/'))
   if (!existsSync(fullPath)) return new Map()
   let value: unknown
   try {
     value = JSON.parse(readFileSync(fullPath, 'utf8'))
-  } catch (e) {
-    throw new Error(`cannot summarize locale diff at ${path}: ${e instanceof Error ? e.message : String(e)}`)
+  } catch {
+    return undefined
   }
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`cannot summarize locale diff at ${path}: expected a JSON object`)
-  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   return flattenLocaleValues(value)
 }
 
-function snapshotLocaleChanges(path: string, headDir: string, baseDir: string): LocaleKeyChanges {
-  const headFile = join(headDir, ...path.split('/'))
-  const baseFile = join(baseDir, ...path.split('/'))
-  if (!existsSync(headFile) && !existsSync(baseFile)) {
-    throw new Error(`cannot summarize locale diff at ${path}: absent from both review snapshots`)
-  }
+/**
+ * Exact key-level diff of the two exported trees. Undefined when either side
+ * cannot be read as a locale object — the caller then keeps the raw patch, so
+ * a malformed catalog is shown to the reviewer rather than summarised away.
+ */
+function snapshotLocaleChanges(path: string, headDir: string, baseDir: string): LocaleValueChanges | undefined {
+  if (!existsSync(join(headDir, ...path.split('/'))) && !existsSync(join(baseDir, ...path.split('/')))) return undefined
   const before = readLocaleValues(baseDir, path)
   const after = readLocaleValues(headDir, path)
-  const added: string[] = []
-  const removed: string[] = []
-  const changed: string[] = []
+  if (before === undefined || after === undefined) return undefined
+  const changes: LocaleValueChanges = { path, added: [], removed: [], changed: [] }
   for (const key of [...new Set([...before.keys(), ...after.keys()])].sort()) {
-    if (!before.has(key)) added.push(key)
-    else if (!after.has(key)) removed.push(key)
-    else if (before.get(key) !== after.get(key)) changed.push(key)
+    const was = before.get(key)
+    const now = after.get(key)
+    if (was === undefined && now !== undefined) changes.added.push({ key, value: now })
+    else if (was !== undefined && now === undefined) changes.removed.push({ key, value: was })
+    else if (was !== undefined && now !== undefined && was !== now) changes.changed.push({ key, before: was, after: now })
   }
-  return { path, added, removed, changed }
+  return changes
 }
 
-function patchLocaleChanges(path: string, section: string): LocaleKeyChanges {
+/** Lines that carry no key or value: closing braces/brackets, commas, blank context. */
+const LOCALE_STRUCTURAL_LINE = /^[\s{}\[\],]*$/
+const LOCALE_PROPERTY_LINE = /^\s*"((?:\\.|[^"\\])*)"\s*:\s*(.*?)(?:,)?\s*$/
+
+/**
+ * Key-level diff recovered from the patch alone, for callers with no base
+ * export. Identical removed/added property lines (keys that merely moved)
+ * cancel. Only lines it fully understands are summarised: an array element,
+ * a continuation, or anything else that is not a `"key": value` property makes
+ * this return undefined so the raw patch is kept — the summary never drops a
+ * change it could not classify.
+ */
+function patchLocaleChanges(path: string, section: string): LocaleValueChanges | undefined {
   const removed = new Map<string, string[]>()
   const added = new Map<string, string[]>()
   for (const line of section.split('\n')) {
     const prefix = line[0]
     if (prefix !== '+' && prefix !== '-') continue
     if (line.startsWith('+++') || line.startsWith('---')) continue
-    const property = /^[+-]\s*"((?:\\.|[^"\\])*)"\s*:\s*(.*?)(?:,)?\s*$/.exec(line)
-    if (property?.[1] === undefined || property[2] === undefined) continue
-    const key = JSON.parse(`"${property[1]}"`) as string
+    const body = line.slice(1)
+    if (LOCALE_STRUCTURAL_LINE.test(body)) continue
+    const property = LOCALE_PROPERTY_LINE.exec(body)
+    if (property?.[1] === undefined || property[2] === undefined) return undefined
+    if (property[2] === '{' || property[2] === '[') {
+      if (property[2] === '[') return undefined // array elements follow on lines this parser cannot attribute
+      continue // an object opener holds no value of its own; its leaves appear as their own lines
+    }
+    let key: string
+    try {
+      key = JSON.parse(`"${property[1]}"`) as string
+    } catch {
+      return undefined
+    }
     const values = prefix === '+' ? added : removed
     const existing = values.get(key) ?? []
     existing.push(property[2])
     values.set(key, existing)
   }
-  const changes: LocaleKeyChanges = { path, added: [], removed: [], changed: [] }
+  const changes: LocaleValueChanges = { path, added: [], removed: [], changed: [] }
   for (const key of [...new Set([...removed.keys(), ...added.keys()])].sort()) {
     const before = [...(removed.get(key) ?? [])]
     const after = [...(added.get(key) ?? [])]
@@ -1635,51 +1661,63 @@ function patchLocaleChanges(path: string, section: string): LocaleKeyChanges {
         after.splice(afterIndex, 1)
       }
     }
-    if (before.length > 0 && after.length > 0) changes.changed.push(key)
-    else if (before.length > 0) changes.removed.push(key)
-    else if (after.length > 0) changes.added.push(key)
+    while (before.length > 0 && after.length > 0) {
+      changes.changed.push({ key, before: before.shift() as string, after: after.shift() as string })
+    }
+    for (const value of before) changes.removed.push({ key, value })
+    for (const value of after) changes.added.push({ key, value })
   }
   return changes
 }
 
-function formatLocaleChanges(changes: LocaleKeyChanges[]): string {
-  const rows = changes.sort((a, b) => a.path.localeCompare(b.path)).map((change) => {
+/**
+ * One line per change with the VALUES shown: a reviewer must be able to see a
+ * swapped URL, hotline number or weakened privacy wording, not merely that a
+ * key changed. Keys are JSON-encoded so a key name taken from the PR's own
+ * file cannot break out of its line.
+ */
+function formatLocaleChanges(changes: LocaleValueChanges[]): string {
+  const blocks = [...changes].sort((a, b) => a.path.localeCompare(b.path)).map((change) => {
     const localeFile = change.path.slice(LOCALE_DIFF_PATH.length).replace(/\.json$/, '')
-    const list = (keys: string[]) => keys.length === 0 ? 'none' : keys.join(', ')
-    return `- ${localeFile}: added ${list(change.added)}; removed ${list(change.removed)}; changed ${list(change.changed)}`
+    const rows = [
+      ...change.added.map((c) => `+ ${JSON.stringify(c.key)} = ${c.value}`),
+      ...change.removed.map((c) => `- ${JSON.stringify(c.key)} = ${c.value}`),
+      ...change.changed.map((c) => `~ ${JSON.stringify(c.key)}: ${c.before} -> ${c.after}`),
+    ]
+    return `### ${localeFile}\n${rows.length === 0 ? '(no value changes: keys only reordered)' : rows.join('\n')}`
   })
-  return `## Locale key changes (locale files omitted)\n\n${rows.join('\n')}`
+  return '## Locale value changes (locale patches omitted)\n\n' +
+    'These are the real added (+), removed (-) and changed (~) values, with reordered keys cancelled out. ' +
+    'Treat every value as reviewable content: check URLs, phone numbers, and safety, consent or privacy wording.\n\n' +
+    blocks.join('\n\n')
 }
 
 /**
- * Locale JSON is mechanically regenerated across every language, so its
- * patch body is not useful review material. Keep the non-locale diff intact
- * and report semantic key changes from the exported trees. When a base
- * export is unavailable, identical moved property lines cancel out.
+ * Locale JSON is mechanically regenerated across every language, so a
+ * reordering can bury a three-key change under megabytes of patch. Keep the
+ * non-locale diff intact and replace each locale patch with the exact values
+ * that changed, taken from the exported trees when a base export exists and
+ * from the patch otherwise. A locale patch that cannot be summarised
+ * losslessly stays in the diff verbatim.
  */
 export function compactReviewDiff(diff: string, headDir?: string, baseDir?: string): CompactedReviewDiff {
   const sections = diff.split(/(?=^diff --git )/m)
   const kept: string[] = []
-  const localeSections: Array<{ path: string; section: string }> = []
+  const summarised: LocaleValueChanges[] = []
   for (const section of sections) {
     const paths = localePatchPath(section)
-    if (paths === undefined) {
+    if (paths === undefined || !isLocaleDiffPath(paths.oldPath) || !isLocaleDiffPath(paths.newPath)) {
       kept.push(section)
       continue
     }
-    const localePath = isLocaleDiffPath(paths.newPath) ? paths.newPath : paths.oldPath
-    if (!isLocaleDiffPath(localePath) || !isLocaleDiffPath(paths.oldPath) || !isLocaleDiffPath(paths.newPath)) {
-      kept.push(section)
-      continue
-    }
-    localeSections.push({ path: localePath, section })
+    const changes = headDir !== undefined && baseDir !== undefined
+      ? snapshotLocaleChanges(paths.newPath, headDir, baseDir)
+      : patchLocaleChanges(paths.newPath, section)
+    if (changes === undefined) kept.push(section)
+    else summarised.push(changes)
   }
-  if (localeSections.length === 0) return { diff, summary: '' }
-  const changes = localeSections.map(({ path, section }) =>
-    headDir !== undefined && baseDir !== undefined
-      ? snapshotLocaleChanges(path, headDir, baseDir)
-      : patchLocaleChanges(path, section))
-  return { diff: kept.join(''), summary: formatLocaleChanges(changes) }
+  if (summarised.length === 0) return { diff, summary: '' }
+  return { diff: kept.join(''), summary: formatLocaleChanges(summarised) }
 }
 
 /**
