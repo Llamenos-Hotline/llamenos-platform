@@ -19,7 +19,6 @@ import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
-import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.ui.notes.noteRecipientPubkeys
 import org.llamenos.hotline.model.AssignRecordRequest
@@ -38,6 +37,8 @@ import org.llamenos.protocol.Evidence
 import org.llamenos.protocol.Interaction
 import org.llamenos.hotline.model.InteractionType
 import org.llamenos.protocol.Record
+import org.llamenos.protocol.RecipientEnvelope
+import org.llamenos.protocol.SharedAdminEnvelope
 import org.llamenos.protocol.UnassignBody
 import org.llamenos.protocol.RecordContact
 import javax.inject.Inject
@@ -651,8 +652,7 @@ class CaseManagementViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isDecryptingSummary = true) }
             try {
-                val hpkeEnv = HpkeEnvelope(v = HpkeEnvelope.CURRENT_VERSION, labelId = HpkeEnvelope.LABEL_ID_MESSAGE, enc = envelope.enc, ct = envelope.ct)
-                val plaintext = cryptoService.decryptMessage(record.encryptedSummary, hpkeEnv)
+                val plaintext = cryptoService.decryptMessage(record.encryptedSummary, listOf(envelope.toRecipientEnvelope()))
                 if (plaintext != null) {
                     val jsonObj = json.decodeFromString<JsonObject>(plaintext)
                     val summary = DecryptedSummary(
@@ -689,8 +689,7 @@ class CaseManagementViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isDecryptingFields = true) }
             try {
-                val hpkeEnv = HpkeEnvelope(v = HpkeEnvelope.CURRENT_VERSION, labelId = HpkeEnvelope.LABEL_ID_MESSAGE, enc = envelope.enc, ct = envelope.ct)
-                val plaintext = cryptoService.decryptMessage(encryptedFields, hpkeEnv)
+                val plaintext = cryptoService.decryptMessage(encryptedFields, listOf(envelope.toRecipientEnvelope()))
                 if (plaintext != null) {
                     val jsonObj = json.decodeFromString<JsonObject>(plaintext)
                     val fields = jsonObj.mapValues { (_, value) ->
@@ -725,8 +724,7 @@ class CaseManagementViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val hpkeEnv = HpkeEnvelope(v = HpkeEnvelope.CURRENT_VERSION, labelId = HpkeEnvelope.LABEL_ID_MESSAGE, enc = envelope.enc, ct = envelope.ct)
-                val plaintext = cryptoService.decryptMessage(encryptedContent, hpkeEnv)
+                val plaintext = cryptoService.decryptMessage(encryptedContent, listOf(envelope.toRecipientEnvelope()))
                 if (plaintext != null) {
                     _uiState.update {
                         it.copy(
@@ -753,8 +751,7 @@ class CaseManagementViewModel @Inject constructor(
 
                 val envelope = record.summaryEnvelopes.find { it.pubkey == pubkey } ?: continue
                 try {
-                    val hpkeEnv = HpkeEnvelope(v = HpkeEnvelope.CURRENT_VERSION, labelId = HpkeEnvelope.LABEL_ID_MESSAGE, enc = envelope.enc, ct = envelope.ct)
-                    val plaintext = cryptoService.decryptMessage(record.encryptedSummary, hpkeEnv)
+                    val plaintext = cryptoService.decryptMessage(record.encryptedSummary, listOf(envelope.toRecipientEnvelope()))
                     if (plaintext != null) {
                         val jsonObj = json.decodeFromString<JsonObject>(plaintext)
                         val title = jsonObj["title"]?.jsonPrimitive?.contentOrNull
@@ -859,3 +856,7 @@ class CaseManagementViewModel @Inject constructor(
         }
     }
 }
+
+/** A record/interaction envelope as the reader-envelope shape CryptoService opens. */
+private fun SharedAdminEnvelope.toRecipientEnvelope() =
+    RecipientEnvelope(pubkey = pubkey, enc = enc, ct = ct)
