@@ -228,6 +228,14 @@ fn androids_label_id_table_matches_the_registry() {
             "CryptoService.kt must declare `{decl}` ({label} is registry index {id})"
         );
     }
+    for retired in ["LABEL_ID_MESSAGE", "LABEL_ID_CALL_META"] {
+        assert!(
+            !kt.contains(retired),
+            "CryptoService.kt declares `{retired}` again: stored records are opened by \
+             mobileDecryptMessage/mobileDecryptCallMetadata, which derive the label id \
+             in Rust; a hand-built envelope here bypasses that"
+        );
+    }
 }
 
 /// Notes, files, contact identifiers and hub keys are canonical-AAD envelopes

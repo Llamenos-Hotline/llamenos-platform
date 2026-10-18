@@ -2403,32 +2403,6 @@ public func computeSharedXHex(ourSecretHex: String, theirPubkeyHex: String)throw
 })
 }
 /**
- * Decrypt a call record's encrypted metadata using the admin's envelope.
- */
-public func decryptCallRecordForReader(encryptedContent: String, adminEnvelopes: [RecipientKeyEnvelope], secretKeyHex: String, readerPubkey: String)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_decrypt_call_record_for_reader(
-        FfiConverterString.lower(encryptedContent),
-        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(adminEnvelopes),
-        FfiConverterString.lower(secretKeyHex),
-        FfiConverterString.lower(readerPubkey),$0
-    )
-})
-}
-/**
- * Decrypt a message using the reader's envelope from the list.
- */
-public func decryptMessageForReader(encryptedContent: String, readerEnvelopes: [RecipientKeyEnvelope], secretKeyHex: String, readerPubkey: String)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_decrypt_message_for_reader(
-        FfiConverterString.lower(encryptedContent),
-        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(readerEnvelopes),
-        FfiConverterString.lower(secretKeyHex),
-        FfiConverterString.lower(readerPubkey),$0
-    )
-})
-}
-/**
  * Decrypt a server-encrypted event payload (AES-256-GCM).
  *
  * Input: hex(nonce_12 + ciphertext), 32-byte key as hex.
@@ -2464,17 +2438,6 @@ public func decryptWithSharedKeyHex(ciphertextHex: String, sharedXHex: String)th
     uniffi_llamenos_core_fn_func_decrypt_with_shared_key_hex(
         FfiConverterString.lower(ciphertextHex),
         FfiConverterString.lower(sharedXHex),$0
-    )
-})
-}
-/**
- * Encrypt a message for multiple readers using the envelope pattern.
- */
-public func encryptMessageForReaders(plaintext: String, readerPubkeys: [String])throws  -> EncryptedMessage  {
-    return try  FfiConverterTypeEncryptedMessage_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_encrypt_message_for_readers(
-        FfiConverterString.lower(plaintext),
-        FfiConverterSequenceString.lower(readerPubkeys),$0
     )
 })
 }
@@ -3391,19 +3354,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_compute_shared_x_hex() != 4280) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_decrypt_call_record_for_reader() != 29910) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_llamenos_core_checksum_func_decrypt_message_for_reader() != 16037) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_llamenos_core_checksum_func_decrypt_server_event_hex() != 59916) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 38820) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_llamenos_core_checksum_func_encrypt_message_for_readers() != 62867) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_encrypt_note_for_recipients() != 17380) {

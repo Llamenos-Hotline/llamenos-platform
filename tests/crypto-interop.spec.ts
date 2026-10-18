@@ -24,6 +24,7 @@ import { hkdf } from '@noble/hashes/hkdf.js'
 import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
 import * as labels from '../packages/shared/crypto-labels'
 import { buildAuthMessage } from '../packages/shared/auth-message'
+import { NO_AAD, contentAad, keyWrapAad } from '../packages/shared/envelope-aad'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -102,7 +103,7 @@ test.describe('Cross-platform crypto interop', () => {
     const { envelope, originalKeyHex, label } = vectors.hpke
     const adminSecretKey = vectors.keys.adminSecretKeyHex
 
-    const decrypted = await hpkeUnwrap(envelope, adminSecretKey, label)
+    const decrypted = await hpkeUnwrap(envelope, adminSecretKey, label, keyWrapAad(label))
     expect(bytesToHex(decrypted)).toBe(originalKeyHex)
   })
 
@@ -110,8 +111,8 @@ test.describe('Cross-platform crypto interop', () => {
     const { encrypted, plaintextJson } = vectors.noteEncryption
     const authorSecretKey = vectors.keys.secretKeyHex
 
-    const noteKey = await hpkeUnwrap(encrypted.authorEnvelope, authorSecretKey, labels.LABEL_NOTE_KEY)
-    const decoded = decryptContent(encrypted.encryptedContent, noteKey, labels.LABEL_NOTE_KEY)
+    const noteKey = await hpkeUnwrap(encrypted.authorEnvelope, authorSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))
+    const decoded = decryptContent(encrypted.encryptedContent, noteKey, contentAad(labels.LABEL_NOTE_KEY))
     expect(decoded).toBe(plaintextJson)
   })
 
@@ -125,8 +126,8 @@ test.describe('Cross-platform crypto interop', () => {
     )
     expect(adminEnvelope).toBeDefined()
 
-    const noteKey = await hpkeUnwrap(adminEnvelope, adminSecretKey, labels.LABEL_NOTE_KEY)
-    const decoded = decryptContent(encrypted.encryptedContent, noteKey, labels.LABEL_NOTE_KEY)
+    const noteKey = await hpkeUnwrap(adminEnvelope, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))
+    const decoded = decryptContent(encrypted.encryptedContent, noteKey, contentAad(labels.LABEL_NOTE_KEY))
     expect(decoded).toBe(plaintextJson)
   })
 
@@ -221,10 +222,10 @@ test.describe('Cross-platform crypto interop', () => {
     expect(volEnvelope).toBeDefined()
 
     // Unwrap message key via HPKE with LABEL_MESSAGE
-    const msgKey = await hpkeUnwrap(volEnvelope, volSecretKey, labels.LABEL_MESSAGE)
+    const msgKey = await hpkeUnwrap(volEnvelope, volSecretKey, labels.LABEL_MESSAGE, NO_AAD)
 
     // Decrypt content
-    const decoded = decryptContent(encrypted.encryptedContent, msgKey, labels.LABEL_MESSAGE)
+    const decoded = decryptContent(encrypted.encryptedContent, msgKey, NO_AAD)
     expect(decoded).toBe(plaintext)
   })
 
@@ -238,8 +239,8 @@ test.describe('Cross-platform crypto interop', () => {
     )
     expect(adminEnvelope).toBeDefined()
 
-    const msgKey = await hpkeUnwrap(adminEnvelope, adminSecretKey, labels.LABEL_MESSAGE)
-    const decoded = decryptContent(encrypted.encryptedContent, msgKey, labels.LABEL_MESSAGE)
+    const msgKey = await hpkeUnwrap(adminEnvelope, adminSecretKey, labels.LABEL_MESSAGE, NO_AAD)
+    const decoded = decryptContent(encrypted.encryptedContent, msgKey, NO_AAD)
     expect(decoded).toBe(plaintext)
   })
 
@@ -248,7 +249,7 @@ test.describe('Cross-platform crypto interop', () => {
     const volSecretKey = vectors.keys.secretKeyHex
 
     // Unwrap first envelope (volunteer)
-    const unwrapped = await hpkeUnwrap(wrappedEnvelopes[0], volSecretKey, label)
+    const unwrapped = await hpkeUnwrap(wrappedEnvelopes[0], volSecretKey, label, keyWrapAad(label))
     expect(bytesToHex(unwrapped)).toBe(hubKeyHex)
 
     // Unwrap second envelope (admin)
@@ -256,6 +257,7 @@ test.describe('Cross-platform crypto interop', () => {
       wrappedEnvelopes[1],
       vectors.keys.adminSecretKeyHex,
       label,
+      keyWrapAad(label),
     )
     expect(bytesToHex(adminUnwrapped)).toBe(hubKeyHex)
   })
@@ -295,9 +297,31 @@ test.describe('Cross-platform crypto interop', () => {
     expect(adminEnvelope).toBeDefined()
 
     // Unwrap with LABEL_CALL_META (not LABEL_MESSAGE)
-    const recordKey = await hpkeUnwrap(adminEnvelope, adminSecretKey, labels.LABEL_CALL_META)
-    const decoded = decryptContent(encryptedContent, recordKey, labels.LABEL_CALL_META)
+    const recordKey = await hpkeUnwrap(adminEnvelope, adminSecretKey, labels.LABEL_CALL_META, NO_AAD)
+    const decoded = decryptContent(encryptedContent, recordKey, NO_AAD)
     expect(decoded).toBe(plaintextJson)
+  })
+
+  test('Rust stored records do not open under the retired canonical AAD', async () => {
+    // The stored-record format binds the label as HPKE `info` only. The
+    // canonical notes AAD — `label` on the content, `label:key-wrap` on the
+    // wrap — is what the deleted encrypt_message/decrypt_message pair bound;
+    // if Rust ever writes it again, the vectors must stop opening here.
+    const adminSecretKey = vectors.keys.adminSecretKeyHex
+    const adminPubkey = vectors.keys.adminX25519PubkeyHex
+    const records = [
+      { label: labels.LABEL_MESSAGE, content: vectors.messageEncryption.encrypted.encryptedContent, envelopes: vectors.messageEncryption.encrypted.readerEnvelopes },
+      { label: labels.LABEL_CALL_META, content: vectors.callRecord.encryptedContent, envelopes: vectors.callRecord.adminEnvelopes },
+    ]
+    for (const { label, content, envelopes } of records) {
+      const envelope = envelopes.find((e: { pubkey: string }) => e.pubkey === adminPubkey)
+      expect(envelope).toBeDefined()
+
+      await expect(hpkeUnwrap(envelope, adminSecretKey, label, keyWrapAad(label))).rejects.toThrow()
+
+      const key = await hpkeUnwrap(envelope, adminSecretKey, label, NO_AAD)
+      expect(() => decryptContent(content, key, contentAad(label))).toThrow()
+    }
   })
 
   test('Domain separation prevents cross-label unwrap', async () => {
@@ -306,14 +330,14 @@ test.describe('Cross-platform crypto interop', () => {
     const adminSecretKey = vectors.keys.adminSecretKeyHex
 
     // Same-label unwrap succeeds
-    await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_NOTE_KEY)).resolves.toBeDefined()
-    await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_MESSAGE)).resolves.toBeDefined()
-    await expect(hpkeUnwrap(wrappedWithHubLabel, adminSecretKey, labels.LABEL_HUB_KEY_WRAP)).resolves.toBeDefined()
+    await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))).resolves.toBeDefined()
+    await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_MESSAGE, keyWrapAad(labels.LABEL_MESSAGE))).resolves.toBeDefined()
+    await expect(hpkeUnwrap(wrappedWithHubLabel, adminSecretKey, labels.LABEL_HUB_KEY_WRAP, keyWrapAad(labels.LABEL_HUB_KEY_WRAP))).resolves.toBeDefined()
 
     // Cross-label unwrap fails (AEAD verification failure)
-    await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_MESSAGE)).rejects.toThrow()
-    await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_NOTE_KEY)).rejects.toThrow()
-    await expect(hpkeUnwrap(wrappedWithHubLabel, adminSecretKey, labels.LABEL_NOTE_KEY)).rejects.toThrow()
+    await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_MESSAGE, keyWrapAad(labels.LABEL_MESSAGE))).rejects.toThrow()
+    await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))).rejects.toThrow()
+    await expect(hpkeUnwrap(wrappedWithHubLabel, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))).rejects.toThrow()
   })
 
   // ─── Adversarial Tests ─────────────────────────────────────
@@ -326,7 +350,7 @@ test.describe('Cross-platform crypto interop', () => {
       ct: tamperedCt,
       enc: validEnvelope.enc,
     }
-    await expect(hpkeUnwrap(tamperedEnvelope, adminSecretKey, validLabel)).rejects.toThrow()
+    await expect(hpkeUnwrap(tamperedEnvelope, adminSecretKey, validLabel, keyWrapAad(validLabel))).rejects.toThrow()
   })
 
   test('HPKE unwrap with truncated data throws', async () => {
@@ -337,14 +361,14 @@ test.describe('Cross-platform crypto interop', () => {
       ct: truncatedCt,
       enc: validEnvelope.enc,
     }
-    await expect(hpkeUnwrap(truncatedEnvelope, adminSecretKey, validLabel)).rejects.toThrow()
+    await expect(hpkeUnwrap(truncatedEnvelope, adminSecretKey, validLabel, keyWrapAad(validLabel))).rejects.toThrow()
   })
 
   test('HPKE unwrap with wrong key throws', async () => {
     const { validEnvelope, validLabel } = vectors.adversarial.hpke
     const wrongSecretKey = vectors.keys.wrongSecretKeyHex
 
-    await expect(hpkeUnwrap(validEnvelope, wrongSecretKey, validLabel)).rejects.toThrow()
+    await expect(hpkeUnwrap(validEnvelope, wrongSecretKey, validLabel, keyWrapAad(validLabel))).rejects.toThrow()
   })
 
   test('Note decrypt with tampered content throws', async () => {
@@ -356,6 +380,7 @@ test.describe('Cross-platform crypto interop', () => {
       validEncrypted.authorEnvelope,
       authorSecretKey,
       labels.LABEL_NOTE_KEY,
+      keyWrapAad(labels.LABEL_NOTE_KEY),
     )
 
     // Decrypt tampered content (should fail — AES-256-GCM auth tag mismatch)
@@ -472,19 +497,23 @@ test.describe('Cross-platform crypto interop', () => {
 
 /**
  * HPKE unwrap: RFC 9180 DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 + AES-256-GCM.
- * info = label bytes, aad = "${label}:key-wrap" bytes.
+ * info = label bytes. The AAD is a per-format convention (PROTOCOL.md §2.4/§2.5)
+ * and is deliberately a required argument: notes/hub keys bind
+ * `keyWrapAad(label)`, stored records (messages, call metadata) bind `NO_AAD`.
+ * A defaulted AAD is how this spec came to pin the retired canonical-AAD
+ * message format after every real reader had moved off it (#1927).
  * Envelope fields: { enc: hex, ct: hex }
  */
 async function hpkeUnwrap(
   envelope: { ct: string; enc: string },
   secretKeyHex: string,
   label: string,
+  aad: Uint8Array,
 ): Promise<Uint8Array> {
   const recipientSk = await hpkeSuite.importKey('raw', Uint8Array.from(hexToBytes(secretKeyHex)).buffer, false)
   const enc = hexToBytes(envelope.enc)
   const ct = hexToBytes(envelope.ct)
   const info = utf8ToBytes(label)
-  const aad = utf8ToBytes(`${label}:key-wrap`)
 
   const plaintext = await hpkeSuite.open(
     { recipientKey: recipientSk, enc, info },
@@ -495,13 +524,13 @@ async function hpkeUnwrap(
   return new Uint8Array(plaintext)
 }
 
-/** Decrypt hex(nonce_12 + ciphertext + tag_16) with AES-256-GCM + AAD */
-function decryptContent(encryptedContentHex: string, key: Uint8Array, label: string): string {
+/** Decrypt hex(nonce_12 + ciphertext + tag_16) with AES-256-GCM under `aad`. */
+function decryptContent(encryptedContentHex: string, key: Uint8Array, aad: Uint8Array): string {
   const contentBytes = hexToBytes(encryptedContentHex)
   const nonce = contentBytes.slice(0, 12)
   const ciphertext = contentBytes.slice(12)
 
-  const cipher = gcm(key, nonce, utf8ToBytes(label))
+  const cipher = gcm(key, nonce, aad)
   const plaintext = cipher.decrypt(ciphertext)
   return new TextDecoder().decode(plaintext)
 }
