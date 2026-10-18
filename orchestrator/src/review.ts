@@ -126,6 +126,80 @@ system, and do not attempt to fix anything you find wrong. If something is \
 wrong, say so in your verdict — do not try to patch it yourself.`
 
 /**
+ * The exact heading a reviewer puts its OUT-OF-SCOPE findings under, and the
+ * one `outOfScopeFindings` looks for. An interface between the brief
+ * (`DIFF_SCOPE_CONTRACT`, prose a model reads) and the CI summary (ci.ts,
+ * code that must hoist those findings onto a green check) — so changing the
+ * wording in one place without the other cannot silently stop a finding from
+ * being reported.
+ */
+export const OUT_OF_SCOPE_HEADING = '## Out-of-scope findings'
+
+/**
+ * The ATTRIBUTION half of every reviewer's contract — #1664.
+ *
+ * `fleet/review` rejected #1653, a pure type-rename, for two findings sitting
+ * on lines that are byte-identical at base and at head
+ * (`CaseManagementViewModel.swift:406`, `EventsViewModel.swift:271` — one
+ * outside every hunk, one a CONTEXT line inside a hunk). The findings were
+ * substantively right. The verdict was still wrong, because the author cannot
+ * act on it inside the PR's scope: the only ways out are to widen a rename
+ * PR into an E2EE fix or to argue with a required check, and both are churn.
+ * A merge gate whose red light has no in-scope remedy is not a gate, it is a
+ * stall.
+ *
+ * The rule is ATTRIBUTION, not blindness, and the distinction is the whole
+ * point: the question is never "is this line inside a hunk" but "is this code
+ * wrong BECAUSE OF this diff". A rename that leaves a call site stale, a
+ * removed guard, a check the diff should have added and did not — all of
+ * those are the diff's defects even where the broken line itself is unchanged,
+ * and all of them still FAIL. What may not FAIL is a defect that is equally
+ * present at the base commit, which this diff neither introduced nor made
+ * worse, and which the reviewer only NOTICED because the diff drew its eye
+ * there (#1653's own wording gave this away: "despite the
+ * `SharedAdminEnvelope` name" — the name the PR had just introduced).
+ *
+ * Such a finding is not discarded: it goes under `OUT_OF_SCOPE_HEADING`, and
+ * ci.ts hoists it into the check's own summary so a green `fleet/review`
+ * cannot read as clean when one exists. See that call site for why the
+ * out-of-scope channel is a PR comment plus the check summary rather than an
+ * auto-filed issue.
+ *
+ * Deliberately NOT enforced by downgrading a FAIL in code. A rule that turned
+ * "this FAIL's reason names an unchanged line" into a PASS would be a new way
+ * to emit a PASS nobody earned — the exact defect class the verdict taxonomy
+ * (`REVIEW_OUTCOME_TOKENS`, ci.ts) exists to keep out, and far worse than the
+ * churn it would fix. The verdict stays the reviewer's own, formed where it
+ * is formed: here, in the brief.
+ */
+export const DIFF_SCOPE_CONTRACT = `WHAT YOU ARE JUDGING: this diff. Read as much of the surrounding code as \
+you need — it is context, and reading it is encouraged — but your VERDICT is \
+about what this diff does.
+
+FAIL for a defect this diff is responsible for. That includes defects whose \
+broken line is itself unchanged: a rename that leaves a call site stale, a \
+guard the diff removed, a check the diff should have added and did not, an \
+invariant the diff's new code depends on and does not uphold. If the code is \
+wrong BECAUSE OF this diff, it is in scope however the hunks happen to fall.
+
+Do NOT fail for a defect that is equally present without this diff. If the \
+code you are objecting to is identical at the base commit — a \`+\`/\`-\` line \
+is changed, a context line in a hunk is NOT — then this PR neither introduced \
+it nor made it worse, and the author cannot fix it inside this PR's scope. \
+Noticing it is useful; rejecting the PR for it is not, because there is no \
+in-scope change that would turn the check green.
+
+Such a finding is REPORTED, never dropped. Put it in a section headed exactly:
+
+  ${OUT_OF_SCOPE_HEADING}
+
+one bullet per finding, each naming \`<file>:<line>\` and what is wrong, with \
+one line on why you judged it pre-existing. That section is published on the \
+pull request in full and is quoted on the check itself, so it reaches a human \
+who can file it as its own issue. It does not change your verdict line: a \
+diff whose own changes are sound is a PASS even when the section is long.`
+
+/**
  * The verdict half of every reviewer's contract. `parseVerdict` reads
  * exactly the grammar this states; a specialist that was told anything else
  * would be UNREADABLE on every run.
@@ -164,6 +238,8 @@ from the author's. Do not defer to the author's own commit messages or PR \
 description as if they settled the question — read the diff yourself.
 
 ${READ_ONLY_CONTRACT}
+
+${DIFF_SCOPE_CONTRACT}
 
 Check, at minimum:
 - Does the diff do what the PR claims, and nothing else?
@@ -303,6 +379,69 @@ export function parseVerdict(output: string): 'PASS' | 'FAIL' | 'UNREADABLE' {
   if (m?.[1] === 'PASS') return 'PASS'
   if (m?.[2] === 'FAIL') return 'FAIL'
   return 'UNREADABLE'
+}
+
+/** A heading line whose text is the out-of-scope section's, at ANY level and
+ *  in any case, with an optional trailing colon or count. Deliberately
+ *  tolerant where `OUT_OF_SCOPE_HEADING` is exact: the brief asks for one
+ *  precise spelling, and a reviewer that writes `### Out-of-scope findings:`
+ *  anyway must still have its findings reported rather than silently
+ *  swallowed — a parser that drops a finding on a formatting near-miss is the
+ *  same defect as not asking for the section at all. */
+const OUT_OF_SCOPE_HEADING_RE = /^\s{0,3}#{1,6}\s*out[- ]of[- ]scope\s+findings\s*:?\s*(?:\(\d+\))?\s*$/i
+
+/** Where the out-of-scope section ENDS: any other markdown heading, a
+ *  horizontal rule (ci.ts joins reviewers with `---`), or the verdict line
+ *  itself. The verdict line is in this list because the brief puts it LAST in
+ *  the response, so a section written just above it runs to end-of-text — and
+ *  a parser that let the body run that far would absorb `VERDICT: PASS` into
+ *  the final finding's text. Caught by its own test, not by reading. */
+const SECTION_END_RE = /^(?:\s{0,3}#{1,6}\s+\S|\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$|VERDICT:)/
+
+/**
+ * The out-of-scope findings a reviewer reported under `OUT_OF_SCOPE_HEADING`
+ * — the findings that, under `DIFF_SCOPE_CONTRACT`, are real but are NOT the
+ * diff's fault and so may not fail the check (#1664).
+ *
+ * `[]` means the reviewer reported none. It never means "there were some and
+ * we could not read them": a section that is present but whose body is not
+ * bullets is returned WHOLE as a single finding, and a bullet that wraps over
+ * several lines keeps its continuation. The only thing this function may ever
+ * lose is whitespace — because ci.ts decides from this list whether a green
+ * check has to carry findings in its summary, and a parse that returned `[]`
+ * for a section with text in it would make a green check read as clean while
+ * discarding the one signal the section exists to carry.
+ */
+export function outOfScopeFindings(text: string): string[] {
+  const lines = text.split('\n')
+  const start = lines.findIndex((l) => OUT_OF_SCOPE_HEADING_RE.test(l))
+  if (start === -1) return []
+  const body: string[] = []
+  for (const line of lines.slice(start + 1)) {
+    if (SECTION_END_RE.test(line)) break
+    body.push(line)
+  }
+  const findings: string[] = []
+  for (const line of body) {
+    const bullet = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line)
+    if (bullet !== null) {
+      findings.push((bullet[1] ?? '').trim())
+      continue
+    }
+    // A continuation of the bullet above it, not a new finding.
+    const continuation = line.trim()
+    if (continuation.length === 0) continue
+    const last = findings.length - 1
+    if (last >= 0) findings[last] = `${findings[last] as string} ${continuation}`
+    else findings.push(continuation)
+  }
+  // Prose under the heading with no bullet at all still counts as one
+  // finding (the `else` branch above already collected it); an empty section
+  // — the reviewer wrote the heading and nothing under it, or wrote "none" —
+  // collapses to nothing but a literal "none" is not special-cased, because
+  // reporting one no-op line costs nothing and guessing at prose costs a
+  // finding.
+  return findings.filter((f) => f.length > 0)
 }
 
 /**
