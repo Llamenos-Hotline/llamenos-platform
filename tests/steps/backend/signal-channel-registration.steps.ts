@@ -17,7 +17,8 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
-import { apiGet, apiPost, ADMIN_SEED } from '../../api-helpers'
+import type { APIRequestContext } from '@playwright/test'
+import { apiGet, apiPost, createUserViaApi, uniqueName, ADMIN_SEED } from '../../api-helpers'
 
 /** Shared with signal-integration.steps.ts — see file header. */
 const SHARED_STATE_KEY = 'signal-integration'
@@ -38,6 +39,8 @@ const LOCAL_STATE_KEY = 'signal-channel-registration'
 interface RegistrationLocalState {
   bridgeUrl: string
   registrationId?: string
+  /** Seed of this scenario's own hub admin — see actingAdminSeed. */
+  adminSeed?: string
   accountInfo?: { registered?: boolean; uuid?: string; error?: string }
   captchaError?: string
 }
@@ -48,6 +51,34 @@ function getLocalState(world: Record<string, unknown>): RegistrationLocalState {
   const fresh: RegistrationLocalState = { bridgeUrl: MOCK_BRIDGE_URL }
   setState(world, LOCAL_STATE_KEY, fresh)
   return fresh
+}
+
+/**
+ * The identity that drives this scenario's /provider-setup/signal/* calls.
+ *
+ * `POST /provider-setup/signal/verify` is rate limited per caller pubkey
+ * (`signal-verify:<pubkey>`, 5/min). The suite-wide ADMIN_SEED is shared by every
+ * parallel worker and already spends 4 of those 5 in provider-setup-signal.feature
+ * (one valid code + three wrong ones), so two more verifies from these scenarios
+ * pushed it to 429 depending on shard timing. Each scenario therefore acts as its
+ * own freshly created hub admin, which gets its own bucket — the same isolation
+ * auth-rate-limit.steps.ts uses (a pubkey per scenario) rather than clearing
+ * counters other workers are filling.
+ */
+async function actingAdminSeed(
+  request: APIRequestContext,
+  world: Record<string, unknown>,
+  hubId: string,
+): Promise<string> {
+  const local = getLocalState(world)
+  if (local.adminSeed) return local.adminSeed
+  const admin = await createUserViaApi(request, {
+    name: uniqueName('sig-admin'),
+    roleIds: ['role-hub-admin'],
+    hubId,
+  })
+  local.adminSeed = admin.seedHex
+  return admin.seedHex
 }
 
 function setSharedRegistrationState(world: Record<string, unknown>, status: string | undefined): void {
@@ -72,6 +103,7 @@ Given('registration is pending for {string}', async ({ request, world, workerHub
     request,
     '/provider-setup/signal/register',
     { bridgeUrl: local.bridgeUrl, phoneNumber, method: 'sms', hubId: workerHub },
+    await actingAdminSeed(request, world, workerHub),
   )
   expect(status).toBe(200)
   local.registrationId = data.id
@@ -93,6 +125,7 @@ Given('Signal is configured with a registered number', async ({ request, world, 
     request,
     '/provider-setup/signal/register',
     { bridgeUrl: local.bridgeUrl, phoneNumber: MOCK_PHONE, method: 'sms', hubId: workerHub },
+    await actingAdminSeed(request, world, workerHub),
   )
   expect(status).toBe(200)
   local.registrationId = data.id
@@ -105,6 +138,7 @@ Given('Signal is configured with a registered number', async ({ request, world, 
     request,
     '/provider-setup/signal/verify',
     { registrationId: local.registrationId, code: '123456' },
+    local.adminSeed,
   )
   expect(verify.status).toBe(200)
   expect(verify.data.status).toBe('complete')
@@ -118,6 +152,7 @@ When('the admin submits a phone number for registration', async ({ request, worl
     request,
     '/provider-setup/signal/register',
     { bridgeUrl: local.bridgeUrl, phoneNumber: MOCK_PHONE, method: 'sms', hubId: workerHub },
+    await actingAdminSeed(request, world, workerHub),
   )
   expect(status).toBe(200)
   local.registrationId = data.id
@@ -131,6 +166,7 @@ When('the admin submits verification code {string}', async ({ request, world }, 
     request,
     '/provider-setup/signal/verify',
     { registrationId: local.registrationId, code },
+    local.adminSeed,
   )
   expect(status).toBe(200)
   setSharedRegistrationState(world, data.status)
@@ -150,6 +186,7 @@ When('the admin attempts to register without a captcha', async ({ request, world
       method: 'sms',
       hubId: workerHub,
     },
+    await actingAdminSeed(request, world, workerHub),
   )
   expect(status).toBe(200)
   local.captchaError = data.error ?? ''
@@ -162,6 +199,7 @@ When('the admin requests account info', async ({ request, world }) => {
   const { status, data } = await apiGet<{ registered?: boolean; uuid?: string; error?: string }>(
     request,
     `/provider-setup/signal/account?registrationId=${local.registrationId}`,
+    local.adminSeed,
   )
   expect(status).toBe(200)
   local.accountInfo = data
