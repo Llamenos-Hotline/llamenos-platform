@@ -29,6 +29,10 @@ import { NO_AAD, contentAad, keyWrapAad } from '../packages/shared/envelope-aad'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const VECTORS_PATH = resolve(__dirname, '../packages/crypto/tests/fixtures/test-vectors.json')
+const STORED_RECORD_VECTORS_PATH = resolve(
+  __dirname,
+  '../packages/crypto/tests/fixtures/stored-record-vectors.json',
+)
 
 // Skip if test vectors haven't been generated yet
 const hasVectors = existsSync(VECTORS_PATH)
@@ -490,6 +494,60 @@ test.describe('Cross-platform crypto interop', () => {
     expect(() =>
       gcm(provKey, data.slice(0, 12), utf8ToBytes(labels.LABEL_DEVICE_PROVISION)).decrypt(data.slice(12)),
     ).toThrow()
+  })
+})
+
+/**
+ * Server-written conformance vector (#1927, #1928): the bytes in
+ * `stored-record-vectors.json` were sealed by the server's own
+ * `encryptMessageForStorage`/`encryptCallRecordForStorage` — NO AAD on either
+ * layer, label as HPKE `info`. Desktop must open them exactly as its
+ * production reader (`platform.ts` `decryptMessage`/`decryptCallRecord`)
+ * does: HPKE open with empty AAD, then AES-256-GCM with empty AAD. Tracked in
+ * git, so this describe does not depend on the generated vectors above.
+ */
+test.describe('Stored-record conformance fixture (#1927)', () => {
+  const fixture = JSON.parse(readFileSync(STORED_RECORD_VECTORS_PATH, 'utf-8'))
+
+  test('the fixture declares the stored-record AAD as empty', () => {
+    expect(fixture.aadHex.content).toBe('')
+    expect(fixture.aadHex.keyWrap).toBe('')
+    for (const record of fixture.records) {
+      expect(record.readerEnvelopes).toHaveLength(fixture.readers.length)
+    }
+  })
+
+  for (const reader of fixture.readers) {
+    test(`JS opens the server-written records as ${reader.name} (no AAD)`, async () => {
+      for (const record of fixture.records) {
+        const envelope = record.readerEnvelopes.find(
+          (e: { pubkey: string }) => e.pubkey === reader.x25519PubkeyHex,
+        )
+        expect(envelope).toBeDefined()
+        const contentKey = await hpkeUnwrap(envelope, reader.x25519SecretHex, record.label, NO_AAD)
+        const plaintext = decryptContent(record.encryptedContent, contentKey, NO_AAD)
+        expect(plaintext).toBe(record.plaintext)
+      }
+    })
+  }
+
+  test('the canonical AAD does not open a server-written record', async () => {
+    const reader = fixture.readers[0]
+    for (const record of fixture.records) {
+      const envelope = record.readerEnvelopes.find(
+        (e: { pubkey: string }) => e.pubkey === reader.x25519PubkeyHex,
+      )
+      expect(envelope).toBeDefined()
+      // The notes convention fails at the HPKE layer…
+      await expect(
+        hpkeUnwrap(envelope, reader.x25519SecretHex, record.label, keyWrapAad(record.label)),
+      ).rejects.toThrow()
+      // …and, given the right content key, at the AES-256-GCM layer too.
+      const contentKey = await hpkeUnwrap(envelope, reader.x25519SecretHex, record.label, NO_AAD)
+      expect(() =>
+        decryptContent(record.encryptedContent, contentKey, contentAad(record.label)),
+      ).toThrow()
+    }
   })
 })
 

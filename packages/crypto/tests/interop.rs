@@ -21,7 +21,6 @@ use llamenos_core::encryption::{
 };
 use llamenos_core::labels::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
