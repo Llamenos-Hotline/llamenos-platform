@@ -17,6 +17,11 @@ import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, resolve, dirname, relative } from 'path'
 import { fileURLToPath } from 'url'
 import { LANGUAGE_CODES } from '../languages'
+import {
+  checkRecordHygiene,
+  classifyLocale,
+  loadDeferralRecord,
+} from './deferral'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -403,26 +408,69 @@ function validateLocaleCoverage(): number {
 // ---------------------------------------------------------------------------
 
 function validateLocaleCompleteness(): number {
-  const enKeys = loadCanonicalKeysDotted()
+  const enFlat = flattenKeysDotted(JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8')))
+  const enKeys = new Set(Object.keys(enFlat))
   const localeFiles = readdirSync(LOCALES_DIR).filter(f => f.endsWith('.json') && f !== 'en.json')
 
-  let totalMissing = 0
-  for (const file of localeFiles) {
-    const locale = file.replace(/\.json$/, '')
-    const data = JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))
-    const keys = new Set(Object.keys(flattenKeysDotted(data)))
-    const missing = [...enKeys].filter(k => !keys.has(k))
-    if (missing.length > 0) {
-      console.error(`  ${locale}: ${missing.length} missing key(s) relative to en.json`)
-      totalMissing += missing.length
-    }
+  // The completeness gate is three-state (missing / deferred / translated) —
+  // see tools/deferral.ts. A verbatim-English value only counts as deferred
+  // when packages/i18n/deferred.json records it; otherwise it is the
+  // regression this gate exists to catch.
+  const parsedRecord = loadDeferralRecord()
+  let totalErrors = 0
+  for (const e of parsedRecord.errors) {
+    console.error(`  deferral record: ${e}`)
+    totalErrors++
   }
 
-  if (totalMissing === 0) {
+  const localeFlats = new Map<string, Record<string, string>>()
+  for (const file of localeFiles) {
+    const locale = file.replace(/\.json$/, '')
+    localeFlats.set(locale, flattenKeysDotted(JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))))
+  }
+
+  const hygieneErrors = checkRecordHygiene(
+    parsedRecord.record,
+    enKeys,
+    new Map([...localeFlats.entries()].map(([l, f]) => [l, new Set(Object.keys(f))]))
+  )
+  for (const e of hygieneErrors.slice(0, 10)) console.error(`  deferral record: ${e}`)
+  if (hygieneErrors.length > 10) console.error(`  deferral record: ... and ${hygieneErrors.length - 10} more stale entrie(s)`)
+  totalErrors += hygieneErrors.length
+
+  let totalMissing = 0
+  let totalUnrecorded = 0
+  let totalStale = 0
+  for (const [locale, flat] of [...localeFlats.entries()].sort()) {
+    const c = classifyLocale(enFlat, flat, parsedRecord.record.get(locale) ?? new Set())
+    totalMissing += c.missing.length
+    totalUnrecorded += c.unrecordedEnglish.length
+    totalStale += c.staleDeferral.length
+    if (c.missing.length > 0) {
+      console.error(`  ${locale}: ${c.missing.length} missing key(s) relative to en.json`)
+    }
+    if (c.unrecordedEnglish.length > 0) {
+      console.error(
+        `  ${locale}: ${c.unrecordedEnglish.length} key(s) are verbatim English but not recorded as deferred — ` +
+        `translate them, or record the deliberate deferral in packages/i18n/deferred.json ` +
+        `(bun run i18n:codegen --sync-deferral)`
+      )
+      c.unrecordedEnglish.slice(0, 5).forEach(k => console.error(`    - ${k}`))
+    }
+    if (c.staleDeferral.length > 0) {
+      console.error(
+        `  ${locale}: ${c.staleDeferral.length} key(s) are translated but still listed in deferred.json — remove the record entries`
+      )
+      c.staleDeferral.slice(0, 5).forEach(k => console.error(`    - ${k}`))
+    }
+  }
+  totalErrors += totalMissing + totalUnrecorded + totalStale
+
+  if (totalErrors === 0) {
     console.log(`  Locale completeness: all ${localeFiles.length} non-English locales have full key coverage`)
   }
 
-  return totalMissing
+  return totalErrors
 }
 
 // ---------------------------------------------------------------------------
