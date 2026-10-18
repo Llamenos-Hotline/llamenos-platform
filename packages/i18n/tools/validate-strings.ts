@@ -451,20 +451,30 @@ function validateLocaleCompleteness(): number {
     }
     if (c.unrecordedEnglish.length > 0) {
       console.error(
-        `  ${locale}: ${c.unrecordedEnglish.length} key(s) are verbatim English but not recorded as deferred — ` +
-        `translate them, or record the deliberate deferral in packages/i18n/deferred.json ` +
-        `(bun run i18n:codegen --sync-deferral)`
+        `  ${locale}: ${c.unrecordedEnglish.length} key(s) are verbatim English but not recorded as deferred`
       )
       c.unrecordedEnglish.slice(0, 5).forEach(k => console.error(`    - ${k}`))
     }
     if (c.staleDeferral.length > 0) {
       console.error(
-        `  ${locale}: ${c.staleDeferral.length} key(s) are translated but still listed in deferred.json — remove the record entries`
+        `  ${locale}: ${c.staleDeferral.length} key(s) are translated but still listed in deferred.json`
       )
       c.staleDeferral.slice(0, 5).forEach(k => console.error(`    - ${k}`))
     }
   }
   totalErrors += totalMissing + totalUnrecorded + totalStale
+
+  // One remedy for both record-drift failures, stated once and exactly: the
+  // sync rewrites packages/i18n/deferred.json from the catalogue (adds a
+  // record for each verbatim-English pair, retires each translated one). A
+  // PR that adds a string always needs it, and the file it rewrites has to be
+  // committed with the PR.
+  if (totalUnrecorded > 0 || totalStale > 0) {
+    console.error(
+      '  Fix: run `bun run i18n:codegen --sync-deferral`, then commit packages/i18n/deferred.json.\n' +
+      '  (If the English is NOT deliberate, translate the keys first -- the sync records whatever is still English.)'
+    )
+  }
 
   if (totalErrors === 0) {
     console.log(`  Locale completeness: all ${localeFiles.length} non-English locales have full key coverage`)

@@ -87,6 +87,7 @@ describe('checkScope', () => {
         'playwright.config.ts',
         'packages/test-specs/features/',
         'packages/i18n/locales/',
+        'packages/i18n/deferred.json',
         'scripts/test-backend-bdd.sh',
         'drizzle/',
         'drizzle.config.ts',
@@ -111,6 +112,7 @@ describe('checkScope', () => {
         'lefthook.yml',
         'packages/test-specs/features/',
         'packages/i18n/locales/',
+        'packages/i18n/deferred.json',
         'package.json',
         'bun.lockb',
       ])
@@ -356,6 +358,76 @@ describe('checkScope', () => {
       expect(checkScope(['packages/i18n/locales/en.json'], shared, []).strayed).toEqual([])
       expect(checkScope(['packages/i18n/languages.ts'], shared, []).strayed).toEqual([])
       expect(checkScope(['packages/i18n/tools/i18n-codegen.ts'], shared, []).strayed).toEqual([])
+    })
+  })
+
+  // packages/i18n/deferred.json is the record of which strings still carry
+  // verbatim English. Since #1930 an unrecorded verbatim-English value is a
+  // hard error, so EVERY PR that adds a user-facing string must rewrite this
+  // file (`bun run i18n:codegen --sync-deferral`). With the file owned by the
+  // shared lane alone, every string-adding PR on a platform lane was a
+  // guaranteed scope=fail: #1785, #1811 and a third PR all needed an operator
+  // `scope:shared` grant the same day.
+  describe('i18n deferral record: platform lanes may write packages/i18n/deferred.json, and nothing else outside locales/', () => {
+    let scopes: Record<'desktop' | 'backend' | 'ios' | 'android' | 'shared', LaneScope>
+
+    beforeAll(async () => {
+      const all = await loadLaneScopes(process.cwd())
+      const d = all['desktop']
+      const b = all['backend']
+      const i = all['ios']
+      const a = all['android']
+      const s = all['shared']
+      if (!d || !b || !i || !a || !s) throw new Error('expected desktop/backend/ios/android/shared lane fragments to exist')
+      scopes = { desktop: d, backend: b, ios: i, android: a, shared: s }
+    })
+
+    const PLATFORM_LANES = ['desktop', 'backend', 'ios', 'android'] as const
+
+    it.each(PLATFORM_LANES)('%s may rewrite packages/i18n/deferred.json', (lane) => {
+      expect(checkScope(['packages/i18n/deferred.json'], scopes[lane], []).strayed).toEqual([])
+    })
+
+    // The realistic diff: a string-adding PR touches its platform code, the
+    // locale sources, and the deferral record — all in one lane's scope.
+    it.each([
+      ['desktop', 'src/client/routes/settings.tsx'],
+      ['backend', 'apps/worker/routes/hubs.ts'],
+      ['ios', 'apps/ios/Sources/Views/Admin/TagsAdminView.swift'],
+      ['android', 'apps/android/app/src/main/java/org/llamenos/ui/Foo.kt'],
+    ] as const)('%s string-adding diff (code + locales + deferred.json) has no strays', (lane, codeFile) => {
+      const diff = [codeFile, 'packages/i18n/locales/en.json', 'packages/i18n/locales/de.json', 'packages/i18n/deferred.json']
+      expect(checkScope(diff, scopes[lane], []).strayed).toEqual([])
+    })
+
+    // Break-it: the grant is ONE FILE. If any of these stops straying, the
+    // grant has been widened past what its justification covers (generated
+    // bookkeeping that the i18n completeness gate validates independently).
+    // (packages/i18n/package.json is deliberately absent: the lanes' bare
+    // `package.json` dependency grant is a basename pattern and already
+    // matches it at every depth, independent of this change.)
+    it.each(PLATFORM_LANES)('%s still may not touch the rest of packages/i18n/ outside locales/', (lane) => {
+      const stillShared = [
+        'packages/i18n/languages.ts',
+        'packages/i18n/index.ts',
+        'packages/i18n/README.md',
+        'packages/i18n/tools/i18n-codegen.ts',
+        'packages/i18n/tools/validate-strings.ts',
+        'packages/i18n/tools/deferral.ts',
+        'packages/i18n/tools/validate-allowlist.json',
+      ]
+      expect(checkScope(stillShared, scopes[lane], []).strayed).toEqual(stillShared)
+    })
+
+    it('shared still owns packages/i18n/deferred.json', () => {
+      expect(checkScope(['packages/i18n/deferred.json'], scopes.shared, []).strayed).toEqual([])
+    })
+
+    // The grant is a FILE grant: a platform lane that owns no other part of
+    // packages/ is not given the file's directory.
+    it.each(PLATFORM_LANES)('%s was not handed packages/i18n/ as a whole', (lane) => {
+      expect(scopes[lane].owned).not.toContain('packages/i18n/')
+      expect(scopes[lane].owned).toContain('packages/i18n/deferred.json')
     })
   })
 
