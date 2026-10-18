@@ -1326,7 +1326,7 @@ export interface PrClaim {
  * `prClaimSection`'s output is therefore bounded above by
  * `PR_CLAIM_TITLE_MAX_CHARS + PR_CLAIM_BODY_MAX_CHARS` plus fixed framing
  * plus the PR number. Neither prompt builder truncates the code diff; locale
- * JSON patches are omitted from both and replaced with semantic key summaries.
+ * JSON patches are omitted from both and replaced with the exact changed values (when a base export exists).
  * Adding a claim cannot remove a byte of code diff, and
  * `tests/orchestrator/review-pr-claim.test.ts` pins that with a megabyte-long
  * body.
@@ -1563,20 +1563,26 @@ function localePatchPath(section: string): { oldPath: string; newPath: string } 
   return { oldPath: header[1], newPath: header[2] }
 }
 
-function flattenLocaleValues(value: unknown, prefix = '', out = new Map<string, string>()): Map<string, string> {
+/**
+ * Flattens a locale object to `dotted.path -> JSON value`. Returns false when
+ * two distinct leaves flatten to the same path (a literal `"a.b"` key beside a
+ * nested `a.b`, or `"x[0]"` beside an array `x`): the later one would silently
+ * shadow the earlier and hide a change, so the caller must not summarise.
+ */
+function flattenLocaleValues(value: unknown, prefix: string, out: Map<string, string>): boolean {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    for (const [key, child] of Object.entries(value)) {
-      flattenLocaleValues(child, prefix === '' ? key : `${prefix}.${key}`, out)
-    }
-  } else if (Array.isArray(value)) {
-    value.forEach((child, index) => flattenLocaleValues(child, `${prefix}[${index}]`, out))
-  } else if (prefix !== '') {
-    out.set(prefix, JSON.stringify(value))
+    return Object.entries(value).every(([key, child]) =>
+      flattenLocaleValues(child, prefix === '' ? key : `${prefix}.${key}`, out))
   }
-  return out
+  if (Array.isArray(value)) {
+    return value.every((child, index) => flattenLocaleValues(child, `${prefix}[${index}]`, out))
+  }
+  if (prefix === '' || out.has(prefix)) return false
+  out.set(prefix, JSON.stringify(value))
+  return true
 }
 
-/** Leaf values of a locale file, or undefined when it is absent, unparseable, or not a JSON object. */
+/** Leaf values of a locale file, or undefined when it is unparseable, not a JSON object, or has colliding paths. Absent is an empty map. */
 function readLocaleValues(root: string, path: string): Map<string, string> | undefined {
   const fullPath = join(root, ...path.split('/'))
   if (!existsSync(fullPath)) return new Map()
@@ -1587,7 +1593,8 @@ function readLocaleValues(root: string, path: string): Map<string, string> | und
     return undefined
   }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
-  return flattenLocaleValues(value)
+  const leaves = new Map<string, string>()
+  return flattenLocaleValues(value, '', leaves) ? leaves : undefined
 }
 
 /**
@@ -1607,65 +1614,6 @@ function snapshotLocaleChanges(path: string, headDir: string, baseDir: string): 
     if (was === undefined && now !== undefined) changes.added.push({ key, value: now })
     else if (was !== undefined && now === undefined) changes.removed.push({ key, value: was })
     else if (was !== undefined && now !== undefined && was !== now) changes.changed.push({ key, before: was, after: now })
-  }
-  return changes
-}
-
-/** Lines that carry no key or value: closing braces/brackets, commas, blank context. */
-const LOCALE_STRUCTURAL_LINE = /^[\s{}\[\],]*$/
-const LOCALE_PROPERTY_LINE = /^\s*"((?:\\.|[^"\\])*)"\s*:\s*(.*?)(?:,)?\s*$/
-
-/**
- * Key-level diff recovered from the patch alone, for callers with no base
- * export. Identical removed/added property lines (keys that merely moved)
- * cancel. Only lines it fully understands are summarised: an array element,
- * a continuation, or anything else that is not a `"key": value` property makes
- * this return undefined so the raw patch is kept — the summary never drops a
- * change it could not classify.
- */
-function patchLocaleChanges(path: string, section: string): LocaleValueChanges | undefined {
-  const removed = new Map<string, string[]>()
-  const added = new Map<string, string[]>()
-  for (const line of section.split('\n')) {
-    const prefix = line[0]
-    if (prefix !== '+' && prefix !== '-') continue
-    if (line.startsWith('+++') || line.startsWith('---')) continue
-    const body = line.slice(1)
-    if (LOCALE_STRUCTURAL_LINE.test(body)) continue
-    const property = LOCALE_PROPERTY_LINE.exec(body)
-    if (property?.[1] === undefined || property[2] === undefined) return undefined
-    if (property[2] === '{' || property[2] === '[') {
-      if (property[2] === '[') return undefined // array elements follow on lines this parser cannot attribute
-      continue // an object opener holds no value of its own; its leaves appear as their own lines
-    }
-    let key: string
-    try {
-      key = JSON.parse(`"${property[1]}"`) as string
-    } catch {
-      return undefined
-    }
-    const values = prefix === '+' ? added : removed
-    const existing = values.get(key) ?? []
-    existing.push(property[2])
-    values.set(key, existing)
-  }
-  const changes: LocaleValueChanges = { path, added: [], removed: [], changed: [] }
-  for (const key of [...new Set([...removed.keys(), ...added.keys()])].sort()) {
-    const before = [...(removed.get(key) ?? [])]
-    const after = [...(added.get(key) ?? [])]
-    for (const value of [...before]) {
-      const beforeIndex = before.indexOf(value)
-      const afterIndex = after.indexOf(value)
-      if (beforeIndex !== -1 && afterIndex !== -1) {
-        before.splice(beforeIndex, 1)
-        after.splice(afterIndex, 1)
-      }
-    }
-    while (before.length > 0 && after.length > 0) {
-      changes.changed.push({ key, before: before.shift() as string, after: after.shift() as string })
-    }
-    for (const value of before) changes.removed.push({ key, value })
-    for (const value of after) changes.added.push({ key, value })
   }
   return changes
 }
@@ -1696,23 +1644,21 @@ function formatLocaleChanges(changes: LocaleValueChanges[]): string {
  * Locale JSON is mechanically regenerated across every language, so a
  * reordering can bury a three-key change under megabytes of patch. Keep the
  * non-locale diff intact and replace each locale patch with the exact values
- * that changed, taken from the exported trees when a base export exists and
- * from the patch otherwise. A locale patch that cannot be summarised
- * losslessly stays in the diff verbatim.
+ * that changed, computed exactly from the two exported trees. A patch alone
+ * cannot say which object a property line sits in, so identical removed/added
+ * lines under different parents would cancel and hide a real change: with no
+ * base export nothing is compacted. A locale file the trees cannot summarise
+ * losslessly (unparseable, colliding paths) also keeps its patch verbatim.
  */
 export function compactReviewDiff(diff: string, headDir?: string, baseDir?: string): CompactedReviewDiff {
-  const sections = diff.split(/(?=^diff --git )/m)
+  if (headDir === undefined || baseDir === undefined) return { diff, summary: '' }
   const kept: string[] = []
   const summarised: LocaleValueChanges[] = []
-  for (const section of sections) {
+  for (const section of diff.split(/(?=^diff --git )/m)) {
     const paths = localePatchPath(section)
-    if (paths === undefined || !isLocaleDiffPath(paths.oldPath) || !isLocaleDiffPath(paths.newPath)) {
-      kept.push(section)
-      continue
-    }
-    const changes = headDir !== undefined && baseDir !== undefined
+    const changes = paths !== undefined && isLocaleDiffPath(paths.oldPath) && isLocaleDiffPath(paths.newPath)
       ? snapshotLocaleChanges(paths.newPath, headDir, baseDir)
-      : patchLocaleChanges(paths.newPath, section)
+      : undefined
     if (changes === undefined) kept.push(section)
     else summarised.push(changes)
   }

@@ -472,40 +472,38 @@ describe('review prompt locale diff compaction', () => {
     }
   })
 
-  it('summarises values from the patch when no base snapshot is available', () => {
+  it('compacts nothing without a base snapshot: a patch alone cannot say which object a line sits in', () => {
+    // The same "url" line removed from one parent and added under another is a
+    // real move of a value, which a leaf-name-only parse would cancel away.
     const diff = [
       ...localeHeader('fr.json'),
-      '-  "changed": "old",',
-      '+  "changed": "new",',
-      '-  "removed": "value"',
-      '+  "added": "value"',
-      '-  "moved": "unchanged"',
-      '+  "moved": "unchanged"',
+      '-    "url": "https://safe.example",',
+      '+    "url": "https://safe.example",',
+      '+    "list": ["tel:+15550199"],',
       '',
     ].join('\n')
     const prompt = buildReviewPrompt('1715', diff, report([`${localeDir}/fr.json`]), '/head')
 
-    expect(prompt).not.toContain(`diff --git a/${localeDir}/fr.json`)
-    expect(prompt).toContain('+ "added" = "value"')
-    expect(prompt).toContain('- "removed" = "value"')
-    expect(prompt).toContain('~ "changed": "old" -> "new"')
-    expect(prompt).not.toContain('"moved"')
+    expect(prompt).toContain(`diff --git a/${localeDir}/fr.json`)
+    expect(prompt).toContain('"tel:+15550199"')
+    expect(prompt).not.toContain('## Locale value changes')
   })
 
-  it('keeps the raw patch when the patch holds a line it cannot attribute to a key', () => {
-    const diff = [
-      ...localeHeader('fr.json'),
-      '-  "list": [',
-      '-    "tel:+15550100"',
-      '+  "list": [',
-      '+    "tel:+15550199"',
-      '',
-    ].join('\n')
-    const prompt = buildReviewPrompt('1715', diff, report([`${localeDir}/fr.json`]), '/head')
-
-    expect(prompt).toContain('"tel:+15550199"')
-    expect(prompt).toContain(`diff --git a/${localeDir}/fr.json`)
-    expect(prompt).not.toContain('## Locale value changes')
+  it('keeps the raw patch when two distinct leaves flatten to the same path', () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-base-'))
+    const headDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-head-'))
+    snapshot(baseDir, 'pt.json', JSON.stringify({ a: { b: 'safe' } }))
+    // Literal "a.b" beside nested a.b: summarising would let one shadow the other.
+    snapshot(headDir, 'pt.json', '{"a":{"b":"safe"},"a.b":"COLLIDING-PATH-MUST-REACH-REVIEWER"}')
+    const diff = [...localeHeader('pt.json'), '+  "a.b": "COLLIDING-PATH-MUST-REACH-REVIEWER"', ''].join('\n')
+    try {
+      const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/pt.json`]), headDir, baseDir)
+      expect(prompt).toContain('COLLIDING-PATH-MUST-REACH-REVIEWER')
+      expect(prompt).not.toContain('## Locale value changes')
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true })
+      rmSync(headDir, { recursive: true, force: true })
+    }
   })
 
   it('leaves non-JSON files under the locales directory in the diff', () => {
@@ -514,7 +512,7 @@ describe('review prompt locale diff compaction', () => {
       '+NOTE-IN-LOCALES-DIR-MUST-REACH-REVIEWER',
       '',
     ].join('\n')
-    const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/README.md`]), '/head')
+    const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/README.md`]), '/head', '/base')
 
     expect(prompt).toContain('NOTE-IN-LOCALES-DIR-MUST-REACH-REVIEWER')
     expect(prompt).not.toContain('## Locale value changes')
