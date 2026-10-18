@@ -875,7 +875,7 @@ export interface ReviewCiDeps extends CiDeps {
    *  claim travels to the profile too — see `buildProfileReviewPrompt`'s own
    *  comment for why the profile half is the load-bearing one (#1696). */
   profileReview(
-    profile: ReviewerProfile, diff: string, changedFiles: readonly string[], claim?: PrClaim,
+    profile: ReviewerProfile, diff: string, changedFiles: readonly string[], claim?: PrClaim, baseDir?: string,
   ): Promise<SecondOpinionResult>
   /**
    * Hands every reviewer's FULL text somewhere the PR itself will show it.
@@ -1183,6 +1183,7 @@ export function composeReviewSet(
     const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured`
       : r.partial !== undefined ? `${who} ran out of turns \u2014 PARTIAL ${r.partial.verdict}, not a full review`
       : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
+      : r.failureKind === 'brief-too-large' ? `${who} brief too large`
       : `${who} unavailable`
     const headline = r.verdict === 'UNREADABLE'
       ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
@@ -1434,7 +1435,9 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
       authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir,
       baseDir: baseExport?.dir, diff, report, claim,
     }),
-    ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles, claim)),
+    ...profiles.map((p) => baseExport === undefined
+      ? deps.profileReview(p, diff, report.changedFiles, claim)
+      : deps.profileReview(p, diff, report.changedFiles, claim, baseExport.dir)),
   ])
   // Every reviewer has finished (`allSettled` never rejects), so the base
   // tree has no readers left. Removed here rather than in a `finally`

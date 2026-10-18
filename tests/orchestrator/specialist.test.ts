@@ -138,6 +138,34 @@ describe('buildProfileReviewPrompt', () => {
     expect(p).toContain('/e')
     expect(p).toContain('DIFF')
   })
+
+  it('omits locale patches and shows the base-to-head value changes for profile reviewers', () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'llamenos-profile-locale-base-'))
+    const headDir = mkdtempSync(join(tmpdir(), 'llamenos-profile-locale-head-'))
+    const localePath = 'packages/i18n/locales/en.json'
+    mkdirSync(join(baseDir, 'packages/i18n/locales'), { recursive: true })
+    mkdirSync(join(headDir, 'packages/i18n/locales'), { recursive: true })
+    writeFileSync(join(baseDir, localePath), JSON.stringify({ onboarding: { tryAgain: 'old' } }))
+    writeFileSync(join(headDir, localePath), JSON.stringify({ onboarding: { tryAgain: 'new' } }))
+    const diff = [
+      `diff --git a/${localePath} b/${localePath}`,
+      `--- a/${localePath}`,
+      `+++ b/${localePath}`,
+      '-"tryAgain": "LOCALE-CHURN"',
+      '+"tryAgain": "LOCALE-CHURN"',
+      '',
+    ].join('\n')
+    try {
+      const prompt = buildProfileReviewPrompt(
+        { agent: 'x-reviewer', instructions: 'EXPERTISE' }, '7', diff, [localePath], headDir, undefined, baseDir,
+      )
+      expect(prompt).not.toContain('LOCALE-CHURN')
+      expect(prompt).toContain('~ "onboarding.tryAgain": "old" -> "new"')
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true })
+      rmSync(headDir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
