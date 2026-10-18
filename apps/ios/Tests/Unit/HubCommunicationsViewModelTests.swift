@@ -232,4 +232,76 @@ final class HubCommunicationsViewModelTests: XCTestCase {
         }
         XCTAssertEqual(step["step"] as? String, "template_selection")
     }
+
+    /// "Not set up" is a fact only once the server has answered, so a fresh model reports
+    /// loading — and `loadAll()` with nothing to ask about ends that state instead of
+    /// leaving the screen on its spinner.
+    func testLoadAllWithoutAnActiveHubSettlesWithoutAskingTheServer() async throws {
+        HubCommunicationsStubURLProtocol.reset(responses: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HubCommunicationsStubURLProtocol.self]
+        let context = HubContext()
+        context.clearActiveHub()
+        let api = APIService(
+            cryptoService: CryptoService(),
+            hubContext: context,
+            sessionConfiguration: configuration
+        )
+        try api.configure(hubURLString: "https://provider-templates.test")
+        let viewModel = HubCommunicationsViewModel(
+            onboardAPI: HubOnboardAPI(api: api),
+            providerService: ProviderSetupService(api: api),
+            hubContext: context
+        )
+        XCTAssertTrue(viewModel.isLoading, "Before the first load the setup state is unknown, not 'not set up'")
+
+        await viewModel.loadAll()
+
+        XCTAssertFalse(viewModel.isLoading, "With no active hub there is nothing to wait for")
+        XCTAssertFalse(viewModel.isSetUp)
+        XCTAssertTrue(HubCommunicationsStubURLProtocol.requests().isEmpty, "No hub means no request")
+    }
+
+    func testLoadAllAppliesAConfiguredHubsStatus() async throws {
+        HubCommunicationsStubURLProtocol.reset(responses: [
+            "GET /api/hubs/hub-001/onboard/provider-status": #"""
+            {
+              "status": {
+                "hubId": "hub-001",
+                "providerConnected": true,
+                "providerType": "twilio",
+                "numbersProvisioned": 1,
+                "channelsConfigured": ["voice", "sms"],
+                "channelsPending": [],
+                "onboardingComplete": true
+              }
+            }
+            """#,
+        ])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HubCommunicationsStubURLProtocol.self]
+        let context = HubContext()
+        context.setActiveHub("hub-001")
+        let api = APIService(
+            cryptoService: CryptoService(),
+            hubContext: context,
+            sessionConfiguration: configuration
+        )
+        try api.configure(hubURLString: "https://provider-templates.test")
+        let viewModel = HubCommunicationsViewModel(
+            onboardAPI: HubOnboardAPI(api: api),
+            providerService: ProviderSetupService(api: api),
+            hubContext: context
+        )
+
+        await viewModel.loadAll()
+
+        XCTAssertFalse(viewModel.isLoading, "The load has finished")
+        XCTAssertTrue(viewModel.isSetUp, "A connected provider with completed onboarding is a set-up hub")
+        XCTAssertEqual(viewModel.providerType, .twilio)
+        XCTAssertTrue(viewModel.channelVoice)
+        XCTAssertTrue(viewModel.channelSms)
+        XCTAssertFalse(viewModel.channelEmail)
+        XCTAssertNil(viewModel.error)
+    }
 }
