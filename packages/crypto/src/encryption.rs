@@ -225,103 +225,6 @@ pub struct EncryptedMessage {
     pub reader_envelopes: Vec<RecipientKeyEnvelope>,
 }
 
-/// Encrypt a message for multiple readers using the envelope pattern.
-pub fn encrypt_message(
-    plaintext: &str,
-    reader_pubkeys: &[String],
-) -> Result<EncryptedMessage, CryptoError> {
-    let message_key = Zeroizing::new(random_bytes_32());
-
-    let packed = aes256gcm_encrypt(&message_key, plaintext.as_bytes(), LABEL_MESSAGE.as_bytes())?;
-
-    let reader_envelopes: Result<Vec<RecipientKeyEnvelope>, CryptoError> = reader_pubkeys
-        .iter()
-        .map(|pk| {
-            let env = hpke_wrap_key(&message_key, pk, LABEL_MESSAGE)?;
-            Ok(RecipientKeyEnvelope {
-                pubkey: pk.clone(),
-                enc: env.enc,
-                ct: env.ct,
-            })
-        })
-        .collect();
-
-    Ok(EncryptedMessage {
-        encrypted_content: hex::encode(&packed),
-        reader_envelopes: reader_envelopes?,
-    })
-}
-
-/// Decrypt a message using the reader's envelope.
-pub fn decrypt_message(
-    encrypted_content: &str,
-    reader_envelopes: &[RecipientKeyEnvelope],
-    secret_key_hex: &str,
-    reader_pubkey: &str,
-) -> Result<String, CryptoError> {
-    let envelope = {
-        let mut found: Option<&RecipientKeyEnvelope> = None;
-        for e in reader_envelopes.iter() {
-            if ct_hex_eq(&e.pubkey, reader_pubkey) {
-                found = Some(e);
-            }
-            // Continue iterating — do NOT break
-        }
-        found.ok_or(CryptoError::DecryptionFailed)?
-    };
-
-    let key_envelope = KeyEnvelope {
-        enc: envelope.enc.clone(),
-        ct: envelope.ct.clone(),
-    };
-
-    let mut message_key = hpke_unwrap_key(&key_envelope, secret_key_hex, LABEL_MESSAGE)?;
-    let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
-    let plaintext = Zeroizing::new(aes256gcm_decrypt(
-        &message_key,
-        &data,
-        LABEL_MESSAGE.as_bytes(),
-    )?);
-    message_key.zeroize();
-    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
-}
-
-// ── Call Record Metadata Decryption ─────────────────────────────────
-
-/// Decrypt a call record's encrypted metadata.
-pub fn decrypt_call_record(
-    encrypted_content: &str,
-    admin_envelopes: &[RecipientKeyEnvelope],
-    secret_key_hex: &str,
-    reader_pubkey: &str,
-) -> Result<String, CryptoError> {
-    let envelope = {
-        let mut found: Option<&RecipientKeyEnvelope> = None;
-        for e in admin_envelopes.iter() {
-            if ct_hex_eq(&e.pubkey, reader_pubkey) {
-                found = Some(e);
-            }
-            // Continue iterating — do NOT break
-        }
-        found.ok_or(CryptoError::DecryptionFailed)?
-    };
-
-    let key_envelope = KeyEnvelope {
-        enc: envelope.enc.clone(),
-        ct: envelope.ct.clone(),
-    };
-
-    let mut record_key = hpke_unwrap_key(&key_envelope, secret_key_hex, LABEL_CALL_META)?;
-    let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
-    let plaintext = Zeroizing::new(aes256gcm_decrypt(
-        &record_key,
-        &data,
-        LABEL_CALL_META.as_bytes(),
-    )?);
-    record_key.zeroize();
-    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
-}
-
 // ── Stored multi-reader records (the wire format on the server) ─────
 //
 // Every record that one party seals for several readers and the server stores
@@ -346,10 +249,14 @@ pub fn decrypt_call_record(
 // the HPKE `info`, so a wrap sealed under any other label fails to open — and the
 // content key is fresh per record and wrapped under that one label only.
 //
-// `encrypt_message` / `decrypt_message` / `decrypt_call_record` above use an
-// AAD-bearing variant that nothing stores any more. They remain only because
-// `tests/interop.rs` pins them and the tracked Android UniFFI binding checks the
-// checksums of their `ffi.rs` exports at load; use the functions below.
+// This is the only multi-reader record format. There used to be a second,
+// AAD-bearing pair (`encrypt_message` / `decrypt_message` / `decrypt_call_record`)
+// that bound the label as the content AAD and `<label>:key-wrap` as the wrap AAD.
+// Nothing stored that format, no reader could open what the server wrote, and
+// its UniFFI export was the shape that let iOS and Android drift from the server
+// (#1927). It was deleted rather than corrected: a second spelling of the same
+// operation is how the two conventions came to coexist. The server-written
+// vectors in `tests/fixtures/stored-record-vectors.json` pin this one.
 
 /// A reader of a stored record: where the envelope is addressed, and the X25519
 /// key the content key is sealed to. The two differ when `address` is an
@@ -682,26 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_message_encryption() {
-        let (reader1_sk, reader1_pk) = gen_keypair();
-        let (_reader2_sk, reader2_pk) = gen_keypair();
-
-        let plaintext = "Hello from the crisis line";
-        let reader_pubkeys = vec![reader1_pk.clone(), reader2_pk.clone()];
-
-        let encrypted = encrypt_message(plaintext, &reader_pubkeys).unwrap();
-
-        let decrypted = decrypt_message(
-            &encrypted.encrypted_content,
-            &encrypted.reader_envelopes,
-            &reader1_sk,
-            &reader1_pk,
-        )
-        .unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
     fn roundtrip_draft_encryption() {
         let (sk, _pk) = gen_keypair();
         let plaintext = "Draft note content";
@@ -796,24 +683,6 @@ mod tests {
     }
 
     #[test]
-    fn message_wrong_reader_fails() {
-        let (_reader1_sk, reader1_pk) = gen_keypair();
-        let (_reader2_sk, reader2_pk) = gen_keypair();
-        let (wrong_reader_sk, wrong_reader_pk) = gen_keypair();
-
-        let encrypted =
-            encrypt_message("Secret message", &[reader1_pk.clone(), reader2_pk.clone()]).unwrap();
-
-        let result = decrypt_message(
-            &encrypted.encrypted_content,
-            &encrypted.reader_envelopes,
-            &wrong_reader_sk,
-            &wrong_reader_pk,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn draft_wrong_key_fails() {
         let (author_sk, _) = gen_keypair();
         let (wrong_sk, _) = gen_keypair();
@@ -842,60 +711,6 @@ mod tests {
         let key = derive_encryption_key(&skb, HKDF_CONTEXT_EXPORT);
         let plaintext = aes256gcm_decrypt(&key, &decoded, HKDF_CONTEXT_EXPORT.as_bytes()).unwrap();
         assert_eq!(String::from_utf8(plaintext).unwrap(), json);
-    }
-
-    #[test]
-    fn call_record_roundtrip() {
-        let (admin_sk, admin_pk) = gen_keypair();
-        let plaintext = r#"{"answeredBy":"vol-1","callerNumber":"+1234"}"#;
-
-        let message_key = Zeroizing::new(random_bytes_32());
-        let packed = aes256gcm_encrypt(
-            &message_key,
-            plaintext.as_bytes(),
-            LABEL_CALL_META.as_bytes(),
-        )
-        .unwrap();
-        let encrypted_content = hex::encode(&packed);
-
-        let admin_env = hpke_wrap_key(&message_key, &admin_pk, LABEL_CALL_META).unwrap();
-        let admin_envelopes = vec![RecipientKeyEnvelope {
-            pubkey: admin_pk.clone(),
-            enc: admin_env.enc.clone(),
-            ct: admin_env.ct.clone(),
-        }];
-
-        let decrypted =
-            decrypt_call_record(&encrypted_content, &admin_envelopes, &admin_sk, &admin_pk)
-                .unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn call_record_wrong_admin_fails() {
-        let (admin_sk, admin_pk) = gen_keypair();
-        let (wrong_sk, wrong_pk) = gen_keypair();
-        let plaintext = r#"{"answeredBy":"vol-1","callerNumber":"+1234"}"#;
-
-        let message_key = Zeroizing::new(random_bytes_32());
-        let packed = aes256gcm_encrypt(
-            &message_key,
-            plaintext.as_bytes(),
-            LABEL_CALL_META.as_bytes(),
-        )
-        .unwrap();
-        let encrypted_content = hex::encode(&packed);
-
-        let admin_env = hpke_wrap_key(&message_key, &admin_pk, LABEL_CALL_META).unwrap();
-        let admin_envelopes = vec![RecipientKeyEnvelope {
-            pubkey: admin_pk.clone(),
-            enc: admin_env.enc.clone(),
-            ct: admin_env.ct.clone(),
-        }];
-
-        let result =
-            decrypt_call_record(&encrypted_content, &admin_envelopes, &wrong_sk, &wrong_pk);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -1099,16 +914,58 @@ mod tests {
         ));
     }
 
+    /// Seal a `LABEL_MESSAGE` record under the canonical notes convention — the
+    /// label as content AAD, `<label>:key-wrap` as wrap AAD — or with either layer
+    /// bare, so each layer's AAD is tested on its own.
+    fn seal_with_aad(pk: &str, content_aad: &[u8], wrap_aad: &[u8]) -> EncryptedMessage {
+        let key = Zeroizing::new(random_bytes_32());
+        let packed = aes256gcm_encrypt(&key, b"inbound sms", content_aad).unwrap();
+        let sealed = hpke_envelope::hpke_seal_key(&key, pk, LABEL_MESSAGE, wrap_aad).unwrap();
+        let enc: [u8; WIRE_ENC_LEN] = decode_wire_bytes("enc", &sealed.enc).unwrap();
+        let ct: [u8; WIRE_KEY_CT_LEN] = decode_wire_bytes("ct", &sealed.ct).unwrap();
+        EncryptedMessage {
+            encrypted_content: hex::encode(packed),
+            reader_envelopes: vec![RecipientKeyEnvelope {
+                pubkey: pk.to_string(),
+                enc: hex::encode(enc),
+                ct: hex::encode(ct),
+            }],
+        }
+    }
+
+    /// The reader opens the empty-AAD format and nothing else. This is the break-it
+    /// for #1927: sealing with the canonical AAD on either layer, or both, must not
+    /// open — otherwise a client that binds the notes AAD would appear to work here
+    /// while failing against the server.
     #[test]
-    fn stored_record_does_not_open_the_aad_variant() {
-        // What the server sealed before this change (AAD `<label>:key-wrap` on the
-        // wrap, the label on the content). Nothing that the reader opens.
+    fn stored_record_does_not_open_a_canonical_aad_record() {
         let (sk, pk) = gen_keypair();
-        let old = encrypt_message("inbound sms", &[pk.clone()]).unwrap();
-        assert!(matches!(
-            open_utf8(&old, &pk, &sk, LABEL_MESSAGE),
-            Err(CryptoError::DecryptionFailed)
-        ));
+        let content = crate::envelope_aad::content_aad(LABEL_MESSAGE);
+        let wrap = crate::envelope_aad::key_wrap_aad(LABEL_MESSAGE);
+
+        let control = seal_with_aad(&pk, &[], &[]);
+        assert_eq!(
+            open_utf8(&control, &pk, &sk, LABEL_MESSAGE).unwrap(),
+            "inbound sms"
+        );
+        for (name, c, w) in [
+            ("content AAD only", &content[..], &[][..]),
+            ("key-wrap AAD only", &[][..], &wrap[..]),
+            (
+                "both layers (the canonical notes convention)",
+                &content[..],
+                &wrap[..],
+            ),
+        ] {
+            let record = seal_with_aad(&pk, c, w);
+            assert!(
+                matches!(
+                    open_utf8(&record, &pk, &sk, LABEL_MESSAGE),
+                    Err(CryptoError::DecryptionFailed)
+                ),
+                "a record sealed with {name} must not open"
+            );
+        }
     }
 
     #[test]

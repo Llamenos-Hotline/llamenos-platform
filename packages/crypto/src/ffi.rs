@@ -11,8 +11,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::encryption::{
-    decrypt_call_record, decrypt_message, derive_kek_from_pin, encrypt_message, encrypt_note,
-    random_bytes_32, EncryptedMessage, EncryptedNote, KeyEnvelope, RecipientKeyEnvelope,
+    derive_kek_from_pin, encrypt_note, random_bytes_32, EncryptedNote, KeyEnvelope,
 };
 use crate::errors::CryptoError;
 use crate::hpke_envelope;
@@ -110,47 +109,6 @@ pub fn encrypt_note_for_recipients(
     admin_pubkeys: Vec<String>,
 ) -> Result<EncryptedNote, CryptoError> {
     encrypt_note(payload_json, author_pubkey, &admin_pubkeys)
-}
-
-/// Encrypt a message for multiple readers using the envelope pattern.
-#[uniffi::export]
-pub fn encrypt_message_for_readers(
-    plaintext: &str,
-    reader_pubkeys: Vec<String>,
-) -> Result<EncryptedMessage, CryptoError> {
-    encrypt_message(plaintext, &reader_pubkeys)
-}
-
-/// Decrypt a message using the reader's envelope from the list.
-#[uniffi::export]
-pub fn decrypt_message_for_reader(
-    encrypted_content: &str,
-    reader_envelopes: Vec<RecipientKeyEnvelope>,
-    secret_key_hex: &str,
-    reader_pubkey: &str,
-) -> Result<String, CryptoError> {
-    decrypt_message(
-        encrypted_content,
-        &reader_envelopes,
-        secret_key_hex,
-        reader_pubkey,
-    )
-}
-
-/// Decrypt a call record's encrypted metadata using the admin's envelope.
-#[uniffi::export]
-pub fn decrypt_call_record_for_reader(
-    encrypted_content: &str,
-    admin_envelopes: Vec<RecipientKeyEnvelope>,
-    secret_key_hex: &str,
-    reader_pubkey: &str,
-) -> Result<String, CryptoError> {
-    decrypt_call_record(
-        encrypted_content,
-        &admin_envelopes,
-        secret_key_hex,
-        reader_pubkey,
-    )
 }
 
 /// Derive a 32-byte KEK from a credential using Argon2id, returned as hex.
@@ -346,26 +304,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decrypted, payload);
-    }
-
-    #[test]
-    fn encrypt_message_via_ffi() {
-        let (reader1_sk, reader1_pk) = generate_x25519_keypair();
-        let (_reader2_sk, reader2_pk) = generate_x25519_keypair();
-        let plaintext = "FFI message test";
-
-        let encrypted =
-            encrypt_message_for_readers(plaintext, vec![reader1_pk.clone(), reader2_pk.clone()])
-                .unwrap();
-
-        let decrypted = decrypt_message_for_reader(
-            &encrypted.encrypted_content,
-            encrypted.reader_envelopes,
-            &reader1_sk,
-            &reader1_pk,
-        )
-        .unwrap();
-        assert_eq!(decrypted, plaintext);
     }
 
     #[test]

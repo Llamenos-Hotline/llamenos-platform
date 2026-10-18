@@ -651,15 +651,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_compute_shared_x_hex(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_decrypt_call_record_for_reader(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_decrypt_message_for_reader(
-    ): Short
     external fun uniffi_llamenos_core_checksum_func_decrypt_server_event_hex(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_encrypt_message_for_readers(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_encrypt_note_for_recipients(
     ): Short
@@ -830,15 +824,9 @@ external fun uniffi_llamenos_core_fn_func_compute_sas_code(`sharedXHex`: RustBuf
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_compute_shared_x_hex(`ourSecretHex`: RustBuffer.ByValue,`theirPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_decrypt_call_record_for_reader(`encryptedContent`: RustBuffer.ByValue,`adminEnvelopes`: RustBuffer.ByValue,`secretKeyHex`: RustBuffer.ByValue,`readerPubkey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_decrypt_message_for_reader(`encryptedContent`: RustBuffer.ByValue,`readerEnvelopes`: RustBuffer.ByValue,`secretKeyHex`: RustBuffer.ByValue,`readerPubkey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_decrypt_server_event_hex(`encryptedHex`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_decrypt_with_shared_key_hex(`ciphertextHex`: RustBuffer.ByValue,`sharedXHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_encrypt_message_for_readers(`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_encrypt_note_for_recipients(`payloadJson`: RustBuffer.ByValue,`authorPubkey`: RustBuffer.ByValue,`adminPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1123,19 +1111,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_compute_shared_x_hex() != 4280.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_decrypt_call_record_for_reader() != 29910.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_decrypt_message_for_reader() != 16037.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_server_event_hex() != 59916.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 38820.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_encrypt_message_for_readers() != 62867.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_encrypt_note_for_recipients() != 17380.toShort()) {
@@ -3052,34 +3031,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Decrypt a call record's encrypted metadata using the admin's envelope.
-         */
-    @Throws(CryptoException::class) fun `decryptCallRecordForReader`(`encryptedContent`: kotlin.String, `adminEnvelopes`: List<RecipientKeyEnvelope>, `secretKeyHex`: kotlin.String, `readerPubkey`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_decrypt_call_record_for_reader(
-    
-        FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`adminEnvelopes`),FfiConverterString.lower(`secretKeyHex`),FfiConverterString.lower(`readerPubkey`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Decrypt a message using the reader's envelope from the list.
-         */
-    @Throws(CryptoException::class) fun `decryptMessageForReader`(`encryptedContent`: kotlin.String, `readerEnvelopes`: List<RecipientKeyEnvelope>, `secretKeyHex`: kotlin.String, `readerPubkey`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_decrypt_message_for_reader(
-    
-        FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`readerEnvelopes`),FfiConverterString.lower(`secretKeyHex`),FfiConverterString.lower(`readerPubkey`),_status)
-}
-    )
-    }
-    
-
-        /**
          * Decrypt a server-encrypted event payload (AES-256-GCM).
          *
          * Input: hex(nonce_12 + ciphertext), 32-byte key as hex.
@@ -3119,20 +3070,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_decrypt_with_shared_key_hex(
     
         FfiConverterString.lower(`ciphertextHex`),FfiConverterString.lower(`sharedXHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Encrypt a message for multiple readers using the envelope pattern.
-         */
-    @Throws(CryptoException::class) fun `encryptMessageForReaders`(`plaintext`: kotlin.String, `readerPubkeys`: List<kotlin.String>): EncryptedMessage {
-            return FfiConverterTypeEncryptedMessage.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_encrypt_message_for_readers(
-    
-        FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
 }
     )
     }

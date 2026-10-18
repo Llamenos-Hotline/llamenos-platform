@@ -14,10 +14,10 @@ use llamenos_core::auth::{
     create_auth_token_from_signing_key_without_nonce, verify_auth_token, AuthToken,
 };
 use llamenos_core::encryption::{
-    decrypt_call_record, decrypt_draft, decrypt_message, decrypt_note, decrypt_with_pin,
-    encrypt_draft, encrypt_export, encrypt_message, encrypt_note, encrypt_with_pin,
-    hpke_unwrap_key, hpke_wrap_key, EncryptedKeyData, EncryptedMessage, EncryptedNote, KeyEnvelope,
-    RecipientKeyEnvelope,
+    decrypt_draft, decrypt_note, decrypt_with_pin, encrypt_draft, encrypt_export, encrypt_note,
+    encrypt_with_pin, hpke_unwrap_key, hpke_wrap_key, open_record_for_reader,
+    seal_record_for_readers, EncryptedKeyData, EncryptedMessage, EncryptedNote, KeyEnvelope,
+    RecipientKeyEnvelope, RecordReader,
 };
 use llamenos_core::labels::*;
 use serde::{Deserialize, Serialize};
@@ -441,24 +441,24 @@ fn generate_and_verify_test_vectors() {
     // ─── NEW v2: Message encryption roundtrip ────────────────
     let msg_plaintext = "Hello from volunteer — E2EE message interop test";
     let msg_readers = vec![author_x25519.clone(), admin_x25519.clone()];
-    let encrypted_msg = encrypt_message(msg_plaintext, &msg_readers).unwrap();
+    let encrypted_msg = seal_stored_record(msg_plaintext, &msg_readers, LABEL_MESSAGE);
 
     // Volunteer can decrypt
-    let vol_decrypted = decrypt_message(
-        &encrypted_msg.encrypted_content,
-        &encrypted_msg.reader_envelopes,
+    let vol_decrypted = open_stored_record(
+        &encrypted_msg,
         TEST_SECRET_KEY,
         &author_x25519,
+        LABEL_MESSAGE,
     )
     .unwrap();
     assert_eq!(vol_decrypted, msg_plaintext);
 
     // Admin can decrypt
-    let admin_msg_decrypted = decrypt_message(
-        &encrypted_msg.encrypted_content,
-        &encrypted_msg.reader_envelopes,
+    let admin_msg_decrypted = open_stored_record(
+        &encrypted_msg,
         TEST_ADMIN_SECRET_KEY,
         &admin_x25519,
+        LABEL_MESSAGE,
     )
     .unwrap();
     assert_eq!(admin_msg_decrypted, msg_plaintext);
@@ -495,22 +495,20 @@ fn generate_and_verify_test_vectors() {
         "export must have nonce + ciphertext"
     );
 
-    // ─── NEW v2: Call record metadata (reuse message pattern with LABEL_CALL_META) ─
-    // Call records are encrypted using the same pattern as messages but with LABEL_CALL_META.
-    // Since there's no encrypt_call_record in Rust (server encrypts in JS), we manually
-    // construct one using the low-level HPKE + AES-256-GCM primitives.
+    // ─── NEW v2: Call record metadata (stored-record format, LABEL_CALL_META) ─
     let call_record_json =
         r#"{"answeredBy":"vol-pubkey-here","callerNumber":"+15551234567","duration":120}"#;
 
-    // Encrypt call record for admin only (volunteer can NOT decrypt call records)
-    let call_record_msg = encrypt_call_record_for_test(call_record_json, &[admin_x25519.clone()]);
+    // Sealed for admin only (volunteer can NOT decrypt call records)
+    let call_record_msg =
+        seal_stored_record(call_record_json, &[admin_x25519.clone()], LABEL_CALL_META);
 
     // Admin can decrypt
-    let call_decrypted = decrypt_call_record(
-        &call_record_msg.encrypted_content,
-        &call_record_msg.reader_envelopes,
+    let call_decrypted = open_stored_record(
+        &call_record_msg,
         TEST_ADMIN_SECRET_KEY,
         &admin_x25519,
+        LABEL_CALL_META,
     )
     .unwrap();
     assert_eq!(call_decrypted, call_record_json);
@@ -572,12 +570,12 @@ fn generate_and_verify_test_vectors() {
     assert!(!verify_auth_token(&adv_auth_token, "GET", "/api/calls").unwrap());
 
     // Message adversarial: wrong reader
-    let adv_msg = encrypt_message("adversarial message", &msg_readers).unwrap();
-    assert!(decrypt_message(
-        &adv_msg.encrypted_content,
-        &adv_msg.reader_envelopes,
+    let adv_msg = seal_stored_record("adversarial message", &msg_readers, LABEL_MESSAGE);
+    assert!(open_stored_record(
+        &adv_msg,
         TEST_WRONG_SECRET_KEY,
         &wrong_x25519,
+        LABEL_MESSAGE
     )
     .is_err());
 
@@ -789,60 +787,37 @@ fn generate_and_verify_test_vectors() {
     println!("Test vectors v2 written to {fixture_path}");
 }
 
-// ─── Helper: Encrypt call record for test (mirrors JS server-side encrypt) ───
+// ─── Helpers: stored-record seal / open (the format the server writes) ───────
 
-/// Manually encrypt call record metadata using HPKE + AES-256-GCM.
-/// This mirrors what the server (Worker) does in JS.
-fn encrypt_call_record_for_test(plaintext: &str, admin_pubkeys: &[String]) -> EncryptedMessage {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-    use zeroize::Zeroize;
-
-    // Generate random per-record key
-    let mut record_key = [0u8; 32];
-    getrandom::getrandom(&mut record_key).expect("getrandom failed");
-
-    // Generate random nonce (12 bytes for AES-256-GCM)
-    let mut nonce_bytes = [0u8; 12];
-    getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
-
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let cipher = Aes256Gcm::new_from_slice(&record_key).unwrap();
-    let ciphertext = cipher
-        .encrypt(
-            nonce,
-            Payload {
-                msg: plaintext.as_bytes(),
-                aad: LABEL_CALL_META.as_bytes(),
-            },
-        )
-        .unwrap();
-
-    let mut packed = Vec::with_capacity(12 + ciphertext.len());
-    packed.extend_from_slice(&nonce_bytes);
-    packed.extend_from_slice(&ciphertext);
-
-    // Wrap the record key for each admin using LABEL_CALL_META via HPKE
-    let reader_envelopes: Vec<RecipientKeyEnvelope> = admin_pubkeys
+/// Seal `plaintext` in the stored-record format (no AAD; the label is the HPKE
+/// `info`) — the one multi-reader format the server writes and every reader
+/// opens. Readers are addressed by their X25519 key.
+fn seal_stored_record(plaintext: &str, reader_pubkeys: &[String], label: &str) -> EncryptedMessage {
+    let readers: Vec<RecordReader> = reader_pubkeys
         .iter()
-        .map(|pk| {
-            let env = hpke_wrap_key(&record_key, pk, LABEL_CALL_META).unwrap();
-            RecipientKeyEnvelope {
-                pubkey: pk.clone(),
-                enc: env.enc,
-                ct: env.ct,
-            }
+        .map(|pk| RecordReader {
+            address: pk.clone(),
+            encryption_pubkey: pk.clone(),
         })
         .collect();
+    seal_record_for_readers(plaintext.as_bytes(), &readers, label).unwrap()
+}
 
-    record_key.zeroize();
-
-    EncryptedMessage {
-        encrypted_content: hex::encode(&packed),
-        reader_envelopes,
-    }
+/// Open a stored record as the reader addressed by `reader_pubkey`.
+fn open_stored_record(
+    record: &EncryptedMessage,
+    secret_key_hex: &str,
+    reader_pubkey: &str,
+    label: &str,
+) -> Result<String, llamenos_core::errors::CryptoError> {
+    let plaintext = open_record_for_reader(
+        &record.encrypted_content,
+        &record.reader_envelopes,
+        &[reader_pubkey],
+        secret_key_hex,
+        label,
+    )?;
+    Ok(String::from_utf8(plaintext.to_vec()).unwrap())
 }
 
 // ─── Helper: Tamper with hex string (flip a bit in the ciphertext area) ──────
@@ -959,34 +934,29 @@ fn message_encryption_roundtrip() {
 
     let plaintext = "Multi-reader encrypted message test";
     let readers = vec![author_x25519.clone(), admin_x25519.clone()];
-    let encrypted = encrypt_message(plaintext, &readers).unwrap();
+    let encrypted = seal_stored_record(plaintext, &readers, LABEL_MESSAGE);
 
     // Both readers can decrypt
-    let vol = decrypt_message(
-        &encrypted.encrypted_content,
-        &encrypted.reader_envelopes,
-        TEST_SECRET_KEY,
-        &author_x25519,
-    )
-    .unwrap();
+    let vol =
+        open_stored_record(&encrypted, TEST_SECRET_KEY, &author_x25519, LABEL_MESSAGE).unwrap();
     assert_eq!(vol, plaintext);
 
-    let admin = decrypt_message(
-        &encrypted.encrypted_content,
-        &encrypted.reader_envelopes,
+    let admin = open_stored_record(
+        &encrypted,
         TEST_ADMIN_SECRET_KEY,
         &admin_x25519,
+        LABEL_MESSAGE,
     )
     .unwrap();
     assert_eq!(admin, plaintext);
 
     // Wrong key fails
     let wrong_x25519 = x25519_pubkey(TEST_WRONG_SECRET_KEY);
-    let result = decrypt_message(
-        &encrypted.encrypted_content,
-        &encrypted.reader_envelopes,
+    let result = open_stored_record(
+        &encrypted,
         TEST_WRONG_SECRET_KEY,
         &wrong_x25519,
+        LABEL_MESSAGE,
     );
     assert!(result.is_err(), "Wrong reader key must fail");
 }
@@ -1033,25 +1003,20 @@ fn call_record_admin_only_decryption() {
     let vol_x25519 = x25519_pubkey(TEST_SECRET_KEY);
 
     let plaintext = r#"{"answeredBy":"vol123","callerNumber":"+1555000"}"#;
-    let encrypted = encrypt_call_record_for_test(plaintext, &[admin_x25519.clone()]);
+    let encrypted = seal_stored_record(plaintext, &[admin_x25519.clone()], LABEL_CALL_META);
 
     // Admin can decrypt
-    let decrypted = decrypt_call_record(
-        &encrypted.encrypted_content,
-        &encrypted.reader_envelopes,
+    let decrypted = open_stored_record(
+        &encrypted,
         TEST_ADMIN_SECRET_KEY,
         &admin_x25519,
+        LABEL_CALL_META,
     )
     .unwrap();
     assert_eq!(decrypted, plaintext);
 
     // Volunteer cannot (not in envelopes)
-    let result = decrypt_call_record(
-        &encrypted.encrypted_content,
-        &encrypted.reader_envelopes,
-        TEST_SECRET_KEY,
-        &vol_x25519,
-    );
+    let result = open_stored_record(&encrypted, TEST_SECRET_KEY, &vol_x25519, LABEL_CALL_META);
     assert!(result.is_err(), "Volunteer must not decrypt call records");
 }
 
