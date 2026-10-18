@@ -3,7 +3,9 @@ title: "Deploy: Kubernetes (Helm)"
 description: Deploy Llamenos to Kubernetes using the official Helm chart.
 ---
 
-This guide covers deploying Llamenos to a Kubernetes cluster using the official Helm chart. The chart manages the application, RustFS storage, WebSocket relay WebSocket relay, and optional signal-notifier/sip-bridge services as separate deployments. You provide a PostgreSQL database.
+This guide covers deploying Llamenos to a Kubernetes cluster using the official Helm chart. The chart manages the application, RustFS storage, and an optional Whisper transcription service as separate deployments. You provide a PostgreSQL database.
+
+> **Single replica only.** Llamenos's call routing, ringing state, and WebSocket/relay sessions are process-local — there is no shared pub/sub or sticky routing across pods yet. The chart refuses to render with `app.replicas` set to anything other than `1`, and ships no autoscaling. Do not try to scale the app deployment horizontally; see [Scaling](#scaling) below.
 
 ## Prerequisites
 
@@ -18,16 +20,23 @@ This guide covers deploying Llamenos to a Kubernetes cluster using the official 
 
 ```bash
 helm install llamenos deploy/helm/llamenos/ \
+  --set app.image.repository=YOUR_REGISTRY/llamenos \
+  --set app.env.WEBHOOK_BASE_URL=https://hotline.yourdomain.com \
   --set secrets.postgresPassword=YOUR_PG_PASSWORD \
   --set secrets.hmacSecret=YOUR_HMAC_HEX \
-  --set secrets.serverWebSocketSecret=YOUR_NOSTR_HEX \
+  --set secrets.serverSecret=YOUR_SERVER_SECRET_HEX \
   --set postgres.host=YOUR_PG_HOST \
-  --set RustFS.credentials.accessKey=your-access-key \
-  --set RustFS.credentials.secretKey=your-secret-key \
+  --set rustfs.credentials.accessKey=your-access-key \
+  --set rustfs.credentials.secretKey=your-secret-key \
   --set ingress.hosts[0].host=hotline.yourdomain.com \
   --set ingress.tls[0].secretName=llamenos-tls \
   --set ingress.tls[0].hosts[0]=hotline.yourdomain.com
 ```
+
+`app.image.repository` has no default — the chart refuses to render without it. Point it at
+wherever your own build of [`deploy/docker/Dockerfile`](https://github.com/Llamenos-Hotline/llamenos-platform/blob/main/deploy/docker/Dockerfile)
+actually publishes to; the project's own CI (`.github/workflows/docker.yml`) publishes to
+Docker Hub, not GHCR.
 
 Or create a `values-production.yaml` file for reproducible deploys:
 
@@ -35,10 +44,10 @@ Or create a `values-production.yaml` file for reproducible deploys:
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/rhonda-rodododo/llamenos-platform
+    repository: YOUR_REGISTRY/llamenos   # required — no default, see above
     tag: "1.0.0"
     pullPolicy: IfNotPresent
-  replicas: 2
+  replicas: 1   # the only supported value — see the single-replica note above
   resources:
     requests:
       cpu: "500m"
@@ -48,7 +57,8 @@ app:
       memory: "1Gi"
   env:
     HOTLINE_NAME: "Your Hotline"
-    NODE_ENV: "production"
+    ENVIRONMENT: "production"
+    WEBHOOK_BASE_URL: "https://hotline.yourdomain.com"
 
 postgres:
   host: my-rds-instance.region.rds.amazonaws.com
@@ -60,13 +70,13 @@ postgres:
 secrets:
   postgresPassword: "your-strong-password"
   hmacSecret: "64-hex-chars-hmac-signing-key"
-  serverWebSocketSecret: "64-hex-chars-WebSocket-identity-key"
+  serverSecret: "64-hex-chars-server-secret"
   # Telephony (at least one required for voice):
   # twilioAccountSid: ""
   # twilioAuthToken: ""
   # twilioPhoneNumber: ""
 
-RustFS:
+rustfs:
   enabled: true
   persistence:
     size: 50Gi
@@ -82,28 +92,14 @@ RustFS:
       cpu: "500m"
       memory: "512Mi"
 
-WebSocket relay:
-  enabled: true
-  resources:
-    requests:
-      cpu: "50m"
-      memory: "64Mi"
-    limits:
-      cpu: "200m"
-      memory: "128Mi"
-
-signalNotifier:
-  enabled: false   # set to true to enable the signal-notifier sidecar
-
+# asterisk, sipBridge, ntfy, and signal are declared in values.yaml but have
+# no backing Deployment in this chart yet — enabling them creates a Secret
+# and nothing else. Leave them disabled until that lands.
 sipBridge:
-  enabled: false   # set to true to enable the SIP bridge (Asterisk/FreeSWITCH/Kamailio)
-  # pbxType: asterisk
+  enabled: false
 
-monitoring:
-  enabled: true
-  serviceMonitor:
-    interval: 30s
-    scrapeTimeout: 10s
+metrics:
+  enabled: true   # creates a ServiceMonitor; requires the Prometheus Operator CRDs
 
 ingress:
   enabled: true
@@ -219,15 +215,15 @@ spec:
     - secretKey: hmac-secret
       remoteRef:
         key: llamenos/hmac-secret
-    - secretKey: server-WebSocket-secret
+    - secretKey: server-secret
       remoteRef:
-        key: llamenos/server-WebSocket-secret
-    - secretKey: RustFS-access-key
+        key: llamenos/server-secret
+    - secretKey: rustfs-access-key
       remoteRef:
-        key: llamenos/RustFS-access-key
-    - secretKey: RustFS-secret-key
+        key: llamenos/rustfs-access-key
+    - secretKey: rustfs-secret-key
       remoteRef:
-        key: llamenos/RustFS-secret-key
+        key: llamenos/rustfs-secret-key
 ```
 
 ### 2. Reference in Helm values
@@ -243,9 +239,9 @@ Alternatively, create the secret manually and reference it the same way:
 kubectl create secret generic llamenos-secrets \
   --from-literal=postgres-password=your_password \
   --from-literal=hmac-secret=your_hmac_hex \
-  --from-literal=server-WebSocket-secret=your_WebSocket_hex \
-  --from-literal=RustFS-access-key=your_key \
-  --from-literal=RustFS-secret-key=your_secret
+  --from-literal=server-secret=your_server_secret_hex \
+  --from-literal=rustfs-access-key=your_key \
+  --from-literal=rustfs-secret-key=your_secret
 ```
 
 ## Prometheus monitoring
@@ -255,17 +251,23 @@ kubectl create secret generic llamenos-secrets \
 If you run the [Prometheus Operator](https://prometheus-operator.dev/), enable the `ServiceMonitor` in your values:
 
 ```yaml
-monitoring:
+metrics:
   enabled: true
+  path: /api/metrics/prometheus
+  interval: 30s
+  # Name of an existing Secret with a "metrics-scrape-token" key, matching the
+  # app's METRICS_SCRAPE_TOKEN. Leave unset to require authenticated admin
+  # access instead of a bearer token.
+  scrapeTokenSecret: ""
+
+monitoring:
   serviceMonitor:
-    namespace: monitoring    # namespace where Prometheus is installed
-    interval: 30s
     scrapeTimeout: 10s
-    labels:
+    additionalLabels:
       release: kube-prometheus-stack
 ```
 
-The chart exposes `/metrics` on the app service and configures the `ServiceMonitor` to match your Prometheus selector.
+The chart exposes `metrics.path` on the app service and configures the `ServiceMonitor` to match your Prometheus selector. `monitoring.serviceMonitor.enabled` is deprecated — `metrics.enabled` is what actually gates the resource.
 
 ### Health probes
 
@@ -304,13 +306,13 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `app.image.repository` | Container image | `ghcr.io/rhonda-rodododo/llamenos-platform` |
+| `app.image.repository` | Container image (required — no default) | `""` |
 | `app.image.tag` | Image tag | Chart appVersion |
 | `app.image.pullPolicy` | Pull policy | `IfNotPresent` |
 | `app.port` | Application port | `3000` |
-| `app.replicas` | Pod replicas | `2` |
+| `app.replicas` | Pod replicas — the chart refuses any value other than `1` | `1` |
 | `app.resources` | CPU/memory requests and limits | `{}` |
-| `app.env` | Extra environment variables | `{}` |
+| `app.env` | Extra environment variables (`WEBHOOK_BASE_URL` required when `ENVIRONMENT` is `production`) | `{}` |
 
 ### PostgreSQL
 
@@ -328,7 +330,9 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 |-----------|-------------|---------|
 | `secrets.postgresPassword` | PostgreSQL password (required) | `""` |
 | `secrets.hmacSecret` | HMAC signing key — 64 hex chars (required) | `""` |
-| `secrets.serverWebSocketSecret` | Server WebSocket identity key — 64 hex chars (required) | `""` |
+| `secrets.serverSecret` | Server secret — 64 hex chars (required) | `""` |
+| `secrets.adminPubkey` | Admin Ed25519 identity key | `""` |
+| `secrets.adminDecryptionPubkey` | Admin X25519 HPKE recipient key (required whenever `adminPubkey` is set) | `""` |
 | `secrets.twilioAccountSid` | Twilio Account SID | `""` |
 | `secrets.twilioAuthToken` | Twilio Auth Token | `""` |
 | `secrets.twilioPhoneNumber` | Twilio phone number (E.164) | `""` |
@@ -336,55 +340,46 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 > **Tip**: For production, use `secrets.existingSecret` with External Secrets Operator, Sealed Secrets, or Vault.
 
-### RustFS
+### RustFS (blob storage)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `RustFS.enabled` | Deploy RustFS | `true` |
-| `RustFS.image.repository` | RustFS image | `RustFS/RustFS` |
-| `RustFS.image.tag` | RustFS tag | `latest` |
-| `RustFS.persistence.size` | Data volume size | `50Gi` |
-| `RustFS.persistence.storageClass` | Storage class | `""` |
-| `RustFS.credentials.accessKey` | RustFS root user (required) | `""` |
-| `RustFS.credentials.secretKey` | RustFS root password (required) | `""` |
-| `RustFS.resources` | CPU/memory requests and limits | `{}` |
+| `rustfs.enabled` | Deploy RustFS | `true` |
+| `rustfs.image.repository` | RustFS image | `rustfs/rustfs` |
+| `rustfs.image.tag` | RustFS tag | `latest` |
+| `rustfs.persistence.size` | Data volume size | `50Gi` |
+| `rustfs.persistence.storageClass` | Storage class | `""` |
+| `rustfs.credentials.accessKey` | RustFS root user (required) | `""` |
+| `rustfs.credentials.secretKey` | RustFS root password (required) | `""` |
+| `rustfs.resources` | CPU/memory requests and limits | `{}` |
 
-### WebSocket relay
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `WebSocket relay.enabled` | Deploy WebSocket relay | `true` |
-| `WebSocket relay.image.repository` | WebSocket relay image | `dockurr/WebSocket relay` |
-| `WebSocket relay.image.tag` | WebSocket relay tag | `latest` |
-| `WebSocket relay.resources` | CPU/memory requests and limits | `{}` |
-
-> WebSocket relay is a core service — real-time events (calls, notifications, hub state) require it. Keep `WebSocket relay.enabled: true`.
-
-### signal-notifier
+### Whisper transcription (optional)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `signalNotifier.enabled` | Deploy signal-notifier sidecar | `false` |
-| `signalNotifier.image.repository` | signal-notifier image | `ghcr.io/rhonda-rodododo/llamenos-signal-notifier` |
-| `signalNotifier.resources` | CPU/memory requests and limits | `{}` |
+| `whisper.enabled` | Deploy the Whisper transcription service | `false` |
+| `whisper.image.repository` / `.tag` | Whisper server image | `fedirz/faster-whisper-server` |
+| `whisper.model` | Whisper model name | `Systran/faster-whisper-base` |
+| `whisper.device` | `cpu` or `cuda` | `cpu` |
 
-### SIP bridge
+### Not yet wired: asterisk, sipBridge, ntfy, signal
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `sipBridge.enabled` | Deploy sip-bridge | `false` |
-| `sipBridge.pbxType` | Backend: `asterisk`, `freeswitch`, or `kamailio` | `asterisk` |
-| `sipBridge.resources` | CPU/memory requests and limits | `{}` |
+`values.yaml` declares `asterisk`, `sipBridge`, `ntfy`, and `signal` sections (PBX, SIP
+bridge, UnifiedPush relay, and Signal CLI bridge respectively), and enabling `sipBridge`
+does create a `bridge-secret` entry in the chart's Secret. **None of them has a
+Deployment/StatefulSet template yet** — enabling any of these deploys no workload at all.
+Leave them disabled until that support lands.
 
 ### Monitoring
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `monitoring.enabled` | Create ServiceMonitor | `false` |
-| `monitoring.serviceMonitor.interval` | Scrape interval | `30s` |
+| `metrics.enabled` | Create a Prometheus Operator `ServiceMonitor` | `false` |
+| `metrics.interval` | Scrape interval | `30s` |
+| `metrics.path` | Metrics path scraped on the app service | `/api/metrics/prometheus` |
+| `metrics.scrapeTokenSecret` | Existing Secret name holding a `metrics-scrape-token` key | `""` |
 | `monitoring.serviceMonitor.scrapeTimeout` | Scrape timeout | `10s` |
-| `monitoring.serviceMonitor.namespace` | Namespace for ServiceMonitor | Same as release |
-| `monitoring.serviceMonitor.labels` | Additional labels for Prometheus selector | `{}` |
+| `monitoring.serviceMonitor.additionalLabels` | Additional labels for the Prometheus selector | `{}` |
 
 ### Ingress
 
@@ -406,10 +401,10 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 ## Using an external S3-compatible store
 
-If you already have RustFS, RustFS, or another S3-compatible service, disable the built-in RustFS:
+If you already have a MinIO, RustFS, or another S3-compatible service, disable the built-in RustFS:
 
 ```yaml
-RustFS:
+rustfs:
   enabled: false
 
 app:
@@ -426,11 +421,10 @@ Before going live:
 
 - [ ] **Secrets via ESO or Sealed Secrets** — never commit secrets to values files
 - [ ] **Resource requests and limits** set on all deployments
-- [ ] **PodDisruptionBudget** configured (`minAvailable: 1`) for zero-downtime drains
 - [ ] **NetworkPolicy** restricting ingress to app pod from ingress controller only
 - [ ] **Read-only root filesystem** on app container (`securityContext.readOnlyRootFilesystem: true`)
 - [ ] **Non-root user** in container (`securityContext.runAsNonRoot: true`)
-- [ ] **PostgreSQL TLS** enabled (set `postgres.sslMode: require` in values)
+- [ ] **PostgreSQL TLS** enabled at the database (this chart has no `postgres.sslMode` toggle — append `?sslmode=require` via your managed database's connection settings, or front it with `stunnel`/a VPC-internal TLS proxy)
 - [ ] **RustFS TLS** or mTLS between app and RustFS
 - [ ] **cert-manager ClusterIssuer** configured for automatic Let's Encrypt renewal
 - [ ] **Prometheus ServiceMonitor** enabled and scraping
@@ -463,13 +457,24 @@ spec:
 
 ## Scaling
 
-The deployment uses `RollingUpdate` strategy for zero-downtime upgrades. Scale replicas based on your traffic:
+**Do not scale the app deployment horizontally.** Llamenos's call routing, ringing state,
+and WebSocket/relay sessions are process-local, with no shared pub/sub or sticky routing
+across pods — a second replica silently drops calls rung on one pod and misses events
+published by another. The chart ships no `HorizontalPodAutoscaler`, and any `helm
+install`/`helm upgrade` that sets `app.replicas` to anything other than `1` fails fast with
+an explicit error instead of rendering:
 
 ```bash
-kubectl scale deployment llamenos --replicas=3
+helm upgrade llamenos deploy/helm/llamenos/ -f values-production.yaml --set app.replicas=3
+# Error: execution error at (llamenos/templates/deployment-app.yaml:...): app.replicas is 3, ...
 ```
 
-Or set `app.replicas` in your values file. PostgreSQL advisory locks ensure data consistency across replicas.
+That guard only covers Helm itself — `kubectl scale deployment llamenos --replicas=3` talks
+to the Deployment directly and bypasses it, so it will appear to succeed. Don't run it; the
+app will start handling calls incorrectly with no crash or error to signal it.
+
+Scale vertically (`app.resources`) instead, or deploy a second independent hotline instance
+with its own database if you need to serve multiple, unrelated teams.
 
 ## Upgrading
 
@@ -495,11 +500,11 @@ helm uninstall llamenos
 ### Pod stuck in CrashLoopBackOff
 
 ```bash
-kubectl logs llamenos-0 -c app --previous
-kubectl describe pod llamenos-0
+kubectl logs -l app.kubernetes.io/instance=llamenos -c app --previous
+kubectl describe pod -l app.kubernetes.io/instance=llamenos
 ```
 
-Common causes: missing secrets (`hmacSecret`, `serverWebSocketSecret`), PostgreSQL unreachable, RustFS not ready.
+Common causes: missing secrets (`hmacSecret`, `serverSecret`), missing `app.env.WEBHOOK_BASE_URL`, PostgreSQL unreachable, RustFS not ready.
 
 ### Database connection errors
 
