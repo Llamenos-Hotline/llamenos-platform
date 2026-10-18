@@ -21,8 +21,8 @@ use llamenos_core::{
 use tauri::Manager;
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload},
 };
 
 fn err_str(e: impl std::fmt::Display) -> String {
@@ -95,8 +95,14 @@ impl CryptoState {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        *self.recovery_group_key.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *self.provisioning_ephemeral.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .recovery_group_key
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .provisioning_ephemeral
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         *self.puk_seed.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
@@ -119,6 +125,32 @@ impl CryptoState {
 
     fn encryption_secret_hex(&self) -> Result<String, String> {
         self.with_secrets(|s| Ok(hex::encode(s.encryption_seed)))
+    }
+
+    /// HPKE-open a sealed 32-byte key with the device X25519 secret — the inner
+    /// half of `hpke_open_key_from_state`, callable without a Tauri runtime so
+    /// the conformance tests open envelopes through the exact production call.
+    fn hpke_open_key_hex(
+        &self,
+        envelope: &hpke_envelope::HpkeEnvelope,
+        expected_label: &str,
+        aad_hex: &str,
+    ) -> Result<String, String> {
+        let aad = hex::decode(aad_hex).map_err(err_str)?;
+        let secret_hex = self.encryption_secret_hex()?;
+        let key = hpke_envelope::hpke_open_key(envelope, &secret_hex, expected_label, &aad)
+            .map_err(err_str)?;
+        Ok(hex::encode(key))
+    }
+
+    #[cfg(test)]
+    fn load_secrets_for_test(
+        &self,
+        secrets: device_keys::DeviceSecrets,
+        device_state: device_keys::DeviceKeyState,
+    ) {
+        *self.secrets.lock().unwrap() = Some(secrets);
+        *self.device_state.lock().unwrap() = Some(device_state);
     }
 }
 
@@ -356,11 +388,7 @@ pub fn hpke_open_key_from_state(
     expected_label: String,
     aad_hex: String,
 ) -> Result<String, String> {
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let secret_hex = state.encryption_secret_hex()?;
-    let key = hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad)
-        .map_err(err_str)?;
-    Ok(hex::encode(key))
+    state.hpke_open_key_hex(&envelope, &expected_label, &aad_hex)
 }
 
 // ── PUK (Per-User Key) ─────────────────────────────────────────────
@@ -556,8 +584,8 @@ pub fn hpke_unwrap_and_set_hub_key(
 ) -> Result<(), String> {
     let aad = hex::decode(&aad_hex).map_err(err_str)?;
     let secret_hex = state.encryption_secret_hex()?;
-    let key =
-        hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad).map_err(err_str)?;
+    let key = hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad)
+        .map_err(err_str)?;
     *lock_mutex(&state.hub_key)? = Some(key.to_vec());
     Ok(())
 }
@@ -589,9 +617,8 @@ pub fn wrap_hub_key_for_member(
     let mut key_arr = [0u8; 32];
     key_arr.copy_from_slice(key);
     let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let envelope =
-        hpke_envelope::hpke_seal_key(&key_arr, &recipient_pubkey_hex, &label, &aad)
-            .map_err(err_str)?;
+    let envelope = hpke_envelope::hpke_seal_key(&key_arr, &recipient_pubkey_hex, &label, &aad)
+        .map_err(err_str)?;
     serde_json::to_value(&envelope).map_err(err_str)
 }
 
@@ -775,11 +802,7 @@ pub struct ShamirSplitResult {
 /// Shamir split: split a hex-encoded secret into N shares with threshold K.
 /// Returns Vec of {x, y_hex} share objects and Vec of SHA-256 commitment hex strings.
 /// Internal only — NOT exposed as an IPC command (secrets must not pass through the JS bridge).
-fn shamir_split(
-    secret_hex: String,
-    total: u8,
-    threshold: u8,
-) -> Result<ShamirSplitResult, String> {
+fn shamir_split(secret_hex: String, total: u8, threshold: u8) -> Result<ShamirSplitResult, String> {
     if threshold < 2 || threshold > 5 {
         return Err("Threshold must be 2-5".into());
     }
@@ -1248,9 +1271,7 @@ pub fn provision_encrypt_for_device(
 /// New device: generate an ephemeral X25519 keypair for provisioning.
 /// The secret is stored in CryptoState. Only the pubkey is returned.
 #[tauri::command]
-pub fn provision_create_session(
-    state: tauri::State<'_, CryptoState>,
-) -> Result<String, String> {
+pub fn provision_create_session(state: tauri::State<'_, CryptoState>) -> Result<String, String> {
     let mut ephemeral_secret = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut ephemeral_secret);
 
@@ -1271,9 +1292,9 @@ pub fn provision_compute_sas(
     primary_enc_pubkey_hex: String,
 ) -> Result<String, String> {
     let guard = lock_mutex(&state.provisioning_ephemeral)?;
-    let ephemeral_secret = guard
-        .as_ref()
-        .ok_or_else(|| "No provisioning session. Call provision_create_session first.".to_string())?;
+    let ephemeral_secret = guard.as_ref().ok_or_else(|| {
+        "No provisioning session. Call provision_create_session first.".to_string()
+    })?;
 
     // Compute shared secret and derive SAS (same as Rust provisioning module).
     // parse_x25519_pubkey validates: 32-byte x-only format, rejects all-zeros identity point.
@@ -1319,7 +1340,9 @@ pub fn provision_decrypt_and_import(
     // Take the ephemeral secret out (consumed — one-shot)
     let ephemeral_secret = lock_mutex(&state.provisioning_ephemeral)?
         .take()
-        .ok_or_else(|| "No provisioning session. Call provision_create_session first.".to_string())?;
+        .ok_or_else(|| {
+            "No provisioning session. Call provision_create_session first.".to_string()
+        })?;
 
     // Decrypt the provisioned payload — returns BOTH device seeds.
     //
@@ -1371,8 +1394,11 @@ pub fn provision_decrypt_and_import(
 fn derive_encryption_seed_from_signing(signing_seed: &[u8; 32]) -> [u8; 32] {
     let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, signing_seed);
     let mut encryption_seed = [0u8; 32];
-    hk.expand(LABEL_DEVICE_ENCRYPTION_SEED.as_bytes(), &mut encryption_seed)
-        .expect("HKDF expand for encryption seed failed");
+    hk.expand(
+        LABEL_DEVICE_ENCRYPTION_SEED.as_bytes(),
+        &mut encryption_seed,
+    )
+    .expect("HKDF expand for encryption seed failed");
     encryption_seed
 }
 
@@ -1463,4 +1489,214 @@ pub fn decrypt_server_event(
         .map_err(|_| "Server event decryption failed (wrong key or corrupted data)".to_string())?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 in decrypted content: {e}"))
+}
+
+// ── Stored-record conformance (#1927) ───────────────────────────────
+//
+// The bytes in `stored-record-vectors.json` were sealed by the server's own
+// `encryptMessageForStorage`/`encryptCallRecordForStorage` — NO AAD on either
+// layer, the label bound as HPKE `info` only (PROTOCOL.md §2.4). The desktop's
+// production reader for these records is split across the IPC boundary:
+// `platform.ts` `decryptMessage`/`decryptCallRecord` builds an `HpkeEnvelope`
+// (`toIpcEnvelope`: v 3, registry labelId, base64url enc/ct), opens it via
+// `hpke_open_key_from_state` with an EMPTY AAD, then AES-256-GCM-decrypts the
+// content with an empty AAD. These tests walk that exact path against the
+// server's bytes — the secrets stay in `CryptoState`, in Rust, the whole time.
+#[cfg(test)]
+mod stored_record_conformance_tests {
+    use super::*;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use llamenos_core::labels::{LABEL_CALL_META, LABEL_MESSAGE, label_to_id};
+
+    const FIXTURE: &str =
+        include_str!("../../../packages/crypto/tests/fixtures/stored-record-vectors.json");
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Fixture {
+        aad_hex: FixtureAad,
+        readers: Vec<FixtureReader>,
+        records: Vec<FixtureRecord>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureAad {
+        content: String,
+        key_wrap: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureReader {
+        name: String,
+        x25519_secret_hex: String,
+        x25519_pubkey_hex: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureRecord {
+        name: String,
+        label: String,
+        plaintext: String,
+        encrypted_content: String,
+        reader_envelopes: Vec<FixtureEnvelope>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureEnvelope {
+        pubkey: String,
+        enc: String,
+        ct: String,
+    }
+
+    fn fixture() -> Fixture {
+        serde_json::from_str(FIXTURE).expect("stored-record-vectors.json does not parse")
+    }
+
+    fn record<'a>(f: &'a Fixture, label: &str) -> &'a FixtureRecord {
+        f.records
+            .iter()
+            .find(|r| r.label == label)
+            .unwrap_or_else(|| panic!("the fixture has no {label} record"))
+    }
+
+    /// A CryptoState unlocked with the fixture reader's X25519 secret.
+    fn state_for(reader: &FixtureReader) -> CryptoState {
+        let mut encryption_seed = [0u8; 32];
+        encryption_seed.copy_from_slice(&hex::decode(&reader.x25519_secret_hex).unwrap());
+        let secrets = device_keys::DeviceSecrets {
+            signing_seed: [0x5au8; 32],
+            encryption_seed,
+        };
+        let ds = device_keys::DeviceKeyState {
+            device_id: format!("vector-{}", reader.name),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        assert_eq!(
+            ds.encryption_pubkey_hex, reader.x25519_pubkey_hex,
+            "the fixture's published pubkey must be the one its secret derives"
+        );
+        let state = CryptoState::new();
+        state.load_secrets_for_test(secrets, ds);
+        state
+    }
+
+    /// `platform.ts` `toIpcEnvelope`: wire hex → IPC envelope (base64url, v 3,
+    /// registry labelId).
+    fn to_ipc_envelope(label: &str, wire: &FixtureEnvelope) -> hpke_envelope::HpkeEnvelope {
+        hpke_envelope::HpkeEnvelope {
+            v: 3,
+            label_id: label_to_id(label).expect("fixture label not in the registry"),
+            enc: URL_SAFE_NO_PAD.encode(hex::decode(&wire.enc).unwrap()),
+            ct: URL_SAFE_NO_PAD.encode(hex::decode(&wire.ct).unwrap()),
+        }
+    }
+
+    /// The webview's `aesGcmDecrypt(.., aadHex)`: nonce(12) || ciphertext+tag.
+    fn aes_gcm_decrypt(
+        encrypted_content_hex: &str,
+        key_hex: &str,
+        aad: &[u8],
+    ) -> Result<String, String> {
+        let data = hex::decode(encrypted_content_hex).map_err(err_str)?;
+        let key_bytes = hex::decode(key_hex).map_err(err_str)?;
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(err_str)?;
+        let plaintext = cipher
+            .decrypt(
+                Nonce::from_slice(&data[..12]),
+                Payload {
+                    msg: &data[12..],
+                    aad,
+                },
+            )
+            .map_err(|_| "AES-256-GCM open failed".to_string())?;
+        String::from_utf8(plaintext).map_err(err_str)
+    }
+
+    /// The desktop production reader for a stored record: IPC envelope →
+    /// `hpke_open_key_hex` (the inner half of `hpke_open_key_from_state`) →
+    /// AES-256-GCM, both under the caller-supplied AAD.
+    fn open_record_as(
+        state: &CryptoState,
+        rec: &FixtureRecord,
+        reader: &FixtureReader,
+        key_wrap_aad_hex: &str,
+        content_aad: &[u8],
+    ) -> Result<String, String> {
+        let wire = rec
+            .reader_envelopes
+            .iter()
+            .find(|e| e.pubkey == reader.x25519_pubkey_hex)
+            .expect("the fixture sealed no envelope to this reader");
+        let envelope = to_ipc_envelope(&rec.label, wire);
+        let key_hex = state.hpke_open_key_hex(&envelope, &rec.label, key_wrap_aad_hex)?;
+        aes_gcm_decrypt(&rec.encrypted_content, &key_hex, content_aad)
+    }
+
+    #[test]
+    fn the_fixture_declares_the_stored_record_aad_as_empty() {
+        let f = fixture();
+        assert_eq!(f.aad_hex.content, "");
+        assert_eq!(f.aad_hex.key_wrap, "");
+        for label in [LABEL_MESSAGE, LABEL_CALL_META] {
+            let rec = record(&f, label);
+            assert_eq!(rec.reader_envelopes.len(), f.readers.len(), "{}", rec.name);
+        }
+        // `platform.ts` hardcodes these labelIds at the decryptMessage /
+        // decryptCallRecord call sites; pin them against the registry so a
+        // registry reorder cannot silently desync the webview constants.
+        assert_eq!(label_to_id(LABEL_MESSAGE), Some(5));
+        assert_eq!(label_to_id(LABEL_CALL_META), Some(6));
+    }
+
+    #[test]
+    fn every_reader_opens_the_server_written_records() {
+        let f = fixture();
+        for reader in &f.readers {
+            let state = state_for(reader);
+            for label in [LABEL_MESSAGE, LABEL_CALL_META] {
+                let rec = record(&f, label);
+                assert_eq!(
+                    open_record_as(&state, rec, reader, "", &[]).unwrap_or_else(|e| panic!(
+                        "{} cannot open {}: {e}",
+                        reader.name, rec.name
+                    )),
+                    rec.plaintext,
+                    "{} opened {} but the plaintext differs",
+                    reader.name,
+                    rec.name
+                );
+            }
+        }
+    }
+
+    /// The canonical notes AAD (`label` / `label:key-wrap`) applied to a stored
+    /// record must fail on BOTH layers — the #1927 defect shape, pinned here so
+    /// the desktop can never re-introduce it at either call site.
+    #[test]
+    fn the_canonical_aad_does_not_open_a_server_written_record() {
+        use llamenos_core::envelope_aad::{content_aad_hex, key_wrap_aad_hex};
+
+        let f = fixture();
+        let reader = &f.readers[0];
+        let state = state_for(reader);
+        for label in [LABEL_MESSAGE, LABEL_CALL_META] {
+            let rec = record(&f, label);
+            let wrap = key_wrap_aad_hex(label).unwrap();
+            let content = content_aad_hex(label).unwrap();
+            let content_aad = hex::decode(&content).unwrap();
+            assert!(
+                open_record_as(&state, rec, reader, &wrap, &content_aad).is_err(),
+                "{} opened under the canonical AAD pair — the stored-record format is no longer pinned",
+                rec.name
+            );
+            // Each layer fails on its own as well.
+            assert!(open_record_as(&state, rec, reader, &wrap, &[]).is_err());
+            assert!(open_record_as(&state, rec, reader, "", &content_aad).is_err());
+        }
+    }
 }
