@@ -1564,6 +1564,29 @@ function localePatchPath(section: string): { oldPath: string; newPath: string } 
 }
 
 /**
+ * The only extended-header lines a section may carry and still be summarised
+ * by its value changes. A new or deleted regular file (100644) is an ordinary
+ * content change; everything else — `old mode`/`new mode` (mode change),
+ * `new file mode 120000` or `160000` (symlink, submodule), `rename`/`copy`
+ * and `similarity`, `Binary files`/`GIT binary patch` — says something the
+ * tree values do not, so the section keeps its patch.
+ */
+const PLAIN_PATCH_HEADER_LINE = /^(?:diff --git |index [0-9a-f]+\.\.[0-9a-f]+(?: 100644)?$|(?:new|deleted) file mode 100644$|--- |\+\+\+ )/
+
+/**
+ * True when the extended header — everything up to the `+++` line that ends it
+ * (or the first hunk) — is a plain content edit of a regular file. A section
+ * with no `+++` line at all (pure rename, mode change, binary) is all header.
+ */
+function isPlainContentPatch(section: string): boolean {
+  for (const line of section.split(/\r?\n/)) {
+    if (line.startsWith('+++ ') || line.startsWith('@@ ')) return true
+    if (line !== '' && !PLAIN_PATCH_HEADER_LINE.test(line)) return false
+  }
+  return true
+}
+
+/**
  * Flattens a locale object to `dotted.path -> JSON value`. Returns false when
  * two distinct leaves flatten to the same path (a literal `"a.b"` key beside a
  * nested `a.b`, or `"x[0]"` beside an array `x`): the later one would silently
@@ -1649,6 +1672,13 @@ function formatLocaleChanges(changes: LocaleValueChanges[]): string {
  * lines under different parents would cancel and hide a real change: with no
  * base export nothing is compacted. A locale file the trees cannot summarise
  * losslessly (unparseable, colliding paths) also keeps its patch verbatim.
+ *
+ * A section is summarised only when it is a plain content edit of ONE path:
+ * a rename or copy (`oldPath !== newPath`) keeps its raw patch, because
+ * comparing the new path against the base tree finds no counterpart and reads
+ * every value as added — the old file's removals would never be shown. Mode
+ * changes, symlinks, submodules and binary patches keep theirs for the same
+ * reason (see `PLAIN_PATCH_HEADER_LINE`).
  */
 export function compactReviewDiff(diff: string, headDir?: string, baseDir?: string): CompactedReviewDiff {
   if (headDir === undefined || baseDir === undefined) return { diff, summary: '' }
@@ -1656,7 +1686,8 @@ export function compactReviewDiff(diff: string, headDir?: string, baseDir?: stri
   const summarised: LocaleValueChanges[] = []
   for (const section of diff.split(/(?=^diff --git )/m)) {
     const paths = localePatchPath(section)
-    const changes = paths !== undefined && isLocaleDiffPath(paths.oldPath) && isLocaleDiffPath(paths.newPath)
+    const changes = paths !== undefined && paths.oldPath === paths.newPath && isLocaleDiffPath(paths.newPath) &&
+      isPlainContentPatch(section)
       ? snapshotLocaleChanges(paths.newPath, headDir, baseDir)
       : undefined
     if (changes === undefined) kept.push(section)

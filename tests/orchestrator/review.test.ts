@@ -518,6 +518,214 @@ describe('review prompt locale diff compaction', () => {
     expect(prompt).not.toContain('## Locale value changes')
   })
 
+  describe('sections whose patch carries more than a content edit keep the raw patch', () => {
+    const withSnapshots = (
+      files: { base?: Record<string, string>; head?: Record<string, string> },
+      run: (baseDir: string, headDir: string) => void,
+    ) => {
+      const baseDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-base-'))
+      const headDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-head-'))
+      for (const [name, content] of Object.entries(files.base ?? {})) snapshot(baseDir, name, content)
+      for (const [name, content] of Object.entries(files.head ?? {})) snapshot(headDir, name, content)
+      try {
+        run(baseDir, headDir)
+      } finally {
+        rmSync(baseDir, { recursive: true, force: true })
+        rmSync(headDir, { recursive: true, force: true })
+      }
+    }
+
+    it('a rename with edits shows the values the rename removed, which the new path alone cannot', () => {
+      // The new path has no base counterpart, so a tree diff of it reads every
+      // value as ADDED and the old file's deletions vanish from the prompt.
+      withSnapshots({
+        base: { 'old.json': JSON.stringify({ help: { hotline: 'Call 555-0100', consent: 'REMOVED-CONSENT-MUST-REACH-REVIEWER' } }) },
+        head: { 'new.json': JSON.stringify({ help: { hotline: 'Call 555-0100' } }) },
+      }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/old.json b/${localeDir}/new.json`,
+          'similarity index 80%',
+          `rename from ${localeDir}/old.json`,
+          `rename to ${localeDir}/new.json`,
+          'index 1111111..2222222 100644',
+          `--- a/${localeDir}/old.json`,
+          `+++ b/${localeDir}/new.json`,
+          '@@ -1,4 +1,3 @@',
+          '-    "consent": "REMOVED-CONSENT-MUST-REACH-REVIEWER"',
+          ...codeSection,
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/old.json`, `${localeDir}/new.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('REMOVED-CONSENT-MUST-REACH-REVIEWER')
+        expect(prompt).toContain(`rename from ${localeDir}/old.json`)
+        expect(prompt).not.toContain('## Locale value changes')
+      })
+    })
+
+    it('differing a/ and b/ paths keep the patch even when the header carries no rename lines', () => {
+      withSnapshots({
+        base: { 'old.json': JSON.stringify({ gone: 'PATH-ONLY-REMOVAL-MUST-REACH-REVIEWER' }) },
+        head: { 'new.json': JSON.stringify({}) },
+      }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/old.json b/${localeDir}/new.json`,
+          `--- a/${localeDir}/old.json`,
+          `+++ b/${localeDir}/new.json`,
+          '@@ -1 +1 @@',
+          '-{"gone":"PATH-ONLY-REMOVAL-MUST-REACH-REVIEWER"}',
+          '+{}',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('PATH-ONLY-REMOVAL-MUST-REACH-REVIEWER')
+        expect(prompt).not.toContain('## Locale value changes')
+      })
+    })
+
+    it('a pure rename (no hunks) still reaches the reviewer as a rename', () => {
+      withSnapshots({
+        base: { 'old.json': JSON.stringify({ a: '1' }) },
+        head: { 'new.json': JSON.stringify({ a: '1' }) },
+      }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/old.json b/${localeDir}/new.json`,
+          'similarity index 100%',
+          `rename from ${localeDir}/old.json`,
+          `rename to ${localeDir}/new.json`,
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
+
+        expect(prompt).toContain(`rename to ${localeDir}/new.json`)
+        expect(prompt).not.toContain('## Locale value changes')
+      })
+    })
+
+    it('a rename whose old side is not a locale file is not summarised by its new path', () => {
+      withSnapshots({ head: { 'new.json': JSON.stringify({ a: 'SMUGGLED-MUST-REACH-REVIEWER' }) } }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/scripts/old.json b/${localeDir}/new.json`,
+          'similarity index 70%',
+          'rename from scripts/old.json',
+          `rename to ${localeDir}/new.json`,
+          '@@ -1 +1 @@',
+          '+  "a": "SMUGGLED-MUST-REACH-REVIEWER"',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('rename from scripts/old.json')
+        expect(prompt).toContain('SMUGGLED-MUST-REACH-REVIEWER')
+      })
+    })
+
+    it('a mode change on an unchanged-content locale file is shown, not summarised as reordering', () => {
+      withSnapshots({
+        base: { 'de.json': JSON.stringify({ a: '1' }) },
+        head: { 'de.json': JSON.stringify({ a: '1' }) },
+      }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/de.json b/${localeDir}/de.json`,
+          'old mode 100644',
+          'new mode 100755',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/de.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('new mode 100755')
+        expect(prompt).not.toContain('keys only reordered')
+      })
+    })
+
+    it('a locale file that becomes a symlink keeps its patch, whatever the snapshot reads through it', () => {
+      // The head export holds a regular JSON file where the PR commits a link;
+      // reading the file's contents would show a harmless catalog.
+      withSnapshots({
+        base: { 'fr.json': JSON.stringify({ a: '1' }) },
+        head: { 'fr.json': JSON.stringify({ a: '1' }) },
+      }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/fr.json b/${localeDir}/fr.json`,
+          'old mode 100644',
+          'new mode 120000',
+          'index 1111111..2222222',
+          `--- a/${localeDir}/fr.json`,
+          `+++ b/${localeDir}/fr.json`,
+          '@@ -1 +1 @@',
+          '-{"a":"1"}',
+          '+/etc/passwd',
+          '\\ No newline at end of file',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/fr.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('new mode 120000')
+        expect(prompt).toContain('+/etc/passwd')
+        expect(prompt).not.toContain('## Locale value changes')
+      })
+    })
+
+    it('a newly added symlink keeps its patch', () => {
+      withSnapshots({ head: { 'ja.json': JSON.stringify({ a: '1' }) } }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/ja.json b/${localeDir}/ja.json`,
+          'new file mode 120000',
+          'index 0000000..2222222',
+          '--- /dev/null',
+          `+++ b/${localeDir}/ja.json`,
+          '@@ -0,0 +1 @@',
+          '+../../../../etc/shadow',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/ja.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('new file mode 120000')
+        expect(prompt).toContain('+../../../../etc/shadow')
+      })
+    })
+
+    it('a plain content edit is still compacted (the guard is not just "never compact")', () => {
+      withSnapshots({
+        base: { 'ko.json': JSON.stringify({ a: '1', b: '2' }) },
+        head: { 'ko.json': JSON.stringify({ a: '1', b: '3' }) },
+      }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/ko.json b/${localeDir}/ko.json`,
+          'index 1111111..2222222 100644',
+          `--- a/${localeDir}/ko.json`,
+          `+++ b/${localeDir}/ko.json`,
+          '@@ -1,2 +1,2 @@',
+          '-  "b": "2"',
+          '+  "b": "3"',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/ko.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('~ "b": "2" -> "3"')
+        expect(prompt).not.toContain(`diff --git a/${localeDir}/ko.json`)
+      })
+    })
+
+    it('a deleted locale file shows every removed value', () => {
+      withSnapshots({ base: { 'sv.json': JSON.stringify({ a: 'GONE-VALUE' }) } }, (baseDir, headDir) => {
+        const diff = [
+          `diff --git a/${localeDir}/sv.json b/${localeDir}/sv.json`,
+          'deleted file mode 100644',
+          'index 1111111..0000000',
+          `--- a/${localeDir}/sv.json`,
+          '+++ /dev/null',
+          '@@ -1 +0,0 @@',
+          '-{"a":"GONE-VALUE"}',
+          '',
+        ].join('\n')
+        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/sv.json`]), headDir, baseDir)
+
+        expect(prompt).toContain('- "a" = "GONE-VALUE"')
+      })
+    })
+  })
+
   it('cannot let a key name inject a line into the prompt', () => {
     const baseDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-base-'))
     const headDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-head-'))
