@@ -4,10 +4,21 @@ import SwiftUI
 
 /// Detail view for a single conversation, showing message bubbles, channel indicator,
 /// text input, and real-time updates.
+///
+/// The screen owns the conversation it shows (#1913). It used to look the conversation up
+/// in `vm.allConversations`, but this screen builds its own view model and only ever
+/// loaded messages into it, so that list was always empty: no channel header, a generic
+/// title, and a closed conversation that still offered a reply bar. The channel header,
+/// the title and the reply bar now all derive from `GET /api/conversations/:id`.
 struct ConversationDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
     @State private var viewModelBox = ViewModelBox<ConversationsViewModel>()
+
+    /// The conversation as the server last reported it; nil until it has loaded.
+    @State private var conversation: AppConversation?
+    /// Why the conversation could not be loaded, if it could not.
+    @State private var conversationLoadError: String?
 
     let conversationId: String
 
@@ -15,59 +26,89 @@ struct ConversationDetailView: View {
         let vm = resolvedViewModel
 
         VStack(spacing: 0) {
-            // Channel indicator
-            channelHeader(vm: vm)
+            if let conversation {
+                channelHeader(conversation)
+            }
 
             // Messages
-            if vm.isLoadingMessages && vm.currentMessages.isEmpty {
+            if let error = conversationLoadError {
+                errorState(error, vm: vm)
+            } else if conversation == nil || (vm.isLoadingMessages && vm.currentMessages.isEmpty) {
                 loadingState
+            } else if let error = vm.errorMessage, vm.currentMessages.isEmpty {
+                // A failed message load is an error, not an empty conversation.
+                errorState(error, vm: vm)
             } else if vm.currentMessages.isEmpty {
                 emptyMessagesState
             } else {
                 messagesList(vm: vm)
             }
 
-            // Reply input
-            replyBar(vm: vm)
+            // Reply input — only once the conversation is known, and never for a
+            // closed one. Offering a reply before the status has loaded would let a
+            // volunteer type into a conversation that turns out to be closed.
+            if let conversation {
+                replyBar(vm: vm, conversation: conversation)
+            }
         }
-        .navigationTitle(conversationTitle(vm: vm))
+        .navigationTitle(conversationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await vm.loadMessages(for: conversationId)
+        .task(id: conversationId) {
+            await load(vm: vm)
         }
+        // `.contain` keeps the container a container (#1914). A bare identifier on a
+        // plain VStack is pushed down onto every child, overwriting `reply-text-field`,
+        // `send-message-button` and the header's id, so none of them was reachable.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversation-detail-view")
+    }
+
+    // MARK: - Loading
+
+    private func load(vm: ConversationsViewModel) async {
+        await loadConversation()
+        await vm.loadMessages(for: conversationId)
+    }
+
+    private func loadConversation() async {
+        do {
+            let loaded: AppConversation = try await appState.apiService.request(
+                method: "GET",
+                path: "/api/conversations/\(conversationId)"
+            )
+            conversation = loaded
+            conversationLoadError = nil
+        } catch {
+            conversationLoadError = error.localizedDescription
+        }
     }
 
     // MARK: - Channel Header
 
-    @ViewBuilder
-    private func channelHeader(vm: ConversationsViewModel) -> some View {
-        let conversation = vm.allConversations.first { $0.id == conversationId }
+    private func channelHeader(_ conversation: AppConversation) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: conversation.channel.iconName)
+                .font(.caption)
+                .foregroundStyle(channelColor(for: conversation.channel))
 
-        if let conversation {
-            HStack(spacing: 8) {
-                Image(systemName: conversation.channel.iconName)
-                    .font(.caption)
-                    .foregroundStyle(channelColor(for: conversation.channel))
+            Text(conversation.channel.displayName)
+                .font(.brand(.caption))
+                .fontWeight(.medium)
+                .foregroundStyle(channelColor(for: conversation.channel))
 
-                Text(conversation.channel.displayName)
-                    .font(.brand(.caption))
-                    .fontWeight(.medium)
-                    .foregroundStyle(channelColor(for: conversation.channel))
+            Spacer()
 
-                Spacer()
-
-                BadgeView(
-                    text: conversation.conversationStatus.displayName,
-                    color: statusColor(for: conversation.conversationStatus),
-                    style: .subtle
-                )
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.brandCard)
-            .accessibilityIdentifier("conversation-channel-header")
+            BadgeView(
+                text: conversation.conversationStatus.displayName,
+                color: statusColor(for: conversation.conversationStatus),
+                style: .subtle
+            )
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.brandCard)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("conversation-channel-header")
     }
 
     // MARK: - Messages List
@@ -106,11 +147,8 @@ struct ConversationDetailView: View {
     // MARK: - Reply Bar
 
     @ViewBuilder
-    private func replyBar(vm: ConversationsViewModel) -> some View {
-        let conversation = vm.allConversations.first { $0.id == conversationId }
-        let isClosed = conversation?.conversationStatus == .closed
-
-        if isClosed {
+    private func replyBar(vm: ConversationsViewModel, conversation: AppConversation) -> some View {
+        if conversation.conversationStatus == .closed {
             HStack {
                 Image(systemName: "lock.fill")
                     .font(.caption)
@@ -123,7 +161,9 @@ struct ConversationDetailView: View {
                 .foregroundStyle(Color.brandMutedForeground)
             }
             .padding(12)
+            .frame(maxWidth: .infinity)
             .background(Color.brandCard)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("conversation-closed-bar")
         } else {
             VStack(spacing: 0) {
@@ -142,7 +182,12 @@ struct ConversationDetailView: View {
                     .accessibilityIdentifier("reply-text-field")
 
                     Button {
-                        Task { await vm.sendReply() }
+                        Task {
+                            await vm.sendReply()
+                            // A reply can change the conversation's status (a waiting
+                            // conversation is claimed by answering it); re-read it.
+                            await loadConversation()
+                        }
                     } label: {
                         if vm.isSending {
                             ProgressView()
@@ -171,6 +216,33 @@ struct ConversationDetailView: View {
         }
     }
 
+    // MARK: - Error State
+
+    private func errorState(_ error: String, vm: ConversationsViewModel) -> some View {
+        ContentUnavailableView {
+            Label(
+                NSLocalizedString("conversations_error_title", comment: "Unable to Load"),
+                systemImage: "exclamationmark.triangle"
+            )
+        } description: {
+            Text(error)
+        } actions: {
+            Button {
+                Task {
+                    conversationLoadError = nil
+                    vm.errorMessage = nil
+                    await load(vm: vm)
+                }
+            } label: {
+                Text(NSLocalizedString("retry", comment: "Retry"))
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("conversation-detail-error")
+    }
+
     // MARK: - Empty State
 
     private var emptyMessagesState: some View {
@@ -186,6 +258,7 @@ struct ConversationDetailView: View {
             .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("messages-empty-state")
     }
 
@@ -200,14 +273,14 @@ struct ConversationDetailView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("messages-loading")
     }
 
     // MARK: - Helpers
 
-    private func conversationTitle(vm: ConversationsViewModel) -> String {
-        let conversation = vm.allConversations.first { $0.id == conversationId }
-        return conversation?.contactDisplayHash
+    private var conversationTitle: String {
+        conversation?.contactDisplayHash
             ?? NSLocalizedString("conversation_title", comment: "Conversation")
     }
 
