@@ -17,29 +17,26 @@ again.
 Usage:
     python3 deploy/ansible/scripts/check-required-env.py
 
-When the rendered files are absent (the normal case in CI, where main's
-workflow invokes this script directly), the script renders them itself by
-running playbooks/check-env-templates.yml four times -- the
-production/required-vars scenario, the all-optional-features scenario, and the
-two /api/test-* dev-route scenarios (staging must emit the vars, production must
-not). The renders can also be produced manually beforehand:
+The script ALWAYS renders its own inputs, into a fresh temporary directory
+it creates and deletes per run, by invoking playbooks/check-env-templates.yml
+once per scenario -- the production/required-vars scenario, the
+all-optional-features scenario, the two /api/test-* dev-route scenarios
+(staging must emit the vars, production must not) and the in-app-calling
+scenario. It never reads a pre-existing file.
 
-    cd deploy/ansible
-    ansible-playbook playbooks/check-env-templates.yml \\
-        -e @vars.example.yml -e app_environment=production \\
-        -e webhook_base_url=https://example.org
-    ansible-playbook playbooks/check-env-templates.yml \\
-        -e @vars.example.yml -e @scripts/full-scenario.extra-vars.json
-    ansible-playbook playbooks/check-env-templates.yml \\
-        -e @vars.example.yml -e env_check_suffix=-staging-devroutes \\
-        -e app_environment=staging -e dev_routes_enabled=true \\
-        -e dev_reset_secret=<>= 32 chars; see DEV_ROUTE_SECRET_FIXTURE>
-    ansible-playbook playbooks/check-env-templates.yml \\
-        -e @vars.example.yml -e env_check_suffix=-prod-devroutes \\
-        -e app_environment=production -e webhook_base_url=https://example.org \\
-        -e dev_routes_enabled=true \\
-        -e dev_reset_secret=<>= 32 chars; see DEV_ROUTE_SECRET_FIXTURE>
-    python3 scripts/check-required-env.py
+That is deliberate, and it is the fix for a real hole. This script used to
+render to fixed /tmp paths and short-circuit with `if all(p.is_file() for p in
+rendered): return`. On any machine where /tmp survives between runs -- notably
+the self-hosted runner fleet, where three runners share one box -- the second
+and every later invocation reused the FIRST run's output. Deleting SERVER_SECRET
+from templates/env/_worker-required-env.j2 still produced "PASSED, rc=0",
+because the stale render still contained it. This is the only env-var drift
+guard in the repo, so a green that means nothing is worse than no guard at all.
+A fixed path on a shared machine was also trivially guessable/poisonable by any
+other user on the box. Both problems are closed by owning a private directory
+per run: there is no longer any code path that can read another run's files.
+
+Requires ansible-playbook on PATH (CI's ansible-validate job installs it).
 
 Exits non-zero (and prints exactly what's missing, from which file) on any
 gap. Run from anywhere; pass --repo-root explicitly if the auto-computed
@@ -52,7 +49,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 # Unconditionally-required vars are extracted generically from any
 # `assertNonEmpty(env, 'X')` / `assertHex64(env, 'X')` call site at the TOP
@@ -603,6 +602,32 @@ def check_paired_vars(targets: dict[str, Path]) -> list[str]:
     return failures
 
 
+# Every file the render playbook writes, by the name the checks below use.
+# Deliberately a fixed table and not command-line flags: each path must be one
+# THIS run just wrote, into a directory this run just created, so there is no
+# way to point the gate at a previous run's output.
+RENDER_FILES = {
+    "monolithic_env": "llamenos-check-env-monolithic.env",
+    "app_env": "llamenos-check-env-app.env",
+    "monolithic_env_full": "llamenos-check-env-monolithic-full.env",
+    "app_env_full": "llamenos-check-env-app-full.env",
+    "monolithic_env_staging_devroutes": "llamenos-check-env-monolithic-staging-devroutes.env",
+    "app_env_staging_devroutes": "llamenos-check-env-app-staging-devroutes.env",
+    "monolithic_env_prod_devroutes": "llamenos-check-env-monolithic-prod-devroutes.env",
+    "app_env_prod_devroutes": "llamenos-check-env-app-prod-devroutes.env",
+    "compose_postgres_staging": "llamenos-check-compose-postgres-staging-devroutes.yml",
+    "compose_postgres_prod": "llamenos-check-compose-postgres-prod-devroutes.yml",
+    "compose_monolithic_staging": "llamenos-check-compose-monolithic-staging-devroutes.yml",
+    "compose_monolithic_prod": "llamenos-check-compose-monolithic-prod-devroutes.yml",
+    "app_env_calling": "llamenos-check-env-app-calling.env",
+    "monolithic_env_calling": "llamenos-check-env-monolithic-calling.env",
+    "compose_app_calling": "llamenos-check-compose-app-calling.yml",
+    "compose_monolithic_calling": "llamenos-check-compose-monolithic-calling.yml",
+    "compose_app_base": "llamenos-check-compose-app.yml",
+    "compose_coturn_calling": "llamenos-check-compose-coturn-calling.yml",
+}
+
+
 def rendered_env(env_file: Path) -> dict[str, str]:
     """Parse a rendered .env into {key: value}."""
     env: dict[str, str] = {}
@@ -620,27 +645,25 @@ def rendered_keys(env_file: Path) -> set[str]:
     return set(rendered_env(env_file))
 
 
-def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
-    """Render every verification output (.env and compose) if absent.
+def render_env_files(repo_root: Path, dest_dir: Path) -> None:
+    """Render every verification output (.env and compose) into `dest_dir`.
 
-    Main's ci.yml invokes this script directly (no separate render step), so
-    the script must be able to produce its own inputs. If the files already
-    exist (a dev ran playbooks/check-env-templates.yml manually), they are
-    used as-is.
+    There is no "already rendered, skip it" fast path and must never be one:
+    that short-circuit is exactly what let a stale render from a previous run
+    satisfy this gate on a box with a persistent /tmp (see module docstring).
+    `dest_dir` is a fresh per-run directory owned by the caller, so the only
+    files this function's consumers can read are the ones it just produced.
     """
-    if all(p.is_file() for p in rendered):
-        return
-
     ansible_dir = repo_root / "deploy" / "ansible"
     playbook = ansible_dir / "playbooks" / "check-env-templates.yml"
     if shutil.which("ansible-playbook") is None:
         raise SystemExit(
-            "[check-required-env] Rendered files missing and ansible-playbook "
-            "is not on PATH -- install ansible (pip install ansible) or run "
-            "playbooks/check-env-templates.yml yourself first (see docstring)."
+            "[check-required-env] ansible-playbook is not on PATH -- this "
+            "script renders the templates itself and cannot fall back to a "
+            "previous run's output. Install ansible (pip install ansible)."
         )
 
-    print("[check-required-env] Rendered files missing -- rendering via ansible-playbook ...")
+    print(f"[check-required-env] Rendering templates into {dest_dir} ...")
     commands = [
         [
             "ansible-playbook",
@@ -709,6 +732,7 @@ def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
         ],
     ]
     for cmd in commands:
+        cmd = [*cmd, "-e", f"env_check_dest_dir={dest_dir}"]
         proc = subprocess.run(cmd, cwd=ansible_dir)
         if proc.returncode != 0:
             raise SystemExit(
@@ -716,7 +740,7 @@ def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
                 f"{' '.join(cmd)}"
             )
 
-    missing = [str(p) for p in rendered if not p.is_file()]
+    missing = [name for name in RENDER_FILES.values() if not (dest_dir / name).is_file()]
     if missing:
         raise SystemExit(
             "[check-required-env] FATAL: render playbook succeeded but did not "
@@ -732,157 +756,20 @@ def main() -> int:
         default=Path(__file__).resolve().parents[3],
         help="Path to the llamenos-platform repo root (default: computed from script location).",
     )
-    parser.add_argument(
-        "--monolithic-env",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic.env"),
-        help="Rendered output of roles/llamenos/templates/env.j2 "
-        "(produced by playbooks/check-env-templates.yml).",
-    )
-    parser.add_argument(
-        "--app-env",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app.env"),
-        help="Rendered output of roles/llamenos-app/templates/env/app.j2 "
-        "(produced by playbooks/check-env-templates.yml).",
-    )
-    parser.add_argument(
-        "--monolithic-env-full",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic-full.env"),
-        help="Rendered output of roles/llamenos/templates/env.j2 with every "
-        "optional feature enabled (produced by playbooks/check-env-templates.yml "
-        "-e @scripts/full-scenario.extra-vars.json).",
-    )
-    parser.add_argument(
-        "--app-env-full",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app-full.env"),
-        help="Rendered output of roles/llamenos-app/templates/env/app.j2 with "
-        "every optional feature enabled.",
-    )
-    parser.add_argument(
-        "--monolithic-env-staging-devroutes",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic-staging-devroutes.env"),
-        help="Rendered output of roles/llamenos/templates/env.j2 at "
-        "app_environment=staging with dev_routes_enabled=true and a >= 32-char "
-        "dev_reset_secret (the /api/test-* scenario the E2E suite needs, #723).",
-    )
-    parser.add_argument(
-        "--app-env-staging-devroutes",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app-staging-devroutes.env"),
-        help="Rendered output of roles/llamenos-app/templates/env/app.j2 in the "
-        "same staging dev-routes scenario.",
-    )
-    parser.add_argument(
-        "--monolithic-env-prod-devroutes",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic-prod-devroutes.env"),
-        help="Rendered output of roles/llamenos/templates/env.j2 with the SAME "
-        "dev-route inputs but app_environment=production -- must carry neither var.",
-    )
-    parser.add_argument(
-        "--app-env-prod-devroutes",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app-prod-devroutes.env"),
-        help="Rendered output of roles/llamenos-app/templates/env/app.j2 in the "
-        "same production dev-routes scenario.",
-    )
-    parser.add_argument(
-        "--compose-postgres-staging",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-postgres-staging-devroutes.yml"),
-        help="Rendered roles/llamenos-postgres/templates/compose/postgres.j2 for the "
-        "staging + dev-routes scenario.",
-    )
-    parser.add_argument(
-        "--compose-postgres-prod",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-postgres-prod-devroutes.yml"),
-        help="Rendered roles/llamenos-postgres/templates/compose/postgres.j2 for the "
-        "production + dev-routes scenario.",
-    )
-    parser.add_argument(
-        "--compose-monolithic-staging",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-monolithic-staging-devroutes.yml"),
-        help="Rendered roles/llamenos/templates/docker-compose.j2 for the staging + "
-        "dev-routes scenario.",
-    )
-    parser.add_argument(
-        "--compose-monolithic-prod",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-monolithic-prod-devroutes.yml"),
-        help="Rendered roles/llamenos/templates/docker-compose.j2 for the production + "
-        "dev-routes scenario.",
-    )
-    parser.add_argument(
-        "--app-env-calling",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app-calling.env"),
-        help="Rendered roles/llamenos-app/templates/env/app.j2 with the PBX, SIP "
-        "edge and TURN relay enabled (scripts/calling-scenario.extra-vars.json).",
-    )
-    parser.add_argument(
-        "--monolithic-env-calling",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic-calling.env"),
-        help="Rendered roles/llamenos/templates/env.j2 in the same calling scenario.",
-    )
-    parser.add_argument(
-        "--compose-app-calling",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-app-calling.yml"),
-        help="Rendered roles/llamenos-app/templates/compose/app.j2 in the calling "
-        "scenario -- must carry the SIP trust-anchor bind mount.",
-    )
-    parser.add_argument(
-        "--compose-monolithic-calling",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-monolithic-calling.yml"),
-        help="Rendered roles/llamenos/templates/docker-compose.j2 in the calling scenario.",
-    )
-    parser.add_argument(
-        "--compose-app-base",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-app.yml"),
-        help="Rendered roles/llamenos-app/templates/compose/app.j2 with the calling "
-        "features OFF -- must carry no anchor mount.",
-    )
-    parser.add_argument(
-        "--compose-coturn-calling",
-        type=Path,
-        default=Path("/tmp/llamenos-check-compose-coturn-calling.yml"),
-        help="Rendered roles/llamenos-coturn/templates/compose/coturn.j2 -- its "
-        "--static-auth-secret must equal the app's TURN_SECRET.",
-    )
     args = parser.parse_args()
 
-    rendered = [
-        args.monolithic_env,
-        args.app_env,
-        args.monolithic_env_full,
-        args.app_env_full,
-        args.monolithic_env_staging_devroutes,
-        args.app_env_staging_devroutes,
-        args.monolithic_env_prod_devroutes,
-        args.app_env_prod_devroutes,
-        args.compose_postgres_staging,
-        args.compose_postgres_prod,
-        args.compose_monolithic_staging,
-        args.compose_monolithic_prod,
-        args.app_env_calling,
-        args.monolithic_env_calling,
-        args.compose_app_calling,
-        args.compose_monolithic_calling,
-        args.compose_app_base,
-        args.compose_coturn_calling,
-    ]
-    ensure_rendered(args.repo_root, rendered)
+    # A fresh directory per run, removed on exit. Intentionally NOT
+    # configurable: every render destination this script reads must be one it
+    # just wrote, or the gate can pass on stale output (see module docstring).
+    with tempfile.TemporaryDirectory(prefix="llamenos-check-env-") as tmp:
+        dest_dir = Path(tmp)
+        render_env_files(args.repo_root, dest_dir)
+        renders = SimpleNamespace(**{k: dest_dir / v for k, v in RENDER_FILES.items()})
+        return run_checks(args.repo_root, renders)
 
-    config_ts = args.repo_root / "apps" / "worker" / "lib" / "config.ts"
+
+def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
+    config_ts = repo_root / "apps" / "worker" / "lib" / "config.ts"
     if not config_ts.is_file():
         print(f"[check-required-env] FATAL: {config_ts} not found", file=sys.stderr)
         return 2
@@ -900,8 +787,8 @@ def main() -> int:
     required = unconditional + conditional
 
     targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role)": args.monolithic_env,
-        "roles/llamenos-app/templates/env/app.j2 (per-service app role)": args.app_env,
+        "roles/llamenos/templates/env.j2 (monolithic/demo role)": renders.monolithic_env,
+        "roles/llamenos-app/templates/env/app.j2 (per-service app role)": renders.app_env,
     }
 
     failures: list[str] = []
@@ -926,8 +813,8 @@ def main() -> int:
     print(f"  {', '.join(OPTIONAL_VARS_WITH_CONSUMERS)}")
 
     full_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, full scenario)": args.monolithic_env_full,
-        "roles/llamenos-app/templates/env/app.j2 (per-service app role, full scenario)": args.app_env_full,
+        "roles/llamenos/templates/env.j2 (monolithic/demo role, full scenario)": renders.monolithic_env_full,
+        "roles/llamenos-app/templates/env/app.j2 (per-service app role, full scenario)": renders.app_env_full,
     }
     for label, path in full_targets.items():
         if not path.is_file():
@@ -976,15 +863,15 @@ def main() -> int:
 
     staging_devroute_targets = {
         "roles/llamenos/templates/env.j2 (monolithic/demo role, staging + dev routes)":
-            args.monolithic_env_staging_devroutes,
+            renders.monolithic_env_staging_devroutes,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, staging + dev routes)":
-            args.app_env_staging_devroutes,
+            renders.app_env_staging_devroutes,
     }
     production_devroute_targets = {
         "roles/llamenos/templates/env.j2 (monolithic/demo role, production + dev routes)":
-            args.monolithic_env_prod_devroutes,
+            renders.monolithic_env_prod_devroutes,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, production + dev routes)":
-            args.app_env_prod_devroutes,
+            renders.app_env_prod_devroutes,
     }
     for label, path in {**staging_devroute_targets, **production_devroute_targets}.items():
         if not path.is_file():
@@ -1007,15 +894,15 @@ def main() -> int:
         check_pg_port_publication(
             {
                 "roles/llamenos-postgres/templates/compose/postgres.j2 (per-service, staging + dev routes)":
-                    args.compose_postgres_staging,
+                    renders.compose_postgres_staging,
                 "roles/llamenos/templates/docker-compose.j2 (monolithic, staging + dev routes)":
-                    args.compose_monolithic_staging,
+                    renders.compose_monolithic_staging,
             },
             {
                 "roles/llamenos-postgres/templates/compose/postgres.j2 (per-service, production + dev routes)":
-                    args.compose_postgres_prod,
+                    renders.compose_postgres_prod,
                 "roles/llamenos/templates/docker-compose.j2 (monolithic, production + dev routes)":
-                    args.compose_monolithic_prod,
+                    renders.compose_monolithic_prod,
             },
         )
     )
@@ -1031,29 +918,29 @@ def main() -> int:
     calling_failures = check_calling_vars(
         calling_env={
             "roles/llamenos/templates/env.j2 (monolithic, calling enabled)":
-                args.monolithic_env_calling,
+                renders.monolithic_env_calling,
             "roles/llamenos-app/templates/env/app.j2 (per-service, calling enabled)":
-                args.app_env_calling,
+                renders.app_env_calling,
         },
         base_env={
             "roles/llamenos/templates/env.j2 (monolithic, calling disabled)":
-                args.monolithic_env,
+                renders.monolithic_env,
             "roles/llamenos-app/templates/env/app.j2 (per-service, calling disabled)":
-                args.app_env,
+                renders.app_env,
         },
         calling_compose={
             "roles/llamenos-app/templates/compose/app.j2 (calling enabled)":
-                args.compose_app_calling,
+                renders.compose_app_calling,
             "roles/llamenos/templates/docker-compose.j2 (calling enabled)":
-                args.compose_monolithic_calling,
+                renders.compose_monolithic_calling,
         },
         base_compose={
             "roles/llamenos-app/templates/compose/app.j2 (calling disabled)":
-                args.compose_app_base,
+                renders.compose_app_base,
             "roles/llamenos/templates/docker-compose.j2 (calling disabled)":
-                args.compose_monolithic_prod,
+                renders.compose_monolithic_prod,
         },
-        coturn_compose=args.compose_coturn_calling,
+        coturn_compose=renders.compose_coturn_calling,
     )
     failures.extend(calling_failures)
     if not calling_failures:
