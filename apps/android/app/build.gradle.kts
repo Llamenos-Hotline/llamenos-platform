@@ -183,6 +183,39 @@ val copyTestVectors by tasks.registering(Copy::class) {
     into("src/androidTest/assets")
 }
 
+// The stored-record conformance vector (#1927/#1928): bytes the server's own
+// encryptMessageForStorage / encryptCallRecordForStorage wrote, read by
+// EnvelopeAadInteropTest. Served as a generated androidTest asset (a build
+// directory, never the source tree) through the Variant API.
+abstract class CopyStoredRecordVectors : DefaultTask() {
+    @get:InputFile
+    abstract val vectors: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        vectors.get().asFile.copyTo(out.resolve("stored-record-vectors.json"))
+    }
+}
+
+val copyStoredRecordVectors by tasks.registering(CopyStoredRecordVectors::class) {
+    vectors.set(file("${rootProject.projectDir}/../../packages/crypto/tests/fixtures/stored-record-vectors.json"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.androidTest?.sources?.assets?.addGeneratedSourceDirectory(
+            copyStoredRecordVectors,
+            CopyStoredRecordVectors::outputDir,
+        )
+    }
+}
+
 // Copy BDD feature files from shared test-specs for Cucumber test runner.
 // Only include platform/mobile/ features — core/, security/, admin/, and
 // platform/desktop/ features have steps not implemented on Android and
@@ -420,4 +453,8 @@ dependencies {
     androidTestImplementation(libs.test.ext.junit)
     androidTestImplementation(libs.cucumber.android)
     androidTestImplementation(kotlin("test"))
+    // EnvelopeAadInteropTest builds a device-key blob around the conformance
+    // fixture's fixed X25519 reader key (Argon2id KEK), so the real mobileUnlock path
+    // can load it. Test-only: the app never derives a KEK outside Rust.
+    androidTestImplementation(libs.bouncycastle.prov)
 }

@@ -9,6 +9,7 @@ import org.junit.Before
 import org.junit.Test
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.HpkeEnvelope
+import org.llamenos.protocol.RecipientEnvelope
 
 /**
  * Unit tests for [CryptoService].
@@ -98,8 +99,8 @@ class CryptoServiceTest {
 
     @Test(expected = IllegalStateException::class)
     fun `decryptMessage throws without native lib`(): Unit = runBlocking {
-        val envelope = HpkeEnvelope(v = 3, labelId = 0, enc = "test", ct = "test")
-        cryptoService.decryptMessage("test", envelope)
+        val envelope = RecipientEnvelope(pubkey = "test", enc = "test", ct = "test")
+        cryptoService.decryptMessage("test", listOf(envelope))
     }
 
     @Test(expected = IllegalStateException::class)

@@ -19,6 +19,7 @@ core-ktx = "1.17.0"
 camerax = "1.5.1"
 mlkit-barcode = "17.3.0"
 jna = "5.18.1"
+bouncycastle = "1.80"
 cucumber = "7.18.1"
 datastore = "1.1.4"
 play-services-location = "21.3.0"
@@ -57,6 +58,7 @@ camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", vers
 camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 mlkit-barcode = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkit-barcode" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+bouncycastle-prov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 cucumber-android = { group = "io.cucumber", name = "cucumber-android", version.ref = "cucumber" }
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }

@@ -289,9 +289,8 @@ object SimulationClient {
      * Authenticated `GET`, signed with the admin identity above.
      *
      * The simulation routes write; nothing here could read a stored row back.
-     * `EnvelopeAadInteropTest` needs to see the *server's own* envelope exactly
-     * as the API serves it — reading it from the database or re-deriving it
-     * locally would prove nothing about the wire.
+     * This reads what the API actually serves — reading it from the database or
+     * re-deriving it locally would prove nothing about the wire.
      */
     fun authorizedGet(path: String): String {
         return authorizedRequest("GET", path)
