@@ -18,8 +18,11 @@ struct HubScopedReloadTests {
 
         await vm.loadNotes()
 
-        #expect(mockAPI.lastRequestPath?.contains("hub-uuid-001") == true)
-        #expect(mockAPI.lastRequestPath?.hasPrefix("/api/hubs/hub-uuid-001/") == true)
+        // loadNotes() fires its notes and custom-fields fetches concurrently, so assert
+        // on every request rather than on whichever one happened to land last.
+        let paths = mockAPI.requestedPaths
+        #expect(!paths.isEmpty)
+        #expect(paths.allSatisfy { $0.hasPrefix("/api/hubs/hub-uuid-001/") })
         UserDefaults.standard.removeObject(forKey: "activeHubId")
     }
 
@@ -31,16 +34,19 @@ struct HubScopedReloadTests {
         let vm = NotesViewModel(apiService: mockAPI, cryptoService: CryptoService())
 
         await vm.loadNotes()
-        let firstPath = mockAPI.lastRequestPath
+        let firstPaths = mockAPI.requestedPaths
 
         ctx.setActiveHub("hub-uuid-002")
         mockAPI.activeHubId = ctx.activeHubId
+        mockAPI.resetRequestedPaths()
         await vm.loadNotes()
-        let secondPath = mockAPI.lastRequestPath
+        let secondPaths = mockAPI.requestedPaths
 
-        #expect(firstPath?.contains("hub-uuid-001") == true)
-        #expect(secondPath?.contains("hub-uuid-002") == true)
-        #expect(firstPath != secondPath)
+        #expect(!firstPaths.isEmpty)
+        #expect(!secondPaths.isEmpty)
+        #expect(firstPaths.allSatisfy { $0.hasPrefix("/api/hubs/hub-uuid-001/") })
+        #expect(secondPaths.allSatisfy { $0.hasPrefix("/api/hubs/hub-uuid-002/") })
+        #expect(Set(firstPaths).isDisjoint(with: secondPaths))
         UserDefaults.standard.removeObject(forKey: "activeHubId")
     }
 }
