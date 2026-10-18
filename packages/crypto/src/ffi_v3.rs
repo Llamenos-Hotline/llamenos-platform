@@ -1141,6 +1141,42 @@ pub fn mobile_decrypt_draft(packed_hex: String, hub_id: String) -> Result<String
     crate::encryption::decrypt_draft(&packed_hex, &key_hex)
 }
 
+/// Copy the stored hub key out under the lock so the lock is not held across
+/// the AEAD call. The copy is zeroized on drop.
+fn hub_key_copy(hub_id: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, CryptoError> {
+    let guard = state().lock().unwrap();
+    guard
+        .hub_keys
+        .get(hub_id)
+        .map(|key| zeroize::Zeroizing::new(*key))
+        .ok_or_else(|| CryptoError::InvalidInput(format!("No hub key for hub: {hub_id}")))
+}
+
+/// Seal a small hub-scoped field (tag label, tag category, team name) under the
+/// stored hub key. `label` is bound as AAD and must be a registered
+/// domain-separation label. The hub key never leaves Rust.
+#[uniffi::export]
+pub fn mobile_encrypt_hub_field(
+    plaintext: String,
+    hub_id: String,
+    label: String,
+) -> Result<String, CryptoError> {
+    let key = hub_key_copy(&hub_id)?;
+    crate::encryption::encrypt_hub_field(&plaintext, &key, &label)
+}
+
+/// Open a field sealed by `mobile_encrypt_hub_field` (or the desktop
+/// `encrypt_hub_field`) under the stored hub key.
+#[uniffi::export]
+pub fn mobile_decrypt_hub_field(
+    packed_hex: String,
+    hub_id: String,
+    label: String,
+) -> Result<String, CryptoError> {
+    let key = hub_key_copy(&hub_id)?;
+    crate::encryption::decrypt_hub_field(&packed_hex, &key, &label)
+}
+
 /// Clear server event keys from Rust memory.
 #[uniffi::export]
 pub fn mobile_clear_server_event_keys() {
@@ -1945,6 +1981,54 @@ mod tests {
 
         mobile_clear_hub_keys();
         mobile_lock();
+    }
+
+    /// The iOS tag screens seal and open through these two exports; the hub key
+    /// must come from MobileState by hub id, and a hub with no key must fail
+    /// rather than seal under some default.
+    #[test]
+    fn hub_field_uses_the_stored_hub_key_by_hub_id() {
+        let label = crate::labels::LABEL_TAG_ENCRYPT.to_string();
+        let vector = "0707070707070707070707072d903ac9db856df12c7b9e44a64e237900b1010e005d";
+
+        assert!(
+            mobile_encrypt_hub_field("x".into(), "hf-no-key".into(), label.clone()).is_err(),
+            "no key stored for the hub"
+        );
+        assert!(
+            mobile_decrypt_hub_field(vector.into(), "hf-no-key".into(), label.clone()).is_err()
+        );
+
+        mobile_set_hub_key("hf-hub".into(), hex::encode([0x42u8; 32])).unwrap();
+        mobile_set_hub_key("hf-other-hub".into(), hex::encode([0x43u8; 32])).unwrap();
+
+        // Opens the desktop-produced vector under the right hub's key only.
+        assert_eq!(
+            mobile_decrypt_hub_field(vector.into(), "hf-hub".into(), label.clone()).unwrap(),
+            "Urgent"
+        );
+        assert!(
+            mobile_decrypt_hub_field(vector.into(), "hf-other-hub".into(), label.clone()).is_err(),
+            "another hub's key must not open this hub's field"
+        );
+
+        let sealed =
+            mobile_encrypt_hub_field("Suivi médical".into(), "hf-hub".into(), label.clone())
+                .unwrap();
+        assert_eq!(
+            mobile_decrypt_hub_field(sealed, "hf-hub".into(), label).unwrap(),
+            "Suivi médical"
+        );
+        assert!(
+            mobile_encrypt_hub_field(
+                "x".into(),
+                "hf-hub".into(),
+                "llamenos:wrong-label:v1".into()
+            )
+            .is_err(),
+            "an unregistered label must not seal"
+        );
+        mobile_clear_hub_keys();
     }
 
     #[test]
