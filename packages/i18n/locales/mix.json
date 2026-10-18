@@ -4143,6 +4143,8 @@
     "inviteCodePlaceholder": "Code or invite link"
   },
   "inviteCreate": "Savaꞌa Invitación",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "bridgeUrlLabel": "URL de Bridge",
   "recoveryGroup": {
     "requests": {

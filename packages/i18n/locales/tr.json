@@ -2476,6 +2476,8 @@
     }
   },
   "inviteCreate": "Davet Oluştur",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "blast": {
     "statusDraft": "Taslak",
     "channelsSection": "Kanallar",
