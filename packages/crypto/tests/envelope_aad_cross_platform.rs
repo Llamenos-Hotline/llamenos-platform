@@ -194,6 +194,12 @@ fn no_mobile_source_respells_the_key_wrap_suffix() {
 /// The one hand-written copy of the label registry that survives on mobile —
 /// Android's `HpkeEnvelope.LABEL_ID_*` constants — must match the registry.
 ///
+/// `LABEL_ID_MESSAGE` and `LABEL_ID_CALL_META` are deliberately absent: #1934
+/// moved Android's messages and call metadata onto Rust's no-AAD stored-record
+/// readers (`mobileEncryptMessage` / `mobileDecryptMessage` /
+/// `mobileDecryptCallMetadata`), which pick the label themselves, and deleted
+/// the constants. Only labels Android still seals by hand are checked.
+///
 /// iOS had the same table and it had drifted: call-metadata and hub-key
 /// envelopes were built with `labelId: 0`, which `hpke_open_key` rejects. iOS
 /// now derives the id through `mobileLabelToId`; Android still transcribes it,
@@ -212,8 +218,6 @@ fn androids_label_id_table_matches_the_registry() {
             "LABEL_ID_HUB_KEY_WRAP",
             llamenos_core::labels::LABEL_HUB_KEY_WRAP,
         ),
-        ("LABEL_ID_MESSAGE", llamenos_core::labels::LABEL_MESSAGE),
-        ("LABEL_ID_CALL_META", llamenos_core::labels::LABEL_CALL_META),
     ];
     for (constant, label) in expected {
         let id = llamenos_core::labels::label_to_id(label)
