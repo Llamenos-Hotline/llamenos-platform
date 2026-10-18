@@ -14,11 +14,15 @@ final class WipeServiceTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
 
-        // A per-test subdirectory keeps one test's cache store out of another's, but it
-        // must sit *inside* the caches directory that wipeAll() clears: a store outside
-        // every clearDirectory() target leaves the assertion resting on URLCache's own
-        // asynchronous disk purge, which loses the race on a contended runner (#1848).
-        cacheStoreDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        // A per-test store keeps one test's cache out of another's, and it must sit
+        // *outside* every directory wipeAll() sweeps (tmp, Caches, Application Support,
+        // Documents): inside one, the sweep deletes the store as plain file cleanup and the
+        // assertions would pass whether or not URLCache.removeAllCachedResponses() did
+        // anything — hiding exactly the #1658 regression they exist to catch. Library itself
+        // is not swept (only its Caches and Application Support children are), so a
+        // sibling there is untouched by the wipe and a surviving entry can only mean the
+        // cache's own removal failed (#1848).
+        cacheStoreDirectory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
             .appendingPathComponent("WipeServiceTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: cacheStoreDirectory, withIntermediateDirectories: true)
 
@@ -126,8 +130,8 @@ final class WipeServiceTests: XCTestCase {
     /// wrong in principle: replacing `URLCache.shared` with a `diskPath: nil` instance
     /// deletes nothing, because the replacement inherits that same store.
     ///
-    /// The dedicated directory is outside the directories `wipeAll()` clears directly,
-    /// so this checks the cache's store operation rather than unrelated file cleanup.
+    /// The dedicated directory sits outside every directory `wipeAll()` sweeps, so the
+    /// entry can only disappear through the cache's own removal, never through file cleanup.
     ///
     /// Note what this does and does not establish. Waiting for the seeded response to
     /// be readable rules out asserting against a cache that was never populated, but it
@@ -147,8 +151,10 @@ final class WipeServiceTests: XCTestCase {
         wipeService.wipeAll()
 
         URLCache.shared = Self.makeCachingCache(directory: cacheStoreDirectory)
-        XCTAssertNil(
-            URLCache.shared.cachedResponse(for: request),
+        // The removal reaches the on-disk store asynchronously, so wait for it to land. A
+        // wipe that deletes nothing (#1658) never lets the entry go, and still fails here.
+        XCTAssertTrue(
+            waitUntil { URLCache.shared.cachedResponse(for: request) == nil },
             "wipeAll must delete cached responses from the store, not hide them behind a replacement cache"
         )
     }
