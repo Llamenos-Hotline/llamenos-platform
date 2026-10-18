@@ -8,7 +8,7 @@ import {
   randomBytes,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
 // getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
@@ -140,9 +140,83 @@ export function encryptCallRecordForStorage(
   metadata: Record<string, unknown>,
   adminPubkeys: string[],
 ): { encryptedContent: string; adminEnvelopes: RecipientEnvelope[] } {
+  // Same refusal as encryptMessageForStorage: a call record sealed to nobody
+  // is ciphertext no admin will ever open — persist nothing rather than mint
+  // an unreadable row and call it encrypted (#1684).
+  if (adminPubkeys.length === 0) {
+    throw new Error(
+      'encryptCallRecordForStorage: refusing to encrypt with an empty reader list — ' +
+      'the result would be undecryptable by everyone. Ensure ADMIN_DECRYPTION_PUBKEY ' +
+      'is configured and/or an admin has a registered X25519 device key.'
+    )
+  }
   const { encryptedContent, envelopes } = sealForPubkeys(JSON.stringify(metadata), adminPubkeys, LABEL_CALL_META)
   return { encryptedContent, adminEnvelopes: envelopes }
 }
+
+// --- Per-User Audit Keys (CRYPTO_ARCHITECTURE.md → packages/crypto/src/audit_key.rs) ---
+//
+// Byte-compatible with audit_key.rs so a future client binding can unwrap and
+// decrypt what the server wrote:
+//   key wrap : HPKE info = LABEL_AUDIT_USER_KEY_WRAP, aad = `${label}:${userPubkey}`
+//   details  : AES-256-GCM, aad = `${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`,
+//              stored as "nonce_hex:ciphertext_hex"
+
+/**
+ * Wrap a per-user audit key for each admin recipient. Throws on an empty
+ * recipient list, matching wrap_audit_key_to_admins — a key wrapped to nobody
+ * can never be recovered by an admin.
+ */
+export function wrapAuditKeyForAdmins(
+  auditKey: Uint8Array,
+  adminPubkeys: string[],
+  userPubkey: string,
+): RecipientEnvelope[] {
+  if (adminPubkeys.length === 0) {
+    throw new Error('wrapAuditKeyForAdmins: at least one admin pubkey required')
+  }
+  const aad = utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${userPubkey}`)
+  const label = utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP)
+  return adminPubkeys.map((pk): RecipientEnvelope => {
+    const sealed = hpkeSeal(hexToBytes(pk), auditKey, label, aad)
+    return {
+      pubkey: pk,
+      enc: bytesToHex(sealed.subarray(0, 32)),
+      ct: bytesToHex(sealed.subarray(32)),
+    }
+  })
+}
+
+/** Encrypt audit entry details with the user's audit key. Returns "nonce_hex:ciphertext_hex". */
+export function encryptAuditDetails(
+  auditKey: Uint8Array,
+  detailsJson: string,
+  userPubkey: string,
+  entryId: string,
+): string {
+  const aad = utf8ToBytes(`${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`)
+  const sealed = symmetricEncrypt(auditKey, utf8ToBytes(detailsJson), aad)
+  // symmetricEncrypt output is iv(12) || ciphertext || tag — split the nonce
+  // out to match audit_key.rs's nonce_hex:ciphertext_hex storage format.
+  return `${bytesToHex(sealed.subarray(0, 12))}:${bytesToHex(sealed.subarray(12))}`
+}
+
+/** Decrypt audit entry details produced by encryptAuditDetails. Throws on wrong key/user/entry. */
+export function decryptAuditDetails(
+  auditKey: Uint8Array,
+  encrypted: string,
+  userPubkey: string,
+  entryId: string,
+): string {
+  const [nonceHex, ctHex] = encrypted.split(':')
+  if (!nonceHex || !ctHex) {
+    throw new Error('decryptAuditDetails: expected nonce_hex:ciphertext_hex format')
+  }
+  const data = new Uint8Array([...hexToBytes(nonceHex), ...hexToBytes(ctHex)])
+  const aad = utf8ToBytes(`${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`)
+  return new TextDecoder().decode(symmetricDecrypt(auditKey, data, aad))
+}
+
 
 // --- Contact Identifier Encryption ---
 

@@ -547,7 +547,7 @@ export class ErasureService {
       // Phase 3: Crypto-shredding
 
       // Destroy per-user audit envelope key
-      await tx.delete(auditUserKeys).where(eq(auditUserKeys.userPubkey, userId))
+      await this.destroyAuditUserKey(userId, tx)
 
       // Replace actorPubkey with [erased] on audit entries and mark erasedAt
       await tx
@@ -877,5 +877,67 @@ export class ErasureService {
           adminEnvelopes,
         },
       })
+  }
+
+  /**
+   * Get-or-create the user's audit key row, serialised per user.
+   *
+   * Two first-entry writers racing on different hub chains must not each
+   * generate a key and overwrite each other — entries sealed with the losing
+   * key would be undecryptable by everyone. A per-user advisory lock makes
+   * creation single-file; the row actually stored is always the one returned,
+   * so every caller encrypts with the key the database holds.
+   *
+   * `create` produces the key material (caller owns the crypto); it runs at
+   * most once per call, inside the lock.
+   */
+  async ensureAuditUserKey(
+    userPubkey: string,
+    create: () => Promise<{ encryptedKey: string; adminEnvelopes: unknown[] }>,
+  ): Promise<typeof auditUserKeys.$inferSelect> {
+    const existing = await this.getAuditUserKey(userPubkey)
+    if (existing) return existing
+
+    return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`auditkey:${userPubkey}`}))`)
+      const [raced] = await tx
+        .select()
+        .from(auditUserKeys)
+        .where(eq(auditUserKeys.userPubkey, userPubkey))
+        .limit(1)
+      if (raced) return raced
+
+      const value = await create()
+      const [row] = await tx
+        .insert(auditUserKeys)
+        .values({
+          userPubkey,
+          encryptedKey: value.encryptedKey,
+          adminEnvelopes: value.adminEnvelopes,
+          createdAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: auditUserKeys.userPubkey,
+          set: { encryptedKey: value.encryptedKey, adminEnvelopes: value.adminEnvelopes },
+        })
+        .returning()
+      if (!row) {
+        throw new ServiceError(500, 'audit user key upsert returned no row')
+      }
+      return row
+    })
+  }
+
+  /**
+   * Destroy a user's audit key — the crypto-shredding half of account erasure.
+   * Once the row is gone the key is unrecoverable and every audit entry whose
+   * details were encrypted with it is permanently unreadable, including in
+   * backups and replicas taken before the erasure.
+   */
+  async destroyAuditUserKey(
+    userPubkey: string,
+    tx?: Pick<Database, 'delete'>,
+  ): Promise<void> {
+    await (tx ?? this.db).delete(auditUserKeys).where(eq(auditUserKeys.userPubkey, userPubkey))
   }
 }

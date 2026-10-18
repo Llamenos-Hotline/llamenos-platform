@@ -225,10 +225,7 @@ describe('CallsService', () => {
         }],
       })
 
-      const result = await svc.endCall('hub-1', 'call-end-1', {
-        encryptedContent: 'enc-data',
-        adminEnvelopes: [{ admin: 'a1', envelope: 'e1' }],
-      })
+      const result = await svc.endCall('hub-1', 'call-end-1')
 
       expect(result).toBeDefined()
       // Active call should be removed

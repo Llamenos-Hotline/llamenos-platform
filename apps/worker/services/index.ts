@@ -4,7 +4,9 @@
  * Services replace Durable Objects. Each service owns a domain's tables
  * and provides typed methods for CRUD and business logic.
  */
+import { hexToBytes } from '@shared/encoding'
 import type { Database } from '../db'
+import { buildReaderPubkeys } from '../lib/encryption-keys'
 
 import { IdentityService } from './identity'
 import { SettingsService } from './settings'
@@ -103,8 +105,31 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   // Register provider implementations once during service initialization (not at module import)
   registerAllProviders()
 
-  const audit = new AuditService(db)
   const settings = new SettingsService(db)
+  const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
+  const hubShred = new HubShredService(db, opts?.blobStorage)
+  const erasure = new ErasureService(db, identity, {
+    deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
+  })
+
+  // Every admin X25519 recipient for server-sealed envelope sets:
+  // ADMIN_DECRYPTION_PUBKEY plus each active super-admin's device keys.
+  const resolveAdminRecipients = async (): Promise<string[]> =>
+    buildReaderPubkeys(db, opts?.env?.ADMIN_DECRYPTION_PUBKEY, await identity.listActiveSuperAdminPubkeys())
+
+  // The per-user audit key path (issue #1684 item 3) requires SERVER_SECRET to
+  // store the key server-decryptably. validateConfig refuses to boot without
+  // it; a hand-rolled caller that omits it gets the plaintext-details behavior
+  // the audit log had before EP08.
+  const serverSecretHex = opts?.env?.SERVER_SECRET?.trim()
+  const audit = new AuditService(db, serverSecretHex
+    ? {
+        serverSecret: hexToBytes(serverSecretHex),
+        resolveAdminRecipients,
+        keyStore: erasure,
+      }
+    : undefined)
+
   const conversations = new ConversationsService(db, opts?.hmacSecret)
   const firehose = new FirehoseService(db)
   const signalContacts = new SignalContactsService(db, opts?.hmacSecret ?? '')
@@ -117,16 +142,13 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   const digestCron = new DigestCronService(db, userNotifications, securityPrefs)
   const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', webhookOrigin(opts?.env ?? {}))
 
-  const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
-  const hubShred = new HubShredService(db, opts?.blobStorage)
-
   const services: Services = {
     identity,
     settings,
     records: new RecordsService(db, audit),
     audit,
     shifts: new ShiftsService(db),
-    calls: new CallsService(db),
+    calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients }),
     conversations,
     blasts: new BlastsService(db, opts?.hmacSecret),
     contacts: new ContactsService(db),
@@ -157,9 +179,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     a2pRegistration: new A2pRegistrationService(db, opts?.hmacSecret ?? ''),
     providerTemplates: new ProviderTemplateService(db),
     hubOnboard: new HubOnboardService(db, providerSetup, settings),
-    erasure: new ErasureService(db, identity, {
-      deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
-    }),
+    erasure,
     retention: new RetentionService(db),
     hubShred,
     ringGroups: new RingGroupsService(db),
