@@ -339,50 +339,23 @@ final class CryptoService: @unchecked Sendable {
 
     // MARK: - Message Encryption (HPKE)
 
+    /// Seal a message (`LABEL_MESSAGE`) for this device and `readerPubkeys` in
+    /// the stored-record format the server and desktop read and write.
+    ///
+    /// Rust owns the AAD: a stored record carries **no** AAD on either layer
+    /// (PROTOCOL.md §2.4), unlike notes/files/contacts, which bind `label` and
+    /// `label:key-wrap`. This function used to pass the canonical AAD itself,
+    /// so a message sealed here could not be opened by the server or desktop
+    /// and vice versa (#1927). Do not choose an AAD at this call site.
     func encryptMessage(plaintext: String, readerPubkeys: [String]) throws -> (encryptedContent: String, envelopes: [RecipientEnvelope]) {
         guard let encPubkey = encryptionPubkeyHex else { throw CryptoServiceError.noKeyLoaded }
         let allReaders = Array(Set([encPubkey] + readerPubkeys))
-        let plaintextHex = plaintext.data(using: .utf8)!.map { String(format: "%02x", $0) }.joined()
-        let result = try ffiMobileSymmetricEncrypt(
-            plaintextHex: plaintextHex,
-            aadHex: try contentAad(CryptoLabels.LABEL_MESSAGE)
-        )
-        let ciphertextHex = result[0]
-        let keyHex = result[1]
-        var envelopes: [RecipientEnvelope] = []
-        for pubkey in allReaders {
-            let hpkeEnv = try ffiMobileHpkeSealKey(
-                keyHex: keyHex,
-                recipientPubkeyHex: pubkey,
-                label: CryptoLabels.LABEL_MESSAGE,
-                aadHex: try keyWrapAad(CryptoLabels.LABEL_MESSAGE)
-            )
-            let wire = try toWireEnvelope(hpkeEnv)
-            envelopes.append(RecipientEnvelope(ct: wire.ct, enc: wire.enc, pubkey: pubkey))
-        }
-        return (ciphertextHex, envelopes)
+        let sealed = try mobileEncryptMessage(plaintext: plaintext, readerPubkeys: allReaders)
+        let envelopes = sealed.readerEnvelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
+        return (sealed.encryptedContent, envelopes)
     }
 
     // MARK: - Message Decryption (HPKE)
-
-    func decryptMessage(encryptedContent: String, envelope: HpkeEnvelope) throws -> String {
-        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let ffiEnvelope = try toFfiEnvelope(label: CryptoLabels.LABEL_MESSAGE, enc: envelope.enc, ct: envelope.ct)
-        let keyHex = try ffiMobileHpkeOpenKey(
-            envelope: ffiEnvelope,
-            expectedLabel: CryptoLabels.LABEL_MESSAGE,
-            aadHex: try keyWrapAad(CryptoLabels.LABEL_MESSAGE)
-        )
-        let plaintextHex = try ffiMobileSymmetricDecrypt(
-            ciphertextHex: encryptedContent,
-            keyHex: keyHex,
-            aadHex: try contentAad(CryptoLabels.LABEL_MESSAGE)
-        )
-        guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
-            throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted message")
-        }
-        return result
-    }
 
     /// Decrypt a conversation message from all of its reader envelopes, whether
     /// a client sealed it or the server did (inbound SMS/WhatsApp/Signal,

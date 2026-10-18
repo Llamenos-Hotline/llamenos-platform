@@ -272,18 +272,13 @@ final class EventsViewModel {
                   let envelopes = event.detailEnvelopes,
                   !envelopes.isEmpty else { continue }
 
-            guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { continue }
+            // Rust picks this device's envelope; none of ours means not a reader.
+            guard envelopes.contains(where: { $0.pubkey == ourPubkey }) else { continue }
 
             do {
-                let hpkeEnvelope = HpkeEnvelope(
-                    v: 3,
-                    labelId: 0,
-                    enc: envelope.enc,
-                    ct: envelope.ct
-                )
                 let plaintext = try cryptoService.decryptMessage(
                     encryptedContent: encrypted,
-                    envelope: hpkeEnvelope
+                    readerEnvelopes: envelopes
                 )
                 if let data = plaintext.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
