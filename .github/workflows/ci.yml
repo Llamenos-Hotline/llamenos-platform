@@ -18,8 +18,9 @@
 # run per merge on a runner pool the queue itself needs.
 #
 # The post-merge Docker canary image that used to ride this workflow's
-# `push: main` run moved to docker-canary.yml — a standalone publish job,
-# not the full matrix. CodeQL keeps its own `push: main` trigger in
+# `push: main` run was removed outright (it published to a Docker Hub account
+# that was never configured, so it could only ever fail; see the PR that
+# deleted docker-canary.yml). CodeQL keeps its own `push: main` trigger in
 # codeql.yml (code scanning alerts are tracked against the default branch;
 # dropping that one would silently empty the security tab). Version bump,
 # release, and deploys run in their own workflows on main.
@@ -151,8 +152,8 @@ jobs:
       # migration-drift are deliberately NOT gated on this: they are cheap and
       # they contend for nothing scarce. (Until #1830 they also ran on
       # `push: main` to keep `ci-status` there a real signal for the
-      # docker-canary job; that trigger — and the canary, now in
-      # docker-canary.yml — no longer rides this workflow.)
+      # docker-canary job; that trigger no longer rides this workflow, and
+      # the canary itself has since been removed.)
       revalidate: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
       # The `pull_request` arm of the same event question — true exactly when
       # a PR head is being checked. The PR-head compile gates (#1762) read
