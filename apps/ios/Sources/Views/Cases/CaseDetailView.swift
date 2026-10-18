@@ -919,7 +919,7 @@ private struct TimelineItemRow: View {
         do {
             let plaintext = try cryptoService.decryptMessage(
                 encryptedContent: encrypted,
-                readerEnvelopes: envelopes
+                readerEnvelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
             )
             // Content may be JSON with a "text" field, or raw text
             if let data = plaintext.data(using: .utf8),
