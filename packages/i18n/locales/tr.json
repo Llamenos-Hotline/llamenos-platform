@@ -2153,7 +2153,9 @@
     "noCategoriesMessage": "Rapor kategorileri olayları sınıflandırmaya yardımcı olur.",
     "noInvitesMessage": "Yeni gönüllü eklemek için davet kodu oluşturun.",
     "noSearchResults": "Aramanızla eşleşen üye yok.",
-    "noUsersMessage": "Henüz katılan üye yok."
+    "noUsersMessage": "Henüz katılan üye yok.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "cases": {
     "assignedSuffix": "Atanmış",
@@ -3000,7 +3002,9 @@
     "createTagNamed": "Create \"{{name}}\"",
     "noTagsFound": "No tags found.",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "adminEntityType": {
     "sectionGeneral": "Genel",
@@ -3606,7 +3610,11 @@
     "suggestedRoleCount": "{{count}} roles",
     "slugPlaceholder": "e.g. intake-coordinator",
     "title": "Roles & Permissions",
-    "updated": "Role updated"
+    "updated": "Role updated",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "status": {
     "inactive": "Pasif",

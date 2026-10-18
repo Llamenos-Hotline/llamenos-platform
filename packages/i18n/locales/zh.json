@@ -313,7 +313,9 @@
     "noCategoriesMessage": "报告分类有助于对事件进行归类。",
     "noInvitesMessage": "生成邀请码以添加新的志愿者。",
     "noSearchResults": "没有符合搜索条件的成员。",
-    "noUsersMessage": "还没有成员加入。"
+    "noUsersMessage": "还没有成员加入。",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -3517,7 +3519,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4278,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

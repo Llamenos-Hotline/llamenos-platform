@@ -313,7 +313,9 @@
     "noCategoriesMessage": "보고서 범주는 사건을 분류하는 데 도움이 됩니다.",
     "noInvitesMessage": "새 자원봉사자를 추가하려면 초대 코드를 생성하세요.",
     "noSearchResults": "검색과 일치하는 멤버가 없습니다.",
-    "noUsersMessage": "아직 가입한 멤버가 없습니다."
+    "noUsersMessage": "아직 가입한 멤버가 없습니다.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -3517,7 +3519,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4278,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",
