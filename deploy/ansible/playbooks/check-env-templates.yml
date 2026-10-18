@@ -25,14 +25,25 @@
 # same "opposite outcomes from the same inputs" shape as the dev-route env vars,
 # so check-required-env.py asserts both directions here too.
 #
-# Usage:
+# `env_check_dest_dir` is REQUIRED (no default). Every render lands in it, so a
+# caller can only read files it just wrote -- a fixed /tmp default is what let a
+# previous run's output satisfy the gate (see check-required-env.py).
+#
+# Usage (normally you just run the checker, which drives this playbook itself
+# with a per-run temporary directory):
+#
+#   cd deploy/ansible && python3 scripts/check-required-env.py
+#
+# To render by hand, supply your own empty directory:
+#
 #   cd deploy/ansible
+#   d="$(mktemp -d)"
 #   ansible-playbook playbooks/check-env-templates.yml \
 #     -e @vars.example.yml -e app_environment=production \
-#     -e webhook_base_url=https://example.org
+#     -e webhook_base_url=https://example.org -e env_check_dest_dir="$d"
 #   ansible-playbook playbooks/check-env-templates.yml \
-#     -e @vars.example.yml -e @scripts/full-scenario.extra-vars.json
-#   python3 scripts/check-required-env.py
+#     -e @vars.example.yml -e @scripts/full-scenario.extra-vars.json \
+#     -e env_check_dest_dir="$d"
 
 - name: Render both .env templates for completeness verification
   hosts: localhost
@@ -43,25 +54,25 @@
     - name: Render monolithic role env template (roles/llamenos/templates/env.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos/templates/env.j2"
-        dest: "/tmp/llamenos-check-env-monolithic{{ env_check_suffix | default('') }}.env"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-env-monolithic{{ env_check_suffix | default('') }}.env"
         mode: "0600"
 
     - name: Render per-service app role env template (roles/llamenos-app/templates/env/app.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos-app/templates/env/app.j2"
-        dest: "/tmp/llamenos-check-env-app{{ env_check_suffix | default('') }}.env"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-env-app{{ env_check_suffix | default('') }}.env"
         mode: "0600"
 
     - name: Render per-service postgres role compose template (roles/llamenos-postgres/templates/compose/postgres.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos-postgres/templates/compose/postgres.j2"
-        dest: "/tmp/llamenos-check-compose-postgres{{ env_check_suffix | default('') }}.yml"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-compose-postgres{{ env_check_suffix | default('') }}.yml"
         mode: "0600"
 
     - name: Render monolithic role compose template (roles/llamenos/templates/docker-compose.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos/templates/docker-compose.j2"
-        dest: "/tmp/llamenos-check-compose-monolithic{{ env_check_suffix | default('') }}.yml"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-compose-monolithic{{ env_check_suffix | default('') }}.yml"
         mode: "0600"
 
     # The app service's own compose file carries the SIP trust-anchor bind
@@ -74,7 +85,7 @@
     - name: Render per-service app role compose template (roles/llamenos-app/templates/compose/app.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos-app/templates/compose/app.j2"
-        dest: "/tmp/llamenos-check-compose-app{{ env_check_suffix | default('') }}.yml"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-compose-app{{ env_check_suffix | default('') }}.yml"
         mode: "0600"
 
     # The relay's own compose file holds --static-auth-secret, which MUST equal
@@ -84,6 +95,6 @@
     - name: Render coturn compose template (roles/llamenos-coturn/templates/compose/coturn.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos-coturn/templates/compose/coturn.j2"
-        dest: "/tmp/llamenos-check-compose-coturn{{ env_check_suffix | default('') }}.yml"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-compose-coturn{{ env_check_suffix | default('') }}.yml"
         mode: "0600"
       when: llamenos_coturn_enabled | default(false) | bool

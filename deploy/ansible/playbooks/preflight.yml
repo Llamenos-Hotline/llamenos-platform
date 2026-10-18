@@ -733,7 +733,7 @@
           MISSING or INVALID: 'backup_age_public_key'.
 
           Backups are encrypted with age and there is no unencrypted path.
-          Expected format: age1... (59 characters starting with 'age1')
+          Expected format: age1... (62 characters: 'age1' + 58 bech32 chars)
 
           To generate a keypair, ON YOUR ADMIN MACHINE (not the server):
             age-keygen -o backup-key.txt
