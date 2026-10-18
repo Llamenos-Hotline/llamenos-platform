@@ -913,18 +913,13 @@ private struct TimelineItemRow: View {
               cryptoService.isUnlocked,
               let ourPubkey = cryptoService.pubkey else { return }
 
-        guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { return }
+        // Rust picks this device's envelope; none of ours means not a reader.
+        guard envelopes.contains(where: { $0.pubkey == ourPubkey }) else { return }
 
         do {
-            let hpkeEnvelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: envelope.enc,
-                ct: envelope.ct
-            )
             let plaintext = try cryptoService.decryptMessage(
                 encryptedContent: encrypted,
-                envelope: hpkeEnvelope
+                readerEnvelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
             )
             // Content may be JSON with a "text" field, or raw text
             if let data = plaintext.data(using: .utf8),
