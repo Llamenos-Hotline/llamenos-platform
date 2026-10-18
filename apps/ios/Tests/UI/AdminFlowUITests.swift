@@ -57,9 +57,8 @@ final class AdminFlowUITests: BaseUITest {
         link.tap()
     }
 
-    /// Needs the admin screens to read the members the server actually mounts: until
-    /// the iOS client stops calling `/api/identity/members` (404, #1701/#1046) the
-    /// list never loads and this fails on the empty state.
+    /// The list is read from `GET /api/identity/members` (mounted by #1917). If that read
+    /// fails the screen falls to its empty state and this fails on the missing list.
     func testVolunteersTabShowsContent() {
         let name = "Seeded volunteer \(UUID().uuidString.prefix(8))"
         seedVolunteer(named: name)
@@ -70,10 +69,10 @@ final class AdminFlowUITests: BaseUITest {
             find("volunteers-list").waitForExistence(timeout: 15),
             "A hub with members should show the volunteers list, not the empty state"
         )
-        XCTAssertTrue(
-            app.staticTexts[name].waitForExistence(timeout: 5),
-            "The seeded volunteer should be listed by name"
-        )
+        // Admins sort first and every test in the class registers one into the class hub, so
+        // the volunteer is below the fold; a List only instantiates the rows it has scrolled to.
+        let row = scrollToMatch(NSPredicate(format: "label == %@", name))
+        XCTAssertTrue(row.exists, "The seeded volunteer should be listed by name")
     }
 
     func testVolunteerSearchExists() {

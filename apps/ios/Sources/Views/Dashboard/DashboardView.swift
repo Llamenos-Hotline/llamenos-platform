@@ -133,12 +133,8 @@ struct DashboardView: View {
                                 : NSLocalizedString("dashboard_off_shift", comment: "Off Shift"))
                                 .font(.brand(.headline))
                                 .foregroundStyle(Color.brandForeground)
-                                // On the Text itself: on the enclosing HStack (not an
-                                // accessibility element) the identifier lands on both the
-                                // StatusDot and the Text, and a lookup can resolve to the
-                                // dot, which has no label.
-                                .accessibilityIdentifier("shift-status-text")
                         }
+                        .accessibilityIdentifier("shift-status-text")
 
                         if vm.isOnShift {
                             Text(vm.elapsedTimeDisplay)

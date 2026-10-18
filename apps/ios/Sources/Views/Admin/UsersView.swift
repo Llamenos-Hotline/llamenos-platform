@@ -20,7 +20,7 @@ struct UsersView: View {
         }
         .searchable(
             text: $viewModel.userSearchText,
-            placement: .navigationBarDrawer(displayMode: .automatic),
+            placement: .navigationBarDrawer(displayMode: .always),
             prompt: NSLocalizedString("admin_search_users", comment: "Search volunteers...")
         )
         .refreshable {
