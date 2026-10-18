@@ -1761,12 +1761,21 @@ jobs:
       - name: Guard the runner's disk headroom
         run: bash scripts/ci/mac-runner-disk-guard.sh guard
 
-      # TMPDIR pinned to the runner's temp dir on every bun/node step: this
-      # job shares the self-hosted Mac with ios-e2e.yml, and launchd's
-      # per-user /var/folders TMPDIR is reaped by macOS underneath a running
-      # `bun install` ("FileNotFound creating node-gyp tempdir", run
-      # 39026934332). The full reasoning is on the matching steps in
-      # ios-e2e.yml's `build` job.
+      # Per-runner BUN_TMPDIR before the first bun step. This job shares the
+      # self-hosted Mac with ios-e2e.yml's `build`, and the two start
+      # `bun install` in the same instant: bun 1.3.5 on macOS ignores TMPDIR
+      # and installs into one shared /private/tmp, where both compute the
+      # same node-gyp shim dir name and APFS fails one with ENOENT
+      # ("FileNotFound creating node-gyp tempdir" — #1916, run 39087131209).
+      # The full measured reasoning is on ios-e2e.yml's `build` copy of this
+      # step; tests/guards.test.ts fails CI if this step goes missing.
+      - name: Give bun a per-runner temp dir
+        run: |
+          mkdir -p "$RUNNER_TEMP/bun-tmp"
+          echo "BUN_TMPDIR=$RUNNER_TEMP/bun-tmp" >> "$GITHUB_ENV"
+
+      # TMPDIR pinned on every bun/node step for node's and bun's JS temp
+      # files; it is NOT what `bun install` uses (see the step above).
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
         env:
@@ -2294,6 +2303,15 @@ jobs:
       # it needs no `bun install`.
       - name: Check test resource names are unique across parallel workers
         run: bun scripts/check-unique-test-names.ts
+
+      # Every job that can land on the self-hosted Mac must give `bun install`
+      # a per-runner BUN_TMPDIR before its first bun step, or two concurrent
+      # installs collide in /private/tmp and eject a merge group (#1916).
+      # Built-in YAML parser only, so it needs no `bun install`. An explicit
+      # path: `bun test` exits non-zero if the file is missing rather than
+      # passing on zero tests.
+      - name: Check CI structure guards
+        run: bun test ./tests/guards.test.ts
 
   # Brings the PRODUCTION compose stack up and asserts a handful of
   # unauthenticated invariants. Nothing else in CI exercises that path — every
