@@ -4,9 +4,14 @@ Feature: CMS Events — Unified Entity System
   The /api/events routes are deprecated and return 301 redirects.
   Event data uses 3-tier E2EE like all other records.
 
-  # @wip: Location-header step is unbound, and "a client sends GET /api/events" records its
-  # response only in entity-unification state (never the shared state the status step reads)
-  # with an empty Bearer token — needs the step fixed, not just the wording — #1198
+  # @wip (#1198): this scenario asserts a 301 the app does not implement, and implementing it
+  # would break a live client. iOS still reads its events list from GET /api/events
+  # (EventsViewModel.swift loadEvents), the redirect target /api/records?category=event answers
+  # in a different shape, and a path-suffix redirect would also catch the hub-scoped mount
+  # /api/hubs/:id/events and silently drop the hub. Un-wip once every client lists events from
+  # /api/records and apps/worker/routes/events.ts is deleted. The scenario's bindings were
+  # also wrong (unquoted Location path, response never written to shared state, unsigned
+  # request) — fix those in the same change.
   @events @deprecated-api @wip
   Scenario: Deprecated /api/events returns 301 redirect
     Given case management is enabled

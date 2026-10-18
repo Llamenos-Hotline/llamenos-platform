@@ -4,13 +4,11 @@ Feature: Storage Integrity
   I want JSONB fields to be stored and retrieved with full fidelity
   So that no double-serialization bugs corrupt structured data
 
-  # @wip: entity/settings JSONB round-trip steps have no backend definitions — #1198
-  @wip
   Scenario Outline: JSONB round-trip for <entityType>
-    Given a <entityType> entity is created via the API with structured JSONB data
-    When the <entityType> is fetched via the API
+    Given a "<entityType>" entity is created via the API with structured JSONB data
+    When the "<entityType>" is fetched via the API
     Then the API response <jsonbField> should be a proper <expectedType>
-    When the <entityType> row is fetched directly from the database
+    When the "<entityType>" row is fetched directly from the database
     Then the DB <dbColumn> should have jsonb_typeof equal to "<pgType>"
     And the DB <dbColumn> should not be double-serialized
 
@@ -22,10 +20,8 @@ Feature: Storage Integrity
       | record summaryEnvelopes     | summaryEnvelopes | array        | summary_envelopes | array  |
       | conversation metadata       | metadata         | object       | metadata          | object |
 
-  # @wip: entity/settings JSONB round-trip steps have no backend definitions — #1198
-  @wip
   Scenario Outline: Settings JSONB round-trip for <settingsType>
-    Given the <settingsType> settings are updated via the API with structured data
+    Given the "<settingsType>" settings are updated via the API with structured data
     When the settings are fetched via the API
     Then the API response <jsonbField> should be a proper object
     When the system_settings row is fetched directly from the database
