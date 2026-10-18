@@ -232,7 +232,7 @@ All domain separation labels are defined in `packages/protocol/crypto-labels.jso
 | 73–76 | Recovery group (EP09) | `LABEL_RECOVERY_GROUP_SHARE_WRAP`, `LABEL_RECOVERY_PUK_SEED_WRAP`, `LABEL_RECOVERY_SHARE_CONTRIBUTE`, `LABEL_RECOVERY_LIVENESS_PROOF` |
 | 77–79 | Role/hub/team encryption | `LABEL_PLATFORM_ROLE_NAME_ENCRYPT`, `LABEL_PLATFORM_ROLE_DESC_ENCRYPT`, `LABEL_HUB_ROLE_ENCRYPT` |
 | 80 | SAS emoji (EP02) | `LABEL_SAS_DERIVE` |
-| (JSON only) | Org structure encryption | `LABEL_TEAM_ENCRYPT`, `LABEL_TAG_ENCRYPT`, `LABEL_ENTITY_TYPE_DEFINITION` — in JSON source, not yet in Rust numeric registry |
+| 85–87 | Org structure encryption | `LABEL_TEAM_ENCRYPT`, `LABEL_TAG_ENCRYPT`, `LABEL_ENTITY_TYPE_DEFINITION` |
 
 **Rule**: Never use raw string literals for crypto contexts. Always use the generated label constants.
 

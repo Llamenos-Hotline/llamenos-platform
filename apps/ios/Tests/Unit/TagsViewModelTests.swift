@@ -42,7 +42,24 @@ final class MockTagsAPIService: TagsAPIServiceProtocol {
 
 struct TagsViewModelTests {
 
-    private static let hubKey = Data(repeating: 0x42, count: 32)
+    // key = 0x42×32 reproduces the desktop-produced ciphertext below
+    // (nonce 0x07×12, AAD = LABEL_TAG_ENCRYPT) — it decrypts to "Urgent".
+    private static let hubKeyHex = String(repeating: "42", count: 32)
+    private static let urgentCiphertext = "0707070707070707070707072d903ac9db856df12c7b9e44a64e237900b1010e005d"
+
+    /// A real `CryptoService` holding the hub key for `hubId` in Rust. Each test uses its own hub id: the
+    /// Rust key table is process-global, so tests must not clear it.
+    private func makeCrypto(hubId: String?) -> CryptoService {
+        let crypto = CryptoService()
+        if let hubId { crypto.storeHubKeyForTesting(hubId: hubId, keyHex: Self.hubKeyHex) }
+        return crypto
+    }
+
+    private func makeViewModel(
+        _ mock: MockTagsAPIService, crypto: CryptoService, activeHubId: String?
+    ) -> TagsViewModel {
+        TagsViewModel(tagsAPI: mock, crypto: crypto, hubIdProvider: { activeHubId })
+    }
 
     private func makeTag(
         id: String = "tag-1",
@@ -82,58 +99,86 @@ struct TagsViewModelTests {
         )
     }
 
-    @Test func loadTagsPopulatesList() async {
+    @Test func loadTagsDecryptsLabelsUnderTheActiveHubKey() async {
+        let crypto = makeCrypto(hubId: "tags-load")
         let mock = MockTagsAPIService()
-        mock.listTagsResult = .success([makeTag()])
-        let vm = TagsViewModel(tagsAPI: mock, hubKeyProvider: { nil })
+        mock.listTagsResult = .success([makeTag(encryptedLabel: Self.urgentCiphertext)])
+        let vm = makeViewModel(mock, crypto: crypto, activeHubId: "tags-load")
         await vm.loadTags()
         #expect(vm.tags.count == 1)
         #expect(vm.tags[0].id == "tag-1")
+        #expect(vm.tags[0].label == "Urgent")
         #expect(vm.isLoading == false)
     }
 
-    @Test func slugifyProducesLowercaseSlugs() {
-        #expect(TagsViewModel.slugify("Urgent Care") == "urgent-care")
-        #expect(TagsViewModel.slugify("Suivi médical") == "suivi-m-dical")
-        #expect(TagsViewModel.slugify("  Padded  ") == "padded")
-        #expect(TagsViewModel.slugify("Multiple   Spaces") == "multiple-spaces")
+    @Test func loadTagsFallsBackToTheStoredValueWithoutAKey() async {
+        let mock = MockTagsAPIService()
+        mock.listTagsResult = .success([makeTag(encryptedLabel: Self.urgentCiphertext)])
+        // No hub active, and an active hub that holds no key: both show the raw value.
+        for activeHubId in [nil, "tags-no-key"] as [String?] {
+            let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: activeHubId)
+            await vm.loadTags()
+            #expect(vm.tags[0].label == Self.urgentCiphertext)
+            #expect(vm.tags[0].category == nil)
+        }
     }
 
-    @Test func createTagCallsAPIAndRefreshes() async throws {
-        let mock = MockTagsAPIService()
-        let created = makeTagResponse(id: "tag-new", name: "follow-up")
-        mock.createTagResult = .success(created)
-        mock.listTagsResult = .success([makeTag(id: "tag-new", name: "follow-up")])
-        let vm = TagsViewModel(tagsAPI: mock, hubKeyProvider: { Self.hubKey })
+    @Test func slugifyMatchesTheDesktopSlug() {
+        #expect(TagsViewModel.slugify("Urgent Care") == "urgent-care")
+        #expect(TagsViewModel.slugify("Multiple   Spaces") == "multiple-spaces")
+        // Characters outside [a-z0-9-] are dropped, not dashed (desktop `useCreateTag`).
+        #expect(TagsViewModel.slugify("Suivi médical") == "suivi-mdical")
+    }
 
-        let result = try await vm.createTag(label: "Follow Up", color: "#3b82f6", category: nil)
+    @Test func createTagSealsTheLabelInRustAndTrimsTheSlug() async throws {
+        let crypto = makeCrypto(hubId: "tags-create")
+        let mock = MockTagsAPIService()
+        mock.createTagResult = .success(makeTagResponse(id: "tag-new", name: "padded"))
+        let vm = makeViewModel(mock, crypto: crypto, activeHubId: "tags-create")
+
+        let result = try await vm.createTag(label: "  Padded  ", color: "#3b82f6", category: " Care ")
 
         #expect(result.id == "tag-new")
-        #expect(mock.lastCreateArgs != nil)
+        let args = try #require(mock.lastCreateArgs)
+        #expect(args.name == "padded")
+        #expect(args.encryptedLabel != "Padded")
+        #expect(crypto.decryptHubField(
+            ciphertextHex: args.encryptedLabel, hubId: "tags-create", label: CryptoLabels.LABEL_TAG_ENCRYPT
+        ) == "Padded")
+        let encryptedCategory = try #require(args.encryptedCategory)
+        #expect(crypto.decryptHubField(
+            ciphertextHex: encryptedCategory, hubId: "tags-create", label: CryptoLabels.LABEL_TAG_ENCRYPT
+        ) == "Care")
         #expect(vm.tags.count == 1)
     }
 
-    @Test func createTagThrowsWithoutHubKey() async {
+    @Test func createTagThrowsWithoutAHubKey() async {
         let mock = MockTagsAPIService()
-        let vm = TagsViewModel(tagsAPI: mock, hubKeyProvider: { nil })
-        await #expect(throws: (any Error).self) {
-            try await vm.createTag(label: "Test", color: "#000", category: nil)
+        // No active hub, and an active hub whose key is not loaded.
+        for activeHubId in [nil, "tags-no-key"] as [String?] {
+            let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: activeHubId)
+            await #expect(throws: TagsViewModelError.self) {
+                try await vm.createTag(label: "Test", color: "#000", category: nil)
+            }
         }
+        #expect(mock.lastCreateArgs == nil)
     }
 
     @Test func loadTagsSetsErrorOnFailure() async {
         let mock = MockTagsAPIService()
         mock.listTagsResult = .failure(URLError(.notConnectedToInternet))
-        let vm = TagsViewModel(tagsAPI: mock, hubKeyProvider: { nil })
+        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: nil)
         await vm.loadTags()
         #expect(vm.errorMessage != nil)
         #expect(vm.tags.isEmpty)
     }
 
-    @Test func deleteTagRefreshesList() async throws {
+    @Test func deleteTagRemovesItFromTheList() async throws {
         let mock = MockTagsAPIService()
-        mock.listTagsResult = .success([])
-        let vm = TagsViewModel(tagsAPI: mock, hubKeyProvider: { nil })
+        mock.listTagsResult = .success([makeTag()])
+        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: nil)
+        await vm.loadTags()
+        #expect(vm.tags.count == 1)
         try await vm.deleteTag("tag-1")
         #expect(mock.lastDeletedTagId == "tag-1")
         #expect(vm.tags.isEmpty)

@@ -1,5 +1,19 @@
 import Foundation
 
+// MARK: - HubFieldCrypting
+
+/// The hub-field seal/open surface the tag screens need. The hub key lives in
+/// Rust (`MobileState`) and is addressed by hub id — it never enters Swift.
+/// A protocol so tests can substitute the real `CryptoService` or a double
+/// without subclassing the final class.
+protocol HubFieldCrypting {
+    func hasHubKey(hubId: String) -> Bool
+    func encryptHubField(plaintext: String, hubId: String, label: String) throws -> String
+    func decryptHubField(ciphertextHex: String, hubId: String, label: String) -> String?
+}
+
+extension CryptoService: HubFieldCrypting {}
+
 // MARK: - DecryptedTag
 
 /// A tag with its E2EE fields decrypted for display.
@@ -14,7 +28,9 @@ struct DecryptedTag: Identifiable, Sendable {
     let category: String?
     let createdAt: String
 
-    init(tag: Tag, hubKey: Data?) {
+    /// `decrypt` opens one stored field under the active hub's key, or is nil
+    /// when no hub is active.
+    init(tag: Tag, decrypt: ((String) -> String?)?) {
         self.init(
             id: tag.id,
             name: tag.name,
@@ -22,11 +38,11 @@ struct DecryptedTag: Identifiable, Sendable {
             color: tag.color,
             encryptedCategory: tag.encryptedCategory,
             createdAt: tag.createdAt,
-            hubKey: hubKey
+            decrypt: decrypt
         )
     }
 
-    init(tag: TagResponse, hubKey: Data?) {
+    init(tag: TagResponse, decrypt: ((String) -> String?)?) {
         self.init(
             id: tag.id,
             name: tag.name,
@@ -34,7 +50,7 @@ struct DecryptedTag: Identifiable, Sendable {
             color: tag.color,
             encryptedCategory: tag.encryptedCategory,
             createdAt: tag.createdAt,
-            hubKey: hubKey
+            decrypt: decrypt
         )
     }
 
@@ -45,31 +61,14 @@ struct DecryptedTag: Identifiable, Sendable {
         color: String,
         encryptedCategory: String?,
         createdAt: String,
-        hubKey: Data?
+        decrypt: ((String) -> String?)?
     ) {
         self.id = id
         self.name = name
         self.color = color
         self.createdAt = createdAt
-        if let hubKey {
-            label = HubFieldCrypto.decrypt(
-                ciphertextHex: encryptedLabel,
-                label: CryptoLabels.LABEL_TAG_ENCRYPT,
-                hubKey: hubKey
-            ) ?? encryptedLabel
-            if let encryptedCategory {
-                category = HubFieldCrypto.decrypt(
-                    ciphertextHex: encryptedCategory,
-                    label: CryptoLabels.LABEL_TAG_ENCRYPT,
-                    hubKey: hubKey
-                )
-            } else {
-                category = nil
-            }
-        } else {
-            label = encryptedLabel
-            category = nil
-        }
+        label = decrypt?(encryptedLabel) ?? encryptedLabel
+        category = encryptedCategory.flatMap { decrypt?($0) }
     }
 }
 
@@ -78,15 +77,33 @@ struct DecryptedTag: Identifiable, Sendable {
 @Observable
 final class TagsViewModel {
     private let tagsAPI: TagsAPIServiceProtocol
-    private let hubKeyProvider: () -> Data?
+    private let crypto: any HubFieldCrypting
+    private let hubIdProvider: () -> String?
 
     var tags: [DecryptedTag] = []
     var isLoading = false
     var errorMessage: String?
 
-    init(tagsAPI: TagsAPIServiceProtocol, hubKeyProvider: @escaping () -> Data?) {
+    init(
+        tagsAPI: TagsAPIServiceProtocol,
+        crypto: any HubFieldCrypting,
+        hubIdProvider: @escaping () -> String?
+    ) {
         self.tagsAPI = tagsAPI
-        self.hubKeyProvider = hubKeyProvider
+        self.crypto = crypto
+        self.hubIdProvider = hubIdProvider
+    }
+
+    /// Decrypts one stored tag field under the active hub's key; nil when no hub is active.
+    private func fieldDecryptor() -> ((String) -> String?)? {
+        guard let hubId = hubIdProvider() else { return nil }
+        return { [crypto] ciphertextHex in
+            crypto.decryptHubField(
+                ciphertextHex: ciphertextHex,
+                hubId: hubId,
+                label: CryptoLabels.LABEL_TAG_ENCRYPT
+            )
+        }
     }
 
     /// Tags grouped by decrypted category for picker display.
@@ -111,8 +128,8 @@ final class TagsViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            let hubKey = hubKeyProvider()
-            tags = try await tagsAPI.listTags().map { DecryptedTag(tag: $0, hubKey: hubKey) }
+            let decrypt = fieldDecryptor()
+            tags = try await tagsAPI.listTags().map { DecryptedTag(tag: $0, decrypt: decrypt) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -130,21 +147,21 @@ final class TagsViewModel {
 
     @discardableResult
     func createTag(label: String, color: String, category: String?) async throws -> DecryptedTag {
-        guard let hubKey = hubKeyProvider() else {
+        guard let hubId = hubIdProvider(), crypto.hasHubKey(hubId: hubId) else {
             throw TagsViewModelError.noHubKey
         }
         let trimmed = label.trimmingCharacters(in: .whitespaces)
-        let encryptedLabel = try HubFieldCrypto.encrypt(
+        let encryptedLabel = try crypto.encryptHubField(
             plaintext: trimmed,
-            label: CryptoLabels.LABEL_TAG_ENCRYPT,
-            hubKey: hubKey
+            hubId: hubId,
+            label: CryptoLabels.LABEL_TAG_ENCRYPT
         )
         let trimmedCategory = category?.trimmingCharacters(in: .whitespaces)
         let encryptedCategory = try trimmedCategory.flatMap { raw in
-            raw.isEmpty ? nil : try HubFieldCrypto.encrypt(
+            raw.isEmpty ? nil : try crypto.encryptHubField(
                 plaintext: raw,
-                label: CryptoLabels.LABEL_TAG_ENCRYPT,
-                hubKey: hubKey
+                hubId: hubId,
+                label: CryptoLabels.LABEL_TAG_ENCRYPT
             )
         }
         let created = try await tagsAPI.createTag(
@@ -154,7 +171,7 @@ final class TagsViewModel {
             color: color,
             encryptedCategory: encryptedCategory
         )
-        let decrypted = DecryptedTag(tag: created, hubKey: hubKey)
+        let decrypted = DecryptedTag(tag: created, decrypt: fieldDecryptor())
         tags.append(decrypted)
         tags.sort { $0.label < $1.label }
         return decrypted

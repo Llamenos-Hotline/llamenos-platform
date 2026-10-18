@@ -7,7 +7,6 @@ import SwiftUI
 /// create/delete — label/color editing lands with the desktop-parity editor.
 struct TagsAdminView: View {
     @Environment(AppState.self) private var appState
-    @Environment(HubKeyStore.self) private var hubKeyStore
     @State private var viewModelBox = ViewModelBox<TagsViewModel>()
     @State private var showCreateSheet = false
     @State private var deleteTarget: DecryptedTag?
@@ -135,7 +134,8 @@ struct TagsAdminView: View {
         if let existing = viewModelBox.value { return existing }
         let vm = TagsViewModel(
             tagsAPI: TagsAPIService(apiService: appState.apiService),
-            hubKeyProvider: { [hubKeyStore] in hubKeyStore.currentHubKey }
+            crypto: appState.cryptoService,
+            hubIdProvider: { [hubContext = appState.hubContext] in hubContext.activeHubId }
         )
         viewModelBox.value = vm
         return vm

@@ -77,7 +77,6 @@ struct EditContactView: View {
 // Shared form fields sub-view
 struct ContactFormFields: View {
     @Environment(AppState.self) private var appState
-    @Environment(HubKeyStore.self) private var hubKeyStore
     @Bindable var vm: ContactFormViewModel
     @State private var tagsBox = ViewModelBox<TagsViewModel>()
 
@@ -124,9 +123,11 @@ struct ContactFormFields: View {
                     })
                 },
                 set: { newIds in
-                    vm.tags = tagsVM.tags
-                        .filter { newIds.contains($0.id) }
-                        .map(\.name)
+                    // Slugs the loaded list cannot resolve (list not loaded yet,
+                    // a failed load) are not the picker's to drop.
+                    let known = Set(tagsVM.tags.map(\.name))
+                    vm.tags = vm.tags.filter { !known.contains($0) }
+                        + tagsVM.tags.filter { newIds.contains($0.id) }.map(\.name)
                 }
             ),
             canCreate: appState.hasPermission("tags:create")
@@ -143,7 +144,8 @@ struct ContactFormFields: View {
         if let existing = tagsBox.value { return existing }
         let tagsVM = TagsViewModel(
             tagsAPI: TagsAPIService(apiService: appState.apiService),
-            hubKeyProvider: { [hubKeyStore] in hubKeyStore.currentHubKey }
+            crypto: appState.cryptoService,
+            hubIdProvider: { [hubContext = appState.hubContext] in hubContext.activeHubId }
         )
         tagsBox.value = tagsVM
         return tagsVM
