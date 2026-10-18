@@ -138,9 +138,9 @@ final class EventsUITests: BaseUITest {
                 "Details tab content should be visible by default in event detail"
             )
             XCTAssertTrue(find("event-tab-details").exists, "Details tab should exist in event detail")
-            XCTAssertTrue(find("event-tab-subEvents").exists, "Sub-events tab should exist in event detail")
-            XCTAssertTrue(find("event-tab-cases").exists, "Linked cases tab should exist in event detail")
-            XCTAssertTrue(find("event-tab-reports").exists, "Linked reports tab should exist in event detail")
+            XCTAssertTrue(find("event-tab-sub_events").exists, "Sub-events tab should exist in event detail")
+            XCTAssertTrue(find("event-tab-linked_cases").exists, "Linked cases tab should exist in event detail")
+            XCTAssertTrue(find("event-tab-linked_reports").exists, "Linked reports tab should exist in event detail")
         }
     }
 
@@ -163,19 +163,19 @@ final class EventsUITests: BaseUITest {
                 "Details tab content should render by default"
             )
 
-            find("event-tab-subEvents").tap()
+            find("event-tab-sub_events").tap()
             XCTAssertTrue(
                 find("event-sub-events-tab").waitForExistence(timeout: 3),
                 "Sub-events content should render when Sub-Events tab is selected"
             )
 
-            find("event-tab-cases").tap()
+            find("event-tab-linked_cases").tap()
             XCTAssertTrue(
                 find("event-linked-cases-tab").waitForExistence(timeout: 3),
                 "Linked cases content should render when Cases tab is selected"
             )
 
-            find("event-tab-reports").tap()
+            find("event-tab-linked_reports").tap()
             XCTAssertTrue(
                 find("event-linked-reports-tab").waitForExistence(timeout: 3),
                 "Linked reports content should render when Reports tab is selected"
