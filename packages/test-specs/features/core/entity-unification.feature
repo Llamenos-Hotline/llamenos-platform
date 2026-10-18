@@ -39,8 +39,12 @@ Feature: Entity System Unification
     Then I should receive 1 record
     And the server should not have seen the plaintext date
 
-  # @wip: unbound, and the Given creates the role without assigning it to any user — the
-  # request then goes out as admin, so binding the wording alone would pass vacuously — #1198
+  # @wip (#1198): unbound, and the Given creates the role without assigning it to any user —
+  # the request then goes out as admin, so binding the wording alone would pass vacuously.
+  # The behaviour it specifies does not exist: /api/records has no events:read alias. Adding
+  # one is a legacy fallback (not allowed before production) AND a permission-scope decision —
+  # events:read never implied visibility into case records, so any alias must be 'own'-scoped
+  # and audited. Decide that first, then bind with a real non-admin user.
   @permission-aliasing @wip
   Scenario: events:read permission maps to cases:read
     Given a user has permission "events:read" but not "cases:read"
