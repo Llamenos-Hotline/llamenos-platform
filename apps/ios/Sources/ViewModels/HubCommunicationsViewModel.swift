@@ -72,6 +72,16 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
 
 /// ViewModel for hub communications settings and onboarding wizard.
 /// Uses @Observable macro (iOS 17+) per project conventions.
+///
+/// Main-actor isolated, for the reason `CaseManagementViewModel` is: `HubCommunicationsView`
+/// reads every property here from the main thread, and without the isolation `loadAll()`
+/// resumed on the global executor after its requests and wrote `setupStatus` / `isSetUp` /
+/// `isLoading` from a GCD worker. A write landing while the body was being evaluated was never
+/// observed, so the screen stayed on whichever state it had last drawn — "loading" or "No
+/// provider configured" — for as long as the app stayed idle, with both `GET /onboard/provider-status`
+/// and `GET /onboard/usage` already answered 200 in under 100ms. Network calls still suspend off
+/// the main thread inside `APIService`; only the state changes are pinned here.
+@MainActor
 @Observable
 final class HubCommunicationsViewModel {
     /// The channels the checklist manages, in display order. `HubChannelType`
@@ -126,8 +136,10 @@ final class HubCommunicationsViewModel {
     /// Whether the onboarding sheet is presented.
     var showOnboardingSheet: Bool = false
 
-    /// Loading states.
-    var isLoading: Bool = false
+    /// Loading states. `isLoading` starts true — until `loadAll()` has asked the server, "not set
+    /// up" is not yet a fact, and the screen must not draw "No provider configured" (with a live
+    /// Start Setup button) for a hub that is fully configured.
+    var isLoading: Bool = true
     var isSavingChannels: Bool = false
     var isCompletingStep: Bool = false
 
@@ -158,7 +170,10 @@ final class HubCommunicationsViewModel {
 
     /// Load hub provider status, usage, and onboarding state.
     func loadAll() async {
-        guard let hubId else { return }
+        guard let hubId else {
+            isLoading = false
+            return
+        }
         isLoading = true
         error = nil
         defer { isLoading = false }
