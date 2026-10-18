@@ -27,6 +27,7 @@ import { ProviderApiError } from '../services/provider-setup/types'
 import { SignalRegistrationError } from '../services/provider-setup/signal-registration'
 import { A2pRegistrationError } from '../services/provider-setup/a2p-registration'
 import { removeAllVolunteerEndpoints } from '../telephony/registrar'
+import { audit } from '../services/audit'
 
 /**
  * Resolve the hub a provider-setup request acts on: the path hub, or a hub
@@ -825,6 +826,10 @@ providerSetup.post('/signal/register',
         // SignalRegistrationService.syntheticBridge (#1623).
         harnessSecret: c.req.header('X-Test-Secret'),
       })
+      await audit(services.audit, 'signalRegistrationStarted', c.get('pubkey'), {
+        numberLast4: body.phoneNumber.slice(-4),
+        status: registration.status,
+      }, undefined, hubId)
       return c.json(registration)
     } catch (err) {
       return handleSignalError(err, c)
@@ -908,6 +913,10 @@ providerSetup.post('/signal/verify',
         code: body.code,
         harnessSecret: c.req.header('X-Test-Secret'),
       })
+      await audit(services.audit, 'signalRegistrationVerified', pubkey, {
+        registrationId: body.registrationId,
+        status: registration.status,
+      }, undefined, registration.hubId)
       return c.json(registration)
     } catch (err) {
       return handleSignalError(err, c)
@@ -972,7 +981,7 @@ providerSetup.get('/signal/account',
     }
 
     try {
-      const info = await services.signalRegistration.getAccountInfo(registrationId)
+      const info = await services.signalRegistration.getAccountInfo(registrationId, c.req.header('X-Test-Secret'))
       return c.json(info)
     } catch (err) {
       return handleSignalError(err, c)
