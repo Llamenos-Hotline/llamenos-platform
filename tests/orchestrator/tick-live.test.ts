@@ -59,7 +59,7 @@ describe('tick: live dispatch pipeline (task 7)', () => {
     const r = await tick(d)
     expect(d.dispatch).toHaveBeenCalledTimes(1)
     expect(d.enableAutoMerge).toHaveBeenCalledWith('42')
-    expect(d.verifyMechanical).toHaveBeenCalledWith({ worktree: '/wt/ios-1', branch: 'fleet/ios/1', lane: lane() })
+    expect(d.verifyMechanical).toHaveBeenCalledWith({ worktree: '/wt/ios-1', branch: 'fleet/ios/1', lane: lane(), allLanes: [lane()] })
     expect(d.secondOpinion).toHaveBeenCalledTimes(1)
     expect(d.postReview).toHaveBeenCalledWith('42', 'PASS', expect.any(String))
     expect(d.record).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', pr: '42', branch: 'fleet/ios/1' }))

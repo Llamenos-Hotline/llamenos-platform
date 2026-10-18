@@ -1028,7 +1028,7 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   // the commit under judgement has executed, or can, at this point.
   const grantedLanes = await resolveGrantedLanes(deps, lane)
 
-  const gate = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, skipTests: true })
+  const gate = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, allLanes: await deps.lanes(), skipTests: true })
   deps.log(`gate (no code from the commit under judgement executed): ${buildGateTrace({ report: gate })}`)
   if (!gate.passed) {
     return {
@@ -1042,7 +1042,7 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   // was computed and printed, in a separate process, against the export — so
   // it can only AND into the result, never revise it. This job holds no
   // secrets for that code to reach.
-  const withTests = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, testDir: deps.ctx.headDir })
+  const withTests = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, allLanes: await deps.lanes(), testDir: deps.ctx.headDir })
   return {
     ok: withTests.passed,
     summary: [
@@ -1250,6 +1250,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     ...rangeFor(deps.ctx),
     lane,
     grantedLanes: await resolveGrantedLanes(deps, lane),
+    allLanes: await deps.lanes(),
     skipTests: true,
   })
   if (!report.passed) {
