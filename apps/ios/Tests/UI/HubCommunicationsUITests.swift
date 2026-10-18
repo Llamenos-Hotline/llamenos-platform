@@ -44,23 +44,37 @@ final class HubCommunicationsUITests: BaseUITest {
 
     // MARK: - Communications View States
 
-    func testCommunicationsViewShowsLoadingOrContent() {
-        given("I am logged in as an admin") {
+    func testCommunicationsViewShowsNoProviderForNewHub() {
+        given("I am logged in as an admin of a hub nobody has configured") {
             launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings") {
             navigateToCommunications()
         }
-        then("the view should show loading, no-provider, or settings content") {
-            let found = anyElementExists([
-                "hub-comms-loading",
-                "hub-comms-no-provider",
-                "hub-comms-settings-list",
-            ])
+        then("the view settles on the no-provider state") {
             XCTAssertTrue(
-                found,
-                "Communications view should show loading, no-provider state, or settings list"
+                find("hub-comms-no-provider").waitForExistence(timeout: 20),
+                "A hub with no provider should show the no-provider state"
             )
+            XCTAssertFalse(find("hub-comms-loading").exists, "Communications should have finished loading")
+            XCTAssertFalse(find("hub-comms-settings-list").exists, "There are no settings for a provider that is not set up")
+        }
+    }
+
+    func testCommunicationsViewShowsSettingsForConfiguredHub() {
+        given("I am logged in as an admin of a hub whose setup is complete") {
+            launchAsAdminOnConfiguredHub()
+        }
+        when("I navigate to Communications settings") {
+            navigateToCommunications()
+        }
+        then("the view settles on the settings list") {
+            XCTAssertTrue(
+                find("hub-comms-settings-list").waitForExistence(timeout: 20),
+                "A hub with completed setup should show its settings"
+            )
+            XCTAssertFalse(find("hub-comms-loading").exists, "Communications should have finished loading")
+            XCTAssertFalse(find("hub-comms-no-provider").exists, "A set-up hub is not in the no-provider state")
         }
     }
 
@@ -71,12 +85,9 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I navigate to Communications settings") {
             navigateToCommunications()
         }
-        then("if no provider is configured, the setup button should appear") {
+        then("the setup button should appear") {
             let noProvider = find("hub-comms-no-provider")
-            guard noProvider.waitForExistence(timeout: 10) else {
-                // Provider may already be configured in test environment -- skip
-                return
-            }
+            XCTAssertTrue(noProvider.waitForExistence(timeout: 20), "A hub with no provider should show the no-provider state")
             let setupButton = find("hub-comms-start-setup-btn")
             XCTAssertTrue(
                 setupButton.waitForExistence(timeout: 5),
@@ -94,15 +105,9 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I tap the Start Setup button") {
             navigateToCommunications()
             let noProvider = find("hub-comms-no-provider")
-            guard noProvider.waitForExistence(timeout: 10) else {
-                // Provider already configured; cannot test onboarding flow
-                return
-            }
+            XCTAssertTrue(noProvider.waitForExistence(timeout: 20), "A hub with no provider should show the no-provider state")
             let setupButton = find("hub-comms-start-setup-btn")
-            guard setupButton.waitForExistence(timeout: 5) else {
-                XCTFail("Start Setup button should exist")
-                return
-            }
+            XCTAssertTrue(setupButton.waitForExistence(timeout: 5), "Start Setup button should exist")
             setupButton.tap()
         }
         then("the onboarding sheet should appear") {
@@ -224,9 +229,8 @@ final class HubCommunicationsUITests: BaseUITest {
             voiceToggle.tap()
 
             let emailToggle = scrollToFind("channel-toggle-email", maxSwipes: 3)
-            if emailToggle.exists {
-                emailToggle.tap()
-            }
+            XCTAssertTrue(emailToggle.exists, "Email toggle should exist")
+            emailToggle.tap()
         }
         then("the toggles should remain interactive") {
             // Verify the channel checklist is still responsive
@@ -306,28 +310,17 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSettingsListShowsSections() {
         given("I am logged in as an admin") {
-            launchAsAdminWithAPI()
+            launchAsAdminOnConfiguredHub()
         }
         when("I navigate to Communications settings") {
             navigateToCommunications()
         }
-        then("if provider is configured, the settings list should show key sections") {
+        then("the settings list should show key sections") {
             let settingsList = find("hub-comms-settings-list")
-            guard settingsList.waitForExistence(timeout: 10) else {
-                // Provider not configured -- no-provider state is shown instead
-                let noProvider = find("hub-comms-no-provider")
-                if noProvider.exists {
-                    // Acceptable: no provider configured in test environment
-                    return
-                }
-                // Loading state may still be active
-                let loading = find("hub-comms-loading")
-                XCTAssertTrue(
-                    loading.exists,
-                    "Settings should show list, no-provider state, or loading"
-                )
-                return
-            }
+            XCTAssertTrue(
+                settingsList.waitForExistence(timeout: 20),
+                "A hub with completed setup should show its settings list"
+            )
 
             // Provider status section
             let statusRow = find("hub-comms-provider-status")
@@ -340,17 +333,14 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSettingsListShowsChannelSettingsLink() {
         given("I am logged in as an admin") {
-            launchAsAdminWithAPI()
+            launchAsAdminOnConfiguredHub()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
         }
         then("the channel settings navigation link should exist") {
             let settingsList = find("hub-comms-settings-list")
-            guard settingsList.waitForExistence(timeout: 10) else {
-                // Not configured -- skip
-                return
-            }
+            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
 
             let channelLink = find("hub-comms-channel-settings-link")
             XCTAssertTrue(
@@ -362,48 +352,38 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSettingsListShowsUsageLink() {
         given("I am logged in as an admin") {
-            launchAsAdminWithAPI()
+            launchAsAdminOnConfiguredHub()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
         }
-        then("the usage link should exist (when usage data is available)") {
+        then("the usage link should exist") {
             let settingsList = find("hub-comms-settings-list")
-            guard settingsList.waitForExistence(timeout: 10) else {
-                return
-            }
+            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
 
+            // The server always reports the current month's usage (zeroes if nothing was
+            // used), so a configured hub always has usage data to link to.
             let usageLink = scrollToFind("hub-comms-usage-link", maxSwipes: 3)
-            // Usage link only appears when usage data is non-nil
-            if usageLink.exists {
-                XCTAssertTrue(true, "Usage link is visible when usage data is available")
-            }
+            XCTAssertTrue(usageLink.exists, "Usage link should be visible when usage data is available")
         }
     }
 
     func testChannelSettingsNavigationOpensChecklist() {
         given("I am logged in as admin with provider configured") {
-            launchAsAdminWithAPI()
+            launchAsAdminOnConfiguredHub()
         }
         when("I tap the channel settings link") {
             navigateToCommunications()
             let settingsList = find("hub-comms-settings-list")
-            guard settingsList.waitForExistence(timeout: 10) else {
-                return
-            }
+            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
 
             let channelLink = find("hub-comms-channel-settings-link")
-            guard channelLink.waitForExistence(timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(channelLink.waitForExistence(timeout: 5), "Channel settings link should exist")
             channelLink.tap()
         }
         then("the channel checklist should appear with a save button") {
             let checklist = find("channel-checklist")
-            guard checklist.waitForExistence(timeout: 5) else {
-                // Navigation may not have occurred if provider not configured
-                return
-            }
+            XCTAssertTrue(checklist.waitForExistence(timeout: 5), "Channel checklist should open")
 
             // In settings mode (not onboarding), a save button is present
             let saveBtn = scrollToFind("channel-save-btn", maxSwipes: 5)
@@ -416,42 +396,33 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testUsageNavigationOpensUsageView() {
         given("I am logged in as admin with provider configured") {
-            launchAsAdminWithAPI()
+            launchAsAdminOnConfiguredHub()
         }
         when("I tap the usage link") {
             navigateToCommunications()
             let settingsList = find("hub-comms-settings-list")
-            guard settingsList.waitForExistence(timeout: 10) else {
-                return
-            }
+            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
 
             let usageLink = scrollToFind("hub-comms-usage-link", maxSwipes: 3)
-            guard usageLink.exists else {
-                // No usage data available -- skip
-                return
-            }
+            XCTAssertTrue(usageLink.exists, "Usage link should exist")
             usageLink.tap()
         }
         then("the usage view should appear") {
             let usageView = find("hub-usage-view")
-            if usageView.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Usage view rendered successfully")
-            }
+            XCTAssertTrue(usageView.waitForExistence(timeout: 5), "Usage view should render")
         }
     }
 
     func testPhoneNumbersSectionExists() {
         given("I am logged in as an admin") {
-            launchAsAdminWithAPI()
+            launchAsAdminOnConfiguredHub()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
         }
         then("the phone numbers section should be visible") {
             let settingsList = find("hub-comms-settings-list")
-            guard settingsList.waitForExistence(timeout: 10) else {
-                return
-            }
+            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
 
             let phoneNumbers = scrollToFind("hub-comms-phone-numbers", maxSwipes: 5)
             XCTAssertTrue(
@@ -517,13 +488,26 @@ final class HubCommunicationsUITests: BaseUITest {
 
     // MARK: - Navigation Helpers
 
+    /// Launch as an admin of a hub whose communications setup is complete: a fresh hub
+    /// taken through every onboarding step on the server, so the Communications screen
+    /// shows its settings rather than the no-provider state. A fresh hub, because the
+    /// class hub must stay unconfigured for the no-provider scenarios.
+    private func launchAsAdminOnConfiguredHub() {
+        guard let hubId = TestAdminAPI.createHub(
+            name: "comms-\(UUID().uuidString.prefix(8))", baseURL: testHubURL
+        ) else { return }
+        let onboard = "/api/hubs/\(hubId)/onboard"
+        TestAdminAPI.send("POST", onboard, [:], baseURL: testHubURL)
+        for step in ["template_selection", "channel_selection", "provider_connection", "phone_number", "channel_setup"] {
+            TestAdminAPI.send("PUT", "\(onboard)/step", ["step": step], baseURL: testHubURL)
+        }
+        launchAsAdminWithAPI(hubId: hubId)
+    }
+
     private func navigateToCommunications() {
         navigateToSettings()
         let commsLink = scrollToFind("settings-communications-link", maxSwipes: 5)
-        guard commsLink.exists else {
-            // Admin may not see link if not actually admin -- this is fine for guard checks
-            return
-        }
+        XCTAssertTrue(commsLink.exists, "The Communications link should be offered to an admin")
         commsLink.tap()
     }
 
@@ -532,95 +516,69 @@ final class HubCommunicationsUITests: BaseUITest {
     private func openOnboardingSheet() {
         navigateToCommunications()
 
-        let noProvider = find("hub-comms-no-provider")
-        guard noProvider.waitForExistence(timeout: 10) else {
-            // If provider is already configured, we cannot open onboarding
-            return
-        }
-
+        XCTAssertTrue(
+            find("hub-comms-no-provider").waitForExistence(timeout: 20),
+            "Onboarding opens from the no-provider state"
+        )
         let setupBtn = find("hub-comms-start-setup-btn")
-        guard setupBtn.waitForExistence(timeout: 5) else {
-            return
-        }
+        XCTAssertTrue(setupBtn.waitForExistence(timeout: 5), "Start Setup button should exist")
         setupBtn.tap()
 
-        // Wait for the sheet to appear
-        let sheet = find("hub-onboarding-sheet")
-        _ = sheet.waitForExistence(timeout: 5)
+        XCTAssertTrue(
+            find("hub-onboarding-sheet").waitForExistence(timeout: 5),
+            "Onboarding sheet should be presented after tapping Start Setup"
+        )
     }
 
     /// Advance past the template step by tapping "Start from Scratch".
     /// This moves to the channels step.
     private func advanceToChannelStep() {
-        let templateList = find("onboarding-template-list")
-        guard templateList.waitForExistence(timeout: 10) else {
-            return
-        }
-
+        XCTAssertTrue(
+            find("onboarding-template-list").waitForExistence(timeout: 10),
+            "The onboarding sheet opens on the template list"
+        )
         let fromScratch = scrollToFind("template-from-scratch", maxSwipes: 5)
-        guard fromScratch.exists else {
-            return
-        }
+        XCTAssertTrue(fromScratch.exists, "Start from Scratch should be offered")
         fromScratch.tap()
 
-        // Wait for the channels step to load
-        let checklist = find("channel-checklist")
-        _ = checklist.waitForExistence(timeout: 5)
+        XCTAssertTrue(
+            find("channel-checklist").waitForExistence(timeout: 5),
+            "Choosing a template should move to the channels step"
+        )
+    }
+
+    /// Tap Next and wait for the step with this identifier.
+    private func tapNext(toReach stepIdentifier: String) {
+        let nextBtn = find("onboarding-next-btn")
+        XCTAssertTrue(nextBtn.waitForExistence(timeout: 5), "Next button should exist")
+        nextBtn.tap()
+        XCTAssertTrue(
+            find(stepIdentifier).waitForExistence(timeout: 5),
+            "Next should reach '\(stepIdentifier)'"
+        )
     }
 
     /// Advance to the provider step by going through template + channels.
     private func advanceToProviderStep() {
         advanceToChannelStep()
-
-        let nextBtn = find("onboarding-next-btn")
-        guard nextBtn.waitForExistence(timeout: 5) else {
-            return
-        }
-        nextBtn.tap()
-
-        let providerStep = find("onboarding-step-provider")
-        _ = providerStep.waitForExistence(timeout: 5)
+        tapNext(toReach: "onboarding-step-provider")
     }
 
     /// Advance to the phone number step.
     private func advanceToPhoneStep() {
         advanceToProviderStep()
-
-        let nextBtn = find("onboarding-next-btn")
-        guard nextBtn.waitForExistence(timeout: 5) else {
-            return
-        }
-        nextBtn.tap()
-
-        let phoneStep = find("onboarding-step-phone")
-        _ = phoneStep.waitForExistence(timeout: 5)
+        tapNext(toReach: "onboarding-step-phone")
     }
 
     /// Advance to the channel setup step.
     private func advanceToChannelSetupStep() {
         advanceToPhoneStep()
-
-        let nextBtn = find("onboarding-next-btn")
-        guard nextBtn.waitForExistence(timeout: 5) else {
-            return
-        }
-        nextBtn.tap()
-
-        let setupStep = find("onboarding-step-channel-setup")
-        _ = setupStep.waitForExistence(timeout: 5)
+        tapNext(toReach: "onboarding-step-channel-setup")
     }
 
     /// Advance to the summary step.
     private func advanceToSummaryStep() {
         advanceToChannelSetupStep()
-
-        let nextBtn = find("onboarding-next-btn")
-        guard nextBtn.waitForExistence(timeout: 5) else {
-            return
-        }
-        nextBtn.tap()
-
-        let summaryStep = find("onboarding-step-summary")
-        _ = summaryStep.waitForExistence(timeout: 5)
+        tapNext(toReach: "onboarding-step-summary")
     }
 }
