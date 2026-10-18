@@ -62,8 +62,6 @@ data class HpkeEnvelope(
         const val LABEL_ID_FILE_KEY = 1
         const val LABEL_ID_FILE_METADATA = 2
         const val LABEL_ID_HUB_KEY_WRAP = 3
-        const val LABEL_ID_MESSAGE = 5
-        const val LABEL_ID_CALL_META = 6
     }
 }
 
@@ -242,6 +240,15 @@ class CryptoService @Inject constructor() {
             nativeLibLoaded = true
         } catch (_: UnsatisfiedLinkError) {
             nativeLibLoaded = false
+        }
+        if (nativeLibLoaded) {
+            // Arm UniFFI's binding/library integrity check: contract version plus a
+            // per-function checksum. Nothing else ever references the generated
+            // `IntegrityCheckingUniffiLib`, so without this call the check never runs —
+            // the checked-in binding drifted from the crate (three checksums) and
+            // nothing noticed. A mismatch throws here, at construction, rather than
+            // surfacing as undefined behaviour at some later JNA call.
+            org.llamenos.core.uniffiEnsureInitialized()
         }
     }
 
@@ -611,10 +618,17 @@ class CryptoService @Inject constructor() {
         }
     }
 
-    // ---- Message Encryption (HPKE) ----
+    // ---- Message Encryption (stored-record format) ----
 
     /**
-     * Encrypt a message for multiple readers with per-message forward secrecy using HPKE.
+     * Seal a conversation message (`LABEL_MESSAGE`) for this device and [readerPubkeys].
+     *
+     * The format is the stored record of `PROTOCOL.md` §2.4 — empty AAD on both the
+     * content layer and the key wrap, label bound as HPKE `info` only — and Rust
+     * chooses it ([org.llamenos.core.mobileEncryptMessage]), not this function. This
+     * used to assemble the record from `mobileSymmetricEncrypt` + `mobileHpkeSealKey`
+     * under the canonical notes AAD, which no server or desktop reader supplies, so
+     * every message an Android device wrote was unreadable by everyone else (#1927).
      */
     suspend fun encryptMessage(
         plaintext: String,
@@ -624,66 +638,51 @@ class CryptoService @Inject constructor() {
         val encPubkey = encryptionPubkeyHex ?: throw CryptoException("No key loaded")
 
         try {
-            val allReaders = (listOf(encPubkey) + readerPubkeys).distinct()
-            val plaintextHex = plaintext.toByteArray(Charsets.UTF_8)
-                .joinToString("") { "%02x".format(it) }
-            val result = org.llamenos.core.mobileSymmetricEncrypt(
-                plaintextHex = plaintextHex,
-                aadHex = contentAad(CryptoLabels.LABEL_MESSAGE),
+            val sealed = org.llamenos.core.mobileEncryptMessage(
+                plaintext = plaintext,
+                readerPubkeys = (listOf(encPubkey) + readerPubkeys).distinct(),
             )
-            val ciphertextHex = result[0]
-            val keyHex = result[1]
-
-            val envelopes = allReaders.map { pubkey ->
-                val hpkeEnv = org.llamenos.core.mobileHpkeSealKey(
-                    keyHex = keyHex,
-                    recipientPubkeyHex = pubkey,
-                    label = CryptoLabels.LABEL_MESSAGE,
-                    aadHex = keyWrapAad(CryptoLabels.LABEL_MESSAGE),
-                )
-                val wire = toWireEnvelope(hpkeEnv)
-                RecipientEnvelope(
-                    pubkey = pubkey,
-                    enc = wire.enc,
-                    ct = wire.ct,
-                )
-            }
-
-            EncryptedMessage(ciphertextHex = ciphertextHex, envelopes = envelopes)
+            EncryptedMessage(
+                ciphertextHex = sealed.encryptedContent,
+                envelopes = sealed.readerEnvelopes.map {
+                    RecipientEnvelope(pubkey = it.pubkey, enc = it.enc, ct = it.ct)
+                },
+            )
         } catch (e: org.llamenos.core.CryptoException) {
             throw CryptoException("Message encryption failed: ${e.message}", e)
         }
     }
 
-    // ---- Message Decryption (HPKE) ----
+    // ---- Message Decryption (stored-record format) ----
 
     /**
-     * Decrypt a message using an HPKE envelope addressed to this device.
+     * Open a `LABEL_MESSAGE` stored record as this device, whoever sealed it — the
+     * server on webhook receipt, the desktop, or another phone.
+     *
+     * [envelopes] are the record's reader envelopes exactly as they arrive on the wire
+     * (hex `enc`/`ct`); Rust finds the one addressed to this device and binds the AAD
+     * ([org.llamenos.core.mobileDecryptMessage]). Returns null when no envelope is ours
+     * or the record does not open.
      */
     suspend fun decryptMessage(
         encryptedContent: String,
-        envelope: HpkeEnvelope,
+        envelopes: List<RecipientEnvelope>,
     ): String? = withContext(computeDispatcher) {
         check(nativeLibLoaded) { "Native crypto library not loaded." }
         if (!isUnlocked) return@withContext null
 
         try {
-            val keyHex = org.llamenos.core.mobileHpkeOpenKey(
-                envelope = toFfiEnvelope(envelope),
-                expectedLabel = CryptoLabels.LABEL_MESSAGE,
-                aadHex = keyWrapAad(CryptoLabels.LABEL_MESSAGE),
+            org.llamenos.core.mobileDecryptMessage(
+                encryptedContent = encryptedContent,
+                envelopes = envelopes.map { it.toFfiRecipientEnvelope() },
             )
-            val plaintextHex = org.llamenos.core.mobileSymmetricDecrypt(
-                ciphertextHex = encryptedContent,
-                keyHex = keyHex,
-                aadHex = contentAad(CryptoLabels.LABEL_MESSAGE),
-            )
-            val bytes = hexToBytes(plaintextHex)
-            String(bytes, Charsets.UTF_8)
-        } catch (_: Exception) {
+        } catch (_: org.llamenos.core.CryptoException) {
             null
         }
     }
+
+    private fun RecipientEnvelope.toFfiRecipientEnvelope() =
+        org.llamenos.core.RecipientKeyEnvelope(pubkey = pubkey, enc = enc, ct = ct)
 
     // ---- PUK Operations ----
 
@@ -1092,45 +1091,30 @@ class CryptoService @Inject constructor() {
             }
         }
 
-    // ---- Call Metadata Decryption (HPKE) ----
+    // ---- Call Metadata Decryption (stored-record format) ----
 
     /**
-     * Decrypt call metadata (callerNumber, answeredBy) from an E2EE admin envelope.
-     * Finds the envelope addressed to this device, HPKE-opens the symmetric key,
-     * then AES-GCM decrypts the call content.
-     * Returns null if no matching envelope is found or decryption fails.
+     * Decrypt call metadata (callerNumber, answeredBy) from a call record's admin envelopes.
+     *
+     * Call records are stored records sealed by the server (`encryptCallRecordForStorage`,
+     * `PROTOCOL.md` §2.5): empty AAD on both layers. Rust finds this device's envelope and
+     * binds the AAD ([org.llamenos.core.mobileDecryptCallMetadata]); this used to open them
+     * by hand under the canonical AAD, which the server never wrote, so it always failed.
+     * Returns null if no envelope is ours or decryption fails.
      */
     suspend fun decryptCallMetadata(
         encryptedContent: String,
         adminEnvelopes: List<AdminEnvelopeData>,
     ): CallMetadata? = withContext(computeDispatcher) {
         if (!nativeLibLoaded || !isUnlocked) return@withContext null
-        val ourPubkey = encryptionPubkeyHex ?: return@withContext null
-
-        val myEnvelope = adminEnvelopes.find { it.pubkey == ourPubkey }
-            ?: return@withContext null
 
         try {
-            val ffiEnvelope = toFfiEnvelope(
-                HpkeEnvelope(
-                    v = HpkeEnvelope.CURRENT_VERSION,
-                    labelId = HpkeEnvelope.LABEL_ID_CALL_META,
-                    enc = myEnvelope.enc,
-                    ct = myEnvelope.ct,
-                ),
+            val plaintext = org.llamenos.core.mobileDecryptCallMetadata(
+                encryptedContent = encryptedContent,
+                envelopes = adminEnvelopes.map {
+                    org.llamenos.core.RecipientKeyEnvelope(pubkey = it.pubkey, enc = it.enc, ct = it.ct)
+                },
             )
-            val keyHex = org.llamenos.core.mobileHpkeOpenKey(
-                envelope = ffiEnvelope,
-                expectedLabel = CryptoLabels.LABEL_CALL_META,
-                aadHex = keyWrapAad(CryptoLabels.LABEL_CALL_META),
-            )
-            val plaintextHex = org.llamenos.core.mobileSymmetricDecrypt(
-                ciphertextHex = encryptedContent,
-                keyHex = keyHex,
-                aadHex = contentAad(CryptoLabels.LABEL_CALL_META),
-            )
-            val bytes = hexToBytes(plaintextHex)
-            val plaintext = String(bytes, Charsets.UTF_8)
             json.decodeFromString<CallMetadata>(plaintext)
         } catch (_: Exception) {
             null

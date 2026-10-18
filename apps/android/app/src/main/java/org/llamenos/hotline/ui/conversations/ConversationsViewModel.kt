@@ -469,26 +469,14 @@ class ConversationsViewModel @Inject constructor(
     }
 
     /**
-     * Decrypt a single message by finding our HPKE envelope and calling CryptoService.
+     * Decrypt a single message. CryptoService hands all of the message's reader
+     * envelopes to Rust, which opens the one addressed to this device.
      */
     private suspend fun decryptMessage(message: ConversationMessage): DecryptedMessage? {
-        val ourPubkey = cryptoService.encryptionPubkeyHex ?: return null
-
-        val envelope = message.recipientEnvelopes.find { it.pubkey == ourPubkey }
-            ?: return null
-
-        // Build HpkeEnvelope from wire format fields
-        val hpkeEnvelope = org.llamenos.hotline.crypto.HpkeEnvelope(
-            v = org.llamenos.hotline.crypto.HpkeEnvelope.CURRENT_VERSION,
-            labelId = org.llamenos.hotline.crypto.HpkeEnvelope.LABEL_ID_MESSAGE,
-            enc = envelope.enc,
-            ct = envelope.ct,
-        )
-
         return try {
             val plaintext = cryptoService.decryptMessage(
                 encryptedContent = message.encryptedContent,
-                envelope = hpkeEnvelope,
+                envelopes = message.recipientEnvelopes,
             )
 
             if (plaintext != null) {
