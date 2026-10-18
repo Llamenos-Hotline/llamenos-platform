@@ -14,15 +14,13 @@ final class WipeServiceTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
 
-        // A per-test store keeps one test's cache out of another's, and it must sit
-        // *outside* every directory wipeAll() sweeps (tmp, Caches, Application Support,
-        // Documents): inside one, the sweep deletes the store as plain file cleanup and the
-        // assertions would pass whether or not URLCache.removeAllCachedResponses() did
-        // anything — hiding exactly the #1658 regression they exist to catch. Library itself
-        // is not swept (only its Caches and Application Support children are), so a
-        // sibling there is untouched by the wipe and a surviving entry can only mean the
-        // cache's own removal failed (#1848).
-        cacheStoreDirectory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+        // A per-test store keeps one test's cache out of another's. It sits in the
+        // caches directory because that is where the app's real default store lives
+        // (Caches/<bundle id>), and wipeAll() sweeps that directory: so a missing entry
+        // here is proven by the sweep *and* the cache removal together. The cache removal
+        // is pinned separately, on its own, by
+        // testWipeAllRemovesCachedResponsesThroughTheSharedCache (#1848).
+        cacheStoreDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("WipeServiceTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: cacheStoreDirectory, withIntermediateDirectories: true)
 
@@ -122,22 +120,38 @@ final class WipeServiceTests: XCTestCase {
         )
     }
 
-    /// The other half of #1658: the entry must be gone from the *store*, not just from
-    /// whichever cache handle `wipeAll()` happened to leave installed.
+    /// The cache removal itself, pinned where timing cannot blur it.
     ///
-    /// Reading back through a fresh cache over the same dedicated on-disk store is the
-    /// distinction the old test could not make, and it is where the pre-fix code was
-    /// wrong in principle: replacing `URLCache.shared` with a `diskPath: nil` instance
-    /// deletes nothing, because the replacement inherits that same store.
+    /// #1658 was `wipeAll()` replacing `URLCache.shared` without ever asking the cache that
+    /// owns the on-disk store to remove its entries. Whether a *later read* sees the entry
+    /// gone cannot tell the two apart here: `wipeAll()` also sweeps the caches directory,
+    /// which holds the default store, so a read-back passes through plain file cleanup
+    /// whether or not the cache removal ran. And `removeAllCachedResponses()` is
+    /// asynchronous on iOS: probed on a simulator, the entry was still readable from a
+    /// fresh cache over the same store in 11 of 12 runs when the old instance was released
+    /// straight after the call. So the contract worth asserting is the call, on the
+    /// instance that was installed when the wipe began.
+    func testWipeAllRemovesCachedResponsesThroughTheSharedCache() {
+        let owner = RecordingURLCache(memoryCapacity: 512_000, diskCapacity: 20_000_000, directory: cacheStoreDirectory)
+        URLCache.shared = owner
+
+        wipeService.wipeAll()
+
+        XCTAssertEqual(
+            owner.removeAllCachedResponsesCalls, 1,
+            "wipeAll must delete cached responses through the cache that owns the store, not just swap it for another"
+        )
+    }
+
+    /// The end-to-end contract: after `wipeAll()`, a fresh cache over the store holds
+    /// nothing. Reading back through a fresh cache rather than `URLCache.shared` is what
+    /// the old test could not do; the entry leaves the store through the cache removal
+    /// plus the caches-directory sweep, and
+    /// testWipeAllRemovesCachedResponsesThroughTheSharedCache pins the first half alone.
     ///
-    /// The dedicated directory sits outside every directory `wipeAll()` sweeps, so the
-    /// entry can only disappear through the cache's own removal, never through file cleanup.
-    ///
-    /// Note what this does and does not establish. Waiting for the seeded response to
-    /// be readable rules out asserting against a cache that was never populated, but it
-    /// does not prove the write reached disk — in the simulator it is observable through
-    /// an independent instance before that. So treat this as a structural assertion
-    /// about where the wipe looks, not as a reproduction of the CI timing failure.
+    /// Waiting for the seeded response to be readable rules out asserting against a cache
+    /// that was never populated, but it does not prove the write reached disk — in the
+    /// simulator it is observable through an independent instance before that.
     func testWipeAllDeletesCachedResponsesFromTheStore() {
         let url = URL(string: "https://test.llamenos.org/wipe-store-\(UUID().uuidString)")!
         let request = Self.seedCachedResponse(for: url)
@@ -151,10 +165,8 @@ final class WipeServiceTests: XCTestCase {
         wipeService.wipeAll()
 
         URLCache.shared = Self.makeCachingCache(directory: cacheStoreDirectory)
-        // The removal reaches the on-disk store asynchronously, so wait for it to land. A
-        // wipe that deletes nothing (#1658) never lets the entry go, and still fails here.
-        XCTAssertTrue(
-            waitUntil { URLCache.shared.cachedResponse(for: request) == nil },
+        XCTAssertNil(
+            URLCache.shared.cachedResponse(for: request),
             "wipeAll must delete cached responses from the store, not hide them behind a replacement cache"
         )
     }
@@ -349,5 +361,17 @@ final class WipeServiceTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         }
         return condition()
+    }
+}
+
+/// A cache that counts `removeAllCachedResponses()` calls, so a test can assert that the
+/// wipe asked the instance owning the store to delete — a fact no read-back can establish
+/// while the removal is asynchronous and the caches directory is swept anyway.
+private final class RecordingURLCache: URLCache, @unchecked Sendable {
+    private(set) var removeAllCachedResponsesCalls = 0
+
+    override func removeAllCachedResponses() {
+        removeAllCachedResponsesCalls += 1
+        super.removeAllCachedResponses()
     }
 }
