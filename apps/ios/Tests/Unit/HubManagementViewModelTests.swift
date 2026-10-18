@@ -10,8 +10,24 @@ final class MockHubAPIService: HubAPIServiceProtocol {
     var hubKeyResult: Result<HubKeyEnvelopeResponse, Error>?
     /// Stub for request<T> — set to a closure returning any Decodable for loadHubs/createHub tests.
     var requestStub: ((String, String) throws -> Any)?
-    /// The path from the most recent request<T> call — used to assert hub-scoped routing.
-    var lastRequestPath: String?
+    /// Every path passed to request<T>, in arrival order — used to assert hub-scoped routing.
+    /// Assert on all of them: with concurrent requests "the last one" is a race winner.
+    ///
+    /// request<T> is called concurrently: NotesViewModel.loadNotes() issues its notes and
+    /// custom-fields fetches with `async let`, and a nonisolated async method runs on the
+    /// global executor, so two calls write this state at once. An unguarded `String?`
+    /// assignment there is a data race — two writers both release the previous value, the
+    /// string is freed while a test still holds a copy of it, and the test reads freed
+    /// memory (HubScopedReloadTests failed on the merge queue that way, and a stress run
+    /// of the same pattern dies with EXC_BAD_ACCESS inside swift_release). The lock makes
+    /// the mock safe to share across those calls.
+    private let pathLock = NSLock()
+    private var _requestedPaths: [String] = []
+
+    var requestedPaths: [String] { pathLock.withLock { _requestedPaths } }
+
+    func resetRequestedPaths() { pathLock.withLock { _requestedPaths.removeAll() } }
+
     /// Active hub ID used by hp() to prefix paths.
     var activeHubId: String?
 
@@ -40,7 +56,7 @@ final class MockHubAPIService: HubAPIServiceProtocol {
     }
 
     func request<T: Decodable>(method: String, path: String, body: (any Encodable)?) async throws -> T {
-        lastRequestPath = path
+        pathLock.withLock { _requestedPaths.append(path) }
         if let stub = requestStub, let result = try stub(method, path) as? T {
             return result
         }
