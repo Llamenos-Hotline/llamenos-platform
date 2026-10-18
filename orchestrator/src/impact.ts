@@ -120,6 +120,7 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'scripts/check-consumed-env.py',
   'scripts/check-db-identity.ts',
   'scripts/check-ecies-active.sh',
+  'scripts/check-i18n-codegen-output.sh',
   'scripts/check-ipc-allowlist.sh',
   'scripts/check-label-count.sh',
   'scripts/check-migration-drift.sh',
