@@ -125,7 +125,12 @@ jobs:
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
-    timeout-minutes: 45
+    # 45 minutes for the build itself (measured max 10.0 over 71 green Mac
+    # builds), PLUS the disk guard's 36-minute step cap below. The guard's
+    # wait must not come out of the build's own budget: a wait that ends in a
+    # pass at minute 35 would otherwise leave the build 10 minutes, and turn
+    # an honest fast refusal into a timeout cancellation.
+    timeout-minutes: 81
 
     steps:
       # MANDATORY, and must stay the literal first step: this job now runs on
@@ -223,7 +228,11 @@ jobs:
       # plus its teardown. A queued or waiting job still spends the merge
       # queue's 240-minute check_response_timeout: a merge-group run's iOS
       # leg finishes at p90 72 min, so a full wait leaves it under ~110.
+      #
+      # The job's timeout-minutes is 45 + this step's cap, so the build that
+      # follows a full wait still has its whole 45. Change them together.
       - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
         env:
           DISK_WAIT_MAX_MIN: "35"
           DISK_WAIT_POLL_SEC: "60"
