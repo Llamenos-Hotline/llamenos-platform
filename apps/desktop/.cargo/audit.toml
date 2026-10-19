@@ -1,0 +1,33 @@
+# cargo-audit policy for apps/desktop. Mirrors the zip entries in /deny.toml —
+# `cargo audit` (security-audit.yml `rust-audit`) and `cargo deny` read
+# different config files, so the same justified exception lives in both.
+#
+# Only the three zip VULNERABILITIES need listing here. The unmaintained /
+# unsound / yanked findings are warnings, which do not fail `cargo audit`.
+#
+# zip is fixed only in >=9.0.0 and both copies in the lockfile are pinned
+# below that by crates we do not control (verified 2026-10-18, tracked in #1956):
+#   * zip 4.6.1 <- tauri-plugin-updater 2.10.1, Windows target only. Latest
+#     2.14.0 and 3.0.0-alpha.3 still require `zip ^4`; the `zip` feature also
+#     gates the tar/flate2 the macOS/Linux updater needs, so it cannot be off.
+#   * zip 8.6.0 <- libsodium-sys-stable build script (latest 1.24.3 still
+#     requires `zip ^8.6`) via stronghold-runtime <- iota_stronghold <-
+#     tauri-plugin-stronghold. Build-time, MSVC targets only.
+#
+# NOT REACHABLE: all three advisories concern extract() on an attacker-supplied
+# archive. The updater minisign-verifies the payload against our pinned pubkey
+# before extract (tauri-plugin-updater `verify_signature` precedes `install`);
+# libsodium's build script minisign-verifies its MSVC zip against libsodium's
+# pinned key before extracting. Forging either needs a signing key, which would
+# already allow arbitrary code execution without any zip bug.
+#
+# REVISIT by 2026-12-31 (same date deny.toml enforces), tracked in #1956: empty
+# this list, `cargo update -p tauri-plugin-updater -p libsodium-sys-stable`,
+# and run `cargo audit`. Anything that no longer fires is dead config.
+
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0367", # SUID/SGID bits preserved on ZIP extraction
+  "RUSTSEC-2026-0368", # extract() creates symlinks escaping the destination
+  "RUSTSEC-2026-0369", # permissions applied through symlinks on extract()
+]
