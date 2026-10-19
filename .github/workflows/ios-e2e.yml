@@ -91,7 +91,9 @@ jobs:
     # start until 20:14:07 — where android-e2e's shards were already working
     # at 20:13:46. Deleting it lets the build dispatch immediately, which is
     # what pulls the whole iOS gate forward.
-    # The Mac mini (runners `mac-mini-ios-1..4`), not `macos-latest`.
+    # The Mac mini, not `macos-latest`. Runners `mac-mini-ios-1` and `-2`
+    # serve; 3 and 4 are registered but deliberately not running (four
+    # shards on this host completed zero tests in 20 minutes).
     #
     # GitHub's macOS concurrency cap is 5 jobs REPO-WIDE, and money does not
     # move it: Free, Pro and Team are all 5 (only Enterprise Cloud is 50),
@@ -123,7 +125,12 @@ jobs:
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
-    timeout-minutes: 45
+    # 45 minutes for the build itself (measured max 10.0 over 71 green Mac
+    # builds), PLUS the disk guard's 36-minute step cap below. The guard's
+    # wait must not come out of the build's own budget: a wait that ends in a
+    # pass at minute 35 would otherwise leave the build 10 minutes, and turn
+    # an honest fast refusal into a timeout cancellation.
+    timeout-minutes: 81
 
     steps:
       # MANDATORY, and must stay the literal first step: this job now runs on
@@ -198,8 +205,74 @@ jobs:
       #
       # A no-op on a GitHub-hosted runner: that VM is thrown away after the
       # job and shares nothing with anybody.
-      - name: Guard the runner's disk headroom
-        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+      #
+      # A refusal WAITS while another CI job on this host is still running,
+      # because that job's teardown is what returns the space: a `ui` shard
+      # deletes a 2.4-2.6 GiB simulator and its build products, a build
+      # deletes its DerivedData. Refusing at once is the wrong failure when
+      # the shortfall is a co-tenant that will be gone in minutes.
+      #
+      # Measured, 2026-10-18 15:44-15:47 UTC: with one `ui (3)` holding the
+      # disk on mac-mini-ios-1, mac-mini-ios-2 refused SIX jobs from three
+      # merge groups in under three minutes (10.8-10.9 GiB free, 12 needed),
+      # ~15 s each. A runner that refuses in seconds immediately takes the next
+      # queued job and refuses that too, so one co-tenant drained the queue
+      # and ejected all three PRs. That `ui (3)` finished at 15:48:02, two
+      # minutes after the last refusal.
+      #
+      # With NO other CI job on the host there is nothing to wait for, and
+      # the refusal is immediate, as before: the space is held by something
+      # only a human can free.
+      #
+      # 35 minutes covers a whole `ui` shard (p90 29 min over 122 Mac shards)
+      # plus its teardown. A queued or waiting job still spends the merge
+      # queue's 240-minute check_response_timeout: a merge-group run's iOS
+      # leg finishes at p90 72 min, so a full wait leaves it under ~110.
+      #
+      # The job's timeout-minutes is 45 + this step's cap, so the build that
+      # follows a full wait still has its whole 45. Change them together.
+      - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
+        env:
+          DISK_WAIT_MAX_MIN: "35"
+          DISK_WAIT_POLL_SEC: "60"
+        run: |
+          set -uo pipefail
+          # This runner's install root, so its own Runner.Worker is not
+          # mistaken for a co-tenant: .../actions-runner-ios-1/_work/<repo>.
+          own_root="${RUNNER_WORKSPACE%%/_work/*}"
+          deadline=$(( SECONDS + DISK_WAIT_MAX_MIN * 60 ))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            # Each attempt's summary goes to a scratch file and only the last
+            # one is published, so a wait that ends well leaves no stale
+            # REFUSED line in the job summary.
+            : > "$RUNNER_TEMP/disk-guard-summary.md"
+            if GITHUB_STEP_SUMMARY="$RUNNER_TEMP/disk-guard-summary.md" \
+                bash scripts/ci/mac-runner-disk-guard.sh guard >"$RUNNER_TEMP/disk-guard.log" 2>&1; then
+              rc=0
+            else
+              rc=$?
+            fi
+            others=$(pgrep -fl '/bin/Runner.Worker' 2>/dev/null | grep -vF "$own_root/" | grep -c . || true)
+            if [ "$rc" -eq 0 ] || [ "$others" -eq 0 ] || [ "$SECONDS" -ge "$deadline" ]; then
+              cat "$RUNNER_TEMP/disk-guard.log"
+              cat "$RUNNER_TEMP/disk-guard-summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              waited="$((attempt - 1)) x ${DISK_WAIT_POLL_SEC}s"
+              if [ "$rc" -eq 0 ]; then
+                [ "$attempt" -eq 1 ] || echo "disk headroom passed on attempt $attempt, after waiting $waited for a co-tenant CI job's teardown"
+              elif [ "$others" -gt 0 ]; then
+                echo "::error::still refused after waiting $waited for $others co-tenant CI job(s) on this host to release space"
+              elif [ "$attempt" -gt 1 ]; then
+                echo "::error::still refused after waiting $waited: every co-tenant CI job has finished and the space did not come back, so what holds it is not CI's"
+              fi
+              exit "$rc"
+            fi
+            # Not `::warning::` — a wait that ends in a pass is not a problem.
+            echo "disk headroom short (attempt $attempt): $(grep -o 'only [0-9.]* GiB free' "$RUNNER_TEMP/disk-guard.log" | head -1); $others other CI job(s) on this host will release space at teardown; re-checking in ${DISK_WAIT_POLL_SEC}s ($(( (deadline - SECONDS) / 60 )) min left)"
+            sleep "$DISK_WAIT_POLL_SEC"
+          done
 
       # bun's install temp dir is BUN_TMPDIR, and it must be per-runner. This
       # step exists in every job that can land on the self-hosted Mac — here,
@@ -322,7 +395,7 @@ jobs:
       - name: Build server crypto library
         run: packages/crypto/scripts/build-server.sh
 
-      # The four runners on this box share one /opt/homebrew prefix, and
+      # The runners on this box share one /opt/homebrew prefix, and
       # concurrent `brew install` against a shared prefix is not safe. This
       # is a no-op on the Mac mini (xcodegen 2.44.1 is installed) and still
       # installs normally anywhere it is genuinely absent.
@@ -489,6 +562,20 @@ jobs:
     # the same device for all four), its own backend HTTP and PostgreSQL
     # ports, and its own RUNNER_TEMP for every file that used to be a fixed
     # /tmp path.
+    #
+    # There is deliberately NO `concurrency:` group on the Mac jobs. The
+    # runner pool already is the semaphore for this host: two runners, one
+    # job each, and every excess job QUEUES for a runner rather than landing
+    # on the box. Measured over 300 CI runs (101 h, 2026-10-14..19): never
+    # more than 2 CI jobs on the host at once; queue wait p90 28 min, max 83.
+    # One full run is 4 Mac jobs in two waves of two — ios-build-test with
+    # `build (mac)`, then `ui (0)` with `ui (3)` behind `needs: build` — so
+    # one run fits the pool exactly. A concurrency group could only do worse:
+    # each key holds ONE job, so allowing two means fixed per-shard keys,
+    # which idle a free runner whenever both waiting jobs share a key; and
+    # the default `queue: single` CANCELS the older pending job, which in a
+    # merge group is an ejection. The concurrency knob that matters is the
+    # runner count, and it lives on the host (see `build`).
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
