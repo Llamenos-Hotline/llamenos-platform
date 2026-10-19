@@ -130,6 +130,35 @@ final class CaseManagementViewModel {
         loadState == .ready && !entityTypes.isEmpty
     }
 
+    /// What the Cases tab renders, derived from the model's facts alone and from
+    /// nothing the view reads separately. The view used to pick the empty state's
+    /// message and its New Case button by reading `entityTypes` itself next to the
+    /// branch that chose the empty state, so the two could disagree about the same
+    /// moment; now one value carries both, and the toolbar's New Case button and the
+    /// empty state's button share `canCreateCase`.
+    var screen: CaseListScreen {
+        switch loadState {
+        case .loading:
+            return .loading
+        case .disabled:
+            return .disabled
+        case .failed(let message):
+            return .failed(message)
+        case .ready:
+            if isLoading && records.isEmpty {
+                return .loading
+            }
+            if records.isEmpty, let recordsError = recordsLoadError {
+                // Without this, a failed fetch rendered as "No cases yet".
+                return .failed(recordsError)
+            }
+            if records.isEmpty && entityTypeFilter == nil && statusFilter == nil {
+                return .empty(canCreate: canCreateCase)
+            }
+            return .list
+        }
+    }
+
     /// All unique statuses across entity types (for filter dropdown).
     var allStatuses: [CaseEnumOption] {
         var seen = Set<String>()
@@ -168,6 +197,18 @@ final class CaseManagementViewModel {
         decryptedSummaries[recordId]?.title
     }
 
+    // MARK: - Load Ordering
+
+    /// Which `loadInitial()` call is current. A superseded call (the hub changed and
+    /// `.task(id:)` started another) may still be suspended on a request when it is
+    /// cancelled, and a request that had already answered resumes without throwing.
+    /// Cancellation alone therefore cannot stop it from writing, so every write after
+    /// an `await` checks that its call is still the latest one.
+    private var initialLoadEpoch = 0
+
+    /// The same for `loadRecords()`, which filters, pages and refreshes also call.
+    private var recordsLoadEpoch = 0
+
     // MARK: - Init
 
     init(apiService: APIService, cryptoService: CryptoService) {
@@ -185,6 +226,8 @@ final class CaseManagementViewModel {
     /// management being on — so they run concurrently, and readiness costs one round
     /// trip rather than two.
     func loadInitial() async {
+        initialLoadEpoch += 1
+        let epoch = initialLoadEpoch
         loadState = .loading
         entityTypes = []
         recordsLoadError = nil
@@ -202,10 +245,11 @@ final class CaseManagementViewModel {
         } catch {
             // A superseded load (the hub changed and `.task(id:)` restarted it) must not
             // overwrite the state its replacement is establishing.
-            guard !Task.isCancelled else { return }
+            guard isCurrentInitialLoad(epoch) else { return }
             loadState = .failed(error.localizedDescription)
             return
         }
+        guard isCurrentInitialLoad(epoch) else { return }
         guard enabled else {
             // Entity types are irrelevant to a hub without case management; the
             // pending request is cancelled when this scope exits.
@@ -215,22 +259,31 @@ final class CaseManagementViewModel {
 
         do {
             let response = try await typesRequest
+            guard isCurrentInitialLoad(epoch) else { return }
             entityTypes = response.entityTypes.filter { $0.isArchived != true }
         } catch {
-            guard !Task.isCancelled else { return }
+            guard isCurrentInitialLoad(epoch) else { return }
             loadState = .failed(error.localizedDescription)
             return
         }
-        guard !Task.isCancelled else { return }
 
         loadState = .ready
         await loadRecords()
     }
 
+    /// Whether `epoch` is still the latest `loadInitial()` and its task is live.
+    private func isCurrentInitialLoad(_ epoch: Int) -> Bool {
+        epoch == initialLoadEpoch && !Task.isCancelled
+    }
+
     /// Fetch records with current filters.
     func loadRecords() async {
+        recordsLoadEpoch += 1
+        let epoch = recordsLoadEpoch
         isLoading = true
-        defer { isLoading = false }
+        // Only the latest call clears the flag: a superseded one finishing late
+        // must not report "done" while its replacement is still fetching.
+        defer { if epoch == recordsLoadEpoch { isLoading = false } }
 
         var path = apiService.hp("/api/records") + "?page=\(currentPage)&limit=\(pageSize)"
         if let etFilter = entityTypeFilter {
@@ -247,6 +300,7 @@ final class CaseManagementViewModel {
             let response: RecordsListResponse = try await apiService.request(
                 method: "GET", path: path
             )
+            guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
             records = response.records
             totalRecords = response.total
             recordsLoadError = nil
@@ -254,7 +308,7 @@ final class CaseManagementViewModel {
             // Decrypt summaries for all loaded records
             await decryptRecordSummaries(response.records)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
             recordsLoadError = error.localizedDescription
         }
@@ -591,6 +645,25 @@ enum CaseListLoadState: Equatable, Sendable {
     case ready
     /// A required request failed; carries the error to show.
     case failed(String)
+}
+
+// MARK: - CaseListScreen
+
+/// The one thing the Cases tab shows, as a function of the view model's state. See
+/// `CaseManagementViewModel.screen`.
+enum CaseListScreen: Equatable, Sendable {
+    /// Still establishing what can be shown, or fetching the first records.
+    case loading
+    /// The hub answered that case management is off.
+    case disabled
+    /// A required request failed; carries the error to show.
+    case failed(String)
+    /// Case management is on and there is nothing to list. `canCreate` is whether the
+    /// hub has an entity type to create a case from — without one the empty state asks
+    /// for a template instead of offering New Case.
+    case empty(canCreate: Bool)
+    /// There are records (or a filter that may be hiding them).
+    case list
 }
 
 // MARK: - CaseDisplayType
