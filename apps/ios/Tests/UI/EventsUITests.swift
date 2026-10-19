@@ -31,18 +31,21 @@ final class EventsUITests: BaseUITest {
         ], timeout: 10)
     }
 
-    /// Enable case management with the jail-support template (its
-    /// `mass_arrest_event` entity type has `category: "event"`) and create
-    /// one event through the real create-event sheet. Mirrors
-    /// `CaseManagementUITests.seedOneCase()` — event-detail scenarios depend
-    /// on an event existing, so this creates one instead of branching on
-    /// whatever the shared class hub happens to hold. Leaves the Events
-    /// list open on the event just created.
-    private func seedOneEvent(title: String = "UI test event \(UUID().uuidString.prefix(8))") {
+    /// Put the class hub in the state the event scenarios need — case management on,
+    /// with the jail-support template (its `mass_arrest_event` entity type has
+    /// `category: "event"`) — and launch the app as an admin of it. The hub is
+    /// configured BEFORE the launch so the first Events load already sees it.
+    private func launchWithEventsEnabled() {
         TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
         TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
-        navigateToEvents()
+        launchAsAdminWithAPI()
+    }
 
+    /// Create an event through the real create-event sheet, from the open Events
+    /// screen, and wait for the sheet to close. Event titles are encrypted
+    /// client-side, so the app is the only thing that can author one — there is
+    /// no API to seed it through.
+    private func createEvent(titled title: String) {
         let createButton = find("events-create-btn")
         let emptyCreateButton = find("events-empty-create-btn")
         guard createButton.waitForExistence(timeout: 10) || emptyCreateButton.waitForExistence(timeout: 3) else {
@@ -52,7 +55,10 @@ final class EventsUITests: BaseUITest {
         (createButton.exists ? createButton : emptyCreateButton).tap()
 
         let titleField = find("event-title-field")
-        XCTAssertTrue(titleField.waitForExistence(timeout: 5), "Event title field should appear in the create sheet")
+        guard titleField.waitForExistence(timeout: 5) else {
+            XCTFail("Event title field should appear in the create sheet")
+            return
+        }
         titleField.tap()
         titleField.typeText(title)
 
@@ -66,14 +72,16 @@ final class EventsUITests: BaseUITest {
         )
     }
 
-    /// Tap the first event row in the (already-open) events list.
-    private func openFirstEventRow() {
-        XCTAssertTrue(find("events-list").waitForExistence(timeout: 10), "Event list should render once an event exists")
-        let firstRow = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'event-row-'"))
+    /// The list row for the event with this title. Titles are unique per test, so the
+    /// row is identified by what the user sees in it, not by its server-assigned id.
+    private func eventRow(titled title: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'event-row-' AND label CONTAINS %@", title))
             .firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "At least one event row should be visible")
-        firstRow.tap()
+    }
+
+    private func uniqueEventTitle() -> String {
+        "UI test event \(UUID().uuidString.prefix(8))"
     }
 
     // MARK: - Scenario: Event list shows CMS-disabled state on a fresh hub
@@ -102,19 +110,22 @@ final class EventsUITests: BaseUITest {
 
     // MARK: - Scenario: Event list shows event rows
 
-    /// Verifies event rows render once an event exists in the system.
+    /// Verifies a created event comes back as a list row carrying its title.
     func testEventListShowsEventRows() {
-        given("case management is enabled with an event") {
-            seedOneEvent()
+        let title = uniqueEventTitle()
+        given("case management is enabled and the app is launched as admin") {
+            launchWithEventsEnabled()
         }
-        when("I navigate to events") {
+        when("I navigate to events and create an event") {
             navigateToEvents()
+            createEvent(titled: title)
         }
-        then("I should see at least one event row") {
+        then("the list should show a row for that event") {
             XCTAssertTrue(find("events-list").waitForExistence(timeout: 10), "Event list should render once an event exists")
-            let eventRows = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'event-row-'"))
-            XCTAssertTrue(eventRows.firstMatch.waitForExistence(timeout: 5), "At least one event row should be visible")
+            XCTAssertTrue(
+                eventRow(titled: title).waitForExistence(timeout: 10),
+                "The created event should appear in the list under its own title"
+            )
         }
     }
 
@@ -125,12 +136,16 @@ final class EventsUITests: BaseUITest {
     /// (see `EventDetailView.swift`), so all 4 tabs must exist once a row
     /// has been tapped — this is not conditional on event data.
     func testEventDetailShowsInfo() {
-        given("case management is enabled with an event") {
-            seedOneEvent()
+        let title = uniqueEventTitle()
+        given("case management is enabled and the app is launched as admin") {
+            launchWithEventsEnabled()
         }
-        when("I navigate to events and tap the event") {
+        when("I create an event and tap its row") {
             navigateToEvents()
-            openFirstEventRow()
+            createEvent(titled: title)
+            let row = eventRow(titled: title)
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "The created event should appear in the list")
+            row.tap()
         }
         then("I should see the event detail with all 4 tabs") {
             XCTAssertTrue(
@@ -150,12 +165,16 @@ final class EventsUITests: BaseUITest {
     /// All 4 tabs render unconditionally (see `testEventDetailShowsInfo`), so
     /// each tap-and-assert below is unconditional too.
     func testEventDetailTabSwitching() {
-        given("case management is enabled with an event") {
-            seedOneEvent()
+        let title = uniqueEventTitle()
+        given("case management is enabled and the app is launched as admin") {
+            launchWithEventsEnabled()
         }
-        when("I open an event detail") {
+        when("I create an event and open its detail") {
             navigateToEvents()
-            openFirstEventRow()
+            createEvent(titled: title)
+            let row = eventRow(titled: title)
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "The created event should appear in the list")
+            row.tap()
         }
         then("switching between tabs should render the correct content areas") {
             XCTAssertTrue(
@@ -189,44 +208,67 @@ final class EventsUITests: BaseUITest {
         }
     }
 
-    // MARK: - Scenario: Event search field visible
+    // MARK: - Scenario: Event search filters the list
 
-    /// Verifies the search field is present on the event list screen.
+    /// Verifies the search field filters the list by event title: with two events
+    /// in the list, a query naming one of them keeps that row and drops the other.
     /// `events-search-field` only renders inside `eventListContent`, which
     /// requires at least one event — see `EventListView.swift`.
-    func testEventSearchFieldVisible() {
-        given("case management is enabled with an event") {
-            seedOneEvent()
+    func testEventSearchFiltersByTitle() {
+        let token = UUID().uuidString.prefix(8).lowercased()
+        let matchingTitle = "Searchable \(token)"
+        let otherTitle = uniqueEventTitle()
+        given("case management is enabled and the app is launched as admin") {
+            launchWithEventsEnabled()
         }
-        when("I navigate to events") {
+        when("I create two events and search for one of them by title") {
             navigateToEvents()
+            createEvent(titled: matchingTitle)
+            createEvent(titled: otherTitle)
+            XCTAssertTrue(eventRow(titled: matchingTitle).waitForExistence(timeout: 10), "The first event should appear in the list")
+            XCTAssertTrue(eventRow(titled: otherTitle).waitForExistence(timeout: 10), "The second event should appear in the list")
+
+            let searchField = find("events-search-field")
+            XCTAssertTrue(searchField.waitForExistence(timeout: 10), "Events search field should be visible once an event exists")
+            searchField.tap()
+            searchField.typeText(String(token))
         }
-        then("the search field should be visible") {
+        then("only the matching event should remain in the list") {
             XCTAssertTrue(
-                find("events-search-field").waitForExistence(timeout: 10),
-                "Events search field should be visible once an event exists"
+                eventRow(titled: otherTitle).waitForNonExistence(timeout: 5),
+                "An event whose title does not match the query should be filtered out"
+            )
+            XCTAssertTrue(
+                eventRow(titled: matchingTitle).exists,
+                "The event whose title matches the query should stay in the list"
             )
         }
     }
 
-    // MARK: - Scenario: Create event button visible for admin
+    // MARK: - Scenario: Create event button opens the create sheet
 
-    /// Verifies the create event button is visible once case management is
-    /// enabled with an event-category entity type. `events-create-btn` only
+    /// Verifies the create event button works for an admin once case management
+    /// is enabled with an event-category entity type. `events-create-btn` only
     /// requires `cmsEnabled && !eventEntityTypes.isEmpty` — not an existing
-    /// event — so this does not need `seedOneEvent()`'s extra create step.
-    func testCreateEventButtonVisible() {
-        given("case management is enabled with an event entity type") {
-            TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
-            TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+    /// event — so no event needs creating first.
+    func testCreateEventButtonOpensCreateSheet() {
+        given("case management is enabled with an event entity type and the app is launched as admin") {
+            launchWithEventsEnabled()
         }
-        when("I navigate to events") {
+        when("I navigate to events and tap the create event button") {
             navigateToEvents()
-        }
-        then("the create event button should be visible") {
+            let createButton = find("events-create-btn")
             XCTAssertTrue(
-                find("events-create-btn").waitForExistence(timeout: 10),
-                "Create event button should be visible for admins once an event entity type exists"
+                createButton.waitForExistence(timeout: 10),
+                "Create event button should be offered for admins once an event entity type exists"
+            )
+            XCTAssertTrue(createButton.isEnabled, "Create event button should be enabled once an event entity type exists")
+            createButton.tap()
+        }
+        then("the create-event sheet should open") {
+            XCTAssertTrue(
+                find("event-title-field").waitForExistence(timeout: 5),
+                "Tapping the create event button should present the create sheet"
             )
         }
     }
