@@ -20,14 +20,14 @@ import org.llamenos.hotline.model.CreateMessageEnvelope
 import org.llamenos.hotline.model.DecryptedMessage
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.SendMessageRequest
-import org.llamenos.hotline.model.User
-import org.llamenos.hotline.model.UsersListResponse
-import org.llamenos.hotline.model.status
+import org.llamenos.hotline.model.Member
+import org.llamenos.hotline.model.MemberDirectory
 import org.llamenos.protocol.ConversationListResponse
 import org.llamenos.protocol.ConversationListResponseConversation
 import org.llamenos.protocol.Message
 import org.llamenos.protocol.MessageListResponse
 import org.llamenos.protocol.RecipientEnvelope
+import org.llamenos.protocol.SharedMemberDirectoryEntryStatus
 import org.llamenos.protocol.SharedReportResponseStatus
 import org.llamenos.protocol.UpdateConversationBody
 import javax.inject.Inject
@@ -65,7 +65,7 @@ data class ConversationsUiState(
 
     // Actions
     val showAssignDialog: Boolean = false,
-    val assignableVolunteers: List<User> = emptyList(),
+    val assignableVolunteers: List<Member> = emptyList(),
     val isLoadingVolunteers: Boolean = false,
 )
 
@@ -447,13 +447,13 @@ class ConversationsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingVolunteers = true) }
             try {
-                val response = apiService.request<UsersListResponse>(
+                val response = apiService.request<MemberDirectory>(
                     "GET",
-                    "/api/users?limit=100",
+                    "/api/identity/members",
                 )
                 _uiState.update {
                     it.copy(
-                        assignableVolunteers = response.users.filter { v -> v.status == "active" },
+                        assignableVolunteers = response.members.filter { v -> v.status == SharedMemberDirectoryEntryStatus.Active },
                         isLoadingVolunteers = false,
                     )
                 }

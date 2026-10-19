@@ -39,6 +39,31 @@ export const userListResponseSchema = z.object({
 export type UserListResponse = z.infer<typeof userListResponseSchema>
 
 /**
+ * `GET /api/identity/members` (#1701, #1766) — the member directory, and the
+ * canonical surface for listing members on every client.
+ *
+ * Deliberately narrower than `userResponseSchema`: no `phone`, no `roles`, no
+ * `hubRoles`. `role` is resolved server-side from the roles that carry
+ * authority in the requested hub, so a hub never learns that one of its
+ * members administers a different hub, nor what custom role names they hold.
+ * Do not add a role id, role name or hub membership to this shape.
+ */
+export const memberDirectoryEntrySchema = z.object({
+  id: z.string(),
+  pubkey: pubkeySchema,
+  displayName: z.string().nullable(),
+  role: z.enum(['admin', 'volunteer']),
+  status: z.enum(['active', 'inactive']),
+  createdAt: z.string(),
+})
+export type MemberDirectoryEntry = z.infer<typeof memberDirectoryEntrySchema>
+
+export const memberDirectoryResponseSchema = z.object({
+  members: z.array(memberDirectoryEntrySchema),
+})
+export type MemberDirectoryResponse = z.infer<typeof memberDirectoryResponseSchema>
+
+/**
  * The non-admin member shape — no `phone`. `GET /users` and `GET /users/:id` (via
  * `createEntityRouter`'s `itemResponseSchema`) both validate against `userResponseSchema`,
  * NOT `userAdminResponseSchema` (`User`, below) — see ll-api-schema-binding's binding

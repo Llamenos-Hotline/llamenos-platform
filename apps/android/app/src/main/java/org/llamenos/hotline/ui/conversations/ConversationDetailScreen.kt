@@ -65,8 +65,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
 import org.llamenos.hotline.model.DecryptedMessage
-import org.llamenos.hotline.model.displayName
-import org.llamenos.hotline.model.role
+import org.llamenos.hotline.model.labelRes
 import org.llamenos.protocol.SharedReportResponseStatus
 
 /**
@@ -176,7 +175,7 @@ fun ConversationDetailScreen(
                                             style = MaterialTheme.typography.bodyMedium,
                                         )
                                         Text(
-                                            text = volunteer.role.replaceFirstChar { it.uppercase() },
+                                            text = stringResource(volunteer.role.labelRes),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )

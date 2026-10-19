@@ -11,14 +11,14 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.model.ShiftResponse
 import org.llamenos.hotline.model.ShiftsListResponse
-import org.llamenos.hotline.model.User
-import org.llamenos.hotline.model.UsersListResponse
+import org.llamenos.hotline.model.Member
+import org.llamenos.hotline.model.MemberDirectory
 import org.llamenos.protocol.UpdateShiftBody
 import javax.inject.Inject
 
 data class ShiftDetailUiState(
     val shift: ShiftResponse? = null,
-    val allVolunteers: List<User> = emptyList(),
+    val allVolunteers: List<Member> = emptyList(),
     val assignedPubkeys: Set<String> = emptySet(),
     val isLoading: Boolean = false,
     val isSaving: Boolean = false,
@@ -43,8 +43,8 @@ class ShiftDetailViewModel @Inject constructor(
                 )
                 val shift = shiftsResponse.shifts.find { it.id == shiftId }
 
-                val volResponse = apiService.request<UsersListResponse>(
-                    "GET", "/api/users",
+                val volResponse = apiService.request<MemberDirectory>(
+                    "GET", "/api/identity/members",
                 )
 
                 val assignedPubkeys = shift?.userPubkeys?.toSet() ?: emptySet()
@@ -52,7 +52,7 @@ class ShiftDetailViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         shift = shift,
-                        allVolunteers = volResponse.users,
+                        allVolunteers = volResponse.members,
                         assignedPubkeys = assignedPubkeys,
                         isLoading = false,
                     )

@@ -11,12 +11,14 @@ import org.llamenos.hotline.model.ActiveCall
 import org.llamenos.protocol.ConversationListResponseConversation
 import org.llamenos.protocol.SharedEntry
 import org.llamenos.protocol.SharedReportResponseStatus
+import org.llamenos.protocol.SharedMemberDirectoryEntryStatus
+import org.llamenos.protocol.SharedRole
 import org.llamenos.hotline.model.BanEntry
 import org.llamenos.hotline.model.ContactSummary
 import org.llamenos.hotline.model.DecryptedMessage
 import org.llamenos.hotline.model.EntityTypeDefinition
 import org.llamenos.hotline.model.Report
-import org.llamenos.hotline.model.User
+import org.llamenos.hotline.model.Member
 import org.llamenos.hotline.ui.admin.AdminUiState
 import org.llamenos.hotline.ui.admin.AdminViewModel
 import org.llamenos.hotline.ui.admin.AdminScreen
@@ -381,25 +383,28 @@ class ScreenshotTests {
     )
 
     private val sampleUsers = listOf(
-        User(
-            active = true,
-            name = "Sarah Chen",
+        Member(
+            id = samplePubkey,
             pubkey = samplePubkey,
-            roles = listOf("role-volunteer"),
+            displayName = "Sarah Chen",
+            role = SharedRole.Volunteer,
+            status = SharedMemberDirectoryEntryStatus.Active,
             createdAt = "2026-01-15T00:00:00Z",
         ),
-        User(
-            active = true,
-            name = "Marcus Rivera",
+        Member(
+            id = samplePubkey2,
             pubkey = samplePubkey2,
-            roles = listOf("role-volunteer"),
+            displayName = "Marcus Rivera",
+            role = SharedRole.Volunteer,
+            status = SharedMemberDirectoryEntryStatus.Active,
             createdAt = "2026-02-01T00:00:00Z",
         ),
-        User(
-            active = true,
-            name = "Jordan Lee",
+        Member(
+            id = "npub1admin000000000000000000000000000000000000000000000000000000ad",
             pubkey = "npub1admin000000000000000000000000000000000000000000000000000000ad",
-            roles = listOf("role-admin"),
+            displayName = "Jordan Lee",
+            role = SharedRole.Admin,
+            status = SharedMemberDirectoryEntryStatus.Active,
             createdAt = "2025-12-01T00:00:00Z",
         ),
     )

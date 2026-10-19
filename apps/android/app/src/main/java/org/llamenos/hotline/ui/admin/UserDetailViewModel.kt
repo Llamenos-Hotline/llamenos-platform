@@ -13,12 +13,12 @@ import org.llamenos.protocol.SharedEntry
 import org.llamenos.hotline.model.AuditLogResponse
 import org.llamenos.hotline.model.ShiftResponse
 import org.llamenos.hotline.model.ShiftsListResponse
-import org.llamenos.hotline.model.User
-import org.llamenos.hotline.model.UsersListResponse
+import org.llamenos.hotline.model.Member
+import org.llamenos.hotline.model.MemberDirectory
 import javax.inject.Inject
 
 data class VolunteerDetailUiState(
-    val volunteer: User? = null,
+    val volunteer: Member? = null,
     val shifts: List<ShiftResponse> = emptyList(),
     val auditEntries: List<SharedEntry> = emptyList(),
     val isLoading: Boolean = false,
@@ -38,10 +38,10 @@ class UserDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val volResponse = apiService.request<UsersListResponse>(
-                    "GET", "/api/users",
+                val volResponse = apiService.request<MemberDirectory>(
+                    "GET", "/api/identity/members",
                 )
-                val volunteer = volResponse.users.find { it.pubkey == pubkey }
+                val volunteer = volResponse.members.find { it.pubkey == pubkey }
                 _uiState.update {
                     it.copy(volunteer = volunteer, isLoading = false)
                 }

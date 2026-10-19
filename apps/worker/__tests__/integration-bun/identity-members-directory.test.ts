@@ -41,6 +41,7 @@ import { IdentityService } from '../../services/identity'
 import identityRoutes from '../../routes/identity'
 import type { AppEnv } from '../../types'
 import { revokedSigningKeys } from '../../lib/revoked-signing-keys'
+import { memberDirectoryResponseSchema } from '@protocol/schemas/users'
 import {
   DEFAULT_ROLES,
   resolveHubPermissions,
@@ -211,6 +212,29 @@ describe('GET /api/identity/members — response shape (iOS UsersListResponse)',
     expect(raw).not.toContain(HUB_A)
     expect(raw).not.toContain(HUB_B)
     expect(raw).not.toContain('role-hub-admin')
+  })
+
+  it('matches the protocol schema every client decodes from, in the instance and a hub directory', async () => {
+    for (const { body } of [await directory(SUPER_ADMIN), await directory(HUB_A_ADMIN, HUB_A)]) {
+      expect(memberDirectoryResponseSchema.safeParse(body).success).toBe(true)
+    }
+  })
+
+  it('carries no role id, role name, hub membership or phone on any member, instance or hub', async () => {
+    // The point of this surface over /api/users: role is resolved server-side to
+    // admin|volunteer, so a hub never learns who administers a different hub.
+    // Asserted on the key set AND on the serialised text (a role id smuggled in
+    // under a renamed key would pass the first check and fail the second).
+    for (const { body } of [await directory(SUPER_ADMIN), await directory(HUB_A_ADMIN, HUB_A)]) {
+      for (const member of body.members as Record<string, unknown>[]) {
+        for (const forbidden of ['roles', 'roleIds', 'hubRoles', 'hubs', 'phone']) {
+          expect(Object.keys(member), `member exposes ${forbidden}`).not.toContain(forbidden)
+        }
+      }
+      const raw = JSON.stringify(body)
+      expect(raw).not.toMatch(/role-[a-z-]+/)
+      expect(raw).not.toContain(PHONE)
+    }
   })
 
   it('maps role, status and a missing name the way the Volunteers screen reads them', async () => {

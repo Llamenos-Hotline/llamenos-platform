@@ -1,10 +1,11 @@
 import { Hono } from 'hono'
+import type { z } from 'zod'
 import { describeRoute, resolver } from 'hono-openapi'
-import { z } from 'zod'
+import { memberDirectoryResponseSchema } from '@protocol/schemas/users'
+import type { MemberDirectoryEntry } from '../services/identity'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
 import { authErrors } from '../openapi/helpers'
-import type { MemberDirectoryEntry } from '../services/identity'
 
 // Mounted twice, like the users router: unscoped at /api/identity and
 // hub-scoped at /api/hubs/:hubId/identity. Under a hub, hubContext has replaced
@@ -12,21 +13,8 @@ import type { MemberDirectoryEntry } from '../services/identity'
 // listing are both confined to that hub.
 const identity = new Hono<AppEnv>()
 
-/**
- * `GET /members` (#1701). Route-local because it is the shape the iOS admin
- * client already decodes (`UsersListResponse` / `ClientUser`), and the
- * `satisfies` binds it to the service's projection at compile time.
- */
-const memberDirectoryResponseSchema = z.object({
-  members: z.array(z.object({
-    id: z.string(),
-    pubkey: z.string(),
-    displayName: z.string().nullable(),
-    role: z.enum(['admin', 'volunteer']),
-    status: z.enum(['active', 'inactive']),
-    createdAt: z.string(),
-  })),
-}) satisfies z.ZodType<{ members: MemberDirectoryEntry[] }>
+// Binds the wire schema to the service's projection at compile time.
+memberDirectoryResponseSchema satisfies z.ZodType<{ members: MemberDirectoryEntry[] }>
 
 identity.get('/members',
   describeRoute({
