@@ -13,7 +13,12 @@ import { createRolesFromTemplate } from './cms'
 const registerCredential = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/webauthn', () => ({ registerCredential }))
 
-let calls: { method: string; url: string }[]
+interface RecordedCall {
+  method: string
+  url: string
+}
+
+let calls: RecordedCall[]
 let respond: () => Response
 
 beforeEach(() => {
