@@ -283,6 +283,12 @@ jobs:
       - name: Check the Mac-pinned classes exist
         run: python3 apps/ios/scripts/ui-tests.py check-mac-shards
 
+      # The packer prices every class per host (ci-timings.json), because one
+      # host-blind figure predicted a 20s spread across shards that ran 834s
+      # apart (#1873). These pin that behaviour, and the timings file's shape.
+      - name: Test the shard packer
+        run: python3 -m unittest discover -s apps/ios/scripts -p "test_*.py"
+
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
       - name: Cache crypto XCFramework + bindings
@@ -725,6 +731,47 @@ jobs:
         run: |
           xcrun simctl boot "$UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$UDID" -b
+
+      # Boot is not warm. Booting the simulator never launches the app, so the
+      # FIRST test of a shard paid the whole cold-start bill — installd
+      # registering the bundle, RunningBoard's first assertion for the process,
+      # dyld mapping the app and its frameworks — inside XCTest's
+      # assertion-acquisition budget, which cannot be raised. #1873: on hosted
+      # runners the first two tests of a shard failed with
+      #   Failed to get background assertion for target app ... Timed out
+      # without ever evaluating an assertion (trace: Launch at 1.28s, Tear Down
+      # at 41.32s), and every test after them passed on the same simulator.
+      #
+      # So pay it here, once, outside any test: install the app, launch it,
+      # terminate it. Not a sleep and not a raised timeout — the same work the
+      # first test would have done, done before the clock starts. The elapsed
+      # time is printed, so a run's log shows what the first launch cost.
+      #
+      # A failed warm-up only means the first test is cold again, so it
+      # annotates instead of failing the shard; a missing app is a broken
+      # build artifact and does fail.
+      - name: Warm the app (install, launch once, terminate)
+        timeout-minutes: 5
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -uo pipefail
+          products="$RUNNER_TEMP/llamenos-build/Build/Products/UITesting-iphonesimulator"
+          apps=()
+          while IFS= read -r app; do apps+=("$app"); done < <(find "$products" -maxdepth 1 -name "*.app" ! -name "*-Runner.app")
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one app under $products, found ${#apps[@]}: ${apps[*]:-none}"
+            exit 1
+          fi
+          bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${apps[0]}/Info.plist")
+          start=$SECONDS
+          if xcrun simctl install "$UDID" "${apps[0]}" \
+              && xcrun simctl launch --terminate-running-process "$UDID" "$bundle_id" \
+              && xcrun simctl terminate "$UDID" "$bundle_id"; then
+            echo "warm-up of $bundle_id took $((SECONDS - start))s"
+          else
+            echo "::warning::warm-up of $bundle_id failed after $((SECONDS - start))s; the first test of this shard will launch cold"
+          fi
 
       # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
       # manual dispatch run it too.
