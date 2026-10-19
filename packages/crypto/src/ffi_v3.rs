@@ -2020,12 +2020,7 @@ mod tests {
             "Suivi médical"
         );
         assert!(
-            mobile_encrypt_hub_field(
-                "x".into(),
-                "hf-hub".into(),
-                "llamenos:wrong-label:v1".into()
-            )
-            .is_err(),
+            mobile_encrypt_hub_field("x".into(), "hf-hub".into(), "wrong-label:v1".into()).is_err(),
             "an unregistered label must not seal"
         );
         mobile_clear_hub_keys();

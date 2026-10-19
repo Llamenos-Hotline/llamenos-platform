@@ -690,13 +690,13 @@ mod tests {
 
     #[test]
     fn hub_field_refuses_unregistered_and_empty_labels() {
-        assert!(encrypt_hub_field("x", &HUB_FIELD_KEY, "llamenos:wrong-label:v1").is_err());
+        assert!(encrypt_hub_field("x", &HUB_FIELD_KEY, "wrong-label:v1").is_err());
         assert!(encrypt_hub_field("x", &HUB_FIELD_KEY, "").is_err());
 
         // The decrypt side must refuse on registration alone. A wrong AAD would
         // fail the AEAD tag anyway, so seal under the unregistered label with
         // the raw primitive: only the registry check can reject these.
-        for label in ["llamenos:wrong-label:v1", ""] {
+        for label in ["wrong-label:v1", ""] {
             let packed = aes256gcm_encrypt(&HUB_FIELD_KEY, b"x", label.as_bytes()).unwrap();
             assert!(
                 decrypt_hub_field(&hex::encode(&packed), &HUB_FIELD_KEY, label).is_err(),
