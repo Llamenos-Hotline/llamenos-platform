@@ -242,7 +242,14 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     // the reload. The mock cannot keep CryptoState across a reload, so the same
     // state is reached in place: the address is forgotten beneath the live
     // session, and the next render shows the first-run screen.
-    await page.evaluate(() => (window as unknown as TestWindow).__TEST_API_CONFIG.resetApiBase())
+    //
+    // The harness hub pin (`__TEST_WORKER_HUB`, set by useOwnHub) is dropped first:
+    // config.tsx re-applies it whenever memberships are cleared (#1719), which
+    // would mask the production outcome — no active hub once the session ends.
+    await page.evaluate(() => {
+      delete (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB
+      return (window as unknown as TestWindow).__TEST_API_CONFIG.resetApiBase()
+    })
     await navigateInApp(page, '/')
     await expect(page.getByTestId(TestIds.SERVER_ADDRESS_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
 
@@ -268,14 +275,14 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
 
     await page.getByTestId(TestIds.INVITE_CODE_INPUT).fill(crypto.randomUUID())
     await page.getByTestId(TestIds.INVITE_CODE_SUBMIT).click()
-    await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'unreachable', { timeout: Timeouts.API })
+    await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'retryable', { timeout: Timeouts.API })
 
     // A server error is not an answer about the code either.
     await page.unroute('**/api/invites/validate/**')
     await page.route('**/api/invites/validate/**', route => route.fulfill({ status: 502, contentType: 'text/html', body: '<html>Bad gateway</html>' }))
     await page.getByTestId(TestIds.INVITE_CODE_INPUT).fill(crypto.randomUUID())
     await page.getByTestId(TestIds.INVITE_CODE_SUBMIT).click()
-    await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'unreachable', { timeout: Timeouts.API })
+    await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'retryable', { timeout: Timeouts.API })
 
     // The real server's answer about a well-formed code it never issued is still "invalid".
     await page.unroute('**/api/invites/validate/**')
