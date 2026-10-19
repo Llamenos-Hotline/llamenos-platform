@@ -3247,39 +3247,70 @@ Response: RingGroup
 
 ### 4.50 Recovery Group
 
-Social recovery with Shamir secret sharing. Mix of public and authenticated routes.
+Social recovery with Shamir secret sharing. This is the **only** specification of the recovery-group routes; it is checked against `apps/worker/routes/recovery-group.ts`. Every route below is mounted **unscoped** (`/api/recovery-group/*`, never `/api/hubs/:hubId/...`) — the hub is named in the body, query, or path where it matters, and the route enforces hub membership itself. Clients MUST NOT hub-prefix these paths.
 
 **Unauthenticated (rate-limited):**
 ```
 POST /api/recovery-group/initiate
-Body: { "hubId": string, "userIdentifier": string, "newDevicePubkey": hex64 }
-Response: RecoveryInitiateResponse
-Rate limit: 10/5min per IP
+Body: { "hubId": uuid, "userIdentifier": string, "newDevicePubkey": hex64 }
+Response: { "sessionId": uuid, "verificationSent": boolean }
+Rate limit: 10/5min per IP. The response shape is identical whether or not the
+user exists (anti-enumeration).
 
 POST /api/recovery-group/initiate/verify
-Body: { "sessionId": string, "verificationCode": string }
-Response: RecoveryInitiateVerifyResponse
+Body: { "sessionId": uuid, "verificationCode": string }
+Response: { "ok": boolean, "expiresAt": ISO-8601 }
+Attempts per session are capped.
+
+POST /api/recovery-group/session/:id/complete
+Body: { "sigchainSeqNo": int, "sigchainPayload": object, "signature": hex128,
+        "prevHash": hex64 | null, "hash": hex64, "signerDeviceId": string,
+        "timestamp": ISO-8601 }
+Response: { "ok": boolean, "sigchainLink": SigchainLink }
+The recovering device has no prior session, so this is unauthenticated. The link
+is signed by the NEW device's own key and is accepted only once the session is
+`active` (>= threshold contributions) and its post-verification delay has
+elapsed. `sigchainPayload` MUST carry `{ sessionId, contributingHolderPubkeys }`;
+the server verifies both independently.
+
+GET  /api/recovery-group/user-envelope/:hubId?sessionId=<uuid>
+Response: { "envelope": string | null }
+Session-scoped: released only after the delay has elapsed and the threshold of
+contributions has been received.
 ```
 
 **Authenticated:**
 ```
 POST /api/recovery-group/enroll
-Permission: recovery:manage
+Permission: recovery:manage (and membership of the hub)
 Body: RecoveryGroupEnrollBody
 Response: { "ok": true }
 
+POST /api/recovery-group/rotate
+Permission: recovery:manage (and membership of the hub)
+Body: { hubId, threshold, totalShares, groupPublicKey, shareEnvelopes, shareCommitments,
+        duressCommitments?, sigchainLinkHash, delayHours?, emergencyFloorHours?,
+        rewrappedUserEnvelopes: [{ userPubkey, envelope }] }
+Response: { "ok": true }
+Atomic: replaces the group and re-wraps every user envelope in one transaction.
+
+GET  /api/recovery-group/sessions?hubId=<uuid>
+Permission: recovery:view (and membership of the hub)
+Response: { sessionId, hubId, userPubkey, newDevicePubkey, status, signalVerified,
+           expiresAt, createdAt, completedAt, cancelledAt, cancelledBy }[]
+
 GET  /api/recovery-group/:hubId
-Permission: recovery:view
+Permission: recovery:view (and membership of the hub)
 Response: RecoveryGroupInfo
 
 POST /api/recovery-group/session/:id/contribute
-Permission: recovery:hold-share
+Permission: recovery:hold-share (and current hub membership + enrollment)
 Body: { "encryptedShare": hex, "contributorSignature": hex128 }
-Response: RecoveryContributeResponse
+Response: { "ok": boolean, "status": RecoverySessionStatus, "contributionCount": number }
 
 GET  /api/recovery-group/session/:id
-Permission: recovery:view
-Response: RecoverySessionStatus
+Permission: recovery:view (and membership of the session's hub)
+Response: RecoverySessionStatusResponse
 
 POST /api/recovery-group/session/:id/emergency
 Permission: recovery:approve
@@ -3292,14 +3323,29 @@ Response: { "ok": true }
 
 POST /api/recovery-group/user-envelope
 Auth: Required
-Body: { "hubId": string, "envelope": string }
+Body: { "hubId": uuid, "envelope": string }
 Response: { "ok": true }
 
 POST /api/recovery-group/shares/liveness
 Permission: recovery:hold-share
-Body: { "hubId": string, "proof": string }
+Body: { "hubId": uuid, "proof": string }
 Response: { "ok": true }
+
+GET  /api/recovery-group/shares/my?hubId=<uuid>
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Response: MyShareEnvelopeResponse = { "hubId": uuid, "shareEnvelope": string }
 ```
+
+`GET /shares/my` returns **only the calling holder's own** envelope — the HPKE
+envelope (label `LABEL_RECOVERY_GROUP_SHARE_WRAP`) sealing that holder's Shamir
+share to their own key. The holder is the authenticated pubkey and is never a
+parameter: `hubId` selects which hub's share, nothing selects whose. Any
+`holderPubkey`/`pubkey` a caller adds is ignored. The server answers `403
+"Not a share holder for this hub"` — one message — whether the caller is no
+longer a member of the hub, was never enrolled, or the hub has no recovery
+group, so the route cannot be used to probe enrollment. A holder cannot take part
+in recovery without this route: it is the only way to get the envelope they must
+open to produce a `contribute` payload.
 
 ### 4.51 Teams
 
@@ -3633,11 +3679,7 @@ POST   /api/settings/cms
 ```
 
 #### Recovery Groups
-```
-POST /api/recovery-group/initiate
-POST /api/recovery-group/verify
-POST /api/recovery-group/complete
-```
+See §4.50 — the complete, authoritative route list.
 
 #### PUK (Per-User Key) Management
 ```
@@ -3974,61 +4016,6 @@ PATCH  /api/settings/cms/report-types/:id
 DELETE /api/settings/cms/report-types/:id
        Permission: cases:manage-types
        Response: { "ok": true }
-```
-
-### 4.27 Recovery Group
-
-**Authenticated routes** (`/api/recovery-group/*`):
-
-```
-POST   /api/recovery-group/enroll
-       Permission: recovery:manage
-       Body: { "hubId": string, "threshold": number, "totalShares": number, "groupPublicKey": hex, "shareEnvelopes": [...], ... }
-       Response: { "ok": true }
-
-GET    /api/recovery-group/:hubId
-       Permission: recovery:view
-       Response: RecoveryGroupInfo
-
-POST   /api/recovery-group/session/:id/contribute
-       Permission: recovery:hold-share
-       Body: { "encryptedShare": hex, "contributorSignature": hex }
-       Response: { "contributions": number, "thresholdMet": boolean }
-
-GET    /api/recovery-group/session/:id
-       Permission: recovery:view
-       Response: RecoverySessionStatus
-
-POST   /api/recovery-group/session/:id/emergency
-       Permission: recovery:approve
-       Body: { "approverPubkey": hex, "justification": string, "signature": hex }
-       Response: { "ok": true }
-
-POST   /api/recovery-group/session/:id/cancel
-       Auth: Required
-       Response: { "ok": true }
-
-POST   /api/recovery-group/user-envelope
-       Auth: Required
-       Body: { "hubId": string, "envelope": hex }
-       Response: { "ok": true }
-
-POST   /api/recovery-group/shares/liveness
-       Permission: recovery:hold-share
-       Body: { "hubId": string, "proof": hex }
-       Response: { "ok": true }
-```
-
-**Unauthenticated routes** (rate-limited):
-
-```
-POST   /api/recovery-group/initiate
-       Body: { "hubId": string, "userIdentifier": string, "newDevicePubkey": hex }
-       Response: { "sessionId": string, "status": string }
-
-POST   /api/recovery-group/initiate/verify
-       Body: { "sessionId": string, "verificationCode": string }
-       Response: { "verified": boolean, "status": string }
 ```
 
 ### 4.28 Security Events

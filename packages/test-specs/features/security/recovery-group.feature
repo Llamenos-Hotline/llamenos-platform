@@ -84,6 +84,55 @@ Feature: Recovery Group Lifecycle
     When a non-holder submits a liveness proof for the hub
     Then the response status is 403
 
+  # -- Own share envelope (#2002) --
+  # A holder reads their OWN envelope. The negative cases are the point: no input
+  # lets a caller name another holder, and every refusal is the same 403.
+
+  @backend
+  Scenario: A share holder reads their own share envelope
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 reads their own share envelope
+    Then the response status is 200
+    And the share envelope returned is share holder 1's own
+    When share holder 2 reads their own share envelope
+    Then the response status is 200
+    And the share envelope returned is share holder 2's own
+
+  @backend
+  Scenario: A share holder cannot read another holder's share envelope by naming them
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 reads their share envelope while naming share holder 2 as the holder
+    Then the response status is 200
+    And the share envelope returned is share holder 1's own
+    And the response does not contain share holder 2's envelope
+
+  @backend
+  Scenario: A hub member who is not an enrolled holder is refused
+    Given a recovery group is enrolled with real share holders
+    When a hub member who is not a share holder reads their share envelope
+    Then the response status is 403
+    And the response does not contain share holder 1's envelope
+    And the response does not contain share holder 2's envelope
+
+  @backend
+  Scenario: An enrolled holder without hold-share permission is refused
+    Given a recovery group is enrolled with real share holders
+    When an enrolled holder without hold-share permission reads their share envelope
+    Then the response status is 403
+
+  @backend
+  Scenario: A holder removed from the hub can no longer read their envelope
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 is removed from the hub
+    And share holder 1 reads their own share envelope
+    Then the response status is 403
+
+  @backend
+  Scenario: A share holder asking for a hub with no recovery group is refused the same way
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 reads their own share envelope for a hub with no recovery group
+    Then the response status is 403
+
   # -- Anti-Enumeration --
 
   @backend

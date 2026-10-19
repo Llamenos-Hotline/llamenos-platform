@@ -12,6 +12,7 @@
  *   POST   /session/:id/cancel      — Cancel session (auth required)
  *   POST   /user-envelope           — Store user recovery envelope (auth required)
  *   POST   /shares/liveness         — Submit liveness proof (recovery:hold-share)
+ *   GET    /shares/my               — Read the caller's OWN share envelope (recovery:hold-share)
  *
  * Unauthenticated routes (rate-limited):
  *   POST   /initiate                — Start recovery (Signal verification)
@@ -43,6 +44,8 @@ import {
   shareLivenessProofSchema,
   recoveryCancelResponseSchema,
   recoveryEmergencyOverrideSchema,
+  myShareEnvelopeQuerySchema,
+  myShareEnvelopeResponseSchema,
 } from '@protocol/schemas/recovery-group'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { safeFetch } from '../lib/safe-fetch'
@@ -618,6 +621,44 @@ authenticatedRoutes.post('/shares/liveness',
         proof: body.proof,
       })
       return c.json({ ok: true })
+    } catch (err) {
+      if (err instanceof RecoveryGroupError) {
+        return c.json({ error: err.message }, err.status)
+      }
+      throw err
+    }
+  },
+)
+
+// GET /shares/my — Read the caller's own share envelope
+// Two path segments, so it cannot be swallowed by the single-segment GET /:hubId.
+authenticatedRoutes.get('/shares/my',
+  describeRoute({
+    tags: ['Recovery Group'],
+    summary: "Get the caller's own recovery share envelope",
+    description: "Returns the HPKE envelope sealing the authenticated share holder's Shamir share to their own key. The holder is always the authenticated caller — there is no way to name another holder; `hubId` only selects which hub's share. Refused (403, one message) unless the caller is currently a member of the hub AND an enrolled holder in it.",
+    responses: {
+      200: {
+        description: "The caller's share envelope",
+        content: {
+          'application/json': {
+            schema: resolver(myShareEnvelopeResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('recovery:hold-share'),
+  validator('query', myShareEnvelopeQuerySchema),
+  async (c) => {
+    const { hubId } = c.req.valid('query')
+    const holderPubkey = c.get('pubkey')
+    const services = c.get('services')
+
+    try {
+      const result = await services.recoveryGroup.getMyShareEnvelope({ hubId, holderPubkey })
+      return c.json(result)
     } catch (err) {
       if (err instanceof RecoveryGroupError) {
         return c.json({ error: err.message }, err.status)

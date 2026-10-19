@@ -80,6 +80,7 @@ const EXCLUDED_SCHEMAS = new Set([
 
   // Recovery group — bare enum schema used as building block
   'recoverySessionStatusSchema',
+  'myShareEnvelopeQuerySchema',
 
   // Device management — query schemas and bare enums
   'listSecurityEventsQuerySchema',

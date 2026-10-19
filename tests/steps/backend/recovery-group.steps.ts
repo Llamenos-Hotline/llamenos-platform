@@ -17,6 +17,7 @@ import {
 import {
   apiGet,
   apiPost,
+  apiDelete,
   devPost,
   createUserViaApi,
   createRoleViaApi,
@@ -58,6 +59,16 @@ interface RecoveryGroupState {
   secondHubSessionId?: string
   crossHubViewerSeed?: string
   crossHubViewerPubkey?: string
+
+  // -- Own share envelope (#2002) --
+  /** Enrolled holders that authenticate as themselves. Index 0 is "share holder 1". */
+  ownShare?: {
+    holders: Array<{ seedHex: string; pubkey: string; envelope: string }>
+    /** Enrolled, but holds a role WITHOUT recovery:hold-share. */
+    unprivilegedHolder: { seedHex: string; pubkey: string }
+    /** Hub member with recovery:hold-share who was never enrolled. */
+    nonHolder: { seedHex: string; pubkey: string }
+  }
 
   // -- Rotation / departed-member-exclusion (real HPKE round-trip) --
   rotation?: {
@@ -491,6 +502,145 @@ When('a non-holder submits a liveness proof for the hub', async ({ request, worl
   s.lastStatus = status
   s.lastBody = data as Record<string, unknown>
   setLastResponse(world, { status, data })
+})
+
+// ── Own share envelope steps (#2002) ───────────────────────────────
+
+const shareEnvelopeFor = (pubkey: string) => `share-envelope-for:${pubkey}`
+
+function getOwn(world: Record<string, unknown>): NonNullable<RecoveryGroupState['ownShare']> {
+  const own = getS(world).ownShare
+  expect(own, 'Given "a recovery group is enrolled with real share holders" has not run').toBeDefined()
+  return own!
+}
+
+function holderN(world: Record<string, unknown>, n: number) {
+  const holder = getOwn(world).holders[n - 1]
+  expect(holder, `no share holder ${n}`).toBeDefined()
+  return holder
+}
+
+async function createHubMember(
+  request: import('@playwright/test').APIRequestContext,
+  hubId: string,
+  roleIds: string[],
+) {
+  const user = await createUserViaApi(request, { name: uniqueName('Share Holder'), roleIds })
+  await addHubMemberViaApi(request, hubId, user.pubkey, ['role-volunteer'])
+  return { seedHex: user.seedHex, pubkey: user.pubkey }
+}
+
+Given('a recovery group is enrolled with real share holders', async ({ request, world }) => {
+  const s = getS(world)
+  expect(s.hubId).toBeDefined()
+
+  const holdShare = await createRoleViaApi(request, {
+    name: `Share Holder ${Date.now()}`,
+    slug: uniqueName('recovery-hold-share'),
+    permissions: ['recovery:hold-share'],
+  })
+
+  const holderUsers = [
+    await createHubMember(request, s.hubId!, [holdShare.id]),
+    await createHubMember(request, s.hubId!, [holdShare.id]),
+  ]
+  // role-volunteer carries no recovery permissions: enrolled, but unprivileged.
+  const unprivilegedHolder = await createHubMember(request, s.hubId!, ['role-volunteer'])
+  const nonHolder = await createHubMember(request, s.hubId!, [holdShare.id])
+
+  const enrolled = [...holderUsers.map((h) => h.pubkey), unprivilegedHolder.pubkey]
+  const { status } = await apiPost(request, '/recovery-group/enroll', {
+    hubId: s.hubId!,
+    threshold: 2,
+    totalShares: 3,
+    groupPublicKey: 'a'.repeat(64),
+    shareEnvelopes: enrolled.map((holderPubkey) => ({
+      holderPubkey,
+      shareEnvelope: shareEnvelopeFor(holderPubkey),
+    })),
+    shareCommitments: makeCommitments(3),
+    sigchainLinkHash: 'b'.repeat(64),
+    delayHours: 24,
+    emergencyFloorHours: 4,
+  }, s.adminSeed)
+  expect(status).toBe(200)
+
+  s.ownShare = {
+    holders: holderUsers.map((h) => ({ ...h, envelope: shareEnvelopeFor(h.pubkey) })),
+    unprivilegedHolder,
+    nonHolder,
+  }
+})
+
+async function getMyShare(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  seedHex: string,
+  query: Record<string, string>,
+) {
+  const s = getS(world)
+  const { status, data } = await apiGet(
+    request,
+    `/recovery-group/shares/my?${new URLSearchParams(query).toString()}`,
+    seedHex,
+  )
+  s.lastStatus = status
+  s.lastBody = data as Record<string, unknown>
+  setLastResponse(world, { status, data })
+}
+
+When('share holder {int} reads their own share envelope', async ({ request, world }, n: number) => {
+  await getMyShare(request, world, holderN(world, n).seedHex, { hubId: getS(world).hubId! })
+})
+
+When(
+  'share holder {int} reads their share envelope while naming share holder {int} as the holder',
+  async ({ request, world }, n: number, other: number) => {
+    const target = holderN(world, other)
+    // Every spelling a caller might try. The route accepts none of them: the
+    // holder is the authenticated pubkey, so these must all be inert.
+    await getMyShare(request, world, holderN(world, n).seedHex, {
+      hubId: getS(world).hubId!,
+      holderPubkey: target.pubkey,
+      holder: target.pubkey,
+      pubkey: target.pubkey,
+    })
+  },
+)
+
+When('a hub member who is not a share holder reads their share envelope', async ({ request, world }) => {
+  await getMyShare(request, world, getOwn(world).nonHolder.seedHex, { hubId: getS(world).hubId! })
+})
+
+When('an enrolled holder without hold-share permission reads their share envelope', async ({ request, world }) => {
+  await getMyShare(request, world, getOwn(world).unprivilegedHolder.seedHex, { hubId: getS(world).hubId! })
+})
+
+When('share holder {int} is removed from the hub', async ({ request, world }, n: number) => {
+  const s = getS(world)
+  const { status } = await apiDelete(request, `/hubs/${s.hubId}/members/${holderN(world, n).pubkey}`)
+  expect(status).toBeLessThan(300)
+})
+
+When(
+  'share holder {int} reads their own share envelope for a hub with no recovery group',
+  async ({ request, world }, n: number) => {
+    await getMyShare(request, world, holderN(world, n).seedHex, { hubId: crypto.randomUUID() })
+  },
+)
+
+Then('the share envelope returned is share holder {int}\'s own', async ({ world }, n: number) => {
+  const s = getS(world)
+  const holder = holderN(world, n)
+  expect(s.lastBody?.shareEnvelope).toBe(holder.envelope)
+  expect(s.lastBody?.hubId).toBe(s.hubId)
+  // The wire shape is exactly the protocol schema: nothing else leaks alongside.
+  expect(Object.keys(s.lastBody ?? {}).sort()).toEqual(['hubId', 'shareEnvelope'])
+})
+
+Then('the response does not contain share holder {int}\'s envelope', async ({ world }, n: number) => {
+  const body = JSON.stringify(getS(world).lastBody ?? {})
+  expect(body).not.toContain(holderN(world, n).envelope)
 })
 
 // ── Recovery-group-specific assertion steps ────────────────────────

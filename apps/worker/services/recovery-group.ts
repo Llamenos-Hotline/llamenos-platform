@@ -21,11 +21,11 @@ const MAX_VERIFICATION_ATTEMPTS = 5
 const VERIFICATION_CODE_LENGTH = 6
 
 /**
- * One refusal for every reason a pubkey may not contribute to a session: not a
- * member of the session's hub any more, and not an enrolled share holder. Kept
+ * One refusal for every reason a pubkey may not act as a share holder in a hub:
+ * not a member of the hub any more, and not an enrolled share holder. Kept
  * identical so neither answer confirms the other.
  */
-const NOT_AUTHORIZED_TO_CONTRIBUTE = 'Contributor is not a share holder for this hub'
+const NOT_A_SHARE_HOLDER = 'Not a share holder for this hub'
 
 export class RecoveryGroupError extends Error {
   constructor(
@@ -125,7 +125,7 @@ export class RecoveryGroupService {
     }
 
     if (!member) {
-      throw new RecoveryGroupError(NOT_AUTHORIZED_TO_CONTRIBUTE, 403)
+      throw new RecoveryGroupError(NOT_A_SHARE_HOLDER, 403)
     }
   }
 
@@ -606,7 +606,7 @@ export class RecoveryGroupService {
 
     const isHolder = holders.some((h) => h.holderPubkey === contributorPubkey)
     if (!isHolder) {
-      throw new RecoveryGroupError(NOT_AUTHORIZED_TO_CONTRIBUTE, 403)
+      throw new RecoveryGroupError(NOT_A_SHARE_HOLDER, 403)
     }
 
     let contributionCount = 0
@@ -1042,6 +1042,44 @@ export class RecoveryGroupService {
       .limit(1)
 
     return envelope[0]?.envelope ?? null
+  }
+
+  /**
+   * The share envelope enrolled for `holderPubkey` in `hubId` — and only that
+   * one. The holder is the AUTHENTICATED caller's pubkey, supplied by the
+   * route from the session, so there is no input with which to name another
+   * holder: the WHERE clause is `(hub_id, holder_pubkey)`, the table's primary
+   * key, and can match at most the caller's own row.
+   *
+   * Same gate as `contributeShare` (#1620): current hub membership first, then
+   * enrollment. Both refusals are one error with one message, so a response
+   * cannot tell "you were removed from the hub" from "you hold no share here"
+   * from "this hub has no recovery group" — none of those may be probed.
+   */
+  async getMyShareEnvelope(params: {
+    hubId: string
+    holderPubkey: string
+  }): Promise<{ hubId: string; shareEnvelope: string }> {
+    const { hubId, holderPubkey } = params
+
+    await this.assertStillHubMember(holderPubkey, hubId)
+
+    const rows = await this.db
+      .select({ shareEnvelope: hubRecoveryGroupShares.shareEnvelope })
+      .from(hubRecoveryGroupShares)
+      .where(
+        and(
+          eq(hubRecoveryGroupShares.hubId, hubId),
+          eq(hubRecoveryGroupShares.holderPubkey, holderPubkey),
+        ),
+      )
+      .limit(1)
+
+    if (rows.length === 0) {
+      throw new RecoveryGroupError(NOT_A_SHARE_HOLDER, 403)
+    }
+
+    return { hubId, shareEnvelope: rows[0].shareEnvelope }
   }
 
   async submitLivenessProof(params: {

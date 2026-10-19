@@ -219,7 +219,6 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     // mounted — routes/identity.ts.)
     'GET /api/identity/invites': '#1701',
     'POST /api/identity/invite': '#1701',
-    'GET /api/recovery-group/shares/my': '#1701',
 
     // Also #1701, found by this test rather than by reading the client. Both
     // are live 404s on a real backend.
