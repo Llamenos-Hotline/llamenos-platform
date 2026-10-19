@@ -310,7 +310,12 @@ const picker = desktop
   </section>
 </BaseLayout>
 
-<script define:vars={{ picker }}>
+<!-- Data block, not code: the script below is a bundled module so the page CSP can stay hash-only. -->
+<script type="application/json" id="download-picker" set:html={JSON.stringify(picker).replace(/</g, '\\u003c')} />
+
+<script>
+  const picker = JSON.parse(document.getElementById('download-picker')?.textContent ?? 'null');
+
   // OS detection
   const ua = navigator.userAgent.toLowerCase();
   let detectedOS = 'linux';
