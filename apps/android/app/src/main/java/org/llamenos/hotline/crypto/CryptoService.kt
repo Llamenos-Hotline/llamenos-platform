@@ -473,6 +473,23 @@ class CryptoService @Inject constructor() {
         }
     }
 
+    /**
+     * Verify an Ed25519 signature over [messageHex] against [pubkeyHex].
+     *
+     * Stateless — needs no device secrets, so it works while locked. Returns false
+     * for a bad signature, malformed hex, or when the native library is unavailable:
+     * a caller gating a destructive action on this must treat "cannot verify" as
+     * "not verified".
+     */
+    fun ed25519Verify(messageHex: String, signatureHex: String, pubkeyHex: String): Boolean {
+        if (!nativeLibLoaded) return false
+        return try {
+            org.llamenos.core.mobileEd25519Verify(messageHex, signatureHex, pubkeyHex)
+        } catch (_: org.llamenos.core.CryptoException) {
+            false
+        }
+    }
+
     // ---- Note Encryption (HPKE) ----
 
     // ---- The wire <-> FFI boundary ----
@@ -971,6 +988,17 @@ class CryptoService @Inject constructor() {
             org.llamenos.core.mobileClearHubKeys()
             org.llamenos.core.mobileClearServerEventKeys()
         }
+        testHubKeys.clear()
+    }
+
+    /**
+     * Zeroize every cached hub key, leaving the server event keys in place.
+     *
+     * The Rust store has no per-hub removal, so evicting one hub's key means
+     * clearing all of them and reloading the rest — see `HubRepository`.
+     */
+    fun clearHubKeysOnly() {
+        if (nativeLibLoaded) org.llamenos.core.mobileClearHubKeys()
         testHubKeys.clear()
     }
 
