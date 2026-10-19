@@ -155,19 +155,6 @@ ios-build:
       run: cd apps/ios && swift test
 ```
 
-On each persistent self-hosted Mac runner, install the version-controlled
-hourly reclaim agent from the repository checkout:
-
-```bash
-bash scripts/ci/mac-runner-disk-guard.sh install-timer
-```
-
-This installs the per-user `org.llamenos.mac-reclaim` LaunchAgent. It runs
-`reclaim` at login and hourly, invoking the script at this checkout rather than
-a copied or pinned script. Re-run the install command if the checkout moves.
-The job-start `guard` remains in place and still refuses to run below its disk
-floor; the timer does not change that threshold.
-
 ## Verification
 
 1. `packages/crypto/scripts/build-mobile.sh ios` produces valid XCFramework

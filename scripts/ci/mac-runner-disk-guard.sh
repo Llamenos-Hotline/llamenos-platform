@@ -108,6 +108,17 @@
 # `guard` is what CI calls. On a GitHub-hosted runner it prints one line and
 # exits 0: the volume is thrown away with the VM, and there is no shared host
 # to protect.
+#
+# `install-timer` is run once by hand on each persistent self-hosted Mac runner,
+# from the repository checkout:
+#
+#   bash scripts/ci/mac-runner-disk-guard.sh install-timer
+#
+# It installs the per-user `org.llamenos.mac-reclaim` LaunchAgent, which runs
+# `reclaim` at login and hourly. The agent invokes the script at THIS checkout
+# rather than a copied or pinned script, so re-run `install-timer` if the
+# checkout moves. The job-start `guard` stays in place and still refuses to run
+# below its disk floor; the timer does not change that threshold.
 
 set -euo pipefail
 
