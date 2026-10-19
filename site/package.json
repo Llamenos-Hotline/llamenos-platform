@@ -6,7 +6,9 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "deploy": "astro build && bunx wrangler pages deploy dist --project-name llamenos-site"
+    "check:privacy": "bun scripts/check-no-third-party.ts",
+    "check:privacy:browser": "bun scripts/check-no-third-party.ts --browser",
+    "deploy": "astro build && bun run check:privacy && bunx wrangler pages deploy dist --project-name llamenos-site"
   },
   "dependencies": {
     "@astrojs/rss": "^4.0.19",
