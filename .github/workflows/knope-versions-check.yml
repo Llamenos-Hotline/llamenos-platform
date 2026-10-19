@@ -1,0 +1,79 @@
+# Catch an inconsistent knope `versioned_files` set on the PR that introduces
+# it, not on main after the merge (#1986).
+#
+# Adding a file to knope.toml's `[package].versioned_files` pins whatever
+# version that file holds at that moment. If it disagrees with package.json,
+# knope refuses to run at all (`knope_versioning::inconsistent_versions`):
+# #1481 added deploy/helm/llamenos/Chart.yaml at 0.19.18 while the repo was at
+# 0.19.19, merged green, and `Knope — Prepare Release PR` then failed on every
+# push to main (14 runs) — no release PR was prepared for a day.
+#
+# This runs the very same `knope prepare-release` that knope-release-pr.yml
+# runs, but with --dry-run: it loads and cross-checks every tracked file and
+# computes the release, and changes, commits, pushes and opens nothing. It uses
+# the same pinned knope version, so it cannot disagree with the real job.
+#
+# Deliberately NOT path-filtered. The check is a few seconds, and a path filter
+# is exactly how a required check ends up `skipped` — and counted as a pass —
+# on the PR that needed it (#1954). It runs on every pull_request, and on
+# merge_group so the merge queue re-proves it against the speculative commit.
+#
+# Tolerates exactly one non-zero outcome, `releases::no_release` ("no commit
+# since the last tag bumps a version"): that is raised only after the version
+# files have been loaded and cross-checked, so it still proves consistency.
+# Every other failure fails the job.
+name: Knope Versions Check
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions: {}  # deny-all; per-job permissions below
+
+concurrency:
+  group: knope-versions-check-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  knope-versions-check:
+    # Hosted, like knope-release-pr.yml: knope-dev/action shells out to `gh`,
+    # which is not reliably on PATH on the self-hosted runners.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # knope reads the tag history to find the last release.
+          fetch-depth: 0
+
+      - name: Install knope
+        uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+        with:
+          # Keep in lockstep with knope-release-pr.yml.
+          version: 0.22.4
+          github-token: ${{ github.token }}
+
+      - name: Dry-run knope prepare-release (cross-checks every versioned file)
+        run: |
+          log="${RUNNER_TEMP}/knope-dry-run.log"
+          set +e
+          knope prepare-release --dry-run --verbose 2>&1 | tee "${log}"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "${status}" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -q 'releases::no_release' "${log}" && ! grep -q 'inconsistent_versions' "${log}"; then
+            echo "::notice::No releasable commits since the last tag; versioned_files were still loaded and are consistent."
+            exit 0
+          fi
+          if grep -q 'inconsistent_versions' "${log}"; then
+            echo "::error file=knope.toml::knope.toml's versioned_files disagree on the version (see the log above). Bring every tracked file to the version package.json holds — this is the one place a version is edited by hand, because you are repairing knope's starting state, not bumping a release."
+          else
+            echo "::error::knope prepare-release --dry-run failed (exit ${status}). The next push to main would fail the same way in knope-release-pr.yml. See the log above."
+          fi
+          exit "${status}"
