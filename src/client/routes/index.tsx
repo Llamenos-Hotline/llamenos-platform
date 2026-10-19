@@ -445,6 +445,7 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
             {t('notes.newNote')}
           </label>
           <textarea
+            data-testid="active-call-note-input"
             value={noteText}
             onChange={e => setNoteText(e.target.value)}
             placeholder={t('notes.notePlaceholder')}
@@ -453,6 +454,7 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
           />
           <div className="flex items-center gap-2">
             <Button
+              data-testid="active-call-note-save-btn"
               onClick={handleSaveNote}
               disabled={saving || !noteText.trim()}
               size="sm"

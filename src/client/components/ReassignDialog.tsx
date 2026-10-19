@@ -11,12 +11,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { listUsers, getUserLoads, updateConversation, type User, type Conversation } from '@/lib/api'
+import { listUsers, getUserLoads, updateConversation, type User, type HubConversation } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { User as UserIcon, Users, AlertCircle, Loader2 } from 'lucide-react'
 
 interface ReassignDialogProps {
-  conversation: Conversation
+  conversation: HubConversation
   open: boolean
   onOpenChange: (open: boolean) => void
   onReassigned?: () => void
@@ -45,7 +45,7 @@ export function ReassignDialog({
 
     Promise.all([
       listUsers(),
-      getUserLoads(),
+      getUserLoads(conversation.hubId),
     ])
       .then(([userRes, loadRes]) => {
         // Filter to active users with messaging enabled
@@ -61,14 +61,14 @@ export function ReassignDialog({
         toast(t('conversations.loadUsersError', { defaultValue: 'Failed to load volunteers' }), 'error')
       })
       .finally(() => setLoading(false))
-  }, [open, conversation.assignedTo, t, toast])
+  }, [open, conversation.assignedTo, conversation.hubId, t, toast])
 
   const handleReassign = async () => {
     if (!selectedPubkey) return
 
     setReassigning(true)
     try {
-      await updateConversation(conversation.id, { assignedTo: selectedPubkey })
+      await updateConversation(conversation.hubId, conversation.id, { assignedTo: selectedPubkey })
       toast(t('conversations.reassigned', { defaultValue: 'Conversation reassigned' }))
       onOpenChange(false)
       onReassigned?.()
@@ -82,7 +82,7 @@ export function ReassignDialog({
   const handleUnassign = async () => {
     setReassigning(true)
     try {
-      await updateConversation(conversation.id, { status: 'waiting' })
+      await updateConversation(conversation.hubId, conversation.id, { status: 'waiting' })
       toast(t('conversations.unassigned', { defaultValue: 'Conversation unassigned' }))
       onOpenChange(false)
       onReassigned?.()
