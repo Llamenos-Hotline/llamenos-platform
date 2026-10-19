@@ -431,6 +431,57 @@ describe('checkScope', () => {
     })
   })
 
+  // docs/security/ was owned by NO lane, so a PR that changes crypto and
+  // documents it in docs/security/CRYPTO_ARCHITECTURE.md was a guaranteed
+  // scope=NO-VERDICT (#1811: one line of that file, no scope:* label could
+  // reach it). Operator ruling: the shared lane owns it. Judged by authority
+  // moved: documentation only, no code path, and a crypto architecture document
+  // is squarely shared-domain.
+  describe('docs/security/ is owned by the shared lane and no one else', () => {
+    let all: Record<string, LaneScope>
+
+    beforeAll(async () => {
+      all = await loadLaneScopes(process.cwd())
+    })
+
+    const lane = (name: string): LaneScope => {
+      const s = all[name]
+      if (!s) throw new Error(`expected lane fragment for ${name}`)
+      return s
+    }
+
+    it('shared may edit docs/security/CRYPTO_ARCHITECTURE.md', () => {
+      expect(checkScope(['docs/security/CRYPTO_ARCHITECTURE.md'], lane('shared'), []).strayed).toEqual([])
+    })
+
+    it('shared owns every file that exists under docs/security/', () => {
+      const files = trackedFiles().filter((f) => f.startsWith('docs/security/'))
+      expect(files.length).toBeGreaterThan(0)
+      expect(checkScope(files, lane('shared'), []).strayed).toEqual([])
+    })
+
+    // Break-it: the grant moves ONE directory to ONE lane. Every other lane
+    // must still stray on it, and shared must still stray on unowned paths.
+    it.each(['ios', 'android', 'desktop', 'backend', 'infra'])('%s still may not touch docs/security/', (name) => {
+      const f = ['docs/security/CRYPTO_ARCHITECTURE.md', 'docs/security/THREAT_MODEL.md']
+      expect(checkScope(f, lane(name), []).strayed).toEqual(f)
+    })
+
+    it('shared was not handed docs/ as a whole', () => {
+      expect(lane('shared').owned).not.toContain('docs/')
+      expect(lane('shared').owned).toContain('docs/security/')
+      expect(checkScope(['docs/QUICKSTART.md', 'docs/epics/EP01.md', 'docs/superpowers/specs/x.md'], lane('shared'), []).strayed).toEqual([
+        'docs/QUICKSTART.md',
+        'docs/epics/EP01.md',
+        'docs/superpowers/specs/x.md',
+      ])
+    })
+
+    it('shared still strays on a genuinely unowned path', () => {
+      expect(checkScope(['some-unowned-dir/file.md'], lane('shared'), []).strayed).toEqual(['some-unowned-dir/file.md'])
+    })
+  })
+
   // --- Lane boundary fix, 2026-09-22: four PRs blocked on the same
   // fleet/verify scope question across three lanes (#890 desktop, #887/#847/
   // #908 backend). Read from the repo's own configuration and structure
