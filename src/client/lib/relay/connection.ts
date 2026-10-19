@@ -6,6 +6,7 @@
  * - Ed25519 challenge-response authentication (via Rust CryptoState)
  * - Subscription management
  * - Event decryption and routing
+ * - Verified remote wipe (top-level `device:wipe` frames only)
  * - Reconnection with exponential backoff + jitter
  * - Time-bucketed event deduplication
  */
@@ -17,6 +18,7 @@ import { LABEL_WS_CHALLENGE } from '@shared/crypto-labels'
 import { wsServerMessageSchema } from '@protocol/schemas/ws-messages'
 import type { WsEventMessage, WsServerMessage } from '@protocol/schemas/ws-messages'
 import type { LlamenosEvent, RelayState, RelayEventHandler } from './types'
+import { executeDeviceWipe, isDeviceWipeFrame, verifyDeviceWipe } from './device-wipe'
 
 export interface RelayConnectionOptions {
   relayUrl: string
@@ -100,6 +102,8 @@ export class RelayConnection {
   private authenticated = false
   /** Timestamp when connection was lost, used for replay on reconnect */
   private disconnectedAt: number | null = null
+  /** Set once a verified wipe has been accepted; later wipe frames are no-ops. */
+  private wiped = false
 
   constructor(options: RelayConnectionOptions) {
     this.relayUrl = options.relayUrl
@@ -217,7 +221,11 @@ export class RelayConnection {
   private setupListeners(ws: WebSocket): void {
     ws.addEventListener('message', (msg) => {
       try {
-        const data = JSON.parse(typeof msg.data === 'string' ? msg.data : '')
+        const data: unknown = JSON.parse(typeof msg.data === 'string' ? msg.data : '')
+        if (isDeviceWipeFrame(data)) {
+          void this.handleDeviceWipeFrame(data)
+          return
+        }
         const parsed = wsServerMessageSchema.safeParse(data)
         if (!parsed.success) return
 
@@ -320,13 +328,6 @@ export class RelayConnection {
     const content = parseEventContent(decrypted)
     if (!content) return
 
-    // Handle device wipe command before routing to subscribers
-    if (content.type === 'device:wipe') {
-      const reason = (content as { type: string; reason?: string }).reason ?? 'admin-erasure'
-      this.handleDeviceWipe(reason as 'user-erasure' | 'device-revocation' | 'admin-erasure')
-      return
-    }
-
     // Route to matching subscribers
     for (const sub of this.subscriptions.values()) {
       if (sub.hubId === msg.hubId && sub.kinds.includes(msg.kind)) {
@@ -339,27 +340,33 @@ export class RelayConnection {
     }
   }
 
-  private handleDeviceWipe(reason: 'user-erasure' | 'device-revocation' | 'admin-erasure'): void {
-    // Zero cryptographic keys immediately
-    import('../key-manager').then(({ wipeKey }) => {
-      try { wipeKey() } catch { /* already wiped or locked */ }
-    }).catch(() => {})
+  /**
+   * A remote wipe frame. Executed only once {@link verifyDeviceWipe} accepts it —
+   * server signature over this device's own authenticated pubkey, explicit target,
+   * freshness. Anything else is dropped: a forged or misdirected wipe must not
+   * destroy keys. A wipe is never derived from encrypted hub-event content.
+   */
+  private async handleDeviceWipeFrame(frame: unknown): Promise<void> {
+    // The server only sends wipes to sockets it has authenticated; before that, the
+    // pubkey we would verify against is not one the server has bound to this socket.
+    if (!this.authenticated || this.wiped) return
 
-    // Clear all storage
-    try { localStorage.clear() } catch { /* storage unavailable */ }
-    try { sessionStorage.clear() } catch { /* storage unavailable */ }
+    const command = await verifyDeviceWipe(frame, {
+      devicePubkey: this.devicePubkey,
+      serverPubkey: this.serverPubkey,
+      nowMs: Date.now(),
+      verify: ed25519Verify,
+    })
+    if (!command) {
+      console.error('[relay] Rejected unverifiable device:wipe frame')
+      return
+    }
+    if (this.wiped) return
+    this.wiped = true
 
-    // Clear IndexedDB (fire-and-forget)
-    try {
-      if (typeof indexedDB !== 'undefined') {
-        indexedDB.databases?.().then(dbs => {
-          dbs.forEach(db => { if (db.name) indexedDB.deleteDatabase(db.name) })
-        }).catch(() => {})
-      }
-    } catch { /* IndexedDB unavailable */ }
-
-    // Notify the UI
-    window.dispatchEvent(new CustomEvent('device:wiped', { detail: { reason } }))
+    // Stop reconnecting: the key this connection authenticates with is about to go.
+    this.close()
+    await executeDeviceWipe(command)
   }
 
   private sendSubscription(sub: Subscription): void {
