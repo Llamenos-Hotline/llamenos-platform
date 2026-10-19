@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { request } from '@/lib/api'
+import { registerCredential } from '@/lib/webauthn'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -247,8 +248,13 @@ export async function deletePasskey(credentialId: string) {
   await request(`/webauthn/credentials/${credentialId}`, { method: 'DELETE' })
 }
 
-export async function registerPasskey() {
-  return request<{ ok: boolean }>('/webauthn/register', { method: 'POST' })
+/**
+ * Run the full WebAuthn registration ceremony (`/webauthn/register/options`, the
+ * authenticator prompt, then `/webauthn/register/verify`). There is no single
+ * `/webauthn/register` route — the ceremony lives in `lib/webauthn.ts`.
+ */
+export async function registerPasskey(label: string): Promise<void> {
+  await registerCredential(label)
 }
 
 // ── Mutations (side-effect helpers for invalidating caches) ──────────

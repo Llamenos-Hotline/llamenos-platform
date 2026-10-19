@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Key, Pencil, Trash2, Check, Usb, Wifi, ShieldCheck } from 'lucide-react'
+import { useToast } from '@/lib/toast'
 import { usePasskeys, renamePasskey, deletePasskey, registerPasskey } from '@/lib/queries/devices'
 
 const TRANSPORT_ICONS: Record<string, typeof Usb> = {
@@ -20,15 +21,29 @@ export const Route = createFileRoute('/security/passkeys')({
 
 function PasskeysPage() {
   const { t } = useTranslation()
+  const { toast } = useToast()
   const { data: passkeys, isLoading, refetch } = usePasskeys()
+  const [newLabel, setNewLabel] = useState('')
+  const [registering, setRegistering] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
 
   if (isLoading) return <div className="animate-pulse">{t('common.loading')}</div>
 
   async function handleRegister() {
-    await registerPasskey()
-    refetch()
+    const label = newLabel.trim()
+    if (!label) return
+    setRegistering(true)
+    try {
+      await registerPasskey(label)
+      setNewLabel('')
+      toast(t('webauthn.registerSuccess'), 'success')
+      refetch()
+    } catch {
+      toast(t('common.error'), 'error')
+    } finally {
+      setRegistering(false)
+    }
   }
 
   async function handleRename(credentialId: string) {
@@ -44,9 +59,22 @@ function PasskeysPage() {
 
   return (
     <div className="space-y-4" data-testid="security-passkeys">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{t('security.passkeys.title')}</h2>
-        <Button size="sm" onClick={handleRegister}>
+      <h2 className="text-lg font-semibold">{t('security.passkeys.title')}</h2>
+
+      <div className="flex gap-2">
+        <Input
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          placeholder={t('webauthn.label')}
+          className="flex-1"
+          data-testid="passkey-label-input"
+        />
+        <Button
+          size="sm"
+          onClick={handleRegister}
+          disabled={registering || !newLabel.trim()}
+          data-testid="passkey-register"
+        >
           <Key className="h-4 w-4 mr-1" />
           {t('security.passkeys.register')}
         </Button>
