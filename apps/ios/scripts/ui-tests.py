@@ -14,6 +14,9 @@
         the class was never measured there. Tests listed in
         Tests/UI/ci-quarantine.txt are skipped unless --include-quarantined.
 
+    ui-tests.py plan --total N [--mac-shards ...]
+        Print each shard's expected wall-clock under the current timings.
+
     ui-tests.py timings --host mac|hosted REPORT.json...
         Fold `report --json` outputs from shards that ran on HOST into that
         host's section of Tests/UI/ci-timings.json: each class's median, across
@@ -51,12 +54,6 @@ SMOKE_FILE = UI_TESTS_DIR / "ci-smoke.txt"
 NON_GATING_FILE = UI_TESTS_DIR / "ci-non-gating.txt"
 MAC_SHARDS_FILE = UI_TESTS_DIR / "ci-mac-shards.txt"
 TIMINGS_FILE = UI_TESTS_DIR / "ci-timings.json"
-MAC, HOSTED = "mac", "hosted"
-HOSTS = (MAC, HOSTED)
-# Whole-shard wall-clock, hosted over Mac, on the same classes (#1873: 1.51x).
-# Only the fallback for a timings file with no class measured on both hosts;
-# `host_factor` derives the real figure from the file as soon as there is one.
-FALLBACK_HOSTED_FACTOR = 1.5
 MAC, HOSTED = "mac", "hosted"
 HOSTS = (MAC, HOSTED)
 # Whole-shard wall-clock, hosted over Mac, on the same classes (#1873: 1.51x).
