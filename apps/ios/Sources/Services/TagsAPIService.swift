@@ -13,6 +13,8 @@ protocol TagsAPIServiceProtocol {
 
 /// API service for hub tags (E2EE labels — see TagsViewModel for the crypto half).
 /// Wire types are the generated protocol types (`Tag`, `TagResponse`, `CreateTagBody`, …).
+/// `Tag` is the element type of `TagListResponse.tags`; quicktype names it from the
+/// property (`tags` → `Tag`), not `TagListResponseTag` — see `generated/swift/Types.swift`.
 @Observable
 final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
     private let apiService: APIService
