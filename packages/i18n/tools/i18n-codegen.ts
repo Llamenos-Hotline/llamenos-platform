@@ -466,15 +466,15 @@ function main() {
   if (validate && hasErrors) {
     if (totals.unrecordedEnglish > 0) {
       console.error(
-        `${totals.unrecordedEnglish} key(s) carry verbatim English with no deferral record. Either translate them, ` +
-        `or -- if the English is deliberate -- record the deferral in packages/i18n/deferred.json ` +
-        `(\`bun run i18n:codegen --sync-deferral\` rewrites the record from the catalogue).`
+        `${totals.unrecordedEnglish} key(s) carry verbatim English with no deferral record. Fix: run ` +
+        `\`bun run i18n:codegen --sync-deferral\`, then commit packages/i18n/deferred.json. ` +
+        `(If the English is not deliberate, translate the keys first -- the sync records whatever is still English.)`
       )
     }
     if (totals.staleDeferral > 0) {
       console.error(
         `${totals.staleDeferral} key(s) are translated but still listed in deferred.json. ` +
-        `Remove the record entries -- the record must not rot.`
+        `Fix: run \`bun run i18n:codegen --sync-deferral\` to retire them, then commit packages/i18n/deferred.json.`
       )
     }
     process.exit(1)
