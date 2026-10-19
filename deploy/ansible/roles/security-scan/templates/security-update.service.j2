@@ -23,9 +23,11 @@ ExecStart=/bin/bash -c '\
     docker compose -f "$f" up -d --remove-orphans 2>/dev/null; \
   done && \
   \
-  # Wait for health check \
+  # Wait for health check (the app's, so only on a host that runs the app) \
   sleep 10 && \
+{% if 'app' in llamenos_compose_names_here %}
   curl -sf http://localhost:3000/api/health/ready >/dev/null 2>&1 && \
+{% endif %}
   echo "Security update completed successfully" || \
   echo "Warning: health check failed after security update" \
 '

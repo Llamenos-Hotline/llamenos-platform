@@ -107,7 +107,7 @@
       delay: 3
       until: pg_health.rc == 0
       changed_when: false
-      when: "'postgres' in (llamenos_compose_stack_here | map(attribute='name'))"
+      when: "'postgres' in llamenos_compose_names_here"
 
     - name: Wait for application health check
       ansible.builtin.uri:
@@ -119,6 +119,7 @@
       retries: 30
       delay: 5
       until: rollback_health.status == 200
+      when: "'app' in llamenos_compose_names_here"
 
     - name: Verify all declared services are running
       ansible.builtin.shell: |
@@ -140,6 +141,9 @@
           exit 1
         fi
         echo "{{ item.name }}: healthy"
+      args:
+        # pipefail is a bashism; the default /bin/sh is dash on Debian/Ubuntu
+        executable: /bin/bash
       loop: "{{ llamenos_compose_stack_here }}"
       loop_control:
         label: "{{ item.name }}"
@@ -165,7 +169,7 @@
           Rollback completed successfully.
 
           Application: https://{{ domain }}
-          Health check: {{ rollback_health.json | default('OK') }}
+          Health check: {{ rollback_health.json | default('not applicable: no app on this host') }}
 
           The previous version is now running. To view version history:
             ssh {{ deploy_user }}@{{ ansible_host }} 'cat {{ version_tracker_dir }}/history.json'

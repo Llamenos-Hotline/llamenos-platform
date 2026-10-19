@@ -113,6 +113,10 @@
       delay: 5
       until: health_check.status == 200
       ignore_errors: true
+      # Only a host that runs the app has anything on :3000 to probe. Left
+      # ungated, the failed probe on a db-, storage- or proxy-only host would
+      # send a healthy host down the rollback block below.
+      when: "'app' in llamenos_compose_names_here"
       tags: [security-update]
 
     # ─── Rollback on Failure ─────────────────────────────────────
@@ -153,12 +157,14 @@
           retries: 15
           delay: 5
           until: rollback_health.status == 200
+          when: "'app' in llamenos_compose_names_here"
 
         - name: Fail with rollback notice
           ansible.builtin.fail:
             msg: >
               Security update failed and has been rolled back. The previous version is running.
-              Check logs: docker compose -f {{ llamenos_compose_app }} logs app
+              Check logs: docker compose -f {{ llamenos_services_dir }}/<service>/docker-compose.yml logs
+              (services on this host: {{ llamenos_compose_names_here | join(', ') }})
 
     # ─── Post-Update Scan ────────────────────────────────────────
     - name: Run post-update security scan
@@ -182,6 +188,14 @@
         - (health_check.status | default(0) | int) == 200
       ansible.builtin.debug:
         msg: "Security update completed. Health check passed. Application is running at https://{{ domain }}"
+      tags: [security-update]
+
+    - name: Security update completed on a host without the app
+      when: "'app' not in llamenos_compose_names_here"
+      ansible.builtin.debug:
+        msg: >-
+          Security update completed. {{ llamenos_compose_names_here | join(', ') }} recreated;
+          there is no application on this host, so no HTTP health probe applies.
       tags: [security-update]
 
     - name: Clean up old images

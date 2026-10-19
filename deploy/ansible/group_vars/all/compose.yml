@@ -27,13 +27,7 @@ llamenos_compose_caddy: "{{ llamenos_services_dir }}/caddy/docker-compose.yml"
 # must not assume which optional services a given host runs.
 llamenos_compose_glob: "{{ llamenos_services_dir }}/*/docker-compose.yml"
 
-# Per-service `.env` file, rendered next to each Compose file.
-llamenos_compose_env_app: "{{ llamenos_services_dir }}/app/.env.app"
-llamenos_compose_env_postgres: "{{ llamenos_services_dir }}/postgres/.env.postgres"
-llamenos_compose_env_rustfs: "{{ llamenos_services_dir }}/rustfs/.env.rustfs"
-llamenos_compose_env_caddy: "{{ llamenos_services_dir }}/caddy/.env.caddy"
-
-# Where update.yml snapshots each service's directory (Compose file + env)
+# Where update.yml snapshots each service's directory (Compose file + .env.<service>)
 # so rollback.yml and update.yml's own rescue can restore it.
 llamenos_rollback_dir: "{{ app_dir }}/.rollback/services"
 
@@ -51,25 +45,21 @@ llamenos_compose_stack:
     group: llamenos_db
     enabled: "{{ llamenos_postgres_enabled | default(true) }}"
     compose: "{{ llamenos_compose_postgres }}"
-    env: "{{ llamenos_compose_env_postgres }}"
     project_src: "{{ llamenos_compose_postgres | dirname }}"
   - name: rustfs
     group: llamenos_storage
     enabled: "{{ llamenos_rustfs_enabled | default(true) }}"
     compose: "{{ llamenos_compose_rustfs }}"
-    env: "{{ llamenos_compose_env_rustfs }}"
     project_src: "{{ llamenos_compose_rustfs | dirname }}"
   - name: app
     group: llamenos_app
     enabled: "{{ llamenos_app_enabled | default(true) }}"
     compose: "{{ llamenos_compose_app }}"
-    env: "{{ llamenos_compose_env_app }}"
     project_src: "{{ llamenos_compose_app | dirname }}"
   - name: caddy
     group: llamenos_proxy
     enabled: "{{ llamenos_caddy_enabled | default(true) }}"
     compose: "{{ llamenos_compose_caddy }}"
-    env: "{{ llamenos_compose_env_caddy }}"
     project_src: "{{ llamenos_compose_caddy | dirname }}"
 
 # The subset of llamenos_compose_stack that belongs on THIS host, same
@@ -85,3 +75,10 @@ llamenos_compose_stack_here: >-
   {%- endif -%}
   {%- endfor -%}
   {{ here }}
+
+# Names of the services on THIS host. Anything that probes a service from the
+# host itself (the app's /api/health on localhost:3000, pg_isready inside the
+# postgres container) must be gated on membership here: a db-only, storage-only
+# or proxy-only host has no app listening, and an ungated probe fails the play
+# on a healthy host.
+llamenos_compose_names_here: "{{ llamenos_compose_stack_here | map(attribute='name') | list }}"
