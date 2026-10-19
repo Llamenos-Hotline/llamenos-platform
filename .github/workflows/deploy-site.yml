@@ -88,9 +88,20 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # `deploy:site` builds the site, runs the third-party-request gate
-      # (site/scripts/check-no-third-party.ts) and only then publishes with wrangler, so a build
-      # that would leak a visitor to a third party is never published.
+      # The publish below must never run without the privacy gate: a crisis-hotline visitor's
+      # browser contacting a third party is exactly what the site must not do. The gate lives in
+      # the site's own `deploy` script (site/scripts/check-no-third-party.ts, via `check:privacy`);
+      # this step refuses to publish when that wiring is absent, instead of trusting it is there.
+      - name: Require the third-party-request gate in the deploy script
+        run: |
+          deploy=$(jq -r '.scripts.deploy // ""' site/package.json)
+          gate=$(jq -r '.scripts["check:privacy"] // ""' site/package.json)
+          if [ -z "$gate" ] || [ ! -f site/scripts/check-no-third-party.ts ] || [[ "$deploy" != *"check:privacy"* ]]; then
+            echo "::error title=Site not deployed::site/package.json's deploy script does not run the third-party-request gate (check:privacy -> site/scripts/check-no-third-party.ts). Refusing to publish an ungated site."
+            exit 1
+          fi
+
+      # `deploy:site` builds the site, runs that gate, and only then publishes with wrangler.
       - name: Build and deploy site
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
