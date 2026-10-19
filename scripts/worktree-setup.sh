@@ -121,8 +121,7 @@ build_crypto_server() {
   fi
 
   info "Building server crypto..."
-  cd "$crypto_dir"
-  cargo build --release
+  "$crypto_dir/scripts/build-server.sh"
   ok "Server crypto built"
 }
 
