@@ -35,6 +35,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
 
     // MARK: - Case comments
 
+    @MainActor
     func testAddCommentWrapsTheCommentForEveryAdminReader() async throws {
         let (crypto, authorPubkey, adminPubkey) = try makeAuthorAndAdminKeys()
         let apiService = makeAPIService(cryptoService: crypto)
@@ -68,6 +69,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testAddCommentWithNoAdminStillWrapsForTheAuthor() async throws {
         let (crypto, authorPubkey, _) = try makeAuthorAndAdminKeys()
         let apiService = makeAPIService(cryptoService: crypto)
@@ -89,6 +91,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
 
     // MARK: - Event details
 
+    @MainActor
     func testCreateEventWrapsTheDetailsForEveryAdminReader() async throws {
         let (crypto, authorPubkey, adminPubkey) = try makeAuthorAndAdminKeys()
         let apiService = makeAPIService(cryptoService: crypto)
