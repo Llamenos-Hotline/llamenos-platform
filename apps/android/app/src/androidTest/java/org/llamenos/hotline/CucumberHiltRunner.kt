@@ -1,5 +1,6 @@
 package org.llamenos.hotline
 
+import android.util.Log
 import io.cucumber.android.runner.CucumberAndroidJUnitRunner
 import io.cucumber.junit.CucumberOptions
 
@@ -41,5 +42,36 @@ class CucumberHiltRunner : CucumberAndroidJUnitRunner() {
             arguments.putString("cucumber.features", shardFeatures)
         }
         super.onCreate(arguments)
+    }
+
+    override fun onStart() {
+        logAllThreadStacksOnCrash()
+        super.onStart()
+    }
+
+    /**
+     * The app and the test code share this process, so an app crash kills the whole
+     * instrumentation run and logcat names only the thread that threw. That is not enough
+     * for Compose's "performMeasureAndLayout called during measure layout" (#1825): the
+     * throwing main thread is merely the *second* party, and the thread that was inside a
+     * layout pass at the time is exactly the one the trace omits. Log every thread's stack
+     * at the moment of the crash so the next occurrence names it.
+     */
+    private fun logAllThreadStacksOnCrash() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { crashed, error ->
+            runCatching {
+                Log.e(CRASH_TAG, "Uncaught ${error::class.java.name} on '${crashed.name}': ${error.message}")
+                for ((thread, frames) in Thread.getAllStackTraces()) {
+                    if (thread === crashed) continue
+                    Log.e(CRASH_TAG, "--- '${thread.name}' (${thread.state}) ---\n" + frames.joinToString("\n") { "    at $it" })
+                }
+            }
+            previous?.uncaughtException(crashed, error)
+        }
+    }
+
+    private companion object {
+        const val CRASH_TAG = "CrashThreadDump"
     }
 }
