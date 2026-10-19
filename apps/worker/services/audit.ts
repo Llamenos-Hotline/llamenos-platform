@@ -221,11 +221,23 @@ export class AuditService {
     const row = await deps.keyStore.ensureAuditUserKey(userPubkey, async () => {
       const key = randomBytes(32)
       const recipients = await deps.resolveAdminRecipients()
-      // wrapAuditKeyForAdmins throws on an empty recipient list, so a key is
-      // never silently stored unreachable by admins.
+      // Loud-but-stored, matching CallsService.sealCallMetadata: an audit
+      // write must not fail (or be dropped) because no admin recipient is
+      // registered yet — e.g. the very first bootstrap actions. The key is
+      // still server-sealed, so details are encrypted at rest and readable
+      // through the admin API; only the offline admin-envelope path is
+      // missing, and the error says so.
+      if (recipients.length === 0) {
+        logger.error(
+          'audit user key stored WITHOUT admin envelopes: no admin HPKE recipient resolvable ' +
+          '(configure ADMIN_DECRYPTION_PUBKEY and/or register an admin device). ' +
+          'Details are encrypted at rest but no admin can unwrap the key offline.',
+          { userPubkey },
+        )
+      }
       return {
         encryptedKey: bytesToHex(serverEncrypt(key, LABEL_AUDIT_USER_KEY_WRAP, deps.serverSecret)),
-        adminEnvelopes: await wrapAuditKeyForAdmins(key, recipients, userPubkey),
+        adminEnvelopes: recipients.length === 0 ? [] : wrapAuditKeyForAdmins(key, recipients, userPubkey),
       }
     })
     return serverDecrypt(hexToBytes(row.encryptedKey), LABEL_AUDIT_USER_KEY_WRAP, deps.serverSecret)

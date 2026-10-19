@@ -216,6 +216,23 @@ describe('per-user audit key — wired', () => {
     expect(verify.firstBrokenEntry?.reason).toContain('undecryptable')
   })
 
+  it('with no admin recipient the entry is still written, encrypted at rest, and readable via the service', async () => {
+    const audit = wiredAudit([])
+    const user = 'ee'.repeat(32)
+
+    // Must not throw: a bootstrap-time audit write cannot depend on an admin
+    // recipient existing yet.
+    const entry = await audit.log('noteCreated', user, { noteId: 'n-norecip-7' }, 'hub-ak-6')
+
+    const stored = await rawEntry(entry.id)
+    expect(typeof (stored!.details as Record<string, unknown>)[MARKER]).toBe('string')
+    expect(JSON.stringify(stored!.details)).not.toContain('n-norecip-7')
+    expect((await keyRow(user))!.adminEnvelopes).toEqual([])
+
+    const { entries } = await audit.list('hub-ak-6')
+    expect(entries.find((e) => e.id === entry.id)?.details).toEqual({ noteId: 'n-norecip-7' })
+  })
+
   it('never encrypts system entries and never creates a key row for them', async () => {
     const admin = reader()
     const audit = wiredAudit([admin.pubkey])
