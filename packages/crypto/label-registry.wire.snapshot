@@ -115,3 +115,4 @@
 97	llamenos:device-auth-no-nonce:v1
 98	llamenos:sip-volunteer-secret:v1
 99	llamenos:device-provision-bundle:v1
+100	llamenos:device-provision-claim:v1
