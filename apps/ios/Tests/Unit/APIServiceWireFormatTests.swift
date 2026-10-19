@@ -264,12 +264,12 @@ final class APIServiceWireFormatTests: XCTestCase {
 
             // POST /api/reports — createReportBodySchema. Used to need a hand-rolled
             // plain-encoder `rawBody:` detour; now goes through `body:` like everything else.
-            ("createTypedReport", CreateTypedReportRequest(
-                title: "Wire probe",
+            ("createTypedReport", CreateReportBody(
                 category: nil,
-                reportTypeId: "33333333-3333-4333-8333-333333333333",
                 encryptedContent: Self.ct,
-                readerEnvelopes: [Self.recipient]
+                readerEnvelopes: [Self.admin],
+                reportTypeID: "33333333-3333-4333-8333-333333333333",
+                title: "Wire probe"
             )),
 
             // POST /api/reports/:id/assign — assignReportBodySchema requires `assignedTo`.
