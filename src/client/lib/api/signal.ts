@@ -1,4 +1,5 @@
 import { request, hp, ApiError } from './client'
+import { netFetch } from '../net'
 import type {
   SignalRegistrationState,
   SignalAccountInfo,
@@ -8,6 +9,9 @@ import type {
   SignalIdentityRecord,
   SignalQueueStats,
   SignalContactRecord,
+  SignalContactRegistration,
+  SidecarTokenResponse,
+  NotifierRegisterPayload,
 } from '@protocol/schemas/signal-notification'
 
 export type { SignalRegistrationState }
@@ -84,26 +88,79 @@ export async function getSignalContact(): Promise<SignalContactRecord | null> {
   }
 }
 
-export async function registerSignalContact(body: {
-  identifierHash: string
-  identifierCiphertext: string
-  identifierEnvelope: { recipientPubkey: string; encryptedKey: string }[]
-  identifierType: 'phone' | 'username'
-}) {
+export async function registerSignalContact(body: SignalContactRegistration) {
   return request<{ ok: boolean }>('/signal-notification/contact', {
     method: 'PUT',
     body: JSON.stringify(body),
   })
 }
 
-export async function registerSignalContactWithSidecar(body: {
-  plaintextIdentifier: string
-  identifierType: 'phone' | 'username'
-}) {
-  return request<{ ok: boolean }>('/signal-notification/contact/sidecar-register', {
+/** Mint the short-lived token that authorises one registration against the sidecar. */
+export async function getSignalSidecarToken() {
+  return request<SidecarTokenResponse>('/signal-notification/contact/sidecar-token', {
     method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** Body of the sidecar's `POST /api/register-client` — the one place plaintext is allowed to go. */
+type SidecarRegisterBody = Pick<NotifierRegisterPayload, 'plaintextIdentifier' | 'identifierType'> & {
+  token: string
+}
+
+/**
+ * Hand the plaintext identifier to the sidecar — never to the app server. The
+ * app server only ever holds the HMAC hash and an HPKE ciphertext of it.
+ *
+ * The app's session credentials are deliberately NOT attached: the sidecar
+ * authenticates this call by `token` alone, and the app's `Authorization` header
+ * has no business reaching a different service. Goes through `netFetch`, so a
+ * packaged build still only reaches an origin the Rust allowlist permits.
+ */
+async function postToSidecar(sidecarUrl: string, body: SidecarRegisterBody): Promise<void> {
+  const res = await netFetch(`${sidecarUrl.replace(/\/+$/, '')}/api/register-client`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  if (!res.ok) throw new ApiError(res.status, await res.text())
+}
+
+/**
+ * Register a Signal contact so that it either ends up registered everywhere or
+ * nowhere.
+ *
+ * 1. Store the hash + ciphertext on the app server (the sidecar token is bound to
+ *    that stored hash, so this has to come first).
+ * 2. Get a sidecar token and register the plaintext with the sidecar directly.
+ *
+ * If step 2 fails for any reason, step 1 is rolled back. Leaving the hash stored
+ * would show a contact as "registered" that the sidecar cannot deliver to. If the
+ * rollback itself fails the error says so, because the caller is then looking at
+ * exactly that half-registered state and must not treat it as a clean failure.
+ */
+export async function registerSignalContactEverywhere(
+  contact: SignalContactRegistration,
+  plaintextIdentifier: string,
+): Promise<void> {
+  await registerSignalContact(contact)
+  try {
+    const { token, sidecarUrl } = await getSignalSidecarToken()
+    await postToSidecar(sidecarUrl, {
+      token,
+      plaintextIdentifier,
+      identifierType: contact.identifierType,
+    })
+  } catch (err) {
+    try {
+      await deleteSignalContact()
+    } catch (rollbackErr) {
+      throw new Error('Signal registration failed and could not be rolled back', {
+        cause: new AggregateError([err, rollbackErr]),
+      })
+    }
+    throw err
+  }
 }
 
 export async function deleteSignalContact() {
