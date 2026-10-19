@@ -276,9 +276,11 @@ final class EventsViewModel {
             guard envelopes.contains(where: { $0.pubkey == ourPubkey }) else { continue }
 
             do {
+                // The generated list item carries `SharedAdminEnvelope`s; the message
+                // reader takes the same three fields as `RecipientEnvelope`s.
                 let plaintext = try cryptoService.decryptMessage(
                     encryptedContent: encrypted,
-                    readerEnvelopes: envelopes
+                    readerEnvelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
                 )
                 if let data = plaintext.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
