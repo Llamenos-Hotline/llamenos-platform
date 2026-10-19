@@ -39,6 +39,7 @@ export function SpamSection({ settings, onChange, onConfirmToggle, expanded, onT
           </div>
         </div>
         <Switch
+          data-testid="spam-captcha-toggle"
           checked={settings.voiceCaptchaEnabled}
           onCheckedChange={(checked) => onConfirmToggle('captcha', checked)}
         />
