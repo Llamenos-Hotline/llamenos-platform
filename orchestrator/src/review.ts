@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
-import { chmod, copyFile, link, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, cp, link, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import type { EngineId, Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { gh } from './gh.js'
+import { fleetRuntimeRoot } from './provenance.js'
 import { HIGH_IMPACT_PATHS } from './impact.js'
 
 const execFileAsync = promisify(execFile)
@@ -1870,6 +1871,95 @@ export async function exportReviewSnapshot(worktree: string, headSha: string): P
   return { dir, cleanup }
 }
 
+/** Where `bun run codegen` writes — gitignored, so `git archive` never carries it. */
+const GENERATED_PROTOCOL_DIR = 'packages/protocol/generated'
+
+/** What the reviewer is told about the generated code in its export. */
+export type GeneratedCodeStatus =
+  /** Not this repository's tree (no protocol package) — nothing to say. */
+  | { kind: 'not-applicable' }
+  | { kind: 'provisioned' }
+  | { kind: 'unavailable'; reason: string }
+
+/**
+ * Runs the codegen in the TRUSTED checkout (never in an export) — the seam
+ * `provisionGeneratedCode` exists to test around.
+ */
+export type RunCodegen = (trustedRoot: string) => Promise<void>
+
+const runTrustedCodegen: RunCodegen = async (trustedRoot) => {
+  await execFileAsync('bun', ['run', 'codegen'], {
+    cwd: trustedRoot, env: allowlistedEnv(), timeout: 180_000, maxBuffer: 16 * 1024 * 1024,
+  })
+}
+
+/**
+ * Puts the generated protocol types into a review export (#1763, #1844,
+ * #1736). `packages/protocol/generated/` is gitignored, so `git archive`
+ * never carries it, and a reviewer reading an export with no generated types
+ * in it invents names that do not exist — and rejects real PRs over them (a
+ * false REJECTED on #1811, claiming a `Tag` type was nonexistent when codegen
+ * emits it).
+ *
+ * The codegen is NOT run inside the export. The export is the PR's tree, and
+ * running its `codegen.ts` (or importing its schemas, which are TypeScript)
+ * would execute the judged commit's own code inside its own judge — exactly
+ * what the gate's first catch (#665) closed and what `fleet-review.yml`'s
+ * header rules out. It runs in the TRUSTED checkout this process runs from,
+ * and the output is copied across as data. The consequence, stated plainly:
+ * the generated files reflect the trusted checkout's schemas (the PR's base),
+ * not the PR's — a type a PR's own schema change introduces is in the diff
+ * but not in `generated/`, and `generatedCodeNote` says so.
+ *
+ * Never throws: failing to produce generated code must not cost the review,
+ * only its context. It comes back as `unavailable`, which the note turns into
+ * an instruction not to treat missing generated types as evidence.
+ */
+export async function provisionGeneratedCode(
+  exportDir: string,
+  trustedRoot: string = fleetRuntimeRoot(),
+  runCodegen: RunCodegen = runTrustedCodegen,
+): Promise<GeneratedCodeStatus> {
+  if (!existsSync(join(exportDir, 'packages/protocol/schemas'))) return { kind: 'not-applicable' }
+  try {
+    await runCodegen(trustedRoot)
+    const generated = join(trustedRoot, GENERATED_PROTOCOL_DIR)
+    if (!existsSync(generated)) {
+      return { kind: 'unavailable', reason: `codegen ran but wrote no ${GENERATED_PROTOCOL_DIR}/` }
+    }
+    const dest = join(exportDir, GENERATED_PROTOCOL_DIR)
+    await rm(dest, { recursive: true, force: true })
+    await cp(generated, dest, { recursive: true, dereference: false })
+    // Same invariant as every other part of the export: no links, no agent config.
+    await stripReviewerControlFiles(dest)
+    return { kind: 'provisioned' }
+  } catch (e) {
+    return { kind: 'unavailable', reason: e instanceof Error ? e.message.split('\n')[0] ?? 'codegen failed' : 'codegen failed' }
+  }
+}
+
+/** The sentence block prepended to a reviewer's prompt for a given status. */
+export function generatedCodeNote(status: GeneratedCodeStatus): string {
+  switch (status.kind) {
+    case 'not-applicable':
+      return ''
+    case 'provisioned':
+      return (
+        `NOTE ON GENERATED CODE: \`${GENERATED_PROTOCOL_DIR}/\` in the export is generated output ` +
+        '(it is gitignored, so it is in no diff). It was produced by the trusted base checkout from the ' +
+        "BASE commit's schemas — not the PR's. A type the PR's own schema change introduces is therefore " +
+        'in the diff but not in that directory: read the schema change instead. Do not report a ' +
+        'type, import or symbol as nonexistent without searching that directory first.\n\n'
+      )
+    case 'unavailable':
+      return (
+        `NOTE ON GENERATED CODE: \`${GENERATED_PROTOCOL_DIR}/\` (gitignored generated types) could NOT ` +
+        `be produced for this export (${status.reason}). Its absence says nothing about the PR: do not ` +
+        'report any type, import or symbol that would come from generated code as nonexistent or invented.\n\n'
+      )
+  }
+}
+
 /**
  * An ALLOWLIST, not a denylist: a denylist only stops the credentials
  * someone remembered to name, and the next one added to the orchestrator's
@@ -2539,6 +2629,12 @@ export async function invokeVerifierEngine(input: {
   // the order.
   const claudeModel = input.model ?? reviewerInvocationForEngine('claude').model
   const primary = reviewPrimaryEngine()
+  // The one choke point every reviewer's export passes through (the gate's
+  // head, a profile review, review-and-merge, the operator-box worktree
+  // path), so no caller can hand a reviewer a tree without its generated
+  // types. See `provisionGeneratedCode` for why this runs in the trusted
+  // checkout and never in the export.
+  const prompt = generatedCodeNote(await provisionGeneratedCode(input.exportDir)) + input.prompt
   const projectRoot = await mkdtemp(join(tmpdir(), 'llamenos-fleet-reviewer-root-'))
   // The claude reviewer's HOME is this gate's, never the runner's — see
   // `prepareReviewerHome`. Created before the call and removed in the
@@ -2561,8 +2657,8 @@ export async function invokeVerifierEngine(input: {
 
     // ── Position 1: the PRIMARY engine ──
     const primaryRun = primary === 'kimi'
-      ? await runKimiOnce({ prompt: input.prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: kimiEnv, timeoutMs: input.timeoutMs })
-      : await runClaudeOnce({ model: claudeModel, prompt: input.prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: claudeEnv, maxTurns: input.maxTurns, timeoutMs: input.timeoutMs })
+      ? await runKimiOnce({ prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: kimiEnv, timeoutMs: input.timeoutMs })
+      : await runClaudeOnce({ model: claudeModel, prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: claudeEnv, maxTurns: input.maxTurns, timeoutMs: input.timeoutMs })
     if (primaryRun.reached) return primaryRun
 
     // ── An exhausted budget: salvage, never cross ──
@@ -2589,8 +2685,8 @@ export async function invokeVerifierEngine(input: {
       `${primaryRun.assistantText}\n${primaryRun.diagnostics}`)) return primaryRun
 
     const fallbackRun = primary === 'kimi'
-      ? await runClaudeOnce({ model: claudeModel, prompt: input.prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: claudeEnv, maxTurns: input.maxTurns, timeoutMs: input.timeoutMs })
-      : await runKimiOnce({ prompt: input.prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: kimiEnv, timeoutMs: input.timeoutMs })
+      ? await runClaudeOnce({ model: claudeModel, prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: claudeEnv, maxTurns: input.maxTurns, timeoutMs: input.timeoutMs })
+      : await runKimiOnce({ prompt, exportDir: input.exportDir, baseDir: input.baseDir, projectRoot, env: kimiEnv, timeoutMs: input.timeoutMs })
     if (fallbackRun.reached) return { ...fallbackRun, fallbackFor: primary }
 
     // The fallback engine can exhaust too (it got the same brief and the same
