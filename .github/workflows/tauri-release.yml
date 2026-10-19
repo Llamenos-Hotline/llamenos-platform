@@ -22,7 +22,18 @@
 # NEVER publishes an unsigned installer: every installer must carry a minisign
 # signature that verifies against plugins.updater.pubkey, or the job fails.
 #
-# Trigger: workflow_dispatch from release.yml with version input.
+# Trigger: workflow_call from release.yml (the normal path), or workflow_dispatch
+# for a manual re-run.
+#
+# Third output, only when `release-tag` is set (always, when called from
+# release.yml): version-free ALIASES of the installers are attached to the
+# still-DRAFT `v<version>` release. A draft accepts uploads where a published
+# release is immutable, which is why release.yml holds `v<version>` as a draft
+# until this workflow has finished. The aliases (`llamenos-linux-x86_64.AppImage`,
+# `llamenos-windows-x64.msi`, ...) carry no version in the file name, so
+# `https://github.com/<repo>/releases/latest/download/<alias>` is a permanent,
+# never-stale download link. The versioned `desktop-v<version>` release above is
+# still published unchanged.
 # Epics 87, 97: Desktop Auto-Updater & Release Pipeline.
 #
 # Flatpak: TODO — offline sources (cargo-sources.json, node-sources.json)
@@ -33,17 +44,37 @@
 name: Desktop Release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        type: string
+        required: true
+      release-tag:
+        description: 'Draft release (v<version>) to attach version-free installer aliases to; also the git ref that is built'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
       version:
         description: 'Version to release (e.g., 1.0.0)'
         required: true
+      release-tag:
+        description: 'Draft release (v<version>) to attach version-free installer aliases to; empty = publish desktop-v<version> only'
+        required: false
+        default: ''
 
 permissions: {}  # deny-all; per-job permissions below
 
 env:
-  # Safely capture workflow_dispatch input at top level — never interpolate directly in run: blocks
-  INPUT_VERSION: ${{ github.event.inputs.version }}
+  # Safely capture the workflow_dispatch/workflow_call input at top level — never
+  # interpolate directly in run: blocks. `inputs.*` is populated for both triggers;
+  # `github.event.inputs.*` is not (under workflow_call github.event is the CALLER's).
+  INPUT_VERSION: ${{ inputs.version }}
+  # Empty on a standalone dispatch. When set, it is the git ref every job checks out
+  # (a called workflow otherwise inherits the caller's merge-commit ref, not the tag).
+  RELEASE_TAG: ${{ inputs.release-tag }}
 
 jobs:
   build:
@@ -69,6 +100,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       # Fail fast and loudly if the updater signing key is unavailable. Without it
       # every installer would be unsigned; we never publish those.
@@ -439,6 +472,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Validate version format
         env:
@@ -449,6 +484,9 @@ jobs:
             exit 1
           fi
           echo "VERSION=${RELEASE_VERSION}" >> "$GITHUB_ENV"
+          # The commit actually built. Not `github.sha`: under workflow_call that is the
+          # CALLER's sha (release.yml's PR merge ref), not the tag this job checked out.
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "Releasing v${RELEASE_VERSION}"
 
       # Immutable releases: once `desktop-v<version>` is published its assets can
@@ -656,7 +694,7 @@ jobs:
       # ── Build provenance metadata ──────────────────────────────
       - name: Generate build-info.json
         env:
-          MERGE_SHA: ${{ github.sha }}
+          MERGE_SHA: ${{ env.SOURCE_SHA }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -840,7 +878,7 @@ jobs:
           git commit -m "desktop: v${VERSION} build metadata
 
           Workflow: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          Commit: ${{ github.sha }}"
+          Commit: ${SOURCE_SHA}"
 
           MAX_ATTEMPTS=5
           attempt=1
@@ -994,7 +1032,7 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --draft \
               --latest=false \
-              --target "${GITHUB_SHA}" \
+              --target "${SOURCE_SHA}" \
               --title "Desktop v${VERSION}" \
               --notes-file release-body.md \
               "${PRERELEASE_FLAG[@]}" \
@@ -1018,6 +1056,53 @@ jobs:
             echo "::error::Draft release ${TAG} asset set does not match what was uploaded — not publishing."
             diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
             exit 1
+          fi
+
+          # ── Version-free aliases on the DRAFT v<version> release ──
+          # Done BEFORE desktop-v<version> is published: that publish is immutable and
+          # a re-run is refused afterwards, so an alias upload that failed after it
+          # could never be retried. Failing here leaves nothing public.
+          #
+          # The alias is the same bytes under a name with no version in it, so
+          # `releases/latest/download/<alias>` never goes stale. The `.sig` is copied
+          # alongside: a minisign signature covers the file content, not its name, so
+          # it verifies the alias unchanged. The set below is the contract that
+          # release.yml's "Assert the release is complete" guard checks; keep them in
+          # step. The `.app.tar.gz` updater payload is not a download and gets no alias.
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            mkdir -p alias-assets
+            for f in release-assets/*; do
+              base=$(basename "$f")
+              case "$base" in
+                *.AppImage)     alias_name="llamenos-linux-x86_64.AppImage" ;;
+                *.AppImage.sig) alias_name="llamenos-linux-x86_64.AppImage.sig" ;;
+                *.deb)          alias_name="llamenos-linux-x86_64.deb" ;;
+                *.deb.sig)      alias_name="llamenos-linux-x86_64.deb.sig" ;;
+                *.rpm)          alias_name="llamenos-linux-x86_64.rpm" ;;
+                *.rpm.sig)      alias_name="llamenos-linux-x86_64.rpm.sig" ;;
+                *-setup.exe)     alias_name="llamenos-windows-x64-setup.exe" ;;
+                *-setup.exe.sig) alias_name="llamenos-windows-x64-setup.exe.sig" ;;
+                *.msi)          alias_name="llamenos-windows-x64.msi" ;;
+                *.msi.sig)      alias_name="llamenos-windows-x64.msi.sig" ;;
+                *.dmg)          alias_name="llamenos-macos-universal.dmg" ;;
+                *.dmg.sig)      alias_name="llamenos-macos-universal.dmg.sig" ;;
+                *)              continue ;;
+              esac
+              if [ -e "alias-assets/${alias_name}" ]; then
+                echo "::error::Two installers map to the alias ${alias_name} (second: ${base}) — the alias would be ambiguous."
+                exit 1
+              fi
+              cp "$f" "alias-assets/${alias_name}"
+            done
+            echo "--- Aliases for ${RELEASE_TAG} ---"
+            find alias-assets -type f | sort
+            ALIAS_COUNT=$(find alias-assets -type f | wc -l)
+            if [ "$ALIAS_COUNT" -eq 0 ]; then
+              echo "::error::No installer produced an alias — refusing to hand ${RELEASE_TAG} a release with no installable desktop artifact."
+              exit 1
+            fi
+            gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber alias-assets/*
+            echo "Attached ${ALIAS_COUNT} aliases to the draft ${RELEASE_TAG}"
           fi
 
           gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest=false

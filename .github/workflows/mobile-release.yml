@@ -14,32 +14,74 @@
 # tauri-release.yml's `desktop-v<version>` (#957). verify-release-live.yml reads
 # the build metadata from the latest `android-v*` / `ios-v*` release.
 #
-# Trigger: workflow_dispatch only, from release.yml's `dispatch` job (see #712).
+# Trigger: workflow_call from release.yml (Android, the normal path) and
+# workflow_dispatch from release.yml's `dispatch` job (iOS, see #712), or by hand.
 # This workflow used to also declare `on: release: [published]`, but GitHub
 # Releases created by GITHUB_TOKEN (as release.yml does) never fire that event
 # — the anti-recursion rule documented in release.yml's header — so that
 # trigger was provably dead and has been removed (#712). `gh workflow run`
 # always dispatches via workflow_dispatch regardless of how it is invoked.
+#
+# `platform` selects which build runs. release.yml calls this with `android` so the
+# release it is assembling waits for the APK but never for the macOS runner (the
+# IPA is not installable anyway — see the iOS job), then dispatches `ios` separately.
+#
+# `release-tag` (set by release.yml): attach a version-free alias of the APK to the
+# still-DRAFT `v<version>` release, so `releases/latest/download/llamenos-android.apk`
+# is a permanent download link. A published release is immutable, which is why
+# release.yml holds `v<version>` as a draft until this has finished. The
+# `android-v<version>` release above is still published unchanged.
 # Epic 210: Mobile Release Prep, Epic 290: Mobile App Distribution & Update Management.
 
 name: Mobile Release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to release (e.g., 1.2.3)"
+        type: string
+        required: false
+      platform:
+        description: "Which build to run: android, ios or all"
+        type: string
+        required: false
+        default: all
+      release-tag:
+        description: "Draft release (v<version>) to attach the version-free APK alias to; also the git ref that is built"
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
     inputs:
       version:
         description: "Version to release (e.g., 1.2.3)"
         required: false
+      platform:
+        description: "Which build to run"
+        type: choice
+        options: [all, android, ios]
+        default: all
+      release-tag:
+        description: "Draft release (v<version>) to attach the version-free APK alias to; empty = publish android-v<version> only"
+        required: false
+        default: ""
 
 permissions: {}  # deny-all; per-job permissions below
 
 env:
-  # Safely capture workflow_dispatch input at top level
-  INPUT_VERSION: ${{ github.event.inputs.version }}
+  # Safely capture the workflow_dispatch/workflow_call input at top level. `inputs.*`
+  # is populated for both triggers; `github.event.inputs.*` is not (under
+  # workflow_call github.event is the CALLER's).
+  INPUT_VERSION: ${{ inputs.version }}
+  # Empty on a standalone dispatch. When set, it is the git ref every job checks out
+  # (a called workflow otherwise inherits the caller's merge-commit ref, not the tag).
+  RELEASE_TAG: ${{ inputs.release-tag }}
 
 jobs:
   # ─── Android Release ─────────────────────────────────────────
   build-android:
+    if: ${{ inputs.platform != 'ios' }}
     runs-on: ubuntu-latest
     name: Build (Android)
     timeout-minutes: 30
@@ -62,6 +104,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Resolve version
         id: version
@@ -379,7 +423,7 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --draft \
               --latest=false \
-              --target "${GITHUB_SHA}" \
+              --target "$(git rev-parse HEAD)" \
               --title "Android v${VERSION}" \
               --notes-file release-body.md \
               ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
@@ -405,11 +449,28 @@ jobs:
             exit 1
           fi
 
+          # ── Version-free alias on the DRAFT v<version> release ──
+          # Done BEFORE android-v<version> is published: that publish is immutable and a
+          # re-run is refused afterwards, so an alias upload that failed after it could
+          # never be retried. Failing here leaves nothing public.
+          #
+          # Same bytes under a name with no version in it, so
+          # `releases/latest/download/llamenos-android.apk` never goes stale. The
+          # name is the contract that release.yml's "Assert the release is complete"
+          # guard checks; keep them in step.
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            mkdir -p alias-assets
+            cp "$APK" alias-assets/llamenos-android.apk
+            gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber alias-assets/llamenos-android.apk
+            echo "Attached llamenos-android.apk to the draft ${RELEASE_TAG}"
+          fi
+
           gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest=false
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
   # ─── iOS Release ──────────────────────────────────────────────
   build-ios:
+    if: ${{ inputs.platform != 'android' }}
     runs-on: macos-latest
     name: Build (iOS)
     timeout-minutes: 45
@@ -422,6 +483,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Resolve version
         id: version
@@ -716,7 +779,7 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --draft \
               --latest=false \
-              --target "${GITHUB_SHA}" \
+              --target "$(git rev-parse HEAD)" \
               --title "iOS v${VERSION}" \
               --notes-file release-body.md \
               ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
