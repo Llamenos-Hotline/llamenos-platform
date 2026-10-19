@@ -16,6 +16,11 @@ kamailio_http_port: 5060
 kamailio_tls_port: 5061
 kamailio_jsonrpc_port: 5065
 
+# Module directory baked into kamailio.cfg's mpath. Debian bookworm x86_64
+# path; override for other arches (e.g. aarch64:
+# /usr/lib/aarch64-linux-gnu/kamailio/modules/).
+kamailio_modules_path: /usr/lib/x86_64-linux-gnu/kamailio/modules/
+
 # Dispatcher configuration (PBX backends)
 # List of SIP URIs for PBX backends to load balance across
 kamailio_dispatcher_targets: []

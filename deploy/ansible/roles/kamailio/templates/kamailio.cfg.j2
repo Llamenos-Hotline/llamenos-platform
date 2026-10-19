@@ -47,7 +47,7 @@ listen=tls:0.0.0.0:{{ kamailio_tls_port }}
 {% endif %}
 
 # === Modules ===
-mpath="/usr/lib/x86_64-linux-gnu/kamailio/modules/"
+mpath="{{ kamailio_modules_path }}"
 
 loadmodule "jsonrpcs.so"
 loadmodule "kex.so"
