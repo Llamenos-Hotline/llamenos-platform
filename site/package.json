@@ -6,6 +6,7 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "test": "bun test",
     "deploy": "astro build && bunx wrangler pages deploy dist --project-name llamenos-site"
   },
   "dependencies": {

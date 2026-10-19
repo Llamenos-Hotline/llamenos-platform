@@ -1,0 +1,116 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { siteConfig } from '../config';
+import { parseChangelog, tokenizeEntry } from '../utils/changelog';
+import changelogSource from '../../../CHANGELOG.md?raw';
+
+// Rendered at BUILD time from the repo's CHANGELOG.md. There is deliberately
+// no client-side fetch to api.github.com: this site may be read by someone in
+// crisis, or by a volunteer whose link to the project is itself sensitive, and
+// a browser request to GitHub would tell GitHub (and anyone watching that
+// connection) that this browser loaded a crisis-hotline page. It would also
+// need the CSP widened and would hit GitHub's 60/hour unauthenticated limit.
+// The links below are plain anchors: nothing contacts GitHub until clicked.
+const releases = parseChangelog(changelogSource);
+if (releases.length === 0) {
+  throw new Error('CHANGELOG.md parsed to zero releases — the changelog page would render empty.');
+}
+
+const { github } = siteConfig;
+const RELEASES = github.releasesUrl;
+// GitHub redirects /releases/latest to the newest release, and release assets
+// are version-independent, so none of these URLs can go stale or carry a version.
+const LATEST = `${RELEASES}/latest`;
+const latestAsset = (name: string) => `${LATEST}/download/${name}`;
+const VERIFY_DOC = `${github.url}/blob/main/docs/REPRODUCIBLE_BUILDS.md`;
+const VERIFY_SCRIPT = `${github.url}/blob/main/scripts/verify-build.sh`;
+
+const artifacts = [
+  { name: 'CHECKSUMS.txt', note: 'SHA-256 of every build output' },
+  { name: 'CHECKSUMS.txt.cosign.sig', note: 'cosign signature over CHECKSUMS.txt' },
+  { name: 'provenance.json', note: 'SLSA build provenance' },
+  { name: 'sbom.cdx.json', note: 'CycloneDX software bill of materials' },
+];
+
+const latest = releases[0];
+const title = 'Changelog';
+const description = `Release history for Llámenos, currently ${latest.version}, with downloads and the means to verify them.`;
+---
+
+<BaseLayout title={title} description={description}>
+  <section class="pt-32 pb-20 md:pt-40">
+    <div class="mx-auto max-w-6xl px-6">
+      <div class="max-w-2xl mb-10">
+        <h1 class="text-3xl font-bold tracking-tight text-fg sm:text-4xl lg:text-5xl">{title}</h1>
+        <p class="mt-4 text-lg text-fg-muted leading-relaxed">
+          What changed in each release. Current version: <strong class="text-fg">{latest.version}</strong>.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <aside class="lg:col-span-1 lg:order-2">
+          <div class="lg:sticky lg:top-28 flex flex-col gap-6">
+            <div class="rounded-2xl border border-border bg-bg-card p-6">
+              <h2 class="text-sm font-medium text-fg-muted uppercase tracking-wider mb-4">Releases</h2>
+              <ul class="space-y-2 text-sm">
+                <li><a href={LATEST} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">Latest release &rarr;</a></li>
+                <li><a href={RELEASES} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">All releases &rarr;</a></li>
+              </ul>
+            </div>
+
+            <div id="verify" class="rounded-2xl border border-border bg-bg-card p-6">
+              <h2 class="text-sm font-medium text-fg-muted uppercase tracking-wider mb-2">Verify a release</h2>
+              <p class="text-sm text-fg-muted mb-4">
+                Builds are reproducible and signed. Check the artifacts of the latest release
+                rather than trusting the download alone.
+              </p>
+              <ul class="space-y-3 text-sm mb-5">
+                {artifacts.map(a => (
+                  <li>
+                    <a href={latestAsset(a.name)} class="font-mono text-accent-bright hover:text-accent transition-colors break-all" rel="noopener noreferrer">{a.name}</a>
+                    <span class="block text-xs text-fg-dim">{a.note}</span>
+                  </li>
+                ))}
+              </ul>
+              <ul class="space-y-2 text-sm border-t border-border pt-4">
+                <li><a href={VERIFY_DOC} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">How to verify a build &rarr;</a></li>
+                <li><a href={VERIFY_SCRIPT} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer"><code class="font-mono">scripts/verify-build.sh</code> &rarr;</a></li>
+              </ul>
+            </div>
+          </div>
+        </aside>
+
+        <div class="lg:col-span-2 lg:order-1 flex flex-col gap-12">
+          {releases.map(release => (
+            <article id={`v${release.version}`} class="scroll-mt-28">
+              <h2 class="flex items-baseline gap-3 text-2xl font-semibold text-fg border-b border-border pb-2">
+                <a href={`#v${release.version}`} class="hover:text-accent-bright transition-colors">{release.version}</a>
+                <time datetime={release.date} class="text-sm font-normal text-fg-dim">{release.date}</time>
+              </h2>
+              {release.sections.map(section => (
+                <div class="mt-5">
+                  <h3 class="text-sm font-medium text-accent-bright uppercase tracking-wider mb-2">{section.title}</h3>
+                  <ul class="list-disc ps-5 space-y-1.5 text-fg-muted leading-relaxed">
+                    {section.items.map(item => (
+                      <li>
+                        {tokenizeEntry(item).map(token =>
+                          token.kind === 'code' ? (
+                            <code class="font-mono text-sm text-fg">{token.value}</code>
+                          ) : token.kind === 'ref' ? (
+                            <a href={`${github.url}/issues/${token.number}`} class="text-fg-dim hover:text-accent-bright transition-colors" target="_blank" rel="noopener noreferrer">#{token.number}</a>
+                          ) : (
+                            token.value
+                          ),
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
