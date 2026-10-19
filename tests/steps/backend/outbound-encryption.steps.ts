@@ -13,6 +13,12 @@ import {
 } from '../../simulation-helpers'
 import { TestDB } from '../../db-helpers'
 import { getScenarioState } from './common.steps'
+import {
+  adminHpkeRecipient,
+  decryptStoredRecordContent,
+  openStoredRecordKey,
+} from '../../crypto-helpers'
+import { LABEL_MESSAGE } from '@shared/crypto-labels'
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -117,18 +123,23 @@ Then('the stored message should have reader envelopes with HPKE fields', async (
 Then('the stored message should have an envelope for the admin decryption pubkey', async ({ world }) => {
   const state = getOEState(world)
   expect(state.outboundMessageId).toBeDefined()
+  expect(state.plaintextSent).toBeDefined()
 
   const row = await TestDB.getRow('messages', state.outboundMessageId!)
   expect(row).toBeTruthy()
 
   const envelopes = row!.reader_envelopes as Array<{ pubkey: string; enc: string; ct: string }>
 
-  // The admin decryption pubkey should be present in at least one envelope.
-  // We don't know the exact pubkey here, but we verify at least one envelope exists
-  // (the admin is always included by the encryptMessageForStorage call).
-  expect(envelopes.length).toBeGreaterThanOrEqual(1)
-  // Verify envelope pubkeys are valid 64-char hex strings (X25519 pubkeys)
-  for (const env of envelopes) {
-    expect(env.pubkey).toMatch(/^[0-9a-f]{64}$/i)
-  }
+  // An envelope that merely exists with a well-shaped pubkey says nothing: the
+  // #1021 defect sealed to an Ed25519 auth key — right count, right 64-hex
+  // shape, openable by nobody. Find the envelope addressed to the admin's
+  // X25519 recipient key and prove it opens to what was sent.
+  const admin = adminHpkeRecipient()
+  const adminEnvelope = envelopes.find(e => e.pubkey === admin.pubkeyHex)
+  expect(
+    adminEnvelope,
+    `no envelope for the admin's X25519 key ${admin.pubkeyHex}; sealed to ${JSON.stringify(envelopes.map(e => e.pubkey))}`,
+  ).toBeTruthy()
+  const messageKey = await openStoredRecordKey(adminEnvelope!.ct, adminEnvelope!.enc, admin.skHex, LABEL_MESSAGE)
+  expect(decryptStoredRecordContent(row!.encrypted_content as string, messageKey)).toBe(state.plaintextSent)
 })

@@ -15,6 +15,8 @@ import {
   createUserViaApi,
   createVolunteerViaApi,
   getMeViaApi,
+  registerDeviceKeyViaApi,
+  seedHexToPubkey,
   testEndpointAccess,
   ADMIN_SEED,
 } from '../../api-helpers'
@@ -87,6 +89,24 @@ Given('an admin with a known keypair', async ({ world }) => {
 
 Given('a third party with a different keypair', async ({ world }) => {
   getSecTestState(world).thirdPartyKeypair = generateTestKeypair()
+})
+
+// A user's pubkey is their Ed25519 AUTH key and is never an HPKE recipient:
+// the server seals to the X25519 keys their devices registered (#1021). These
+// Givens publish that device key, as a real client does at registration, so
+// the scenarios below exercise the key the server must actually seal to.
+
+Given('the volunteer has registered a device encryption key', async ({ request, world }) => {
+  const state = getSecTestState(world)
+  expect(state.volunteerKeypair, 'the scenario needs a registered volunteer first').toBeDefined()
+  await registerDeviceKeyViaApi(request, state.volunteerKeypair!.seedHex)
+})
+
+Given('the admin has registered a device encryption key', async ({ request }) => {
+  // The admin is shared by every parallel scenario; `registerDeviceKeyViaApi`
+  // keys the device by a fixed per-identity push token, so re-registration
+  // updates the same row in place.
+  await registerDeviceKeyViaApi(request, ADMIN_SEED)
 })
 
 Given('a hub with {int} admins with known keypairs', async ({request, world}, count: number) => {
@@ -226,6 +246,30 @@ interface StoredMessage {
   readerEnvelopes?: Array<{ pubkey: string; ct: string; enc: string }>
 }
 
+/** Fetch the scenario's stored message back over the API as `authSeedHex`. */
+async function fetchStoredMessageAs(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  authSeedHex: string,
+  readerLabel: string,
+): Promise<StoredMessage> {
+  const scenario = getScenarioState(world)
+  expect(scenario.conversationId, 'no conversation was created').toBeDefined()
+  expect(scenario.messageId, 'no message was recorded').toBeDefined()
+
+  const { status, data } = await apiGet<{ messages: StoredMessage[] }>(
+    request,
+    `/conversations/${scenario.conversationId}/messages`,
+    authSeedHex,
+  )
+  expect(status, `${readerLabel} could not list the conversation's messages`).toBe(200)
+
+  const message = data.messages.find(m => m.id === scenario.messageId)
+  expect(message, `${readerLabel} cannot see message ${scenario.messageId}`).toBeTruthy()
+  expect(message!.encryptedContent, 'message has no ciphertext').toBeTruthy()
+  return message!
+}
+
 /**
  * Fetch the stored message back as `readerSeedHex`, open the reader envelope
  * addressed to that reader's X25519 key, and return the plaintext.
@@ -249,30 +293,17 @@ async function decryptStoredMessageAs(
   reader: TestHpkeRecipient,
   readerLabel: string,
 ): Promise<string> {
-  const scenario = getScenarioState(world)
-  expect(scenario.conversationId, 'no conversation was created').toBeDefined()
-  expect(scenario.messageId, 'no message was recorded').toBeDefined()
+  const message = await fetchStoredMessageAs(request, world, authSeedHex, readerLabel)
 
-  const { status, data } = await apiGet<{ messages: StoredMessage[] }>(
-    request,
-    `/conversations/${scenario.conversationId}/messages`,
-    authSeedHex,
-  )
-  expect(status, `${readerLabel} could not list the conversation's messages`).toBe(200)
-
-  const message = data.messages.find(m => m.id === scenario.messageId)
-  expect(message, `${readerLabel} cannot see message ${scenario.messageId}`).toBeTruthy()
-  expect(message!.encryptedContent, 'message has no ciphertext').toBeTruthy()
-
-  const envelope = message!.readerEnvelopes?.find(e => e.pubkey === reader.pubkeyHex)
+  const envelope = message.readerEnvelopes?.find(e => e.pubkey === reader.pubkeyHex)
   expect(
     envelope,
     `no reader envelope addressed to ${readerLabel}'s X25519 key ${reader.pubkeyHex}; ` +
-      `the server sealed to ${JSON.stringify(message!.readerEnvelopes?.map(e => e.pubkey))}`,
+      `the server sealed to ${JSON.stringify(message.readerEnvelopes?.map(e => e.pubkey))}`,
   ).toBeTruthy()
 
   const messageKey = await openStoredRecordKey(envelope!.ct, envelope!.enc, reader.skHex, LABEL_MESSAGE)
-  return decryptStoredRecordContent(message!.encryptedContent!, messageKey)
+  return decryptStoredRecordContent(message.encryptedContent!, messageKey)
 }
 
 When('a message {string} is encrypted for volunteer and admin', async ({ request, world }, messageText: string) => {
@@ -335,6 +366,21 @@ Then('the admin can decrypt the message to {string}', async ({ request, world },
     'the admin',
   )
   expect(plaintext).toBe(expectedText)
+})
+
+Then('no reader envelope is addressed to an auth key', async ({ request, world }) => {
+  const state = getSecTestState(world)
+  expect(state.volunteerKeypair, 'the scenario needs a registered volunteer first').toBeDefined()
+  // A user's pubkey is their Ed25519 auth key. DHKEM(X25519) accepts those
+  // bytes as a peer public key whose secret no device holds, so an envelope
+  // addressed to one is well-formed, the right shape, and permanently
+  // unopenable — the exact #1021 defect. Compare against the actual keys, not
+  // a hex-shape regex: a shape check is precisely what passed on #1021.
+  const message = await fetchStoredMessageAs(request, world, ADMIN_SEED, 'the admin')
+  expect(message.readerEnvelopes?.length, 'message has no reader envelopes').toBeGreaterThan(0)
+  const sealedTo = message.readerEnvelopes!.map(e => e.pubkey)
+  expect(sealedTo, "sealed to the volunteer's auth key").not.toContain(state.volunteerKeypair!.pubkey)
+  expect(sealedTo, "sealed to the admin's auth key").not.toContain(seedHexToPubkey(ADMIN_SEED))
 })
 
 When('a volunteer encrypts a note {string}', async ({request, world}, noteText: string) => {
