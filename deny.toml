@@ -31,7 +31,9 @@ yanked = "warn"
 #   * `reason` MUST end with `[expires YYYY-MM-DD]`. The "Enforce advisory
 #     ignore expiry" step in the workflow fails the build once that date has
 #     passed (or if the marker is missing), forcing a re-triage instead of a
-#     silent, permanent suppression.
+#     silent, permanent suppression. The same step enforces it on every
+#     `.cargo/audit.toml` (cargo-audit reads those, not this file) — an
+#     advisory ignored in one place must carry the same dated reason in both.
 #
 # Vulnerabilities (rustls, quick-xml, rkyv) are deliberately NOT listed: they
 # are fixed by upgrading, not by ignoring.
