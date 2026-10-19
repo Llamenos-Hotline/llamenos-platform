@@ -17,29 +17,21 @@ final class ActiveCallUITests: BaseUITest {
 
             // Simulate an incoming call and answer it
             let call = simulateIncomingCall(callerNumber: "+15551110001")
-            guard !call.callId.isEmpty else { return }
-
-            // Read admin pubkey from the settings for answering the call
-            navigateToSettings()
-            let npub = find("settings-npub")
-            if npub.waitForExistence(timeout: 5) {
-                // Use a placeholder pubkey — the simulation accepts any registered pubkey
-            }
-            simulateAnswerCall(callId: call.callId, pubkey: "admin")
+            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
+            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
             navigateToDashboard()
         }
         then("the active call card should be visible on the dashboard") {
-            // "dashboard-title" is NOT in this list: it is the generic dashboard
-            // landmark and renders whether or not a call is active, so including
-            // it made this assertion true regardless of the call card — exactly
-            // the kind of acceptance criteria that hid #1129 (iOS couldn't decode
-            // a ringing call at all) behind a passing test.
-            let found = anyElementExists([
-                "active-call-card",
-                "active-calls-card",
-                "active-call-count",
-            ])
-            XCTAssertTrue(found, "Dashboard should show active call card or call count when a call is in progress")
+            // Only the call card itself counts. "dashboard-title" and the stats
+            // tile ("active-calls-card" / "active-call-count") render whether or
+            // not a call is active, so accepting them made this assertion true
+            // regardless of the call — exactly the kind of acceptance criteria
+            // that hid #1129 (iOS couldn't decode a ringing call at all) behind
+            // a passing test.
+            XCTAssertTrue(
+                find("active-call-card").waitForExistence(timeout: 10),
+                "Active call card should appear on the dashboard when a call is in progress"
+            )
         }
     }
 
@@ -52,9 +44,8 @@ final class ActiveCallUITests: BaseUITest {
             launchAsAdminWithAPI()
 
             let call = simulateIncomingCall(callerNumber: "+15551110002")
-            if !call.callId.isEmpty {
-                simulateAnswerCall(callId: call.callId, pubkey: "admin")
-            }
+            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
+            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
             navigateToDashboard()
         }
         when("I look for the hangup button") {
@@ -77,9 +68,8 @@ final class ActiveCallUITests: BaseUITest {
             launchAsAdminWithAPI()
 
             let call = simulateIncomingCall(callerNumber: "+15551110003")
-            if !call.callId.isEmpty {
-                simulateAnswerCall(callId: call.callId, pubkey: "admin")
-            }
+            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
+            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
             navigateToDashboard()
         }
         when("I tap the ban + hangup button") {
@@ -104,9 +94,8 @@ final class ActiveCallUITests: BaseUITest {
             launchAsAdminWithAPI()
 
             let call = simulateIncomingCall(callerNumber: "+15551110004")
-            if !call.callId.isEmpty {
-                simulateAnswerCall(callId: call.callId, pubkey: "admin")
-            }
+            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
+            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
             navigateToDashboard()
         }
         then("the quick note button should be visible") {
@@ -126,9 +115,8 @@ final class ActiveCallUITests: BaseUITest {
             launchAsAdminWithAPI()
 
             let call = simulateIncomingCall(callerNumber: "+15551110005")
-            if !call.callId.isEmpty {
-                simulateAnswerCall(callId: call.callId, pubkey: "admin")
-            }
+            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
+            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
             navigateToDashboard()
         }
         then("the report spam button should be visible") {
