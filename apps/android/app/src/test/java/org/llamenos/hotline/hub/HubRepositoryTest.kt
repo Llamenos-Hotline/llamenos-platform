@@ -14,6 +14,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Hub
@@ -21,6 +22,7 @@ import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import org.llamenos.hotline.model.HubKeyEnvelopeResponseEnvelope
 import org.llamenos.protocol.SharedHubDetailResponseStatus
+import java.io.IOException
 
 class HubRepositoryTest {
 
@@ -73,7 +75,6 @@ class HubRepositoryTest {
         val envelope = makeEnvelope()
         coEvery { apiService.getHubKey("hub-uuid-001") } returns envelope
         coEvery { activeHubState.setActiveHub(any()) } returns Unit
-        every { cryptoService.hasHubKey(any()) } returns false
 
         repo.switchHub("hub-uuid-001")
 
@@ -86,9 +87,8 @@ class HubRepositoryTest {
     }
 
     @Test
-    fun `switchHub persists hub ID even if key fetch throws`() = runTest {
-        every { cryptoService.hasHubKey(any()) } returns false
-        coEvery { apiService.getHubKey(any()) } throws RuntimeException("network error")
+    fun `switchHub persists hub ID even if key fetch fails`() = runTest {
+        coEvery { apiService.getHubKey(any()) } throws ApiException(500, "server error")
         coEvery { activeHubState.setActiveHub(any()) } returns Unit
 
         repo.switchHub("hub-uuid-001")
@@ -97,15 +97,103 @@ class HubRepositoryTest {
         coVerify(exactly = 0) { cryptoService.loadHubKey(any(), any()) }
     }
 
+    // ── Stale hub keys (#1090): a cached key is never trusted over the server ──
+
     @Test
-    fun `switchHub skips fetch if key already cached`() = runTest {
+    fun `switchHub refetches the key even when one is cached`() = runTest {
+        // A cached key may predate a rotation; the old hasHubKey short-circuit kept it forever.
         every { cryptoService.hasHubKey("hub-uuid-001") } returns true
+        val rotated = makeEnvelope(ct = "rotated")
+        coEvery { apiService.getHubKey("hub-uuid-001") } returns rotated
         coEvery { activeHubState.setActiveHub(any()) } returns Unit
 
         repo.switchHub("hub-uuid-001")
 
-        coVerify(exactly = 0) { apiService.getHubKey(any()) }
-        coVerify(exactly = 1) { activeHubState.setActiveHub("hub-uuid-001") }
+        coVerify(exactly = 1) { apiService.getHubKey("hub-uuid-001") }
+        coVerify(exactly = 1) { cryptoService.loadHubKey("hub-uuid-001", rotated) }
+    }
+
+    @Test
+    fun `a 403 evicts the removed hub's key and keeps the others`() = runTest {
+        val keyA = makeEnvelope(ct = "a")
+        val keyB = makeEnvelope(ct = "b")
+        coEvery { apiService.getHubKey("hub-a") } returns keyA
+        coEvery { apiService.getHubKey("hub-b") } returns keyB
+        repo.loadAllHubKeys(listOf(makeHub("hub-a"), makeHub("hub-b")))
+
+        coEvery { apiService.getHubKey("hub-a") } throws ApiException(403, "not a member")
+        repo.refreshHubKey("hub-a")
+
+        coVerify(exactly = 1) { cryptoService.clearHubKeysOnly() }
+        // hub-b is re-unwrapped from its held envelope, without asking the server again.
+        coVerify(exactly = 2) { cryptoService.loadHubKey("hub-b", keyB) }
+        coVerify(exactly = 1) { apiService.getHubKey("hub-b") }
+        coVerify(exactly = 1) { cryptoService.loadHubKey("hub-a", keyA) }
+    }
+
+    @Test
+    fun `a 404 — excluded from the rotated key — evicts the key`() = runTest {
+        coEvery { apiService.getHubKey("hub-a") } returns makeEnvelope()
+        repo.refreshHubKey("hub-a")
+
+        coEvery { apiService.getHubKey("hub-a") } throws ApiException(404, "No key envelope for this user")
+        repo.refreshHubKey("hub-a")
+
+        coVerify(exactly = 1) { cryptoService.clearHubKeysOnly() }
+    }
+
+    @Test
+    fun `a network blip is retried and does not evict the key`() = runTest {
+        val key = makeEnvelope()
+        coEvery { apiService.getHubKey("hub-a") } returns key
+        repo.refreshHubKey("hub-a")
+
+        coEvery { apiService.getHubKey("hub-a") } throws IOException("offline") andThen key
+        repo.refreshHubKey("hub-a")
+
+        coVerify(exactly = 3) { apiService.getHubKey("hub-a") }
+        coVerify(exactly = 2) { cryptoService.loadHubKey("hub-a", key) }
+        coVerify(exactly = 0) { cryptoService.clearHubKeysOnly() }
+    }
+
+    @Test
+    fun `a persistent network failure keeps the cached key`() = runTest {
+        coEvery { apiService.getHubKey("hub-a") } returns makeEnvelope()
+        repo.refreshHubKey("hub-a")
+
+        coEvery { apiService.getHubKey("hub-a") } throws IOException("offline")
+        repo.refreshHubKey("hub-a")
+
+        // One success, then the first attempt plus two retries.
+        coVerify(exactly = 4) { apiService.getHubKey("hub-a") }
+        coVerify(exactly = 0) { cryptoService.clearHubKeysOnly() }
+    }
+
+    @Test
+    fun `a 401 is not mistaken for removal`() = runTest {
+        coEvery { apiService.getHubKey("hub-a") } returns makeEnvelope()
+        repo.refreshHubKey("hub-a")
+
+        coEvery { apiService.getHubKey("hub-a") } throws ApiException(401, "unauthorized")
+        repo.refreshHubKey("hub-a")
+
+        coVerify(exactly = 0) { cryptoService.clearHubKeysOnly() }
+    }
+
+    @Test
+    fun `loadAllHubKeys evicts the key of a hub no longer in the member list`() = runTest {
+        val keyA = makeEnvelope(ct = "a")
+        val keyB = makeEnvelope(ct = "b")
+        coEvery { apiService.getHubKey("hub-a") } returns keyA
+        coEvery { apiService.getHubKey("hub-b") } returns keyB
+        repo.loadAllHubKeys(listOf(makeHub("hub-a"), makeHub("hub-b")))
+
+        // The member list no longer includes hub-a.
+        repo.loadAllHubKeys(listOf(makeHub("hub-b")))
+
+        coVerify(exactly = 1) { cryptoService.clearHubKeysOnly() }
+        coVerify(exactly = 1) { cryptoService.loadHubKey("hub-a", keyA) }
+        coVerify(exactly = 1) { apiService.getHubKey("hub-a") }
     }
 
     // ── ensureInitialHub (issue #1340: must fire after login and on session restore) ──
@@ -118,11 +206,9 @@ class HubRepositoryTest {
             val api = mockk<ApiService>()
             coEvery { api.getHubs() } returns
                 HubsListResponse(listOf(makeHub("hub-aaa"), makeHub("hub-bbb")))
-            // Key already cached — switchHub skips the key fetch; this test isolates selection.
-            val crypto = mockk<CryptoService>(relaxed = true)
-            every { crypto.hasHubKey(any()) } returns true
+            coEvery { api.getHubKey(any()) } returns makeEnvelope()
 
-            HubRepository(api, crypto, state).ensureInitialHub()
+            HubRepository(api, mockk(relaxed = true), state).ensureInitialHub()
 
             assertEquals("hub-aaa", state.activeHubId.value)
         }

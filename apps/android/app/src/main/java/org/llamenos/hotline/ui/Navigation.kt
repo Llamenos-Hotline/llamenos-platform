@@ -12,14 +12,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import org.llamenos.hotline.telephony.LinphoneService
 import org.llamenos.hotline.telephony.rememberMicrophoneRequest
-import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
-import kotlinx.coroutines.flow.filterIsInstance
 import org.llamenos.hotline.api.VersionChecker
 import org.llamenos.hotline.ui.components.UpdateBanner
 import org.llamenos.hotline.ui.components.UpdateRequiredScreen
-import org.llamenos.hotline.model.LlamenosEvent
-import org.llamenos.hotline.service.AttributedHubEvent
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -455,28 +451,16 @@ fun LlamenosNavigation(
 
     var isDeviceWiped by remember { mutableStateOf(false) }
     var deviceWipeReason by remember { mutableStateOf("") }
-    val context = LocalContext.current
 
-    LaunchedEffect(Unit) {
-        webSocketService.typedEvents
-            .filterIsInstance<AttributedHubEvent<LlamenosEvent.DeviceWipe>>()
-            .collect { attributed ->
-                val wipeEvent = attributed.event
-                // Clear ALL encrypted storage and AndroidKeyStore keys
-                keystoreService.wipeAll()
-                // Zeroize Rust crypto state (hub keys, server event keys, device keys)
-                cryptoService.clearHubKeys()
-                cryptoService.lock()
-                // Clear transcription preferences (separate SharedPreferences instance)
-                context.getSharedPreferences("transcription_prefs", android.content.Context.MODE_PRIVATE)
-                    .edit().clear().apply()
-                // Clear app cache directory
-                context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
-                // Update UI
-                isDeviceWiped = true
-                deviceWipeReason = wipeEvent.reason
-            }
-    }
+    DeviceWipeEffect(
+        webSocketService = webSocketService,
+        keystoreService = keystoreService,
+        cryptoService = cryptoService,
+        onWiped = { reason ->
+            isDeviceWiped = true
+            deviceWipeReason = reason
+        },
+    )
 
     if (isDeviceWiped) {
         DeviceWipeReceiptScreen(

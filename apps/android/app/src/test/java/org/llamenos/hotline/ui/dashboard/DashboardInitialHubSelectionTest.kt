@@ -23,6 +23,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.llamenos.hotline.api.AnalyticsRepository
+import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.AuthInterceptor
 import org.llamenos.hotline.api.RetryInterceptor
@@ -165,9 +166,9 @@ class DashboardInitialHubSelectionTest {
             val repoApi = mockk<ApiService>()
             coEvery { repoApi.getHubs() } returns
                 HubsListResponse(listOf(makeHub("hub-first"), makeHub("hub-second")))
-            val crypto = mockk<CryptoService>(relaxed = true)
-            every { crypto.hasHubKey(any()) } returns true
-            val hubRepository = HubRepository(repoApi, crypto, state)
+            // switchHub always refreshes the hub key; a 404 here only means "no key for you".
+            coEvery { repoApi.getHubKey(any()) } throws ApiException(404, "no envelope")
+            val hubRepository = HubRepository(repoApi, mockk<CryptoService>(relaxed = true), state)
 
             DashboardViewModel(
                 mockk<CryptoService>(relaxed = true),

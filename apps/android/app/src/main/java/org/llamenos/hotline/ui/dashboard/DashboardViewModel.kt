@@ -202,9 +202,6 @@ class DashboardViewModel @Inject constructor(
             is LlamenosEvent.ConversationNew -> {
                 // New conversation — handled by ConversationsViewModel
             }
-            is LlamenosEvent.DeviceWipe -> {
-                // Device wipe handled by DeviceWipeReceiptScreen
-            }
             is LlamenosEvent.Unknown -> {
                 // Forward compatibility — ignore unknown events
             }

@@ -139,6 +139,28 @@ class WebSocketService @Inject constructor(
     val typedEvents: SharedFlow<AttributedHubEvent<LlamenosEvent>> = _typedEvents.asSharedFlow()
 
     /**
+     * The server's Ed25519 key from `GET /api/config`, refreshed on every connect.
+     * Wipe frames are verified against it; without it no wipe is accepted.
+     */
+    @Volatile
+    private var serverPubkey: String? = null
+
+    /** The signing pubkey this socket authenticated with — the server's routing key for it. */
+    @Volatile
+    private var authenticatedPubkey: String? = null
+
+    // Replay 1: a verified wipe must reach the wipe handler even if it subscribes
+    // after the frame arrived (activity recreation). Re-running a wipe is harmless.
+    private val _deviceWipes = MutableSharedFlow<DeviceWipeCommand>(replay = 1)
+
+    /**
+     * Remote wipe commands aimed at this device. Only frames that pass
+     * [DeviceWipeVerifier] — server signature, target and freshness — are emitted;
+     * a wipe is never derived from an ordinary hub event.
+     */
+    val deviceWipes: SharedFlow<DeviceWipeCommand> = _deviceWipes.asSharedFlow()
+
+    /**
      * Store server event keys in Rust memory after authentication.
      * Keys never touch JVM memory.
      */
@@ -183,12 +205,14 @@ class WebSocketService @Inject constructor(
      */
     internal suspend fun resolveRelayUrl(): String? {
         val hubUrl = keystoreService.retrieve(KeystoreService.KEY_HUB_URL) ?: return null
-        val advertised = try {
-            apiService.request<AppConfigResponse>("GET", "/api/config").wsRelayUrl
+        val config = try {
+            apiService.request<AppConfigResponse>("GET", "/api/config")
         } catch (e: Exception) {
             android.util.Log.w("WebSocketService", "Relay config fetch failed: ${e.message}")
             null
         }
+        serverPubkey = config?.serverPubkey
+        val advertised = config?.wsRelayUrl
         val url = relayWebSocketUrl(hubUrl, advertised, org.llamenos.hotline.BuildConfig.DEBUG)
         if (url == null && advertised != null) {
             android.util.Log.e("WebSocketService", "Refusing relay connection: endpoint is not TLS-protected")
@@ -199,6 +223,7 @@ class WebSocketService @Inject constructor(
     private fun openSocket(relayUrl: String) {
         _connectionState.value = ConnectionState.CONNECTING
         authenticated = false
+        authenticatedPubkey = null
 
         // Apply the same app-level certificate pinning as ApiService for the relay
         // host, so operator-customised deployments are pinned on the WS leg too.
@@ -277,6 +302,7 @@ class WebSocketService @Inject constructor(
                 handleAuthenticated(hubs)
             }
             "event" -> handleEventMessage(obj)
+            "device:wipe" -> handleDeviceWipe(obj)
             "subscribed", "unsubscribed", "pong" -> {
                 // Confirmations and keepalives need no action.
             }
@@ -302,6 +328,7 @@ class WebSocketService @Inject constructor(
         val messageHex = signedMessage.toByteArray(Charsets.UTF_8)
             .joinToString("") { "%02x".format(it) }
         val sig = cryptoService.ed25519Sign(messageHex) ?: return
+        authenticatedPubkey = pubkey
 
         val authMessage = buildJsonObject {
             put("type", "auth")
@@ -311,6 +338,25 @@ class WebSocketService @Inject constructor(
             put("sig", sig)
         }
         webSocket?.send(authMessage.toString())
+    }
+
+    /**
+     * A remote wipe frame. Emitted only once [DeviceWipeVerifier] accepts it; anything
+     * else is logged and dropped — a forged or misdirected wipe must not destroy keys.
+     */
+    private fun handleDeviceWipe(obj: kotlinx.serialization.json.JsonObject) {
+        val command = DeviceWipeVerifier.verify(
+            frame = obj,
+            devicePubkey = authenticatedPubkey,
+            serverPubkey = serverPubkey,
+            nowMs = System.currentTimeMillis(),
+            verifySignature = cryptoService::ed25519Verify,
+        )
+        if (command == null) {
+            android.util.Log.e("WebSocketService", "Rejected unverifiable device:wipe frame")
+            return
+        }
+        scope.launch { _deviceWipes.emit(command) }
     }
 
     /**
@@ -392,11 +438,6 @@ class WebSocketService @Inject constructor(
                 )
                 "conversation:closed" -> LlamenosEvent.ConversationClosed(
                     obj["conversationId"]?.jsonPrimitive?.content ?: return null
-                )
-                "device:wipe" -> LlamenosEvent.DeviceWipe(
-                    targetDevicePubkey = obj["targetDevicePubkey"]?.jsonPrimitive?.content ?: "",
-                    reason = obj["reason"]?.jsonPrimitive?.content ?: "",
-                    serverSignature = obj["serverSignature"]?.jsonPrimitive?.content ?: "",
                 )
                 else -> LlamenosEvent.Unknown(type)
             }

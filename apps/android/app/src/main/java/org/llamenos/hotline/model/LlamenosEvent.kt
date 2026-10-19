@@ -57,12 +57,6 @@ sealed class LlamenosEvent {
     /** A call was answered by a volunteer. */
     data class CallAnswered(val callId: String, val answeredBy: String) : LlamenosEvent()
 
-    data class DeviceWipe(
-        val targetDevicePubkey: String,
-        val reason: String,
-        val serverSignature: String,
-    ) : LlamenosEvent()
-
     /** An event type this client version does not recognize. */
     data class Unknown(val type: String) : LlamenosEvent()
 }

@@ -5,7 +5,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Response from `GET /api/config` — only the fields needed for version checking.
+ * Response from `GET /api/config` — only the fields the app reads (version check, relay).
  * Extra fields are ignored thanks to `ignoreUnknownKeys = true` in [ApiService.json].
  */
 @Serializable
@@ -15,6 +15,8 @@ data class AppConfigResponse(
     val minApiVersion: Int = 1,
     /** Server-advertised WebSocket relay endpoint (e.g. `/ws`); null when no relay is configured. */
     val wsRelayUrl: String? = null,
+    /** The server's Ed25519 verification key; remote wipe frames are verified against it. */
+    val serverPubkey: String? = null,
 )
 
 /**
