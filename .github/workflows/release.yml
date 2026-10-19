@@ -863,3 +863,20 @@ jobs:
             exit 1
           fi
           echo "Demo Deploy run: $RUN_URL"
+
+  # --- Redeploy the marketing site ---
+  #
+  # The site bakes release data in at build time (changelog, latest installer links), so it goes
+  # stale the moment a release lands unless it is rebuilt. This is a sibling of `dispatch`, not a
+  # step inside it: a failed desktop/mobile dispatch must not skip the site, and a failed site
+  # deploy must not mask which dispatch broke. It calls the workflow directly instead of
+  # `gh workflow run`, so its result is this job's result — a missing Cloudflare secret turns
+  # this release run red, naming the secret, instead of being a separate run nobody opens.
+  # The desktop/Android installers attach later; tauri-release.yml and mobile-release.yml
+  # redeploy the site again once they have, so the download links catch up.
+  deploy-site:
+    needs: [check, release]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-site.yml
+    secrets: inherit

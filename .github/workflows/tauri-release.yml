@@ -1117,3 +1117,13 @@ jobs:
           RUSTFS_BUCKET: ${{ secrets.RUSTFS_STAGING_BUCKET }}
         run: |
           echo "::error::PARTIAL RELEASE: v${VERSION} binaries were uploaded to s3://${RUSTFS_BUCKET}/desktop/v${VERSION} (and s3://${RUSTFS_BUCKET}/desktop/latest.json was updated to point at them), but a later step in this job failed — the llamenos-releases metadata commit and/or the GitHub Release for v${VERSION} may be missing or incomplete. Re-run this workflow with the same version (${VERSION}) to converge: the upload, metadata commit, and GitHub Release steps are all idempotent. If you are abandoning this version instead, manually delete s3://${RUSTFS_BUCKET}/desktop/v${VERSION} and restore s3://${RUSTFS_BUCKET}/desktop/latest.json from the previous version."
+
+  # ─── Redeploy the marketing site so its download links see the new installers ───
+  # The site resolves the newest `desktop-v*` release at build time
+  # (site/src/utils/releases.ts); without this it keeps linking the previous version.
+  deploy-site:
+    needs: [release]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-site.yml
+    secrets: inherit

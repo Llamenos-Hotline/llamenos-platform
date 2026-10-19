@@ -1,0 +1,100 @@
+# Marketing-site deploy (Cloudflare Pages). The site is built statically, and at build time it
+# bakes in data that goes stale the moment a release lands: the download links resolve the
+# newest `desktop-v*` / `android-v*` GitHub Releases (site/src/utils/releases.ts), and the
+# version/changelog shown come from the repo. So every release must redeploy it.
+#
+# Called from:
+#   - release.yml        after the `v<version>` release is published
+#   - tauri-release.yml  after the `desktop-v<version>` installers are attached
+#   - mobile-release.yml after the `android-v<version>` APK is attached
+# and manually via workflow_dispatch.
+#
+# This is the marketing site ONLY. The server is deployed by the Ansible playbooks
+# (deploy-prod.yml) and must never go through wrangler. The one command here is the repo-root
+# `bun run deploy:site` — never `wrangler` directly, never from a subdirectory (CLAUDE.md,
+# "Deployment rules"). Nothing here puts a CDN or proxy in front of the app host: TLS terminates
+# on the origin (Caddy + Let's Encrypt), and the Android client hard-fails on any other chain.
+#
+# Required secrets (a missing one FAILS the run, naming it, before anything is built):
+#   CLOUDFLARE_API_TOKEN   — Pages:Edit token for the llamenos-site project
+#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare account that owns it
+
+name: Deploy Site
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch to build and publish. Defaults to the repository's default branch.
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch to build and publish. Defaults to the repository's default branch.
+        type: string
+        required: false
+        default: ''
+
+# Two releases landing close together must not publish concurrently, and a deploy in progress is
+# never cancelled half-way: a newer request waits and then publishes the newest content.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+permissions: {}  # deny-all; per-job permissions below
+
+env:
+  BUN_VERSION: "1.3.5"
+
+jobs:
+  deploy:
+    name: Build and publish site
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      # First step, before checkout or install: an unconfigured deploy must fail in seconds and
+      # say which secret is missing, never build for minutes and then skip the publish.
+      - name: Require Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Site not deployed::secret ${name} is not configured (or not passed to this workflow — callers must use \`secrets: inherit\`). Nothing was published."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # A branch name, not a tag or SHA: wrangler derives the Pages deployment branch from
+          # git, and a detached HEAD would publish a preview instead of production.
+          ref: ${{ inputs.ref || github.event.repository.default_branch }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # `deploy:site` builds the site, runs the third-party-request gate
+      # (site/scripts/check-no-third-party.ts) and only then publishes with wrangler, so a build
+      # that would leak a visitor to a third party is never published.
+      - name: Build and deploy site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Lifts the unauthenticated 60 req/hr API limit when site/src/utils/releases.ts lists releases.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun run deploy:site
