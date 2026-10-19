@@ -2601,13 +2601,16 @@ jobs:
   #     the queue ref is the invisible-gap bug itself (the #1594 shape)
   #     and fails here.
   #
+  #   every event — `crypto-tests` has no queue-only deferral, so a skip
+  #     with the `crypto` flag set fails here too (#1941).
+  #
   # A separate job rather than a ci-status step because ci-status cannot
   # read these flags: adding `changes` to its `needs` trips the
   # required-context rail in tests/orchestrator/guards.test.ts (`changes`'s
   # own `if:` names `event_name` without `merge_group`), and that rail is
   # load-bearing. This job's `if:` names no event, so the rail passes.
   platform-suite-coverage:
-    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd]
+    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd, crypto-tests]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2622,6 +2625,7 @@ jobs:
           ANDROID: ${{ needs.changes.outputs.android }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           BACKEND: ${{ needs.changes.outputs.backend }}
+          CRYPTO: ${{ needs.changes.outputs.crypto }}
           R_IOS_COMPILE: ${{ needs.ios-compile-check.result }}
           R_ANDROID_COMPILE: ${{ needs.android-compile-check.result }}
           R_IOS_BUILD: ${{ needs.ios-build-test.result }}
@@ -2630,6 +2634,7 @@ jobs:
           R_ANDROID_E2E: ${{ needs.android-e2e.result }}
           R_E2E: ${{ needs.e2e.result }}
           R_BACKEND_BDD: ${{ needs.backend-bdd.result }}
+          R_CRYPTO: ${{ needs.crypto-tests.result }}
         run: |
           set -euo pipefail
           gap=""
@@ -2668,6 +2673,13 @@ jobs:
             if { [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; } && [ "$R_E2E" = "skipped" ]; then gap="$gap e2e"; fi
             if [ "$BACKEND" = "true" ] && [ "$R_BACKEND_BDD" = "skipped" ]; then gap="$gap backend-bdd"; fi
           fi
+
+          # crypto-tests has no `revalidate` deferral: its `if:` is exactly
+          # `crypto == 'true'`, so on EVERY event a skip with the flag set is
+          # wiring drift, never a deliberate deferral. ci-status reads `skipped`
+          # as a pass, so without this the suite could vanish and stay green
+          # (#1941, #1954).
+          if [ "$CRYPTO" = "true" ] && [ "$R_CRYPTO" = "skipped" ]; then gap="$gap crypto-tests"; fi
 
           if [ -n "$gap" ]; then
             echo "::error::Platform suites for the changed paths were SKIPPED on $EVENT_NAME:$gap — ci-status must not report success for a platform nothing verified (#1762). This is a CI wiring defect, not a code failure; check the gate's if: against detect-changed-platforms.sh."

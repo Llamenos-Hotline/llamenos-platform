@@ -117,7 +117,17 @@ DESKTOP_EXCLUDE_RE='^tests/(orchestrator|live|load|iso-builder|eslint)/'
 # `desktop` flag, but backend-bdd itself only gates on `backend`, so it needs
 # its own hit here too.
 BACKEND_RE='^(apps/worker/|sip-bridge/|signal-notifier/|deploy/docker/|src/server/|drizzle/|drizzle\.config\.ts$|tests/steps/backend/|vitest\.(unit|integration)\.(config|setup)\.ts$)'
-CRYPTO_RE='^packages/crypto/'
+# `crypto-tests` is not only the crate's own unit tests: packages/crypto/tests/
+# envelope_aad_cross_platform.rs reads Android's CryptoService.kt and generated
+# binding, every hand-written Kotlin/Swift file under apps/android/app/src/main
+# and apps/ios/Sources, and src/client/lib/*. Its whole purpose is to fail when
+# one of THOSE drifts from the registry, so a diff confined to them must run
+# it — with the old `^packages/crypto/` alone, a mobile-only diff that broke
+# the Android label-id table skipped the suite and reported green (#1941).
+# Whole app prefixes rather than the exact directories the test walks today:
+# the test grows new readers, this regex does not, and a missed path fails
+# toward a silent skip while an extra one costs ~3.5 min on a hosted runner.
+CRYPTO_RE='^(packages/crypto/|apps/android/|apps/ios/|src/client/)'
 ANSIBLE_RE='^deploy/ansible/'
 # Dependency manifests only — deliberately narrower than SHARED_DEPS_RE: a
 # docs- or workflow-only PR must not be blocked by a dependency advisory it
