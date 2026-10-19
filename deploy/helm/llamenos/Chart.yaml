@@ -8,7 +8,7 @@ version: 0.3.0
 # this drifted 16 releases behind before #1120). `app.image.tag` falls back
 # to this value (see _helpers.tpl's `llamenos.appImageTag`), so a drifted
 # appVersion silently requests an image tag that was never published.
-appVersion: "0.19.19"
+appVersion: "0.19.18"
 keywords:
   - hotline
   - crisis-response
