@@ -259,10 +259,13 @@ jobs:
             if [ "$rc" -eq 0 ] || [ "$others" -eq 0 ] || [ "$SECONDS" -ge "$deadline" ]; then
               cat "$RUNNER_TEMP/disk-guard.log"
               cat "$RUNNER_TEMP/disk-guard-summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-              if [ "$rc" -ne 0 ] && [ "$others" -gt 0 ]; then
-                echo "::error::still refused after waiting $((attempt - 1)) x ${DISK_WAIT_POLL_SEC}s for $others co-tenant CI job(s) on this host to release space"
+              waited="$((attempt - 1)) x ${DISK_WAIT_POLL_SEC}s"
+              if [ "$rc" -eq 0 ]; then
+                [ "$attempt" -eq 1 ] || echo "disk headroom passed on attempt $attempt, after waiting $waited for a co-tenant CI job's teardown"
+              elif [ "$others" -gt 0 ]; then
+                echo "::error::still refused after waiting $waited for $others co-tenant CI job(s) on this host to release space"
               elif [ "$attempt" -gt 1 ]; then
-                echo "disk headroom passed on attempt $attempt, after waiting for a co-tenant CI job's teardown"
+                echo "::error::still refused after waiting $waited: every co-tenant CI job has finished and the space did not come back, so what holds it is not CI's"
               fi
               exit "$rc"
             fi
