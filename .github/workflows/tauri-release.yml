@@ -60,10 +60,6 @@ on:
       version:
         description: 'Version to release (e.g., 1.0.0)'
         required: true
-      release-tag:
-        description: 'Draft release (v<version>) to attach version-free installer aliases to; empty = publish desktop-v<version> only'
-        required: false
-        default: ''
 
 permissions: {}  # deny-all; per-job permissions below
 
@@ -72,7 +68,9 @@ env:
   # interpolate directly in run: blocks. `inputs.*` is populated for both triggers;
   # `github.event.inputs.*` is not (under workflow_call github.event is the CALLER's).
   INPUT_VERSION: ${{ inputs.version }}
-  # Empty on a standalone dispatch. When set, it is the git ref every job checks out
+  # Only ever set through workflow_call (release.yml), never from a manual dispatch input:
+  # a dispatch-supplied ref would run an arbitrary ref with this workflow's secrets and
+  # environment. Empty on a standalone dispatch. When set, it is the git ref every job checks out
   # (a called workflow otherwise inherits the caller's merge-commit ref, not the tag).
   RELEASE_TAG: ${{ inputs.release-tag }}
 
