@@ -74,7 +74,8 @@
 # those is a deliberate, reviewable edit to this crate. No key material is
 # exposed and no cryptographic property is weakened in the meantime.
 #
-# REVISIT (review by 2026-12-01, tracked in #1713): remove both ignores as
+# REVISIT (expires 2026-12-01 — enforced by the "Enforce advisory ignore expiry"
+# step in security-audit.yml, tracked in #1713): remove both ignores as
 # soon as openmls_rust_crypto publishes a release depending on `hpke-rs >=0.8`,
 # which pins the fixed libcrux-kem 0.0.10. Re-check with:
 #   cargo update -p libcrux-kem --precise 0.0.10
@@ -89,12 +90,12 @@
 ignore = [
   # Panic on Decoding Short Hybrid Keys (libcrux-kem <=0.0.9, fixed 0.0.10).
   # Hybrid PQ key decode only; not compiled in any build. See above.
-  "RUSTSEC-2026-0331",
+  "RUSTSEC-2026-0331", # libcrux-kem <=0.0.9 hybrid key decode panic; lockfile-only, never compiled, tracked in #1713 [expires 2026-12-01]
 
   # Hybrid Encapsulation from Seed Panics on Short Seed (libcrux-kem <=0.0.9,
   # fixed 0.0.10). Hybrid PQ encapsulate_derand only, and requires an
   # attacker-controlled secret seed; not compiled in any build. See above.
-  "RUSTSEC-2026-0330",
+  "RUSTSEC-2026-0330", # libcrux-kem <=0.0.9 hybrid encapsulate_derand panic; lockfile-only, never compiled, tracked in #1713 [expires 2026-12-01]
 ]
 
 # NOTE ON WARNINGS (informational advisories — these do NOT fail `cargo audit`,

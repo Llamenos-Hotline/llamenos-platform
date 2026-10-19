@@ -21,13 +21,19 @@
 # pinned key before extracting. Forging either needs a signing key, which would
 # already allow arbitrary code execution without any zip bug.
 #
-# REVISIT by 2026-12-31 (same date deny.toml enforces), tracked in #1956: empty
-# this list, `cargo update -p tauri-plugin-updater -p libsodium-sys-stable`,
-# and run `cargo audit`. Anything that no longer fires is dead config.
+# EXPIRY IS ENFORCED, not advisory. `cargo audit` has no expiry of its own, so
+# the "Enforce advisory ignore expiry" step in security-audit.yml reads every
+# audit.toml: each ID must sit on its own line with a trailing comment ending
+# `[expires YYYY-MM-DD]`, and the build fails once that date has passed. Keep
+# this date in step with the zip entries in /deny.toml.
+#
+# REVISIT by 2026-12-31, tracked in #1956: empty this list,
+# `cargo update -p tauri-plugin-updater -p libsodium-sys-stable`, and run
+# `cargo audit`. Anything that no longer fires is dead config.
 
 [advisories]
 ignore = [
-  "RUSTSEC-2026-0367", # SUID/SGID bits preserved on ZIP extraction
-  "RUSTSEC-2026-0368", # extract() creates symlinks escaping the destination
-  "RUSTSEC-2026-0369", # permissions applied through symlinks on extract()
+  "RUSTSEC-2026-0367", # zip <9.0.0 keeps SUID/SGID bits on extract; only minisign-verified archives are extracted, no upgrade exists, tracked in #1956 [expires 2026-12-31]
+  "RUSTSEC-2026-0368", # zip <9.0.0 extract() follows attacker symlinks; same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
+  "RUSTSEC-2026-0369", # zip <9.0.0 applies Unix permissions through symlinks on extract(); same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
 ]
