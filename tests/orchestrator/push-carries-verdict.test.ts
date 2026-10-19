@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -8,6 +9,7 @@ import {
   type LastVerdictDeps,
 } from '../../orchestrator/src/review-cache.js'
 import { REPO } from '../../orchestrator/src/gh.js'
+import { CI_DIFF_FLAGS } from '../../orchestrator/src/ci.js'
 
 /**
  * #1394: a push must never start a review. #2014: nor may it conclude green
@@ -456,8 +458,13 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
     onlyReads(g.ghCalls)
   })
 
+  // The #1975 reproduction itself: a PASS recorded under the pre-#2014 name
+  // for THIS diff — `fleet-review-pass-pr<N>-<sha256(diff)[0:24]>`, the
+  // name the four green runs on #1975 found. The diff-keyed gate hits it and
+  // concludes `cache-hit` green; the tree-keyed one never asks for it.
   it('a pre-#2014 diff-keyed PASS for the same diff is never found — no record from that era can hit', () => {
-    const oldName = `fleet-review-pass-pr${PR}-${'ef'.repeat(12)}`
+    const rebasedDiff = git('diff', ...CI_DIFF_FLAGS, `${base2}...${rebased}`) + '\n'
+    const oldName = `fleet-review-pass-pr${PR}-${createHash('sha256').update(rebasedDiff).digest('hex').slice(0, 24)}`
     const g = reviewGate({
       action: 'synchronize', head: rebased, base: base2,
       routes: [
@@ -465,6 +472,7 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
         ...passRecordedFor(tree1), ...earnedOn(tree1),
       ],
     })
+    expect(g.status, g.out).toBe(1)
     expect(g.outputs['outcome']).toBe('tree-changed')
     expect(g.ghCalls.some((c) => c.join(' ').includes(oldName))).toBe(false)
   })
