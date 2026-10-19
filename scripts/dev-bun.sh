@@ -24,7 +24,17 @@ fi
 
 source "$PROJECT_DIR/scripts/lib/worktree-db.sh"
 
-COMPOSE="docker compose --project-directory $PROJECT_DIR -f $COMPOSE_FILE"
+# One shared dev stack, addressed by a fixed project name — never inherited.
+# The stack publishes fixed host ports (5432, 9000) and holds every worktree's own
+# database, so a project per worktree would collide on those ports instead of
+# isolating anything. The name below is the `name:` in docker-compose.dev.yml.
+# `-p` outranks COMPOSE_PROJECT_NAME, which the sourced .env (or the caller) may
+# carry from some other worktree (`pt1453`); dropping it keeps child processes from
+# resolving a different project than the one we manage.
+DEV_COMPOSE_PROJECT="llamenos-dev"
+unset COMPOSE_PROJECT_NAME
+
+COMPOSE="docker compose -p $DEV_COMPOSE_PROJECT --project-directory $PROJECT_DIR -f $COMPOSE_FILE"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
