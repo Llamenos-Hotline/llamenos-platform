@@ -65,7 +65,7 @@ function isEngineId(v: unknown): v is EngineId {
  * Parses one lane's file entry into an override, or returns a rejection
  * reason. Two shapes are accepted, backward compatible:
  *   "backend": "live"
- *   "backend": {"mode":"live","engine":"opencode","model":"kimi-for-coding/k3-256k"}
+ *   "backend": {"mode":"live","engine":"opencode","model":"kimi-code-plan-global/k3-256k"}
  *
  * Fail CLOSED, never throw: any malformed entry — unknown keys, an invalid
  * mode or engine, a non-string model — rejects that one lane (the caller
