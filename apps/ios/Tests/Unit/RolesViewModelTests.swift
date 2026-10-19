@@ -64,18 +64,17 @@ struct RolesViewModelTests {
     @Test func loadRolesPopulatesSortedList() async {
         let mock = MockRolesAPIService()
         mock.listRolesResult = .success(RoleListResponse(roles: [
-            makeSystemRole(id: "r1", slug: "volunteer", name: "Volunteer", isDefault: true),
-            makeSystemRole(id: "r2", slug: "admin", name: "Admin"),
-            makeSystemRole(id: "r3", slug: "viewer", name: "Viewer", isSystem: false),
+            makeSystemRole(id: "r1", slug: "viewer", name: "Viewer", isSystem: false),
+            makeSystemRole(id: "r2", slug: "volunteer", name: "Volunteer", isSystem: false, isDefault: true),
+            makeSystemRole(id: "r3", slug: "admin", name: "Admin"),
+            makeSystemRole(id: "r4", slug: "auditor", name: "Auditor", isSystem: false),
         ]))
         let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService())
         await vm.loadRoles(includeCatalog: false)
-        #expect(vm.roles.count == 3)
+        #expect(vm.roles.count == 4)
         #expect(vm.isLoading == false)
-        // System roles first, then default, then alphabetical
-        #expect(vm.roles[0].slug == "admin")
-        #expect(vm.roles[1].slug == "volunteer")
-        #expect(vm.roles[2].slug == "viewer")
+        // System roles first, then the default role, then alphabetical by name
+        #expect(vm.roles.map(\.slug) == ["admin", "volunteer", "auditor", "viewer"])
     }
 
     @Test func systemRoleUsesPlaintextName() async {
