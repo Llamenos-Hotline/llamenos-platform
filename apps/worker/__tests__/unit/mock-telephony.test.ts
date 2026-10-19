@@ -10,10 +10,21 @@ import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib
 import type { Env } from '@worker/types'
 import type { TelephonyProviderConfig } from '@shared/types'
 
-const ALLOWED = { ENVIRONMENT: 'demo', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }
+/**
+ * The configuration in which the mock provider is constructible, as of #1604:
+ * `devSurfacesEnabled` (apps/worker/lib/dev-surfaces.ts) — an ENVIRONMENT on the
+ * ['development', 'staging'] allowlist, the explicit flag, and a >= 32-char
+ * secret on anything but `development`. It used to be
+ * `{ ENVIRONMENT: 'demo', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }`.
+ */
+const ALLOWED = {
+  ENVIRONMENT: 'development',
+  DEV_ROUTES_ENABLED: 'true',
+  DEV_RESET_SECRET: 'a'.repeat(32),
+}
 
 describe('mock telephony environment guard', () => {
-  it.each(['development', 'staging', 'demo'])('is allowed in %s with DEMO_MODE confirmed', (environment) => {
+  it.each(['development', 'staging'])('is allowed in %s with the flag and a strong secret', (environment) => {
     expect(isMockTelephonyAllowed({ ...ALLOWED, ENVIRONMENT: environment })).toBe(true)
     expect(() => assertMockTelephonyAllowed({ ...ALLOWED, ENVIRONMENT: environment })).not.toThrow()
   })
@@ -22,7 +33,7 @@ describe('mock telephony environment guard', () => {
     for (const environment of ['production', 'Production', ' production ']) {
       const env = { ...ALLOWED, ENVIRONMENT: environment }
       expect(isMockTelephonyAllowed(env)).toBe(false)
-      expect(mockTelephonyRefusalReason(env)).toBe('ENVIRONMENT=production')
+      expect(mockTelephonyRefusalReason(env)).toBe('ENVIRONMENT=production never serves /api/test-*')
       expect(() => new MockTelephonyAdapter(env, '+15555550100')).toThrow(MockTelephonyRefusedError)
     }
   })
@@ -33,15 +44,27 @@ describe('mock telephony environment guard', () => {
     expect(isMockTelephonyAllowed({ ...ALLOWED, ENVIRONMENT: '' })).toBe(false)
   })
 
-  it('refuses without DEMO_MODE=true', () => {
-    expect(isMockTelephonyAllowed({ ...ALLOWED, DEMO_MODE: undefined })).toBe(false)
-    expect(isMockTelephonyAllowed({ ...ALLOWED, DEMO_MODE: 'false' })).toBe(false)
-    expect(isMockTelephonyAllowed({ ...ALLOWED, DEMO_MODE: '1' })).toBe(false)
+  // #1604 moved this gate from DEMO_MODE + DEMO_MODE_CONFIRM onto
+  // `devSurfacesEnabled` — the same declaration that opens `/api/test-*`. These
+  // assert the three factors that predicate requires, in place of the two demo
+  // flags that used to stand here.
+  it('refuses without DEV_ROUTES_ENABLED=true', () => {
+    expect(isMockTelephonyAllowed({ ...ALLOWED, DEV_ROUTES_ENABLED: undefined })).toBe(false)
+    expect(isMockTelephonyAllowed({ ...ALLOWED, DEV_ROUTES_ENABLED: 'false' })).toBe(false)
+    expect(isMockTelephonyAllowed({ ...ALLOWED, DEV_ROUTES_ENABLED: '1' })).toBe(false)
   })
 
-  it('refuses without the DEMO_MODE_CONFIRM two-factor value', () => {
-    expect(isMockTelephonyAllowed({ ...ALLOWED, DEMO_MODE_CONFIRM: undefined })).toBe(false)
-    expect(isMockTelephonyAllowed({ ...ALLOWED, DEMO_MODE_CONFIRM: 'yes' })).toBe(false)
+  it('refuses on a reachable environment without a strong secret', () => {
+    const staging = { ...ALLOWED, ENVIRONMENT: 'staging' }
+    expect(isMockTelephonyAllowed({ ...staging, DEV_RESET_SECRET: undefined })).toBe(false)
+    expect(isMockTelephonyAllowed({ ...staging, DEV_RESET_SECRET: 'short' })).toBe(false)
+    expect(isMockTelephonyAllowed({ ...staging, DEV_RESET_SECRET: 'a'.repeat(32) })).toBe(true)
+  })
+
+  it('refuses the demo environment name the old gate allowed', () => {
+    // The removed gate accepted ENVIRONMENT=demo; the dev-surface allowlist is
+    // ['development', 'staging'] only, so this is now strictly narrower.
+    expect(isMockTelephonyAllowed({ ...ALLOWED, ENVIRONMENT: 'demo' })).toBe(false)
   })
 })
 
@@ -81,7 +104,7 @@ describe('MockTelephonyAdapter', () => {
   })
 })
 
-describe('adapter factory selects the mock per hub, and refuses it outside demo mode', () => {
+describe('adapter factory selects the mock per hub, and refuses it where the dev surface is closed', () => {
   const mockConfig = { type: 'mock', phoneNumber: '+15555550100' } as unknown as TelephonyProviderConfig
   const settings = (hubConfig: TelephonyProviderConfig | null) => ({
     getHubTelephonyProvider: async () => hubConfig,
@@ -89,7 +112,7 @@ describe('adapter factory selects the mock per hub, and refuses it outside demo 
   })
   const env = (over: Record<string, string>) => ({ ...over }) as unknown as Env
 
-  it('returns a MockTelephonyAdapter for a hub configured with type mock in demo mode', async () => {
+  it('returns a MockTelephonyAdapter for a hub configured with type mock on a test instance', async () => {
     const adapter = await getHubTelephonyFromService(env(ALLOWED), settings(mockConfig), 'hub-1')
     expect(adapter).toBeInstanceOf(MockTelephonyAdapter)
   })
@@ -106,7 +129,7 @@ describe('adapter factory selects the mock per hub, and refuses it outside demo 
     expect(await getTelephonyFromService(withTwilioEnv, { getTelephonyProvider: async () => mockConfig })).toBeNull()
   })
 
-  it('returns null without DEMO_MODE_CONFIRM', async () => {
-    expect(await getHubTelephonyFromService(env({ ...ALLOWED, DEMO_MODE_CONFIRM: '' }), settings(mockConfig), 'hub-1')).toBeNull()
+  it('returns null without DEV_ROUTES_ENABLED', async () => {
+    expect(await getHubTelephonyFromService(env({ ...ALLOWED, DEV_ROUTES_ENABLED: '' }), settings(mockConfig), 'hub-1')).toBeNull()
   })
 })

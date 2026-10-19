@@ -4,7 +4,13 @@ import { config } from 'dotenv'
 // Load .env.live for Twilio credentials and staging config
 config({ path: '.env.live' })
 
-const baseURL = process.env.LIVE_BASE_URL || 'https://demo-next.llamenos-platform.com'
+// No default. The old one named the demo instance, which #1604 retired along with demo
+// mode — a live suite silently pointed at a host that no longer exists reports a deploy
+// failure that is really a config failure. Say which deployment to check, or do not run.
+const baseURL = process.env.LIVE_BASE_URL
+if (!baseURL) {
+  throw new Error('LIVE_BASE_URL is required: the live suite has no default deployment to check')
+}
 
 export default defineConfig({
   testDir: './tests/live',

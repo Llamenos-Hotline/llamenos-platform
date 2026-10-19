@@ -4,7 +4,7 @@
  *
  * The other two are `apps/worker/lib/dev-surfaces.ts` (the router and every
  * route answer 404) and `deploy/ansible` (the `.env` is never rendered, and
- * `playbooks/tasks/guard-demo-mode.yml` hard-fails the combination before any
+ * `playbooks/tasks/guard-dev-routes.yml` hard-fails the combination before any
  * file reaches the host).
  *
  * Why a startup refusal and not just the 404: a production process configured

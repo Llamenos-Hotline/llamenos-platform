@@ -40,7 +40,7 @@ export interface CreateNoteInput {
   fieldEnvelopes?: unknown
   authorEnvelope: unknown
   adminEnvelopes?: unknown[]
-  /** Explicit creation time — only for seeding historical demo data. */
+  /** Explicit creation time — only for seeding the historical sample dataset. */
   createdAt?: Date
 }
 
@@ -489,7 +489,7 @@ export class RecordsService {
   }
 
   // -----------------------------------------------------------------------
-  // Reset (demo/development only)
+  // Reset (the secret-gated dev surface only)
   // -----------------------------------------------------------------------
 
   async reset(): Promise<void> {

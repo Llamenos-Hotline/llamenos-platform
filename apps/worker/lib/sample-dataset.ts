@@ -1,27 +1,61 @@
 /**
- * The fixed demo dataset — hand-authored, obviously fictional.
+ * The fixed sample dataset — hand-authored, obviously fictional.
  *
  * Everything here is invented: people are named "Example"/"Sample"/"Placeholder",
  * phone numbers sit in the reserved fictional 555-01xx range, and note text is
  * generic hotline content with no real-world identifiers. This file is plain
- * data (no crypto, no I/O); `services/demo-seeder.ts` encrypts and stores it.
+ * data (no crypto, no I/O); `services/sample-seeder.ts` encrypts and stores it.
+ *
+ * This is a TEST affordance, not a product mode. It was written for a public
+ * demo instance; #1604 retired the demo product (the only two deployment shapes
+ * are the secure hosted one and the self-hosted one) and kept the dataset,
+ * because a deployed test instance still needs realistic seeded data to
+ * exercise flows against. The one way to seed it is `POST /api/test-seed-sample`
+ * on the secret-gated dev surface (lib/dev-surfaces.ts).
  *
  * Times are expressed as offsets from "now" (seed time) so the schedule and
- * call log always look current after each reset.
+ * call log always look current after each re-seed.
  */
 import type { MessagingChannelType } from '@protocol/schemas/settings'
 
-/** Stable hub identity so a re-seed replaces the previous demo hub instead of adding another. */
-export const DEMO_HUB = {
+/** Stable hub identity so a re-seed replaces the previous sample hub instead of adding another. */
+export const SAMPLE_HUB = {
   id: 'd3e0d3e0-0000-4000-8000-000000000001',
-  name: 'Demo Hotline',
-  slug: 'demo-hotline',
-  description: 'Fictional demonstration hub. All people, numbers and notes are invented sample data.',
+  name: 'Sample Hotline',
+  slug: 'sample-hotline',
+  description: 'Fictional sample hub. All people, numbers and notes are invented test data.',
 } as const
 
-/** Display names of the demo accounts the dataset is written around (see @shared/demo-accounts). */
-export const DEMO_CAST = {
-  admin: 'Demo Admin',
+/**
+ * The sample cast's account metadata. Carries NO key material: the accounts'
+ * Ed25519 signing seeds are generated per process by `lib/sample-identities.ts`
+ * and exist nowhere else.
+ *
+ * This used to live in `packages/shared/demo-accounts.ts` so the login page's
+ * demo account picker could render it. That picker — and the unauthenticated
+ * `GET /api/config/demo/credentials` that fed it seeds — went with demo mode
+ * (#1604), leaving the seeder as the only consumer, so the list moved here and
+ * lost the two fields only the picker used (a `description` string and a
+ * legacy secp256k1 handle).
+ */
+export interface SampleAccount {
+  name: string
+  roleIds: string[]
+  phone: string
+  spokenLanguages: string[]
+}
+
+export const SAMPLE_ACCOUNTS: readonly SampleAccount[] = [
+  { name: 'Sample Admin', roleIds: ['role-super-admin'], phone: '+15551000001', spokenLanguages: ['en', 'es'] },
+  { name: 'Maria Santos', roleIds: ['role-volunteer'], phone: '+15551000002', spokenLanguages: ['en', 'es', 'pt'] },
+  { name: 'James Chen', roleIds: ['role-volunteer'], phone: '+15551000003', spokenLanguages: ['en', 'zh'] },
+  { name: 'Fatima Al-Rashid', roleIds: ['role-volunteer'], phone: '+15551000004', spokenLanguages: ['en', 'ar'] },
+  { name: 'Community Reporter', roleIds: ['role-reporter'], phone: '+15551000005', spokenLanguages: ['en'] },
+]
+
+/** Display names of the sample accounts the dataset is written around. */
+export const SAMPLE_CAST = {
+  admin: 'Sample Admin',
   maria: 'Maria Santos',
   james: 'James Chen',
 } as const
@@ -30,12 +64,12 @@ type Volunteer = 'maria' | 'james'
 
 // ─── Shifts ──────────────────────────────────────────────────────────────────
 // Three 8-hour windows on all seven days cover the whole 24h clock (UTC), and
-// James Chen is on every window — so the demo volunteer is on shift whenever
+// James Chen is on every window — so the sample volunteer is on shift whenever
 // someone looks. Maria overlaps the two daytime windows.
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 
-export const DEMO_SHIFTS: ReadonlyArray<{
+export const SAMPLE_SHIFTS: ReadonlyArray<{
   name: string
   startTime: string
   endTime: string
@@ -49,7 +83,7 @@ export const DEMO_SHIFTS: ReadonlyArray<{
 
 // ─── Calls + notes ───────────────────────────────────────────────────────────
 
-export interface DemoCall {
+export interface SampleCall {
   key: string
   hoursAgo: number
   durationSeconds: number
@@ -62,7 +96,7 @@ export interface DemoCall {
 }
 
 /** Twelve calls across the last fortnight, newest first. Eight carry a note. */
-export const DEMO_CALLS: ReadonlyArray<DemoCall> = [
+export const SAMPLE_CALLS: ReadonlyArray<SampleCall> = [
   {
     key: 'call-01', hoursAgo: 3, durationSeconds: 612, callerLast4: '0142', answeredBy: 'james',
     note: 'Caller has felt very isolated since moving to a new city. We talked through a simple evening routine and I shared the hub\'s peer-support group schedule. Caller said they would try the Thursday meetup.',
@@ -111,18 +145,18 @@ export const DEMO_CALLS: ReadonlyArray<DemoCall> = [
 
 // ─── Contacts ────────────────────────────────────────────────────────────────
 
-export type DemoContactType = 'individual' | 'organization' | 'legal_resource' | 'service_provider'
+export type SampleContactType = 'individual' | 'organization' | 'legal_resource' | 'service_provider'
 
-export interface DemoContact {
+export interface SampleContact {
   key: string
   displayName: string
-  contactType: DemoContactType
+  contactType: SampleContactType
   tags: string[]
   /** Fictional phone number (reserved 555-01xx range) used only as a blind-index identifier. */
   phone: string
 }
 
-export const DEMO_CONTACTS: ReadonlyArray<DemoContact> = [
+export const SAMPLE_CONTACTS: ReadonlyArray<SampleContact> = [
   { key: 'contact-1', displayName: 'Riley Example', contactType: 'individual', tags: ['follow-up'], phone: '+15555550142' },
   { key: 'contact-2', displayName: 'Sam Sample', contactType: 'individual', tags: ['caregiver'], phone: '+15555550177' },
   { key: 'contact-3', displayName: 'Jordan Placeholder', contactType: 'individual', tags: ['regular-caller'], phone: '+15555550163' },
@@ -130,12 +164,12 @@ export const DEMO_CONTACTS: ReadonlyArray<DemoContact> = [
   { key: 'contact-5', displayName: 'Example Tenants Legal Clinic', contactType: 'legal_resource', tags: ['housing', 'referral'], phone: '+15555550111' },
   { key: 'contact-6', displayName: 'Sample Community Pantry', contactType: 'service_provider', tags: ['food', 'referral'], phone: '+15555550122' },
   { key: 'contact-7', displayName: 'Placeholder Caregiver Respite Line', contactType: 'service_provider', tags: ['respite', 'referral'], phone: '+15555550133' },
-  { key: 'contact-8', displayName: 'Demo Peer Support Collective', contactType: 'organization', tags: ['peer-support'], phone: '+15555550144' },
+  { key: 'contact-8', displayName: 'Sample Peer Support Collective', contactType: 'organization', tags: ['peer-support'], phone: '+15555550144' },
 ]
 
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
-export const DEMO_ENTITY_TYPE = {
+export const SAMPLE_ENTITY_TYPE = {
   name: 'support_case',
   label: 'Support Case',
   labelPlural: 'Support Cases',
@@ -149,17 +183,17 @@ export const DEMO_ENTITY_TYPE = {
   ],
   defaultStatus: 'open',
   closedStatuses: ['resolved'],
-  numberPrefix: 'DEMO',
+  numberPrefix: 'SAMPLE',
   numberingEnabled: true,
 } as const
 
-export interface DemoCase {
+export interface SampleCase {
   key: string
   title: string
   description: string
   status: 'open' | 'in_progress' | 'resolved'
   assignedTo: Volunteer
-  /** Keys of DEMO_CONTACTS linked to this case. */
+  /** Keys of SAMPLE_CONTACTS linked to this case. */
   contacts: string[]
   /** Timeline, oldest first. `noteOfCall` links the note written on that call. */
   timeline: ReadonlyArray<
@@ -169,7 +203,7 @@ export interface DemoCase {
   >
 }
 
-export const DEMO_CASES: ReadonlyArray<DemoCase> = [
+export const SAMPLE_CASES: ReadonlyArray<SampleCase> = [
   {
     key: 'case-1',
     title: 'Caregiver support follow-up',
@@ -201,7 +235,7 @@ export const DEMO_CASES: ReadonlyArray<DemoCase> = [
 
 // ─── Conversations (one per configured messaging channel) ───────────────────
 
-export interface DemoConversation {
+export interface SampleConversation {
   /** Fictional sender number/handle used to derive the blind-index hash. */
   sender: string
   last4: string
@@ -209,7 +243,7 @@ export interface DemoConversation {
   messages: ReadonlyArray<{ direction: 'inbound' | 'outbound'; text: string }>
 }
 
-export const DEMO_CONVERSATIONS: Record<MessagingChannelType, DemoConversation> = {
+export const SAMPLE_CONVERSATIONS: Record<MessagingChannelType, SampleConversation> = {
   sms: {
     sender: '+15555550151', last4: '0151', assignedTo: 'maria',
     messages: [
@@ -235,7 +269,7 @@ export const DEMO_CONVERSATIONS: Record<MessagingChannelType, DemoConversation> 
     ],
   },
   telegram: {
-    sender: '@demo_sample_contact', last4: '0154', assignedTo: 'maria',
+    sender: '@sample_contact', last4: '0154', assignedTo: 'maria',
     messages: [
       { direction: 'inbound', text: 'Hey, do you have a list of local support groups?' },
       { direction: 'outbound', text: 'We do! I will send you the current schedule. Is there a particular topic you are looking for?' },
@@ -253,7 +287,7 @@ export const DEMO_CONVERSATIONS: Record<MessagingChannelType, DemoConversation> 
 // ─── Audit trail ─────────────────────────────────────────────────────────────
 
 /** Volunteer actions appear in the audit log with the real action names the app uses. */
-export const DEMO_ADMIN_AUDIT_ACTIONS: ReadonlyArray<{ hoursAgo: number; action: string; details: Record<string, unknown> }> = [
+export const SAMPLE_ADMIN_AUDIT_ACTIONS: ReadonlyArray<{ hoursAgo: number; action: string; details: Record<string, unknown> }> = [
   { hoursAgo: 330, action: 'userAdded', details: { name: 'Maria Santos' } },
   { hoursAgo: 330, action: 'userAdded', details: { name: 'James Chen' } },
   { hoursAgo: 328, action: 'shiftCreated', details: { name: 'Morning Line' } },

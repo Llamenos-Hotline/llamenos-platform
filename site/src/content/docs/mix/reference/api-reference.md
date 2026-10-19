@@ -81,8 +81,6 @@ Devuelve configuración hub pública, canales habilitados, ni identidad servidor
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "..." }],
   "defaultHubId": "...",
@@ -1377,7 +1375,7 @@ POST /api/setup/complete
 **Cuerpo:**
 
 ```json
-{ "demoMode": false }
+{}
 ```
 
 También crea hub por defecto si ninguno existe.

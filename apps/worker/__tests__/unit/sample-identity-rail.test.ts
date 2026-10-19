@@ -1,31 +1,45 @@
 /**
- * Rail: a deployment that is not a development server cannot create, register
- * or reveal a demo identity, and the demo signing seeds this repository once
- * published never come back.
+ * Rail: nothing can create, register or reveal a sample identity unless this
+ * host may serve the `/api/test-*` surface at all, `ENVIRONMENT=production`
+ * never can, and the sample signing seeds this repository once published never
+ * come back.
  *
- * Every row of the environment matrix is a configuration someone could give the
- * shipped image — which is the same image CI tests under
- * ENVIRONMENT=development + DEV_ROUTES_ENABLED=true. Every row carries both
- * demo flags and a setup-state row claiming demo mode, so the only thing
- * standing between it and a demo super-admin is the development-server gate.
+ * ## What #1604 changed here, and what it did not
+ *
+ * This file used to assert that the seeds were mintable ONLY on
+ * `ENVIRONMENT=development` — a second predicate (`demoSurfacesEnabled`)
+ * narrower than `devSurfacesEnabled`, which the staging allowlist had widened
+ * for the end-to-end suite. The reason was not the seeds themselves: it was
+ * that the same seeds were handed to an UNAUTHENTICATED login picker,
+ * `GET /api/config/demo/credentials`, so widening the predicate would have
+ * published a super-admin seed on a reachable host.
+ *
+ * #1604 deleted that picker, and `POST /api/demo/reset`, with the rest of demo
+ * mode. What remains is a secret-gated `/test-*` route handing out seeds for a
+ * fictional cast on a host that already serves `POST /api/test-reset` behind
+ * the same credential — strictly less authority than that caller holds already.
+ * So the narrow predicate is gone and the surviving rail is the one asserted
+ * below. It is deliberately NOT weaker where it matters: production is still
+ * refused with every flag and a strong secret set, and the matrix still runs
+ * every row of it.
+ *
+ * Every row of the matrix is a configuration someone could give the shipped
+ * image — the same image CI tests under ENVIRONMENT=development +
+ * DEV_ROUTES_ENABLED=true.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { Hono } from 'hono'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import type { AppEnv } from '@worker/types'
 import type { Services } from '@worker/services'
-import configRoute from '@worker/routes/config'
-import demoRoute from '@worker/routes/demo'
-import { demoIdentities, DemoIdentitiesUnavailableError } from '@worker/lib/demo-identities'
-import { devSurfacesEnabled, demoSurfacesEnabled, MIN_DEPLOYED_SECRET_LENGTH } from '@worker/lib/dev-surfaces'
-import { resetDemoData, seedDemoDataset } from '@worker/services/demo-seeder'
+import { sampleIdentities, SampleIdentitiesUnavailableError } from '@worker/lib/sample-identities'
+import { devSurfacesEnabled, MIN_DEPLOYED_SECRET_LENGTH } from '@worker/lib/dev-surfaces'
+import { seedSampleDataset } from '@worker/services/sample-seeder'
 import { isRevokedSigningKey, revokedSigningKeys } from '@worker/lib/revoked-signing-keys'
 import { authenticateRequest, validateToken } from '@worker/lib/auth'
 import { IdentityService } from '@worker/services/identity'
 import { ErasureService } from '@worker/services/erasure'
-import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
+import { SAMPLE_ACCOUNTS } from '@worker/lib/sample-dataset'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
 import { trackedFiles } from '../../../../tests/orchestrator/codeowners'
 
@@ -39,36 +53,45 @@ vi.mock('@llamenos/crypto/ffi', async (importOriginal) => {
   }
 })
 
-const DEMO_FLAGS = { DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA', DEMO_RESET_CRON: 'daily' }
-const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' }
-
-const ENVIRONMENTS = ['production', 'staging', 'demo', 'test', '', undefined, 'Development', 'development ']
-const DEV_ROUTES = ['true', undefined, 'TRUE', '1']
-
 /**
  * Long enough to satisfy the deployed-target opt-in in lib/dev-surfaces.ts.
- * This is the third axis, and it is load-bearing: `ENVIRONMENT=staging` +
+ * Load-bearing as its own axis: `ENVIRONMENT=staging` +
  * `DEV_ROUTES_ENABLED=true` WITHOUT it leaves `devSurfacesEnabled` false, so a
- * matrix that omits it never exercises the one configuration the staging
- * allowlist newly opens. Every row below is run with the secret present and
+ * matrix that omitted it would never exercise the one configuration the
+ * staging allowlist opens. Every row below runs with the secret present and
  * absent.
  */
 const STRONG_SECRET = 'e'.repeat(MIN_DEPLOYED_SECRET_LENGTH)
 const RESET_SECRETS = [undefined, STRONG_SECRET]
 
-/** Every combination except the one development-server configuration. */
-const NOT_DEV: Array<Record<string, string | undefined>> = ENVIRONMENTS
+const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' }
+
+const ENVIRONMENTS = ['production', 'demo', 'test', '', undefined, 'Development', 'development ', 'Staging', 'staging ']
+const DEV_ROUTES = ['true', undefined, 'TRUE', '1']
+
+/**
+ * Every combination in which `devSurfacesEnabled` is FALSE — derived from the
+ * predicate rather than hand-listed, so a row cannot drift into the wrong set
+ * when the predicate changes. `production` with the flag and a strong secret is
+ * in here, which is the row that matters most.
+ */
+const CLOSED: Array<Record<string, string | undefined>> = ENVIRONMENTS
   .flatMap(ENVIRONMENT => DEV_ROUTES.flatMap(DEV_ROUTES_ENABLED =>
-    RESET_SECRETS.map(DEV_RESET_SECRET => ({ ...DEMO_FLAGS, ENVIRONMENT, DEV_ROUTES_ENABLED, DEV_RESET_SECRET }))))
-  .filter(env => !(env.ENVIRONMENT === 'development' && env.DEV_ROUTES_ENABLED === 'true'))
-  .concat(RESET_SECRETS.map(DEV_RESET_SECRET =>
-    ({ ...DEMO_FLAGS, ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: undefined, DEV_RESET_SECRET })))
+    RESET_SECRETS.map(DEV_RESET_SECRET => ({ ENVIRONMENT, DEV_ROUTES_ENABLED, DEV_RESET_SECRET }))))
+  .concat(RESET_SECRETS.flatMap(DEV_RESET_SECRET => [
+    { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: undefined, DEV_RESET_SECRET },
+    { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: undefined, DEV_RESET_SECRET },
+    // staging with the flag but no (or a too-short) secret
+    { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: undefined },
+    { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: 'e'.repeat(MIN_DEPLOYED_SECRET_LENGTH - 1) },
+  ]))
+  .filter(env => !devSurfacesEnabled(env))
 
 const label = (env: Record<string, string | undefined>) =>
   `ENVIRONMENT=${JSON.stringify(env.ENVIRONMENT)} DEV_ROUTES_ENABLED=${JSON.stringify(env.DEV_ROUTES_ENABLED)} ` +
-  `DEV_RESET_SECRET=${env.DEV_RESET_SECRET ? '(a strong secret)' : '(unset)'}`
+  `DEV_RESET_SECRET=${env.DEV_RESET_SECRET ? `(${env.DEV_RESET_SECRET.length} chars)` : '(unset)'}`
 
-/** Services that record every property touched — a refused request must touch none. */
+/** Services that record every property touched — a refused call must touch none. */
 function untouchableServices() {
   const touched: string[] = []
   const services = new Proxy({}, {
@@ -80,146 +103,63 @@ function untouchableServices() {
   return { services, touched }
 }
 
-/** A database whose setup state claims the wizard's demo toggle was ticked. */
-function demoClaimingServices(storedDemoMode = true) {
-  const getSetupState = vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: storedDemoMode })
-  const services = {
-    settings: {
-      getSetupState,
-      getEnabledChannels: vi.fn().mockResolvedValue({}),
-      getTelephonyProvider: vi.fn().mockResolvedValue(null),
-      getHubs: vi.fn().mockResolvedValue({ hubs: [] }),
-    },
-    identity: { hasAdmin: vi.fn().mockResolvedValue({ hasAdmin: true }) },
-  }
-  return { services: services as unknown as Services, getSetupState }
-}
-
-function appWith(env: Record<string, string | undefined>, services: Services, permissions: string[] = ['*']) {
-  const app = new Hono<AppEnv>()
-  app.use('*', async (c, next) => {
-    c.env = { HOTLINE_NAME: 'Rail', ...env } as unknown as AppEnv['Bindings']
-    c.set('services', services)
-    c.set('pubkey', 'a'.repeat(64))
-    c.set('permissions', permissions)
-    c.set('requestId', 'rail')
-    await next()
-  })
-  app.route('/config', configRoute)
-  app.route('/demo', demoRoute)
-  return app
-}
-
-describe('demo identities off a development server', () => {
-  it.each(NOT_DEV.map(env => [label(env), env]))('%s: cannot be generated', (_label, env) => {
-    expect(() => demoIdentities(env)).toThrow(DemoIdentitiesUnavailableError)
+describe('sample identities where the /api/test-* surface is closed', () => {
+  it('covers every closed row the matrix can produce, production included', () => {
+    expect(CLOSED.length).toBeGreaterThan(50)
+    expect(
+      CLOSED.some(e => e.ENVIRONMENT === 'production' && e.DEV_ROUTES_ENABLED === 'true' && e.DEV_RESET_SECRET === STRONG_SECRET),
+      'the production row with every other factor satisfied is the one this rail exists for',
+    ).toBe(true)
   })
 
-  it.each(NOT_DEV.map(env => [label(env), env]))('%s: are never revealed, and the database is never asked', async (_label, env) => {
-    const { services, getSetupState } = demoClaimingServices()
-    const res = await appWith(env, services).request('/config/demo/credentials')
-    expect(res.status).toBe(404)
-    expect(JSON.stringify(await res.json())).not.toMatch(/seed/i)
-    expect(getSetupState).not.toHaveBeenCalled()
+  it.each(CLOSED.map(env => [label(env), env]))('%s: cannot be generated', (_label, env) => {
+    expect(() => sampleIdentities(env)).toThrow(SampleIdentitiesUnavailableError)
   })
 
-  it.each(NOT_DEV.map(env => [label(env), env]))('%s: a stored demoMode flag does not switch demo mode on', async (_label, env) => {
-    const { services } = demoClaimingServices()
-    const res = await appWith({ ...env, DEMO_MODE: undefined }, services).request('/config')
-    expect(res.status).toBe(200)
-    expect((await res.json()).demoMode).toBe(false)
-  })
-
-  it.each(NOT_DEV.map(env => [label(env), env]))('%s: the demo reset registers nothing', async (_label, env) => {
-    const { services, touched } = untouchableServices()
-    const res = await appWith(env, services).request('/demo/reset', { method: 'POST' })
-    expect(res.status).toBe(403)
-    expect(touched).toEqual([])
-  })
-
-  it.each(NOT_DEV.map(env => [label(env), env]))('%s: the seeder refuses before touching any service', async (_label, env) => {
+  it.each(CLOSED.map(env => [label(env), env]))('%s: the seeder refuses before touching any service', async (_label, env) => {
     const seeded = untouchableServices()
-    await expect(seedDemoDataset(seeded.services, { ...env, ENVIRONMENT: env.ENVIRONMENT ?? '', HMAC_SECRET: 'x' }))
-      .rejects.toThrow(DemoIdentitiesUnavailableError)
+    await expect(seedSampleDataset(seeded.services, { ...env, ENVIRONMENT: env.ENVIRONMENT ?? '', HMAC_SECRET: 'x' }))
+      .rejects.toThrow(SampleIdentitiesUnavailableError)
     expect(seeded.touched).toEqual([])
-
-    const reset = untouchableServices()
-    await expect(resetDemoData(reset.services, { ...env, ENVIRONMENT: env.ENVIRONMENT ?? '', HMAC_SECRET: 'x' }))
-      .rejects.toThrow(DemoIdentitiesUnavailableError)
-    expect(reset.touched).toEqual([])
   })
 })
 
 /**
- * The one configuration the staging allowlist newly opens, called out on its own
- * because the matrix above used to miss it: `ENVIRONMENT=staging` +
- * `DEV_ROUTES_ENABLED=true` + a strong `DEV_RESET_SECRET`. Here
- * `devSurfacesEnabled` is TRUE — that is the whole point, `/api/test-*` is
- * served — so anything that rode on that predicate silently changed meaning.
- * The demo surfaces must not ride on it.
+ * The configuration #1604 opened: `ENVIRONMENT=staging` +
+ * `DEV_ROUTES_ENABLED=true` + a strong `DEV_RESET_SECRET`. This is asserted
+ * POSITIVELY and on purpose — it is the change, and the seven deployed-target
+ * end-to-end scenarios that could not seed their fixture are what it is for
+ * (#1625). A test that only said "no" here would pass just as well if the
+ * removal had never happened.
  */
 describe('a fully opted-in staging end-to-end target', () => {
   const STAGING_E2E = { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET }
 
-  it('is a host whose DEV surface is open and whose DEMO surface is not', () => {
+  it('may mint the sample cast, because its /api/test-* surface is open', () => {
     expect(devSurfacesEnabled(STAGING_E2E)).toBe(true)
-    expect(demoSurfacesEnabled(STAGING_E2E)).toBe(false)
+    const identities = sampleIdentities(STAGING_E2E)
+    expect(identities.map(i => i.name)).toEqual(SAMPLE_ACCOUNTS.map(a => a.name))
   })
 
-  it('refuses the signing seeds with a 404 decided before the database is read', async () => {
-    const { services, getSetupState } = demoClaimingServices()
-    const res = await appWith({ ...DEMO_FLAGS, ...STAGING_E2E }, services).request('/config/demo/credentials')
-    // 404, NOT the 500 that `demoIdentities()` throwing one layer below the
-    // guard would produce: non-disclosure rests on the guard, not on a throw.
-    expect(res.status).toBe(404)
-    expect(JSON.stringify(await res.json())).not.toMatch(/seed/i)
-    expect(getSetupState).not.toHaveBeenCalled()
-  })
-
-  it('is not put into demo mode by a stored database flag', async () => {
-    const { services } = demoClaimingServices()
-    const res = await appWith({ ...STAGING_E2E, DEMO_MODE: undefined }, services).request('/config')
-    expect(res.status).toBe(200)
-    expect((await res.json() as { demoMode: boolean }).demoMode).toBe(false)
-  })
-
-  // The deliberate other half of the decision: `DEMO_MODE` is deployment
-  // configuration an operator set on purpose, and it drives the demo BANNER —
-  // a warning that nothing here is real. A warning is not a capability, and
-  // suppressing it on a reachable host would be the less safe choice, so this
-  // arm is unchanged. The capability (the seeds above) stays refused.
-  it('still reports demo mode when the operator set DEMO_MODE, with no stored flag', async () => {
-    const { services } = demoClaimingServices(false)
-    const res = await appWith({ ...STAGING_E2E, DEMO_MODE: 'true' }, services).request('/config')
-    expect(res.status).toBe(200)
-    expect((await res.json() as { demoMode: boolean }).demoMode).toBe(true)
-  })
-
-  it('refuses the admin-authenticated demo reset without touching any service', async () => {
-    const { services, touched } = untouchableServices()
-    const res = await appWith({ ...DEMO_FLAGS, ...STAGING_E2E }, services).request('/demo/reset', { method: 'POST' })
-    expect(res.status).toBe(403)
-    expect(touched).toEqual([])
+  it('still refuses them on production with the same flag and secret', () => {
+    const PROD = { ...STAGING_E2E, ENVIRONMENT: 'production' }
+    expect(devSurfacesEnabled(PROD)).toBe(false)
+    expect(() => sampleIdentities(PROD)).toThrow(SampleIdentitiesUnavailableError)
   })
 })
 
-describe('demo identities on a development server (the control)', () => {
-  it('are generated in-process, one per demo account, and are none of the revoked keys', () => {
-    const identities = demoIdentities(DEV_SERVER)
-    expect(identities.map(i => i.name)).toEqual(DEMO_ACCOUNTS.map(a => a.name))
+describe('sample identities on a development server (the control)', () => {
+  it('are generated in-process, one per sample account, and are none of the revoked keys', () => {
+    const identities = sampleIdentities(DEV_SERVER)
+    expect(identities.map(i => i.name)).toEqual(SAMPLE_ACCOUNTS.map(a => a.name))
     for (const identity of identities) {
       expect(bytesToHex(ed25519.getPublicKey(hexToBytes(identity.seedHex)))).toBe(identity.pubkey)
       expect(isRevokedSigningKey(identity.pubkey)).toBe(false)
     }
   })
 
-  it('are handed to the login picker in demo mode, keyed by the listed handle', async () => {
-    const { services } = demoClaimingServices()
-    const res = await appWith({ ...DEV_SERVER, DEMO_MODE: undefined }, services).request('/config/demo/credentials')
-    expect(res.status).toBe(200)
-    const { credentials } = await res.json() as { credentials: Array<{ pubkey: string; seedHex: string }> }
-    const identities = demoIdentities(DEV_SERVER)
-    expect(credentials).toEqual(identities.map(i => ({ pubkey: i.listedPubkey, seedHex: i.seedHex })))
+  it('are the same objects on a second call — one set per process, never regenerated', () => {
+    expect(sampleIdentities(DEV_SERVER)).toBe(sampleIdentities(DEV_SERVER))
   })
 })
 
@@ -244,8 +184,8 @@ function candidateSeeds(line: string): string[] {
 describe('the signing keys whose seeds this repository published', () => {
   const revoked = [...revokedSigningKeys()]
 
-  it('are five, one per demo account that ever shipped seeds', () => {
-    expect(revoked).toHaveLength(DEMO_ACCOUNTS.length)
+  it('are five, one per sample account that ever shipped seeds', () => {
+    expect(revoked).toHaveLength(SAMPLE_ACCOUNTS.length)
     for (const key of revoked) expect(key).toMatch(/^[0-9a-f]{64}$/)
   })
 
@@ -372,6 +312,6 @@ describe('the signing keys whose seeds this repository published', () => {
       })
     }
     expect(scanned).toBeGreaterThan(1000)
-    expect(hits, `published demo seeds are back in the tree:\n${hits.join('\n')}`).toEqual([])
+    expect(hits, `published sample-account seeds are back in the tree:\n${hits.join('\n')}`).toEqual([])
   })
 })

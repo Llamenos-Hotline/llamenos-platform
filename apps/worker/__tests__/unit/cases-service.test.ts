@@ -548,43 +548,51 @@ describe('CasesService — Evidence verification', () => {
 // ---------------------------------------------------------------------------
 
 describe('CasesService — Reset safety', () => {
-  it('throws 403 outside demo/development mode', async () => {
-    const svc = new CasesService({} as never)
+  // Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts) since #1604 — see
+  // identity-service.test.ts for the four directions and why the DEMO_MODE /
+  // DEMO_MODE_CONFIRM pair this used to assert is gone.
+  const SECRET = 'a'.repeat(64)
+  const STAGING = { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }
+
+  it('refuses on ENVIRONMENT=production even with a valid secret', async () => {
+    const db = { delete: vi.fn().mockResolvedValue(undefined) }
+    const svc = new CasesService(db as never)
     await expect(
-      svc.reset({ DEMO_MODE: 'false', ENVIRONMENT: 'production' }),
-    ).rejects.toThrow('Reset not allowed')
+      svc.reset({ ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET),
+    ).rejects.toThrow('ENVIRONMENT=production never serves /api/test-*')
+    expect(db.delete).not.toHaveBeenCalled()
   })
 
-  it('throws 403 when DEMO_MODE=true but DEMO_MODE_CONFIRM is missing', async () => {
-    const svc = new CasesService({} as never)
-    await expect(
-      svc.reset({ DEMO_MODE: 'true', ENVIRONMENT: 'staging' }),
-    ).rejects.toThrow('DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
+  it('refuses on staging without the secret', async () => {
+    const db = { delete: vi.fn().mockResolvedValue(undefined) }
+    const svc = new CasesService(db as never)
+    await expect(svc.reset(STAGING, undefined)).rejects.toThrow('requires the dev-surface shared secret')
+    expect(db.delete).not.toHaveBeenCalled()
   })
 
-  it('throws 403 when DEMO_MODE=true but DEMO_MODE_CONFIRM has wrong value', async () => {
-    const svc = new CasesService({} as never)
-    await expect(
-      svc.reset({ DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'yes', ENVIRONMENT: 'staging' }),
-    ).rejects.toThrow('DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
+  it('refuses on staging with the wrong secret', async () => {
+    const db = { delete: vi.fn().mockResolvedValue(undefined) }
+    const svc = new CasesService(db as never)
+    await expect(svc.reset(STAGING, 'b'.repeat(64))).rejects.toThrow('requires the dev-surface shared secret')
+    expect(db.delete).not.toHaveBeenCalled()
   })
 
-  it('allows reset in demo mode with confirmation and deletes all case tables', async () => {
+  it('allows the reset on staging with the correct secret and deletes all case tables', async () => {
     const db = { delete: vi.fn().mockResolvedValue(undefined) }
     const svc = new CasesService(db as never)
 
-    await svc.reset({ DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA', ENVIRONMENT: 'staging' })
+    await svc.reset(STAGING, SECRET)
 
     // 9 tables must be cleared: custodyEntries, evidence, caseInteractions,
     // reportCases, reportEvents, caseEvents, caseContacts, events, caseRecords
     expect(db.delete).toHaveBeenCalledTimes(9)
   })
 
-  it('allows reset in development environment without DEMO_MODE_CONFIRM', async () => {
+  it('allows the reset on development with the configured secret', async () => {
     const db = { delete: vi.fn().mockResolvedValue(undefined) }
     const svc = new CasesService(db as never)
 
-    await svc.reset({ DEMO_MODE: 'false', ENVIRONMENT: 'development' })
+    await svc.reset({ ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET)
 
     expect(db.delete).toHaveBeenCalledTimes(9)
   })

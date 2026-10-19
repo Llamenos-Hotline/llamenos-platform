@@ -120,7 +120,6 @@ export function createMockEnv(overrides?: Partial<Env>): Env {
     ENVIRONMENT: 'test',
     // Valid 32-byte hex — needed by hashPhone() which calls hexToBytes(secret)
     HMAC_SECRET: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    DEMO_MODE: 'false',
   }
   return { ...defaultEnv, ...overrides }
 }

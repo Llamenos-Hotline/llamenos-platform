@@ -27,8 +27,11 @@ describe('isAllowedOAuthRedirectUrl', () => {
       expect(isAllowedOAuthRedirectUrl('https://app.llamenos-hotline.org/oauth/callback', prodEnv)).toBe(true)
     })
 
-    it('accepts https://demo.llamenos-platform.com', () => {
-      expect(isAllowedOAuthRedirectUrl('https://demo.llamenos-platform.com/oauth/callback', prodEnv)).toBe(true)
+    // Removed from the built-in set in #1604 with the rest of demo mode: an
+    // allowlist entry for a host nobody runs is a standing invitation to
+    // whoever registers it next.
+    it('refuses https://demo.llamenos-platform.com', () => {
+      expect(isAllowedOAuthRedirectUrl('https://demo.llamenos-platform.com/oauth/callback', prodEnv)).toBe(false)
     })
 
     it('accepts tauri://localhost for desktop', () => {

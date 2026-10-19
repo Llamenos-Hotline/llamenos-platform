@@ -10,7 +10,7 @@ wiring this role feeds).
 > setup live in [`deploy/PUSH_NOTIFICATIONS.md`](../../../PUSH_NOTIFICATIONS.md).
 > The token/ACL provisioning in `tasks/provision.yml` and the compose service
 > body in `templates/compose/_ntfy-service.j2` are also used by the
-> monolithic demo/staging role (`roles/llamenos`).
+> deprecated monolithic role (`roles/llamenos`).
 
 ## Why this needs its own role
 

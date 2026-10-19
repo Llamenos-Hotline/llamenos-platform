@@ -104,7 +104,7 @@
   delay: 3
   until: ntfy_health.status == 200
 
-# Token + ACL provisioning is shared with the monolithic demo/staging path
+# Token + ACL provisioning is shared with the deprecated monolithic path
 # (roles/llamenos/tasks/main.yml), which runs the same broker inside its own
 # compose project — see provision.yml for the contract.
 - name: Provision the publish account, token and access control

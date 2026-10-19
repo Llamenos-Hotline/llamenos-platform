@@ -15,14 +15,15 @@
  *     cannot open it, and neither can `demo`;
  *   - the flag alone is not enough, and the environment alone is not enough;
  *   - on a reachable environment a missing or short secret refuses;
- *   - the demo surfaces (signing seeds, demo reset) do NOT come along for the
- *     ride.
+ *   - `destructiveResetRefusal` — the service-level copy the four `reset()`
+ *     methods ask — preserves that ordering exactly, and additionally requires
+ *     the REQUEST to carry the secret.
  */
 import { describe, it, expect } from 'vitest'
 import {
   devSurfacesEnabled,
   devSurfacesRefusal,
-  demoSurfacesEnabled,
+  destructiveResetRefusal,
   devSurfaceSecretPresented,
   DEV_SURFACE_ENVIRONMENTS,
   MIN_DEPLOYED_SECRET_LENGTH,
@@ -60,8 +61,9 @@ describe('devSurfacesEnabled — the environment allowlist', () => {
   )
 
   // The allowlist is compared EXACTLY. `apps/worker/__tests__/unit/
-  // demo-identity-rail.test.ts` asserts the same for the demo surfaces, and a
-  // normalising comparison would silently accept spellings nobody configured.
+  // sample-identity-rail.test.ts` asserts the same for the sample-seed surfaces,
+  // and a normalising comparison would silently accept spellings nobody
+  // configured.
   it.each(['Development', 'development ', ' development', 'DEVELOPMENT', 'Staging', 'staging '])(
     'refuses the near-miss environment spelling %j',
     (environment) => {
@@ -146,20 +148,49 @@ describe('devSurfaceSecretPresented', () => {
   })
 })
 
-describe('demoSurfacesEnabled — NOT widened by the staging allowlist', () => {
-  // The demo surfaces mint the demo cast's Ed25519 signing seeds and re-seed
-  // their accounts. #723 decided they stay on a developer's own machine, and
-  // letting a test harness reach a staging box must not quietly change that.
-  it('is true on a development server', () => {
-    expect(demoSurfacesEnabled(DEV)).toBe(true)
+describe('destructiveResetRefusal — the service-level reset gate', () => {
+  // `IdentityService.reset`, `SettingsService.reset`, `ContactsService.reset`
+  // and `CasesService.reset` all ask this. Before #1604 they asked DEMO_MODE +
+  // DEMO_MODE_CONFIRM instead, with an `ENVIRONMENT === 'development'` escape
+  // hatch that needed no secret at all.
+  //
+  // Two properties, both asserted by trying to break them: production is
+  // refused BEFORE any secret is read, and the REQUEST must present the secret
+  // — never the host configuration alone.
+  it('refuses production even with the flag and a valid secret presented', () => {
+    const env = { ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG }
+    expect(destructiveResetRefusal(env, STRONG)).toMatch(/production/)
   })
 
-  it('is false on a staging target that CAN serve /api/test-*', () => {
+  it('refuses a configured host when the request presents nothing', () => {
     expect(devSurfacesEnabled(STAGING)).toBe(true)
-    expect(demoSurfacesEnabled(STAGING)).toBe(false)
+    expect(destructiveResetRefusal(STAGING, undefined)).toMatch(/shared secret/)
   })
 
-  it.each(['production', 'demo', 'staging'])('is false on ENVIRONMENT=%s', (environment) => {
-    expect(demoSurfacesEnabled({ ENVIRONMENT: environment, DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG })).toBe(false)
+  it('refuses a configured host when the request presents the wrong secret', () => {
+    expect(destructiveResetRefusal(STAGING, 'b'.repeat(MIN_DEPLOYED_SECRET_LENGTH))).toMatch(/shared secret/)
   })
+
+  it('allows a configured staging host when the request presents the secret', () => {
+    expect(destructiveResetRefusal(STAGING, STRONG)).toBeNull()
+  })
+
+  it('allows development only once a secret is configured AND presented', () => {
+    // DEV has no DEV_RESET_SECRET: `devSurfacesEnabled` admits it (a developer's
+    // machine is not reachable), but the reset still will not run, because
+    // routes/dev.ts demands the header on every /test-* route in every
+    // environment and this predicate matches it.
+    expect(devSurfacesEnabled(DEV)).toBe(true)
+    expect(destructiveResetRefusal(DEV, undefined)).toMatch(/shared secret/)
+    const withSecret = { ...DEV, DEV_RESET_SECRET: STRONG }
+    expect(destructiveResetRefusal(withSecret, STRONG)).toBeNull()
+  })
+
+  it.each(['demo', 'prod', 'Staging', 'test', '', undefined])(
+    'refuses the unrecognised environment %j even with the flag, a secret and the header',
+    (environment) => {
+      const env = { ENVIRONMENT: environment, DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG }
+      expect(destructiveResetRefusal(env, STRONG)).not.toBeNull()
+    },
+  )
 })

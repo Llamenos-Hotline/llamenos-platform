@@ -388,7 +388,7 @@ describe('hubRoutingReadiness against the production service registry', () => {
  * The ring decision, measurable on a deployment.
  *
  * It was not: nothing reported what `resolveRingableVolunteers` resolves to,
- * and its only non-provider caller is demo-gated, so with `DEMO_MODE=false` —
+ * and its only non-provider caller needs the mock provider selectable, so without it —
  * what a real VM runs — the live suite's ring-eligibility checks skipped
  * entirely. These drive the oracle against the production registry and real
  * PostgreSQL, through the HTTP route an operator and the live suite call.
