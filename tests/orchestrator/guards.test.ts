@@ -2775,10 +2775,26 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       ALL_GATED_JOBS,
     ],
     [
+      // `crypto-tests` RUNS here: packages/crypto/tests/envelope_aad_cross_platform.rs
+      // reads apps/ios/Sources and apps/android/app/src/main, so a mobile-only
+      // diff that drifts from the registry is exactly what it exists to catch.
+      // It used to be listed as skipped, which pinned the #1941 gap in place.
       'an apps/ios/-only change',
       ['apps/ios/Sources/App/Foo.swift'],
-      ['ios-build-test'],
-      ALL_GATED_JOBS.filter((j) => j !== 'ios-build-test'),
+      ['ios-build-test', 'crypto-tests'],
+      ALL_GATED_JOBS.filter((j) => j !== 'ios-build-test' && j !== 'crypto-tests'),
+    ],
+    [
+      'an apps/android/-only change (CryptoService.kt label-id table)',
+      ['apps/android/app/src/main/java/org/llamenos/hotline/crypto/CryptoService.kt'],
+      ['android-build-test', 'crypto-tests'],
+      ['ios-build-test', 'audit'],
+    ],
+    [
+      'a src/client/-only change (hub-key-manager.ts is read by the AAD cross-platform test)',
+      ['src/client/lib/hub-key-manager.ts'],
+      ['crypto-tests'],
+      ['ios-build-test', 'android-build-test', 'android-e2e', 'audit'],
     ],
     [
       'a packages/protocol/-only change',
@@ -3267,6 +3283,18 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       }
     },
   )
+
+  // ci-status reads `skipped` as success, so crypto-tests vanishing from a diff
+  // that set the crypto flag would stay green. platform-suite-coverage is the
+  // job that turns that skip fatal (#1941, #1954) — but only if it can SEE the
+  // result, which needs both the `needs` edge and the check.
+  it('platform-suite-coverage needs crypto-tests and fails when it is skipped with the crypto flag set', () => {
+    const block = jobBlock(ciYaml(), 'platform-suite-coverage')
+    expect(block).toMatch(/needs:\s*\[[^\]]*\bcrypto-tests\b[^\]]*\]/)
+    expect(block).toContain('CRYPTO: ${{ needs.changes.outputs.crypto }}')
+    expect(block).toContain('R_CRYPTO: ${{ needs.crypto-tests.result }}')
+    expect(block).toContain('if [ "$CRYPTO" = "true" ] && [ "$R_CRYPTO" = "skipped" ]; then gap="$gap crypto-tests"; fi')
+  })
 
   it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop gate — removing it must fail this test', (job) => {
     expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")
