@@ -111,8 +111,11 @@ struct RecoveryTeamConfigView: View {
                 }
             }
             .padding()
+            // The id lives on the content, not the ScrollView: the body's ZStack stamps
+            // `recovery-team-config-view` over its sole child, which erased the ScrollView's own id.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("recovery-team-setup")
         }
-        .accessibilityIdentifier("recovery-team-setup")
     }
 
     // MARK: - Configured State
