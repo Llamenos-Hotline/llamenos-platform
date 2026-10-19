@@ -55,6 +55,16 @@
 //! defence. Both devices derive the SAS from the ephemeral shared secret, so a
 //! MITM holding two different shared secrets shows the user two different codes.
 //!
+//! That only holds if the primary obtains `ePK_new` over an authenticated
+//! channel — the QR code it scans off the new device's screen (PROTOCOL.md
+//! §6.4), never the relay. A 6-digit SAS has ~20 bits. If a MITM can substitute
+//! `ePK_new` on the primary's leg, it knows both secrets of that leg, so it learns
+//! the primary's SAS as soon as the claim is published. It can then grind keys
+//! for a forged claim on the other leg until the new device shows the same code,
+//! which takes about 10^6 X25519 operations. With `ePK_new` pinned by the QR, the
+//! attacker cannot compute the primary's SAS, and a forged claim matches with
+//! probability 10^-6 per ceremony, online only.
+//!
 //! ## The key bundle
 //!
 //! ```text
@@ -342,6 +352,10 @@ fn ephemeral_secret_from_bytes(sk_bytes: &[u8]) -> Result<X25519StaticSecret, Cr
 ///
 /// The primary's long-term X25519 encryption key is not used. The long-term
 /// Ed25519 signing key is used only to sign the claim.
+///
+/// `new_device_ephemeral_pubkey_hex` MUST come from the QR code scanned off the
+/// new device (PROTOCOL.md §6.4), not from the relay: the SAS is only
+/// grind-resistant when this key reaches the primary authenticated (module docs).
 ///
 /// The caller MUST publish `claim_hex` to the new device before the SAS
 /// comparison, and MUST NOT publish `encrypted_hex` until the user has
@@ -1180,6 +1194,51 @@ mod tests {
 
         let decrypted = decrypt_provisioned_bundle(&tampered, &result.claim_hex, &new_sk);
         assert!(matches!(decrypted, Err(CryptoError::DecryptionFailed)));
+    }
+
+    // ── PROTOCOL.md §6.13.2 worked example ─────────────────────────────────
+
+    /// The static vector printed in PROTOCOL.md §6.13.2, computed independently
+    /// with @noble (JS). Pins the spec to this implementation: if either the
+    /// claim encoding, the AAD, the KDF or the SAS changes, this fails.
+    #[test]
+    fn protocol_worked_example_6_13_2() {
+        let seq = |start: u8| -> [u8; 32] { std::array::from_fn(|i| start + i as u8) };
+        let primary = DeviceSecrets {
+            signing_seed: seq(0x21),
+            encryption_seed: seq(0x01),
+        };
+        let new_device_sk = seq(0x65);
+        let primary_ephemeral = X25519StaticSecret::from(seq(0xa1));
+
+        let claim_hex = "01ad438bfae31f6c093d61d4339255ea798092c9fadd07b97827f4b0ae9dee7c1ce7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0a9a87061ba9144381a58c15b1abb30ef27cbb5b0506f8a8da3a034a9f09b4069f327fd151f70544c88c2761bee46d1b1f8fdcc0e96b370bffe36a53f76d09e0c";
+        let wire_hex = "c9cacbcccdcecfd0d1d2d3d487dfa871dd6003ff9ef91ba34caa45b28cfdaa97fad9cb1df66b4316bb4bc162eb95d3453505ea3cd9f70d3f3e121c028bef21259069df3598fe2fb67bd5e523ed81d37cae5d420e0e36f90dcada15c374";
+
+        // The claim is deterministic (Ed25519 signatures are), so sealing with
+        // the vector's primary ephemeral reproduces it byte for byte.
+        let new_pk_hex =
+            hex::encode(X25519PublicKey::from(&X25519StaticSecret::from(new_device_sk)).as_bytes());
+        assert_eq!(
+            new_pk_hex,
+            "5714769d116bf76436ae74bc793d2c30ad1903c59ac5273805c7e2698b410c36"
+        );
+        let sealed = seal_with_secret(
+            &primary,
+            &new_pk_hex,
+            &primary_ephemeral,
+            &build_bundle(&primary),
+        );
+        assert_eq!(sealed.claim_hex, claim_hex);
+        assert_eq!(sealed.sas_code, "691 028");
+
+        assert_eq!(
+            compute_provisioning_sas(claim_hex, &new_device_sk).unwrap(),
+            "691 028"
+        );
+        let opened = decrypt_provisioned_bundle(wire_hex, claim_hex, &new_device_sk).unwrap();
+        assert_eq!(opened.sas_code, "691 028");
+        assert_eq!(opened.secrets.signing_seed, primary.signing_seed);
+        assert_eq!(opened.secrets.encryption_seed, primary.encryption_seed);
     }
 
     // ── Format detection tests ──────────────────────────────────────────────
