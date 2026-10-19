@@ -447,10 +447,7 @@ class ConversationsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingVolunteers = true) }
             try {
-                val response = apiService.request<MemberDirectory>(
-                    "GET",
-                    "/api/identity/members",
-                )
+                val response = apiService.getMemberDirectory()
                 _uiState.update {
                     it.copy(
                         assignableVolunteers = response.members.filter { v -> v.status == SharedMemberDirectoryEntryStatus.Active },

@@ -98,9 +98,7 @@ class BlastsViewModel @Inject constructor(
     private fun loadUsers() {
         viewModelScope.launch {
             try {
-                val response = apiService.request<MemberDirectory>(
-                    "GET", "/api/identity/members",
-                )
+                val response = apiService.getMemberDirectory()
                 _uiState.update { it.copy(users = response.members) }
             } catch (_: Exception) {
                 // Silently fail — users list is supplementary

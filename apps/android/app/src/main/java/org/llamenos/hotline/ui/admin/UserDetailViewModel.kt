@@ -38,9 +38,7 @@ class UserDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val volResponse = apiService.request<MemberDirectory>(
-                    "GET", "/api/identity/members",
-                )
+                val volResponse = apiService.getMemberDirectory()
                 val volunteer = volResponse.members.find { it.pubkey == pubkey }
                 _uiState.update {
                     it.copy(volunteer = volunteer, isLoading = false)

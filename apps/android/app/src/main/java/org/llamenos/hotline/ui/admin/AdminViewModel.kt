@@ -371,10 +371,7 @@ class AdminViewModel @Inject constructor(
             }
 
             try {
-                val response = apiService.request<MemberDirectory>(
-                    "GET",
-                    "/api/identity/members",
-                )
+                val response = apiService.getMemberDirectory()
                 _uiState.update {
                     it.copy(
                         volunteers = response.members,

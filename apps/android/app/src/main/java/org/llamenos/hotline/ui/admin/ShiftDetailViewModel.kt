@@ -43,9 +43,7 @@ class ShiftDetailViewModel @Inject constructor(
                 )
                 val shift = shiftsResponse.shifts.find { it.id == shiftId }
 
-                val volResponse = apiService.request<MemberDirectory>(
-                    "GET", "/api/identity/members",
-                )
+                val volResponse = apiService.getMemberDirectory()
 
                 val assignedPubkeys = shift?.userPubkeys?.toSet() ?: emptySet()
 

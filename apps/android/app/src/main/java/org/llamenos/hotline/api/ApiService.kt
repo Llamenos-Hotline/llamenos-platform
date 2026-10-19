@@ -16,6 +16,7 @@ import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ClearPushTokenRequest
 import org.llamenos.hotline.model.HubsListResponse
+import org.llamenos.hotline.model.MemberDirectory
 import org.llamenos.hotline.model.OkResponse
 import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.hotline.model.RecoveryContributeRequest
@@ -392,6 +393,21 @@ class ApiService @Inject constructor(
      * every active hub). This is the member-hub list for multi-hub routing.
      */
     suspend fun getHubs(): HubsListResponse = request("GET", "/api/hubs")
+
+    /**
+     * The member directory of the hub being browsed (GET /api/hubs/{hubId}/identity/members).
+     *
+     * Hub-scoped on purpose: the unscoped route needs the global `users:read`, which a hub admin
+     * does not hold, and it resolves admin-vs-volunteer globally rather than in this hub's
+     * context. Throws [IllegalStateException] when no hub is active — it never falls back to
+     * the unscoped path, which would turn a missing hub into a 403.
+     */
+    suspend fun getMemberDirectory(): MemberDirectory {
+        val hubId = checkNotNull(activeHubIdOrNull()) {
+            "The member directory is hub-scoped, but no hub is active"
+        }
+        return request("GET", "/api/hubs/$hubId/identity/members")
+    }
 
     // ---- Telephony API ----
 
