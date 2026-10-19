@@ -42,15 +42,19 @@
     # ─── Record Pre-Update State ─────────────────────────────────
     - name: Record current image digests for rollback
       ansible.builtin.shell: |
-        cd {{ app_dir }}
-        docker compose images --format json 2>/dev/null || echo "[]"
+        docker compose -f "{{ item.compose }}" images --format json 2>/dev/null || echo "[]"
+      loop: "{{ llamenos_compose_stack_here }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: pre_update_images
       changed_when: false
       tags: [security-update]
 
     - name: Save rollback state
       ansible.builtin.copy:
-        content: "{{ pre_update_images.stdout }}"
+        content: >-
+          {{ dict(llamenos_compose_stack_here | map(attribute='name')
+             | zip(pre_update_images.results | map(attribute='stdout'))) | to_nice_json }}
         dest: "{{ app_dir }}/.rollback-images.json"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_group }}"
@@ -76,18 +80,24 @@
     # ─── Pull Latest Container Images ────────────────────────────
     - name: Pull latest container images
       community.docker.docker_compose_v2:
-        project_src: "{{ app_dir }}"
+        project_src: "{{ item.project_src }}"
         pull: always
         state: present
         recreate: never
+      loop: "{{ llamenos_compose_stack_here }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: pull_result
       tags: [security-update, container-update]
 
     - name: Restart services with updated images
       community.docker.docker_compose_v2:
-        project_src: "{{ app_dir }}"
+        project_src: "{{ item.project_src }}"
         state: restarted
         recreate: always
+      loop: "{{ llamenos_compose_stack_here }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: restart_result
       tags: [security-update, container-update]
 
@@ -116,14 +126,23 @@
 
         - name: Stop failed deployment
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ item.project_src }}"
             state: stopped
+          loop: "{{ llamenos_compose_stack_here | reverse | list }}"
+          loop_control:
+            label: "{{ item.name }}"
 
         - name: Start services with previous configuration
+          # No pull — fall back to the image already cached locally, not
+          # whatever "Pull latest container images" just fetched.
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ item.project_src }}"
+            pull: never
             state: present
             recreate: always
+          loop: "{{ llamenos_compose_stack_here }}"
+          loop_control:
+            label: "{{ item.name }}"
 
         - name: Verify rollback health
           ansible.builtin.uri:
