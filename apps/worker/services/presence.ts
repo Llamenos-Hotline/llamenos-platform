@@ -15,7 +15,7 @@
  *
  * ## Presence is derived from the ringing rule, not a second copy of it
  *
- * `resolveRingableVolunteers` (services/ringing.ts) is the one definition of
+ * `resolveRingableVolunteers` (`services/ringing.ts`) is the one definition of
  * "who may be rung", shared by the ringing path and the answer route. Presence
  * CALLS it rather than re-deriving "on shift" from the schedule, so the two can
  * never drift: whatever the ring rule becomes — the schedule alone, or
