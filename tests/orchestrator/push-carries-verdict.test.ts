@@ -10,9 +10,10 @@ import {
 import { REPO } from '../../orchestrator/src/gh.js'
 
 /**
- * #1394: a push must never start a review, and must never turn `fleet/review`
- * red on its own account. The verdict a PR last EARNED stands until somebody
- * requests another; a PR nobody has asked about concludes green, saying so.
+ * #1394: a push must never start a review. #2014: nor may it conclude green
+ * on a verdict for a different tree — a PASS earned on another tree is
+ * reported as exactly that (`tree-changed`) and fails closed, a FAIL is
+ * carried as the red it was, and only a cache hit for THIS tree is green.
  *
  * Two layers, both driving real code:
  *
@@ -92,6 +93,17 @@ describe('lastEarnedVerdict — the verdict a push carries forward', () => {
     expect(last.earned.verdict).toBe('FAIL')
     expect(last.earned.text).not.toContain('never read')
     expect(last.earned.text).toContain('no longer readable')
+  })
+
+  // A record from before #2014 is named for a 24-hex diff hash, not a tree.
+  // It is still a verdict this PR EARNED — a FAIL from then must still be
+  // carried — even though no cache lookup can ever find it again.
+  it('counts a record from the diff-keyed era too, so an old FAIL is still carried', async () => {
+    const old = { id: 51, name: `fleet-review-fail-pr${PR}-${'cd'.repeat(12)}`, expired: false }
+    const { deps } = fakeApi([run(5)], { 5: [old] }, 'VERDICT: FAIL — from before #2014')
+    const last = await lastEarnedVerdict(deps)
+    if (last.kind !== 'found') throw new Error(`expected found, got ${last.kind}`)
+    expect(last.earned.verdict).toBe('FAIL')
   })
 
   it('counts a record under a review-set namespace (a crypto-content PR)', async () => {
@@ -222,6 +234,10 @@ interface Scenario {
   requestedReviewer?: string
   author?: string
   branch?: string
+  /** The commits under judgement; the default pair otherwise. */
+  head?: string
+  base?: string
+  /** Matched BEFORE the shared routes, so a scenario can override them. */
   routes: Route[]
 }
 
@@ -233,7 +249,7 @@ function reviewGate(s: Scenario): GateRun {
   const ghLog = join(dir, 'gh-log')
   writeFileSync(ghOutput, '')
   writeFileSync(ghLog, '')
-  writeFileSync(join(dir, 'routes.json'), JSON.stringify([...common, ...s.routes]))
+  writeFileSync(join(dir, 'routes.json'), JSON.stringify([...s.routes, ...common]))
   const r = spawnSync('bun', [join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'review-gate'], {
     cwd: process.cwd(),
     encoding: 'utf8',
@@ -246,8 +262,8 @@ function reviewGate(s: Scenario): GateRun {
       FLEET_CI_BRANCH: s.branch ?? BRANCH,
       FLEET_CI_PR: PR,
       FLEET_CI_HEAD_DIR: headDir,
-      FLEET_CI_HEAD_SHA: headSha,
-      FLEET_CI_BASE_SHA: baseSha,
+      FLEET_CI_HEAD_SHA: s.head ?? headSha,
+      FLEET_CI_BASE_SHA: s.base ?? baseSha,
       FLEET_REVIEW_EVENT_NAME: 'pull_request',
       FLEET_REVIEW_EVENT_ACTION: s.action,
       FLEET_REVIEW_REQUESTED_REVIEWER: s.requestedReviewer ?? '',
@@ -275,8 +291,8 @@ function onlyReads(calls: string[][]): void {
   }
 }
 
-describe('review-gate by injection — a push never starts a review, and is never red on its own account', () => {
-  it('a push with a review still requested of llamenos-auto: carries the PASS it earned, no engine', () => {
+describe('review-gate by injection — a push never starts a review, and never goes green on another tree\'s verdict', () => {
+  it('a push with a review still requested of llamenos-auto, after a PASS on another tree: RED, no engine (#2014)', () => {
     // A synchronize payload never carries `requested_reviewer`; it is set
     // here anyway, the worst case, to show a push naming a trigger login is
     // still not a request.
@@ -284,10 +300,11 @@ describe('review-gate by injection — a push never starts a review, and is neve
       action: 'synchronize', requestedReviewer: 'llamenos-auto',
       routes: [runsRoute([run(8, 'earnedpass8')]), artifactsRoute(8, [record(81, 'PASS')])],
     })
-    expect(g.status, g.out).toBe(0)
-    expect(g.outputs['outcome']).toBe('carried')
+    expect(g.status, g.out).toBe(1)
+    expect(g.outputs['outcome']).toBe('tree-changed')
     expect(g.outputs['earned_sha']).toBe('earnedpass8')
-    expect(g.out).toContain('VERDICT: PASS (carried)')
+    expect(g.out).toContain('does not cover this head')
+    expect(g.out).toContain('not a rejection of the code')
     onlyReads(g.ghCalls)
   })
 
@@ -340,13 +357,13 @@ describe('review-gate by injection — a push never starts a review, and is neve
   })
 
   describe('a PR authored by llamenos-auto (the release PR, fleet PRs)', () => {
-    it('a push carries its verdict exactly as for any other author', () => {
+    it('a push onto another tree is red exactly as for any other author', () => {
       const g = reviewGate({
         action: 'synchronize', author: 'llamenos-auto',
         routes: [runsRoute([run(8, 'earnedpass8')]), artifactsRoute(8, [record(81, 'PASS')])],
       })
-      expect(g.status, g.out).toBe(0)
-      expect(g.outputs['outcome']).toBe('carried')
+      expect(g.status, g.out).toBe(1)
+      expect(g.outputs['outcome']).toBe('tree-changed')
       // Whom to ask for another review is a login GitHub will accept (#1232).
       expect(g.out).toContain('`rhonda-rodododo`')
     })
@@ -363,5 +380,116 @@ describe('review-gate by injection — a push never starts a review, and is neve
       expect(g.outputs['outcome']).toBe('not-requested')
       expect(g.out).toContain('`rhonda-rodododo`')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #2014 — a verdict covers the TREE it judged, and nothing else.
+//
+// #1975, exactly: rebased onto a newer `main`, its diff came through
+// byte-for-byte while its tree changed, and the diff-keyed cache published
+// the old tree's PASS as a green `fleet/review` four times. Every case below
+// runs the real gate CLI against a real repo holding that shape.
+// ---------------------------------------------------------------------------
+
+describe('#2014: review-gate reuses a verdict only for the identical tree', () => {
+  let base2: string
+  let rebased: string
+  let noopRebase: string
+  let tree1: string
+  let tree2: string
+  const JUDGED_RUN = 77
+
+  beforeAll(() => {
+    // `main` moves on with an unrelated file; the PR is replayed onto it.
+    git('checkout', '-q', '-b', 'main2', baseSha)
+    writeFileSync(join(repo, 'apps', 'worker', 'services', 'other.ts'), 'export const z = 0\n')
+    git('add', '.')
+    git('commit', '-q', '-m', 'main moved')
+    base2 = git('rev-parse', 'HEAD')
+    writeFileSync(join(repo, 'apps', 'worker', 'services', 'shift.ts'), 'export const a = 2\nexport const b = 3\n')
+    git('commit', '-q', '-am', 'head, rebased')
+    rebased = git('rev-parse', 'HEAD')
+    tree1 = git('rev-parse', `${headSha}^{tree}`)
+    tree2 = git('rev-parse', `${rebased}^{tree}`)
+    // A no-op rebase: a different commit carrying the IDENTICAL tree.
+    noopRebase = git('commit-tree', tree1, '-p', baseSha, '-m', 'head, re-committed')
+    git('checkout', '-q', 'main')
+  })
+
+  /** A PASS recorded by `fleet-review.yml` for `tree` — the artifact the
+   *  real `artifactReviewCache.lookup` lists, and the run it checks. */
+  const passRecordedFor = (tree: string): Route[] => [
+    { match: `^api repos/${REPO}/actions/artifacts\\?name=${cacheArtifactName(PR, tree, undefined, 'PASS')}&`, stdout: { artifacts: [{ id: 701, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
+    { match: `^api repos/${REPO}/actions/runs/${JUDGED_RUN}$`, stdout: { path: WORKFLOW_PATH } },
+  ]
+  /** The same PASS in the run history a push reads (`lastEarnedVerdict`). */
+  const earnedOn = (tree: string): Route[] => [
+    runsRoute([run(JUDGED_RUN, headSha)]),
+    artifactsRoute(JUDGED_RUN, [{ id: 701, name: cacheArtifactName(PR, tree, undefined, 'PASS'), expired: false }]),
+  ]
+
+  it('is the #1975 shape: identical diff text, different trees — so a diff-keyed cache WOULD hit', () => {
+    const diff = (b: string, h: string) => git('diff', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', `${b}...${h}`)
+    expect(diff(base2, rebased)).toBe(diff(baseSha, headSha))
+    expect(tree2).not.toBe(tree1)
+    expect(git('rev-parse', `${noopRebase}^{tree}`)).toBe(tree1)
+    expect(noopRebase).not.toBe(headSha)
+  })
+
+  it('a push onto a CHANGED tree after a PASS: RED (tree-changed), naming both, no engine', () => {
+    const g = reviewGate({
+      action: 'synchronize', head: rebased, base: base2,
+      routes: [...passRecordedFor(tree1), ...earnedOn(tree1)],
+    })
+    expect(g.status, g.out).toBe(1)
+    expect(g.outputs['outcome']).toBe('tree-changed')
+    expect(g.outputs['earned_sha']).toBe(headSha)
+    expect(g.out).toContain(tree2)
+    // It looked the cache up under the NEW tree, never the judged one.
+    const lookups = g.ghCalls.map((c) => c.join(' ')).filter((c) => c.includes('/actions/artifacts?name='))
+    expect(lookups.length).toBeGreaterThan(0)
+    for (const l of lookups) {
+      expect(l).toContain(`tree-${tree2}`)
+      expect(l).not.toContain(tree1)
+    }
+    onlyReads(g.ghCalls)
+  })
+
+  it('a pre-#2014 diff-keyed PASS for the same diff is never found — no record from that era can hit', () => {
+    const oldName = `fleet-review-pass-pr${PR}-${'ef'.repeat(12)}`
+    const g = reviewGate({
+      action: 'synchronize', head: rebased, base: base2,
+      routes: [
+        { match: `name=${oldName}`, stdout: { artifacts: [{ id: 702, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
+        ...passRecordedFor(tree1), ...earnedOn(tree1),
+      ],
+    })
+    expect(g.outputs['outcome']).toBe('tree-changed')
+    expect(g.ghCalls.some((c) => c.join(' ').includes(oldName))).toBe(false)
+  })
+
+  it('a review request on the CHANGED tree re-judges it — run-engine, not the old PASS', () => {
+    const g = reviewGate({
+      action: 'review_requested', requestedReviewer: 'llamenos-auto', head: rebased, base: base2,
+      routes: passRecordedFor(tree1),
+    })
+    expect(g.status, g.out).toBe(0)
+    expect(g.outputs['outcome']).toBe('run-engine')
+  })
+
+  it('a push onto the IDENTICAL tree (a no-op rebase) reuses the PASS — cache-hit, no engine, no history read', () => {
+    const g = reviewGate({ action: 'synchronize', head: noopRebase, routes: passRecordedFor(tree1) })
+    expect(g.status, g.out).toBe(0)
+    expect(g.outputs['outcome']).toBe('cache-hit')
+    expect(g.out).toContain(tree1)
+    expect(g.ghCalls.some((c) => c.join(' ').includes('/actions/workflows/'))).toBe(false)
+    onlyReads(g.ghCalls)
+  })
+
+  it('a review request on the IDENTICAL tree also reuses it — re-requesting never re-spends a review', () => {
+    const g = reviewGate({ action: 'review_requested', requestedReviewer: 'llamenos-auto', head: noopRebase, routes: passRecordedFor(tree1) })
+    expect(g.status, g.out).toBe(0)
+    expect(g.outputs['outcome']).toBe('cache-hit')
   })
 })

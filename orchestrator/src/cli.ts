@@ -31,7 +31,7 @@ import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
   reviewNotRequestedAdvice, reviewGateFailsClosed,
-  ciContextFromEnv, ciDiff, ciChangedFiles,
+  ciContextFromEnv, ciDiff, ciChangedFiles, ciHeadTree,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
@@ -1431,11 +1431,12 @@ async function runCiGate(job: string, run: (ctx: CiContext) => Promise<CiVerdict
  * what enforces the fail-closed branches of `decideReviewGate`. Every
  * outcome `REVIEW_GATE_STANDING` (ci.ts) classifies `no-verdict` —
  * `review-set-unresolved`, `not-requested`, `unreviewed` (#1564),
- * `carry-unreadable` — exits 1, as does a cached or carried FAIL, which
+ * `tree-changed` (#2014), `carry-unreadable` — exits 1, as does a cached or
+ * carried FAIL, which
  * stops every subsequent step (the smoke test, the real review) from ever
  * running: GitHub Actions does not run later steps after one fails unless
  * they opt in with `if: always()`/`if: failure()`, and none of the review
- * steps do. `cache-hit`, `carried` PASS, `low-tier`, `bot-authored` and
+ * steps do. `cache-hit` PASS, `low-tier`, `bot-authored` and
  * `run-engine` exit 0; the `outcome` step output is what the workflow's own
  * `if:` on each later step reads, and `profiles`/`clear_labels` are what it
  * carries into `review-ci` and into the label-clearing job.
@@ -1471,6 +1472,8 @@ async function runReviewGate(): Promise<number> {
     prDiff: () => ciDiff(ctx),
     changedFiles: () => ciChangedFiles(ctx),
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
+    // The cache KEY (#2014) — the tree a verdict judged, never the diff.
+    headTree: () => ciHeadTree(ctx),
     requested: request.requested,
     // A push may republish a verdict but never start one (#1284). Passed as
     // its own fact, not inferred from `requested` being false, so the gate
@@ -1504,9 +1507,10 @@ async function runReviewGate(): Promise<number> {
     }
   } else {
     const clear = outcome.kind === 'run-engine' ? outcome.clearLabels.join(',') : ''
-    // The head a carried verdict was EARNED on, for the outcome title's
-    // summary — this run's own head is not the one the reviewers read.
-    const earnedOn = outcome.kind === 'carried' ? outcome.earned.headSha : ''
+    // The head a carried or superseded verdict was EARNED on, for the
+    // outcome title's summary — this run's own head is not the one the
+    // reviewers read.
+    const earnedOn = outcome.kind === 'carried' || outcome.kind === 'tree-changed' ? outcome.earned.headSha : ''
     appendFileSync(ghOutput, `outcome=${outcome.kind}\nclear_labels=${clear}\nearned_sha=${earnedOn}\n`)
   }
   if (outcome.kind === 'review-set-unresolved') {
@@ -1527,7 +1531,7 @@ async function runReviewGate(): Promise<number> {
     // "request a review" to imply the previous one was somehow lost.
     if (isRepublishOnlyEvent(event)) {
       process.stderr.write(
-        `${REVIEW_JOB}: this push changed the diff, so no verdict this PR has already earned covers the new head\n`,
+        `${REVIEW_JOB}: this push changed the tree, so no verdict this PR has already earned covers the new head\n`,
       )
     }
     // What to DO about it, from `reviewNotRequestedAdvice` — which refuses to
@@ -1547,19 +1551,29 @@ async function runReviewGate(): Promise<number> {
     })) process.stderr.write(`${REVIEW_JOB}: ${line}\n`)
     return 1
   }
-  // A push (#1284) whose diff changed. No model call on any of these, and
-  // none of them is red on the push's own account: the verdict the PR last
-  // earned stands, and a PR nobody has asked about is green saying so. No
-  // review report either — the carried verdict's comment is already on the
-  // PR from the run that earned it, and one per push would be noise.
+  // A push (#1284) onto a tree no cached verdict covers. No model call on
+  // either of these, and no review report — the earned verdict's comment is
+  // already on the PR from the run that earned it. Both are red: a carried
+  // FAIL is still a FAIL, and a PASS for another tree is no verdict about
+  // this one (#2014 — #1975 sat CLEAN on exactly that PASS).
   if (outcome.kind === 'carried') {
     const [ask] = reviewTriggerLogins(event)
-    const again = `request a review from \`${ask}\` to have this head reviewed`
-    if (outcome.earned.verdict === 'FAIL') {
-      process.stderr.write(`${REVIEW_JOB}: FAILED — ${outcome.earned.text}\n${REVIEW_JOB}: ${again}\n`)
-      return 1
-    }
-    process.stdout.write(`${REVIEW_JOB}: ${outcome.earned.text}\n${REVIEW_JOB}: ${again}\n`)
+    process.stderr.write(
+      `${REVIEW_JOB}: FAILED — ${outcome.earned.text}\n` +
+      `${REVIEW_JOB}: request a review from \`${ask}\` to have this head reviewed\n`,
+    )
+    return 1
+  }
+  if (outcome.kind === 'tree-changed') {
+    const [ask] = reviewTriggerLogins(event)
+    process.stderr.write(
+      `${REVIEW_JOB}: FAILED — this head's tree (${outcome.cacheKey.headTree ?? 'unreadable'}) has no verdict: ` +
+      `the last PASS was earned on ${outcome.earned.headSha}, a different tree, so it does not cover this head\n` +
+      `${REVIEW_JOB}: ${outcome.earned.text}\n` +
+      `${REVIEW_JOB}: this is not a rejection of the code: request a review from \`${ask}\` and this check ` +
+      `goes green on the verdict it earns for this tree\n`,
+    )
+    return 1
   }
   // #1564: nothing has EVER reviewed this PR, so this check has nothing to
   // report — and a required context with nothing to report must be red, not
@@ -1587,9 +1601,9 @@ async function runReviewGate(): Promise<number> {
   // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A
   // cached PASS concludes green below; a cached FAIL fails HERE, restating
   // the original verdict so the check says WHY rather than going red with
-  // no explanation. The diff has not changed since that verdict, so
+  // no explanation. The tree has not changed since that verdict, so
   // reviewing it again could only reach the same conclusion; pushing a fix
-  // changes the hash and reviews afresh.
+  // changes the tree and reviews afresh.
   if (outcome.kind === 'cache-hit') {
     // A re-published verdict still reaches the PR as a review, not as a
     // bare status — see `writeReviewReport`.
@@ -1669,15 +1683,26 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
   try {
     mkdirSync(dir, { recursive: true })
     const hash = diffHash(await ciDiff(ctx)).slice(0, 12)
+    // The judged TREE is in the marker (#2014). Keyed on the diff alone, a
+    // fresh review of a NEW tree carrying the same diff — #1975 after its
+    // rebase — produced a marker already on the PR, so its verdict was never
+    // posted and the thread kept naming the old tree. Unreadable falls back
+    // to the head sha: one extra comment at worst, never a suppressed one.
+    let judged: string
+    try {
+      judged = `tree-${await ciHeadTree(ctx)}`
+    } catch {
+      judged = `head-${ctx.headSha}`
+    }
     entries.forEach((e, i) => {
       // `marker` is what makes re-posting idempotent: the publish job skips
       // a comment whose marker is already on the PR, so a re-request on an
-      // unchanged diff does not pile up duplicates — the churn this whole
+      // unchanged tree does not pile up duplicates — the churn this whole
       // issue is about.
       writeFileSync(join(dir, `${String(i).padStart(2, '0')}-${e.reviewer}.json`), JSON.stringify({
         reviewer: e.reviewer,
         verdict: e.verdict,
-        marker: `<!-- fleet/review:${e.reviewer}:${hash} -->`,
+        marker: `<!-- fleet/review:${e.reviewer}:${hash}:${judged} -->`,
         body: e.body,
       }))
     })
@@ -1829,6 +1854,8 @@ const HANDLERS: Record<string, CommandHandler> = {
     log: ciLog,
     prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
     prDiff: () => ciDiff(ctx),
+    // The cache KEY (#2014) — the same tree the gate step keyed its lookup on.
+    headTree: () => ciHeadTree(ctx),
     secondOpinion,
     // The PR's own stated intent, for the `## Pull request` section of every
     // reviewer's prompt (#1696). The SAME live read the review set already

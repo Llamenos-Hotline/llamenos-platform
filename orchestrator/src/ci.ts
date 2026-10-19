@@ -6,7 +6,7 @@ import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
 import { finalLine, outOfScopeFindings, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
-  diffHash, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
+  diffHash, isTreeSha, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
@@ -128,12 +128,15 @@ export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'depen
  * structurally rather than relying on a synchronize payload happening to
  * carry no `requested_reviewer`.
  *
- * A push is not a review request, so it never turns the check red on its own
- * account either. The verdict this PR last EARNED stands until somebody asks
- * for another (`lastEarnedVerdict`, review-cache.ts): a PASS stays a pass, a
- * FAIL stays a fail, and a PR nobody has asked about concludes green saying
- * so. The operator's rule, verbatim: "If there's a review there's a review.
- * If another review is needed it can be requested."
+ * What it republishes is bounded by the TREE (#2014). A push over an
+ * unchanged tree republishes that tree's verdict (`cache-hit`) — a rebase
+ * that changes nothing costs nothing. A push onto a tree no verdict covers
+ * can conclude green on NO account: a FAIL this PR last earned stays a red
+ * (`carried`), and a PASS earned on another tree is reported as exactly that
+ * and fails closed (`tree-changed`). It used to carry the PASS green — "if
+ * there's a review there's a review" (#1284) — and that is how #1975 sat
+ * CLEAN and queueable with no verdict for the code it would merge. A review
+ * for another tree is not a review of this one; request one.
  */
 export const REVIEW_REPUBLISH_ACTION = 'synchronize'
 
@@ -625,9 +628,9 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  * entry, never that anything was judged.
  */
 export const REVIEW_OUTCOME_TOKENS = [
-  'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:low-tier', 'PASS:bot-authored',
+  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:bot-authored',
   'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried', 'REJECTED:partial',
-  'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed',
+  'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed', 'NO-VERDICT:tree-changed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
   'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:partial-pass',
   'NO-VERDICT:did-not-run',
@@ -900,6 +903,13 @@ export interface ReviewCiDeps extends CiDeps {
    * never heard of a review cache is unaffected.
    */
   cacheFor?(scope: string | undefined): ReviewCache
+  /**
+   * The head commit's tree sha — the review cache's KEY (#2014; see
+   * `ReviewCacheKey.headTree`). `ciHeadTree` in production. Omitted, or
+   * failing, means there is no key: the cache is neither read nor written,
+   * so the engine runs. Never a guessed tree.
+   */
+  headTree?(): Promise<string>
   /**
    * Where this run's `ReviewCiResult` is written for the workflow to read
    * (#1230). Omitted means `reviewResultRecorder(process.env)`, which writes
@@ -1334,9 +1344,10 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
 
   const diff = await deps.prDiff()
 
-  // Exactly one review per PR per DIFF CONTENT per REVIEW SET. Keyed by a
-  // hash of the diff itself (`review-cache.ts`), never the head SHA, so a
-  // rebase that only replays the PR onto a newer `main` still hits;
+  // Exactly one review per PR per JUDGED TREE per REVIEW SET (#2014). Keyed
+  // by the head's tree sha (`review-cache.ts`), never the head SHA — a no-op
+  // rebase still hits — and never the diff text, which a rebase onto a moved
+  // `main` leaves identical while changing the code under judgement;
   // namespaced by `reviewSetTag` so a PASS produced by the general reviewer
   // alone can never be re-published as one that also included a profile
   // that never ran.
@@ -1348,9 +1359,9 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // because the cache is an injected interface, not `ghJson` itself, and
   // a future or test implementation of it could still throw; the fail-safe
   // direction must hold even then.
-  const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff) }
+  const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff), headTree: await readHeadTree(deps) }
   const exactScope = reviewSetTag(profiles.map((p) => p.agent))
-  const cache = deps.cacheFor?.(exactScope)
+  const cache = cacheKey.headTree === undefined ? undefined : deps.cacheFor?.(exactScope)
   if (cache !== undefined) {
     let cached: CachedVerdict | undefined
     try {
@@ -1362,7 +1373,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     if (cached !== undefined) {
       deps.log(
         `review cache hit (${cached.verdict}) for PR ${deps.ctx.pr} ` +
-        `(sha256:${cacheKey.diffHash.slice(0, 12)}…) — re-publishing instead of invoking the engine`,
+        `(tree ${cacheKey.headTree}) — re-publishing instead of invoking the engine`,
       )
       // Re-published verdicts still reach the PR: a cached result must read
       // as a review, not as a bare status (see `publishReport`).
@@ -1464,7 +1475,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // whole record, not just its own reviewer's: the set's composed verdict is
   // not a judgement of the diff if part of it never ran.
   const substantive = results.every((r) => r.verdict !== 'UNREADABLE')
-  if (substantive && deps.cacheFor !== undefined) {
+  if (substantive && deps.cacheFor !== undefined && cacheKey.headTree !== undefined) {
     // Recorded under the exact review set AND under the
     // general-reviewer-only namespace. Both directions are load-bearing,
     // and both exist because the review set for one diff CHANGES between
@@ -1516,12 +1527,15 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  *    job. First because every later branch would otherwise be deciding
  *    against a review set it does not actually know, and "we could not work
  *    out what to review" must never become "nothing needed reviewing".
- *  - `cache-hit` — a prior SUBSTANTIVE verdict exists for this exact diff
- *    AND this exact review set (`reviewSetTag`). No model call either way:
- *    a cached PASS concludes the job successfully, a cached FAIL concludes
- *    it red with the original verdict restated (#1158 — a rebase that does
- *    not change the diff must not re-spend a review to reach the same
- *    conclusion; 10 and 8 runs on two failing PRs in one 12-hour window).
+ *  - `cache-hit` — a prior SUBSTANTIVE verdict exists for this exact head
+ *    TREE AND this exact review set (`reviewSetTag`). No model call either
+ *    way: a cached PASS concludes the job successfully, a cached FAIL
+ *    concludes it red with the original verdict restated (#1158 — a rebase
+ *    that does not change the tree must not re-spend a review to reach the
+ *    same conclusion; 10 and 8 runs on two failing PRs in one 12-hour
+ *    window). The TREE, not the diff (#2014): #1975's diff survived a rebase
+ *    onto a newer `main` byte-for-byte, and its PASS for the old tree was
+ *    re-published as a green check on a tree nobody had judged.
  *    Reached regardless of who the review was requested from, which is what
  *    makes a second review request on an already-reviewed PR cheap and
  *    non-destructive instead of a wasted re-review or (the old bug) a
@@ -1540,16 +1554,20 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  *    and the file-level reasons are logged (and printed to the job's own
  *    stdout by `runReviewGate`, cli.ts) so the decision is auditable from
  *    the check's own output, not just from reading this file's source.
- *  - `carried` / `unreviewed` / `carry-unreadable` — a PUSH (#1284,
- *    `republishOnly`) with nothing cached for this exact diff. A push is not
- *    a review request, so it neither starts a review nor turns the check red
- *    on its own account: `carried` restates the verdict this PR last EARNED
- *    (`lastEarnedVerdict`), naming the head it was earned on — a PASS
- *    concludes green, a FAIL red; `unreviewed` is a PR no review has ever
+ *  - `carried` / `tree-changed` / `unreviewed` / `carry-unreadable` — a
+ *    PUSH (#1284, `republishOnly`) with nothing cached for this exact tree.
+ *    A push is not a review request, so it never starts a review — and
+ *    nothing cached means no verdict covers this head, so it never concludes
+ *    green either: `carried` restates a FAIL this PR last EARNED
+ *    (`lastEarnedVerdict`), naming the head it was earned on, and is red;
+ *    `tree-changed` is the PASS case and is RED too (#2014): that PASS judged
+ *    another tree, and a required context green on a verdict for different
+ *    code is the bypass #1975 was. `unreviewed` is a PR no review has ever
  *    been earned on, and is RED (#1564): nothing has judged this diff, and a
  *    required context satisfied by a run that formed no verdict is a false
- *    green. It clears as soon as a verdict exists — the next push over the
- *    same diff hits `cache-hit`, and over a changed one `carried`.
+ *    green. Every one of them clears the same way: request a review, which
+ *    judges this tree, and every later push over the same tree hits
+ *    `cache-hit`.
  *    `carry-unreadable` is the same direction for a different cause: the
  *    history could not be read, and "could not look" must never become
  *    "there was nothing to find" — that would carry a PR's FAIL into a green.
@@ -1568,12 +1586,13 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  * required context under `strict_required_status_checks_policy`, so the
  * check has to EXIST on the current head; a rebase moves the head and
  * strands the earned verdict on the old sha. That is a different question
- * from whether a review is WARRANTED, which only a changed diff makes true.
+ * from whether a review is WARRANTED, which only a changed tree makes true.
  * Every branch above answers the first question on a push without answering
- * the second: `cache-hit` republishes the verdict this exact diff already
+ * the second: `cache-hit` republishes the verdict this exact tree already
  * earned, `low-tier` and `bot-authored` conclude green on their own terms,
- * and everything else carries the PR's last earned verdict forward — or,
- * where none was ever earned, says so and fails closed (#1564).
+ * and everything else reports the PR's last earned verdict — red, because
+ * it was earned on another tree — or, where none was ever earned, says so
+ * and fails closed (#1564).
  * `run-engine` is unreachable on a push by construction.
  *
  * `runReviewCi` itself resolves the same set and opens with the identical
@@ -1587,7 +1606,8 @@ export type ReviewGateOutcome =
   | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict; profiles: string[] }
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
   | { kind: 'bot-authored'; cacheKey: ReviewCacheKey; author: string; reason: string }
-  | { kind: 'carried'; cacheKey: ReviewCacheKey; earned: EarnedVerdict }
+  | { kind: 'carried'; cacheKey: ReviewCacheKey; earned: EarnedVerdict & { verdict: 'FAIL' } }
+  | { kind: 'tree-changed'; cacheKey: ReviewCacheKey; earned: EarnedVerdict & { verdict: 'PASS' } }
   | { kind: 'unreviewed'; cacheKey: ReviewCacheKey }
   | { kind: 'carry-unreadable'; cacheKey: ReviewCacheKey; reason: string }
   | { kind: 'not-requested'; cacheKey: ReviewCacheKey }
@@ -1604,6 +1624,12 @@ export interface ReviewGateDeps {
   /** The cache for one review-set namespace — the namespace is not known
    *  until the set has been decided, which is why this is a factory. */
   cacheFor(scope: string | undefined): ReviewCache
+  /**
+   * The head commit's tree sha — the cache KEY (#2014). `ciHeadTree` in
+   * production. Omitted or failing means no key: the cache is not read, so
+   * nothing can be a `cache-hit`, and the gate decides as on a miss.
+   */
+  headTree?(): Promise<string>
   /**
    * Whether THIS event asked US for a review — `reviewRequestFor` over the
    * workflow's own event fields. Computed by the caller so this function has
@@ -1646,16 +1672,18 @@ export interface ReviewGateDeps {
  * and, through `reviewGateFailsClosed`, what the gate's exit code must be.
  *
  *  - `judged` — a verdict about a diff exists. `cache-hit` is a verdict for
- *    THIS exact diff; `carried` is one this PR earned for an earlier head
+ *    THIS exact tree; `carried` is a FAIL this PR earned for an earlier head
  *    (#1394's deliberate republish, so a rebase never leaves the head with
- *    no `fleet/review` at all); `run-engine` is a verdict being formed right
- *    now, by the later steps, whose own exit code decides the job.
+ *    no `fleet/review` at all — always red, since only a FAIL is carried);
+ *    `run-engine` is a verdict being formed right now, by the later steps,
+ *    whose own exit code decides the job.
  *  - `no-review-needed` — a deliberate, stated decision that this diff needs
  *    no model review: no reviewable content (`low-tier`), or an automated
  *    dependency bump (`bot-authored`). Green, with its reason printed into
  *    the check's own output.
  *  - `no-verdict` — NOTHING judged this diff, and nothing decided it did not
- *    need judging. These MUST be red.
+ *    need judging. These MUST be red. `tree-changed` is here, not under
+ *    `judged`: a PASS for another tree is no verdict about this one (#2014).
  *
  * #1564 is why this table exists and why the exit code is derived from it
  * rather than written out branch by branch. `unreviewed` — a push to a PR no
@@ -1683,6 +1711,7 @@ export const REVIEW_GATE_STANDING: Record<ReviewGateOutcome['kind'], ReviewGateS
   'cache-hit': 'judged',
   'carried': 'judged',
   'run-engine': 'judged',
+  'tree-changed': 'no-verdict',
   'low-tier': 'no-review-needed',
   'bot-authored': 'no-review-needed',
   'review-set-unresolved': 'no-verdict',
@@ -1705,7 +1734,7 @@ export function reviewGateFailsClosed(kind: ReviewGateOutcome['kind']): boolean 
 
 export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGateOutcome> {
   const diff = await deps.prDiff()
-  const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff) }
+  const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff), headTree: await readHeadTree(deps) }
   const changedFiles = await deps.changedFiles()
 
   // FIRST, ahead of the cache, the tier and the request: work out WHAT this
@@ -1723,16 +1752,19 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   // Identical fail-safe direction as `runReviewCi`: a lookup failure and a
   // genuine miss are indistinguishable on purpose, because both mean "this
   // is not yet a known-good diff" — see `artifactReviewCache`'s own doc.
+  //
+  // No tree, no lookup (#2014): the key IS the tree, and a lookup without
+  // one could only match by accident. Decided as a miss.
   const cache = deps.cacheFor(reviewSetTag(set.profiles))
   let cached: CachedVerdict | undefined
   try {
-    cached = await cache.lookup(cacheKey)
+    cached = cacheKey.headTree === undefined ? undefined : await cache.lookup(cacheKey)
   } catch (e) {
     deps.log(`review cache lookup threw — treating pr=${cacheKey.pr} as a miss (fail safe): ${e instanceof Error ? e.message : String(e)}`)
     cached = undefined
   }
   if (cached !== undefined) {
-    deps.log(`reused ${cached.verdict} verdict for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
+    deps.log(`reused ${cached.verdict} verdict for pr=${cacheKey.pr} tree ${cacheKey.headTree} — no engine call`)
     return { kind: 'cache-hit', cacheKey, verdict: cached, profiles: set.profiles }
   }
 
@@ -1782,27 +1814,34 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
     return { kind: 'low-tier', cacheKey, tier, reasons }
   }
 
-  // A push reaching this line is a head that MOVED and a diff that CHANGED
-  // (an unchanged diff hit the cache above; a Dependabot bump or a docs-only
-  // push concluded green above too). Crucially, `run-engine` is out of reach
+  // A push reaching this line is a head that MOVED onto a tree no verdict
+  // covers (an unchanged tree hit the cache above; a Dependabot bump or a
+  // docs-only push concluded green above too). Crucially, `run-engine` is out of reach
   // from here, whatever `requested` says: this is the structural guarantee
   // that adding `synchronize` to `fleet-review.yml` (#1284) can never become
   // the every-push model call that trigger was originally banned for.
   //
-  // A push is not a review request, and `not-requested` — "nobody asked" —
-  // is not a defect in the PR: the verdict this PR last earned stands until
-  // somebody requests another. But "no verdict was EVER earned" is not a
-  // verdict either, and must not read as one (#1564): it is red, and the
-  // check says why and whom to ask.
+  // A push is not a review request, so it starts nothing — and it cannot
+  // conclude green either, because nothing judged this tree (#2014). A FAIL
+  // this PR last earned is carried forward as the red it was. A PASS is not:
+  // it judged other code, and #1975 merged-to-CLEAN on exactly that — a
+  // green required context with no verdict for the tree it would land. "No
+  // verdict was EVER earned" is red for the same reason (#1564). Each says
+  // why and whom to ask; a requested review judges this tree.
   if (deps.republishOnly) {
     const last: LastVerdictLookup = deps.lastVerdict === undefined
       ? { kind: 'unreadable', reason: 'no lookup for the last earned verdict was wired into this gate' }
       : await deps.lastVerdict()
-    const moved = `the head of pr=${cacheKey.pr} moved and its diff changed (sha256:${cacheKey.diffHash.slice(0, 12)}…)`
+    const moved = `the head of pr=${cacheKey.pr} moved onto tree ${cacheKey.headTree ?? '(unreadable)'}, which no cached verdict covers`
     if (last.kind === 'found') {
-      deps.log(`${moved} — carrying forward the ${last.earned.verdict} earned on ${last.earned.headSha}; ` +
-        'a push never starts a review')
-      return { kind: 'carried', cacheKey, earned: last.earned }
+      const { earned } = last
+      if (earned.verdict === 'PASS') {
+        deps.log(`${moved} — the PASS earned on ${earned.headSha} judged another tree, so it does not cover this ` +
+          'head; a push never starts a review, so failing closed until one is requested')
+        return { kind: 'tree-changed', cacheKey, earned: { ...earned, verdict: 'PASS' } }
+      }
+      deps.log(`${moved} — carrying forward the FAIL earned on ${earned.headSha}; a push never starts a review`)
+      return { kind: 'carried', cacheKey, earned: { ...earned, verdict: 'FAIL' } }
     }
     if (last.kind === 'none') {
       deps.log(`${moved} — no review has ever been earned on this PR, and a push never starts one; ` +
@@ -1822,6 +1861,23 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   }
 
   return { kind: 'run-engine', cacheKey, profiles: set.profiles, clearLabels: set.fromLabels }
+}
+
+/**
+ * The head's tree from `deps.headTree`, or `undefined` — never a guess.
+ * `undefined` for an unwired dep, a throw, or anything that is not a tree
+ * id; every caller then treats the cache as absent (#2014).
+ */
+async function readHeadTree(deps: { headTree?: (() => Promise<string>) | undefined; log(msg: string): void }): Promise<string | undefined> {
+  if (deps.headTree === undefined) return undefined
+  try {
+    const tree = (await deps.headTree()).trim()
+    if (isTreeSha(tree)) return tree
+    deps.log(`head tree read returned "${tree}", not a tree id — the review cache is not consulted (fail safe)`)
+  } catch (e) {
+    deps.log(`could not read the head tree — the review cache is not consulted (fail safe): ${e instanceof Error ? e.message : String(e)}`)
+  }
+  return undefined
 }
 
 /** `undefined` when the workflow did not supply a branch — a CI entry point
@@ -1860,6 +1916,18 @@ export function ciContextFromEnv(env: NodeJS.ProcessEnv, repoDir: string): CiCon
 export const CI_DIFF_FLAGS: readonly string[] = [
   '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
 ]
+
+/**
+ * The head commit's TREE sha — what `git cat-file -p <head>` names as
+ * `tree`, and the GitHub API as `.commit.tree.sha` — read in the trusted
+ * base checkout over the fetched head object. The review cache's key
+ * (#2014): the code a merge would land, independent of which commit carries
+ * it.
+ */
+export async function ciHeadTree(ctx: CiContext): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['-C', ctx.repoDir, 'rev-parse', '--verify', '--quiet', `${ctx.headSha}^{tree}`])
+  return stdout.trim()
+}
 
 /** Read inside the trusted base checkout, over the fetched head object. */
 export async function ciDiff(ctx: CiContext): Promise<string> {
