@@ -80,6 +80,12 @@ export interface RunRecord {
   itemId: string
   itemName: string
   engine: string
+  /**
+   * The account a lane's dispatches draw quota from (`engines.ts`'s
+   * `providerOf`) — what `circuit.ts`'s `inQuotaCooldown` is keyed on.
+   * Absent on rows written before it existed, which read as their `engine`.
+   */
+  provider?: string
   branch?: string
   pr?: string
   outcome: Outcome

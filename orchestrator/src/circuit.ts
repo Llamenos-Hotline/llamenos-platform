@@ -225,9 +225,52 @@ export async function checkBreakers(
   return undefined
 }
 
-/** Lane-level backoff instead of a global halt: one provider's quota should not
- *  stop five other lanes that use a different one. */
-export function inQuotaCooldown(rows: RunRecord[], lane: string, now: number, limits: Limits): boolean {
-  const last = rows.filter((x) => x.lane === lane && x.outcome === 'QUOTA').sort((a, b) => b.ts - a.ts)[0]
+/** A provider whose quota cooldown is still running, and who is stuck behind it. */
+export interface QuotaCooldown {
+  provider: string
+  /** Lanes whose dispatches draw on `provider`. */
+  lanes: string[]
+  /** Epoch ms at which the cooldown lapses. */
+  until: number
+}
+
+/** The provider a ledger row's quota was drawn from. Rows predating the
+ *  `provider` field read as their engine. */
+const providerOfRow = (x: RunRecord): string => x.provider ?? x.engine
+
+/**
+ * Provider-level backoff instead of a global halt: one provider's quota should
+ * not stop lanes running on a different one — and, equally, must stop every
+ * lane on the SAME one. Quota is a property of the provider's account, not of
+ * the lane that happened to discover it (#1756, #1835): keyed on lane, the
+ * other lanes on that provider each burned a dispatch rediscovering it.
+ */
+export function inQuotaCooldown(rows: RunRecord[], provider: string, now: number, limits: Limits): boolean {
+  const last = rows.filter((x) => providerOfRow(x) === provider && x.outcome === 'QUOTA').sort((a, b) => b.ts - a.ts)[0]
   return last !== undefined && now - last.ts < limits.quotaCooldownMs
+}
+
+/**
+ * Every provider currently cooling down, with the lanes behind it — the
+ * pure core of `doctor`'s quota check (#1835). `providerFor` maps a lane to
+ * its provider (`providerOf` over the lane's engine/model); only lanes in the
+ * `live` mode are reported, since a shadow or off lane dispatches nothing.
+ */
+export function quotaCooldowns(
+  rows: RunRecord[],
+  lanes: readonly { id: string; mode: string; provider: string }[],
+  now: number,
+  limits: Limits,
+): QuotaCooldown[] {
+  const out: QuotaCooldown[] = []
+  for (const provider of new Set(lanes.filter((l) => l.mode === 'live').map((l) => l.provider))) {
+    if (!inQuotaCooldown(rows, provider, now, limits)) continue
+    const last = Math.max(...rows.filter((x) => providerOfRow(x) === provider && x.outcome === 'QUOTA').map((x) => x.ts))
+    out.push({
+      provider,
+      lanes: lanes.filter((l) => l.mode === 'live' && l.provider === provider).map((l) => l.id),
+      until: last + limits.quotaCooldownMs,
+    })
+  }
+  return out
 }

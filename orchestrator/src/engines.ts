@@ -436,6 +436,37 @@ export function resolveDispatchModel(engine: EngineId, model: string): string {
   return `opencode:${model}`
 }
 
+// An opencode lane with no model override must not fall back to the Claude
+// default — 'sonnet' would route the dispatch to the claude CLI, silently
+// defeating the engine selection. 'kimi' is dispatch-one.sh's maintained
+// opencode token (maps to kimi-code-plan-global/k3-256k inside the script).
+export const DEFAULT_OPENCODE_MODEL = 'kimi'
+
+/**
+ * The provider whose account (and therefore quota) a lane's dispatches draw
+ * on — the axis a quota cooldown must be keyed on (#1756, #1835). It is NOT
+ * the lane (six lanes can share one account) and NOT the engine either: the
+ * `opencode` engine fronts several independent subscriptions (Kimi, Copilot,
+ * GLM, ...), and one exhausting says nothing about the others.
+ *
+ * Resolved through `resolveDispatchModel`, so a raw `kimi-code-plan-global/…`
+ * id, the retired `kimi-for-coding/…` id and the bare `kimi` token all name
+ * the same provider. A raw `<provider>/<model>` id names its own provider;
+ * the Claude-family tokens collapse to `claude`.
+ */
+export function providerOf(engine: EngineId, model?: string): string {
+  if (engine !== 'opencode') return engine
+  const resolved = resolveDispatchModel(engine, model ?? DEFAULT_OPENCODE_MODEL)
+  if (resolved.startsWith('opencode:')) {
+    const raw = resolved.slice('opencode:'.length)
+    return raw.split('/')[0] || raw
+  }
+  const token = resolved.split(':')[0] ?? resolved
+  if (token === 'kimi' || token === 'kimi-thinking') return 'kimi'
+  if (/^(?:opus|sonnet|haiku|fable)$/.test(token)) return 'claude'
+  return token
+}
+
 /**
  * The registry id a live opencode lane's configured model will actually
  * resolve to once dispatch-one.sh has done its mapping — the value

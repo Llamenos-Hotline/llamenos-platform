@@ -197,6 +197,36 @@ describe('tick: live dispatch pipeline (task 7)', () => {
     expect(r.attempted).toBe(0)
   })
 
+  // #1756/#1835: quota is the provider's, not the lane's. ios discovered it;
+  // backend (same provider) must not spend a dispatch rediscovering it, while
+  // a lane on a different provider must carry on.
+  it('a QUOTA found by one lane cools every other lane on that provider, and only those', async () => {
+    const mk = (id: string, engine: Lane['engine'], model?: string): Lane =>
+      ({ ...lane(), id, engine, model, scope: { owned: [`apps/${id}/`], notOwned: [] } })
+    const rows: RunRecord[] = [
+      { ts: 900, runId: 'a', lane: 'ios', itemId: '9', itemName: 't9', engine: 'claude', provider: 'claude', outcome: 'QUOTA' },
+    ]
+    const dispatch = vi.fn(async (): Promise<DispatchOutcome> => ({ outcome: 'SUCCESS' }))
+    const d = baseDeps({
+      lanes: [mk('backend', 'claude'), mk('infra', 'opencode', 'kimi')],
+      readLedger: () => rows,
+      now: () => 1000,
+      listItems: async (l: Lane) => ({ ok: true as const, items: [item(l.id === 'backend' ? '1' : '2')] }),
+      readLabels: async (id: string) => ['agent-dispatchable', id === '1' ? 'lane:backend' : 'lane:infra'],
+      dispatch,
+    })
+    await tick(d)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect((dispatch.mock.calls[0] as unknown as [WorkItem, Lane])[1].id).toBe('infra')
+  })
+
+  it('stamps each ledger row with the provider its lane draws quota from', async () => {
+    const record = vi.fn()
+    const d = baseDeps({ lanes: [{ ...lane(), engine: 'opencode', model: 'copilot' }], record })
+    await tick(d)
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'DISPATCHED', engine: 'opencode', provider: 'copilot' }))
+  })
+
   it('does dispatch again once the quota cooldown window has elapsed', async () => {
     const rows: RunRecord[] = [
       { ts: 900, runId: 'a', lane: 'ios', itemId: '9', itemName: 't9', engine: 'claude', outcome: 'QUOTA' },

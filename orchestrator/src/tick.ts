@@ -1,5 +1,6 @@
 import { checkBreakers, inQuotaCooldown, isQuotaHaltReason, parseQuotaResumeAt } from './circuit.js'
 import { LIMITS, MAX_ATTEMPTS_PER_ITEM, type Lane } from './config.js'
+import { providerOf } from './engines.js'
 import { failedAttemptsIn, type Outcome, type RunRecord } from './ledger.js'
 import { runReviewLoop, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
 import { judge, selectForLane, type Rejection } from './select.js'
@@ -249,7 +250,7 @@ export function claimAcrossLanes(lanes: Lane[], itemsByLane: Map<string, WorkIte
   return owned
 }
 
-type BaseRecord = Pick<RunRecord, 'ts' | 'runId' | 'lane' | 'itemId' | 'itemName' | 'engine'>
+type BaseRecord = Pick<RunRecord, 'ts' | 'runId' | 'lane' | 'itemId' | 'itemName' | 'engine' | 'provider'>
 
 /**
  * The live-dispatch pipeline for exactly one item. Order is the safety
@@ -525,7 +526,7 @@ async function runLiveDispatch(
       // since `dispatch-one.sh` itself still has no quota-detection of its
       // own. `result` carries `quotaResetHint`/`quotaResetAt` straight onto
       // this ledger row when that happened, which is what `circuit.ts`'s
-      // `quotaBreaker` and the per-lane `inQuotaCooldown` backoff above both
+      // `quotaBreaker` and the per-provider `inQuotaCooldown` backoff above both
       // read back.
       final = { ...base, ...result }
     }
@@ -654,12 +655,14 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     for (const lane of active) {
       let taken = 0
 
-      // Lane-level backoff: one provider's quota should not stop every other
-      // lane. Checked once per lane, not per item — the cooldown does not
-      // depend on which item is up next.
-      const cooling = lane.mode === 'live' && inQuotaCooldown(rows, lane.id, now, LIMITS)
+      // Provider-level backoff: one provider's quota should not stop lanes
+      // on a different one, and must stop every lane on the same one — quota
+      // belongs to the account, not the lane. Checked once per lane, not per
+      // item — the cooldown does not depend on which item is up next.
+      const provider = providerOf(lane.engine, lane.model)
+      const cooling = lane.mode === 'live' && inQuotaCooldown(rows, provider, now, LIMITS)
       if (cooling) {
-        deps.log(`lane ${lane.id} is in quota cooldown — skipping this pass`)
+        deps.log(`lane ${lane.id} is in quota cooldown (provider ${provider}) — skipping this pass`)
       }
 
       for (const item of itemsByLane.get(lane.id) ?? []) {
@@ -681,7 +684,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
 
         if (cooling) continue
 
-        const base: BaseRecord = { ts: deps.now(), runId: runId(deps.now()), lane: lane.id, itemId: item.id, itemName: item.title, engine: lane.engine }
+        const base: BaseRecord = { ts: deps.now(), runId: runId(deps.now()), lane: lane.id, itemId: item.id, itemName: item.title, engine: lane.engine, provider: providerOf(lane.engine, lane.model) }
 
         if (lane.mode === 'shadow') {
           deps.record({ ...base, outcome: 'SHADOW', note: `would dispatch to ${lane.id}; scope=${lane.scope.owned.join(',')}` })
