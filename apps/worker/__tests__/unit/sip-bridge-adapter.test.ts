@@ -375,21 +375,23 @@ describe('SipBridgeAdapter', () => {
       expect(body.hubId).toBe('hub-1')
     })
 
-    it('returns empty array when bridge returns no callSids', async () => {
+    // #1136: a 200 OK with an empty channelIds array means every leg the bridge tried
+    // to dial failed (see sip-bridge/src/command-handler.ts) — that is a total outage,
+    // not a successful empty ring, and must reject so the caller (services/ringing.ts)
+    // retries and the circuit breaker can see the failure.
+    it('rejects when the bridge returns no channelIds for a non-empty volunteer list (total outage, #1136)', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
         headers: { get: () => 'application/json' },
         json: async () => ({}),
       } as unknown as Response)
 
-      const sids = await adapter.ringVolunteers({
+      await expect(adapter.ringVolunteers({
         callSid: 'cs-parent',
         callerNumber: '+15551111111',
         volunteers: [{ phone: '+15552222222', callToken: 'token-a' }],
         callbackUrl: 'https://example.com/callback',
-      })
-
-      expect(sids).toEqual([])
+      })).rejects.toThrow('All 1 dial attempt(s) failed')
     })
 
     it('throws when bridge request fails', async () => {

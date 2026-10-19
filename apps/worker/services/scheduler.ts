@@ -44,11 +44,16 @@ import {
   createSignalQueueDrainOpts,
 } from '../lib/signal-queue-drain-worker'
 import { DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS } from '../messaging/signal/queue'
+import {
+  startStaleCallReaperWorker,
+  stopStaleCallReaperWorker,
+} from '../lib/stale-call-reaper-worker'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
 import type { IdentityService } from './identity'
 import type { HubShredService } from './hub-shred'
+import type { CallsService } from './calls'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
@@ -70,6 +75,7 @@ export const SCHEDULER_WORKER_NAMES = [
   're-encryption',
   'periodic-cleanup',
   'signal-queue-drain',
+  'stale-call-reaper',
 ] as const
 
 export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
@@ -92,6 +98,7 @@ export type TaskSchedulerServiceDeps = {
   erasureService: ErasureService
   identityService: IdentityService
   hubShred: HubShredService
+  callsService: CallsService
 }
 
 export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
@@ -196,6 +203,13 @@ export class TaskScheduler {
     )
     started.push('signal-queue-drain')
 
+    // Stuck-call reaper: archives stale `active_calls` rows for EVERY hub on a
+    // fixed schedule. Previously this only happened lazily, as a side effect of
+    // `CallsService.getActiveCalls(hubId)` — so a hub with no open dashboard
+    // leaked `active_calls`/`call_tokens` rows indefinitely (#1136).
+    startStaleCallReaperWorker(deps.callsService)
+    started.push('stale-call-reaper')
+
     this.startedWorkers = started
 
     const missing = SCHEDULER_WORKER_NAMES.filter((name) => !started.includes(name))
@@ -226,6 +240,7 @@ export class TaskScheduler {
     stopReEncryptionWorker()
     stopPeriodicCleanupWorker()
     stopSignalQueueDrainWorker()
+    stopStaleCallReaperWorker()
 
     logger.info('Stopped')
   }

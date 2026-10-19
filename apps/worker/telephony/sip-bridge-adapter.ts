@@ -1,6 +1,7 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { getPrompt } from '@shared/voice-prompts'
 import { speechLanguageFor } from '../services/ivr-speech/voices'
+import { AllDialsFailedError } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -115,7 +116,17 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
       callbackUrl,
       hubId,
     })
-    return (result as { channelIds?: string[] })?.channelIds ?? []
+    const channelIds = (result as { channelIds?: string[] })?.channelIds ?? []
+    // The bridge dials each volunteer leg independently and never throws on a per-leg
+    // failure (see sip-bridge/src/command-handler.ts), so a total outage (every leg
+    // failed) comes back as a 200 with an empty array rather than a rejected request.
+    // Surface that here the same way the REST adapters do — see AllDialsFailedError —
+    // so the caller (services/ringing.ts) retries and the breaker can see it (#1136).
+    const attempted = volunteers.length + (appTargets?.length ?? 0)
+    if (channelIds.length === 0 && attempted > 0) {
+      throw new AllDialsFailedError(attempted)
+    }
+    return channelIds
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

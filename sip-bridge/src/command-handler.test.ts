@@ -430,6 +430,43 @@ describe('CommandHandler', () => {
       expect(pbx.of('originate')).toEqual([])
     })
 
+    it('rejects when every volunteer leg fails to originate (total trunk outage, #1136)', async () => {
+      await queuedCaller()
+      pbx.client.originate = async () => { throw new Error('trunk unreachable') }
+
+      await expect(
+        handler.ringVolunteers({
+          parentCallSid: CALLER,
+          callerNumber: '+15557770001',
+          volunteers: [
+            { pubkey: 'tok-a', phone: '+15550200' },
+            { pubkey: 'tok-b', phone: '+15550201' },
+          ],
+        }),
+      ).rejects.toThrow('All 2 dial attempt(s) failed')
+    })
+
+    it('does not reject when only some volunteer legs fail (partial outage, #1136)', async () => {
+      await queuedCaller()
+      let calls = 0
+      pbx.client.originate = (async () => {
+        calls++
+        if (calls === 1) throw new Error('trunk unreachable')
+        return { id: 'leg-ok' }
+      }) as BridgeClient['originate']
+
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+
+      expect(legs).toEqual(['leg-ok'])
+    })
+
     it('reports an unanswered leg with the status its hangup cause means', async () => {
       await queuedCaller()
       const [busy, noAnswer] = await handler.ringVolunteers({

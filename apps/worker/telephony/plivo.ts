@@ -1,6 +1,7 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -90,6 +91,8 @@ function _hubQueryParam(hubId?: string): string {
  * - REST API: POST /v1/Account/{auth_id}/Call/
  * - Webhooks use form data with CallUUID, From, To, Digits, CallStatus
  */
+const logger = createLogger('telephony.plivo')
+
 export class PlivoAdapter implements TelephonyAdapter {
   private authId: string
   private authToken: string
@@ -245,8 +248,6 @@ export class PlivoAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callSids: string[] = []
-
     const calls = await Promise.allSettled(
       params.volunteers.map(async (vol) => {
         // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs
@@ -273,17 +274,13 @@ export class PlivoAdapter implements TelephonyAdapter {
           const data = await res.json() as { request_uuid: string }
           return data.request_uuid
         }
-        throw new Error(`Failed to call volunteer`)
+        throw new Error(`Failed to call volunteer: ${res.status}`)
       })
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callSids.push(result.value)
-      }
-    }
-
-    return callSids
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Plivo', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

@@ -465,6 +465,14 @@ export class CommandHandler {
       `Ringing ${channelIds.length - appChannels}/${request.volunteers.length} volunteer phone(s)` +
         ` and ${appChannels}/${appTargets.length} in-app endpoint(s)`
     )
+    // Every leg failed (a total PBX/trunk outage) — the HTTP layer (index.ts's /ring
+    // handler) only returns a 500 when this throws, so a total outage must not look
+    // like `{ ok: true, channelIds: [] }` to the worker (#1136). A partial failure
+    // (some legs placed) is normal and still returns what succeeded.
+    const attempted = request.volunteers.length + appTargets.length
+    if (channelIds.length === 0 && attempted > 0) {
+      throw new Error(`All ${attempted} dial attempt(s) failed`)
+    }
     return channelIds
   }
 

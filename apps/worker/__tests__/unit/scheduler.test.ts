@@ -50,6 +50,11 @@ vi.mock('@worker/lib/signal-queue-drain-worker', () => ({
   })),
 }))
 
+vi.mock('@worker/lib/stale-call-reaper-worker', () => ({
+  startStaleCallReaperWorker: vi.fn(),
+  stopStaleCallReaperWorker: vi.fn(),
+}))
+
 import { startBlastWorker, stopBlastWorker } from '@worker/lib/blast-delivery-worker'
 import { startScheduledBlastPoller, stopScheduledBlastPoller } from '@worker/lib/blast-scheduled-poller'
 import { startRetentionPurgeWorker, stopRetentionPurgeWorker } from '@worker/lib/retention-purge-worker'
@@ -62,6 +67,7 @@ import {
   startSignalQueueDrainWorker,
   stopSignalQueueDrainWorker,
 } from '@worker/lib/signal-queue-drain-worker'
+import { startStaleCallReaperWorker, stopStaleCallReaperWorker } from '@worker/lib/stale-call-reaper-worker'
 
 /**
  * Every worker the scheduler owns, with the dependency whose absence used to
@@ -78,6 +84,7 @@ const WORKERS = [
   { name: 're-encryption', start: startReEncryptionWorker, stop: stopReEncryptionWorker, dep: 'erasureService' },
   { name: 'periodic cleanup', start: startPeriodicCleanupWorker, stop: stopPeriodicCleanupWorker, dep: 'identityService' },
   { name: 'signal queue drain', start: startSignalQueueDrainWorker, stop: stopSignalQueueDrainWorker, dep: 'resolveAdapter' },
+  { name: 'stale call reaper', start: startStaleCallReaperWorker, stop: stopStaleCallReaperWorker, dep: 'callsService' },
 ] as const
 
 /** Distinguishable sentinels, so a mis-wired field is visible in the assertion. */
@@ -90,6 +97,7 @@ function serviceDeps(): TaskSchedulerServiceDeps {
     erasureService: { __svc: 'erasure' } as never,
     identityService: { __svc: 'identity' } as never,
     hubShred: { __svc: 'hubShred' } as never,
+    callsService: { __svc: 'calls' } as never,
   }
 }
 
@@ -131,6 +139,19 @@ describe('TaskScheduler', () => {
       scheduler.start(d)
       scheduler.start(d)
       for (const { start } of WORKERS) expect(start).toHaveBeenCalledTimes(1)
+    })
+
+    // #1136: the stuck-call reaper must run on the scheduler like every other
+    // background worker, not only lazily inside a dashboard read. There is no
+    // "when callsService is omitted" case to assert any more: `callsService` is
+    // a required field of TaskSchedulerServiceDeps, so an omission is a compile
+    // error at the one call site that builds it (#1567) rather than a worker
+    // that quietly never runs.
+    it('hands the stale call reaper the calls service (#1136)', () => {
+      const { scheduler } = setup()
+      const d = deps()
+      scheduler.start(d)
+      expect(startStaleCallReaperWorker).toHaveBeenCalledWith(d.callsService)
     })
 
     it('hands the erasure expiry worker the hub shred executor (#1566)', () => {

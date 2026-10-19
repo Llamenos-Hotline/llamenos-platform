@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -68,6 +69,8 @@ function hubXmlParam(hubId?: string): string {
 function hubQP(hubId?: string): string {
   return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
 }
+
+const logger = createLogger('telephony.bandwidth')
 
 /**
  * BandwidthAdapter — Bandwidth Voice API v2 implementation.
@@ -260,7 +263,6 @@ export class BandwidthAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callIds: string[] = []
     const hubParam = hubQP(params.hubId)
 
     const calls = await Promise.allSettled(
@@ -291,13 +293,9 @@ export class BandwidthAdapter implements TelephonyAdapter {
       }),
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callIds.push(result.value)
-      }
-    }
-
-    return callIds
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Bandwidth', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {
