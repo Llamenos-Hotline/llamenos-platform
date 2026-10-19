@@ -53,6 +53,29 @@ ignore = [
   { id = "RUSTSEC-2025-0081", reason = "unic-char-property unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
   { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
   { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
+  # tauri-plugin-notification -> notify-rust -> zbus 5 and tauri-plugin-single-instance
+  # -> zbus 5 (Linux D-Bus). zvariant/zbus_names/zvariant_derive were merged into
+  # zbus 6.0.0, but every published notify-rust / tauri-plugin-notification /
+  # tauri-plugin-single-instance still requires `zbus ^5` (checked 2026-10-18). Tracked in #1956.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant 5.9.2 unmaintained (merged into zbus 6); via zbus 5 <- notify-rust and tauri-plugin-single-instance, no vulnerability, no upstream release on zbus 6 yet, tracked in #1956 [expires 2026-12-31]" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.1 unmaintained; same zbus 5 path as RUSTSEC-2026-0370, tracked in #1956 [expires 2026-12-31]" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.9.2 unmaintained; same zbus 5 path as RUSTSEC-2026-0370, tracked in #1956 [expires 2026-12-31]" },
+  # zip: fixed only in >=9.0.0, and BOTH copies in the graph are pinned below it by
+  # crates we do not control (tracked in #1956):
+  #   * zip 4.6.1 <- tauri-plugin-updater (Windows target only; latest 2.14.0 and
+  #     3.0.0-alpha.3 still require `zip ^4`). The `zip` feature also gates the
+  #     tar/flate2 the macOS/Linux updater needs, so it cannot be disabled.
+  #   * zip 8.6.0 <- libsodium-sys-stable build script (latest 1.24.3 still requires
+  #     `zip ^8.6`), via stronghold-runtime <- iota_stronghold <- tauri-plugin-stronghold.
+  # All three advisories concern `extract()` on an ATTACKER-SUPPLIED archive. Neither
+  # copy ever sees one: the updater minisign-verifies the downloaded payload against
+  # our pinned pubkey before it calls extract (updater.rs `verify_signature` precedes
+  # `install`), and libsodium's build script minisign-verifies the libsodium MSVC zip
+  # against libsodium's pinned key before extracting. Forging either needs a signing
+  # key, which would already allow arbitrary code execution without any zip bug.
+  { id = "RUSTSEC-2026-0367", reason = "zip <9.0.0 keeps SUID/SGID bits on extract; zip 4.6.1 (tauri-plugin-updater, Windows only) and 8.6.0 (libsodium-sys-stable build script) both only extract minisign-verified archives, no upgrade exists, tracked in #1956 [expires 2026-12-31]" },
+  { id = "RUSTSEC-2026-0368", reason = "zip <9.0.0 extract() follows attacker symlinks; same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
+  { id = "RUSTSEC-2026-0369", reason = "zip <9.0.0 applies Unix permissions through symlinks on extract(); same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
 ]
 
 # ── Licenses ────────────────────────────────────────────────────────────────
