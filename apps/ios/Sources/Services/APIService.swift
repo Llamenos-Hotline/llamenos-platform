@@ -217,7 +217,7 @@ final class APIService: @unchecked Sendable {
         // No schema accepts those, and because the schemas are not `strict()` an
         // unknown key is *ignored* rather than rejected: a required field 400'd, but an
         // OPTIONAL one was silently dropped. On the all-optional `.partial()` update
-        // bodies (`PATCH /api/contacts-v2/:id`, `PATCH /api/records/:id`) that meant
+        // bodies (`PATCH /api/directory/:id`, `PATCH /api/records/:id`) that meant
         // every key — ciphertext and HPKE envelopes included — was discarded, the
         // request validated against `{}`, the row was left untouched, and the client
         // was told it had saved.
@@ -679,11 +679,11 @@ final class APIService: @unchecked Sendable {
 
     func enrollRecoveryGroup(_ body: [String: Any]) async throws -> OkResponse {
         let jsonData = try JSONSerialization.data(withJSONObject: body)
-        return try await request(method: "POST", path: hp("/api/recovery-group/enroll"), rawBody: jsonData)
+        return try await request(method: "POST", path: "/api/recovery-group/enroll", rawBody: jsonData)
     }
 
     func getRecoveryGroup(hubId: String) async throws -> AppRecoveryGroupInfo {
-        try await request(method: "GET", path: hp("/api/recovery-group/\(hubId)"))
+        try await request(method: "GET", path: "/api/recovery-group/\(hubId)")
     }
 
     func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> AppRecoveryInitiateResponse {
@@ -705,17 +705,21 @@ final class APIService: @unchecked Sendable {
 
     func listRecoverySessions() async throws -> [RecoverySessionStatus] {
         guard let hubId = hubContext.activeHubId else { throw APIError.noBaseURL }
-        return try await request(method: "GET", path: hp("/api/recovery-group/sessions?hubId=\(hubId)"))
+        return try await request(method: "GET", path: "/api/recovery-group/sessions?hubId=\(hubId)")
     }
 
     /// Fetch the current user's share envelope from the recovery group.
     /// Returns the HPKE-encrypted Shamir share and its commitment.
+    ///
+    /// The server stores each holder's `shareEnvelope` (`hub_recovery_group_shares`) but mounts no
+    /// route that returns it: `GET /api/recovery-group/:hubId` omits it and there is no `shares/my`.
+    /// This call 404s until the server grows that endpoint (reported on #1997).
     func getMyShareEnvelope(hubId: String) async throws -> ShareEnvelopeResponse {
-        try await request(method: "GET", path: hp("/api/recovery-group/shares/my"))
+        try await request(method: "GET", path: "/api/recovery-group/shares/my")
     }
 
     func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatus {
-        try await request(method: "GET", path: hp("/api/recovery-group/session/\(sessionId)"))
+        try await request(method: "GET", path: "/api/recovery-group/session/\(sessionId)")
     }
 
     func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> ContributeResponse {
@@ -723,11 +727,11 @@ final class APIService: @unchecked Sendable {
             "encryptedShare": encryptedShare,
             "contributorSignature": contributorSignature,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/session/\(sessionId)/contribute"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/session/\(sessionId)/contribute", body: body)
     }
 
     func cancelRecoverySession(sessionId: String) async throws -> OkResponse {
-        try await request(method: "POST", path: hp("/api/recovery-group/session/\(sessionId)/cancel"))
+        try await request(method: "POST", path: "/api/recovery-group/session/\(sessionId)/cancel")
     }
 
     func storeUserRecoveryEnvelope(hubId: String, envelope: String) async throws -> OkResponse {
@@ -735,7 +739,7 @@ final class APIService: @unchecked Sendable {
             "hubId": hubId,
             "envelope": envelope,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/user-envelope"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/user-envelope", body: body)
     }
 
     func submitShareLivenessProof(hubId: String, proof: String) async throws -> OkResponse {
@@ -743,7 +747,7 @@ final class APIService: @unchecked Sendable {
             "hubId": hubId,
             "proof": proof,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/shares/liveness"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/shares/liveness", body: body)
     }
 }
 
@@ -769,7 +773,7 @@ extension APIService {
         body.append(encryptedData)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
-        let target = try Self.resolve(path: hp("/api/uploads/entity-file"), against: baseURL)
+        let target = try Self.resolve(path: "/api/uploads/entity-file", against: baseURL)
         var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

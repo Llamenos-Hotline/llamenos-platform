@@ -225,7 +225,7 @@ final class APIServiceWireFormatTests: XCTestCase {
                 readerEnvelopes: [Self.recipient]
             )),
 
-            // POST /api/contacts-v2 — createContactBodySchema. Generated type; `hubID`
+            // POST /api/directory — createContactBodySchema. Generated type; `hubID`
             // carries an explicit `CodingKeys` case of "hubId" that the strategy
             // overrode to "hub_id".
             ("createContact", CreateContactBody(
@@ -243,7 +243,7 @@ final class APIServiceWireFormatTests: XCTestCase {
                 trigramTokens: ["abc"]
             )),
 
-            // PATCH /api/contacts-v2/:id — updateContactBodySchema is
+            // PATCH /api/directory/:id — updateContactBodySchema is
             // createContactBodySchema.partial(): EVERY field optional. This is the
             // silent-loss case. Snake-cased, the whole body validated as `{}`,
             // `services.contacts.update(id, {})` wrote nothing, and iOS reported success.

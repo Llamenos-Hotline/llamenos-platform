@@ -16,7 +16,7 @@ final class ContactsAPIService: @unchecked Sendable {
     func createContact(_ body: CreateContactBody) async throws -> Contact {
         try await apiService.request(
             method: "POST",
-            path: apiService.hp("/api/contacts-v2"),
+            path: apiService.hp("/api/directory"),
             body: body
         )
     }
@@ -26,7 +26,7 @@ final class ContactsAPIService: @unchecked Sendable {
     func updateContact(id: String, body: UpdateContactBody) async throws -> Contact {
         try await apiService.request(
             method: "PATCH",
-            path: apiService.hp("/api/contacts-v2/\(id)"),
+            path: apiService.hp("/api/directory/\(id)"),
             body: body
         )
     }
@@ -36,14 +36,14 @@ final class ContactsAPIService: @unchecked Sendable {
     func getContact(id: String) async throws -> Contact {
         try await apiService.request(
             method: "GET",
-            path: apiService.hp("/api/contacts-v2/\(id)")
+            path: apiService.hp("/api/directory/\(id)")
         )
     }
 
     // MARK: - List
 
     func listContacts(page: Int = 1, limit: Int = 50, contactTypeHash: String? = nil) async throws -> ContactDirectoryListResponse {
-        var path = apiService.hp("/api/contacts-v2") + "?page=\(page)&limit=\(limit)"
+        var path = apiService.hp("/api/directory") + "?page=\(page)&limit=\(limit)"
         if let contactTypeHash {
             let encoded = contactTypeHash.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactTypeHash
             path += "&contactTypeHash=\(encoded)"
@@ -58,7 +58,7 @@ final class ContactsAPIService: @unchecked Sendable {
         let encoded = joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined
         return try await apiService.request(
             method: "GET",
-            path: apiService.hp("/api/contacts-v2/search") + "?tokens=\(encoded)"
+            path: apiService.hp("/api/directory/search") + "?tokens=\(encoded)"
         )
     }
 
@@ -67,7 +67,7 @@ final class ContactsAPIService: @unchecked Sendable {
     func deleteContact(id: String) async throws {
         let _: OkResponse = try await apiService.request(
             method: "DELETE",
-            path: apiService.hp("/api/contacts-v2/\(id)")
+            path: apiService.hp("/api/directory/\(id)")
         )
     }
 }

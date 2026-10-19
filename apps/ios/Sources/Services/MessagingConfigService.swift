@@ -118,7 +118,7 @@ final class MessagingConfigService {
         isLoading = true
         error = nil
         do {
-            config = try await api.request(method: "GET", path: "/settings/messaging")
+            config = try await api.request(method: "GET", path: "/api/settings/messaging")
             isLoading = false
         } catch {
             self.error = error.localizedDescription
@@ -128,13 +128,13 @@ final class MessagingConfigService {
 
     func updateConfig(_ updates: [String: Any]) async throws {
         let rawBody = try JSONSerialization.data(withJSONObject: updates)
-        config = try await api.request(method: "PATCH", path: "/settings/messaging", rawBody: rawBody)
+        config = try await api.request(method: "PATCH", path: "/api/settings/messaging", rawBody: rawBody)
     }
 
     func testChannel(_ channel: String) async throws -> Bool {
         let rawBody = try JSONSerialization.data(withJSONObject: ["channel": channel])
         let response: AppConnectionTestResponse = try await api.request(
-            method: "POST", path: "/settings/messaging/test", rawBody: rawBody
+            method: "POST", path: "/api/settings/messaging/test", rawBody: rawBody
         )
         return response.connected
     }
@@ -142,7 +142,7 @@ final class MessagingConfigService {
     func loadA2pStatus(hubId: String) async {
         do {
             a2pRegistration = try await api.request(
-                method: "GET", path: "/provider-setup/a2p/status?hubId=\(hubId)"
+                method: "GET", path: "/api/provider-setup/a2p/status?hubId=\(hubId)"
             )
         } catch {
             a2pRegistration = nil
@@ -154,7 +154,7 @@ final class MessagingConfigService {
             "hubId": hubId,
             "brandInfo": brandInfo,
         ])
-        return try await api.request(method: "POST", path: "/provider-setup/a2p/brand", rawBody: rawBody)
+        return try await api.request(method: "POST", path: "/api/provider-setup/a2p/brand", rawBody: rawBody)
     }
 
     func submitCampaign(registrationId: String, hubId: String, campaignInfo: [String: Any]) async throws -> A2pRegistrationResponse {
@@ -163,11 +163,11 @@ final class MessagingConfigService {
             "hubId": hubId,
             "campaignInfo": campaignInfo,
         ])
-        return try await api.request(method: "POST", path: "/provider-setup/a2p/campaign", rawBody: rawBody)
+        return try await api.request(method: "POST", path: "/api/provider-setup/a2p/campaign", rawBody: rawBody)
     }
 
     func skipA2p(hubId: String) async throws -> A2pRegistrationResponse {
         let rawBody = try JSONSerialization.data(withJSONObject: ["hubId": hubId])
-        return try await api.request(method: "POST", path: "/provider-setup/a2p/skip", rawBody: rawBody)
+        return try await api.request(method: "POST", path: "/api/provider-setup/a2p/skip", rawBody: rawBody)
     }
 }

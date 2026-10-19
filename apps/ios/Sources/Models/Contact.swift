@@ -60,9 +60,50 @@ struct ContactTimelineEvent: Identifiable, Codable, Sendable {
     var eventType: ContactEventType { ContactEventType(rawValue: type) ?? .call }
 }
 
-struct ContactTimelineResponse: Codable, Sendable {
+/// `GET /api/contacts/:hash` — the unified timeline (PROTOCOL §4.29). The server returns the
+/// contact's notes and conversations as separate lists (`contactTimelineDetailResponseSchema`);
+/// this folds them into one newest-first event list. Note content is encrypted, so note events
+/// carry no summary.
+struct ContactTimelineResponse: Decodable, Sendable {
     let events: [ContactTimelineEvent]
-    let total: Int
+    var total: Int { events.count }
+
+    private enum CodingKeys: String, CodingKey { case notes, conversations }
+
+    private struct NoteRow: Decodable {
+        let id: String
+        let createdAt: String
+    }
+
+    private struct ConversationRow: Decodable {
+        let id: String
+        let channelType: String
+        let status: String
+        let createdAt: String
+        let lastMessageAt: String?
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let notes = try container.decode([NoteRow].self, forKey: .notes)
+        let conversations = try container.decode([ConversationRow].self, forKey: .conversations)
+
+        let noteEvents = notes.map {
+            ContactTimelineEvent(
+                id: $0.id, type: ContactEventType.note.rawValue, timestamp: $0.createdAt,
+                summary: nil, status: nil, duration: nil
+            )
+        }
+        let conversationEvents = conversations.map {
+            ContactTimelineEvent(
+                id: $0.id, type: ContactEventType.conversation.rawValue,
+                timestamp: $0.lastMessageAt ?? $0.createdAt,
+                summary: $0.channelType, status: $0.status, duration: nil
+            )
+        }
+        // ISO-8601 UTC timestamps from the same serializer sort correctly as strings.
+        events = (noteEvents + conversationEvents).sorted { $0.timestamp > $1.timestamp }
+    }
 }
 
 // MARK: - Contact Detail
