@@ -6,14 +6,17 @@ import { promisify } from 'node:util'
 import { acquire } from './lock.js'
 import { checkHalt, halt, resume, haltedLocally } from './killswitch.js'
 import { readAll, append, since, type RunRecord } from './ledger.js'
-import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt } from './circuit.js'
+import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt, quotaCooldowns } from './circuit.js'
 import { loadLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
 import { checkDispatchDependency, type DependencyReport } from './dependency.js'
 import { checkoutProvenance, ensureRuntimeCurrent, fleetRuntimeRoot, provenanceProblems } from './provenance.js'
 import { checkFleetEnvFile } from './fleet-env.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
-import { dispatch as dispatchWorker, doctorRegistryIdForOpencodeModel, modelResolutionProblem, type EffortLevel } from './engines.js'
+import {
+  dispatch as dispatchWorker, doctorRegistryIdForOpencodeModel, modelResolutionProblem, providerOf,
+  DEFAULT_OPENCODE_MODEL, type EffortLevel,
+} from './engines.js'
 import { verifyMechanical } from './verify.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
@@ -188,6 +191,25 @@ export async function doctor(): Promise<number> {
       }
     }
   }
+  // Issue #1835: a provider in quota cooldown dispatches nothing, yet it
+  // trips no breaker and writes no halt file — so every check above and
+  // `not halted` below stayed green while every lane on that provider failed.
+  // Derived from the ledger on each run, never cached.
+  const nowMs = Date.now()
+  const cooling = quotaCooldowns(
+    readAll(),
+    lanes.map((l) => ({ id: l.id, mode: l.mode, provider: providerOf(l.engine, l.model) })),
+    nowMs, LIMITS,
+  )
+  for (const c of cooling) {
+    checks.push([`provider ${c.provider} not in quota cooldown (lanes: ${c.lanes.join(', ')})`, false,
+      `quota exhausted — these lanes skip dispatch until ${new Date(c.until).toISOString()}; ` +
+      'clears by itself, nothing to run'])
+  }
+  const coolingProviders = new Set(cooling.map((c) => c.provider))
+  for (const provider of new Set(lanes.filter((l) => l.mode === 'live').map((l) => providerOf(l.engine, l.model)))) {
+    if (!coolingProviders.has(provider)) checks.push([`provider ${provider} not in quota cooldown`, true, ''])
+  }
   checks.push(['not halted', !haltedLocally(),
     existsSync(HALT_REASON_FILE) ? `halted: ${readFileSync(HALT_REASON_FILE, 'utf8').trim()} — clear with: llamenos-fleet resume` : ''])
   checks.push(['command on PATH', existsSync(`${process.env['HOME']}/.local/bin/llamenos-fleet`),
@@ -352,11 +374,6 @@ const BRIEFS_DIR = join(FLEET_DIR, 'briefs')
 const DEFAULT_TIMEOUT_SEC = 90 * 60
 const DEFAULT_EFFORT: EffortLevel = 'high'
 const DEFAULT_MODEL = 'sonnet'
-// An opencode lane with no model override must not fall back to the Claude
-// default — 'sonnet' would route the dispatch to the claude CLI, silently
-// defeating the engine selection. 'kimi' is dispatch-one.sh's maintained
-// opencode token (maps to kimi-code-plan-global/k3-256k inside the script).
-const DEFAULT_OPENCODE_MODEL = 'kimi'
 
 /** One name identifies a dispatched item everywhere: the tmux session
  *  dispatch-one.sh starts, the status file it polls, and the handle `settle`

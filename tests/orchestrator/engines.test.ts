@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  statusToOutcome, parseStatusFile, buildArgs, isTerminalStatus, resolveDispatchModel,
+  statusToOutcome, parseStatusFile, buildArgs, isTerminalStatus, resolveDispatchModel, providerOf,
   doctorRegistryIdForOpencodeModel, modelResolutionProblem,
   parseWorkerLogSignal, detectQuotaFromLog, extractResetHint, parseResetAt, QUOTA_MESSAGE_RE,
   resolveLaunchOutcome,
@@ -176,6 +176,36 @@ describe('resolveDispatchModel', () => {
   it('does not double-wrap a model that is already a dispatcher token', () => {
     expect(resolveDispatchModel('opencode', 'opencode:some-provider/some-model')).toBe('opencode:some-provider/some-model')
     expect(resolveDispatchModel('opencode', 'kimi-thinking')).toBe('kimi-thinking')
+  })
+})
+
+// #1756/#1835: the axis a quota cooldown is keyed on. The opencode engine
+// fronts several independent subscriptions, so engine alone is too coarse.
+describe('providerOf', () => {
+  it('is the engine for claude, whatever the model', () => {
+    expect(providerOf('claude')).toBe('claude')
+    expect(providerOf('claude', 'opus')).toBe('claude')
+  })
+
+  it('defaults an opencode lane with no model to kimi, matching the dispatcher default', () => {
+    expect(providerOf('opencode')).toBe('kimi')
+  })
+
+  it('maps every spelling of the kimi subscription to one provider', () => {
+    for (const m of ['kimi', 'kimi-thinking', 'kimi-code-plan-global/k3-256k', 'kimi-for-coding/k3-256k']) {
+      expect(providerOf('opencode', m)).toBe('kimi')
+    }
+  })
+
+  it('keeps independent opencode subscriptions apart', () => {
+    expect(providerOf('opencode', 'copilot')).toBe('copilot')
+    expect(providerOf('opencode', 'glm')).toBe('glm')
+    expect(providerOf('opencode', 'some-provider/some-model')).toBe('some-provider')
+    expect(providerOf('opencode', 'opencode:other/model')).toBe('other')
+  })
+
+  it('folds claude-family tokens routed through opencode back to claude', () => {
+    expect(providerOf('opencode', 'sonnet')).toBe('claude')
   })
 })
 

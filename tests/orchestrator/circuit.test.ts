@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  rateBreaker, failureBreaker, inQuotaCooldown, quotaBreaker, isQuotaHaltReason, parseQuotaResumeAt,
+  rateBreaker, failureBreaker, inQuotaCooldown, quotaCooldowns, quotaBreaker, isQuotaHaltReason, parseQuotaResumeAt,
 } from '../../orchestrator/src/circuit.js'
 import type { RunRecord, Outcome } from '../../orchestrator/src/ledger.js'
 
@@ -137,21 +137,66 @@ describe('failureBreaker', () => {
 })
 
 describe('inQuotaCooldown', () => {
-  it('sits the lane out after a quota outcome', () => {
-    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'ios', 1000 + 60_000, LIMITS)).toBe(true)
+  it('sits the provider out after a quota outcome', () => {
+    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'claude', 1000 + 60_000, LIMITS)).toBe(true)
   })
-  it('releases the lane after the cooldown', () => {
-    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'ios', 1000 + 3_700_000, LIMITS)).toBe(false)
+  it('releases the provider after the cooldown', () => {
+    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'claude', 1000 + 3_700_000, LIMITS)).toBe(false)
   })
-  it('is per-lane, not global', () => {
-    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'backend', 1000 + 60_000, LIMITS)).toBe(false)
+  // #1756/#1835: quota belongs to the provider's account, not to the lane that
+  // discovered it. Keyed on lane, backend rediscovered what ios already knew.
+  it('is per-provider: a QUOTA from one lane cools every other lane on that provider', () => {
+    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'claude', 1000 + 60_000, LIMITS)).toBe(true)
+  })
+  it('does not cool a different provider', () => {
+    const rows = [r('QUOTA', 1000, 'ios', { engine: 'opencode', provider: 'kimi' })]
+    expect(inQuotaCooldown(rows, 'claude', 1000 + 60_000, LIMITS)).toBe(false)
+    expect(inQuotaCooldown(rows, 'copilot', 1000 + 60_000, LIMITS)).toBe(false)
+    expect(inQuotaCooldown(rows, 'kimi', 1000 + 60_000, LIMITS)).toBe(true)
+  })
+  it('reads a row written before the provider field existed as its engine', () => {
+    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios', { engine: 'opencode' })], 'opencode', 1000 + 60_000, LIMITS)).toBe(true)
   })
   it('honours a non-default cooldown value from limits', () => {
     const shortCooldown = { ...LIMITS, quotaCooldownMs: 30_000 }
     // 60s after the QUOTA outcome: still inside the default 1h cooldown, but
     // past this limits object's 30s cooldown — proves the value actually read
     // is limits.quotaCooldownMs, not a hardcoded default.
-    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'ios', 1000 + 60_000, shortCooldown)).toBe(false)
+    expect(inQuotaCooldown([r('QUOTA', 1000, 'ios')], 'claude', 1000 + 60_000, shortCooldown)).toBe(false)
+  })
+})
+
+// #1835: doctor must report a provider in cooldown instead of showing green
+// while every lane on it fails.
+describe('quotaCooldowns', () => {
+  const lanes = [
+    { id: 'ios', mode: 'live', provider: 'claude' },
+    { id: 'backend', mode: 'live', provider: 'claude' },
+    { id: 'infra', mode: 'live', provider: 'kimi' },
+    { id: 'shared', mode: 'shadow', provider: 'copilot' },
+  ]
+  it('names the provider, every live lane behind it, and when it lapses', () => {
+    expect(quotaCooldowns([r('QUOTA', 1000, 'ios')], lanes, 2000, LIMITS))
+      .toEqual([{ provider: 'claude', lanes: ['ios', 'backend'], until: 1000 + LIMITS.quotaCooldownMs }])
+  })
+  it('reports nothing when no provider is cooling', () => {
+    expect(quotaCooldowns([], lanes, 2000, LIMITS)).toEqual([])
+    expect(quotaCooldowns([r('QUOTA', 1000, 'ios')], lanes, 1000 + 3_700_000, LIMITS)).toEqual([])
+  })
+  it('does not report a provider only shadow or off lanes use', () => {
+    const rows = [r('QUOTA', 1000, 'shared', { engine: 'opencode', provider: 'copilot' })]
+    expect(quotaCooldowns(rows, lanes, 2000, LIMITS)).toEqual([])
+  })
+  it('reports each cooling provider separately, using its own newest QUOTA', () => {
+    const rows = [
+      r('QUOTA', 1000, 'ios'),
+      r('QUOTA', 1500, 'infra', { engine: 'opencode', provider: 'kimi' }),
+      r('QUOTA', 1200, 'backend'),
+    ]
+    expect(quotaCooldowns(rows, lanes, 2000, LIMITS)).toEqual([
+      { provider: 'claude', lanes: ['ios', 'backend'], until: 1200 + LIMITS.quotaCooldownMs },
+      { provider: 'kimi', lanes: ['infra'], until: 1500 + LIMITS.quotaCooldownMs },
+    ])
   })
 })
 
