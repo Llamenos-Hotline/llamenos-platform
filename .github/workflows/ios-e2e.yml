@@ -62,6 +62,10 @@ on:
   # client's API contract never runs this suite. The nightly run on main
   # catches that within a day. It also runs the quarantined tests, so each
   # quarantined defect stays visible daily until it is fixed.
+  #
+  # "Visible" means the `report` job at the bottom of this file: a red scheduled
+  # run opens one `[nightly-ios-e2e]` issue (#2057). Until it existed this run
+  # was red on every night from the first, 2026-09-29, and nobody was told.
   schedule:
     - cron: "17 3 * * *"
 
@@ -1301,9 +1305,16 @@ jobs:
   report:
     name: report
     needs: [build, ui]
-    # `failure` only: a cancelled run (a runner restart, an operator) is not a
-    # verdict. `build` failing leaves `ui` skipped, so both are checked.
-    if: ${{ always() && github.event_name == 'schedule' && (needs.build.result == 'failure' || needs.ui.result == 'failure') }}
+    # `failure` AND `cancelled`. A job that exceeds its timeout-minutes is
+    # recorded as cancelled, not failed: the 2026-09-30 and 2026-10-01 nightlies
+    # both ended that way (ui shards cancelled after 65-70 min waiting on a
+    # starved Mac), delivered no verdict, and a failure-only condition would
+    # have reported neither. A run with no verdict is a red nightly.
+    # `build` failing leaves `ui` skipped, so both are checked.
+    if: >-
+      ${{ always() && github.event_name == 'schedule'
+      && (contains(fromJSON('["failure","cancelled"]'), needs.build.result)
+      || contains(fromJSON('["failure","cancelled"]'), needs.ui.result)) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1338,15 +1349,16 @@ jobs:
           PREFIX='[nightly-ios-e2e]'
 
           FAILED_JOBS="$(gh run view "$RUN_ID" --repo "$REPO" --json jobs \
-            -q '[.jobs[] | select(.conclusion == "failure") | .name] | join("|")')"
+            -q '[.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled") | .name] | join("|")')"
 
           BODY="$(mktemp)"
           python3 apps/ios/scripts/ui-tests.py nightly-report "$RESULTS" --shards "$SHARDS" \
             --failed-jobs "$FAILED_JOBS" --run-url "$RUN_URL" > "$BODY"
           SIGNATURE="$(head -n1 "$BODY")"
 
-          # How long has it been red? Walk the scheduled runs newest-first,
-          # skipping cancelled ones (no verdict), until one is green.
+          # How long has it been red? Walk the scheduled runs newest-first until
+          # one is green. Cancelled and skipped runs carry no verdict either way,
+          # so they neither extend nor break the streak.
           RUNS="$(gh run list --repo "$REPO" --workflow ios-e2e.yml --event schedule --limit 60 \
             --json databaseId,conclusion,createdAt,headSha)"
           STREAK="$(jq -c --argjson id "$RUN_ID" '
