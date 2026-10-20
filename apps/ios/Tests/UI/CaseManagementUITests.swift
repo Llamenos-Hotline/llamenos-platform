@@ -331,7 +331,10 @@ final class CaseManagementUITests: BaseUITest {
         given("case management is on in a hub with no cases") {
             guard let hubId = TestAdminAPI.createHub(
                 name: "ios-cases-empty-\(UUID().uuidString.prefix(8))", baseURL: testHubURL
-            ) else { return }
+            ) else {
+                XCTFail("The dedicated empty hub could not be created through the admin API")
+                return
+            }
             TestAdminAPI.setCaseManagement(enabled: true, hubId: hubId, baseURL: testHubURL)
             TestAdminAPI.applyTemplate("jail-support", hubId: hubId, baseURL: testHubURL)
             launchAsAdminWithAPI(hubId: hubId)

@@ -70,6 +70,7 @@
     "ios:test": "bash scripts/ios-build.sh test",
     "ios:xcframework": "bash scripts/ios-build.sh xcframework",
     "ios:uitest": "bash scripts/ios-build.sh uitest",
+    "ios:check-vacuous-assertions": "python3 apps/ios/scripts/check-vacuous-assertions.py",
     "ios:all": "bash scripts/ios-build.sh all",
     "crypto:test:mobile": "cargo test --manifest-path packages/crypto/Cargo.toml --features mobile",
     "test:android": "scripts/test-android.sh",

@@ -440,6 +440,12 @@ jobs:
       - name: Check for stale accessibility identifiers in iOS UI tests
         run: python3 apps/ios/scripts/check-stale-identifiers.py
 
+      # Same fail-fast class: an XCTAssertTrue(true)/XCTAssertFalse(false)/
+      # XCTAssert(true) can never fail, so the test asserting it verifies
+      # nothing. Banned under apps/ios/Tests since #1888.
+      - name: Check for vacuous assertions in iOS UI tests
+        run: python3 apps/ios/scripts/check-vacuous-assertions.py
+
       # Every test the merge gate skips must exist and name the issue that owns it.
       - name: Check the UI test quarantine
         run: python3 apps/ios/scripts/ui-tests.py check-quarantine
