@@ -26,6 +26,8 @@ import {
   wrapAuditKeyForAdmins,
   encryptAuditDetails,
   decryptAuditDetails,
+  sealAuditKeyForServer,
+  openServerSealedAuditKey,
 } from './crypto'
 
 const SECRET = 'a'.repeat(64) // 32 hex bytes = valid HMAC secret
@@ -479,5 +481,22 @@ describe('encryptAuditDetails / decryptAuditDetails', () => {
 
   it('rejects malformed input', () => {
     expect(() => decryptAuditDetails(auditKey, 'no-colon', userPubkey, entryId)).toThrow()
+  })
+})
+
+describe('sealAuditKeyForServer / openServerSealedAuditKey', () => {
+  const auditKey = new Uint8Array(32).fill(7)
+  const serverSecret = new Uint8Array(32).fill(3)
+
+  it('round-trips the key and never stores it legibly', () => {
+    const sealed = sealAuditKeyForServer(auditKey, serverSecret)
+    expect(sealed).toMatch(/^[0-9a-f]+$/)
+    expect(sealed).not.toContain(bytesToHex(auditKey))
+    expect(openServerSealedAuditKey(sealed, serverSecret)).toEqual(auditKey)
+  })
+
+  it('refuses a different server secret', () => {
+    const sealed = sealAuditKeyForServer(auditKey, serverSecret)
+    expect(() => openServerSealedAuditKey(sealed, new Uint8Array(32).fill(4))).toThrow()
   })
 })

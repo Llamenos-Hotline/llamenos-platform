@@ -15,19 +15,18 @@
 import { randomBytes } from 'node:crypto'
 import { eq, and, asc, desc, sql, count, gte, lte, inArray } from 'drizzle-orm'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
 import type { Database } from '../db'
 import { auditLog, auditUserKeys } from '../db/schema'
 import {
   hashIP,
-  serverEncrypt,
-  serverDecrypt,
+  sealAuditKeyForServer,
+  openServerSealedAuditKey,
   wrapAuditKeyForAdmins,
   encryptAuditDetails,
   decryptAuditDetails,
 } from '../lib/crypto'
-import { LABEL_AUDIT_USER_KEY_WRAP } from '@shared/crypto-labels'
 import { getClientIp, CLIENT_FINGERPRINT_PREFIX } from '../lib/client-ip'
 import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
@@ -62,7 +61,7 @@ export interface AuditCryptoDeps {
   /** Admin X25519 recipients a freshly created key is wrapped for. */
   resolveAdminRecipients: () => Promise<string[]>
   /** audit_user_keys row access (owned by ErasureService). */
-  keyStore: Pick<ErasureService, 'getAuditUserKey' | 'ensureAuditUserKey'>
+  keyStore: Pick<ErasureService, 'getAuditUserKey' | 'ensureAuditUserKey' | 'lockAuditActor'>
 }
 
 // ---------------------------------------------------------------------------
@@ -208,13 +207,16 @@ export class AuditService {
   /**
    * The user's 32-byte audit key, creating and storing it on first use.
    *
-   * The stored row is the authority: encryptedKey is serverDecrypt-able (so
+   * The stored row is the authority: encryptedKey is server-sealed (so
    * this server can read details for admin views) and adminEnvelopes carries
    * the key HPKE-wrapped to every admin under LABEL_AUDIT_USER_KEY_WRAP with
    * AAD `label:userPubkey`, byte-matching audit_key.rs / LABEL_AUDIT_USER_KEY
    * on clients.
+   *
+   * Null when the user is erased: their key was shredded and must never be
+   * re-minted (ErasureService.ensureAuditUserKey).
    */
-  private async ensureUserAuditKey(userPubkey: string): Promise<Uint8Array> {
+  private async ensureUserAuditKey(userPubkey: string): Promise<Uint8Array | null> {
     const deps = this.cryptoDeps
     if (!deps) throw new Error('ensureUserAuditKey requires crypto deps')
 
@@ -236,11 +238,13 @@ export class AuditService {
         )
       }
       return {
-        encryptedKey: bytesToHex(serverEncrypt(key, LABEL_AUDIT_USER_KEY_WRAP, deps.serverSecret)),
+        encryptedKey: sealAuditKeyForServer(key, deps.serverSecret),
         adminEnvelopes: recipients.length === 0 ? [] : wrapAuditKeyForAdmins(key, recipients, userPubkey),
       }
     })
-    return serverDecrypt(hexToBytes(row.encryptedKey), LABEL_AUDIT_USER_KEY_WRAP, deps.serverSecret)
+    return row
+      ? openServerSealedAuditKey(row.encryptedKey, deps.serverSecret)
+      : null
   }
 
   /**
@@ -263,7 +267,7 @@ export class AuditService {
     if (key === undefined) {
       const row = await deps.keyStore.getAuditUserKey(entry.actorPubkey)
       key = row
-        ? serverDecrypt(hexToBytes(row.encryptedKey), LABEL_AUDIT_USER_KEY_WRAP, deps.serverSecret)
+        ? openServerSealedAuditKey(row.encryptedKey, deps.serverSecret)
         : null
       keyCache.set(entry.actorPubkey, key)
     }
@@ -317,18 +321,40 @@ export class AuditService {
     // recomputation (and verifyChain, which decrypts before re-hashing)
     // possible; hashing the ciphertext would tie verification to a random
     // nonce and prove nothing about the underlying event.
-    let storedDetails: Record<string, unknown> | null = details
-    if (this.cryptoDeps && actorPubkey !== 'system') {
-      const key = await this.ensureUserAuditKey(actorPubkey)
-      storedDetails = {
-        [ENCRYPTED_DETAILS_KEY]: encryptAuditDetails(
-          key, JSON.stringify(details), actorPubkey, id,
-        ),
-      }
-    }
+    const keyedActor = this.cryptoDeps && actorPubkey !== 'system' ? this.cryptoDeps : null
+    const userKey = keyedActor ? await this.ensureUserAuditKey(actorPubkey) : null
 
     return await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${chainLockKey(hubId)}))`)
+
+      // An erased actor's entry is written the way erasure leaves that user's
+      // earlier entries: actor '[erased]', no details, erasedAt stamped. The
+      // shared audit-key lock (held to commit) orders this append against
+      // executeErasure, so the user is either still active here — and the
+      // erasure's rewrite catches the committed row — or already erased.
+      // Nothing is ever sealed under a key the erasure has destroyed, and no
+      // key is minted for an erased user.
+      let entryActor = actorPubkey
+      let hashedDetails: Record<string, unknown> | null = details
+      let storedDetails: Record<string, unknown> | null = details
+      let erasedAt: Date | null = null
+      if (keyedActor) {
+        const { erased } = await keyedActor.keyStore.lockAuditActor(actorPubkey, tx)
+        if (erased) {
+          entryActor = '[erased]'
+          hashedDetails = null
+          storedDetails = null
+          erasedAt = new Date()
+        } else if (!userKey) {
+          throw new ServiceError(500, 'audit user key unavailable for an active user')
+        } else {
+          storedDetails = {
+            [ENCRYPTED_DETAILS_KEY]: encryptAuditDetails(
+              userKey, JSON.stringify(details), actorPubkey, id,
+            ),
+          }
+        }
+      }
 
       const [latest] = await tx
         .select({ entryHash: auditLog.entryHash, createdAt: auditLog.createdAt })
@@ -348,9 +374,9 @@ export class AuditService {
       const entryHash = computeEntryHash({
         id,
         action,
-        actorPubkey,
+        actorPubkey: entryActor,
         createdAt,
-        details,
+        details: hashedDetails,
         previousEntryHash,
       })
 
@@ -360,10 +386,11 @@ export class AuditService {
           id,
           hubId: hubId ?? null,
           action,
-          actorPubkey,
+          actorPubkey: entryActor,
           details: storedDetails,
           previousEntryHash,
           entryHash,
+          erasedAt,
           // Explicitly set createdAt to the same timestamp used for hash
           // computation. Using sql`` avoids JS Date round-trip issues and
           // ensures the stored value exactly matches the hashed value.
@@ -372,8 +399,9 @@ export class AuditService {
         .returning()
 
       // Callers and the tests pinning this method's return contract see the
-      // plaintext details they passed in, never the sealed storage form.
-      return { ...row, details }
+      // plaintext details they passed in, never the sealed storage form —
+      // except for an erased actor, whose details were never stored.
+      return { ...row, details: hashedDetails }
     })
   }
 

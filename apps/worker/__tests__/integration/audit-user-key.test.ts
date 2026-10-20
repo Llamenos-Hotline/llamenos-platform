@@ -22,6 +22,9 @@
  *     (crypto-shredding) — via the raw decrypt path AND the service read path.
  *  7. `system` entries are never encrypted (no user key exists for them).
  *  8. createServices — the production construction path — arms all of it.
+ *  9. Erasure is final: no write after (or racing) executeErasure re-mints the
+ *     shredded key or seals anything under it — the entry is anonymised
+ *     instead, and the chain still verifies.
  *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
  */
@@ -30,7 +33,7 @@ import '../../db/pg-array-patch'
 import '../mocks/llamenos-crypto-ffi'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_AUDIT_DETAILS, LABEL_AUDIT_USER_KEY_WRAP } from '@shared/crypto-labels'
@@ -302,5 +305,135 @@ describe('per-user audit key — wired', () => {
       .where(eq(schema.auditLog.actorPubkey, user))
     // Entries remain (audit floor), but the key is gone.
     expect(stored.length).toBeGreaterThan(0)
+  })
+
+  it('a write after executeErasure mints no new key and is stored anonymised', async () => {
+    const admin = reader()
+    const audit = wiredAudit([admin.pubkey])
+    const erasure = new ErasureService(fresh.db)
+    const user = 'ac'.repeat(32)
+    const hub = 'hub-ak-8'
+
+    await fresh.db.insert(schema.users).values({ pubkey: user, displayName: 'Erase Me Too' })
+    await audit.log('noteCreated', user, { noteId: 'n-pre-erasure-9' }, hub)
+    expect(await keyRow(user)).toBeTruthy()
+
+    await erasure.executeErasure(user, admin.pubkey, 'test erasure', audit)
+    expect(await keyRow(user)).toBeUndefined()
+
+    // An in-flight request finishing after the erasure: before the fix this
+    // created a brand-new audit_user_keys row for the erased pubkey.
+    const late = await audit.log('noteCreated', user, { noteId: 'n-post-erasure-9' }, hub)
+
+    expect(await keyRow(user)).toBeUndefined()
+    expect(late.actorPubkey).toBe('[erased]')
+    expect(late.details).toBeNull()
+    const stored = await rawEntry(late.id)
+    expect(stored!.actorPubkey).toBe('[erased]')
+    expect(stored!.details).toBeNull()
+    expect(stored!.erasedAt).toBeTruthy()
+
+    // No row for the erased user carries their pubkey, and nothing is
+    // sealed under the destroyed key — so the chain still verifies.
+    const byUser = await fresh.db.select().from(schema.auditLog).where(eq(schema.auditLog.actorPubkey, user))
+    expect(byUser).toHaveLength(0)
+    const verify = await audit.verifyFullChain(hub)
+    expect(verify.valid).toBe(true)
+    expect(verify.checkedEntries).toBe(2)
+  })
+
+  it('ensureAuditUserKey refuses to re-create a shredded key for an erased user', async () => {
+    const erasure = new ErasureService(fresh.db)
+    const user = 'ad'.repeat(32)
+    await fresh.db.insert(schema.users).values({ pubkey: user, displayName: 'Erased', status: 'erased' })
+
+    const create = vi.fn(async () => ({ encryptedKey: 'unused', adminEnvelopes: [] }))
+    expect(await erasure.ensureAuditUserKey(user, create)).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+    expect(await keyRow(user)).toBeUndefined()
+  })
+
+  it('an append holding the audit-key lock commits before the erasure shreds, and the erasure rewrites it', async () => {
+    const admin = reader()
+    const audit = wiredAudit([admin.pubkey])
+    const erasure = new ErasureService(fresh.db)
+    const user = 'ae'.repeat(32)
+    const hub = 'hub-ak-9'
+
+    await fresh.db.insert(schema.users).values({ pubkey: user, displayName: 'Racing' })
+    await audit.log('login', user, {}, hub)
+
+    // Stand in for an AuditService.log append that is mid-transaction when
+    // the erasure starts: it holds the shared audit-key lock, has seen the
+    // user as active, and has written its row but not committed.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let sawErased: boolean | undefined
+    const racingId = crypto.randomUUID()
+    const append = fresh.db.transaction(async (tx) => {
+      sawErased = (await erasure.lockAuditActor(user, tx)).erased
+      await tx.insert(schema.auditLog).values({
+        id: racingId,
+        hubId: hub,
+        action: 'noteCreated',
+        actorPubkey: user,
+        details: { noteId: 'n-racing-10' },
+        previousEntryHash: null,
+        entryHash: '0'.repeat(64),
+      })
+      await gate
+    })
+
+    let erasureDone = false
+    const erasing = erasure
+      .executeErasure(user, admin.pubkey, 'race', audit)
+      .then(() => { erasureDone = true })
+
+    // The erasure must be parked on the audit-key lock, not past it.
+    await expect.poll(async () => {
+      const [row] = await fresh.db.execute<{ waiting: number }>(
+        sql`SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`,
+      )
+      return row?.waiting ?? 0
+    }, { timeout: 15_000 }).toBeGreaterThan(0)
+    expect(erasureDone).toBe(false)
+    expect(sawErased).toBe(false)
+
+    release()
+    await append
+    await erasing
+
+    // The racing row committed first, so the erasure's rewrite caught it.
+    const stored = await rawEntry(racingId)
+    expect(stored!.actorPubkey).toBe('[erased]')
+    expect(stored!.details).toBeNull()
+    expect(stored!.erasedAt).toBeTruthy()
+    expect(await keyRow(user)).toBeUndefined()
+  })
+
+  it('an admin erasing their own account completes, with the erasure entry anonymised', async () => {
+    const admin = reader()
+    const audit = wiredAudit([admin.pubkey])
+    const erasure = new ErasureService(fresh.db)
+    const self = 'af'.repeat(32)
+
+    await fresh.db.insert(schema.users).values({ pubkey: self, displayName: 'Self Eraser' })
+    await audit.log('login', self, {}, null)
+
+    // Would deadlock if the userErasureExecuted append ran while the erasure
+    // transaction still held this user's audit-key lock.
+    await erasure.executeErasure(self, self, 'self', audit)
+
+    const rows = await fresh.db
+      .select()
+      .from(schema.auditLog)
+      .where(eq(schema.auditLog.action, 'userErasureExecuted'))
+    // Every other erasure in this file is executed by a non-erased admin, so
+    // the self-erasure is the only anonymised userErasureExecuted entry.
+    const anonymised = rows.filter((r) => r.actorPubkey === '[erased]')
+    expect(anonymised).toHaveLength(1)
+    expect(anonymised[0]!.details).toBeNull()
+    expect(rows.some((r) => r.actorPubkey === self)).toBe(false)
+    expect(await keyRow(self)).toBeUndefined()
   })
 })

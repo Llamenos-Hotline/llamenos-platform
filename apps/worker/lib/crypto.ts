@@ -217,6 +217,21 @@ export function decryptAuditDetails(
   return new TextDecoder().decode(symmetricDecrypt(auditKey, data, aad))
 }
 
+/**
+ * Seal a per-user audit key for the server-held copy
+ * (audit_user_keys.encrypted_key), which lets the server decrypt details for
+ * admin reads. Hex-encoded. The label is shared with the admin HPKE wrap over
+ * independent key material; a dedicated label is tracked in #2054.
+ */
+export function sealAuditKeyForServer(auditKey: Uint8Array, serverSecret: Uint8Array): string {
+  return bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_WRAP, serverSecret))
+}
+
+/** Open a key sealed by sealAuditKeyForServer. Throws on a wrong secret or tampered row. */
+export function openServerSealedAuditKey(encryptedKey: string, serverSecret: Uint8Array): Uint8Array {
+  return serverDecrypt(hexToBytes(encryptedKey), LABEL_AUDIT_USER_KEY_WRAP, serverSecret)
+}
+
 
 // --- Contact Identifier Encryption ---
 
