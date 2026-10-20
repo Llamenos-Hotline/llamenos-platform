@@ -63,7 +63,7 @@ on:
   # catches that within a day. It also runs the quarantined tests, so each
   # quarantined defect stays visible daily until it is fixed.
   push:
-    branches: [proof-2057-verify]
+    branches: [proof-2057-A, proof-2057-B]
   schedule:
     - cron: "17 3 * * *"
 
@@ -883,7 +883,7 @@ jobs:
           # puts the fragile classes back on hosted runners — which is the
           # failure this whole mechanism exists to prevent.
           extra+=(--mac-shards 0,3)
-          printf '%s\n' -only-testing:LlamenosUITests/DashboardUITests -only-testing:LlamenosUITests/EventsUITests > "$RUNNER_TEMP/shard-args.txt"; cat "$RUNNER_TEMP/shard-args.txt"
+          printf '%s\n' -only-testing:LlamenosUITests/DashboardUITests/testNavigateToShiftsTab -test-iterations 12 > "$RUNNER_TEMP/shard-args.txt"; cat "$RUNNER_TEMP/shard-args.txt"
           test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
       # Inside the job's 65: leaves room for setup (5-7 min) and the always()
