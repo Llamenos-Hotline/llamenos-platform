@@ -14,71 +14,15 @@ final class ActiveCallUITests: BaseUITest {
 
     // MARK: - Helpers
 
-    /// The dashboard presents the first active call its hub holds, whoever answered it, and
-    /// a call stays active until it is ended or goes stale — so a call left over from one
-    /// test would be the card the next test sees. Each test therefore gets a hub of its own
-    /// (see #2027 for the dashboard half of that).
+    /// This test's hub (see `launchAsAdminOnFreshHub`).
     private var callHubId = ""
 
     private func launchOnFreshHub() {
-        guard let hubId = TestAdminAPI.createHub(name: "active-call-\(UUID().uuidString.prefix(8))", baseURL: testHubURL) else {
-            return // createHub already failed the test with the server's answer
-        }
-        callHubId = hubId
-        launchAsAdminWithAPI(hubId: hubId)
+        callHubId = launchAsAdminOnFreshHub(named: "active-call") ?? ""
     }
 
-    /// A call row as the server reports it.
-    private struct ServerCall {
-        let id: String
-        let status: String
-        let answeredBy: String?
-    }
-
-    /// The calls the server holds as active for this class's hub, read through the real
-    /// authenticated API — the same route the dashboard polls.
-    private func serverActiveCalls() -> [ServerCall] {
-        guard let data = TestAdminAPI.send("GET", "/api/hubs/\(callHubId)/calls/active", baseURL: testHubURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let calls = json["calls"] as? [[String: Any]] else {
-            XCTFail("GET /api/hubs/\(callHubId)/calls/active did not return { calls: [...] }")
-            return []
-        }
-        return calls.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            return ServerCall(id: id, status: row["status"] as? String ?? "", answeredBy: row["answeredBy"] as? String)
-        }
-    }
-
-    /// The signing pubkey the app is running as — the identity a call must be answered by
-    /// for the app's call actions to be authorised (`answeredBy` is checked server-side).
-    private func appIdentityPubkey() -> String {
-        let identity = find("dashboard-identity")
-        XCTAssertTrue(identity.waitForExistence(timeout: 15), "The dashboard should expose the signed-in identity")
-        let pubkey = identity.label
-        XCTAssertEqual(pubkey.count, 64, "The dashboard identity should be a 32-byte hex pubkey, got '\(pubkey)'")
-        return pubkey
-    }
-
-    /// Put a call on this class's hub and answer it as the app's own identity.
-    /// Fails the test unless the server reports the call as in progress, answered by the app.
-    private func answerCallAsApp(callerNumber: String) -> String {
-        let pubkey = appIdentityPubkey()
-        let call = simulateIncomingCall(callerNumber: callerNumber, hubId: callHubId)
-        XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should be created (status '\(call.status)')")
-        XCTAssertEqual(call.status, "ringing", "A new call should be ringing")
-        let answered = simulateAnswerCall(callId: call.callId, pubkey: pubkey)
-        XCTAssertEqual(answered, "in-progress", "The call should be in progress once the app's identity answers it")
-        let held = serverActiveCalls().first { $0.id == call.callId }
-        XCTAssertEqual(held?.answeredBy, pubkey, "The server should record the app's identity as the call's answerer")
-        return call.callId
-    }
-
-    /// Wait for the call card to leave the screen.
-    private func waitForCardToClear(timeout: TimeInterval = 15) -> Bool {
-        let gone = NSPredicate(format: "exists == false")
-        let expectation = XCTNSPredicateExpectation(predicate: gone, object: find("active-call-card"))
-        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    private func answerCall(from callerNumber: String) -> String {
+        answerCallAsApp(callerNumber: callerNumber, hubId: callHubId)
     }
 
     private func tapOnceHittable(_ identifier: String, timeout: TimeInterval = 15) {
@@ -101,7 +45,7 @@ final class ActiveCallUITests: BaseUITest {
             XCTAssertFalse(find("active-call-card").exists, "No call card should show before a call exists")
         }
         when("a call from +15551110001 is answered by my identity") {
-            callId = answerCallAsApp(callerNumber: "+15551110001")
+            callId = answerCall(from: "+15551110001")
         }
         then("the active call card should show the caller on the dashboard") {
             XCTAssertTrue(
@@ -126,16 +70,16 @@ final class ActiveCallUITests: BaseUITest {
         var callId = ""
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
-            callId = answerCallAsApp(callerNumber: "+15551110002")
+            callId = answerCall(from: "+15551110002")
             XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
         when("I tap hang up") {
             tapOnceHittable("hangup-button")
         }
         then("the card clears and the server no longer holds the call") {
-            XCTAssertTrue(waitForCardToClear(), "The call card should clear after hanging up")
+            XCTAssertTrue(waitForCallCardToClear(), "The call card should clear after hanging up")
             XCTAssertFalse(
-                serverActiveCalls().contains { $0.id == callId },
+                serverActiveCalls(hubId: callHubId).contains { $0.id == callId },
                 "The server should have ended call \(callId)"
             )
         }
@@ -151,7 +95,7 @@ final class ActiveCallUITests: BaseUITest {
         var callId = ""
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
-            callId = answerCallAsApp(callerNumber: number)
+            callId = answerCall(from: number)
             XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
         when("I open ban + hang up, give a reason and confirm") {
@@ -163,9 +107,9 @@ final class ActiveCallUITests: BaseUITest {
             tapOnceHittable("ban-confirm-button")
         }
         then("the call ends and the caller is banned") {
-            XCTAssertTrue(waitForCardToClear(), "The call card should clear after ban + hang up")
+            XCTAssertTrue(waitForCallCardToClear(), "The call card should clear after ban + hang up")
             XCTAssertFalse(
-                serverActiveCalls().contains { $0.id == callId },
+                serverActiveCalls(hubId: callHubId).contains { $0.id == callId },
                 "The server should have ended call \(callId)"
             )
             let retry = simulateIncomingCall(callerNumber: number, hubId: callHubId)
@@ -182,7 +126,7 @@ final class ActiveCallUITests: BaseUITest {
         var callId = ""
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
-            callId = answerCallAsApp(callerNumber: number)
+            callId = answerCall(from: number)
             XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
         when("I open ban + hang up and cancel") {
@@ -193,7 +137,7 @@ final class ActiveCallUITests: BaseUITest {
         then("the call is still running and the caller is not banned") {
             XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 10), "The call should still be on screen")
             XCTAssertTrue(
-                serverActiveCalls().contains { $0.id == callId && $0.status == "in-progress" },
+                serverActiveCalls(hubId: callHubId).contains { $0.id == callId && $0.status == "in-progress" },
                 "The server should still hold call \(callId) in progress"
             )
             // A second call from the same number is the proof the caller was not banned.
@@ -224,7 +168,7 @@ final class ActiveCallUITests: BaseUITest {
         var callId = ""
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
-            callId = answerCallAsApp(callerNumber: "+15551110005")
+            callId = answerCall(from: "+15551110005")
             XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
         when("I tap report spam") {
@@ -234,7 +178,7 @@ final class ActiveCallUITests: BaseUITest {
             let deadline = Date().addingTimeInterval(15)
             var flagged: ServerCall?
             while Date() < deadline {
-                flagged = serverActiveCalls().first { $0.id == callId }
+                flagged = serverActiveCalls(hubId: callHubId).first { $0.id == callId }
                 if flagged?.status == "spam" { break }
                 // Wait on an expectation, not a sleep: the report is a network round trip.
                 let tick = XCTestExpectation(description: "report spam settles")
