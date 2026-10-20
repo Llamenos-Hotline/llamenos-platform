@@ -32,10 +32,20 @@
         test case with its result and duration, per-class totals, and the
         slowest tests. Exits 1 if the log shows zero executed test cases —
         a run that collects nothing is a failure, not a pass.
+
+    ui-tests.py nightly-report RESULTS_DIR --shards N [--failed-jobs A|B] [--run-url URL]
+        Fold the per-shard `report --json` files of a scheduled run into the
+        Markdown body of the "iOS nightly is red" issue. Failures are split
+        into the ones no filed defect owns (new, untriaged) and the ones
+        ci-quarantine.txt already names; quarantined tests that PASSED are
+        listed because their entry is stale. A shard that wrote no results is
+        named, not skipped. The first line is a signature of the failing set,
+        so the workflow can tell a repeat of last night from a change.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -545,6 +555,84 @@ def report(log_path: Path, json_out: Path | None) -> int:
     return 0
 
 
+RESULTS_FILE_RE = re.compile(r"ui-test-results-shard-(?P<shard>\d+)\.json$")
+ISSUE_NUMBER_RE = re.compile(r"#(\d+)")
+SIGNATURE_PREFIX = "<!-- ios-nightly-signature:"
+
+
+def nightly_report(results_dir: Path, shards: int, failed_jobs: list[str], run_url: str = "") -> str:
+    """Markdown body for the scheduled run's issue; line 1 is the failing-set signature.
+
+    Reads every `ui-test-results-shard-N.json` under `results_dir` (the files
+    `report --json` writes). Three things are kept apart on purpose, because
+    only the first is news:
+
+    * failures no quarantine entry owns   -> a new regression or an untriaged flake
+    * failures a quarantine entry owns    -> known; shown so they stay visible daily
+    * quarantined tests that passed       -> the entry is stale
+
+    A shard with no results file is listed as such. A dead shard (runner
+    refused, hub unreachable, Xcode out of date) otherwise contributes nothing
+    and a run that lost half its tests reads as a short list of failures.
+    """
+    seen: dict[int, list[dict]] = {}
+    for path in sorted(results_dir.rglob("*.json")) if results_dir.is_dir() else []:
+        m = RESULTS_FILE_RE.search(path.name)
+        if m:
+            seen[int(m["shard"])] = json.loads(path.read_text(encoding="utf-8"))
+    missing = [i for i in range(shards) if i not in seen]
+
+    owners = {(c, t): ISSUE_NUMBER_RE.findall(why) for c, t, why in quarantine()}
+    failing: dict[tuple[str, str], int] = {}
+    passed: set[tuple[str, str]] = set()
+    for shard_index, cases in seen.items():
+        for case in cases:
+            key = (case["class"], case["test"])
+            if case["status"] in ("failed", "timed-out"):
+                failing[key] = shard_index
+            elif case["status"] == "passed":
+                passed.add(key)
+    new = sorted(k for k in failing if k not in owners)
+    known = sorted(k for k in failing if k in owners)
+    stale = sorted(k for k in owners if k in passed and k not in failing)
+
+    def label(key: tuple[str, str]) -> str:
+        return f"`{key[0]}.{key[1]}`"
+
+    def tag(key: tuple[str, str]) -> str:
+        n = failing[key]
+        return f"shard {n}" + (" — killed for exceeding its time allowance" if any(
+            c["class"] == key[0] and c["test"] == key[1] and c["status"] == "timed-out" for c in seen[n]) else "")
+
+    signature = hashlib.sha1(json.dumps(
+        [[f"{c}.{t}" for c, t in new], [f"{c}.{t}" for c, t in known], missing, sorted(failed_jobs)]
+    ).encode()).hexdigest()[:16]
+
+    out = [f"{SIGNATURE_PREFIX}{signature} -->"]
+    total = sum(len(v) for v in seen.values())
+    out.append(f"{len(failing)} failing test(s) of {total} executed on {len(seen)} of {shards} shard(s)"
+               + (f" — [run]({run_url})" if run_url else "") + ".")
+    if failed_jobs:
+        out += ["", "**Failed jobs:** " + ", ".join(f"`{j}`" for j in sorted(failed_jobs))]
+    if missing:
+        out += ["", f"**Shard(s) {', '.join(map(str, missing))} wrote no results** — the job died before or during "
+                    "the test step (runner refusal, unreachable hub, toolchain). That is not a test verdict; read "
+                    "the failed job, and note this run covered fewer tests than a full one."]
+    out += ["", f"### Not owned by any filed defect ({len(new)})"]
+    out += [f"- {label(k)} — {tag(k)}" for k in new] or ["_none_"]
+    if new:
+        out += ["", "Nothing in `apps/ios/Tests/UI/ci-quarantine.txt` covers these. Treat each as a real defect "
+                    "until shown otherwise: the failures this suite's authors first called flaky turned out to be races "
+                    "in the app or the test."]
+    out += ["", f"### Quarantined and still failing ({len(known)})"]
+    out += [f"- {label(k)} — {tag(k)} — " + ", ".join(f"#{n}" for n in owners[k]) for k in known] or ["_none_"]
+    if stale:
+        out += ["", f"### Quarantined but passing ({len(stale)}) — the entry is stale",
+                "Remove the entry in the PR that proves the test passes; until then the merge gate skips a test that works."]
+        out += [f"- {label(k)} — " + ", ".join(f"#{n}" for n in owners[k]) for k in stale]
+    return "\n".join(out) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -574,6 +662,11 @@ def main() -> int:
     r = sub.add_parser("report")
     r.add_argument("log", type=Path)
     r.add_argument("--json", type=Path)
+    n = sub.add_parser("nightly-report", help="Markdown issue body for a scheduled run's failures")
+    n.add_argument("results_dir", type=Path)
+    n.add_argument("--shards", type=int, required=True, help="how many ui shards the run had")
+    n.add_argument("--failed-jobs", default="", help="'|'-separated names of the jobs that failed")
+    n.add_argument("--run-url", default="")
     args = ap.parse_args()
 
     if args.cmd in ("shard", "plan"):
@@ -594,6 +687,10 @@ def main() -> int:
         return check_mac_shards()
     if args.cmd == "timings":
         return timings(args.host, args.reports)
+    if args.cmd == "nightly-report":
+        print(nightly_report(args.results_dir, args.shards,
+                             [j for j in args.failed_jobs.split("|") if j], args.run_url), end="")
+        return 0
     return report(args.log, args.json)
 
 
