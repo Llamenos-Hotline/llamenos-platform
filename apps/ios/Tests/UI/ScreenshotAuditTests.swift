@@ -27,7 +27,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_01a_Login() {
         launchClean()
         let loginInput = find("hub-url-input")
-        _ = loginInput.waitForExistence(timeout: 10)
+        XCTAssertTrue(loginInput.waitForExistence(timeout: 10), "The screen should be up before it is photographed")
         screenshot("01a-login")
     }
 
@@ -38,10 +38,10 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_01b_Onboarding() {
         launchClean()
         let createBtn = find("create-identity")
-        guard createBtn.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(createBtn.waitForExistence(timeout: 10), "createBtn should be on screen")
         createBtn.tap()
         let pinInput = find("pin-input")
-        _ = pinInput.waitForExistence(timeout: 5)
+        XCTAssertTrue(pinInput.waitForExistence(timeout: 5), "The screen should be up before it is photographed")
         screenshot("01b-onboarding")
     }
 
@@ -52,10 +52,10 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_01c_PINSet() {
         launchClean()
         let createBtn = find("create-identity")
-        guard createBtn.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(createBtn.waitForExistence(timeout: 10), "createBtn should be on screen")
         createBtn.tap()
         let pinInput = find("pin-input")
-        _ = pinInput.waitForExistence(timeout: 5)
+        XCTAssertTrue(pinInput.waitForExistence(timeout: 5), "The screen should be up before it is photographed")
         screenshot("01c-pin-set")
     }
 
@@ -64,14 +64,14 @@ final class ScreenshotAuditTests: BaseUITest {
         // Launch authenticated so there IS an identity, then lock immediately.
         launchAuthenticated()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         // Lock the app via the lock button on the dashboard.
         let lockBtn = find("lock-app")
         if lockBtn.waitForExistence(timeout: 3) {
             lockBtn.tap()
         }
         let pinPad = find("pin-pad")
-        _ = pinPad.waitForExistence(timeout: 5)
+        XCTAssertTrue(pinPad.waitForExistence(timeout: 5), "The screen should be up before it is photographed")
         screenshot("01d-pin-unlock")
     }
 
@@ -82,19 +82,19 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_02a_Dashboard() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        _ = dashboard.waitForExistence(timeout: 10)
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "The screen should be up before it is photographed")
         screenshot("02a-dashboard")
     }
 
     /// Dashboard with an active call card (requires backend simulation).
     func testScreenshot_02b_DashboardActiveCall() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 15) else { return }
-        simulateIncomingCall()
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "dashboard should be on screen")
+        XCTAssertFalse(simulateIncomingCall(hubId: testHubId).callId.isEmpty, "The simulated call should be created")
         let callCard = find("active-call-card")
-        _ = callCard.waitForExistence(timeout: 8)
+        XCTAssertTrue(callCard.waitForExistence(timeout: 15), "The call card should be on screen before it is photographed")
         screenshot("02b-dashboard-active-call")
     }
 
@@ -103,13 +103,13 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_03_ActiveCall() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 15) else { return }
-        simulateIncomingCall()
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "dashboard should be on screen")
+        XCTAssertFalse(simulateIncomingCall(hubId: testHubId).callId.isEmpty, "The simulated call should be created")
         let callCard = find("active-call-card")
-        guard callCard.waitForExistence(timeout: 8) else { return }
+        XCTAssertTrue(callCard.waitForExistence(timeout: 15), "The call card should be on screen")
         screenshot("03-active-call")
     }
 
@@ -120,18 +120,16 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_04a_NotesList() {
         launchAsAdminWithAPI()
         navigateToNotes()
-        let list = find("notes-list")
-        let empty = find("notes-empty-state")
-        _ = anyElementExists(["notes-list", "notes-empty-state", "notes-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["notes-list", "notes-empty-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("04a-notes-list")
     }
 
     /// Notes list with data — requires backend.
     func testScreenshot_04b_NotesListWithData() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         navigateToNotes()
-        _ = anyElementExists(["notes-list", "notes-empty-state"], timeout: 12)
+        XCTAssertTrue(anyElementExists(["notes-list", "notes-empty-state"], timeout: 12), "The screen should have loaded before it is photographed")
         screenshot("04b-notes-list-data")
     }
 
@@ -142,15 +140,15 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_05a_CasesList() {
         launchAsAdminWithAPI()
         navigateToCases()
-        _ = anyElementExists(["case-list", "case-empty-state", "case-loading", "cms-not-enabled"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["case-list", "case-empty-state", "cms-not-enabled"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("05a-cases-list")
     }
 
     func testScreenshot_05b_CasesListWithData() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         navigateToCases()
-        _ = anyElementExists(["case-list", "case-empty-state", "cms-not-enabled"], timeout: 12)
+        XCTAssertTrue(anyElementExists(["case-list", "case-empty-state", "cms-not-enabled"], timeout: 12), "The screen should have loaded before it is photographed")
         screenshot("05b-cases-list-data")
     }
 
@@ -161,36 +159,30 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_06a_ConversationsList() {
         launchAsAdminWithAPI()
         navigateToConversations()
-        _ = anyElementExists(["conversations-list", "conversations-empty-state", "conversations-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["conversations-list", "conversations-empty-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("06a-conversations-list")
     }
 
     func testScreenshot_06b_ConversationsWithData() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         simulateIncomingMessage(body: "Hi, I need some help please.")
         navigateToConversations()
-        _ = anyElementExists(["conversations-list", "conversations-empty-state"], timeout: 12)
+        XCTAssertTrue(anyElementExists(["conversations-list", "conversations-empty-state"], timeout: 12), "The screen should have loaded before it is photographed")
         screenshot("06b-conversations-data")
     }
 
     func testScreenshot_06c_ConversationDetail() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         let (convId, _) = simulateIncomingMessage(body: "Hello, I need help.")
-        guard !convId.isEmpty else { return }
+        XCTAssertFalse(convId.isEmpty, "The simulated message should have created a conversation")
         navigateToConversations()
         let row = find("conversation-row-\(convId)")
-        if row.waitForExistence(timeout: 10) && row.isHittable {
-            row.tap()
-        } else {
-            // Tap first row in the list as fallback
-            let list = find("conversations-list")
-            if list.waitForExistence(timeout: 5) {
-                app.tables.cells.firstMatch.tap()
-            }
-        }
-        _ = anyElementExists(["conversation-detail-view", "messages-list", "messages-empty-state"], timeout: 8)
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "The simulated conversation should be listed")
+        XCTAssertTrue(row.isHittable, "The conversation row should be tappable")
+        row.tap()
+        XCTAssertTrue(anyElementExists(["conversation-detail-view", "messages-list", "messages-empty-state"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("06c-conversation-detail")
     }
 
@@ -201,7 +193,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_07_Shifts() {
         launchAsAdminWithAPI()
         navigateToShifts()
-        _ = anyElementExists(["shifts-empty-state", "clock-in-button", "shifts-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["shifts-empty-state", "clock-in-button"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("07-shifts")
     }
 
@@ -212,23 +204,23 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_08a_Reports() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         let reportsBtn = find("dashboard-reports-action")
-        guard reportsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(reportsBtn.waitForExistence(timeout: 5), "reportsBtn should be on screen")
         reportsBtn.tap()
-        _ = anyElementExists(["reports-list", "reports-empty-state", "reports-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["reports-list", "reports-empty-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("08a-reports-list")
     }
 
     func testScreenshot_08b_ReportsWithData() {
-        guard !testHubId.isEmpty else { return }
+        XCTAssertFalse(testHubId.isEmpty, "The class hub should have been created")
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 15) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "dashboard should be on screen")
         let reportsBtn = find("dashboard-reports-action")
-        guard reportsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(reportsBtn.waitForExistence(timeout: 5), "reportsBtn should be on screen")
         reportsBtn.tap()
-        _ = anyElementExists(["reports-list", "reports-empty-state"], timeout: 12)
+        XCTAssertTrue(anyElementExists(["reports-list", "reports-empty-state"], timeout: 12), "The screen should have loaded before it is photographed")
         screenshot("08b-reports-data")
     }
 
@@ -239,11 +231,11 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_09_Contacts() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         let contactsBtn = find("dashboard-contacts-action")
-        guard contactsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(contactsBtn.waitForExistence(timeout: 5), "contactsBtn should be on screen")
         contactsBtn.tap()
-        _ = anyElementExists(["contacts-list", "contacts-empty-state", "contacts-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["contacts-list", "contacts-empty-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("09-contacts-list")
     }
 
@@ -254,11 +246,11 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_10_Blasts() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         let blastsBtn = find("dashboard-blasts-action")
-        guard blastsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(blastsBtn.waitForExistence(timeout: 5), "blastsBtn should be on screen")
         blastsBtn.tap()
-        _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["blasts-list", "blasts-empty-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("10-blasts-list")
     }
 
@@ -269,11 +261,11 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_11_Triage() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         let triageBtn = find("dashboard-triage-action")
-        guard triageBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(triageBtn.waitForExistence(timeout: 5), "triageBtn should be on screen")
         triageBtn.tap()
-        _ = anyElementExists(["triage-list", "triage-empty-state", "triage-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["triage-list", "triage-empty-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("11-triage-list")
     }
 
@@ -284,11 +276,11 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_12_CallHistory() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         let historyBtn = find("dashboard-call-history-action")
-        guard historyBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(historyBtn.waitForExistence(timeout: 5), "historyBtn should be on screen")
         historyBtn.tap()
-        _ = anyElementExists(["call-history-list", "call-history-empty", "call-history-loading"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["call-history-list", "call-history-empty"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("12-call-history")
     }
 
@@ -299,12 +291,12 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_13_Help() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "dashboard should be on screen")
         let helpBtn = find("dashboard-help-action")
-        guard helpBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(helpBtn.waitForExistence(timeout: 5), "helpBtn should be on screen")
         helpBtn.tap()
         let helpScreen = find("help-screen")
-        _ = helpScreen.waitForExistence(timeout: 5)
+        XCTAssertTrue(helpScreen.waitForExistence(timeout: 5), "The screen should be up before it is photographed")
         screenshot("13a-help")
         app.swipeUp()
         screenshot("13b-help-scrolled")
@@ -317,7 +309,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14a_Settings() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        _ = find("settings-account-link").waitForExistence(timeout: 8)
+        XCTAssertTrue(find("settings-account-link").waitForExistence(timeout: 8), "The screen should be up before it is photographed")
         screenshot("14a-settings")
         app.swipeUp()
         screenshot("14b-settings-scrolled")
@@ -326,14 +318,14 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14c_AccountSettings() {
         launchAsAdminWithAPI()
         navigateToAccountSettings()
-        _ = anyElementExists(["settings-signing-pubkey", "settings-device-id", "copy-signing-pubkey"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["settings-signing-pubkey", "settings-device-id", "copy-signing-pubkey"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("14c-account-settings")
     }
 
     func testScreenshot_14d_Preferences() {
         launchAsAdminWithAPI()
         navigateToPreferencesSettings()
-        _ = anyElementExists(["settings-call-sounds", "settings-language-picker", "settings-auto-lock-picker"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["settings-call-sounds", "settings-language-picker", "settings-auto-lock-picker"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("14d-preferences")
     }
 
@@ -341,9 +333,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let transcriptionLink = scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 5)
-        guard transcriptionLink.exists && transcriptionLink.isHittable else { return }
+        XCTAssertTrue(transcriptionLink.exists && transcriptionLink.isHittable, "transcriptionLink should be reachable")
         transcriptionLink.tap()
-        _ = anyElementExists(["transcription-enable-toggle", "transcription-language-picker"], timeout: 5)
+        XCTAssertTrue(anyElementExists(["transcription-enable-toggle", "transcription-language-picker"], timeout: 5), "The screen should have loaded before it is photographed")
         screenshot("14e-transcription-settings")
     }
 
@@ -351,9 +343,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let diagLink = scrollToFind("settings-diagnostics-link", maxSwipes: 5, timeout: 5)
-        guard diagLink.exists && diagLink.isHittable else { return }
+        XCTAssertTrue(diagLink.exists && diagLink.isHittable, "diagLink should be reachable")
         diagLink.tap()
-        _ = anyElementExists(["crash-reporting-toggle", "send-crash-reports"], timeout: 5)
+        XCTAssertTrue(anyElementExists(["crash-reporting-toggle", "send-crash-reports"], timeout: 5), "The screen should have loaded before it is photographed")
         screenshot("14f-diagnostics")
     }
 
@@ -361,9 +353,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let hubsLink = scrollToFind("settings-hubs-link", maxSwipes: 5, timeout: 5)
-        guard hubsLink.exists && hubsLink.isHittable else { return }
+        XCTAssertTrue(hubsLink.exists && hubsLink.isHittable, "hubsLink should be reachable")
         hubsLink.tap()
-        _ = anyElementExists(["hubs-list", "hubs-loading"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["hubs-list"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("14g-hub-management")
     }
 
@@ -371,10 +363,10 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let panicLink = scrollToFind("settings-panic-wipe", maxSwipes: 5, timeout: 5)
-        guard panicLink.exists && panicLink.isHittable else { return }
+        XCTAssertTrue(panicLink.exists && panicLink.isHittable, "panicLink should be reachable")
         panicLink.tap()
         // Sheet appears — capture it
-        _ = find("pin-pad").waitForExistence(timeout: 3)
+        XCTAssertTrue(find("confirm-panic-wipe").waitForExistence(timeout: 5), "The panic wipe screen should be up before it is photographed")
         screenshot("14h-panic-wipe")
     }
 
@@ -385,7 +377,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15a_AdminPanel() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        _ = find("admin-tab-view").waitForExistence(timeout: 8)
+        XCTAssertTrue(find("admin-tab-view").waitForExistence(timeout: 8), "The screen should be up before it is photographed")
         screenshot("15a-admin-panel")
         app.swipeUp()
         screenshot("15b-admin-panel-scrolled")
@@ -395,9 +387,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-volunteers", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        _ = anyElementExists(["volunteers-list", "volunteers-empty-state"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["volunteers-list", "volunteers-empty-state"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("15c-admin-volunteers")
     }
 
@@ -405,9 +397,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-bans", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        sleep(2)
+        XCTAssertTrue(anyElementExists(["ban-list", "bans-empty-state"], timeout: 10), "The screen should have loaded before it is photographed (15d-admin-ban-list)")
         screenshot("15d-admin-ban-list")
     }
 
@@ -415,9 +407,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-audit-log", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        sleep(2)
+        XCTAssertTrue(anyElementExists(["audit-log-list", "audit-empty-state"], timeout: 10), "The screen should have loaded before it is photographed (15e-admin-audit-log)")
         screenshot("15e-admin-audit-log")
     }
 
@@ -425,9 +417,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-invites", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        sleep(2)
+        XCTAssertTrue(anyElementExists(["invites-list", "invites-empty-state"], timeout: 10), "The screen should have loaded before it is photographed (15f-admin-invites)")
         screenshot("15f-admin-invites")
     }
 
@@ -435,9 +427,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-custom-fields", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        _ = anyElementExists(["custom-fields-list", "custom-fields-empty-state", "custom-fields-loading"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["custom-fields-list", "custom-fields-empty-state"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("15g-admin-custom-fields")
     }
 
@@ -445,9 +437,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-schema-browser", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        sleep(2)
+        XCTAssertTrue(anyElementExists(["schema-browser-list", "schema-browser-empty"], timeout: 10), "The screen should have loaded before it is photographed (15h-admin-schema-browser)")
         screenshot("15h-admin-schema-browser")
     }
 
@@ -455,9 +447,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-telephony-settings", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        _ = anyElementExists(["telephony-settings-view", "telephony-provider-picker"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["telephony-settings-view", "telephony-provider-picker"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("15i-admin-telephony")
     }
 
@@ -465,9 +457,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-spam-settings", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        _ = find("spam-settings-view").waitForExistence(timeout: 8)
+        XCTAssertTrue(find("spam-settings-view").waitForExistence(timeout: 8), "The screen should be up before it is photographed")
         screenshot("15j-admin-spam")
     }
 
@@ -475,9 +467,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-system-health", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        _ = anyElementExists(["system-health-view", "health-loading", "health-error-state"], timeout: 10)
+        XCTAssertTrue(anyElementExists(["system-health-view", "health-error-state"], timeout: 10), "The screen should have loaded before it is photographed")
         screenshot("15k-admin-system-health")
     }
 
@@ -485,9 +477,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-ivr-settings", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        _ = anyElementExists(["ivr-settings-view", "ivr-save-button"], timeout: 8)
+        XCTAssertTrue(anyElementExists(["ivr-settings-view", "ivr-save-button"], timeout: 8), "The screen should have loaded before it is photographed")
         screenshot("15l-admin-ivr")
     }
 
@@ -495,9 +487,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-report-categories", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "link should be reachable")
         link.tap()
-        sleep(2)
+        XCTAssertTrue(anyElementExists(["report-categories-list", "categories-empty-state"], timeout: 10), "The screen should have loaded before it is photographed (15m-admin-report-categories)")
         screenshot("15m-admin-report-categories")
     }
 

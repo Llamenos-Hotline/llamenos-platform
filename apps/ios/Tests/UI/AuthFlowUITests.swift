@@ -217,19 +217,19 @@ final class AuthFlowUITests: XCTestCase {
     /// Navigate from login to the onboarding screen.
     private func navigateToOnboarding() {
         let hubURLInput = find("hub-url-input")
-        guard hubURLInput.waitForExistence(timeout: 20) else { return }
+        XCTAssertTrue(hubURLInput.waitForExistence(timeout: 20), "The login screen should ask for a hub URL")
         hubURLInput.tap()
         hubURLInput.typeText("https://test.example.org")
         dismissKeyboard()
 
         let createButton = find("create-identity")
-        guard createButton.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(createButton.waitForExistence(timeout: 5), "The login screen should offer to create an identity")
         createButton.tap()
     }
 
     /// Wait for the PIN set screen (v3: navigateToOnboarding already lands here).
     private func navigateToPINSet() {
-        _ = find("pin-input").waitForExistence(timeout: 10)
+        XCTAssertTrue(find("pin-input").waitForExistence(timeout: 10), "Creating an identity should lead to setting a PIN")
     }
 
     /// Navigate all the way through to the dashboard (create identity, set PIN).

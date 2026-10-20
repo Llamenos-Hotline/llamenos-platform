@@ -143,16 +143,11 @@ final class NoteFlowUITests: BaseUITest {
 
         navigateToNotes()
 
-        // If there are no notes, the empty state should have a create button
+        // Without a hub there is nothing to list, so the tab settles on its empty state.
         let emptyState = find("notes-empty-state")
-        if emptyState.waitForExistence(timeout: 5) {
-            let createFirstNote = find("create-first-note")
-            XCTAssertTrue(
-                createFirstNote.exists,
-                "Empty state should have a 'Create Your First Note' button"
-            )
-        }
-        // If notes exist, that's fine too — the test passes
+        XCTAssertTrue(emptyState.waitForExistence(timeout: 20), "A hub-less app has no notes, so Notes shows its empty state")
+        XCTAssertTrue(find("create-first-note").exists, "Empty state should have a 'Create Your First Note' button")
+        XCTAssertFalse(find("notes-list").exists, "There is nothing to list")
     }
 
     // MARK: - Note Detail
