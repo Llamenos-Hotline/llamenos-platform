@@ -116,17 +116,41 @@ final class DashboardUITests: BaseUITest {
 
     // MARK: - Tab Navigation (tab-navigation.feature)
 
+    /// `MainTabView` has six tabs and an iPhone tab bar shows at most five items, so
+    /// iOS shows four tabs plus "More". This used to assert six tab-bar BUTTONS, a
+    /// layout the app cannot produce on this device class, so it failed on every
+    /// run from the first (#1240) while the other tab scenarios — which already
+    /// reach Shifts and Settings through More — passed. What a user needs is that
+    /// every section is reachable, and that is what this checks: each title is
+    /// either a tab-bar button or a row under More. It holds whichever way #1240's
+    /// open question (fold a destination elsewhere, or keep More) is decided.
     func testAllTabsExist() {
+        let titles = ["Dashboard", "Notes", "Cases", "Messages", "Shifts", "Settings"]
         given("I am authenticated and on the dashboard") {
             // Already on dashboard
         }
-        then("I should see 6 tab bar items") {
+        then("every main section is a tab-bar button or listed under More") {
             let tabBar = app.tabBars.firstMatch
             XCTAssertTrue(tabBar.waitForExistence(timeout: 5), "Tab bar should exist")
-            XCTAssertGreaterThanOrEqual(
-                tabBar.buttons.count, 6,
-                "Tab bar should have at least 6 buttons (Dashboard, Notes, Cases, Messages, Shifts, Settings)"
-            )
+            let overflow = titles.filter { !tabBar.buttons[$0].exists }
+            if !overflow.isEmpty {
+                let more = tabBar.buttons["More"]
+                XCTAssertTrue(
+                    more.exists,
+                    "\(overflow) are not tab-bar buttons, so the tab bar must offer More to reach them"
+                )
+                more.tap()
+                if !app.tables.cells.staticTexts[overflow[0]].waitForExistence(timeout: 2) {
+                    // More re-opens the overflow tab shown last; tapping it again pops to its list.
+                    more.tap()
+                }
+                for title in overflow {
+                    XCTAssertTrue(
+                        app.tables.cells.staticTexts[title].waitForExistence(timeout: 5),
+                        "\(title) should be listed under More"
+                    )
+                }
+            }
         }
     }
 
