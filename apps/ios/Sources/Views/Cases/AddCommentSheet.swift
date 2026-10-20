@@ -52,6 +52,10 @@ struct AddCommentSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
+                        // Belt and braces: even if the disabled state does not
+                        // reach the toolbar control, an empty comment must
+                        // never submit.
+                        guard canSubmit else { return }
                         isSubmitting = true
                         let text = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
                         onSubmit(text)
