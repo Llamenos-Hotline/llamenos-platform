@@ -1,0 +1,124 @@
+name: proof-2057-report
+'on':
+  push:
+    branches:
+    - proof-2057-report
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - run: echo ok
+    - name: maybe fail
+      run: test "$(cat proof-flag.txt)" = green || true
+  ui:
+    name: ui (${{ matrix.shard }})
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+        - 0
+        - 1
+        - 2
+        - 3
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+    - name: fabricate per-test results
+      env:
+        SHARD: ${{ matrix.shard }}
+      run: "set -eu\nflag=\"$(cat proof-flag.txt)\"\npython3 - <<'PY'\nimport json,os\ns=int(os.environ[\"SHARD\"]); red=open(\"proof-flag.txt\").read().strip()==\"red\"\ncases=[{\"class\":\"OkUITests\"\
+        ,\"test\":\"testOk%d\"%s,\"status\":\"passed\",\"seconds\":1.0}]\nif s==1 and red:\n    cases+=[{\"class\":\"FreshUITests\",\"test\":\"testUnowned\",\"status\":\"failed\",\"seconds\":2.0},\n   \
+        \         {\"class\":\"DashboardUITests\",\"test\":\"testAllTabsExist\",\"status\":\"failed\",\"seconds\":2.0}]\nif s==2:\n    cases+=[{\"class\":\"BlastsUITests\",\"test\":\"testBlastsListShowsContent\"\
+        ,\"status\":\"passed\",\"seconds\":2.0}]\nif not (s==3 and red):\n    json.dump(cases,open(os.environ[\"RUNNER_TEMP\"]+\"/ui-test-results-shard-%d.json\"%s,\"w\"))\nPY"
+    - name: upload
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: ios-e2e-results-json-shard-${{ matrix.shard }}
+        path: ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
+        retention-days: 1
+        if-no-files-found: ignore
+    - name: verdict
+      run: if [ "$(cat proof-flag.txt)" = red ] && { [ "${{ matrix.shard }}" = 1 ] || [ "${{ matrix.shard }}" = 3 ]; }; then exit 1; fi
+  report:
+    name: report
+    needs:
+    - build
+    - ui
+    if: ${{ always() && github.event_name == 'push' && (contains(fromJSON('["failure","cancelled"]'), needs.build.result) || contains(fromJSON('["failure","cancelled"]'), needs.ui.result)) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+    - name: Download per-test results
+      continue-on-error: true
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        pattern: ios-e2e-results-json-shard-*
+        path: ${{ runner.temp }}/results
+    - name: Open or update the nightly issue
+      env:
+        RESULTS: ${{ runner.temp }}/results
+        SHARDS: '4'
+      run: "set -euo pipefail\nPREFIX='[nightly-ios-e2e-PROOF]'\n\nFAILED_JOBS=\"$(gh run view \"$RUN_ID\" --repo \"$REPO\" --json jobs \\\n  -q '[.jobs[] | select(.conclusion == \"failure\" or .conclusion\
+        \ == \"cancelled\") | .name] | join(\"|\")')\"\n\nBODY=\"$(mktemp)\"\npython3 apps/ios/scripts/ui-tests.py nightly-report \"$RESULTS\" --shards \"$SHARDS\" \\\n  --failed-jobs \"$FAILED_JOBS\" --run-url\
+        \ \"$RUN_URL\" > \"$BODY\"\nSIGNATURE=\"$(head -n1 \"$BODY\")\"\n\n# How long has it been red? Walk the scheduled runs newest-first until\n# one is green. Cancelled and skipped runs carry no verdict\
+        \ either way,\n# so they neither extend nor break the streak.\nRUNS=\"$(gh run list --repo \"$REPO\" --workflow ios-e2e.yml --event schedule --limit 60 \\\n  --json databaseId,conclusion,createdAt,headSha)\"\
+        \nSTREAK=\"$(jq -c --argjson id \"$RUN_ID\" '\n  [ .[] | select(.conclusion != \"cancelled\" and .conclusion != \"skipped\" and .conclusion != \"\") ] as $done\n  | ($done | map(.conclusion == \"\
+        success\") | index(true)) as $green\n  | (if $green == null then $done else $done[0:$green] end) as $red\n  | {count: ($red | length),\n     since: ($red | last | .createdAt // \"\"),\n     sinceSha:\
+        \ ($red | last | .headSha // \"\"),\n     everGreen: ($green != null)}' <<<\"$RUNS\")\"\nCOUNT=\"$(jq -r .count <<<\"$STREAK\")\"\nSINCE=\"$(jq -r '.since[0:10]' <<<\"$STREAK\")\"\nSINCE_SHA=\"\
+        $(jq -r .sinceSha <<<\"$STREAK\")\"\nif [[ \"$(jq -r .everGreen <<<\"$STREAK\")\" == \"true\" ]]; then\n  HISTORY=\"Red on the last $COUNT consecutive scheduled run(s), since $SINCE (\\`${SINCE_SHA:0:9}\\\
+        `).\"\nelse\n  HISTORY=\"Red on all $COUNT scheduled run(s) on record, since $SINCE (\\`${SINCE_SHA:0:9}\\`) \u2014 there is no green nightly to compare with.\"\nfi\n\n# Suspects: commits since\
+        \ the last GREEN nightly when there is one,\n# else since the previous nightly. Newest 40 are listed.\nLOWER=\"$(jq -r '[.[] | select(.conclusion == \"success\")][0].headSha // empty' <<<\"$RUNS\"\
+        )\"\nif [[ -z \"$LOWER\" ]]; then\n  LOWER=\"$(jq -r --argjson id \"$RUN_ID\" '[.[] | select(.databaseId != $id)][0].headSha // empty' <<<\"$RUNS\")\"\n  RANGE=\"since the previous nightly (${LOWER:0:9})\"\
+        \nelse\n  RANGE=\"since the last green nightly (${LOWER:0:9})\"\nfi\nSUSPECTS=\"$(mktemp)\"\n# shellcheck disable=SC2016  # literal backticks (markdown) inside a jq program, not a substitution\n\
+        if [[ -n \"$LOWER\" && \"$LOWER\" != \"$SHA\" ]] && gh api \"repos/$REPO/compare/$LOWER...$SHA\" \\\n     --jq '\"\\(.total_commits)\\n\" + ([.commits | reverse | .[0:40][] | \"- `\\(.sha[0:9])`\
+        \ \\(.commit.message | split(\"\\n\")[0])\"] | join(\"\\n\"))' \\\n     > \"$SUSPECTS\" 2>/dev/null; then\n  TOTAL=\"$(head -n1 \"$SUSPECTS\")\"; tail -n +2 \"$SUSPECTS\" > \"$SUSPECTS.list\"\n\
+        \  if [[ \"$TOTAL\" -gt 40 ]]; then echo \"- \u2026 and $((TOTAL - 40)) older commit(s)\" >> \"$SUSPECTS.list\"; fi\nelif [[ \"$LOWER\" == \"$SHA\" ]]; then\n  RANGE=\"since the previous nightly:\
+        \ none, it ran on this same commit\"\n  : > \"$SUSPECTS.list\"\nelse\n  RANGE=\"(no earlier run to bound the range)\"\n  echo \"- \\`${SHA:0:9}\\`\" > \"$SUSPECTS.list\"\nfi\n\nFULL=\"$(mktemp)\"\
+        \n{\n  echo \"The nightly iOS E2E run on \\`main\\` failed. It is the only standing check of the iOS suite outside a merge group.\"\n  echo\n  echo \"**Commit:** \\`$SHA\\`  \"\n  echo \"**Run:**\
+        \ $RUN_URL  \"\n  echo \"**History:** $HISTORY\"\n  echo\n  sed '1d' \"$BODY\"\n  echo\n  echo \"### Commits $RANGE\"\n  cat \"$SUSPECTS.list\"\n  echo\n  echo \"This is a detector, not a gate:\
+        \ it blocks nothing and is not a required check. It closes itself when a later scheduled run is green.\"\n  echo \"$SIGNATURE\"\n} > \"$FULL\"\n\n{ echo \"### iOS nightly RED at \\`${SHA:0:9}\\\
+        `\"; echo; echo \"$HISTORY\"; echo; sed '1d' \"$BODY\"; } >> \"$GITHUB_STEP_SUMMARY\"\necho \"::error title=nightly iOS E2E red::main is red at $SHA \u2014 $HISTORY\"\n\n# One issue at a time, found\
+        \ by title prefix. Comment only when the\n# failing set changed since the issue (or its newest comment) last\n# recorded it.\nOPEN=\"$(gh issue list --repo \"$REPO\" --state open --label ci \\\n\
+        \  --search \"\\\"$PREFIX\\\" in:title\" --json number -q '.[0].number // empty')\"\nif [[ -z \"$OPEN\" ]]; then\n  gh issue create --repo \"$REPO\" --label ci \\\n    --title \"$PREFIX nightly\
+        \ iOS E2E is red on main (since $SINCE)\" --body-file \"$FULL\"\nelse\n  LAST=\"$(gh issue view \"$OPEN\" --repo \"$REPO\" --json body,comments \\\n    -q '[.body, (.comments[].body)] | map(select(contains(\"\
+        <!-- ios-nightly-signature:\"))) | last // \"\"' \\\n    | grep -o '<!-- ios-nightly-signature:[0-9a-f]* -->' | tail -n1 || true)\"\n  if [[ \"$LAST\" == \"$SIGNATURE\" ]]; then\n    echo \"Failing\
+        \ set unchanged since the last report on #$OPEN; not commenting again.\"\n  else\n    gh issue comment \"$OPEN\" --repo \"$REPO\" --body-file \"$FULL\"\n  fi\nfi\n"
+  recover:
+    name: recover
+    needs:
+    - build
+    - ui
+    if: ${{ always() && github.event_name == 'push' && needs.build.result == 'success' && needs.ui.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+    - name: Close the open nightly issue
+      run: "set -euo pipefail\nfor n in $(gh issue list --repo \"$REPO\" --state open --label ci \\\n             --search '\"[nightly-ios-e2e-PROOF]\" in:title' --json number -q '.[].number'); do\n  gh\
+        \ issue close \"$n\" --repo \"$REPO\" \\\n    --comment \"Nightly iOS E2E green again at \\`$SHA\\` ($RUN_URL).\"\ndone\n"
