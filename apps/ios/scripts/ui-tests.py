@@ -595,7 +595,7 @@ def nightly_report(results_dir: Path, shards: int, failed_jobs: list[str], run_u
     out.append(f"{len(failing)} failing test(s) of {total} executed on {len(seen)} of {shards} shard(s)"
                + (f" — [run]({run_url})" if run_url else "") + ".")
     if failed_jobs:
-        out += ["", "**Failed jobs:** " + ", ".join(f"`{j}`" for j in sorted(failed_jobs))]
+        out += ["", "**Failed or cancelled jobs:** " + ", ".join(f"`{j}`" for j in sorted(failed_jobs))]
     if missing:
         out += ["", f"**Shard(s) {', '.join(map(str, missing))} wrote no results** — the job died before or during "
                     "the test step (runner refusal, unreachable hub, toolchain). That is not a test verdict; read "
