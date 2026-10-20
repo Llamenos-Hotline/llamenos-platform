@@ -275,6 +275,21 @@ final class CaseManagementUITests: BaseUITest {
         XCTAssertTrue(titleInput.waitForExistence(timeout: 5))
         titleInput.tap()
         titleInput.typeText(title)
+        // `typeText` returns once the key events are synthesized, not once the field has
+        // consumed them, and a tap on Create reads the field as it is at that instant. A
+        // run that submitted while only "Seeded ca" of "Seeded case 3632D769" had arrived
+        // created a case no title lookup could ever find (#2050's merge group). So wait on
+        // what the field holds — it either reaches the full title or fails here, naming
+        // what it did hold, instead of surfacing as a missing row 30 seconds later.
+        let titleTyped = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", title),
+            object: titleInput
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [titleTyped], timeout: 10),
+            .completed,
+            "The title field should hold '\(title)' before Create, but holds '\(titleInput.value as? String ?? "nil")'"
+        )
 
         let submit = find("case-create-submit")
         XCTAssertTrue(submit.isEnabled, "Create should be enabled with a type and a title")
