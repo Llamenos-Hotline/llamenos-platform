@@ -62,7 +62,7 @@ final class RecoveryGroupUITests: BaseUITest {
         XCTAssertTrue(find("account-recovery-view").waitForExistence(timeout: 5), "Account recovery view should appear")
 
         // Verify identifier input exists
-        let hubInput = find("recovery-hub-url-input")
+        let hubInput = find("recovery-hub-input")
         XCTAssertTrue(
             hubInput.waitForExistence(timeout: 5),
             "Hub URL input should exist in recovery flow"
@@ -75,7 +75,7 @@ final class RecoveryGroupUITests: BaseUITest {
         )
 
         // Start is unavailable until both fields are filled
-        let startButton = find("recovery-start-button")
+        let startButton = find("start-recovery-button")
         XCTAssertTrue(
             startButton.waitForExistence(timeout: 5),
             "Start recovery button should exist"

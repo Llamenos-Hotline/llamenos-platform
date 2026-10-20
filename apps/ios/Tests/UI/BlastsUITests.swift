@@ -120,8 +120,10 @@ final class BlastsUITests: BaseUITest {
             openCreateSheet()
         }
         then("each channel is a toggle and Send Now needs content") {
-            for channel in ["sms", "whatsapp", "signal"] {
-                let toggle = find("blast-channel-\(channel)")
+            for (channel, identifier) in [
+                ("sms", "blast-channel-sms"), ("whatsapp", "blast-channel-whatsapp"), ("signal", "blast-channel-signal"),
+            ] {
+                let toggle = find(identifier)
                 XCTAssertTrue(toggle.exists, "\(channel) channel toggle should exist")
                 XCTAssertNotNil(toggle.value as? String, "\(channel) should be a toggle with an on/off value")
             }
