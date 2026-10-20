@@ -58,6 +58,7 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
   notes: ['noteCreated', 'noteUpdated'],
   messaging: [
     'messageSent', 'conversationClaimed', 'conversationClosed',
+    'conversationAssigneeEnvelopesAdded',
     'conversationUpdated', 'reportCreated', 'reportAssigned',
     'reportUpdated',
   ],
