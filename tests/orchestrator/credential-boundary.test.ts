@@ -7,16 +7,19 @@ import {
 } from './forgery-rails.js'
 
 /**
- * #1673: the import boundary is the rail that decides whether this
- * orchestrator can forge a check run. The Checks API refuses a PAT, so the
- * only working forgery needs the GitHub App installation token, and only
- * `github-app.ts` can mint one. If no file but `review-and-merge.ts` can
- * import the minting surface, no other file has a credential to write a
- * verdict with — however it spells the endpoint. That is what the text rail in
- * `guards.test.ts` can never establish: `'check' + '-runs'` contains no
- * `check-runs` for it to see.
+ * #1673: this suite is drift and accident detection for the orchestrator's
+ * use of the GitHub App credential — it catches an UNINTENDED import of the
+ * minting surface in review. It is NOT a security boundary: a static scan of
+ * source text cannot enforce a module boundary in a JavaScript runtime (see
+ * #2022). Deliberate bypasses that pass this rail on Bun include
+ * `(import.meta).require('./github-app.ts')` — a parenthesised member
+ * expression is not a static `ImportDeclaration` — and an aliased
+ * `import.meta` (`const m = import.meta; m.require(...)`), which the rail's
+ * shape-match never sees. The Checks API refuses a PAT, so a working forgery
+ * needs the App installation token; the control that decides forgery
+ * resistance is provenance verification at the gate (#2022), not this scan.
  */
-describe('rail: only review-and-merge.ts can reach the GitHub App credential', () => {
+describe('rail: drift detection on imports of the GitHub App credential', () => {
   const OTHER = join(SRC, 'other.ts')
   const violationsOf = (text: string, file = OTHER): string[] => credentialBoundaryViolations([{ file, text }])
 
@@ -124,9 +127,9 @@ describe('rail: only review-and-merge.ts can reach the GitHub App credential', (
 
   /**
    * The review's own scenario: missing-checks.ts is admitted as a reader, so
-   * a write added to it is the forgery that matters most. Through the App
-   * helpers it is refused by the boundary whether or not the path is spelled
-   * so the text rail can see it.
+   * a write added to it is the drift that matters most to catch. Through the
+   * App helpers it is flagged by the import scan whether or not the path is
+   * spelled so the text rail can see it.
    */
   describe('missing-checks.ts', () => {
     const MISSING_CHECKS = MISSING_CHECKS_FILE

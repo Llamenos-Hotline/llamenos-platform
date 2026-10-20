@@ -4,21 +4,30 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 /**
- * The two rails that decide whether anything under `orchestrator/src` other
- * than `review-and-merge.ts` can forge a check run (#1673). They live here, not
- * inline in a test, so each can be pointed at synthetic forgeries as well as at
- * the real tree. Both return one message per violation; empty means admitted.
+ * Drift and accident detection for the orchestrator's use of the GitHub App
+ * credential and the `check-runs` endpoint (#1673). These rails catch an
+ * UNINTENDED import or endpoint mention in review. They are NOT a security
+ * boundary: a static scan of source text cannot enforce a module boundary in
+ * a JavaScript runtime (see #2022). Deliberate bypasses that pass the import
+ * rail on Bun include `(import.meta).require('./github-app.ts')` — a
+ * parenthesised member expression is not a static `ImportDeclaration` — an
+ * aliased `import.meta` (`const m = import.meta; m.require(...)`), which the
+ * shape-match never sees, and a dynamic `import()` whose specifier carries a
+ * `?query`, defeating the string match. The forgery control is provenance
+ * verification at the gate (#2022), not this scan. The rails live here, not
+ * inline in a test, so each can be pointed at synthetic violations as well as
+ * at the real tree. Both return one message per violation; empty means
+ * admitted.
  *
- *  - `credentialBoundaryViolations` is the control that carries the weight. A
- *    PAT cannot create a check run; only the GitHub App's installation token
- *    can, and only `github-app.ts` can mint one. So a file that cannot import
- *    the minting surface has no credential to write a verdict with, however it
- *    spells the endpoint — `'check' + '-runs'`, a config value, an array
- *    joined at call time all produce no `check-runs` text for a text rail to
- *    see, and all are as harmless as the read without that token.
- *  - `checkRunsViolations` is defence in depth: it confines every mention of
- *    `check-runs` outside `review-and-merge.ts` to one read whose path is
- *    pinned to a validated commit SHA.
+ *  - `credentialBoundaryViolations` scans imports of the credential surface.
+ *    A PAT cannot create a check run; only the GitHub App's installation
+ *    token can, and only `github-app.ts` can mint one — so an accidental
+ *    import of the minting surface outside `review-and-merge.ts` is worth
+ *    flagging in review. That is the whole claim: drift detection, not
+ *    prevention.
+ *  - `checkRunsViolations` confines every mention of `check-runs` outside
+ *    `review-and-merge.ts` to one read whose path is pinned to a validated
+ *    commit SHA.
  */
 
 export const SRC = join(process.cwd(), 'orchestrator', 'src')
@@ -155,12 +164,14 @@ function isPropertyName(n: ts.Identifier): boolean {
 }
 
 /**
- * `BOUNDS`, enforced on the AST. Every way a module is loaded is a reference
- * this walks: static `import`, `export … from`, `import x = require()`,
- * dynamic `import()`, `require()`, `import.meta.require`. Any of them with a
- * computed specifier is refused outright, because a computed specifier is a
- * module this rail cannot name. `eval`, `Function` and `globalThis` are
- * refused for the same reason: each builds a load this walk would not see.
+ * `BOUNDS`, checked on the AST — best-effort drift detection, not a boundary
+ * (see the file header and #2022; e.g. `(import.meta).require` and an aliased
+ * `import.meta` both pass it). The load forms this walk recognises: static
+ * `import`, `export … from`, `import x = require()`, dynamic `import()`,
+ * `require()`, `import.meta.require`. Any of them with a computed specifier
+ * is refused outright, because a computed specifier is a module this rail
+ * cannot name. `eval`, `Function` and `globalThis` are refused for the same
+ * reason: each builds a load this walk would not see.
  *
  * Toward a bounded module:
  *  - a named import of a covered export is refused outside its `importers`;
