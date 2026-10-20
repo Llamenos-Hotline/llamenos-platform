@@ -14,9 +14,6 @@ DashboardUITests/testAllTabsExist  # six main tabs, iPhone shows four plus More 
 # Recovery-group calls are hub-scoped with hp() but the server mounts them unscoped (404).
 RecoveryGroupUITests/testAdminCanConfigureRecoveryTeam  # recovery-group paths 404 — #1032
 
-# navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
-EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245
-
 # The Blasts screen renders none of its four states — no list, empty state, loading
 # or error — while GET /blasts returns 200. Navigation succeeds and the data
 # arrives; the view produces nothing. Not a flake: the same single test failed on

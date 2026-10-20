@@ -217,13 +217,17 @@ class BaseUITest: XCTestCase {
 
     // MARK: - Simulation Helpers
 
-    /// Simulate an incoming call via the test simulation API.
+    /// Simulate an incoming call in this class's hub via the test simulation API.
     /// Returns (callId, status) on success, or nil values on failure.
+    ///
+    /// The call must carry the class hub: the app lists calls per member hub
+    /// (`/api/hubs/:id/calls/active`), so a call the server files under no hub is
+    /// never returned to any client and no active-call UI can ever appear for it.
     @discardableResult
     func simulateIncomingCall(callerNumber: String = "+15551234567") -> (callId: String, status: String) {
         return simulationRequest(
             endpoint: "incoming-call",
-            body: ["callerNumber": callerNumber],
+            body: ["callerNumber": callerNumber, "hubId": testHubId],
             extractKeys: ("callId", "status")
         )
     }
