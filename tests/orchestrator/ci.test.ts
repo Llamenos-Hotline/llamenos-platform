@@ -5,7 +5,7 @@ import {
   REVIEW_KEY_ENV, GENERAL_REVIEWER, UNSCOPED_LANE,
   type CiContext, type VerifyCiDeps, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
-import { cacheArtifactName, diffHash, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
+import { cacheArtifactName, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { SecondOpinionResult } from '../../orchestrator/src/review.js'
 import { parseVerdict } from '../../orchestrator/src/review.js'
 import type { Lane } from '../../orchestrator/src/config.js'
@@ -21,6 +21,10 @@ const ctx = (over: Partial<CiContext> = {}): CiContext => ({
   branch: 'fleet/ios/123', repoDir: '/base', headDir: '/tmp/head',
   baseSha: 'base111', headSha: 'head222', pr: '42', ...over,
 })
+
+/** The head tree — the review cache's key (#2014). */
+const TREE = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+const headTree = async (): Promise<string> => TREE
 
 /** The head export has no `.git` — that is the invariant under test. */
 const noGitInHead = (p: string): boolean => p !== '/tmp/head/.git'
@@ -537,8 +541,8 @@ describe('fleet/review runs the whole review set in one job', () => {
     const store = new Map<string, CachedVerdict>()
     const self = {
       names: [] as string[], recorded: [] as string[],
-      async lookup(k: ReviewCacheKey) { return store.get(`${k.pr}:${k.diffHash}`) },
-      async record(k: ReviewCacheKey, v: CachedVerdict) { self.recorded.push(`${k.pr}:${k.diffHash}`); store.set(`${k.pr}:${k.diffHash}`, v) },
+      async lookup(k: ReviewCacheKey) { return store.get(`${k.pr}:${k.headTree}`) },
+      async record(k: ReviewCacheKey, v: CachedVerdict) { self.recorded.push(`${k.pr}:${k.headTree}`); store.set(`${k.pr}:${k.headTree}`, v) },
     }
     return self
   }
@@ -557,6 +561,7 @@ describe('fleet/review runs the whole review set in one job', () => {
     stripExport: vi.fn(async () => {}),
     publishReport: vi.fn(async () => {}),
     profileReview: vi.fn(async () => PASS(CRYPTO)),
+    headTree,
     ...over,
   })
 
@@ -770,8 +775,8 @@ describe('fleet/review runs the whole review set in one job', () => {
     seen.length = 0
     await runReviewCi(deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }), cacheFor: spy }))
     expect(seen[0]).toBe(reviewSetTag([CRYPTO]))
-    expect(cacheArtifactName('42', diffHash('d'), undefined))
-      .not.toBe(cacheArtifactName('42', diffHash('d'), reviewSetTag([CRYPTO])))
+    expect(cacheArtifactName('42', TREE, undefined))
+      .not.toBe(cacheArtifactName('42', TREE, reviewSetTag([CRYPTO])))
   })
 
   // The label-clearing step makes the review set SHRINK between runs, so a
@@ -786,8 +791,8 @@ describe('fleet/review runs the whole review set in one job', () => {
       if (!caches.has(key)) {
         const store = new Map<string, CachedVerdict>()
         caches.set(key, {
-          async lookup(k) { return store.get(`${k.pr}:${k.diffHash}`) },
-          async record(k, v) { recorded.push(scope); store.set(`${k.pr}:${k.diffHash}`, v) },
+          async lookup(k) { return store.get(`${k.pr}:${k.headTree}`) },
+          async record(k, v) { recorded.push(scope); store.set(`${k.pr}:${k.headTree}`, v) },
         })
       }
       return caches.get(key) as ReviewCache
@@ -814,8 +819,8 @@ describe('fleet/review runs the whole review set in one job', () => {
       if (!caches.has(key)) {
         const store = new Map<string, CachedVerdict>()
         caches.set(key, {
-          async lookup(k) { return store.get(`${k.pr}:${k.diffHash}`) },
-          async record(k, v) { recorded.push(scope); store.set(`${k.pr}:${k.diffHash}`, v) },
+          async lookup(k) { return store.get(`${k.pr}:${k.headTree}`) },
+          async record(k, v) { recorded.push(scope); store.set(`${k.pr}:${k.headTree}`, v) },
         })
       }
       return caches.get(key) as ReviewCache
@@ -851,7 +856,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   const diff = 'diff --git a/x b/x\n+hello\n'
   const cache: ReviewCache = { async lookup() { return { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } }, async record() {} }
   const gate = (reviewSet: () => Promise<ReviewSetDecision>, requested = true) => decideReviewGate({
-    ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['x'],
+    ctx: ctx(), headTree, prDiff: async () => diff, changedFiles: async () => ['x'],
     cacheFor: () => cache, requested, republishOnly: false, reviewSet, log: () => {},
   })
 
@@ -861,7 +866,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   // six Dependabot bumps sat in for a day.
   const botGate = (author: string | undefined, profiles: string[] = [], branch = 'fleet/ios/123') =>
     decideReviewGate({
-      ctx: ctx({ branch }), prDiff: async () => diff, changedFiles: async () => ['bun.lock'],
+      ctx: ctx({ branch }), headTree, prDiff: async () => diff, changedFiles: async () => ['bun.lock'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
       requested: false, republishOnly: false, prAuthor: author,
       reviewSet: async () => ({ ok: true, profiles, fromLabels: profiles, reasons: [] }),
@@ -908,7 +913,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   // docs to me" is not an answer to that.
   it('does NOT take the low-tier shortcut when a reviewer label explicitly asked for a review', async () => {
     const o = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
+      ctx: ctx(), headTree, prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
       requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: [] }),
@@ -919,7 +924,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
 
   it('does NOT take the low-tier shortcut when the PR\'s own CONTENT put a profile in the set either', async () => {
     const o = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
+      ctx: ctx(), headTree, prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
       requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
@@ -930,7 +935,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
 
   it('still takes the low-tier shortcut for a docs-only diff nobody labelled', async () => {
     const o = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
+      ctx: ctx(), headTree, prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
       requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
@@ -941,7 +946,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
 
   it('carries the resolved set and the labels to clear into run-engine', async () => {
     const o = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['x'],
+      ctx: ctx(), headTree, prDiff: async () => diff, changedFiles: async () => ['x'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
       requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: [] }),
@@ -957,7 +962,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   // verdict carried through so the reader sees why.
   it('concludes cache-hit with a FAIL verdict, spending no review, and carries the original text', async () => {
     const o = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => 'd', changedFiles: async () => ['x'],
+      ctx: ctx(), headTree, prDiff: async () => 'd', changedFiles: async () => ['x'],
       cacheFor: () => ({
         async lookup() { return { verdict: 'FAIL' as const, text: 'VERDICT: FAIL (cached)\n\n---\n\nleaks a key' } },
         async record() {},
@@ -971,10 +976,53 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     expect(o.kind === 'cache-hit' && o.verdict.text).toContain('leaks a key')
   })
 
+  // #2014, per scope. #1975 carries `crypto-security-reviewer` as well as the
+  // general review, and the crypto PASS is the one whose staleness matters
+  // most. Each namespace is keyed on the tree independently: the crypto PASS
+  // for one tree must not stand in for another, and must still be reused for
+  // the identical one.
+  describe('a crypto-reviewed PASS covers its own tree only (#2014)', () => {
+    const CRYPTO = 'crypto-security-reviewer'
+    const TREE_B = '4eeb09ad75c143b8a9e7b23df601af79f0379647'
+    const cryptoTag = reviewSetTag([CRYPTO])
+    const cryptoSet = async (): Promise<ReviewSetDecision> => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] })
+    // A PASS recorded under the crypto set's namespace for TREE, and under
+    // the general namespace for TREE too — exactly what `runReviewCi` writes.
+    const cacheFor = (scope: string | undefined): ReviewCache => ({
+      async lookup(k) {
+        return (scope === cryptoTag || scope === undefined) && k.headTree === TREE
+          ? { verdict: 'PASS', text: `VERDICT: PASS (cached, ${scope ?? 'general'})` } : undefined
+      },
+      async record() {},
+    })
+    const crypto = (tree: string, over: { requested?: boolean; republishOnly?: boolean } = {}) => decideReviewGate({
+      ctx: ctx(), headTree: async () => tree, prDiff: async () => diff, changedFiles: async () => ['packages/crypto/src/hpke.rs'],
+      cacheFor, requested: over.requested ?? false, republishOnly: over.republishOnly ?? false, reviewSet: cryptoSet, log: () => {},
+      lastVerdict: async () => ({ kind: 'found', earned: { verdict: 'PASS', headSha: 'judged1', runUrl: 'https://example/run/1', text: 'VERDICT: PASS (earlier tree)' } }),
+    })
+
+    it('reuses the crypto PASS for the identical tree', async () => {
+      const o = await crypto(TREE)
+      expect(o.kind).toBe('cache-hit')
+      expect(o.kind === 'cache-hit' && o.verdict.text).toContain(cryptoTag)
+    })
+
+    it('a review request on a changed tree re-runs the crypto review', async () => {
+      const o = await crypto(TREE_B, { requested: true })
+      expect(o.kind).toBe('run-engine')
+      expect(o.kind === 'run-engine' && o.profiles).toEqual([CRYPTO])
+    })
+
+    it('a push onto a changed tree is red — the crypto PASS does not carry', async () => {
+      const o = await crypto(TREE_B, { republishOnly: true })
+      expect(o.kind).toBe('tree-changed')
+    })
+  })
+
   it('looks the cache up in the review set\'s own namespace, never the general reviewer\'s', async () => {
     const seen: (string | undefined)[] = []
     await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['x'],
+      ctx: ctx(), headTree, prDiff: async () => diff, changedFiles: async () => ['x'],
       cacheFor: (scope) => { seen.push(scope); return { async lookup() { return undefined }, async record() {} } },
       requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),

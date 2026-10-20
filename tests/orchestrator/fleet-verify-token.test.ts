@@ -270,6 +270,8 @@ describe('behaviour: an unreadable PR read never turns either fleet gate green',
       ctx: { branch: 'fleet/orch/1', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '42' },
       prDiff: async () => `diff --git a/${HIGH_IMPACT} b/${HIGH_IMPACT}\n+x\n`,
       changedFiles: async () => [HIGH_IMPACT],
+      // The head tree the cached PASS was recorded under (#2014).
+      headTree: async () => 'f3655875dd861eb24ebf01708a07f4caa0995b43',
       cacheFor: () => ({ async lookup() { return { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } }, async record() {} }),
       requested: true, republishOnly: false,
       // Wired exactly as `runReviewGate` (cli.ts) wires it: `facts?.labels`

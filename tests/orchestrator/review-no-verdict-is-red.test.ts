@@ -120,10 +120,12 @@ describe('rail: an outcome with no verdict is never green (#1564, #1495)', () =>
   })
 
   it('classifies the outcomes that provably formed no verdict as no-verdict', () => {
-    // `unreviewed` is #1564 itself; the other three were already red, and are
-    // pinned here so a future edit cannot quietly move one into a green class.
+    // `unreviewed` is #1564 itself, and `tree-changed` is #2014 — a PASS for
+    // another tree is no verdict for this one; the other three were already
+    // red, and are pinned here so a future edit cannot quietly move one into
+    // a green class.
     expect(standings('no-verdict').sort()).toEqual(
-      ['carry-unreadable', 'not-requested', 'review-set-unresolved', 'unreviewed'],
+      ['carry-unreadable', 'not-requested', 'review-set-unresolved', 'tree-changed', 'unreviewed'],
     )
   })
 
@@ -188,11 +190,11 @@ describe('rail: an outcome with no verdict is never green (#1564, #1495)', () =>
     it('catches a no-verdict outcome given a green name, the #1564 regression exactly', () => {
       const reverted = namingScript()
         .replace(
-          /^([ \t]*)carried\) token="PASS:carried" ;;$/m,
-          '$1carried) token="PASS:carried" ;;\n$1unreviewed) token="PASS:unreviewed" ;;',
+          /^([ \t]*)cache-hit\) token="PASS:cached" ;;$/m,
+          '$1cache-hit) token="PASS:cached" ;;\n$1unreviewed) token="PASS:unreviewed" ;;',
         )
         .replace(
-          /^([ \t]*)PASS:carried\) detail=.*$/m,
+          /^([ \t]*)PASS:cached\) detail=.*$/m,
           '$&\n$1PASS:unreviewed) detail="a push, and no review has been requested on this PR" ;;',
         )
       expect(reverted, 'the revert patch did not apply — this test is vacuous')
