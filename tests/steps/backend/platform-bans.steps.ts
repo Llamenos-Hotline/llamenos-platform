@@ -28,7 +28,7 @@ import {
   addHubMemberViaApi,
   uniquePhone,
 } from '../../api-helpers'
-import { simulateIncomingCall } from '../../simulation-helpers'
+import { simulateIncomingCallResponse } from '../../simulation-helpers'
 
 // ── State ──────────────────────────────────────────────────────────
 
@@ -258,13 +258,20 @@ When('the admin DELETEs {string}', async ({ request, world }, pathTemplate: stri
 
 When('a call arrives from {string} to hub {string}', async ({ request, world }, caller: string) => {
   const state = getScenarioState(world)
-  try {
-    const result = await simulateIncomingCall(request, { callerNumber: caller, hubId: state.hubId })
-    state.callId = result.callId
-    state.callStatus = result.status
-  } catch {
-    // The simulation endpoint runs the real ban check and returns non-2xx when banned.
-    state.callStatus = 'rejected'
+  // Record the server's own answer and nothing else (same contract as
+  // call-routing.steps.ts's `a call arrives from {string}`). A thrown or
+  // non-2xx response must never be re-read as a ban: a 500 from the
+  // simulation endpoint would otherwise pass the ban scenario with the ban
+  // check never having run.
+  const response = await simulateIncomingCallResponse(request, {
+    callerNumber: caller,
+    hubId: state.hubId,
+  })
+  state.callHttpStatus = response.status
+  state.callResponseBody = response.data
+  if (response.ok) {
+    state.callId = response.data.callId
+    state.callStatus = response.data.status
   }
 })
 
@@ -311,5 +318,12 @@ Then('a platform-scoped ban should exist for the same phone number', async ({ re
 })
 
 Then('the call should be rejected as banned', ({ world }) => {
-  expect(getScenarioState(world).callStatus).toBe('rejected')
+  const state = getScenarioState(world)
+  // Only the endpoint's ban refusal — 403 { banned: true } from the real
+  // checkBan path — counts. Any other status fails with the server's body.
+  expect(
+    state.callHttpStatus,
+    `incoming-call returned HTTP ${state.callHttpStatus}: ${JSON.stringify(state.callResponseBody)}`,
+  ).toBe(403)
+  expect(state.callResponseBody?.banned).toBe(true)
 })
