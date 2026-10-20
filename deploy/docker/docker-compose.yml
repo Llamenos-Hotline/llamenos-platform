@@ -274,10 +274,17 @@ services:
   # A pin below that silently turns the media plane's only
   # certificate-to-session binding into a call-killing chain check, so
   # deploy/docker/tests/telephony/asterisk-image-dtls-pin.test.ts refuses any
-  # digest not vetted for it. If you bump this image, add the new digest there
-  # with its Asterisk version.
+  # digest not vetted for it. The pin itself lives in Dockerfile.asterisk: if you
+  # bump it, add the new digest there with its Asterisk version, and bump
+  # ASTERISK_VERSION / ASTERISK_SHA256 in that Dockerfile to match.
   asterisk:
-    image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
+    # Built from the vetted upstream image plus the DNS resolver module it ships
+    # without (#1690): see Dockerfile.asterisk. The digest pin and its #1687
+    # floor now live there.
+    build:
+      context: .
+      dockerfile: Dockerfile.asterisk
+    image: llamenos-asterisk:local
     # Also enabled by "telephony": kamailio (telephony profile) has a hard
     # `depends_on: asterisk: condition: service_healthy` below, so activating
     # telephony without asterisk previously failed compose config resolution
