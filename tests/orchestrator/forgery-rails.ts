@@ -61,7 +61,9 @@ function sameFile(a: string, b: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The credential boundary
+// The credential boundary — drift detection over what the AST scan sees,
+// not a runtime module boundary (see the suite header in
+// credential-boundary.test.ts)
 // ---------------------------------------------------------------------------
 
 export const CLI_FILE = join(SRC, 'cli.ts')
@@ -109,10 +111,15 @@ export const BOUNDS: readonly Bound[] = [
   { module: REVIEW_AND_MERGE_FILE, covers: () => true, importers: [CLI_FILE], what: 'the check-run poster' },
 ]
 
-/** Closed lists, so a module cannot be reached under a name this rail did not
- *  anticipate. A builtin that loads or evaluates code (`node:module`'s
+/** Closed lists, bounding only what this rail's AST scan sees: a load or
+ *  evaluation spelled in a form the scan recognises is refused by not
+ *  being on them. A builtin that loads or evaluates code (`node:module`'s
  *  `createRequire`, `node:vm`, `node:worker_threads`) or a package that
- *  re-exports this repo's files is refused by not being on them. */
+ *  re-exports this repo's files is refused that way. A spelling the scan
+ *  does not recognise — a parenthesised `(import.meta).require`, an
+ *  aliased `import.meta`, a computed specifier the walker cannot resolve
+ *  — reaches the module regardless; these lists do not and cannot close
+ *  that. */
 export const NODE_BUILTINS: ReadonlySet<string> = new Set([
   'node:child_process', 'node:crypto', 'node:fs', 'node:fs/promises', 'node:os', 'node:path', 'node:url', 'node:util',
 ])

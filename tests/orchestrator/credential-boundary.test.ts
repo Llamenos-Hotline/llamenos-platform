@@ -105,7 +105,10 @@ describe('rail: drift detection on imports of the GitHub App credential', () => 
    * credential — `postReviewCheckRun`, and the deps that carry it — so
    * importing those is a forgery that never touches github-app.ts. Main
    * refuses it only by accident, and only in a file that also spells
-   * `check-runs`; this refuses it in every file but cli.ts.
+   * `check-runs`; this rail flags such an import in any scanned file but
+   * cli.ts. Per the suite header, "flags" is all a static scan can do —
+   * this is drift detection over the import forms the AST walk
+   * recognises, not a refusal of the module at runtime.
    */
   describe('the check-run poster in review-and-merge.ts is bounded to cli.ts', () => {
     it('admits cli.ts importing it', () => {
