@@ -75,3 +75,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=resolver-builder --chown=asterisk:asterisk /usr/src/asterisk/res/res_resolver_unbound.so /usr/lib/asterisk/modules/res_resolver_unbound.so
 RUN strip --strip-unneeded /usr/lib/asterisk/modules/res_resolver_unbound.so
+
+# The image's default user is the one Asterisk runs as. The upstream image has no
+# USER and relies on Asterisk dropping privilege itself (-U); compose still sets
+# `user: root` for the entrypoint's chown of the astdb volume, and the daemon
+# still drops to asterisk from there. Anything that runs this image without that
+# override gets an unprivileged process, not root.
+USER asterisk

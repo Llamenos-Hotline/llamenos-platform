@@ -175,6 +175,11 @@ measure() {
 measure control "$BASE_IMAGE" Unavail
 measure ours "$OURS_IMAGE" Avail
 
+# `ours` ran above as the image's DEFAULT user (no --user override): it must be
+# unprivileged, and the resolver must work for that user.
+OURS_USER="$(docker inspect -f '{{.Config.User}}' "$OURS_IMAGE")"
+[[ "$OURS_USER" == "asterisk" ]] || fail "ours: image default user is '${OURS_USER:-root}', expected asterisk"
+
 if ! docker exec "$RUN_ID-pbx" asterisk -rx "module show like res_resolver_unbound" | grep -q "res_resolver_unbound.so.*Running"; then
   fail "ours: res_resolver_unbound is not running"
 fi

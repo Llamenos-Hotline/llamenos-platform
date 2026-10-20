@@ -53,6 +53,15 @@ describe('the Asterisk image ships a DNS resolver module', () => {
     expect(dockerfile).toMatch(/apt-get install[^\n]*libunbound8/)
   })
 
+  it('leaves the image on the unprivileged asterisk user', () => {
+    // Trivy DS-0002 (dockerfile-scan, required): no USER means root by default.
+    // Compose overrides it to root for the entrypoint's chown, so the image
+    // default is the only thing that keeps a bare `docker run` unprivileged.
+    const finalStage = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '))
+    const users = [...finalStage.matchAll(/^USER (\S+)$/gm)].map((m) => m[1])
+    expect(users.at(-1)).toBe('asterisk')
+  })
+
   it('verifies the Asterisk source tarball', () => {
     expect(dockerfile).toMatch(/ARG ASTERISK_SHA256=[0-9a-f]{64}/)
     expect(dockerfile).toContain('sha256sum -c')
