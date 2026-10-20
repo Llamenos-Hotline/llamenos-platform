@@ -26,3 +26,59 @@ llamenos_compose_caddy: "{{ llamenos_services_dir }}/caddy/docker-compose.yml"
 # operations that act on "the whole stack" (restore's stop/start), which
 # must not assume which optional services a given host runs.
 llamenos_compose_glob: "{{ llamenos_services_dir }}/*/docker-compose.yml"
+
+# Where update.yml snapshots each service's directory (Compose file + .env.<service>)
+# so rollback.yml and update.yml's own rescue can restore it.
+llamenos_rollback_dir: "{{ app_dir }}/.rollback/services"
+
+# The core stack in dependency order: data and storage before the app that
+# needs them, the app before the proxy in front of it. update.yml and
+# rollback.yml iterate this; they stop it in reverse.
+#
+# `group` is the inventory group that places the service (the same group the
+# service's role checks before it renders anything), and `enabled` mirrors
+# the role's own switch. Placement is therefore declared, never probed: a
+# day-2 run against a half-broken host must still know what *should* be
+# there, and fail on what is missing instead of silently skipping it.
+llamenos_compose_stack:
+  - name: postgres
+    group: llamenos_db
+    enabled: "{{ llamenos_postgres_enabled | default(true) }}"
+    compose: "{{ llamenos_compose_postgres }}"
+    project_src: "{{ llamenos_compose_postgres | dirname }}"
+  - name: rustfs
+    group: llamenos_storage
+    enabled: "{{ llamenos_rustfs_enabled | default(true) }}"
+    compose: "{{ llamenos_compose_rustfs }}"
+    project_src: "{{ llamenos_compose_rustfs | dirname }}"
+  - name: app
+    group: llamenos_app
+    enabled: "{{ llamenos_app_enabled | default(true) }}"
+    compose: "{{ llamenos_compose_app }}"
+    project_src: "{{ llamenos_compose_app | dirname }}"
+  - name: caddy
+    group: llamenos_proxy
+    enabled: "{{ llamenos_caddy_enabled | default(true) }}"
+    compose: "{{ llamenos_compose_caddy }}"
+    project_src: "{{ llamenos_compose_caddy | dirname }}"
+
+# The subset of llamenos_compose_stack that belongs on THIS host, same
+# placement rule the roles use: an empty group means "single host, runs
+# everything"; otherwise the host must be a member.
+llamenos_compose_stack_here: >-
+  {%- set here = [] -%}
+  {%- for svc in llamenos_compose_stack -%}
+  {%- if (svc.enabled | bool)
+         and (groups.get(svc.group, []) | length == 0
+              or inventory_hostname in groups.get(svc.group, [])) -%}
+  {%- set _ = here.append(svc) -%}
+  {%- endif -%}
+  {%- endfor -%}
+  {{ here }}
+
+# Names of the services on THIS host. Anything that probes a service from the
+# host itself (the app's /api/health on localhost:3000, pg_isready inside the
+# postgres container) must be gated on membership here: a db-only, storage-only
+# or proxy-only host has no app listening, and an ungated probe fails the play
+# on a healthy host.
+llamenos_compose_names_here: "{{ llamenos_compose_stack_here | map(attribute='name') | list }}"
