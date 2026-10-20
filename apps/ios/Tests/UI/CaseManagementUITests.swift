@@ -363,30 +363,28 @@ final class CaseManagementUITests: BaseUITest {
         }
     }
 
-    /// Scenario: Pagination controls appear when many records exist.
-    /// This tests the pagination bar structure (prev/next/page label).
+    /// Scenario: A list that fits on one page has no pagination bar.
+    ///
+    /// The bar appears only past one page (more than 50 records), which a UI test cannot
+    /// seed through the app's E2EE create sheet; what it can pin down is the other half
+    /// of the rule — one case, one page, no bar to page with.
     func testPaginationControlsStructure() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("case management is on and a single case exists") {
+            title = launchWithSeededCase()
         }
         when("I navigate to Cases") {
             navigateToCases()
         }
-        then("pagination controls should appear when there are enough records") {
-            let pagination = find("case-pagination")
-            let caseList = find("case-list")
-
-            // Pagination only shows when totalPages > 1 (more than 50 records)
-            if caseList.waitForExistence(timeout: 10) {
-                if pagination.waitForExistence(timeout: 3) {
-                    // Verify prev and next buttons exist
-                    let prevButton = find("case-page-prev")
-                    let nextButton = find("case-page-next")
-                    XCTAssertTrue(prevButton.exists, "Pagination should have a previous button")
-                    XCTAssertTrue(nextButton.exists, "Pagination should have a next button")
-                }
-                // If no pagination, there are fewer than 50 records — valid
-            }
+        then("the case is listed and there is no pagination bar") {
+            XCTAssertTrue(
+                caseTitle(title).waitForExistence(timeout: 15),
+                "The case '\(title)' should be listed"
+            )
+            XCTAssertFalse(
+                find("case-pagination").exists,
+                "A single page of results should not offer paging"
+            )
         }
     }
 
@@ -394,86 +392,62 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Tapping a case card opens the detail view with header.
     func testCaseDetailShowsHeader() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("case management is on and a case exists") {
+            title = launchWithSeededCase()
         }
-        when("I navigate to Cases and tap a case card") {
-            navigateToCases()
-            let caseList = find("case-list")
-            guard caseList.waitForExistence(timeout: 10) else {
-                // No case list — skip detail tests
-                return
-            }
-            let firstCard = caseList.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'case-list-row-'"))
-                .firstMatch
-            guard firstCard.waitForExistence(timeout: 5) else {
-                return
-            }
-            firstCard.tap()
+        when("I tap the case in the list") {
+            openCase(titled: title)
         }
-        then("I should see the case detail header") {
-            let header = find("case-detail-header")
-            if header.waitForExistence(timeout: 5) {
-                XCTAssertTrue(header.exists, "Case detail header should be visible after tapping a card")
-            }
-            // If no records exist, we can't test detail — pass gracefully
+        then("the header names that case") {
+            let headerTitle = find("case-detail-title")
+            XCTAssertTrue(headerTitle.waitForExistence(timeout: 10), "The header should show the decrypted title")
+            XCTAssertEqual(headerTitle.label, title, "The header should show the title of the case that was tapped")
         }
     }
 
-    /// Scenario: Case detail shows the status pill.
+    /// Scenario: Case detail shows the status pill with the case's status.
     func testCaseDetailShowsStatusPill() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a newly created arrest case") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case") {
+            openCase(titled: title)
         }
-        then("I should see the status pill") {
+        then("the status pill shows the type's first status") {
             let statusPill = find("case-status-pill")
-            if find("case-detail-header").waitForExistence(timeout: 5) {
-                XCTAssertTrue(
-                    statusPill.waitForExistence(timeout: 3),
-                    "Status pill should be visible in case detail header"
-                )
-            }
+            XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be visible in case detail header")
+            XCTAssertTrue(
+                statusPill.label.contains("Reported"),
+                "A new arrest case starts as Reported (jail-support template); the pill reads '\(statusPill.label)'"
+            )
         }
     }
 
-    /// Scenario: Case detail shows all 4 tabs (Details, Timeline, Contacts, Evidence).
+    /// Scenario: Case detail opens on the Details tab, with all 4 tabs offered.
+    ///
+    /// The tab buttons do not expose which one is selected (#2032), so "opens on Details" is
+    /// asserted by the content on screen: the Details body is shown and no other tab's is.
     func testCaseDetailTabBar() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case exists") {
+            title = launchWithSeededCase()
         }
-        when("I open a case detail") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I open the case") {
+            openCase(titled: title)
         }
-        then("I should see all 4 detail tabs") {
-            guard find("case-detail-header").waitForExistence(timeout: 5) else { return }
-
-            let detailsTab = find("case-tab-details")
-            let timelineTab = find("case-tab-timeline")
-            let contactsTab = find("case-tab-contacts")
-            let evidenceTab = find("case-tab-evidence")
-
+        then("it opens on Details, and Timeline, Contacts and Evidence are offered but not showing") {
             XCTAssertTrue(
-                detailsTab.waitForExistence(timeout: 3),
-                "Details tab should exist in case detail"
+                find("case-details-tab").waitForExistence(timeout: 10),
+                "A case should open on its Details tab"
             )
-            XCTAssertTrue(
-                timelineTab.waitForExistence(timeout: 3),
-                "Timeline tab should exist in case detail"
-            )
-            XCTAssertTrue(
-                contactsTab.waitForExistence(timeout: 3),
-                "Contacts tab should exist in case detail"
-            )
-            XCTAssertTrue(
-                evidenceTab.waitForExistence(timeout: 3),
-                "Evidence tab should exist in case detail"
-            )
+            for name in ["details", "timeline", "contacts", "evidence"] {
+                XCTAssertTrue(find("case-tab-\(name)").exists, "\(name) tab should exist in case detail")
+            }
+            for body in ["case-timeline-tab", "case-contacts-tab", "case-evidence-tab"] {
+                XCTAssertFalse(find(body).exists, "\(body) should not be showing on the Details tab")
+            }
         }
     }
 
@@ -571,197 +545,188 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Tapping the status pill opens the QuickStatusSheet.
     func testStatusPillOpensSheet() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case exists") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
         }
-        when("I open a case detail and tap the status pill") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I tap the status pill") {
             let statusPill = find("case-status-pill")
-            if statusPill.waitForExistence(timeout: 5) {
-                statusPill.tap()
-            }
+            XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be visible")
+            statusPill.tap()
         }
-        then("the QuickStatusSheet should appear with status options") {
-            guard find("case-detail-header").exists else { return }
-
-            let sheet = find("quick-status-sheet")
-            if sheet.waitForExistence(timeout: 5) {
-                XCTAssertTrue(sheet.exists, "QuickStatusSheet should be visible after tapping status pill")
-
-                // Verify at least one status option exists
-                let statusOptions = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'status-option-'"))
-                XCTAssertGreaterThan(
-                    statusOptions.count, 0,
-                    "QuickStatusSheet should contain at least one status option"
+        then("the sheet offers every status of the case's type") {
+            XCTAssertTrue(
+                find("quick-status-sheet").waitForExistence(timeout: 5),
+                "QuickStatusSheet should be visible after tapping status pill"
+            )
+            // arrest_case in the jail-support template.
+            for status in ["reported", "confirmed", "in_custody", "arraigned", "released", "case_closed"] {
+                XCTAssertTrue(
+                    app.buttons["status-option-\(status)"].exists,
+                    "The sheet should offer the '\(status)' status"
                 )
             }
-            // If no status pill (volunteer without edit permission), pass gracefully
         }
     }
 
-    /// Scenario: Selecting a new status updates the pill.
+    /// Scenario: Selecting a new status updates the pill — and the server keeps it.
     func testSelectNewStatus() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case that is Reported") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
+            XCTAssertTrue(find("case-status-pill").label.contains("Reported"))
         }
-        when("I open status sheet and select a different status") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
-            let statusPill = find("case-status-pill")
-            guard statusPill.waitForExistence(timeout: 5) else { return }
-            statusPill.tap()
+        when("I choose In Custody in the status sheet") {
+            find("case-status-pill").tap()
+            let option = app.buttons["status-option-in_custody"]
+            XCTAssertTrue(option.waitForExistence(timeout: 5), "The sheet should offer In Custody")
+            option.tap()
+            XCTAssertTrue(
+                find("quick-status-sheet").waitForNonExistence(timeout: 10),
+                "The sheet should dismiss once a status is chosen"
+            )
         }
-        then("the status should update") {
-            let sheet = find("quick-status-sheet")
-            guard sheet.waitForExistence(timeout: 5) else { return }
+        then("the pill reads In Custody, and still does after reopening the case from the server") {
+            let pill = find("case-status-pill")
+            let updated = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label CONTAINS 'In Custody'"), object: pill
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 10), .completed,
+                           "The status pill should now read In Custody (reads '\(pill.label)')")
 
-            // Find status options that are NOT the currently selected one
-            // (the selected one has a checkmark)
-            let statusOptions = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'status-option-'"))
+            find("case-detail-close").tap()
+            openCase(titled: title)
+            XCTAssertTrue(
+                find("case-status-pill").label.contains("In Custody"),
+                "The new status should have been saved: the reopened case reads '\(find("case-status-pill").label)'"
+            )
+        }
+    }
 
-            if statusOptions.count > 1 {
-                // Tap the second status option (different from current)
-                let secondOption = statusOptions.element(boundBy: 1)
-                if secondOption.exists {
-                    secondOption.tap()
-                    // Sheet should dismiss after selection
-                    _ = sheet.waitForNonExistence(timeout: 5)
-                    // Status pill should still exist (with updated status)
-                    let pill = find("case-status-pill")
-                    XCTAssertTrue(
-                        pill.waitForExistence(timeout: 5),
-                        "Status pill should remain visible after status change"
-                    )
-                }
-            }
+    /// Scenario: Changing a case's status keeps who it is assigned to.
+    func testStatusChangeKeepsAssignment() {
+        var title = ""
+        given("a case that is assigned to me") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
+            XCTAssertTrue(
+                find("case-unassign-btn").waitForExistence(timeout: 10),
+                "The creator of a case is assigned to it"
+            )
+        }
+        when("I change its status") {
+            find("case-status-pill").tap()
+            let option = app.buttons["status-option-confirmed"]
+            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            option.tap()
+            XCTAssertTrue(find("quick-status-sheet").waitForNonExistence(timeout: 10))
+        }
+        then("I am still assigned") {
+            let updated = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label CONTAINS 'Confirmed'"), object: find("case-status-pill")
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 10), .completed, "The status should have changed")
+            XCTAssertTrue(find("case-unassign-btn").exists, "A status change must not clear the assignee (#1643)")
+            XCTAssertFalse(find("case-assign-btn").exists)
         }
     }
 
     // MARK: - Comments
 
-    /// Scenario: Full add comment flow — open sheet, type text, submit.
+    /// Scenario: Full add comment flow — type in the sheet, submit, and see the comment.
     func testAddCommentFlow() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        let comment = "Comment \(UUID().uuidString.prefix(8))"
+        given("a case exists") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
         }
-        when("I open a case detail, navigate to timeline, and open the comment sheet") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
-
-            // Switch to Timeline tab
+        when("I open the comment sheet from the timeline, write a comment and submit") {
             let timelineTab = find("case-tab-timeline")
-            if timelineTab.waitForExistence(timeout: 5) {
-                timelineTab.tap()
-            }
+            XCTAssertTrue(timelineTab.waitForExistence(timeout: 5))
+            timelineTab.tap()
+
+            let expand = find("case-comment-expand")
+            XCTAssertTrue(expand.waitForExistence(timeout: 10), "The timeline should offer the full comment sheet")
+            expand.tap()
+
+            XCTAssertTrue(find("add-comment-sheet").waitForExistence(timeout: 5), "The comment sheet should open")
+            let sheetInput = find("comment-input")
+            XCTAssertTrue(sheetInput.waitForExistence(timeout: 3))
+            sheetInput.tap()
+            sheetInput.typeText(comment)
+            let submit = find("comment-submit")
+            XCTAssertTrue(submit.isEnabled, "Submit should be enabled once there is text")
+            submit.tap()
         }
-        then("I should be able to open the comment sheet and see the input") {
-            guard find("case-detail-header").exists else { return }
-
-            // The inline comment input should be visible
-            let commentInput = find("case-comment-input")
-            let commentSubmit = find("case-comment-submit")
-
-            if commentInput.waitForExistence(timeout: 5) {
-                XCTAssertTrue(commentInput.exists, "Comment input should be visible on timeline tab")
-
-                // Tap the send button to open AddCommentSheet
-                if commentSubmit.exists {
-                    commentSubmit.tap()
-
-                    let commentSheet = find("add-comment-sheet")
-                    if commentSheet.waitForExistence(timeout: 5) {
-                        // Verify the sheet has the text editor and submit button
-                        let sheetInput = find("comment-input")
-                        let sheetSubmit = find("comment-submit")
-
-                        XCTAssertTrue(
-                            sheetInput.waitForExistence(timeout: 3),
-                            "Comment sheet should contain a text input"
-                        )
-                        XCTAssertTrue(
-                            sheetSubmit.waitForExistence(timeout: 3),
-                            "Comment sheet should contain a submit button"
-                        )
-
-                        // Type a comment
-                        sheetInput.tap()
-                        sheetInput.typeText("Test comment from XCUITest")
-
-                        // Submit should be enabled now
-                        XCTAssertTrue(
-                            sheetSubmit.isEnabled,
-                            "Submit button should be enabled after entering text"
-                        )
-                    }
-                }
-            }
+        then("the comment appears in the case timeline") {
+            XCTAssertTrue(
+                find("add-comment-sheet").waitForNonExistence(timeout: 15),
+                "The sheet should close once the comment is saved"
+            )
+            let posted = find("case-timeline").staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", comment)
+            ).firstMatch
+            XCTAssertTrue(
+                posted.waitForExistence(timeout: 15),
+                "The saved comment should read back, decrypted, in the timeline"
+            )
         }
     }
 
     // MARK: - Assignment
 
-    /// Scenario: Unassigned case shows "Assign to me" button.
+    /// Scenario: Unassign and "Assign to me" round-trip through the server.
+    /// The creator of a case is assigned to it, so the case opens offering Unassign.
     func testAssignToMeButton() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case I created, which is assigned to me") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
+            XCTAssertTrue(
+                find("case-unassign-btn").waitForExistence(timeout: 10),
+                "The creator of a case is assigned to it"
+            )
         }
-        when("I open a case detail") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
+        when("I unassign myself") {
+            find("case-unassign-btn").tap()
         }
-        then("I should see the assign button if the case is unassigned to me") {
-            guard find("case-detail-header").waitForExistence(timeout: 5) else { return }
-
+        then("the case offers Assign to me, and assigning again offers Unassign") {
             let assignButton = find("case-assign-btn")
-            // The assign button only shows when the current user is NOT in assignedTo.
-            // For a fresh record with no assignees, it should be visible.
-            if assignButton.waitForExistence(timeout: 3) {
-                XCTAssertTrue(
-                    assignButton.exists,
-                    "Assign to me button should be visible for unassigned cases"
-                )
-                XCTAssertTrue(
-                    assignButton.isEnabled,
-                    "Assign to me button should be tappable"
-                )
-            }
-            // If the user is already assigned, the button won't appear — that's valid
+            XCTAssertTrue(assignButton.waitForExistence(timeout: 10), "An unassigned case should offer Assign to me")
+            XCTAssertFalse(find("case-unassign-btn").exists)
+            XCTAssertTrue(assignButton.isEnabled, "Assign to me should be tappable")
+            assignButton.tap()
+            XCTAssertTrue(
+                find("case-unassign-btn").waitForExistence(timeout: 10),
+                "After assigning, the case should offer Unassign"
+            )
+            XCTAssertFalse(find("case-assign-btn").exists, "An assigned case no longer offers Assign to me")
         }
     }
 
     // MARK: - Detail Close
 
-    /// Scenario: Closing the case detail returns to the list.
+    /// Scenario: Closing the case detail returns to the list, with the case still in it.
     func testCaseDetailCloseReturnsToList() {
-        given("case management is enabled and I am authenticated as admin with API") {
-            configureCaseManagementWithTwoTypes()
-            launchAsAdminWithAPI()
+        var title = ""
+        given("case management is on and I have a case open") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
         }
-        when("I open a case detail and tap the close button") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
-
+        when("I tap the close button") {
             let closeButton = find("case-detail-close")
-            if closeButton.waitForExistence(timeout: 5) {
-                closeButton.tap()
-            }
+            XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "The detail should offer a close button")
+            closeButton.tap()
         }
-        then("I should be back on the case list") {
-            // After closing the detail sheet, the case list should be visible again
-            // Case management is enabled by this test's own Given, so
-            // `cms-not-enabled` is not an acceptable outcome here.
-            let found = anyElementExists([
-                "case-list",
-                "case-empty-state",
-                "case-type-tabs",
-            ], timeout: 5)
+        then("I am back on the case list, which still shows the case") {
             XCTAssertTrue(
-                found,
-                "Case list should be visible after closing the detail view"
+                find("case-detail-header").waitForNonExistence(timeout: 10),
+                "The detail should be gone after closing it"
             )
+            XCTAssertTrue(caseTitle(title).waitForExistence(timeout: 10), "The list should still show '\(title)'")
         }
     }
 
@@ -800,67 +765,34 @@ final class CaseManagementUITests: BaseUITest {
 
     // MARK: - QuickStatusSheet Dismiss
 
-    /// Scenario: Cancelling the QuickStatusSheet dismisses it without changes.
+    /// Scenario: Cancelling the QuickStatusSheet dismisses it without changing the status.
     func testQuickStatusSheetCancel() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        var title = ""
+        given("a case that is Reported") {
+            title = launchWithSeededCase()
+            openCase(titled: title)
+            XCTAssertTrue(find("case-status-pill").label.contains("Reported"))
         }
         when("I open the status sheet and cancel") {
-            navigateToCases()
-            guard openFirstCaseCard() else { return }
-            let statusPill = find("case-status-pill")
-            guard statusPill.waitForExistence(timeout: 5) else { return }
-            statusPill.tap()
-        }
-        then("cancelling should dismiss the sheet") {
+            find("case-status-pill").tap()
             let sheet = find("quick-status-sheet")
-            guard sheet.waitForExistence(timeout: 5) else { return }
-
-            // Find and tap the Cancel button in the sheet's toolbar
-            let cancelButton = app.buttons.matching(
-                NSPredicate(format: "label CONTAINS[c] 'Cancel'")
-            ).firstMatch
-            if cancelButton.waitForExistence(timeout: 3) {
-                cancelButton.tap()
-
-                // Sheet should be dismissed
-                XCTAssertTrue(
-                    sheet.waitForNonExistence(timeout: 5),
-                    "QuickStatusSheet should dismiss after tapping Cancel"
-                )
-            }
-
-            // Status pill should still be visible
-            let pill = find("case-status-pill")
+            XCTAssertTrue(sheet.waitForExistence(timeout: 5), "The status sheet should open")
+            let cancelButton = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Cancel'")).firstMatch
+            XCTAssertTrue(cancelButton.waitForExistence(timeout: 3), "The sheet should offer Cancel")
+            cancelButton.tap()
+        }
+        then("the sheet is gone and the status is unchanged") {
             XCTAssertTrue(
-                pill.waitForExistence(timeout: 3),
-                "Status pill should remain after cancelling status sheet"
+                find("quick-status-sheet").waitForNonExistence(timeout: 5),
+                "QuickStatusSheet should dismiss after tapping Cancel"
+            )
+            XCTAssertTrue(
+                find("case-status-pill").label.contains("Reported"),
+                "Cancelling must not change the status (reads '\(find("case-status-pill").label)')"
             )
         }
     }
 
     // MARK: - Helpers
-
-    /// Open the first case card in the list. Returns false if no cards exist.
-    @discardableResult
-    private func openFirstCaseCard() -> Bool {
-        let caseList = find("case-list")
-        guard caseList.waitForExistence(timeout: 10) else {
-            // No case list — CMS disabled or empty
-            return false
-        }
-
-        let firstCard = find("case-list").descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'case-list-row-'"))
-            .firstMatch
-        guard firstCard.waitForExistence(timeout: 5) else {
-            return false
-        }
-        firstCard.tap()
-
-        // Wait for detail to appear
-        let header = find("case-detail-header")
-        return header.waitForExistence(timeout: 5)
-    }
 
 }
