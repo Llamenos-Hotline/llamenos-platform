@@ -51,7 +51,7 @@ function deployFiles(dir: string, out: string[] = []): string[] {
     if (statSync(full).isDirectory()) {
       if (entry === 'node_modules' || entry === '.terraform') continue
       deployFiles(full, out)
-    } else if (/\.(ya?ml|j2|tf|sh|conf|md|ts)$/.test(entry)) {
+    } else if (/\.(ya?ml|j2|tf|sh|conf|md|ts)$/.test(entry) || /^Dockerfile/.test(entry)) {
       out.push(full)
     }
   }

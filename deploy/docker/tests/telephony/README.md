@@ -191,3 +191,12 @@ container traffic in — ufw drops it by default — so a host-run worker can ne
 serve a prompt to the PBX. Running the shipped image on the compose network is
 also what production does, so the app reaches ARI as `http://asterisk:8088`
 and the bridge as `http://sip-bridge:3000` without any name mapping.
+
+## Name resolution (#1690)
+
+`run-asterisk-name-resolution.sh` builds `deploy/docker/Dockerfile.asterisk` and
+checks, against a live PBX, that a SIP target given by name resolves — including a
+name only `/etc/hosts` knows, which the unmodified upstream image cannot resolve
+(`0 viable targets`) — while Docker-DNS names still resolve and a name nothing
+resolves still fails. It runs the unmodified image alongside as a control and
+fails if the control stops showing the defect. Needs Docker only.

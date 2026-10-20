@@ -132,7 +132,13 @@ services:
   # `dtls_verify = fingerprint` into chain verification and kill every
   # DTLS-SRTP call. See deploy/docker/docker-compose.yml and #1687.
   asterisk:
-    image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
+    # Built from the vetted upstream image plus the DNS resolver module it ships
+    # without (#1690): see Dockerfile.asterisk. The digest pin and its #1687
+    # floor now live there.
+    build:
+      context: .
+      dockerfile: Dockerfile.asterisk
+    image: llamenos-asterisk:local
     profiles: ["telephony"]
     ports:
       - "8088:8088"       # ARI HTTP; SIP is reached only through Kamailio.
