@@ -1,8 +1,10 @@
 ---
 import type { ParsedSlide } from '../utils/slides';
+import '../styles/fonts.css';
 // Note: global.css intentionally NOT imported — slides are self-contained
 // to avoid Tailwind resets and marketing site styles interfering with
-// the 1920x1080 presentation canvas scaling.
+// the 1920x1080 presentation canvas scaling. fonts.css is just @font-face
+// rules, so it is safe to share.
 
 interface Props {
   title: string;
@@ -555,7 +557,7 @@ const formattedDate = date
 
 <a href="/slides/" id="back-link">← All Decks</a>
 
-<div id="slides-viewport">
+<div id="slides-viewport" data-slide-count={slideCount}>
   <div id="slides-scaler">
     {slides.map((slide, i) => (
       <section
@@ -591,15 +593,14 @@ const formattedDate = date
   <div id="notes-content"></div>
 </div>
 
-<script define:vars={{ slideCount, slug }}>
+<script>
   // ── State ──────────────────────────────────────────────────────────
   let current = 0;
   let fragmentIndex = -1;
   let isOverview = false;
   let notesVisible = false;
-  const totalSlides = slideCount;
-
   const viewport = document.getElementById('slides-viewport');
+  const totalSlides = Number(viewport.dataset.slideCount);
   const scaler = document.getElementById('slides-scaler');
   const progressBar = document.getElementById('progress-bar');
   const counter = document.getElementById('slide-counter');
