@@ -367,7 +367,12 @@ Then('the CAPTCHA setting change should persist after a reload', async ({ page, 
   await page.reload()
   await expect(page.getByTestId(TestIds.PIN_INPUT)).toBeVisible({ timeout: Timeouts.AUTH })
   await enterPin(page, TEST_PIN)
-  await page.waitForURL(u => !u.toString().includes('/login'), { timeout: Timeouts.AUTH })
+  // Wait for the authenticated layout to render before navigating. A URL change
+  // is not enough: navigateAfterLogin takes an instant (non-waiting) snapshot of
+  // the sidebar and, finding it still unrendered, falls back to `goto('/login')`
+  // — a full page load that throws away the key we just unlocked, leaving the
+  // scenario stranded on the PIN screen.
+  await expect(page.getByTestId(TestIds.NAV_SIDEBAR)).toBeVisible({ timeout: Timeouts.AUTH })
   await navigateAfterLogin(page, '/admin/spam-protection')
 
   await expect(page.getByTestId(TestIds.SPAM_CAPTCHA_TOGGLE))
