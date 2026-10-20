@@ -116,7 +116,7 @@
  */
 
 import { deriveBranchRuleset, type RulesetFact } from './board.js'
-import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
+import { REPO, commitSha, gh, ghJson, describeGhFailure } from './gh.js'
 
 // ---------------------------------------------------------------------------
 // Observations — one shape per thing read off a head. Pure functions below
@@ -701,7 +701,10 @@ export function defaultMissingChecksDeps(): MissingChecksDeps {
       // historical attempt within a suite, which nothing here needs: those
       // are superseded by definition, and fetching them only widens the
       // payload and the chance of a mis-ordering.
-      const pages = await pagedJson<GhCheckRunsPage>(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`)
+      //
+      // `commitSha` pins the segment to a SHA: a `..` there would resolve
+      // to the endpoint that CREATES a check run (#1673, see gh.ts).
+      const pages = await pagedJson<GhCheckRunsPage>(`repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)
       return pages.flatMap((p) => p.check_runs ?? []).map((r) => ({
         id: r.id ?? 0,
         name: r.name ?? '',
@@ -712,7 +715,7 @@ export function defaultMissingChecksDeps(): MissingChecksDeps {
       }))
     },
     fetchCommitStatuses: async (sha) => {
-      const pages = await pagedJson<GhStatusResponse>(`repos/${REPO}/commits/${sha}/status?per_page=100`)
+      const pages = await pagedJson<GhStatusResponse>(`repos/${REPO}/commits/${commitSha(sha)}/status?per_page=100`)
       return pages.flatMap((p) => p.statuses ?? []).map((s) => ({ context: s.context ?? '', state: s.state ?? '', updatedAt: s.updated_at ?? '' }))
     },
     fetchWorkflowRuns: async (sha) => {

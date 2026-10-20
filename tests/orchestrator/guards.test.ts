@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import ts from 'typescript'
+import { checkRunsViolations, orchestratorSources, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
+import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
   runReviewCi, decideReviewGate,
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
@@ -232,19 +233,6 @@ describe('rail: the fleet cannot merge its own changes', () => {
  * below for what does remain.
  */
 describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () => {
-  function orchestratorSources(): { file: string; text: string }[] {
-    const out: { file: string; text: string }[] = []
-    const walk = (dir: string): void => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const full = join(dir, e.name)
-        if (e.isDirectory()) walk(full)
-        else if (e.name.endsWith('.ts')) out.push({ file: full, text: readFileSync(full, 'utf8') })
-      }
-    }
-    walk(join(process.cwd(), 'orchestrator', 'src'))
-    return out
-  }
-
   it('finds orchestrator sources to scan at all — the grep must not pass vacuously', () => {
     expect(orchestratorSources().length).toBeGreaterThan(10)
   })
@@ -384,107 +372,29 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
   })
 
   /**
-   * Where `check-runs` is allowed to appear OUTSIDE `review-and-merge.ts`:
-   * as the final path segment of the READ `commits/${ref}/check-runs`, and
-   * nowhere else. Anchored to the occurrence itself — what immediately
-   * precedes and follows it — not to a window of surrounding text.
+   * Where `check-runs` may appear OUTSIDE `review-and-merge.ts`: only as the
+   * tail of the read `repos/${REPO}/commits/${commitSha(x)}/check-runs`, with
+   * `REPO` and `commitSha` resolving to `gh.ts`'s own exports — see
+   * `checkRunsViolations` in `forgery-rails.ts` for the full shape.
    *
-   * Why this and not "does a write token sit near it" (the rail's first
-   * draft, #1673): a write is not detectable from text. `method` can reach a
-   * request through object shorthand, double quotes, a template literal, an
-   * argv array, a helper in `github-app.ts`, or a `headers` block that pushes
-   * it past any window; every one of those is a forgery that a token-and-radius
-   * heuristic waves through. The anchor needs no write detection at all:
-   * the one endpoint that CREATES a check run is the bare
-   * `repos/{R}/check-runs`, and `commits/{ref}/check-runs` is a GET-only
-   * resource — GitHub offers no create or update there. So a file confined to
-   * the anchored shape has no check-run write to make, however it builds its
-   * request.
+   * Why the SHA is pinned rather than any `${…}` accepted (#1673's security
+   * review): the rail's previous anchor matched the interpolation's TEXT, never
+   * its value, and `fetch`/`gh api` resolve a `..` (or `%2e%2e`) segment under
+   * WHATWG URL rules — so `commits/${'..'}/check-runs` reached
+   * `repos/{R}/check-runs`, the endpoint that CREATES a check run. A 40-hex SHA
+   * has no dot, percent sign or slash to resolve.
    *
-   * Applied to EVERY occurrence, not to the file as a whole: one anchored
-   * read cannot alibi a bare mention elsewhere in the same file, and
-   * `commits/${x}/check-runs/../../../check-runs` fails on its second hit.
-   * The character after must be `?`, a quote or a backtick, so a longer
-   * path (`.../check-runs/<id>`, `.../check-runs/../…`) is not the read.
-   */
-  const ANCHORED_READ_BEFORE = /commits\/\$\{[^}/]+\}\/$/
-  const ANCHORED_READ_AFTER = /^[?'"`]/
-
-  /** Every position of `check-runs` in `text`, and whether it is the anchored
-   *  read — the property the whole rail rests on. */
-  function checkRunsOccurrences(text: string): { at: number; anchored: boolean }[] {
-    return [...text.matchAll(/check-runs/g)].map((m) => ({
-      at: m.index,
-      anchored: ANCHORED_READ_BEFORE.test(text.slice(0, m.index)) && ANCHORED_READ_AFTER.test(text.slice(m.index + m[0].length)),
-    }))
-  }
-
-  /** Whether `at` falls inside a string or template literal token — i.e. in
-   *  the code a request is built from — rather than in a comment. Comments
-   *  are trivia in the TypeScript AST, outside every token's range, which
-   *  is the property a regex over source text cannot give: an endpoint named
-   *  in prose is not an endpoint called in a request. */
-  function literalRanges(text: string): [number, number][] {
-    const ranges: [number, number][] = []
-    const sf = ts.createSourceFile('probe.ts', text, ts.ScriptTarget.Latest, true)
-    const visit = (n: ts.Node): void => {
-      if (
-        ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ||
-        ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)
-      ) ranges.push([n.getStart(sf), n.getEnd()])
-      ts.forEachChild(n, visit)
-    }
-    visit(sf)
-    return ranges
-  }
-
-  /**
-   * The whole rail, as a function of the sources so it can be pointed at
-   * synthetic forgeries as well as the real tree. Returns one message per
-   * violation; empty means every file is admitted.
-   *
-   *  - `permitted` (`review-and-merge.ts`) is the one place the bare
-   *    endpoint may be named; it is checked separately for actually posting.
-   *  - Any other file naming `check-runs` must (1) have EVERY occurrence be
-   *    the anchored read, comments included, and (2) have at least one such
-   *    occurrence inside a literal — a file whose only mention is a docstring
-   *    is not reading anything and is not admitted on the strength of one.
-   */
-  function checkRunsViolations(sources: { file: string; text: string }[], permitted: string): string[] {
-    const out: string[] = []
-    for (const { file, text } of sources) {
-      if (file === permitted) continue
-      const occurrences = checkRunsOccurrences(text)
-      if (occurrences.length === 0) continue
-      for (const o of occurrences) {
-        if (!o.anchored) out.push(`${file}: check-runs at offset ${o.at} is not the commits/\${ref}/check-runs read`)
-      }
-      const ranges = literalRanges(text)
-      const inRequest = occurrences.some((o) => o.anchored && ranges.some(([s, e]) => o.at >= s && o.at < e))
-      if (!inRequest) out.push(`${file}: names check-runs only in prose — no request reads it`)
-    }
-    return out
-  }
-
-  /**
-   * The Checks API's `POST /repos/{R}/check-runs` is a write path with real
-   * consequences: whatever it posts becomes a required-status verdict on a
-   * commit, exactly as authoritative as an Actions job's own result. Only
-   * `review-and-merge.ts`'s `postReviewCheckRun` may call it — see that
-   * file's own module comment for why this is the ONE local write path this
-   * design trusts, and why it never gained a `statuses:write`-shaped
-   * capability anywhere else in the orchestrator (ci.ts's own comment above
-   * `VERIFY_JOB`/`REVIEW_JOB` explains why a same-named STATUS was rejected
-   * outright: it is what makes fork PRs unmergeable). A second call site
-   * creating a check-run — however it got there — would be a second,
-   * ungoverned place this process can post a verdict nothing here reviewed.
+   * This is defence in depth, not the boundary. A text rail cannot see a path
+   * assembled from pieces (`'check' + '-runs'`); what decides forgery
+   * resistance is that a PAT cannot create a check run, and only
+   * `review-and-merge.ts` may import the App credential that can — the rail in
+   * `credential-boundary.test.ts`.
    */
   it('creates a check-run from exactly one file (review-and-merge.ts)', () => {
-    const REVIEW_AND_MERGE_FILE = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
     const sources = orchestratorSources()
 
-    // Every other file naming the endpoint is confined to the anchored read.
-    expect(checkRunsViolations(sources, REVIEW_AND_MERGE_FILE), 'a file other than review-and-merge.ts names check-runs outside the read').toEqual([])
+    // Every other file naming the endpoint is confined to the pinned read.
+    expect(checkRunsViolations(sources, REVIEW_AND_MERGE_FILE), 'a file other than review-and-merge.ts names check-runs outside the pinned read').toEqual([])
 
     // And that one file must ACTUALLY post there. Deleting the request and
     // leaving the module comment behind kept this rail green when it was
@@ -497,8 +407,8 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
 
     // The reader this rail was relaxed for must still be there and still be
     // admitted — a rail that admitted nobody would also pass the clause above.
-    const reader = join(process.cwd(), 'orchestrator', 'src', 'missing-checks.ts')
-    expect(sources.some((s) => s.file === reader && checkRunsOccurrences(s.text).length > 0), 'missing-checks.ts no longer reads check-runs').toBe(true)
+    expect(sources.find((s) => s.file === MISSING_CHECKS_FILE)?.text, 'missing-checks.ts no longer reads check-runs through commitSha')
+      .toContain('/commits/${commitSha(sha)}/check-runs')
   })
 
   /**
@@ -507,27 +417,43 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
    * forgery or false-green that an earlier shape of this rail admitted.
    */
   describe('the check-runs rail refuses what it exists to refuse', () => {
-    const RAM = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
-    const OTHER = join(process.cwd(), 'orchestrator', 'src', 'other.ts')
-    const violationsOf = (text: string): string[] => checkRunsViolations([{ file: OTHER, text }], RAM)
+    // Probes are placed at missing-checks.ts's path: it is the one admitted
+    // reader, so a forgery written there is the one this rail must still see.
+    const IMPORTS = "import { REPO, commitSha } from './gh.js'\n"
+    const violationsOf = (text: string): string[] => checkRunsViolations([{ file: MISSING_CHECKS_FILE, text: IMPORTS + text }], REVIEW_AND_MERGE_FILE)
 
     it('admits missing-checks.ts exactly as it stands', () => {
-      const file = join(process.cwd(), 'orchestrator', 'src', 'missing-checks.ts')
-      expect(checkRunsViolations([{ file, text: readFileSync(file, 'utf8') }], RAM)).toEqual([])
+      expect(checkRunsViolations([{ file: MISSING_CHECKS_FILE, text: readFileSync(MISSING_CHECKS_FILE, 'utf8') }], REVIEW_AND_MERGE_FILE)).toEqual([])
     })
 
-    it('admits an anchored read in a request', () => {
-      expect(violationsOf('const r = await pagedJson(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`)')).toEqual([])
+    it('admits a pinned read in a request', () => {
+      expect(violationsOf('const r = await pagedJson(`repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)')).toEqual([])
+    })
+
+    it('refuses a pinned read in any file but missing-checks.ts — main admits none, and this admits one', () => {
+      const other = join(process.cwd(), 'orchestrator', 'src', 'other.ts')
+      const text = IMPORTS + 'const r = await pagedJson(`repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)'
+      expect(checkRunsViolations([{ file: other, text }], REVIEW_AND_MERGE_FILE)).not.toEqual([])
+    })
+
+    // The value is what the pin is for: commitSha must refuse every segment
+    // a URL parser would resolve, and hand a real SHA back unchanged.
+    it('commitSha refuses anything but a 40-hex SHA', () => {
+      const sha = 'a'.repeat(40)
+      expect(commitShaOf(sha)).toBe(sha)
+      for (const bad of ['..', '.', '%2e%2e', '%2E%2E', 'a/b', '', `${sha}/..`, sha.toUpperCase(), 'a'.repeat(64), `${sha}?`]) {
+        expect(() => commitShaOf(bad), JSON.stringify(bad)).toThrow()
+      }
     })
 
     it('refuses a file whose only check-runs reference is a comment naming the read', () => {
-      expect(violationsOf('// reads commits/${sha}/check-runs\nexport const x = 1\n')).not.toEqual([])
+      expect(violationsOf('// reads commits/${commitSha(sha)}/check-runs\nexport const x = 1\n')).not.toEqual([])
       expect(violationsOf('/** GET repos/R/commits/${sha}/check-runs */\nexport const x = 1\n')).not.toEqual([])
     })
 
     it('refuses a comment alibi beside a write to the bare endpoint', () => {
       const forged = [
-        '// the read is commits/${sha}/check-runs',
+        '// the read is commits/${commitSha(sha)}/check-runs',
         'await appApiRequest(http, { method, url: `${GITHUB_API}/repos/${REPO}/check-runs`, body }, secrets, "x")',
       ].join('\n')
       expect(violationsOf(forged)).not.toEqual([])
@@ -540,17 +466,17 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
     it('refuses a write to repos/${REPO}/check-runs outside review-and-merge.ts', () => {
       const forged = [
         'const method = "POST"',
-        'const read = `repos/${REPO}/commits/${sha}/check-runs?per_page=100`',
+        'const read = `repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`',
         'const token = await mintInstallationToken(http, secrets, "x")',
         'await fetchAppHttp(http, { method, url: `${GITHUB_API}/repos/${REPO}/check-runs`, headers: { a: token } }, secrets, "x")',
       ].join('\n')
       expect(violationsOf(forged)).not.toEqual([])
     })
 
-    // Each shape is written beside a legitimate anchored read, because that is
+    // Each shape is written beside a legitimate pinned read, because that is
     // what defeated the windowed rail: the read supplied the alibi, and the
     // write token was one the pattern could not see.
-    const READ = 'const read = `repos/${REPO}/commits/${sha}/check-runs?per_page=100`\n'
+    const READ = 'const read = `repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`\n'
     it.each([
       ['object shorthand method', 'const method = "POST"\nfetch(`https://api.github.com/repos/${REPO}/check-runs`, { method })'],
       ['double-quoted method', 'fetch(`${U}/repos/${REPO}/check-runs`, { method: "POST" })'],
@@ -560,16 +486,30 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
       ['curl argv', "run(['curl', '-d', '{}', `https://api.github.com/repos/${REPO}/check-runs`])"],
       ['PATCH of an existing run', 'const method = "PATCH"\nfetch(`${U}/repos/${REPO}/check-runs/${id}`, { method, body: "{\\"conclusion\\":\\"success\\"}" })'],
       ['method pushed out of any window', 'fetch(`${U}/repos/${REPO}/check-runs`, { headers: {\n' + '  a: "' + 'x'.repeat(900) + '",\n}, method: \'POST\' })'],
-      ['path traversal out of the read', 'fetch(`${U}/repos/${REPO}/commits/${sha}/check-runs/../../check-runs`)'],
-      ['a longer path after the read', 'fetch(`${U}/repos/${REPO}/commits/${sha}/check-runs/${id}`)'],
+      ['path traversal out of the read', 'fetch(`${U}/repos/${REPO}/commits/${commitSha(sha)}/check-runs/../../check-runs`)'],
+      ['a longer path after the read', 'gh(["api", `repos/${REPO}/commits/${commitSha(sha)}/check-runs/${id}`])'],
+      // #1673's security review: traversal carried in the interpolated VALUE,
+      // before check-runs. Each resolves to repos/{R}/check-runs.
+      ['a literal dot-segment ref', "gh(['api', `repos/${REPO}/commits/${'..'}/check-runs`])"],
+      ['a variable holding a dot-segment', "const up = '..'\ngh(['api', `repos/${REPO}/commits/${up}/check-runs`])"],
+      ['a percent-encoded dot-segment', "gh(['api', `repos/${REPO}/commits/${'%2e%2e'}/check-runs`])"],
+      ['an unvalidated sha parameter', "const read = (sha: string) => gh(['api', `repos/${REPO}/commits/${sha}/check-runs`])"],
+      ['a dot-segment read with a POST beside it', "const r = await fetch(`${U}/repos/${REPO}/commits/${'..'}/check-runs`, { method: 'POST', body })"],
+      // Shapes that keep commitSha in the braces but defeat it some other way.
+      ['a local commitSha shadowing gh.ts', "const x = (s: string) => s\nconst f = (commitSha: (s: string) => string) => `repos/${REPO}/commits/${commitSha('..')}/check-runs`"],
+      ['commitSha from another module', "import { commitSha as cs } from './other-gh.js'\nconst r = `repos/${REPO}/commits/${cs(sha)}/check-runs`"],
+      ['a tagged template that rebuilds the path', 'const r = rebuild`repos/${REPO}/commits/${commitSha(sha)}/check-runs`'],
+      ['a quote inside the template, then traversal', "const r = `repos/${REPO}/commits/${commitSha(sha)}/check-runs'/../../../${tail}`"],
+      ['a prefix that puts the read in the query', 'const r = `${U}/repos/${REPO}/${x}?/commits/${commitSha(sha)}/check-runs`'],
+      ['an escape that hides the spelling from a text scan', "gh(['api', `repos/${REPO}/check\\-runs`, '-X', 'POST'])"],
     ])('refuses %s', (_name, text) => {
-      expect(violationsOf(READ + text), 'beside an anchored read').not.toEqual([])
+      expect(violationsOf(READ + text), 'beside a pinned read').not.toEqual([])
       expect(violationsOf(text), 'alone').not.toEqual([])
     })
 
-    it('does not let one anchored read alibi a bare mention in the same file', () => {
+    it('does not let one pinned read alibi a bare mention in the same file', () => {
       const text = [
-        'const a = `repos/${REPO}/commits/${sha}/check-runs`',
+        'const a = `repos/${REPO}/commits/${commitSha(sha)}/check-runs`',
         'const b = `repos/${REPO}/check-runs`',
       ].join('\n')
       expect(violationsOf(text)).not.toEqual([])
