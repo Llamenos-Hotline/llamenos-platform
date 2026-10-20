@@ -62,6 +62,8 @@ on:
   # client's API contract never runs this suite. The nightly run on main
   # catches that within a day. It also runs the quarantined tests, so each
   # quarantined defect stays visible daily until it is fixed.
+  push:
+    branches: [proof-2057-verify]
   schedule:
     - cron: "17 3 * * *"
 
@@ -121,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: ${{ fromJSON(inputs.tier == 'smoke' && '["mac"]' || '["mac", "hosted"]') }}
+        host: ["hosted"]
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
@@ -617,9 +619,7 @@ jobs:
         # The smoke tier stays entirely on the Mac: it is two shards, which is
         # exactly the Mac's concurrency, so there is nothing to gain from
         # splitting it and a toolchain to avoid straddling.
-        include: ${{ fromJSON(inputs.tier == 'smoke'
-          && '[{"shard":0,"host":"mac"},{"shard":1,"host":"mac"}]'
-          || '[{"shard":0,"host":"mac"},{"shard":3,"host":"mac"},{"shard":1,"host":"hosted"},{"shard":2,"host":"hosted"}]') }}
+        include: [{"shard":1,"host":"hosted"}]
 
     steps:
       # MANDATORY, and must stay the literal first step — same guard, same
@@ -883,7 +883,7 @@ jobs:
           # puts the fragile classes back on hosted runners — which is the
           # failure this whole mechanism exists to prevent.
           extra+=(--mac-shards 0,3)
-          python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee "$RUNNER_TEMP/shard-args.txt"
+          printf '%s\n' -only-testing:LlamenosUITests/DashboardUITests -only-testing:LlamenosUITests/EventsUITests > "$RUNNER_TEMP/shard-args.txt"; cat "$RUNNER_TEMP/shard-args.txt"
           test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
       # Inside the job's 65: leaves room for setup (5-7 min) and the always()

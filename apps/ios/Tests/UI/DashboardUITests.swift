@@ -154,6 +154,37 @@ final class DashboardUITests: BaseUITest {
         }
     }
 
+    // PROOF ONLY (branch proof-2057-verify, never merged): MUST fail, naming Reports.
+    func testBreakIt_NonexistentSectionMustFail() {
+        let titles = ["Dashboard", "Notes", "Cases", "Messages", "Shifts", "Settings", "Reports"]
+        given("I am authenticated and on the dashboard") {
+            // Already on dashboard
+        }
+        then("every main section is a tab-bar button or listed under More") {
+            let tabBar = app.tabBars.firstMatch
+            XCTAssertTrue(tabBar.waitForExistence(timeout: 5), "Tab bar should exist")
+            let overflow = titles.filter { !tabBar.buttons[$0].exists }
+            if !overflow.isEmpty {
+                let more = tabBar.buttons["More"]
+                XCTAssertTrue(
+                    more.exists,
+                    "\(overflow) are not tab-bar buttons, so the tab bar must offer More to reach them"
+                )
+                more.tap()
+                if !app.tables.cells.staticTexts[overflow[0]].waitForExistence(timeout: 2) {
+                    // More re-opens the overflow tab shown last; tapping it again pops to its list.
+                    more.tap()
+                }
+                for title in overflow {
+                    XCTAssertTrue(
+                        app.tables.cells.staticTexts[title].waitForExistence(timeout: 5),
+                        "\(title) should be listed under More"
+                    )
+                }
+            }
+        }
+    }
+
     /// Scenario: Navigate to notes tab (core/note-encryption.feature)
     func testNavigateToNotesTab() {
         given("I am authenticated and on the main screen") {
