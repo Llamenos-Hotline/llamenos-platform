@@ -139,15 +139,25 @@ final class NoteFlowUITests: BaseUITest {
     // MARK: - Empty State
 
     func testEmptyStateShowsCreateButton() {
-        launchAuthenticated()
-
-        navigateToNotes()
-
-        // Without a hub there is nothing to list, so the tab settles on its empty state.
-        let emptyState = find("notes-empty-state")
-        XCTAssertTrue(emptyState.waitForExistence(timeout: 20), "A hub-less app has no notes, so Notes shows its empty state")
-        XCTAssertTrue(find("create-first-note").exists, "Empty state should have a 'Create Your First Note' button")
-        XCTAssertFalse(find("notes-list").exists, "There is nothing to list")
+        given("I am connected as an admin to a hub that holds no notes") {
+            // A hub of its own: the class hub accumulates the notes other tests create, and a
+            // hub-less launch has no API to ask, so it lands on the load error, not the list.
+            guard let hubId = TestAdminAPI.createHub(
+                name: "ios-notes-empty-\(UUID().uuidString.prefix(8))", baseURL: testHubURL
+            ) else { return }
+            launchAsAdminWithAPI(hubId: hubId)
+            // Bootstrap re-renders the tab view once the session is up; a tap on Notes before
+            // that lands on a view that is then replaced and leaves the Dashboard selected.
+            XCTAssertTrue(find("dashboard-identity").waitForExistence(timeout: 20), "The session should be up")
+            navigateToNotes()
+        }
+        then("Notes shows its empty state with a way to write the first note") {
+            let emptyState = find("notes-empty-state")
+            XCTAssertTrue(emptyState.waitForExistence(timeout: 20), "A hub with no notes should show the empty state")
+            XCTAssertTrue(find("create-first-note").exists, "Empty state should have a 'Create Your First Note' button")
+            XCTAssertFalse(find("notes-list").exists, "There is nothing to list")
+            XCTAssertFalse(find("notes-error").exists, "Loading an empty hub is not an error")
+        }
     }
 
     // MARK: - Note Detail
