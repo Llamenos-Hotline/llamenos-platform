@@ -35,7 +35,9 @@ function makeApp(opts: {
 
   const mockCases = {
     listEvents: vi.fn().mockResolvedValue({ events: [], total: 0 }),
-    getEvent: vi.fn(),
+    // The hub guard (#2011) fetches the event before any handler; by default it is
+    // an event of the app's own hub. Tests of the handlers override this.
+    getEvent: vi.fn().mockResolvedValue({ id: 'ev-1', hubId }),
     createEvent: vi.fn(),
     updateEvent: vi.fn(),
     deleteEvent: vi.fn().mockResolvedValue(undefined),

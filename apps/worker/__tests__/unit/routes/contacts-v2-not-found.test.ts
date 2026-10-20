@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import contactsV2Routes from '@worker/routes/contacts-v2'
+import { ServiceError } from '@worker/services/settings'
 
 const VALID_ENVELOPE = {
   pubkey: 'a'.repeat(64),
@@ -20,7 +21,9 @@ function makeApp() {
     lookupByIdentifierHash: vi.fn().mockResolvedValue(null),
     searchByTrigramTokens: vi.fn().mockResolvedValue([]),
     create: vi.fn(),
-    get: vi.fn().mockResolvedValue(null),
+    // Like the real service, a missing row throws its 404; the hub guard (#2011)
+    // reads through this before the handler does.
+    get: vi.fn().mockRejectedValue(new ServiceError(404, 'Contact not found')),
     update: vi.fn().mockResolvedValue(null),
     delete: vi.fn().mockResolvedValue(undefined),
     createRelationship: vi.fn(),
@@ -29,7 +32,7 @@ function makeApp() {
     listGroupsForContact: vi.fn().mockResolvedValue([]),
     createGroup: vi.fn(),
     listGroups: vi.fn().mockResolvedValue([]),
-    getGroup: vi.fn().mockResolvedValue(null),
+    getGroup: vi.fn().mockRejectedValue(new ServiceError(404, 'Group not found')),
     updateGroup: vi.fn().mockResolvedValue(null),
     deleteGroup: vi.fn().mockResolvedValue(undefined),
     addMember: vi.fn(),
@@ -103,7 +106,7 @@ describe('GET /groups/:groupId — 404 handling', () => {
 
   it('returns 200 with members when group exists', async () => {
     const { app, mockContacts } = makeApp()
-    mockContacts.getGroup.mockResolvedValue({ id: 'g-1', name: 'Test Group' })
+    mockContacts.getGroup.mockResolvedValue({ id: 'g-1', hubId: 'hub-1', name: 'Test Group' })
     mockContacts.listMembers.mockResolvedValue([{ contactId: 'c-1' }])
 
     const res = await app.request('/groups/g-1')

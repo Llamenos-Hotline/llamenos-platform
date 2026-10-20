@@ -21,10 +21,21 @@ import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
+import { resourceInPathHub } from '../lib/hub-scope'
 
 const logger = createLogger('routes.conversations')
 
 const conversations = new Hono<AppEnv>()
+
+// Inside /hubs/:hubId every /:id route may only touch a conversation of that
+// hub (#2011). Registered before the handlers so no route can opt out; a
+// conversation of another hub is a 404, the same as a missing one.
+const conversationInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['stats', 'load']),
+  load: (services, id, hubId) => services.conversations.getByIdForHub(id, hubId),
+})
+conversations.use('/:id/*', conversationInPathHub)
 
 /** Dispatch push notification to a specific user (Epic 86) */
 function dispatchPushToUser(

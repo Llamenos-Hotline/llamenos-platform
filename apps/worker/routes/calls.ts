@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
+import type { Services } from '../services'
 import { getTelephonyFromService } from '../lib/service-factories'
 import { hangUpCallerLeg } from '../services/call-hangup'
 
@@ -61,6 +62,22 @@ function toCallRecordResponse(row: CallRecordRow): CallRecord {
     encryptedContent: row.encryptedContent || undefined,
     adminEnvelopes: row.adminEnvelopes,
   })
+}
+
+/**
+ * The live call `callId` as seen from this request: inside /hubs/:hubId only a
+ * call of that hub exists (a call of another hub reads as missing — #2011);
+ * on the unscoped mount (`hubId === ''`) there is no hub to bound to, so the
+ * lookup is by id alone.
+ */
+function findActiveCall(
+  services: Services,
+  hubId: string,
+  callId: string,
+): Promise<ActiveCallRow | null> {
+  return hubId
+    ? services.calls.getActiveCallById(hubId, callId)
+    : services.calls.getActiveCallByCallId(callId)
 }
 
 calls.get('/active',
@@ -354,12 +371,10 @@ calls.get('/:callId',
     const hubId = c.get('hubId') ?? ''
 
     // Try active calls first (hub-scoped if available, then global), fall back to history
-    const activeCall = hubId
-      ? await services.calls.getActiveCallById(hubId, callId)
-      : await services.calls.getActiveCallByCallId(callId)
+    const activeCall = await findActiveCall(services, hubId, callId)
     if (activeCall) return c.json(toActiveCallResponse(activeCall))
 
-    const historyRecord = await services.calls.getCallRecord(callId)
+    const historyRecord = await services.calls.getCallRecord(hubId, callId)
     if (historyRecord) return c.json(toCallRecordResponse(historyRecord))
 
     return c.json({ error: 'Call not found' }, 404)
@@ -484,7 +499,7 @@ calls.post('/:callId/hangup',
       // The provider's status callback can end the record between our disconnect and
       // this write. The caller is disconnected either way — return the finished record.
       if (err instanceof ServiceError && err.status === 404) {
-        const record = await services.calls.getCallRecord(callId)
+        const record = await services.calls.getCallRecord(hubId, callId)
         if (record) return c.json({ call: toCallRecordResponse(record) })
       }
       return c.json({ error: 'Failed to hang up call' }, 500)
@@ -557,8 +572,7 @@ calls.post('/:callId/ban',
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
 
-    // Look up by callId only — route may lack hub context (not mounted under hubScoped)
-    const call = await services.calls.getActiveCallByCallId(callId)
+    const call = await findActiveCall(services, hubId, callId)
     if (!call) return c.json({ error: 'Call not found' }, 404)
 
     if (call.answeredBy !== pubkey) {
@@ -621,8 +635,9 @@ calls.get('/:callId/recording',
     const pubkey = c.get('pubkey')
 
     // Check call record for recording info (try active calls first, then history)
-    const activeCall = await services.calls.getActiveCallById(c.get('hubId') ?? '', callId)
-    const historyRecord = activeCall ? null : await services.calls.getCallRecord(callId)
+    const hubId = c.get('hubId') ?? ''
+    const activeCall = await services.calls.getActiveCallById(hubId, callId)
+    const historyRecord = activeCall ? null : await services.calls.getCallRecord(hubId, callId)
     const recordingSid = activeCall?.recordingSid ?? historyRecord?.recordingSid
     const hasRecording = activeCall?.hasRecording ?? historyRecord?.hasRecording
     const answeredBy = activeCall?.answeredBy ?? null

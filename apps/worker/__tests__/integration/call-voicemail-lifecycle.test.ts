@@ -142,7 +142,7 @@ describe('voicemail on a call nobody could be rung for', () => {
 
     await calls.markVoicemail(HUB, 'CA-vm-2')
 
-    const record = await calls.getCallRecord('CA-vm-2')
+    const record = await calls.getCallRecord(HUB, 'CA-vm-2')
     expect(record?.hasVoicemail).toBe(true)
   })
 
