@@ -355,15 +355,39 @@ pub fn decrypt_provisioned_bundle(
     signing_seed.copy_from_slice(&plaintext[1..33]);
     encryption_seed.copy_from_slice(&plaintext[33..BUNDLE_LEN]);
 
-    // DeviceSecrets zeroizes both seeds on drop; the stack copies above are
-    // moved into it, and `plaintext` is Zeroizing.
-    Ok(BundleDecryptionResult {
+    // Test-only observability hook: record where the two seed locals live, so
+    // the zeroization test can read those exact slots after this frame is
+    // abandoned (the same raw-pointer pattern as device_keys.rs's
+    // secrets_zeroize_on_drop, applied to stack locals).
+    #[cfg(test)]
+    SEED_LOCAL_PTRS.with(|p| {
+        p.set((
+            signing_seed.as_ptr() as usize,
+            encryption_seed.as_ptr() as usize,
+        ))
+    });
+
+    // [u8; 32] is Copy, so constructing DeviceSecrets *copies* the seeds out of
+    // the stack locals rather than moving them — both locals still hold the
+    // seeds here. Wipe them explicitly; the copies inside the struct are
+    // covered by DeviceSecrets' #[zeroize(drop)], and `plaintext` is Zeroizing.
+    let result = BundleDecryptionResult {
         secrets: DeviceSecrets {
             signing_seed,
             encryption_seed,
         },
         sas_code,
-    })
+    };
+    signing_seed.zeroize();
+    encryption_seed.zeroize();
+    Ok(result)
+}
+
+// Test-only hook: the addresses of `decrypt_provisioned_bundle`'s two seed
+// stack locals on the current thread, recorded while they were live.
+#[cfg(test)]
+thread_local! {
+    static SEED_LOCAL_PTRS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[cfg(test)]
@@ -414,6 +438,65 @@ mod tests {
         // SAS code format: "XXX XXX"
         assert_eq!(decrypted.sas_code.len(), 7);
         assert_eq!(&decrypted.sas_code[3..4], " ");
+    }
+
+    /// Regression test for the un-zeroized stack locals fixed in #1864: the
+    /// two `[u8; 32]` seed locals in decrypt_provisioned_bundle are Copy, so
+    /// building the returned DeviceSecrets copies the seeds out of them, and
+    /// without an explicit wipe both seeds survive on the abandoned stack
+    /// frame after the function returns. Follows the raw-pointer pattern of
+    /// device_keys.rs's secrets_zeroize_on_drop: read the exact slots through
+    /// saved pointers after the wipe, and assert the seeds were non-zero
+    /// before so a zero read cannot be mistaken for a seed that was always
+    /// zeros.
+    #[test]
+    fn bundle_import_zeroizes_stack_seed_locals() {
+        let (primary, _signing_pk, primary_enc_pk) = primary_device();
+        let (ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
+        let encrypted = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
+        let ephemeral_sk_bytes = hex::decode(ephemeral_sk.as_str()).unwrap();
+
+        let decrypted = decrypt_provisioned_bundle(
+            &encrypted.encrypted_hex,
+            &primary_enc_pk,
+            &ephemeral_sk_bytes,
+        )
+        .unwrap();
+
+        // Addresses of the two stack locals, recorded while they were live.
+        let (sig_ptr, enc_ptr) = SEED_LOCAL_PTRS.with(|p| p.get());
+        assert_ne!(
+            sig_ptr, 0,
+            "test hook did not record the signing seed local's stack address"
+        );
+        assert_ne!(
+            enc_ptr, 0,
+            "test hook did not record the encryption seed local's stack address"
+        );
+
+        // Read the abandoned stack slots before anything else reuses them.
+        let sig_after = unsafe { std::ptr::read_volatile(sig_ptr as *const [u8; 32]) };
+        let enc_after = unsafe { std::ptr::read_volatile(enc_ptr as *const [u8; 32]) };
+
+        // Falsifiability: the locals held byte-identical copies of these seeds
+        // (Copy semantics), so a zero read only proves zeroization if the
+        // seeds themselves are non-zero.
+        assert_ne!(
+            decrypted.secrets.signing_seed, [0u8; 32],
+            "signing seed was already all zeros — the test cannot tell zeroization apart from that"
+        );
+        assert_ne!(
+            decrypted.secrets.encryption_seed, [0u8; 32],
+            "encryption seed was already all zeros — the test cannot tell zeroization apart from that"
+        );
+        assert_eq!(
+            sig_after, [0u8; 32],
+            "signing seed survived on the stack after bundle import — stack local was not zeroized"
+        );
+        assert_eq!(
+            enc_after, [0u8; 32],
+            "encryption seed survived on the stack after bundle import — stack local was not zeroized"
+        );
     }
 
     /// The regression test for the defect this module's docs describe: a linked
