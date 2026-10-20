@@ -204,8 +204,14 @@ function NotesPage() {
       }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
       const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
-      setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
-      setTotal(prev => prev + 1)
+      // This list, and the edit/reply actions on it, are scoped to the active hub. A note
+      // filed to another hub's call is stored correctly but does not belong on this page
+      // until that hub is active — listing it here would aim its edits and replies at the
+      // wrong hub.
+      if (hubId === getActiveHub()) {
+        setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
+        setTotal(prev => prev + 1)
+      }
       setShowNewNote(false)
     } catch {
       toast(t('common.error'), 'error')
