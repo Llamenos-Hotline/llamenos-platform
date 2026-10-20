@@ -297,17 +297,7 @@ pub async fn capture_pins(origin: &Url, timeout: Duration) -> Result<Vec<String>
     let health_url = format!("{}/api/health", origin.origin().ascii_serialization());
 
     if origin.scheme() == "http" {
-        let host = origin
-            .host()
-            .ok_or_else(|| "backend address has no host".to_string())?;
-        if !api_config::is_loopback_host(&host) {
-            return Err("refusing plaintext http:// to a non-loopback host".to_string());
-        }
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| format!("could not build HTTP client: {e}"))?;
+        let client = loopback_http_client(origin, timeout)?;
         require_health_ok(&client, &health_url).await?;
         return Ok(Vec::new());
     }
@@ -321,6 +311,46 @@ pub async fn capture_pins(origin: &Url, timeout: Duration) -> Result<Vec<String>
     Ok(pins)
 }
 
+/// Plain (no TLS) client for a debug-build loopback `http://` backend; refuses
+/// any non-loopback plaintext host.
+fn loopback_http_client(origin: &Url, timeout: Duration) -> Result<reqwest::Client, String> {
+    let host = origin
+        .host()
+        .ok_or_else(|| "backend address has no host".to_string())?;
+    if !api_config::is_loopback_host(&host) {
+        return Err("refusing plaintext http:// to a non-loopback host".to_string());
+    }
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("could not build HTTP client: {e}"))
+}
+
+/// The client the first-run health probe (`net::net_probe_health`, #1711) must
+/// use for `target`.
+///
+/// The probe has to reach the same trust decision `capture_pins` will reach a
+/// moment later, because the probe is only a preview of it. A default
+/// `reqwest` client does not: it demands a chain to an OS-trusted root, while
+/// this app's trust model is SPKI pinning that deliberately ignores the chain
+/// (module docs). Using it made the probe stricter than the real gate, so a
+/// self-signed or private-CA backend — a supported deployment — was rejected
+/// with "unreachable" before `api_config_set` could ever pin it.
+///
+/// For `https://` this is therefore a capturing client — the pins it observes
+/// are discarded, the probe returns only a `bool`. It is not a relaxation: the
+/// verifier still checks the handshake signature and the hostname against the
+/// certificate's subject names, and `api_config_set` accepts the very same
+/// certificates. There is deliberately no path that builds a client with
+/// verification disabled.
+pub fn build_probe_client(target: &Url, timeout: Duration) -> Result<reqwest::Client, String> {
+    if target.scheme() == "http" {
+        return loopback_http_client(target, timeout);
+    }
+    Ok(build_capturing_client(timeout)?.client)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,8 +360,12 @@ mod tests {
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
     fn self_signed_cert() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
+        self_signed_cert_for(&["127.0.0.1", "localhost"])
+    }
+
+    fn self_signed_cert_for(names: &[&str]) -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
         let CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+            generate_simple_self_signed(names.iter().map(|n| n.to_string()).collect::<Vec<_>>())
                 .expect("self-signed cert generation");
         let cert_der = cert.der().clone();
         let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
@@ -350,10 +384,18 @@ mod tests {
         let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let origin = format!("https://{}", std_listener.local_addr().expect("local_addr"));
 
+        // A resolver rather than `with_single_cert`: the latter refuses a key
+        // that does not belong to the certificate, and one test needs exactly
+        // that forged server (a certificate replayed without its private key).
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key_der)
+            .expect("supported signing key");
+        let resolver = rustls::sign::SingleCertAndKey::from(rustls::sign::CertifiedKey::new(
+            vec![cert_der],
+            signing_key,
+        ));
         let server_config = rustls::ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(vec![cert_der], key_der)
-            .expect("server TLS config");
+            .with_cert_resolver(StdArc::new(resolver));
         let acceptor = tokio_rustls::TlsAcceptor::from(StdArc::new(server_config));
 
         std::thread::spawn(move || {
@@ -507,5 +549,93 @@ mod tests {
             outcome.is_err(),
             "the WS TLS connector must refuse the same mismatched key the HTTP client refuses"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // First-run probe (#1711)
+    // -----------------------------------------------------------------
+
+    fn probe(client: &reqwest::Client, origin: &str) -> bool {
+        let target = Url::parse(&format!("{origin}/api/health")).expect("probe url");
+        block_on(crate::net::probe_health(client, target))
+    }
+
+    fn probe_with_production_client(origin: &str) -> bool {
+        let target = Url::parse(origin).expect("origin url");
+        // `reqwest::Client::builder().build()` needs an entered runtime.
+        block_on(async {
+            let client =
+                build_probe_client(&target, Duration::from_secs(5)).expect("probe client builds");
+            let health = Url::parse(&format!("{origin}/api/health")).expect("probe url");
+            crate::net::probe_health(&client, health).await
+        })
+    }
+
+    #[test]
+    fn probe_accepts_a_self_signed_backend_that_the_default_root_store_refuses() {
+        let (cert, key) = self_signed_cert();
+        let origin = spawn_tls_server(cert, key);
+
+        // The pre-#1711 probe client: default WebPKI roots. A self-signed
+        // certificate chains to nothing, so it refuses a server the app can
+        // in fact be configured against. This is the bug, pinned as a fact so
+        // the accept assertion below cannot pass vacuously.
+        let default_client = block_on(async {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("default client")
+        });
+        assert!(
+            !probe(&default_client, &origin),
+            "premise: a default-trust client must refuse a self-signed backend"
+        );
+
+        assert!(
+            probe_with_production_client(&origin),
+            "the probe must accept exactly what api_config_set will go on to pin"
+        );
+        // ...and that really is the case: TOFU capture succeeds on it.
+        let target = Url::parse(&origin).expect("origin url");
+        block_on(capture_pins(&target, Duration::from_secs(5)))
+            .expect("capture_pins accepts the certificate the probe accepted");
+    }
+
+    #[test]
+    fn probe_refuses_a_certificate_issued_for_a_different_host() {
+        // Reachable, healthy (200) and TLS-valid in itself, but the
+        // certificate names another host. The pinning verifier still checks
+        // the hostname, so the probe must not wave it through.
+        let (cert, key) = self_signed_cert_for(&["not-this-host.example"]);
+        let origin = spawn_tls_server(cert, key);
+        assert!(
+            !probe_with_production_client(&origin),
+            "a certificate for another hostname must be refused"
+        );
+        let target = Url::parse(&origin).expect("origin url");
+        assert!(
+            block_on(capture_pins(&target, Duration::from_secs(5))).is_err(),
+            "probe and capture_pins must agree"
+        );
+    }
+
+    #[test]
+    fn probe_refuses_a_replayed_certificate_without_its_private_key() {
+        // The attacker holds the (public) certificate but not its key, so the
+        // handshake signature cannot verify. The probe must not be satisfiable
+        // by certificate bytes alone.
+        let (real_cert, _real_key) = self_signed_cert();
+        let (_other_cert, other_key) = self_signed_cert();
+        let origin = spawn_tls_server(real_cert, other_key);
+        assert!(
+            !probe_with_production_client(&origin),
+            "a certificate presented without its private key must be refused"
+        );
+    }
+
+    #[test]
+    fn probe_over_plaintext_requires_a_loopback_host() {
+        let target = Url::parse("http://192.0.2.1").expect("url");
+        assert!(build_probe_client(&target, Duration::from_secs(1)).is_err());
     }
 }
