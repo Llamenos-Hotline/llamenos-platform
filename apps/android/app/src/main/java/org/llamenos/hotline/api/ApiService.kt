@@ -9,6 +9,7 @@ import okhttp3.CertificatePinner
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
@@ -217,13 +218,10 @@ class ApiService @Inject constructor(
             throw e
         }
 
-        if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: response.message
-            throw ApiException(response.code, errorBody)
+        val responseBody = response.use {
+            throwUnlessSuccessful(it)
+            it.body.string()
         }
-
-        val responseBody = response.body?.string()
-            ?: throw ApiException(response.code, "Empty response body")
 
         json.decodeFromString<T>(responseBody)
     }
@@ -277,10 +275,7 @@ class ApiService @Inject constructor(
             throw e
         }
 
-        if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: response.message
-            throw ApiException(response.code, errorBody)
-        }
+        response.use { throwUnlessSuccessful(it) }
     }
 
     /**
@@ -319,9 +314,18 @@ class ApiService @Inject constructor(
 
         val response = client.newCall(request).execute()
 
+        response.use { throwUnlessSuccessful(it) }
+    }
+
+    /**
+     * Throw [ApiException] for a non-2xx [response]. The caller closes it — every helper here
+     * wraps the response in `use`: a success response whose body is never read still holds its
+     * connection until closed, and before this each no-content call leaked one.
+     */
+    @PublishedApi
+    internal fun throwUnlessSuccessful(response: Response) {
         if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: response.message
-            throw ApiException(response.code, errorBody)
+            throw ApiException(response.code, response.body.string())
         }
     }
 
