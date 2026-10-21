@@ -60,7 +60,7 @@ final class EventsViewModel {
         allEntityTypes.first { $0.id == id }
     }
 
-    func statusDef(for event: EventListResponseEvent) -> CaseEnumOption? {
+    func statusDef(for event: EventListResponseEvent) -> SharedStatus? {
         entityType(for: event.entityTypeID)?.statuses.first { $0.value == event.statusHash }
     }
 

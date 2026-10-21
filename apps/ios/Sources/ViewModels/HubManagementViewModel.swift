@@ -159,10 +159,10 @@ final class HubManagementViewModel {
         error = nil
 
         let body = CreateHubBody(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines),
             description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
-            phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+            slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines)
         )
 
         do {

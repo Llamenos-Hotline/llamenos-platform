@@ -249,7 +249,13 @@ export const setupStateSchema = z.object({
 // --- List/wrapper response schemas ---
 
 export const customFieldsListResponseSchema = z.object({
-  fields: z.array(customFieldResponseSchema),
+  // `GET`/`PUT /api/settings/custom-fields` return whole stored rows
+  // (`services.settings.getCustomFields` / `updateCustomFields` map every column
+  // of `customFieldDefinitions`), so the documented shape is the canonical
+  // definition — not the narrow `customFieldResponseSchema` projection. Clients
+  // that decoded the projection silently dropped `editableByUsers`, `validation`,
+  // `id`, `createdAt` and the file-upload limits.
+  fields: z.array(customFieldDefinitionSchema),
 })
 
 export const roleListResponseSchema = z.object({

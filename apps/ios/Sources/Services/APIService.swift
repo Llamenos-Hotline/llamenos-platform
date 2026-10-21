@@ -101,6 +101,17 @@ final class APIService: @unchecked Sendable {
     private let hubContext: HubContext
     private let session: URLSession
     private let encoder: JSONEncoder
+
+    /// Encoder for generated protocol types.
+    ///
+    /// `encoder` applies `.convertToSnakeCase`, which rewrites a type's own
+    /// `CodingKeys` on the way out — a generated `PromoteBanBody` whose key is
+    /// `banId` goes on the wire as `ban_id`. No input schema under
+    /// `packages/protocol/schemas/` accepts a snake_case key, so a body encoded
+    /// that way is rejected (or silently emptied) by the route validator. Types
+    /// generated from those schemas must therefore be encoded with their own
+    /// coding keys and no renaming strategy.
+    private let wireEncoder = JSONEncoder()
     private let decoder: JSONDecoder
 
     /// Offline write queue. Set by AppState after initialization.
@@ -401,6 +412,27 @@ final class APIService: @unchecked Sendable {
         body: (any Encodable)? = nil
     ) async throws {
         let _: EmptyResponse = try await request(method: method, path: path, body: body)
+    }
+
+    /// Request whose body is a type generated from `packages/protocol/schemas/`.
+    ///
+    /// Encodes with `wireEncoder` so the generated `CodingKeys` reach the wire
+    /// verbatim. Prefer this over `body:` for every generated request type.
+    func request<T: Decodable>(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws -> T {
+        try await request(method: method, path: path, rawBody: try wireEncoder.encode(wireBody))
+    }
+
+    /// Fire-and-forget variant of `request(method:path:wireBody:)`.
+    func request(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws {
+        let _: EmptyResponse = try await request(method: method, path: path, wireBody: wireBody)
     }
 
     // MARK: - CMS Report Types

@@ -103,9 +103,9 @@ final class CaseManagementViewModel {
     // MARK: - Computed
 
     /// All unique statuses across entity types (for filter dropdown).
-    var allStatuses: [CaseEnumOption] {
+    var allStatuses: [SharedStatus] {
         var seen = Set<String>()
-        var result: [CaseEnumOption] = []
+        var result: [SharedStatus] = []
         for et in entityTypes {
             for s in et.statuses where !seen.contains(s.value) {
                 seen.insert(s.value)
@@ -131,8 +131,8 @@ final class CaseManagementViewModel {
     }
 
     /// Status definition for a record.
-    func statusDef(for record: SharedRecordListResponseRecord) -> CaseEnumOption? {
-        entityType(for: record.entityTypeId)?.statuses.first { $0.value == record.statusHash }
+    func statusDef(for record: SharedRecordListResponseRecord) -> SharedStatus? {
+        entityType(for: record.entityTypeID)?.statuses.first { $0.value == record.statusHash }
     }
 
     /// Decrypted title for a record, if available.
@@ -207,7 +207,7 @@ final class CaseManagementViewModel {
     /// Select a record and load its detail data.
     func selectRecord(_ record: SharedRecordListResponseRecord) async {
         selectedRecord = record
-        selectedEntityType = entityType(for: record.entityTypeId)
+        selectedEntityType = entityType(for: record.entityTypeID)
         activeTab = .details
 
         // Decrypt fields for the selected record
@@ -417,10 +417,13 @@ final class CaseManagementViewModel {
             }
 
             let body = CreateInteractionBody(
-                interactionType: .comment,
-                encryptedContent: encrypted.encryptedContent,
                 contentEnvelopes: envelopes,
-                interactionTypeHash: "comment_hash"
+                encryptedContent: encrypted.encryptedContent,
+                interactionType: .comment,
+                interactionTypeHash: "comment_hash",
+                newStatusHash: nil,
+                previousStatusHash: nil,
+                sourceID: nil
             )
 
             let _: CaseInteraction = try await apiService.request(

@@ -951,8 +951,8 @@ struct TypedReportCreateView: View {
                     order: 0, accessLevel: "all", supportAudioInput: false,
                     placeholder: "123 Main St", defaultValue: nil,
                     validation: nil, showWhen: nil, indexable: nil,
-                    indexType: nil, hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    indexType: nil, hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -961,10 +961,10 @@ struct TypedReportCreateView: View {
                     section: nil, helpText: "Describe what you observed",
                     order: 1, accessLevel: "all", supportAudioInput: true,
                     placeholder: nil, defaultValue: nil,
-                    validation: SharedFieldValidation(min: nil, max: nil, minLength: 10, maxLength: 2000, pattern: nil),
+                    validation: SharedFieldValidation(max: nil, maxLength: 2000, min: nil, minLength: 10, pattern: nil),
                     showWhen: nil, indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -973,10 +973,10 @@ struct TypedReportCreateView: View {
                     section: "Details", helpText: nil,
                     order: 2, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil,
-                    validation: SharedFieldValidation(min: 0, max: 1000, minLength: nil, maxLength: nil, pattern: nil),
+                    validation: SharedFieldValidation(max: 1000, maxLength: nil, min: 0, minLength: nil, pattern: nil),
                     showWhen: nil, indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -991,8 +991,8 @@ struct TypedReportCreateView: View {
                     order: 3, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil, validation: nil,
                     showWhen: nil, indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -1002,8 +1002,8 @@ struct TypedReportCreateView: View {
                     order: 4, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil, validation: nil,
                     showWhen: nil, indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -1020,8 +1020,8 @@ struct TypedReportCreateView: View {
                     placeholder: nil, defaultValue: nil, validation: nil,
                     showWhen: SharedFieldShowWhen(field: "force_used", operator: "equals", value: .bool(true)),
                     indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -1037,8 +1037,8 @@ struct TypedReportCreateView: View {
                     order: 6, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil, validation: nil,
                     showWhen: nil, indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
                 SharedField(
@@ -1048,8 +1048,8 @@ struct TypedReportCreateView: View {
                     order: 7, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil, validation: nil,
                     showWhen: nil, indexable: nil, indexType: nil,
-                    hubEditable: nil, editableByVolunteers: nil,
-                    visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
+                    hubEditable: nil, editableByUsers: nil,
+                    visibleToUsers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
             ],

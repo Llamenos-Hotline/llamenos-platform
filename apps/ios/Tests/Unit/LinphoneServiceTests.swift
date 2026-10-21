@@ -172,9 +172,9 @@ struct LinphoneServiceCoreTests {
     @Test func registerBeforeInitializeThrowsNotInitialized() {
         // Before the SDK was linked this call compiled to a no-op and "succeeded".
         let svc = LinphoneService()
-        let params = SipTokenResponse(
-            username: "user", domain: "sip.example.org",
-            password: "pass", transport: "tls", expiry: 3600
+        let params = SIPTokenResponse(
+            domain: "sip.example.org", encryption: nil, iceServers: nil,
+            password: "pass", transport: "tls", username: "user"
         )
         #expect(throws: LinphoneError.self) {
             try svc.registerHubAccount(hubId: "hub-uuid-001", sipParams: params)

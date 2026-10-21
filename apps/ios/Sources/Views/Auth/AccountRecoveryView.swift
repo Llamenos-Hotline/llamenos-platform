@@ -309,7 +309,7 @@ struct AccountRecoveryView: View {
                 userIdentifier: userIdentifier,
                 newDevicePubkey: pubkey
             )
-            sessionId = response.sessionId
+            sessionId = response.sessionID
             step = .signalVerification
         } catch {
             errorMessage = error.localizedDescription

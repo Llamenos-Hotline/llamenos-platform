@@ -365,7 +365,7 @@ struct CaseListView: View {
 private struct CaseCardRow: View {
     let record: SharedRecordListResponseRecord
     let entityType: EntityType?
-    let statusDef: CaseEnumOption?
+    let statusDef: SharedStatus?
     let decryptedTitle: String?
 
     var body: some View {
