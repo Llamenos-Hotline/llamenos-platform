@@ -16,17 +16,20 @@ import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
-import org.llamenos.hotline.model.Conversation
-import org.llamenos.hotline.model.ConversationMessage
-import org.llamenos.hotline.model.ConversationsListResponse
 import org.llamenos.hotline.model.CreateMessageEnvelope
 import org.llamenos.hotline.model.DecryptedMessage
 import org.llamenos.hotline.model.LlamenosEvent
-import org.llamenos.hotline.model.MessagesListResponse
 import org.llamenos.hotline.model.SendMessageRequest
 import org.llamenos.hotline.model.User
 import org.llamenos.hotline.model.UsersListResponse
 import org.llamenos.hotline.model.status
+import org.llamenos.protocol.ConversationListResponse
+import org.llamenos.protocol.ConversationListResponseConversation
+import org.llamenos.protocol.Message
+import org.llamenos.protocol.MessageListResponse
+import org.llamenos.protocol.RecipientEnvelope
+import org.llamenos.protocol.SharedReportResponseStatus
+import org.llamenos.protocol.UpdateConversationBody
 import javax.inject.Inject
 
 /**
@@ -39,16 +42,15 @@ enum class ConversationFilter(val queryParam: String) {
 }
 
 data class ConversationsUiState(
-    val conversations: List<Conversation> = emptyList(),
+    val conversations: List<ConversationListResponseConversation> = emptyList(),
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
     val error: String? = null,
     val filter: ConversationFilter = ConversationFilter.ACTIVE,
     val totalConversations: Int = 0,
-    val totalUnread: Int = 0,
 
     // Detail view
-    val selectedConversation: Conversation? = null,
+    val selectedConversation: ConversationListResponseConversation? = null,
     val messages: List<DecryptedMessage> = emptyList(),
     val isLoadingMessages: Boolean = false,
     val messagesError: String? = null,
@@ -141,20 +143,17 @@ class ConversationsViewModel @Inject constructor(
 
             try {
                 val filter = _uiState.value.filter
-                val response = apiService.request<ConversationsListResponse>(
+                val response = apiService.request<ConversationListResponse>(
                     "GET",
-                    "/api/conversations?status=${filter.queryParam}",
+                    apiService.hp("/api/conversations") + "?status=${filter.queryParam}",
                 )
-
-                val totalUnread = response.conversations.sumOf { it.unreadCount }
 
                 _uiState.update {
                     it.copy(
                         conversations = response.conversations,
                         isLoading = false,
                         isRefreshing = false,
-                        totalConversations = response.total,
-                        totalUnread = totalUnread,
+                        totalConversations = response.total.toInt(),
                     )
                 }
             } catch (e: Exception) {
@@ -187,7 +186,7 @@ class ConversationsViewModel @Inject constructor(
     /**
      * Select a conversation and load its messages.
      */
-    fun openConversation(conversation: Conversation) {
+    fun openConversation(conversation: ConversationListResponseConversation) {
         _uiState.update {
             it.copy(
                 selectedConversation = conversation,
@@ -197,7 +196,6 @@ class ConversationsViewModel @Inject constructor(
             )
         }
         loadMessages(conversation.id)
-        markAsRead(conversation.id)
     }
 
     /**
@@ -221,20 +219,21 @@ class ConversationsViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingMessages = true, messagesError = null) }
 
             try {
-                val response = apiService.request<MessagesListResponse>(
+                val response = apiService.request<MessageListResponse>(
                     "GET",
-                    "/api/conversations/$conversationId/messages",
+                    apiService.hp("/api/conversations/$conversationId/messages"),
                 )
 
+                val channelType = _uiState.value.selectedConversation?.channelType.orEmpty()
                 val decrypted = response.messages.mapNotNull { message ->
-                    decryptMessage(message)
+                    decryptMessage(message, channelType)
                 }
 
                 _uiState.update {
                     it.copy(
                         messages = decrypted,
                         isLoadingMessages = false,
-                        totalMessages = response.total,
+                        totalMessages = response.total.toInt(),
                     )
                 }
             } catch (e: Exception) {
@@ -265,7 +264,7 @@ class ConversationsViewModel @Inject constructor(
                 // Collect reader pubkeys: self + assigned volunteer (if different) + admins
                 val readerPubkeys = buildList {
                     cryptoService.encryptionPubkeyHex?.let { add(it) }
-                    conversation.assignedVolunteerPubkey?.let { volunteerPub ->
+                    conversation.assignedTo?.let { volunteerPub ->
                         if (volunteerPub != cryptoService.encryptionPubkeyHex) add(volunteerPub)
                     }
                     // Include admin pubkeys so admins can decrypt messages
@@ -289,9 +288,9 @@ class ConversationsViewModel @Inject constructor(
                     readerEnvelopes = envelopes,
                 )
 
-                apiService.request<ConversationMessage>(
+                apiService.request<Message>(
                     "POST",
-                    "/api/conversations/${conversation.id}/messages",
+                    apiService.hp("/api/conversations/${conversation.id}/messages"),
                     request,
                 )
 
@@ -306,22 +305,6 @@ class ConversationsViewModel @Inject constructor(
                         sendError = e.message ?: "Failed to send message",
                     )
                 }
-            }
-        }
-    }
-
-    /**
-     * Mark all messages in a conversation as read.
-     */
-    private fun markAsRead(conversationId: String) {
-        viewModelScope.launch {
-            try {
-                apiService.requestNoContent(
-                    "POST",
-                    "/api/conversations/$conversationId/read",
-                )
-            } catch (_: Exception) {
-                // Read receipts are non-critical
             }
         }
     }
@@ -349,16 +332,25 @@ class ConversationsViewModel @Inject constructor(
     /**
      * Get conversations filtered by the current search query.
      */
-    fun filteredConversations(): List<Conversation> {
+    fun filteredConversations(): List<ConversationListResponseConversation> {
         val query = _uiState.value.searchQuery.lowercase()
         if (query.isBlank()) return _uiState.value.conversations
         return _uiState.value.conversations.filter { conversation ->
-            conversation.contactHash.lowercase().contains(query) ||
+            conversation.contactIdentifierHash.lowercase().contains(query) ||
                     conversation.channelType.lowercase().contains(query)
         }
     }
 
     // ---- Conversation Actions ----
+    //
+    // The server has no close/reopen/assign sub-routes. A conversation is changed
+    // with `PATCH /conversations/:id` carrying `{ status }` and/or `{ assignedTo }`
+    // (`updateConversationBodySchema`); the desktop client does the same. All three
+    // used to POST to `/:id/close`, `/:id/reopen` and `/:id/assign`, which 404 (#1730).
+
+    private suspend fun patchSelectedConversation(conversationId: String, body: UpdateConversationBody) {
+        apiService.requestNoContent("PATCH", apiService.hp("/api/conversations/$conversationId"), body)
+    }
 
     /**
      * Close/resolve the currently selected conversation.
@@ -367,13 +359,15 @@ class ConversationsViewModel @Inject constructor(
         val conversation = _uiState.value.selectedConversation ?: return
         viewModelScope.launch {
             try {
-                apiService.requestNoContent(
-                    "POST",
-                    "/api/conversations/${conversation.id}/close",
+                patchSelectedConversation(
+                    conversation.id,
+                    UpdateConversationBody(status = SharedReportResponseStatus.Closed),
                 )
                 _uiState.update {
                     it.copy(
-                        selectedConversation = it.selectedConversation?.copy(status = "closed"),
+                        selectedConversation = it.selectedConversation?.copy(
+                            status = SharedReportResponseStatus.Closed,
+                        ),
                     )
                 }
                 loadConversations()
@@ -392,13 +386,15 @@ class ConversationsViewModel @Inject constructor(
         val conversation = _uiState.value.selectedConversation ?: return
         viewModelScope.launch {
             try {
-                apiService.requestNoContent(
-                    "POST",
-                    "/api/conversations/${conversation.id}/reopen",
+                patchSelectedConversation(
+                    conversation.id,
+                    UpdateConversationBody(status = SharedReportResponseStatus.Active),
                 )
                 _uiState.update {
                     it.copy(
-                        selectedConversation = it.selectedConversation?.copy(status = "active"),
+                        selectedConversation = it.selectedConversation?.copy(
+                            status = SharedReportResponseStatus.Active,
+                        ),
                     )
                 }
                 loadConversations()
@@ -418,15 +414,14 @@ class ConversationsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(showAssignDialog = false) }
             try {
-                apiService.requestNoContent(
-                    "POST",
-                    "/api/conversations/${conversation.id}/assign",
-                    mapOf("volunteerPubkey" to volunteerPubkey),
+                patchSelectedConversation(
+                    conversation.id,
+                    UpdateConversationBody(assignedTo = volunteerPubkey),
                 )
                 _uiState.update {
                     it.copy(
                         selectedConversation = it.selectedConversation?.copy(
-                            assignedVolunteerPubkey = volunteerPubkey,
+                            assignedTo = volunteerPubkey,
                         ),
                     )
                 }
@@ -472,19 +467,19 @@ class ConversationsViewModel @Inject constructor(
      * Decrypt a single message. CryptoService hands all of the message's reader
      * envelopes to Rust, which opens the one addressed to this device.
      */
-    private suspend fun decryptMessage(message: ConversationMessage): DecryptedMessage? {
+    private suspend fun decryptMessage(message: Message, channelType: String): DecryptedMessage? {
         return try {
             val plaintext = cryptoService.decryptMessage(
                 encryptedContent = message.encryptedContent,
-                envelopes = message.recipientEnvelopes,
+                envelopes = message.readerEnvelopes.map { RecipientEnvelope(ct = it.ct, enc = it.enc, pubkey = it.pubkey) },
             )
 
             if (plaintext != null) {
                 DecryptedMessage(
                     id = message.id,
                     text = plaintext,
-                    direction = message.direction,
-                    channelType = message.channelType,
+                    direction = message.direction?.value.orEmpty(),
+                    channelType = channelType,
                     createdAt = message.createdAt,
                     isRead = message.readAt != null,
                 )

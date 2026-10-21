@@ -39,13 +39,17 @@ val UserListResponseUser.status: String
 
 // ── BanListResponseBan (typealias BanEntry) ───────────────────────────────
 
-/** Use phone hash as unique key (generated BanListResponseBan has no `id` field). */
+/**
+ * The ban's `phoneHash` — the server's HMAC of the number. It is the key
+ * `DELETE /api/bans/:phoneHash` takes and the only stable identity a ban has
+ * (`phone` is the masked display form, `***1234`, and is not unique).
+ */
 val BanListResponseBan.id: String
-    get() = phone
+    get() = phoneHash
 
-/** The hashed identifier — maps to `phone` in the generated type. */
+/** The hashed identifier (`phoneHash`). */
 val BanListResponseBan.identifierHash: String
-    get() = phone
+    get() = phoneHash
 
 /** Who created the ban — maps to `bannedBy` in the generated type. */
 val BanListResponseBan.createdBy: String

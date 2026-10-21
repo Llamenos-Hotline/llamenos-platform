@@ -48,7 +48,6 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.model.BanEntry
 import org.llamenos.hotline.model.createdAt
 import org.llamenos.hotline.model.id
-import org.llamenos.hotline.model.identifierHash
 
 /**
  * Ban list management tab in the admin panel.
@@ -238,14 +237,14 @@ private fun BanCard(
                 modifier = Modifier.weight(1f),
             ) {
                 Text(
-                    text = ban.identifierHash.take(16) + "...",
+                    text = ban.phone,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.testTag("ban-hash-${ban.id}"),
                 )
 
-                if (ban.reason != null) {
+                if (ban.reason.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = ban.reason,
@@ -285,7 +284,7 @@ private fun BanCard(
 @Composable
 private fun AddBanDialog(
     onDismiss: () -> Unit,
-    onConfirm: (identifier: String, reason: String?) -> Unit,
+    onConfirm: (phone: String, reason: String?) -> Unit,
 ) {
     var identifier by remember { mutableStateOf("") }
     var reason by remember { mutableStateOf("") }
@@ -298,7 +297,7 @@ private fun AddBanDialog(
                 OutlinedTextField(
                     value = identifier,
                     onValueChange = { identifier = it },
-                    label = { Text(stringResource(R.string.ban_list_identifier_label)) },
+                    label = { Text(stringResource(R.string.ban_list_phone_number)) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()

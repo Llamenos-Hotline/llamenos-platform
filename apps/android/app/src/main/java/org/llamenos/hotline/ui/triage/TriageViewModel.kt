@@ -12,15 +12,16 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.CmsReportTypesResponse
-import org.llamenos.hotline.model.ConvertFromReportBody
 import org.llamenos.hotline.model.ConvertFromReportResponse
-import org.llamenos.hotline.model.ConvertReportToCaseRequest
-import org.llamenos.hotline.model.ConvertReportToCaseResponse
+import org.llamenos.hotline.model.EntityTypeDefinition
+import org.llamenos.hotline.model.EntityTypesResponse
 import org.llamenos.hotline.model.Report
 import org.llamenos.hotline.model.ReportsListResponse
+import org.llamenos.protocol.ConvertFromReportBody
 import org.llamenos.protocol.ReportTypeDefinition
 import javax.inject.Inject
 
@@ -42,6 +43,8 @@ data class TriageUiState(
     val error: String? = null,
     val selectedFilter: TriageStatusFilter = TriageStatusFilter.PENDING,
     val reportTypes: List<ReportTypeDefinition> = emptyList(),
+    /** Case types a report can be converted into — `GET /settings/cms/entity-types`, archived ones dropped. */
+    val entityTypes: List<EntityTypeDefinition> = emptyList(),
     val isConverting: Boolean = false,
     val selectedReport: Report? = null,
     val lastConvertedRecordId: String? = null,
@@ -80,8 +83,10 @@ class TriageViewModel @Inject constructor(
             }
             val reportsDeferred = async { fetchReports() }
             val typesDeferred = async { fetchReportTypes() }
+            val entityTypesDeferred = async { fetchEntityTypes() }
             reportsDeferred.await()
             typesDeferred.await()
+            entityTypesDeferred.await()
         }
     }
 
@@ -125,6 +130,23 @@ class TriageViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The conversion route needs the id of the case type to create, so the picker is fed
+     * from the hub's entity types. Failing to load them is surfaced rather than swallowed:
+     * without one the Convert action has nothing to send.
+     */
+    private suspend fun fetchEntityTypes() {
+        try {
+            val response = apiService.request<EntityTypesResponse>(
+                "GET",
+                apiService.hp("/api/settings/cms/entity-types"),
+            )
+            _uiState.update { it.copy(entityTypes = response.entityTypes.filterNot { type -> type.isArchived }) }
+        } catch (e: Exception) {
+            _uiState.update { it.copy(error = e.message ?: "Failed to load entity types") }
+        }
+    }
+
     fun setFilter(filter: TriageStatusFilter) {
         _uiState.update { it.copy(selectedFilter = filter, reports = emptyList(), total = 0) }
         loadTriageQueue()
@@ -143,47 +165,21 @@ class TriageViewModel @Inject constructor(
     }
 
     /**
-     * Convert a report to a case record.
-     */
-    fun convertToCase(report: Report) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isConverting = true, error = null) }
-            try {
-                val title = report.metadata?.reportTitle ?: "Untitled Report"
-                val body = ConvertReportToCaseRequest(
-                    reportId = report.id,
-                    title = title,
-                    reportTypeId = report.metadata?.reportTypeId,
-                )
-                apiService.request<ConvertReportToCaseResponse>(
-                    "POST",
-                    apiService.hp("/api/reports/${report.id}/convert-to-case"),
-                    body = body,
-                )
-                _uiState.update { it.copy(isConverting = false, selectedReport = null) }
-                // Reload the queue
-                loadTriageQueue()
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isConverting = false,
-                        error = e.message ?: "Failed to convert report",
-                    )
-                }
-            }
-        }
-    }
-
-    /**
-     * Convert a report to an entity record using the atomic conversion endpoint (EP06-A3).
+     * Convert a report to a case record of [entityTypeId] using the atomic conversion
+     * endpoint (EP06-A3): `POST /records/convert-from-report`.
+     *
+     * This replaced `POST /reports/:id/convert-to-case`, which the server has never mounted
+     * (#1730), and which sent a title and report type where the real route needs the id of
+     * the entity type to create.
      */
     fun convertToEntity(report: Report, entityTypeId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isConverting = true, error = null) }
             try {
                 val body = ConvertFromReportBody(
-                    reportId = report.id,
-                    entityTypeId = entityTypeId,
+                    reportID = report.id,
+                    entityTypeID = entityTypeId,
+                    additionalFields = JsonObject(emptyMap()),
                 )
                 val response = apiService.request<ConvertFromReportResponse>(
                     "POST",
