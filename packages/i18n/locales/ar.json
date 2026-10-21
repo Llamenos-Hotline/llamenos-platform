@@ -2455,6 +2455,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "لا يمكن فتح المحتوى المشفّر في هذا المركز على هذا الجهاز بعد",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,6 +2468,7 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "اضغط على مركز للتبديل إلى سياقك النشط. المركز النشط يحدد البيانات التي تراها.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",

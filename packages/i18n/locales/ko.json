@@ -2455,6 +2455,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "이 허브의 암호화된 콘텐츠는 아직 이 기기에서 열 수 없습니다",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,6 +2468,7 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "허브를 탭하여 활성 컨텍스트를 전환하세요. 활성 허브에 따라 표시되는 데이터가 결정됩니다.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",

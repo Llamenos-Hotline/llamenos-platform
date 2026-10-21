@@ -716,6 +716,7 @@
       "archived": "Archivado",
       "suspended": "Suspendido"
     },
+    "switchFooter": "Kaji hub ña naskuiin hub ña sáꞌa chuun. Hub ña sáꞌa chuun kúú ña káꞌnu ndudu ña kunini.",
     "switchHub": "Nasama hub",
     "title": "Administración de Hub",
     "urlLabel": "URL de Hub",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Ndudu ña nditaꞌvi nuu hub yóꞌo ta kúú koo nunaa nuu kaa yóꞌo.",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"

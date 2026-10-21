@@ -716,6 +716,7 @@
       "archived": "بایگانی شده",
       "suspended": "تعلیق شده"
     },
+    "switchFooter": "برای تغییر زمینهٔ فعال روی یک هاب ضربه بزنید. هاب فعال تعیین می‌کند چه داده‌هایی می‌بینید.",
     "switchHub": "تغییر هاب",
     "title": "مدیریت هاب",
     "urlLabel": "نشانی هاب",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "محتوای رمزگذاری‌شدهٔ این هاب هنوز روی این دستگاه باز نمی‌شود",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"

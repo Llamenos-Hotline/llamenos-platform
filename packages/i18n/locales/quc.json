@@ -716,6 +716,7 @@
       "archived": "Yakon",
       "suspended": "Q'atal"
     },
+    "switchFooter": "Chachapa jun hub rech kakꞌexik ri achꞌaꞌteem. Ri hub ri tajin kachakun kubꞌij jas taq tzꞌibꞌ kawilo.",
     "switchHub": "Tik'ex hub",
     "title": "Rub'anik Hub",
     "urlLabel": "Hub URL",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Ri tzꞌibꞌ awatalik pa we hub riꞌ majaꞌ kakwin katzijox pa we kꞌutbꞌal riꞌ",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
