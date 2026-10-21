@@ -585,7 +585,7 @@ struct CaseDetailView: View {
                         let text = inlineCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
                         inlineCommentText = ""
                         Task {
-                            await viewModel.addComment(recordId: record.id, text: text)
+                            await submitComment(text)
                         }
                     } label: {
                         Image(systemName: "paperplane.fill")
@@ -627,13 +627,28 @@ struct CaseDetailView: View {
             AddCommentSheet(
                 onSubmit: { text in
                     Task {
-                        await viewModel.addComment(recordId: record.id, text: text)
+                        await submitComment(text)
                         viewModel.showCommentSheet = false
                     }
                 }
             )
             .presentationDetents([.medium])
         }
+    }
+
+    /// Encrypt and post a case comment.
+    ///
+    /// The admin decryption pubkey is resolved here, at submit time, because the
+    /// server stores the envelopes it is given verbatim — a comment wrapped only
+    /// for the author would be permanently unreadable to admins, breaking the
+    /// accountability guarantee in `docs/security/CRYPTO_ARCHITECTURE.md`.
+    private func submitComment(_ text: String) async {
+        await appState.ensureAdminPubkeyLoaded()
+        await viewModel.addComment(
+            recordId: record.id,
+            text: text,
+            adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
+        )
     }
 
     // MARK: - Contacts Tab
