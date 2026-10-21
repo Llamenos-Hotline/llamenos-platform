@@ -5,7 +5,7 @@ import SwiftUI
 // and `contactHash` as identifier. This client model uses `Int` for counts and provides
 // UI computed properties (displayIdentifier, totalInteractions).
 
-struct ContactSummary: Identifiable, Codable, Sendable {
+struct ContactSummary: Identifiable, Codable, Sendable, Hashable {
     var id: String { contactHash }
     let contactHash: String
     let last4: String?
@@ -23,6 +23,20 @@ struct ContactSummary: Identifiable, Codable, Sendable {
 
     var totalInteractions: Int {
         callCount + conversationCount + noteCount + reportCount
+    }
+
+    /// Whether `query` names this contact. The server holds contacts only as
+    /// hashes (plus the last four digits of a phone number), so those are the
+    /// only things there is to search. Leading `*` is ignored so the displayed
+    /// form (`***1234`) finds the same contact as the digits.
+    func matches(_ query: String) -> Bool {
+        let needle = query
+            .filter { $0 != "*" }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !needle.isEmpty else { return true }
+        if let last4, last4.lowercased().contains(needle) { return true }
+        return contactHash.lowercased().contains(needle)
     }
 }
 
@@ -94,8 +108,27 @@ struct ContactIdentifier: Codable, Identifiable, Sendable {
     let addedAt: String?
 }
 
-struct ContactDetailResponse: Codable, Sendable {
-    let contact: ContactDetail
+extension ContactDetail {
+    /// The profile of a contact the list already returned, with the note and
+    /// conversation counts taken from the activity `GET /api/contacts/:hash`
+    /// returned for it. The server holds no contact type, linked cases or
+    /// identifiers for a hashed contact, so those stay absent rather than
+    /// being invented.
+    init(summary: ContactSummary, activity: ContactTimelineDetailResponse) {
+        self.init(
+            contactHash: summary.contactHash,
+            last4: summary.last4,
+            firstSeen: summary.firstSeen,
+            lastSeen: summary.lastSeen,
+            callCount: summary.callCount,
+            conversationCount: activity.conversations.count,
+            noteCount: activity.notes.count,
+            reportCount: summary.reportCount,
+            contactType: nil,
+            linkedCases: nil,
+            identifiers: nil
+        )
+    }
 }
 
 // MARK: - Contact Relationship
@@ -117,13 +150,6 @@ struct AppContactRelationship: Codable, Identifiable, Sendable {
 
 struct AppContactRelationshipsResponse: Codable, Sendable {
     let relationships: [AppContactRelationship]
-}
-
-// MARK: - Contact Search Response
-
-struct ContactSearchResponse: Codable, Sendable {
-    let contacts: [ContactSummary]
-    let total: Int
 }
 
 // MARK: - Event Type

@@ -64,11 +64,8 @@ struct ContactsView: View {
                     contactHash: contactHash,
                     displayIdentifier: displayIdentifier
                 )
-            case .detail(let contactHash, let displayIdentifier):
-                ContactDetailView(
-                    contactHash: contactHash,
-                    displayIdentifier: displayIdentifier
-                )
+            case .detail(let summary):
+                ContactDetailView(summary: summary)
             }
         }
     }
@@ -118,10 +115,7 @@ struct ContactsView: View {
     private func contactsList(vm: ContactsViewModel) -> some View {
         List {
             ForEach(vm.contacts) { contact in
-                NavigationLink(value: ContactNavDestination.detail(
-                    contactHash: contact.contactHash,
-                    displayIdentifier: contact.displayIdentifier
-                )) {
+                NavigationLink(value: ContactNavDestination.detail(contact)) {
                     ContactRowView(contact: contact)
                 }
                 .accessibilityIdentifier("contact-row-\(contact.contactHash)")
@@ -216,7 +210,9 @@ struct ContactsView: View {
 
 enum ContactNavDestination: Hashable {
     case timeline(contactHash: String, displayIdentifier: String)
-    case detail(contactHash: String, displayIdentifier: String)
+    /// Carries the whole summary row: the profile is that row plus the activity
+    /// the server returns for the contact, so it needs no second lookup of it.
+    case detail(ContactSummary)
 }
 
 // MARK: - ContactRowView
