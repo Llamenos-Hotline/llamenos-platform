@@ -224,10 +224,12 @@ class BaseUITest: XCTestCase {
     /// (`/api/hubs/:id/calls/active`), so a call the server files under no hub is
     /// never returned to any client and no active-call UI can ever appear for it.
     @discardableResult
-    func simulateIncomingCall(callerNumber: String = "+15551234567") -> (callId: String, status: String) {
+    func simulateIncomingCall(callerNumber: String = "+15551234567", hubId: String? = nil) -> (callId: String, status: String) {
+        // Default to the class hub; a test that needs a hub of its own passes it.
+        let body = ["callerNumber": callerNumber, "hubId": hubId ?? testHubId]
         return simulationRequest(
             endpoint: "incoming-call",
-            body: ["callerNumber": callerNumber, "hubId": testHubId],
+            body: body,
             extractKeys: ("callId", "status")
         )
     }

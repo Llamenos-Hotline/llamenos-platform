@@ -187,25 +187,31 @@ final class APIConnectedUITests: BaseUITest {
             let dashboard = find("dashboard-title")
             _ = dashboard.waitForExistence(timeout: 15)
         }
-        when("I open the note creation form and cancel") {
+        when("I open the note creation form, type text and cancel") {
             navigateToNotes()
 
             let createButton = anyElement(["create-note-button", "create-first-note"])
-            guard createButton.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 10), "A create-note action should be on the Notes tab")
             createButton.tap()
 
             let textEditor = find("note-text-editor")
-            _ = textEditor.waitForExistence(timeout: 5)
+            XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "The create sheet should open")
+            textEditor.tap()
+            textEditor.typeText("Draft that must not be saved")
 
-            let cancelButton = find("cancel-note-create")
-            cancelButton.tap()
+            find("cancel-note-create").tap()
         }
-        then("I should be back on the notes list") {
-            let createButton = anyElement(["create-note-button", "create-first-note"])
+        then("the sheet is gone and nothing was saved") {
             XCTAssertTrue(
-                createButton.waitForExistence(timeout: 5),
-                "Create button should be visible after cancelling"
+                find("note-text-editor").waitForNonExistence(timeout: 10),
+                "Cancel should dismiss the create sheet"
             )
+            XCTAssertFalse(
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Draft that must not be saved"))
+                    .firstMatch.exists,
+                "A cancelled draft must not appear in the notes list"
+            )
+            XCTAssertFalse(find("note-create-error").exists, "Cancelling should not talk to the server")
         }
     }
 
@@ -228,78 +234,58 @@ final class APIConnectedUITests: BaseUITest {
         }
     }
 
-    /// `clock-in-button` only renders once `ShiftsViewModel.shiftDays` is
-    /// non-empty, which requires an actual shift schedule record on this
-    /// class's hub (see `GET /api/shifts`, `ShiftsView.swift`) — this suite
-    /// does not create one. When it is absent, skip explicitly: the previous
-    /// version of this test accepted "shifts-empty-state" as evidence the
-    /// clock-in request succeeded, even though the empty state means
-    /// clock-in was never tapped at all (the same shape of defect as #1129's
-    /// "dashboard-title" accepted as proof of an active call).
-    func testClockInViaAPI() throws {
-        given("I am connected to the API as a volunteer") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            _ = dashboard.waitForExistence(timeout: 15)
-        }
-        try when("I navigate to shifts and tap clock in") {
+    func testClockInViaAPI() {
+        given("I am connected to the API as a volunteer who is off shift") {
+            launchAsVolunteerWithAPI()
             navigateToShifts()
-            let clockIn = find("clock-in-button")
-            guard clockIn.waitForExistence(timeout: 10) else {
-                if find("shifts-empty-state").exists {
-                    throw XCTSkip("No shift schedule is configured on this test hub; there is nothing to clock into")
-                }
-                XCTFail("Clock in button should exist")
-                return
-            }
-            clockIn.tap()
+            XCTAssertTrue(
+                find("clock-in-button").waitForExistence(timeout: 20),
+                "An off-shift volunteer should be offered Clock In"
+            )
         }
-        then("I should see the on-shift state or a server error") {
-            // Either the clock-out button appears (success) or an error
-            // message — reaching this point means clock-in was actually
-            // tapped, so there is no "empty state" fallback to accept here.
-            let found = find("clock-out-button").waitForExistence(timeout: 10) ||
-                find("shifts-error").waitForExistence(timeout: 3) ||
-                find("shifts-success").waitForExistence(timeout: 3)
-            XCTAssertTrue(found, "API should respond to clock-in request")
+        when("I tap clock in") {
+            find("clock-in-button").tap()
+        }
+        then("the server puts me on shift and the app offers Clock Out") {
+            XCTAssertTrue(
+                find("clock-out-button").waitForExistence(timeout: 20),
+                "Clocking in should put the volunteer on shift"
+            )
+            XCTAssertFalse(find("clock-in-button").exists, "An on-shift volunteer has nothing to clock in to")
+            XCTAssertFalse(find("shifts-error").exists, "The clock-in request should not report an error")
+            XCTAssertEqual(
+                find("shift-status-label").label, "On Shift",
+                "The status label should read On Shift once the server accepted the clock-in"
+            )
         }
     }
 
-    func testClockOutConfirmationViaAPI() throws {
-        given("I am connected to the API as a volunteer") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            _ = dashboard.waitForExistence(timeout: 15)
-        }
-        try when("I clock in then try to clock out") {
+    func testClockOutConfirmationViaAPI() {
+        given("I am connected to the API as a volunteer and clocked in") {
+            launchAsVolunteerWithAPI()
             navigateToShifts()
-
-            // First clock in
             let clockIn = find("clock-in-button")
-            guard clockIn.waitForExistence(timeout: 10) else {
-                if find("shifts-empty-state").exists {
-                    throw XCTSkip("No shift schedule is configured on this test hub; there is nothing to clock into")
-                }
-                XCTFail("Clock in button should exist")
-                return
-            }
+            XCTAssertTrue(clockIn.waitForExistence(timeout: 20), "An off-shift volunteer should be offered Clock In")
             clockIn.tap()
-
-            // Wait for clock out to appear
-            let clockOut = find("clock-out-button")
-            XCTAssertTrue(clockOut.waitForExistence(timeout: 10), "Clock out button should appear after clocking in")
-            clockOut.tap()
-        }
-        then("I should see a clock out confirmation dialog") {
             XCTAssertTrue(
-                app.alerts.firstMatch.waitForExistence(timeout: 5),
-                "A confirmation dialog should appear before clocking out"
+                find("clock-out-button").waitForExistence(timeout: 20),
+                "Clocking in should put the volunteer on shift"
             )
-            // Cancel to not actually clock out
-            let cancelButton = app.alerts.firstMatch.buttons.element(boundBy: 0)
-            if cancelButton.exists {
-                cancelButton.tap()
-            }
+        }
+        when("I clock out and confirm") {
+            find("clock-out-button").tap()
+            let alert = app.alerts["End Shift?"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 5), "Clock out should ask for confirmation")
+            alert.buttons["Clock Out"].tap()
+        }
+        then("the server ends the shift and the app is off shift again") {
+            XCTAssertTrue(
+                find("clock-in-button").waitForExistence(timeout: 20),
+                "Confirming clock out should put the volunteer off shift"
+            )
+            XCTAssertFalse(find("clock-out-button").exists, "An off-shift volunteer has nothing to clock out of")
+            XCTAssertEqual(find("shift-status-label").label, "Off Shift")
+            XCTAssertFalse(find("shifts-error").exists, "The clock-out request should not report an error")
         }
     }
 
@@ -524,7 +510,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let volunteersLink = find("admin-volunteers")
-            guard volunteersLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(volunteersLink.waitForExistence(timeout: 5), "volunteersLink should exist")
             volunteersLink.tap()
         }
         then("I should see the volunteers list or empty state") {
@@ -545,7 +531,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let bansLink = find("admin-bans")
-            guard bansLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(bansLink.waitForExistence(timeout: 5), "bansLink should exist")
             bansLink.tap()
         }
         then("I should see the ban list or empty state") {
@@ -566,7 +552,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let bansLink = find("admin-bans")
-            guard bansLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(bansLink.waitForExistence(timeout: 5), "bansLink should exist")
             bansLink.tap()
 
             _ = anyElementExists(["ban-list", "bans-empty-state"])
@@ -587,7 +573,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let auditLink = find("admin-audit-log")
-            guard auditLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(auditLink.waitForExistence(timeout: 5), "auditLink should exist")
             auditLink.tap()
         }
         then("I should see the audit log or empty state") {
@@ -608,7 +594,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let invitesLink = find("admin-invites")
-            guard invitesLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(invitesLink.waitForExistence(timeout: 5), "invitesLink should exist")
             invitesLink.tap()
         }
         then("I should see the invites list or empty state") {
@@ -629,7 +615,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let invitesLink = find("admin-invites")
-            guard invitesLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(invitesLink.waitForExistence(timeout: 5), "invitesLink should exist")
             invitesLink.tap()
 
             _ = anyElementExists(["invites-list", "invites-empty-state"])
@@ -674,7 +660,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let customFieldsLink = find("admin-custom-fields")
-            guard customFieldsLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(customFieldsLink.waitForExistence(timeout: 5), "customFieldsLink should exist")
             customFieldsLink.tap()
 
             _ = anyElementExists([
@@ -734,7 +720,7 @@ final class APIConnectedUITests: BaseUITest {
             ])
 
             let createButton = find("create-report-button")
-            guard createButton.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "createButton should exist")
             createButton.tap()
         }
         then("I should see the report creation form") {
@@ -845,7 +831,7 @@ final class APIConnectedUITests: BaseUITest {
         when("I navigate to help via settings") {
             navigateToSettings()
             let helpButton = scrollToFind("settings-help")
-            guard helpButton.exists else { return }
+            XCTAssertTrue(helpButton.exists, "helpButton should exist")
             helpButton.tap()
         }
         then("I should see the help screen") {
@@ -866,7 +852,7 @@ final class APIConnectedUITests: BaseUITest {
         when("I navigate to help via settings") {
             navigateToSettings()
             let helpButton = scrollToFind("settings-help")
-            guard helpButton.exists else { return }
+            XCTAssertTrue(helpButton.exists, "helpButton should exist")
             helpButton.tap()
         }
         then("I should see the admin guide section") {
@@ -881,107 +867,79 @@ final class APIConnectedUITests: BaseUITest {
     // MARK: - Call Simulation Tests
 
     func testSimulateIncomingCallAppearance() {
-        given("I am connected to the API as a volunteer") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "Dashboard should load")
+        var hubId = ""
+        given("I am connected to the API on a hub with no calls") {
+            hubId = launchAsAdminOnFreshHub(named: "incoming-call") ?? ""
+            XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15), "Dashboard should load")
+            XCTAssertFalse(find("active-call-card").exists, "No call card should show before a call exists")
         }
         when("an incoming call is simulated") {
-            let result = simulateIncomingCall(callerNumber: "+15551110001")
-            XCTAssertFalse(result.callId.isEmpty, "Simulation should return a callId")
-            XCTAssertEqual(result.status, "ringing", "Call status should be ringing")
+            _ = ringCall(callerNumber: "+15551110001", hubId: hubId)
         }
-        then("the dashboard or call UI should reflect the incoming call") {
-            // Allow time for the WebSocket push to arrive and UI to update
-            // The app may show an incoming call banner, a ringing indicator,
-            // or update the dashboard activity section.
-            let found = anyElementExists([
-                "incoming-call-banner", "call-ringing-indicator",
-                "dashboard-active-call", "active-call-card",
-                "dashboard-title",  // Fallback: dashboard is still visible (call may render differently)
-            ], timeout: 10)
-            XCTAssertTrue(found, "UI should respond to the simulated incoming call")
+        then("the dashboard shows the ringing call, naming the caller") {
+            XCTAssertTrue(
+                find("active-call-card").waitForExistence(timeout: 20),
+                "The ring event should put the call on the dashboard"
+            )
+            XCTAssertTrue(app.staticTexts["0001"].exists, "The call card should identify the caller by last four digits")
         }
     }
 
     func testSimulateAnswerCallStatusChange() {
-        given("I am connected to the API as a volunteer") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 15))
+        var hubId = ""
+        var callId = ""
+        given("I am connected to the API on a hub with a ringing call") {
+            hubId = launchAsAdminOnFreshHub(named: "answer-call") ?? ""
+            XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
+            callId = ringCall(callerNumber: "+15551110002", hubId: hubId)
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
-        when("an incoming call is simulated and then answered") {
-            let call = simulateIncomingCall(callerNumber: "+15551110002")
-            XCTAssertFalse(call.callId.isEmpty, "Should get a callId")
-
-            // Brief pause for the call to register
-            Thread.sleep(forTimeInterval: 1)
-
-            let status = simulateAnswerCall(callId: call.callId, pubkey: mockPubkey)
+        when("the call is answered by my identity") {
+            let status = simulateAnswerCall(callId: callId, pubkey: appIdentityPubkey())
             XCTAssertEqual(status, "in-progress", "Answered call status should be in-progress")
         }
-        then("the app should reflect the active call state") {
-            // After answering, the dashboard/call UI should update
-            let found = anyElementExists([
-                "active-call-card", "call-in-progress",
-                "dashboard-active-call", "dashboard-title",
-            ], timeout: 10)
-            XCTAssertTrue(found, "UI should reflect the active call")
+        then("the server holds the call in progress and the app still shows it") {
+            let held = serverActiveCalls(hubId: hubId).first { $0.id == callId }
+            XCTAssertEqual(held?.status, "in-progress")
+            XCTAssertEqual(held?.answeredBy, appIdentityPubkey())
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 10), "The answered call should stay on the dashboard")
+            XCTAssertTrue(find("call-elapsed-timer").exists, "An in-progress call runs an elapsed timer")
         }
     }
 
     func testSimulateEndCallStatusChange() {
-        given("I am connected to the API as a volunteer") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 15))
+        var hubId = ""
+        var callId = ""
+        given("I am connected to the API and on a call") {
+            hubId = launchAsAdminOnFreshHub(named: "end-call") ?? ""
+            XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
+            callId = answerCallAsApp(callerNumber: "+15551110003", hubId: hubId)
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
-        when("an incoming call is simulated, answered, and then ended") {
-            let call = simulateIncomingCall(callerNumber: "+15551110003")
-            XCTAssertFalse(call.callId.isEmpty, "Should get a callId")
-
-            Thread.sleep(forTimeInterval: 1)
-
-            let answerStatus = simulateAnswerCall(callId: call.callId, pubkey: mockPubkey)
-            XCTAssertEqual(answerStatus, "in-progress")
-
-            Thread.sleep(forTimeInterval: 1)
-
-            let endStatus = simulateEndCall(callId: call.callId)
-            XCTAssertEqual(endStatus, "completed", "Ended call status should be completed")
+        when("the call ends") {
+            XCTAssertEqual(simulateEndCall(callId: callId), "completed", "Ended call status should be completed")
         }
-        then("the app should return to the normal dashboard state") {
-            // After ending, the active call card should disappear
-            // or the dashboard should show the completed call in recent activity
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(
-                dashboard.waitForExistence(timeout: 10),
-                "Dashboard should be visible after call ends"
-            )
+        then("the call card leaves the dashboard and the server no longer holds the call") {
+            XCTAssertTrue(waitForCallCardToClear(), "The call card should disappear once the call has ended")
+            XCTAssertFalse(serverActiveCalls(hubId: hubId).contains { $0.id == callId })
         }
     }
 
     func testSimulateVoicemailStatus() {
-        given("I am connected to the API as a volunteer") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 15))
+        var hubId = ""
+        var callId = ""
+        given("I am connected to the API with a call ringing") {
+            hubId = launchAsAdminOnFreshHub(named: "voicemail") ?? ""
+            XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
+            callId = ringCall(callerNumber: "+15551110004", hubId: hubId)
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
-        when("an incoming call is simulated and goes to voicemail") {
-            let call = simulateIncomingCall(callerNumber: "+15551110004")
-            XCTAssertFalse(call.callId.isEmpty, "Should get a callId")
-
-            Thread.sleep(forTimeInterval: 1)
-
-            let status = simulateVoicemail(callId: call.callId)
-            XCTAssertEqual(status, "unanswered", "Voicemail status should be unanswered")
+        when("the caller gives up and goes to voicemail") {
+            XCTAssertEqual(simulateVoicemail(callId: callId), "unanswered", "Voicemail status should be unanswered")
         }
-        then("the dashboard should still be stable") {
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(
-                dashboard.waitForExistence(timeout: 10),
-                "Dashboard should remain stable after voicemail"
-            )
+        then("the ringing call leaves the dashboard") {
+            XCTAssertTrue(waitForCallCardToClear(), "A call that went to voicemail is no longer ringing")
+            XCTAssertFalse(serverActiveCalls(hubId: hubId).contains { $0.id == callId })
         }
     }
 
@@ -1025,7 +983,6 @@ final class APIConnectedUITests: BaseUITest {
             )
             XCTAssertFalse(result1.conversationId.isEmpty)
 
-            Thread.sleep(forTimeInterval: 0.5)
 
             let result2 = simulateIncomingMessage(
                 senderNumber: "+15559990002",
@@ -1073,40 +1030,42 @@ final class APIConnectedUITests: BaseUITest {
     // MARK: - Combined Call + Note Flow
 
     func testCallThenCreateNote() {
-        given("I am connected to the API as a volunteer") {
+        var callId = ""
+        let noteText = "Note for call \(UUID().uuidString.prefix(8))"
+        given("I am connected to the API and a call has finished") {
             launchWithAPI()
-            let dashboard = find("dashboard-title")
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 15))
+            XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
+            callId = simulateIncomingCall(callerNumber: "+15551110005").callId
+            XCTAssertFalse(callId.isEmpty, "Simulation should return a callId")
+            XCTAssertEqual(simulateAnswerCall(callId: callId, pubkey: mockPubkey), "in-progress")
+            XCTAssertEqual(simulateEndCall(callId: callId), "completed")
         }
-        when("a call is simulated and I create a note") {
-            // Simulate a full call lifecycle
-            let call = simulateIncomingCall(callerNumber: "+15551110005")
-            XCTAssertFalse(call.callId.isEmpty)
-
-            Thread.sleep(forTimeInterval: 1)
-            simulateAnswerCall(callId: call.callId, pubkey: mockPubkey)
-
-            Thread.sleep(forTimeInterval: 1)
-            simulateEndCall(callId: call.callId)
-
-            Thread.sleep(forTimeInterval: 1)
-
-            // Now navigate to notes and create a note about the call
+        when("I write a note about that call and save it") {
             navigateToNotes()
-
             let createButton = anyElement(["create-note-button", "create-first-note"])
-            guard createButton.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 10), "A create-note action should be on the Notes tab")
             createButton.tap()
 
             let textEditor = find("note-text-editor")
-            guard textEditor.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "The create sheet should open")
             textEditor.tap()
-            textEditor.typeText("Note for call \(call.callId)")
+            textEditor.typeText(noteText)
+
+            let callIdField = scrollToVisible("note-call-id-input")
+            XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
+            callIdField.tap()
+            callIdField.typeText(callId)
+
+            find("save-note").tap()
+            XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")
         }
-        then("the note form should be ready to save") {
-            let saveButton = find("save-note")
-            XCTAssertTrue(saveButton.exists, "Save button should exist after entering note text")
-            XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled")
+        then("the note is listed with the text I wrote") {
+            XCTAssertFalse(find("note-create-error").exists, "Saving the note should not report an error")
+            XCTAssertTrue(
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", noteText)).firstMatch
+                    .waitForExistence(timeout: 15),
+                "The saved note should read back from the server in the notes list"
+            )
         }
     }
 

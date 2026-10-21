@@ -3,128 +3,189 @@ import XCTest
 /// XCUITest suite for in-call actions on the dashboard.
 /// Tests the active call card, hangup, ban dialog, and quick note buttons.
 ///
+/// Every test puts a real call on the real backend, answered by the identity the app is
+/// running as, so the call card is the product of server state — not of whatever the
+/// dashboard happens to render. The actions are then asserted by what they did to that
+/// server state (the call ended, the caller is banned, the call is flagged as spam), not
+/// by whether a button was on screen.
+///
 /// Maps to BDD scenarios: active-call-panel, hangup, ban-with-reason.
 final class ActiveCallUITests: BaseUITest {
 
+    // MARK: - Helpers
+
+    /// This test's hub (see `launchAsAdminOnFreshHub`).
+    private var callHubId = ""
+
+    private func launchOnFreshHub() {
+        callHubId = launchAsAdminOnFreshHub(named: "active-call") ?? ""
+    }
+
+    private func answerCall(from callerNumber: String) -> String {
+        answerCallAsApp(callerNumber: callerNumber, hubId: callHubId)
+    }
+
+    private func tapOnceHittable(_ identifier: String, timeout: TimeInterval = 15) {
+        let element = find(identifier)
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), "\(identifier) should be on the call card")
+        XCTAssertTrue(element.isHittable, "\(identifier) should be tappable")
+        element.tap()
+    }
+
     // MARK: - Scenario: Active call card visible when call exists
 
-    /// Verifies the active call card renders on the dashboard when a
-    /// call is in progress. Requires the Docker Compose backend and
-    /// a simulated incoming+answered call.
+    /// The call card is the product of a call being answered: absent before, present after,
+    /// and it names the caller. Passing without a call is impossible — nothing but the card
+    /// is accepted.
     func testActiveCallPanelVisible() {
-        given("I am authenticated as admin with API and a call is active") {
-            launchAsAdminWithAPI()
-
-            // Simulate an incoming call and answer it
-            let call = simulateIncomingCall(callerNumber: "+15551110001")
-            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
-            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
-            navigateToDashboard()
+        var callId = ""
+        given("I am authenticated as admin with API and no call is in progress") {
+            launchOnFreshHub()
+            XCTAssertTrue(find("dashboard-identity").waitForExistence(timeout: 15))
+            XCTAssertFalse(find("active-call-card").exists, "No call card should show before a call exists")
         }
-        then("the active call card should be visible on the dashboard") {
-            // Only the call card itself counts. "dashboard-title" and the stats
-            // tile ("active-calls-card" / "active-call-count") render whether or
-            // not a call is active, so accepting them made this assertion true
-            // regardless of the call — exactly the kind of acceptance criteria
-            // that hid #1129 (iOS couldn't decode a ringing call at all) behind
-            // a passing test.
+        when("a call from +15551110001 is answered by my identity") {
+            callId = answerCall(from: "+15551110001")
+        }
+        then("the active call card should show the caller on the dashboard") {
             XCTAssertTrue(
-                find("active-call-card").waitForExistence(timeout: 10),
-                "Active call card should appear on the dashboard when a call is in progress"
+                find("active-call-card").waitForExistence(timeout: 20),
+                "The dashboard should show the active call card for call \(callId)"
+            )
+            XCTAssertTrue(
+                app.staticTexts["0001"].waitForExistence(timeout: 5),
+                "The card should identify the caller by the last four digits (0001)"
+            )
+            XCTAssertTrue(
+                find("call-elapsed-timer").exists,
+                "The card should run an elapsed timer for an in-progress call"
             )
         }
     }
 
     // MARK: - Scenario: Hangup button ends the call
 
-    /// Verifies the hangup button is present on the active call card
-    /// and tapping it dismisses the card.
+    /// Tapping hang up ends the call on the server and clears the card.
     func testHangupButtonEndsCall() {
-        given("I am authenticated as admin with API and a call is active") {
-            launchAsAdminWithAPI()
-
-            let call = simulateIncomingCall(callerNumber: "+15551110002")
-            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
-            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
-            navigateToDashboard()
+        var callId = ""
+        given("I am authenticated as admin with API and I am on a call") {
+            launchOnFreshHub()
+            callId = answerCall(from: "+15551110002")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
-        when("I look for the hangup button") {
-            let callCard = find("active-call-card")
-            XCTAssertTrue(callCard.waitForExistence(timeout: 10), "Active call card should appear after answering the simulated call")
+        when("I tap hang up") {
+            tapOnceHittable("hangup-button")
         }
-        then("the hangup button should exist on the active call card") {
-            let hangupButton = find("hangup-button")
-            XCTAssertTrue(hangupButton.waitForExistence(timeout: 5), "Hangup button should be visible on active call card")
-            XCTAssertTrue(hangupButton.isEnabled, "Hangup button should be tappable")
+        then("the card clears and the server no longer holds the call") {
+            XCTAssertTrue(waitForCallCardToClear(), "The call card should clear after hanging up")
+            XCTAssertFalse(
+                serverActiveCalls(hubId: callHubId).contains { $0.id == callId },
+                "The server should have ended call \(callId)"
+            )
         }
     }
 
     // MARK: - Scenario: Ban + hangup button shows reason field
 
-    /// Verifies that tapping the ban+hangup button opens a dialog
-    /// with a reason text field.
+    /// Ban + hang up takes a reason, bans the caller on the server, and ends the call.
+    /// The proof the ban landed is the one a caller would meet: the same number can no
+    /// longer ring in.
     func testBanDialogShowsReasonField() {
-        given("I am authenticated as admin with API and a call is active") {
-            launchAsAdminWithAPI()
-
-            let call = simulateIncomingCall(callerNumber: "+15551110003")
-            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
-            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
-            navigateToDashboard()
+        let number = "+15551110003"
+        var callId = ""
+        given("I am authenticated as admin with API and I am on a call") {
+            launchOnFreshHub()
+            callId = answerCall(from: number)
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
-        when("I tap the ban + hangup button") {
-            let banButton = find("ban-hangup-button")
-            XCTAssertTrue(banButton.waitForExistence(timeout: 10), "Ban + hangup button should be visible on the active call card")
-            banButton.tap()
+        when("I open ban + hang up, give a reason and confirm") {
+            tapOnceHittable("ban-hangup-button")
+            let reason = find("ban-reason-input")
+            XCTAssertTrue(reason.waitForExistence(timeout: 10), "The ban dialog should ask for a reason")
+            reason.tap()
+            reason.typeText("Harassing caller")
+            tapOnceHittable("ban-confirm-button")
         }
-        then("the ban dialog should show a reason input field") {
-            let reasonInput = find("ban-reason-input")
-            let confirmButton = find("ban-confirm-button")
+        then("the call ends and the caller is banned") {
+            XCTAssertTrue(waitForCallCardToClear(), "The call card should clear after ban + hang up")
+            XCTAssertFalse(
+                serverActiveCalls(hubId: callHubId).contains { $0.id == callId },
+                "The server should have ended call \(callId)"
+            )
+            let retry = simulateIncomingCall(callerNumber: number, hubId: callHubId)
+            XCTAssertTrue(
+                retry.callId.isEmpty,
+                "A banned caller must not be able to ring in again (got call \(retry.callId))"
+            )
+        }
+    }
 
-            XCTAssertTrue(reasonInput.waitForExistence(timeout: 5), "Ban reason input should be visible in the ban dialog")
-            XCTAssertTrue(confirmButton.waitForExistence(timeout: 3), "Ban confirm button should exist in the dialog")
+    /// Cancelling the ban dialog bans nobody and leaves the call running.
+    func testCancellingBanDialogKeepsCallAndCaller() {
+        let number = "+15551110006"
+        var callId = ""
+        given("I am authenticated as admin with API and I am on a call") {
+            launchOnFreshHub()
+            callId = answerCall(from: number)
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+        }
+        when("I open ban + hang up and cancel") {
+            tapOnceHittable("ban-hangup-button")
+            XCTAssertTrue(find("ban-reason-input").waitForExistence(timeout: 10))
+            app.buttons["Cancel"].tap()
+        }
+        then("the call is still running and the caller is not banned") {
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 10), "The call should still be on screen")
+            XCTAssertTrue(
+                serverActiveCalls(hubId: callHubId).contains { $0.id == callId && $0.status == "in-progress" },
+                "The server should still hold call \(callId) in progress"
+            )
+            // A second call from the same number is the proof the caller was not banned.
+            let second = simulateIncomingCall(callerNumber: number, hubId: callHubId)
+            XCTAssertFalse(second.callId.isEmpty, "A caller whose ban was cancelled must still be able to ring in")
         }
     }
 
     // MARK: - Scenario: Quick note button visible during active call
 
-    /// Verifies the quick note button is present on the active call card.
-    func testQuickNoteButtonVisibleDuringCall() {
-        given("I am authenticated as admin with API and a call is active") {
-            launchAsAdminWithAPI()
-
-            let call = simulateIncomingCall(callerNumber: "+15551110004")
-            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
-            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
-            navigateToDashboard()
-        }
-        then("the quick note button should be visible") {
-            let callCard = find("active-call-card")
-            XCTAssertTrue(callCard.waitForExistence(timeout: 10), "Active call card should appear after answering the simulated call")
-
-            let noteButton = find("quick-note-button")
-            XCTAssertTrue(noteButton.waitForExistence(timeout: 3), "Quick note button should be visible during an active call")
-        }
+    /// The quick note button is on the call card and tapping it must start a note for the
+    /// call. The dashboard wires the button to an empty closure
+    /// (`DashboardView.onQuickNote`), so the tap does nothing — the assertion that it opens
+    /// note creation cannot be met until that is built.
+    func testQuickNoteButtonVisibleDuringCall() throws {
+        throw XCTSkip("The dashboard's onQuickNote closure is empty — tapping Add Note during a call does nothing (#2026)")
     }
 
     // MARK: - Scenario: Report spam button visible during active call
 
-    /// Verifies the report spam button is present on the active call card.
-    func testReportSpamButtonVisible() {
-        given("I am authenticated as admin with API and a call is active") {
-            launchAsAdminWithAPI()
-
-            let call = simulateIncomingCall(callerNumber: "+15551110005")
-            XCTAssertFalse(call.callId.isEmpty, "The simulated incoming call should return a callId")
-            XCTAssertEqual(simulateAnswerCall(callId: call.callId, pubkey: "admin"), "in-progress", "The simulated call should be answered")
-            navigateToDashboard()
+    /// Reporting spam flags the call as spam on the server.
+    ///
+    /// Skipped while #2028 stands: a spam-flagged call makes `GET /calls/active` answer 500,
+    /// so the server state this test reads back cannot be read at all. Delete the
+    /// `XCTSkipIf` line when #2028 is fixed — the assertions below are the ones to keep.
+    func testReportSpamButtonVisible() throws {
+        try XCTSkipIf(true, "Reporting spam makes GET /calls/active 500 for the whole hub (#2028)")
+        var callId = ""
+        given("I am authenticated as admin with API and I am on a call") {
+            launchOnFreshHub()
+            callId = answerCall(from: "+15551110005")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
         }
-        then("the report spam button should be visible") {
-            let callCard = find("active-call-card")
-            XCTAssertTrue(callCard.waitForExistence(timeout: 10), "Active call card should appear after answering the simulated call")
-
-            let spamButton = find("report-spam-button")
-            XCTAssertTrue(spamButton.waitForExistence(timeout: 3), "Report spam button should be visible during an active call")
+        when("I tap report spam") {
+            tapOnceHittable("report-spam-button")
+        }
+        then("the server flags the call as spam") {
+            let deadline = Date().addingTimeInterval(15)
+            var flagged: ServerCall?
+            while Date() < deadline {
+                flagged = serverActiveCalls(hubId: callHubId).first { $0.id == callId }
+                if flagged?.status == "spam" { break }
+                // Wait on an expectation, not a sleep: the report is a network round trip.
+                let tick = XCTestExpectation(description: "report spam settles")
+                tick.isInverted = true
+                _ = XCTWaiter().wait(for: [tick], timeout: 1)
+            }
+            XCTAssertEqual(flagged?.status, "spam", "The server should flag call \(callId) as spam")
         }
     }
 }

@@ -12,12 +12,6 @@ final class RecoveryGroupUITests: BaseUITest {
 
         navigateToAdminSettingsScreen("admin-recovery-team")
 
-        let found = anyElementExists([
-            "recovery-team-config-view",
-            "recovery-team-loading",
-        ])
-        XCTAssertTrue(found, "Recovery team config view should show content or loading state")
-
         // This class's hub is fresh, so no recovery team exists: the setup form must show.
         XCTAssertTrue(
             find("recovery-team-setup").waitForExistence(timeout: 15),
@@ -35,12 +29,13 @@ final class RecoveryGroupUITests: BaseUITest {
 
         navigateToAdminSettingsScreen("admin-recovery-requests")
 
-        let found = anyElementExists([
-            "recovery-requests-view",
-            "recovery-requests-empty",
-            "recovery-requests-loading",
-        ])
-        XCTAssertTrue(found, "Recovery requests view should show content, empty state, or loading")
+        // This class's hub is fresh, so nobody has asked for recovery: the view settles on its
+        // empty state — not still loading, and with no requests listed.
+        XCTAssertTrue(
+            find("recovery-requests-empty").waitForExistence(timeout: 15),
+            "A hub with no recovery requests should show the empty state"
+        )
+        XCTAssertFalse(find("recovery-requests-loading").exists, "The requests should have finished loading")
     }
 
     // MARK: - User Account Recovery Flow
@@ -64,14 +59,10 @@ final class RecoveryGroupUITests: BaseUITest {
         }
         recoveryLink.tap()
 
-        let recoveryView = find("account-recovery-view")
-        guard recoveryView.waitForExistence(timeout: 5) else {
-            XCTFail("Account recovery view should appear")
-            return
-        }
+        XCTAssertTrue(find("account-recovery-view").waitForExistence(timeout: 5), "Account recovery view should appear")
 
         // Verify identifier input exists
-        let hubInput = find("recovery-hub-url-input")
+        let hubInput = find("recovery-hub-input")
         XCTAssertTrue(
             hubInput.waitForExistence(timeout: 5),
             "Hub URL input should exist in recovery flow"
@@ -83,18 +74,20 @@ final class RecoveryGroupUITests: BaseUITest {
             "Identifier input should exist in recovery flow"
         )
 
-        // Verify start button exists and is initially disabled
-        let startButton = find("recovery-start-button")
+        // Start is unavailable until both fields are filled
+        let startButton = find("start-recovery-button")
         XCTAssertTrue(
             startButton.waitForExistence(timeout: 5),
             "Start recovery button should exist"
         )
+        XCTAssertFalse(startButton.isEnabled, "Recovery cannot start with no hub and no identifier")
 
-        // Type into fields and verify button becomes enabled
         hubInput.tap()
         hubInput.typeText("https://test.example.org")
+        XCTAssertFalse(startButton.isEnabled, "A hub alone is not enough to start recovery")
 
         identifierInput.tap()
         identifierInput.typeText("+15551234567")
+        XCTAssertTrue(startButton.isEnabled, "Recovery can start once the hub and identifier are filled")
     }
 }
