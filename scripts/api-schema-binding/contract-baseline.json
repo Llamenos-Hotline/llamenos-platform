@@ -1,0 +1,709 @@
+{
+  "_readme": [
+    "CONTRACT BASELINE. A shrink-only ratchet of client calls that are KNOWN TO BE BROKEN.",
+    "Every entry is one client call site, in desktop, iOS, Android or sip-bridge, that reaches no mounted route on the server. It was frozen on 2026-10-21, from the guard's own output, when the endpoint-contract guard (#2001) landed.",
+    "This file is not an allowlist. contract-allowlist.json holds calls that are correct, each with its reason. This file holds calls that are wrong today. Each one names the open issue that owns fixing it.",
+    "IT MAY ONLY SHRINK. When you fix a call, the guard fails until you delete its entry here and lower \"size\" to match. A fixed call cannot stay listed.",
+    "ADDING AN ENTRY MEANS SHIPPING A KNOWN-BROKEN CLIENT CALL. Fix the call instead. If you truly cannot, you need all of: an entry naming an open owning issue that is listed in \"owners\", \"size\" raised by one, the entry in sorted position, and a reviewer who accepts a new broken call. There is no command that writes this file.",
+    "Matching is exact: client, file, method, path (as the guard prints it) and category. There are no wildcards, and each entry absorbs exactly one call. Two identical broken calls in one file need two entries, and a third identical call fails.",
+    "Run: bun scripts/api-schema-binding/contract-guard.ts --all to see every baselined row with its line number."
+  ],
+  "size": 86,
+  "owners": {
+    "1701": "17 API paths the iOS client calls do not exist (contacts-v2, identity, recordings, conversation read)",
+    "1730": "Mobile clients call routes the server does not mount (Android notes PUT, convert-to-case, contact relationships/timeline, conversation actions)",
+    "1997": "Client/server endpoint contract: client call sites that match no mounted route (missing /api, hp() scope, wrong verb, renamed paths)",
+    "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, contact search)",
+    "2068": "Webhook URLs shown to admins and registered with providers point at unmounted routes"
+  },
+  "entries": [
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "POST",
+      "path": "/provider-setup/a2p/brand",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "POST",
+      "path": "/provider-setup/a2p/campaign",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "POST",
+      "path": "/provider-setup/a2p/skip",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "GET",
+      "path": "/provider-setup/a2p/status",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "GET",
+      "path": "/settings/messaging",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "PATCH",
+      "path": "/settings/messaging",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
+      "method": "POST",
+      "path": "/settings/messaging/test",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "GET",
+      "path": "/api/admin/bans",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "POST",
+      "path": "/api/admin/bans",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "DELETE",
+      "path": "/api/admin/bans/:param",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "POST",
+      "path": "/api/admin/bans/bulk",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "GET",
+      "path": "/api/admin/custom-fields",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "PUT",
+      "path": "/api/admin/custom-fields",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
+      "method": "PUT",
+      "path": "/api/admin/custom-fields",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/RecordingPlayer.kt",
+      "method": "*",
+      "path": "/api/recordings/:param/audio",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactDetailViewModel.kt",
+      "method": "GET",
+      "path": "hp(/api/contacts/:param/relationships)",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactsViewModel.kt",
+      "method": "GET",
+      "path": "hp(/api/contacts/search)",
+      "category": "shadowed-by-param-route",
+      "issue": 2002
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactTimelineViewModel.kt",
+      "method": "GET",
+      "path": "hp(/api/contacts/:param/timeline)",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
+      "method": "POST",
+      "path": "/api/conversations/:param/assign",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
+      "method": "POST",
+      "path": "/api/conversations/:param/close",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
+      "method": "POST",
+      "path": "/api/conversations/:param/read",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
+      "method": "POST",
+      "path": "/api/conversations/:param/reopen",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/messaging/BlastsViewModel.kt",
+      "method": "GET",
+      "path": "/api/admin/blasts",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/messaging/BlastsViewModel.kt",
+      "method": "POST",
+      "path": "/api/admin/blasts",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/notes/NotesViewModel.kt",
+      "method": "PUT",
+      "path": "hp(/api/notes/:param)",
+      "category": "wrong-verb",
+      "issue": 1730
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/WebhookConfirmationScreen.kt",
+      "method": "*",
+      "path": "/api/messaging/incoming",
+      "category": "unmounted",
+      "issue": 2068
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/WebhookConfirmationScreen.kt",
+      "method": "*",
+      "path": "/api/telephony/status",
+      "category": "unmounted",
+      "issue": 2068
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/triage/TriageViewModel.kt",
+      "method": "POST",
+      "path": "hp(/api/reports/:param/convert-to-case)",
+      "category": "unmounted",
+      "issue": 1730
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/components/admin-settings/events-migration-panel.tsx",
+      "method": "POST",
+      "path": "/api/admin/events/migrate",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/components/admin-settings/events-migration-panel.tsx",
+      "method": "GET",
+      "path": "/api/admin/events/migration-status",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/cms.ts",
+      "method": "POST",
+      "path": "hp(/api/settings/entity-schema/roles/from-template)",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/directory.ts",
+      "method": "PUT",
+      "path": "hp(/api/directory/:param)",
+      "category": "wrong-verb",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/directory.ts",
+      "method": "POST",
+      "path": "hp(/api/uploads/entity-file)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/recovery.ts",
+      "method": "GET",
+      "path": "/api/hubs/:param/recovery-group",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/recovery.ts",
+      "method": "GET",
+      "path": "/api/hubs/:param/recovery-group/candidates",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/signal.ts",
+      "method": "POST",
+      "path": "/api/signal-notification/contact/sidecar-register",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/queries/devices.ts",
+      "method": "PATCH",
+      "path": "/api/webauthn/credentials/:param",
+      "category": "wrong-verb",
+      "issue": 1997
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/queries/devices.ts",
+      "method": "POST",
+      "path": "/api/webauthn/register",
+      "category": "unmounted",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "GET",
+      "path": "hp(/api/recovery-group/:param)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "POST",
+      "path": "hp(/api/recovery-group/enroll)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "GET",
+      "path": "hp(/api/recovery-group/session/:param)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "POST",
+      "path": "hp(/api/recovery-group/session/:param/cancel)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "POST",
+      "path": "hp(/api/recovery-group/session/:param/contribute)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "GET",
+      "path": "hp(/api/recovery-group/sessions)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "POST",
+      "path": "hp(/api/recovery-group/shares/liveness)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "GET",
+      "path": "hp(/api/recovery-group/shares/my)",
+      "category": "unmounted",
+      "issue": 2002
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "POST",
+      "path": "hp(/api/recovery-group/user-envelope)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "POST",
+      "path": "hp(/api/uploads/entity-file)",
+      "category": "hub-scope-mismatch",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ContactsAPIService.swift",
+      "method": "GET",
+      "path": "hp(/api/contacts-v2)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ContactsAPIService.swift",
+      "method": "POST",
+      "path": "hp(/api/contacts-v2)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ContactsAPIService.swift",
+      "method": "DELETE",
+      "path": "hp(/api/contacts-v2/:param)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ContactsAPIService.swift",
+      "method": "GET",
+      "path": "hp(/api/contacts-v2/:param)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ContactsAPIService.swift",
+      "method": "PATCH",
+      "path": "hp(/api/contacts-v2/:param)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ContactsAPIService.swift",
+      "method": "GET",
+      "path": "hp(/api/contacts-v2/search)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "POST",
+      "path": "/provider-setup/a2p/brand",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "POST",
+      "path": "/provider-setup/a2p/campaign",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "POST",
+      "path": "/provider-setup/a2p/skip",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "GET",
+      "path": "/provider-setup/a2p/status",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "GET",
+      "path": "/settings/messaging",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "PATCH",
+      "path": "/settings/messaging",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/MessagingConfigService.swift",
+      "method": "POST",
+      "path": "/settings/messaging/test",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/a2p/brand",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/a2p/skip",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "GET",
+      "path": "/provider-setup/a2p/status",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/configure",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/configure-webhooks",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/oauth/start",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "GET",
+      "path": "/provider-setup/oauth/status/:param",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "GET",
+      "path": "/provider-setup/phone-numbers",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/phone-numbers/provision",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/phone-numbers/search",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/signal/register",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "GET",
+      "path": "/provider-setup/signal/status",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "DELETE",
+      "path": "/provider-setup/signal/unregister",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/signal/verify",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "GET",
+      "path": "/provider-setup/status/:param",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/ProviderSetupService.swift",
+      "method": "POST",
+      "path": "/provider-setup/test",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "method": "PATCH",
+      "path": "/api/identity/:param/role",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "method": "POST",
+      "path": "/api/identity/invite",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "method": "GET",
+      "path": "/api/identity/invites",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "method": "*",
+      "path": "/api/recordings/:param/stream",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/ContactsViewModel.swift",
+      "method": "GET",
+      "path": "hp(/api/contacts/:param/relationships)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/ContactsViewModel.swift",
+      "method": "GET",
+      "path": "hp(/api/contacts/:param/timeline)",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/ContactsViewModel.swift",
+      "method": "GET",
+      "path": "hp(/api/contacts/search)",
+      "category": "shadowed-by-param-route",
+      "issue": 2002
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/ViewModels/ConversationsViewModel.swift",
+      "method": "POST",
+      "path": "/api/conversations/:param/read",
+      "category": "unmounted",
+      "issue": 1701
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Views/Cases/EvidenceCustodyChainView.swift",
+      "method": "GET",
+      "path": "/evidence/:param/custody",
+      "category": "missing-/api-prefix",
+      "issue": 1997
+    }
+  ]
+}

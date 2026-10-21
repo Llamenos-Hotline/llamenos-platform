@@ -11,7 +11,20 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { buildRouteIndex, checkCall, type CallSite, type Finding } from './contract-match'
-import { evaluate, FLOORS, loadAllowlist, loadMountedRoutes, validateAllowlist, type AllowlistEntry } from './contract-guard'
+import {
+  evaluate,
+  failed,
+  FLOORS,
+  loadAllowlist,
+  loadBaseline,
+  loadMountedRoutes,
+  render,
+  validateAllowlist,
+  validateBaseline,
+  type AllowlistEntry,
+  type Baseline,
+  type BaselineEntry,
+} from './contract-guard'
 import { extractDesktopCalls } from './desktop-calls'
 import { extractMobileCalls } from './mobile-calls'
 import { extractBridgeCalls } from './sip-bridge-calls'
@@ -223,6 +236,8 @@ describe('unresolved calls are reported, never passed', () => {
   })
 })
 
+const noBaseline: Baseline = { size: 0, owners: {}, entries: [] }
+
 describe('allowlist', () => {
   const route = (method: string, path: string) => ({ method, path })
   const call = (path: string): CallSite => ({ client: 'ios', file: 'A.swift', line: 3, method: 'GET', paths: [{ path, scoping: 'none' }] })
@@ -241,25 +256,92 @@ describe('allowlist', () => {
 
   test('an entry silences exactly its row and a missing reason is rejected', () => {
     const calls = [...floorsOk(), call('/api/gone')]
-    expect(evaluate(table, calls, []).failing).toHaveLength(1)
-    expect(evaluate(table, calls, [entry()]).failing).toHaveLength(0)
+    expect(evaluate(table, calls, [], noBaseline).failing).toHaveLength(1)
+    expect(evaluate(table, calls, [entry()], noBaseline).failing).toHaveLength(0)
     expect(validateAllowlist([entry({ reason: '' })])[0]).toContain('"reason" is required')
     expect(validateAllowlist([entry({ reason: 'ok' })])[0]).toContain('"reason" is required')
     expect(validateAllowlist([entry(), entry()].slice(0, 2)).some(p => p.includes('duplicate'))).toBe(true)
   })
 
   test('an entry that matches nothing is stale and fails the run', () => {
-    expect(evaluate(table, floorsOk(), [entry()]).stale).toHaveLength(1)
+    expect(evaluate(table, floorsOk(), [entry()], noBaseline).stale).toHaveLength(1)
   })
 
   test('too few call sites or routes fails instead of passing vacuously', () => {
-    expect(evaluate(table, [], []).extractionProblems.length).toBeGreaterThan(0)
-    expect(evaluate([route('GET', '/api/ok')], floorsOk(), []).extractionProblems.length).toBeGreaterThan(0)
+    expect(evaluate(table, [], [], noBaseline).extractionProblems.length).toBeGreaterThan(0)
+    expect(evaluate([route('GET', '/api/ok')], floorsOk(), [], noBaseline).extractionProblems.length).toBeGreaterThan(0)
   })
 
   test('the committed allowlist is well formed and every row carries its reason', () => {
     const entries = loadAllowlist()
     expect(validateAllowlist(entries)).toEqual([])
     expect(entries.length).toBeGreaterThan(0)
+  })
+})
+
+describe('baseline: a shrink-only ratchet of known-broken calls', () => {
+  const table = [{ method: 'GET', path: '/api/ok' }, ...Array.from({ length: FLOORS.routes }, (_, i) => ({ method: 'GET', path: `/api/r${i}` }))]
+  const floorsOk: CallSite[] = Object.entries(FLOORS.sites).flatMap(([client, n]) =>
+    Array.from({ length: n }, (_, i): CallSite => ({ client: client as CallSite['client'], file: 'ok', line: i, method: 'GET', paths: [{ path: '/api/ok', scoping: 'none' }] })),
+  )
+  const broken = (path: string, line = 3): CallSite => ({ client: 'ios', file: 'A.swift', line, method: 'GET', paths: [{ path, scoping: 'none' }] })
+  const known = (path: string, over: Partial<BaselineEntry> = {}): BaselineEntry => ({ client: 'ios', file: 'A.swift', method: 'GET', path, category: 'unmounted', issue: 1997, ...over })
+  const baseline = (...entries: BaselineEntry[]): Baseline => ({ size: entries.length, owners: { '1997': 'the contract audit' }, entries })
+
+  test('(a) a mismatch that is not in the baseline fails the run', () => {
+    const r = evaluate(table, [...floorsOk, broken('/api/gone'), broken('/api/new-defect')], [], baseline(known('/api/gone')))
+    expect(r.failing.map(f => f.path)).toEqual(['/api/new-defect'])
+    expect(failed(r)).toBe(true)
+    expect(render(r)).toContain('NEW mismatches (1)')
+  })
+
+  test('(b) a baselined call that was fixed fails the run until its entry is deleted', () => {
+    const r = evaluate(table, floorsOk, [], baseline(known('/api/gone')))
+    expect(r.failing).toEqual([])
+    expect(r.staleBaseline).toEqual([known('/api/gone')])
+    expect(failed(r)).toBe(true)
+    expect(render(r)).toContain('FIXED baseline entry')
+  })
+
+  test('(c) the baselined set passes, and its size is printed with a per-issue count', () => {
+    const r = evaluate(table, [...floorsOk, broken('/api/gone')], [], baseline(known('/api/gone')))
+    expect(r.baselined).toHaveLength(1)
+    expect(failed(r)).toBe(false)
+    expect(render(r)).toContain('baseline (shrink-only): 1 known-broken calls still to fix (#1997 1)')
+  })
+
+  test('each entry absorbs exactly one call: a third identical broken call fails', () => {
+    const two = baseline(known('/api/gone'), known('/api/gone'))
+    expect(failed(evaluate(table, [...floorsOk, broken('/api/gone', 3), broken('/api/gone', 9)], [], two))).toBe(false)
+    const r = evaluate(table, [...floorsOk, broken('/api/gone', 3), broken('/api/gone', 9), broken('/api/gone', 20)], [], two)
+    expect(r.failing.map(f => f.line)).toEqual([20])
+    // And one of two identical calls fixed leaves one stale entry.
+    expect(evaluate(table, [...floorsOk, broken('/api/gone', 3)], [], two).staleBaseline).toHaveLength(1)
+  })
+
+  test('an entry matches on client, file, method, path and category, never on a prefix', () => {
+    const r = evaluate(table, [...floorsOk, broken('/api/gone/deeper')], [], baseline(known('/api/gone')))
+    expect(r.failing.map(f => f.path)).toEqual(['/api/gone/deeper'])
+    expect(r.staleBaseline).toHaveLength(1)
+  })
+
+  test('the file rejects an unowned entry, a stale owner, a miscounted size, an unresolved row and an out-of-order row', () => {
+    expect(validateBaseline(baseline(known('/api/a')))).toEqual([])
+    expect(validateBaseline(baseline(known('/api/a', { issue: 0 })))[0]).toContain('"issue" must name the issue')
+    expect(validateBaseline(baseline(known('/api/a', { issue: 4242 })))[0]).toContain('#4242 is not listed in "owners"')
+    expect(validateBaseline({ ...baseline(known('/api/a')), owners: { '1997': 'x', '1': 'fixed' } })).toEqual([
+      'owner #1 owns no baseline entry. Its rows are fixed, so remove it from "owners"',
+    ])
+    expect(validateBaseline({ ...baseline(known('/api/a')), size: 2 })[0]).toContain('"size" is 2 but the baseline lists 1')
+    expect(validateBaseline(baseline(known('/api/a', { category: 'unresolved' as BaselineEntry['category'] })))[0]).toContain('cannot be baselined')
+    expect(validateBaseline(baseline(known('/api/b'), known('/api/a'))).some(p => p.includes('out of order'))).toBe(true)
+    // A malformed baseline fails the run even when every call matches.
+    expect(failed(evaluate(table, [...floorsOk, broken('/api/a')], [], { ...baseline(known('/api/a')), size: 5 }))).toBe(true)
+  })
+
+  test('the committed baseline is well formed and every entry is owned by an issue', () => {
+    const b = loadBaseline()
+    expect(validateBaseline(b)).toEqual([])
+    expect(b.entries.every(e => String(e.issue) in b.owners)).toBe(true)
   })
 })
