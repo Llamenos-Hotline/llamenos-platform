@@ -38,6 +38,15 @@ describe('the Asterisk image ships a DNS resolver module', () => {
       // A bare upstream image would drop the module without any other signal.
       expect(body).not.toMatch(/^ {4}image: andrius\/asterisk/m)
     })
+
+    it(`${file} marks the locally built asterisk image as never pulled`, () => {
+      // `llamenos-asterisk:local` exists in no registry. bootstrap-backend runs
+      // `docker compose pull asterisk` before it starts the telephony profile;
+      // without pull_policy: build that pull fails "pull access denied", the
+      // start step is skipped on the strength of it, and sip-bridge never comes
+      // up on :3001 — every @telephony backend-bdd scenario then fails (#2030).
+      expect(service(read(file), 'asterisk')).toMatch(/^ {4}pull_policy: build$/m)
+    })
   }
 
   const dockerfile = read('Dockerfile.asterisk')
