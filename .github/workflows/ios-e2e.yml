@@ -231,13 +231,52 @@ jobs:
       #
       # The job's timeout-minutes is 45 + this step's cap, so the build that
       # follows a full wait still has its whole 45. Change them together.
+      # THE GUARD ITSELF MUST NOT BE ABLE TO HANG (2026-10-21).
+      #
+      # Six consecutive `build (mac)` jobs across three merge groups failed at
+      # THIS step with the host at 50 GiB free (the threshold is 12) and load
+      # near idle. They did not refuse: the step printed NOTHING for its whole
+      # 36 minutes and was killed by `timeout-minutes`. The loop below
+      # redirects the script's output to a file and only prints it when the
+      # script returns, and the script never returned.
+      #
+      # Measured on the host while it was happening: the script's `bash` was
+      # asleep with no children, and a stack sample put it inside
+      # `opendir()` from a `for dir in "$DERIVED_DATA"/*/` glob. The host's
+      # DerivedData is a symlink onto an external volume, and a process the
+      # runner service spawns blocks on the first directory read there (the
+      # same open from a `launchctl submit` job fails at once with EPERM; from
+      # an ssh session it succeeds). Every attempt hit the same wedge, so
+      # every job that landed on the runner started its own 36-minute wait the
+      # moment the previous one timed out. The free-space check the guard
+      # exists for never ran, because report/reclaim come first.
+      #
+      # So each attempt is now BOUNDED. The script runs under a watchdog, its
+      # output reaches the job log either way (a hang shows where it stopped),
+      # and a hung attempt falls back to what the guard actually protects: the
+      # free space on the volume, read with a plain `df` that touches none of
+      # the paths reclaim walks. Enough free space -> proceed, with a warning
+      # that reclaim did not run. Not enough -> the same refusal/wait as a
+      # normal short attempt. A genuinely starved host still blocks; a host
+      # with room no longer waits on a path that is not about room.
+      #
+      # DISK_MIN_FREE_GIB is exported to the script as MAC_DISK_MIN_FREE_GIB,
+      # so the script's gate and the watchdog's df fallback cannot disagree.
+      # Nothing here signals a process group: only the guard's own pid and
+      # its direct children are ever signalled.
       - name: Guard the runner's disk headroom (wait out a co-tenant)
         timeout-minutes: 36
         env:
           DISK_WAIT_MAX_MIN: "35"
           DISK_WAIT_POLL_SEC: "60"
+          DISK_GUARD_ATTEMPT_MAX_SEC: "90"
+          DISK_MIN_FREE_GIB: "12"
         run: |
           set -uo pipefail
+          export MAC_DISK_MIN_FREE_GIB="$DISK_MIN_FREE_GIB"
+          volume="${MAC_DISK_GUARD_VOLUME:-/System/Volumes/Data}"
+          guard_log="$RUNNER_TEMP/disk-guard.log"
+          guard_summary="$RUNNER_TEMP/disk-guard-summary.md"
           # This runner's install root, so its own Runner.Worker is not
           # mistaken for a co-tenant: .../actions-runner-ios-1/_work/<repo>.
           own_root="${RUNNER_WORKSPACE%%/_work/*}"
@@ -248,17 +287,56 @@ jobs:
             # Each attempt's summary goes to a scratch file and only the last
             # one is published, so a wait that ends well leaves no stale
             # REFUSED line in the job summary.
-            : > "$RUNNER_TEMP/disk-guard-summary.md"
-            if GITHUB_STEP_SUMMARY="$RUNNER_TEMP/disk-guard-summary.md" \
-                bash scripts/ci/mac-runner-disk-guard.sh guard >"$RUNNER_TEMP/disk-guard.log" 2>&1; then
+            : > "$guard_summary"
+            : > "$guard_log"
+            # An attempt may not run past the wait deadline, or the step's own
+            # timeout-minutes would kill it and hide the verdict again.
+            cap="$DISK_GUARD_ATTEMPT_MAX_SEC"
+            remaining=$(( deadline - SECONDS ))
+            [ "$remaining" -ge "$cap" ] || cap=$(( remaining > 10 ? remaining : 10 ))
+            GITHUB_STEP_SUMMARY="$guard_summary" \
+              bash scripts/ci/mac-runner-disk-guard.sh guard >"$guard_log" 2>&1 &
+            gpid=$!
+            started=$SECONDS
+            hung=0
+            while kill -0 "$gpid" 2>/dev/null; do
+              if [ $(( SECONDS - started )) -ge "$cap" ]; then hung=1; break; fi
+              sleep 1
+            done
+            if [ "$hung" -eq 1 ]; then
+              last_line=$(tail -n 1 "$guard_log" 2>/dev/null || true)
+              # The script's own pid and its direct children, nothing wider.
+              pkill -TERM -P "$gpid" 2>/dev/null || true
+              kill -TERM "$gpid" 2>/dev/null || true
+              sleep 2
+              pkill -KILL -P "$gpid" 2>/dev/null || true
+              kill -KILL "$gpid" 2>/dev/null || true
+              # Never `wait` on something that may not have died: a process
+              # stuck in the kernel ignores SIGKILL, and waiting is the bug.
+              if kill -0 "$gpid" 2>/dev/null; then disown "$gpid" 2>/dev/null || true; else wait "$gpid" 2>/dev/null || true; fi
+              free_kib=$(df -k "$volume" 2>/dev/null | awk 'NR==2 {print $4}')
+              free_gib=$(awk -v k="${free_kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')
+              echo "::group::disk guard output before it hung (attempt $attempt)"
+              cat "$guard_log"
+              echo "::endgroup::"
+              if awk -v f="$free_gib" -v m="$DISK_MIN_FREE_GIB" 'BEGIN { exit !(f >= m) }'; then
+                echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to df: ${free_gib} GiB free on ${volume}, ${DISK_MIN_FREE_GIB} needed. Proceeding WITHOUT reclaim."
+                printf '### iOS runner disk guard (%s)\n\nGuard script hung after %ss (last output: %s). df fallback: **%s GiB free**, need %s GiB. Proceeded without reclaim.\n\n' \
+                  "${RUNNER_NAME:-local}" "$cap" "$last_line" "$free_gib" "$DISK_MIN_FREE_GIB" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                exit 0
+              fi
+              echo "::error::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}') and the df fallback shows only ${free_gib} GiB free on ${volume} of the ${DISK_MIN_FREE_GIB} GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+              printf 'REFUSED: only %s GiB free, need %s GiB (guard script hung; df fallback). Environmental, not this PR.\n' "$free_gib" "$DISK_MIN_FREE_GIB" > "$guard_summary"
+              rc=1
+            elif wait "$gpid"; then
               rc=0
             else
               rc=$?
             fi
             others=$(pgrep -fl '/bin/Runner.Worker' 2>/dev/null | grep -vF "$own_root/" | grep -c . || true)
             if [ "$rc" -eq 0 ] || [ "$others" -eq 0 ] || [ "$SECONDS" -ge "$deadline" ]; then
-              cat "$RUNNER_TEMP/disk-guard.log"
-              cat "$RUNNER_TEMP/disk-guard-summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              [ "$hung" -eq 1 ] || cat "$guard_log"
+              cat "$guard_summary" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
               waited="$((attempt - 1)) x ${DISK_WAIT_POLL_SEC}s"
               if [ "$rc" -eq 0 ]; then
                 [ "$attempt" -eq 1 ] || echo "disk headroom passed on attempt $attempt, after waiting $waited for a co-tenant CI job's teardown"
@@ -270,8 +348,13 @@ jobs:
               exit "$rc"
             fi
             # Not `::warning::` — a wait that ends in a pass is not a problem.
-            echo "disk headroom short (attempt $attempt): $(grep -o 'only [0-9.]* GiB free' "$RUNNER_TEMP/disk-guard.log" | head -1); $others other CI job(s) on this host will release space at teardown; re-checking in ${DISK_WAIT_POLL_SEC}s ($(( (deadline - SECONDS) / 60 )) min left)"
-            sleep "$DISK_WAIT_POLL_SEC"
+            shortfall=$(grep -o 'only [0-9.]* GiB free' "$guard_log" | head -1 || true)
+            [ -n "$shortfall" ] || shortfall="guard hung, df fallback short"
+            echo "disk headroom short (attempt $attempt): $shortfall; $others other CI job(s) on this host will release space at teardown; re-checking in ${DISK_WAIT_POLL_SEC}s ($(( (deadline - SECONDS) / 60 )) min left)"
+            nap="$DISK_WAIT_POLL_SEC"
+            left=$(( deadline - SECONDS ))
+            [ "$nap" -le "$left" ] || nap="$left"
+            sleep "$nap"
           done
 
       # bun's install temp dir is BUN_TMPDIR, and it must be per-runner. This
