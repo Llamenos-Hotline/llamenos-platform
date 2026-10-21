@@ -95,21 +95,29 @@ final class RolesUITests: BaseUITest {
             }
             usersLink.tap()
 
-            _ = anyElementExists(["volunteers-list", "volunteers-loading", "volunteers-empty-state"])
+            XCTAssertTrue(
+                find("volunteers-list").waitForExistence(timeout: 10),
+                "The users list should load"
+            )
 
-            let permButton = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'effective-permissions-'"))
-                .firstMatch
-            if permButton.waitForExistence(timeout: 10) {
-                permButton.tap()
+            // The permissions button carries its own identifier (a row-level
+            // identifier must not swallow it), so it is a button of its own.
+            let permButton = app.buttons.matching(
+                NSPredicate(format: "identifier BEGINSWITH 'effective-permissions-'")
+            ).firstMatch
+            guard permButton.waitForExistence(timeout: 10) else {
+                XCTFail("A user row should offer a permissions button for users:read holders")
+                return
             }
+            permButton.tap()
         }
         then("I should see the effective permissions view") {
-            let found = anyElementExists([
-                "effective-permissions-list", "effective-permissions-loading",
-                "effective-permissions-error",
-            ])
-            XCTAssertTrue(found, "Effective permissions view should appear")
+            // The loaded list, not merely a screen: "loading" and "error" are
+            // what the view shows when the fetch has not (or has not) worked.
+            XCTAssertTrue(
+                find("effective-permissions-list").waitForExistence(timeout: 15),
+                "Effective permissions view should list the user's permissions"
+            )
         }
     }
 
@@ -119,13 +127,21 @@ final class RolesUITests: BaseUITest {
         given("I am authenticated as a volunteer (no system:view-roles)") {
             launchAsVolunteerWithAPI()
         }
-        when("I look at the admin panel") {
-            navigateToAdminPanel()
+        when("I open Settings") {
+            navigateToSettings()
+            // Positive control: Settings rendered, so a missing admin entry
+            // below means "hidden", not "the screen never loaded".
+            XCTAssertTrue(
+                scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 10).exists,
+                "The Settings screen should have loaded"
+            )
         }
-        then("the roles link should not exist") {
-            let rolesLink = find("admin-roles")
-            let exists = rolesLink.waitForExistence(timeout: 2)
-            XCTAssertFalse(exists, "Roles link should be hidden without system:view-roles")
+        then("the admin panel, and the roles viewer behind it, should not be reachable") {
+            XCTAssertFalse(
+                scrollToFind("settings-admin-link", maxSwipes: 5, timeout: 2).exists,
+                "The admin panel link should be hidden without audit:read"
+            )
+            XCTAssertFalse(find("admin-roles").exists, "Roles link should be hidden without system:view-roles")
         }
     }
 }

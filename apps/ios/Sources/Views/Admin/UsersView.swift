@@ -81,6 +81,12 @@ struct UsersView: View {
                         },
                         canViewPermissions: appState.hasPermission("users:read")
                     )
+                    // `.contain` keeps the row's own controls addressable. A bare
+                    // identifier here is applied to every child that has none of
+                    // its own AND overrides the ones that do, which collapsed the
+                    // permissions button and the role menu into
+                    // "volunteer-row-<id>" in the accessibility tree.
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("volunteer-row-\(user.id)")
                 }
             } header: {
@@ -196,6 +202,7 @@ struct UserRowView: View {
                         .background(Circle().fill(Color.brandPrimary.opacity(0.1)))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(NSLocalizedString("roles_effective_permissions", comment: "Effective Permissions"))
                 .accessibilityIdentifier("effective-permissions-\(user.id)")
             }
 

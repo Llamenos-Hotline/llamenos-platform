@@ -22,6 +22,7 @@ struct EditContactView: View {
                         ToolbarItem(placement: .confirmationAction) {
                             Button(NSLocalizedString("common_save", comment: "Save")) { update() }
                                 .disabled(vm.displayName.trimmingCharacters(in: .whitespaces).isEmpty || vm.isSaving)
+                                .accessibilityIdentifier("contact-save-button")
                         }
                     }
             }
@@ -132,6 +133,9 @@ struct ContactFormFields: View {
             ),
             canCreate: appState.hasPermission("tags:create")
         )
+        // `.contain`: a bare identifier would also replace the picker's own
+        // "tag-picker-trigger" in the accessibility tree.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("contact-tag-picker")
         .task {
             if tagsVM.tags.isEmpty {
