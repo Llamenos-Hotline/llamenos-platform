@@ -139,6 +139,11 @@ services:
       context: .
       dockerfile: Dockerfile.asterisk
     image: llamenos-asterisk:local
+    # Built here, never pulled: llamenos-asterisk:local exists in no registry, so
+    # `docker compose pull asterisk` (bootstrap-backend's registry-pull step) fails
+    # "pull access denied" and, with it, the whole telephony start step is skipped
+    # and the sip-bridge sidecar never comes up. `build` makes pull skip it.
+    pull_policy: build
     profiles: ["telephony"]
     ports:
       - "8088:8088"       # ARI HTTP; SIP is reached only through Kamailio.
