@@ -40,12 +40,6 @@ data class ContactTimelineEvent(
 )
 
 @Serializable
-data class ContactTimelineResponse(
-    val events: List<ContactTimelineEvent>,
-    val total: Int = 0,
-)
-
-@Serializable
 data class ContactDetail(
     val contactHash: String,
     val last4: String? = null,
@@ -76,28 +70,4 @@ data class ContactIdentifier(
     val hash: String,
     val value: String? = null,
     val addedAt: String? = null,
-)
-
-@Serializable
-data class ContactDetailResponse(
-    val contact: ContactDetail,
-)
-
-@Serializable
-data class ContactRelationship(
-    val relatedContactHash: String,
-    val relatedLast4: String? = null,
-    val relationshipType: String,
-    val createdAt: String? = null,
-)
-
-@Serializable
-data class ContactRelationshipsResponse(
-    val relationships: List<ContactRelationship>,
-)
-
-@Serializable
-data class ContactSearchResponse(
-    val contacts: List<ContactSummary>,
-    val total: Int = 0,
 )

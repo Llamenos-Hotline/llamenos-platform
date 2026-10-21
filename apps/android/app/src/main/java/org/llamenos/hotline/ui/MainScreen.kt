@@ -8,8 +8,6 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -133,10 +131,6 @@ fun MainScreen(
     // Picks the hub to browse when none is chosen yet (#1340); refreshed by pull-to-refresh.
     val hubSelectionViewModel: HubSelectionViewModel = hiltViewModel()
 
-    // Unread count for conversations badge
-    val conversationsUiState by conversationsViewModel.uiState.collectAsState()
-    val unreadCount = conversationsUiState.totalUnread
-
     Scaffold(
         bottomBar = {
             NavigationBar(
@@ -147,29 +141,10 @@ fun MainScreen(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
                         icon = {
-                            if (tab == MainTab.CONVERSATIONS && unreadCount > 0) {
-                                BadgedBox(
-                                    badge = {
-                                        Badge(
-                                            modifier = Modifier.testTag("conversations-badge"),
-                                        ) {
-                                            Text(
-                                                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-                                            )
-                                        }
-                                    },
-                                ) {
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = stringResource(tab.labelRes),
-                                    )
-                                }
-                            } else {
-                                Icon(
-                                    imageVector = tab.icon,
-                                    contentDescription = stringResource(tab.labelRes),
-                                )
-                            }
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = stringResource(tab.labelRes),
+                            )
                         },
                         label = { Text(stringResource(tab.labelRes)) },
                         modifier = Modifier.testTag(tab.testTagValue),

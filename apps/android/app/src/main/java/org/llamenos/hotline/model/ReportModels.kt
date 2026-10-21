@@ -63,26 +63,7 @@ data class UpdateReportRequest(
     val status: String,
 )
 
-@Serializable
-data class ConvertReportToCaseRequest(
-    val reportId: String,
-    val title: String,
-    val reportTypeId: String? = null,
-)
-
-@Serializable
-data class ConvertReportToCaseResponse(
-    val recordId: String,
-    val reportId: String,
-)
-
-// EP06-A3: Atomic report-to-entity conversion
-
-@Serializable
-data class ConvertFromReportBody(
-    val reportId: String,
-    val entityTypeId: String,
-    val additionalFields: Map<String, String> = emptyMap(),
-)
+// EP06-A3: Atomic report-to-entity conversion — request body is the generated
+// org.llamenos.protocol.ConvertFromReportBody.
 
 typealias ConvertFromReportResponse = org.llamenos.protocol.ConvertFromReportResponse

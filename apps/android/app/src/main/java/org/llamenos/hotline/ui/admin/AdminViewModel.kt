@@ -43,6 +43,7 @@ import org.llamenos.hotline.model.TelephonyProviderConfig
 import org.llamenos.hotline.model.TelephonyProviderType
 import org.llamenos.hotline.model.TranscriptionSettings
 import org.llamenos.hotline.model.UpdateCustomFieldsRequest
+import org.llamenos.protocol.CreateBanBody
 import org.llamenos.hotline.model.User
 import org.llamenos.hotline.model.UsersListResponse
 import org.llamenos.hotline.model.displayName
@@ -416,9 +417,11 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingBans = true, bansError = null) }
 
             try {
+                // Hub bans are `/api/bans` (hub-scoped), not under `/api/admin`, which
+                // carries only security-events and devices (#1149).
                 val response = apiService.request<BanListResponse>(
                     "GET",
-                    "/api/admin/bans",
+                    apiService.hp("/api/bans"),
                 )
                 _uiState.update {
                     it.copy(
@@ -445,16 +448,20 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showAddBanDialog = false) }
     }
 
-    fun addBan(identifier: String, reason: String?) {
+    /**
+     * Ban one number. The server takes the E.164 number itself (`createBanBodySchema`)
+     * and hashes it with its own key — the client never sends, or computes, a hash.
+     */
+    fun addBan(phone: String, reason: String?) {
         viewModelScope.launch {
             _uiState.update { it.copy(showAddBanDialog = false, bansError = null) }
 
             try {
-                val request = AddBanRequest(
-                    identifier = identifier,
+                val request = CreateBanBody(
+                    phone = phone.trim(),
                     reason = reason?.takeIf { it.isNotBlank() },
                 )
-                apiService.requestNoContent("POST", "/api/admin/bans", request)
+                apiService.requestNoContent("POST", apiService.hp("/api/bans"), request)
                 loadBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -464,12 +471,13 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun removeBan(banId: String) {
+    /** Unban by the ban's `phoneHash` — the key `DELETE /api/bans/:phoneHash` takes. */
+    fun removeBan(phoneHash: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(bansError = null) }
 
             try {
-                apiService.requestNoContent("DELETE", "/api/admin/bans/$banId")
+                apiService.requestNoContent("DELETE", apiService.hp("/api/bans/$phoneHash"))
                 loadBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -671,7 +679,7 @@ class AdminViewModel @Inject constructor(
                     phones = phones,
                     reason = reason?.takeIf { it.isNotBlank() },
                 )
-                apiService.requestNoContent("POST", "/api/admin/bans/bulk", request)
+                apiService.requestNoContent("POST", apiService.hp("/api/bans/bulk"), request)
                 loadBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -704,8 +712,9 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingFields = true, fieldsError = null) }
             try {
+                // `/api/settings/custom-fields`, not `/api/admin/custom-fields` (#1149).
                 val response = apiService.request<CustomFieldsResponse>(
-                    "GET", "/api/admin/custom-fields",
+                    "GET", "/api/settings/custom-fields",
                 )
                 _uiState.update {
                     it.copy(customFields = response.fields, isLoadingFields = false)
@@ -742,7 +751,7 @@ class AdminViewModel @Inject constructor(
                     currentFields.add(field)
                 }
                 val request = UpdateCustomFieldsRequest(fields = currentFields)
-                apiService.requestNoContent("PUT", "/api/admin/custom-fields", request)
+                apiService.requestNoContent("PUT", "/api/settings/custom-fields", request)
                 loadCustomFields()
             } catch (e: Exception) {
                 _uiState.update {
@@ -758,7 +767,7 @@ class AdminViewModel @Inject constructor(
             try {
                 val updatedFields = _uiState.value.customFields.filter { it.id != fieldId }
                 val request = UpdateCustomFieldsRequest(fields = updatedFields)
-                apiService.requestNoContent("PUT", "/api/admin/custom-fields", request)
+                apiService.requestNoContent("PUT", "/api/settings/custom-fields", request)
                 loadCustomFields()
             } catch (e: Exception) {
                 _uiState.update {

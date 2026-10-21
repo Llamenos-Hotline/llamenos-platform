@@ -67,6 +67,7 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.model.DecryptedMessage
 import org.llamenos.hotline.model.displayName
 import org.llamenos.hotline.model.role
+import org.llamenos.protocol.SharedReportResponseStatus
 
 /**
  * Conversation detail screen showing message bubbles and reply input.
@@ -156,7 +157,7 @@ fun ConversationDetailScreen(
                                     viewModel.assignConversation(volunteer.pubkey)
                                 },
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (conversation?.assignedVolunteerPubkey == volunteer.pubkey) {
+                                    containerColor = if (conversation?.assignedTo == volunteer.pubkey) {
                                         MaterialTheme.colorScheme.primaryContainer
                                     } else {
                                         MaterialTheme.colorScheme.surfaceVariant
@@ -263,7 +264,7 @@ fun ConversationDetailScreen(
                         }
 
                         // Close or reopen button
-                        if (conversation.status == "closed") {
+                        if (conversation.status == SharedReportResponseStatus.Closed) {
                             IconButton(
                                 onClick = { viewModel.reopenSelectedConversation() },
                                 modifier = Modifier.testTag("reopen-conversation-button"),

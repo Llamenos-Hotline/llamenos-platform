@@ -14,7 +14,6 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ContactSummary
-import org.llamenos.hotline.model.ContactSearchResponse
 import org.llamenos.hotline.model.ContactsListResponse
 import javax.inject.Inject
 
@@ -28,14 +27,32 @@ data class ContactsUiState(
     val searchQuery: String = "",
     val contactTypes: List<String> = emptyList(),
     val selectedContactType: String? = null,
-)
+) {
+    /**
+     * The loaded contacts that match [searchQuery] by contact hash or last four digits.
+     *
+     * Search is local, over what has been loaded. The server has no contact search:
+     * `GET /contacts/search` is shadowed by `GET /contacts/:hash` and answered 200 with a
+     * lookup of a contact named "search", and `/contacts` takes only `page` and `limit`
+     * (#2002). A server-side search is the server's to add.
+     */
+    val visibleContacts: List<ContactSummary>
+        get() {
+            val needle = searchQuery.trim()
+            if (needle.isEmpty()) return contacts
+            return contacts.filter { contact ->
+                contact.contactHash.contains(needle, ignoreCase = true) ||
+                    contact.last4?.contains(needle) == true
+            }
+        }
+}
 
 /**
  * ViewModel for the contacts screen.
  *
  * Loads paginated contact summaries from GET /contacts. Each contact
  * shows aggregated interaction counts (calls, conversations, notes, reports).
- * Supports trigram search via GET /contacts/search and type filtering.
+ * Search filters the loaded page(s) locally — see [ContactsUiState.visibleContacts].
  */
 @HiltViewModel
 class ContactsViewModel @Inject constructor(
@@ -63,55 +80,22 @@ class ContactsViewModel @Inject constructor(
                 )
             }
             try {
-                val state = _uiState.value
-                val search = state.searchQuery
-
-                // Use trigram search endpoint if there's a search query
-                if (search.isNotBlank() && page == 1) {
-                    val query = buildString {
-                        append(apiService.hp("/api/contacts/search"))
-                        append("?q=$search")
-                        state.selectedContactType?.let {
-                            append("&contactType=$it")
-                        }
-                    }
-                    val response = apiService.request<ContactSearchResponse>(
-                        "GET",
-                        query,
+                val query = buildString {
+                    append(apiService.hp("/api/contacts"))
+                    append("?page=$page&limit=50")
+                }
+                val response = apiService.request<ContactsListResponse>(
+                    "GET",
+                    query,
+                )
+                _uiState.update {
+                    it.copy(
+                        contacts = if (page == 1) response.contacts else it.contacts + response.contacts,
+                        total = response.total,
+                        currentPage = page,
+                        isLoading = false,
+                        isRefreshing = false,
                     )
-                    _uiState.update {
-                        it.copy(
-                            contacts = response.contacts,
-                            total = response.total,
-                            currentPage = 1,
-                            isLoading = false,
-                            isRefreshing = false,
-                        )
-                    }
-                } else {
-                    val query = buildString {
-                        append(apiService.hp("/api/contacts"))
-                        append("?page=$page&limit=50")
-                        if (search.isNotBlank()) {
-                            append("&search=$search")
-                        }
-                        state.selectedContactType?.let {
-                            append("&contactType=$it")
-                        }
-                    }
-                    val response = apiService.request<ContactsListResponse>(
-                        "GET",
-                        query,
-                    )
-                    _uiState.update {
-                        it.copy(
-                            contacts = if (page == 1) response.contacts else it.contacts + response.contacts,
-                            total = response.total,
-                            currentPage = page,
-                            isLoading = false,
-                            isRefreshing = false,
-                        )
-                    }
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -139,7 +123,6 @@ class ContactsViewModel @Inject constructor(
 
     fun setSearchQuery(query: String) {
         _uiState.update { it.copy(searchQuery = query) }
-        loadContacts(page = 1)
     }
 
     fun setContactTypeFilter(contactType: String?) {
