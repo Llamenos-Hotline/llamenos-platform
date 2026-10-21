@@ -6,9 +6,11 @@ import SwiftUI
 /// and the interaction timeline.
 struct ContactDetailView: View {
     @Environment(AppState.self) private var appState
-    let contactHash: String
-    let displayIdentifier: String
+    let summary: ContactSummary
     @State private var viewModelBox = ViewModelBox<ContactDetailViewModel>()
+
+    private var contactHash: String { summary.contactHash }
+    private var displayIdentifier: String { summary.displayIdentifier }
 
     var body: some View {
         let vm = resolvedViewModel
@@ -392,7 +394,7 @@ struct ContactDetailView: View {
 
     private var resolvedViewModel: ContactDetailViewModel {
         if let existing = viewModelBox.value { return existing }
-        let vm = ContactDetailViewModel(apiService: appState.apiService, contactHash: contactHash)
+        let vm = ContactDetailViewModel(apiService: appState.apiService, summary: summary)
         viewModelBox.value = vm
         return vm
     }

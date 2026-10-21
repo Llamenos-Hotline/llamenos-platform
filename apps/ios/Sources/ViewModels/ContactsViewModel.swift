@@ -68,10 +68,6 @@ final class ContactsViewModel {
         let nextPage = currentPage + 1
         do {
             var path = apiService.hp("/api/contacts") + "?page=\(nextPage)&limit=50"
-            if !searchQuery.isEmpty {
-                let encoded = searchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? searchQuery
-                path += "&search=\(encoded)"
-            }
             if let contactType = selectedContactType {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
@@ -90,25 +86,25 @@ final class ContactsViewModel {
         isLoading = false
     }
 
-    // MARK: - Search (Trigram)
+    // MARK: - Search
 
+    /// Search the contact list by identifier.
+    ///
+    /// The server mounts no contact search: `GET /api/contacts/search` is not a
+    /// route, and its path falls into `GET /api/contacts/:hash`, which answers
+    /// 200 for a contact whose hash is the word "search" (#2002). A contact is
+    /// held only as a hash plus the last four digits of its number, and those
+    /// are in every list row, so the search reads the whole list and matches
+    /// on them here.
     func search() async {
         isLoading = true
         errorMessage = nil
 
         do {
-            let query = searchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? searchQuery
-            var path = apiService.hp("/api/contacts/search") + "?q=\(query)"
-            if let contactType = selectedContactType {
-                let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
-                path += "&contactType=\(encoded)"
-            }
-            let response: ContactSearchResponse = try await apiService.request(
-                method: "GET",
-                path: path
-            )
-            contacts = response.contacts
-            total = response.total
+            let all = try await fetchAllContacts()
+            let matched = all.filter { $0.matches(searchQuery) }
+            contacts = matched
+            total = matched.count
             currentPage = 1
         } catch {
             if contacts.isEmpty {
@@ -117,6 +113,32 @@ final class ContactsViewModel {
         }
 
         isLoading = false
+    }
+
+    /// Every contact the server lists, page by page, until it has them all.
+    ///
+    /// Each contact once: the server appends the contacts known only from
+    /// conversations to every page of the list, so pages overlap.
+    private func fetchAllContacts() async throws -> [ContactSummary] {
+        let pageSize = 200
+        var all: [ContactSummary] = []
+        var seen = Set<String>()
+        var page = 1
+        while true {
+            var path = apiService.hp("/api/contacts") + "?page=\(page)&limit=\(pageSize)"
+            if let contactType = selectedContactType {
+                let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
+                path += "&contactType=\(encoded)"
+            }
+            let response: ContactsListResponse = try await apiService.request(
+                method: "GET",
+                path: path
+            )
+            let fresh = response.contacts.filter { seen.insert($0.contactHash).inserted }
+            all.append(contentsOf: fresh)
+            if fresh.isEmpty || all.count >= response.total { return all }
+            page += 1
+        }
     }
 
     // MARK: - Filter by Contact Type
@@ -148,7 +170,8 @@ final class ContactsViewModel {
 @Observable
 final class ContactDetailViewModel {
     private let apiService: APIService
-    let contactHash: String
+    let summary: ContactSummary
+    var contactHash: String { summary.contactHash }
 
     var contact: ContactDetail?
     var relationships: [AppContactRelationship] = []
@@ -156,24 +179,27 @@ final class ContactDetailViewModel {
     var isLoadingRelationships = false
     var errorMessage: String?
 
-    init(apiService: APIService, contactHash: String) {
+    init(apiService: APIService, summary: ContactSummary) {
         self.apiService = apiService
-        self.contactHash = contactHash
+        self.summary = summary
     }
 
     // MARK: - Load Contact Detail
 
+    /// `GET /api/contacts/:hash` returns the contact's activity —
+    /// `{notes, conversations}` — not a profile, so the profile is the list row
+    /// plus that activity.
     func loadContact() async {
         guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
 
         do {
-            let response: ContactDetailResponse = try await apiService.request(
+            let activity: ContactTimelineDetailResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/contacts/\(contactHash)")
             )
-            contact = response.contact
+            contact = ContactDetail(summary: summary, activity: activity)
         } catch {
             errorMessage = error.localizedDescription
         }
