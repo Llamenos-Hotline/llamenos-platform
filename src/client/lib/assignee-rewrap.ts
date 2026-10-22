@@ -26,7 +26,7 @@
  */
 import { useEffect } from 'react'
 import { KIND_CONVERSATION_ASSIGNED } from '@shared/event-kinds'
-import type { AssigneeEnvelopeEntry } from '@protocol/schemas'
+import type { AssigneeEnvelopeEntry, AssigneeEnvelopeGapsResponse } from '@protocol/schemas'
 import {
   addAssigneeEnvelopes,
   getAssigneeEnvelopeGaps,
@@ -65,6 +65,7 @@ export async function rewrapConversationForAssignee(hubId: string, conversationI
   for (;;) {
     const gaps = await getAssigneeEnvelopeGaps(hubId, conversationId)
     if (gaps.messages.length === 0) return total
+    assertCoherentGaps(conversationId, gaps)
 
     const entries: AssigneeEnvelopeEntry[] = []
     for (const gap of gaps.messages) {
@@ -95,6 +96,40 @@ export async function rewrapConversationForAssignee(hubId: string, conversationI
     // Zero means another re-wrapper got there first (first write wins
     // server-side). It is making the progress; asking again would only race it.
     if (added === 0) return total
+  }
+}
+
+const X25519_HEX = /^[0-9a-f]{64}$/
+
+/**
+ * Refuse a gap list that is not internally consistent before sealing anything.
+ *
+ * The keys to seal to come from the server's device registry — the same
+ * registry every message write path already trusts to name a user's readers
+ * (PROTOCOL.md §2.4.1, "Trust"). Nothing on the client can yet verify them
+ * independently; that needs the user sigchain. What CAN be checked is that the
+ * answer names an assignee, and that every key a message is to be sealed to is
+ * one of that assignee's listed device keys and a well-formed X25519 key. A
+ * response that fails either is not an answer this protocol produces, so the
+ * re-wrap stops rather than sealing content keys to it.
+ */
+function assertCoherentGaps(conversationId: string, gaps: AssigneeEnvelopeGapsResponse): void {
+  if (!gaps.assignedTo) {
+    throw new Error(`assignee-envelope gaps for ${conversationId} name messages but no assignee`)
+  }
+  const recipients = new Set(gaps.recipients)
+  for (const key of recipients) {
+    if (!X25519_HEX.test(key)) {
+      throw new Error(`assignee-envelope gaps for ${conversationId} list a malformed recipient key`)
+    }
+  }
+  for (const gap of gaps.messages) {
+    if (gap.missingRecipients.some(key => !recipients.has(key))) {
+      throw new Error(
+        `assignee-envelope gaps for ${conversationId}: message ${gap.id} names a recipient ` +
+        'that is not one of the assignee\'s listed device keys',
+      )
+    }
   }
 }
 
