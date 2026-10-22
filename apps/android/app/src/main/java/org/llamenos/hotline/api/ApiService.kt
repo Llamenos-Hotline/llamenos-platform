@@ -319,6 +319,26 @@ class ApiService @Inject constructor(
     }
 
     /**
+     * Execute a request whose response is binary — call-recording audio — and return the
+     * body bytes. Signed exactly like [request]: the [AuthInterceptor] sits on [client], which
+     * is why audio is fetched here rather than handed to a media player as a bare URL.
+     */
+    suspend fun requestBytes(
+        method: String,
+        path: String,
+    ): ByteArray = withContext(ioDispatcher) {
+        val request = Request.Builder()
+            .url("${getBaseUrl()}$path")
+            .method(method.uppercase(), null)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            throwUnlessSuccessful(response)
+            response.body.bytes()
+        }
+    }
+
+    /**
      * Throw [ApiException] for a non-2xx [response]. The caller closes it — every helper here
      * wraps the response in `use`: a success response whose body is never read still holds its
      * connection until closed, and before this each no-content call leaked one.

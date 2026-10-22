@@ -13,8 +13,11 @@ import org.llamenos.hotline.steps.BaseSteps
 /**
  * Step definitions for blasts.feature scenarios.
  *
- * Blasts UI: BlastsScreen with list of sent blasts, create dialog
- * with recipient selection (individual + select all), scheduling.
+ * Blasts UI: BlastsScreen lists the hub's blasts; the create dialog takes a name,
+ * a message and the channels to send on. Recipients are the hub's opted-in
+ * subscribers on those channels, so "selecting recipients" selects channels
+ * (individually, or all at once) — there is no per-person picker, because the
+ * server's blasts do not target hub members (apps/worker/routes/blasts.ts).
  */
 class BlastSteps : BaseSteps() {
 
@@ -23,7 +26,9 @@ class BlastSteps : BaseSteps() {
         try {
             onNodeWithTag("create-blast-fab").performClick()
             composeRule.waitForIdle()
-            onNodeWithTag("blast-message-input").performTextInput("Test blast message ${System.currentTimeMillis()}")
+            val stamp = System.currentTimeMillis()
+            onNodeWithTag("blast-name-input").performTextInput("Test blast $stamp")
+            onNodeWithTag("blast-message-input").performTextInput("Test blast message $stamp")
             composeRule.waitForIdle()
         } catch (_: Throwable) {
             // FAB or dialog not available
@@ -33,10 +38,10 @@ class BlastSteps : BaseSteps() {
     @When("I select recipients")
     fun iSelectRecipients() {
         try {
-            onAllNodes(hasTestTagPrefix("blast-recipient-")).onFirst().performClick()
+            onNodeWithTag("blast-channel-sms").performClick()
             composeRule.waitForIdle()
         } catch (_: Throwable) {
-            // No volunteers available or dialog not open
+            // Dialog not open
         }
     }
 
@@ -48,7 +53,7 @@ class BlastSteps : BaseSteps() {
     @Then("I should see the recipient selection interface")
     fun iShouldSeeTheRecipientSelectionInterface() {
         assertAnyTagDisplayed(
-            "blast-recipients-label", "blast-message-input",
+            "blast-channels-label", "blast-message-input",
             "blasts-list", "blasts-empty", "dashboard-title",
         )
     }
@@ -56,28 +61,26 @@ class BlastSteps : BaseSteps() {
     @Then("I should be able to select individual volunteers")
     fun iShouldBeAbleToSelectIndividualVolunteers() {
         try {
-            onAllNodes(hasTestTagPrefix("blast-recipient-")).onFirst().assertIsDisplayed()
+            onAllNodes(hasTestTagPrefix("blast-channel-")).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
-            // No volunteers loaded yet
+            // Dialog not open
         }
     }
 
     @Then("I should be able to select all volunteers")
     fun iShouldBeAbleToSelectAllVolunteers() {
         assertAnyTagDisplayed(
-            "blast-select-all", "blast-recipients-label",
+            "blast-select-all", "blast-channels-label",
             "blasts-list", "blasts-empty", "dashboard-title",
         )
     }
 
     @When("I set a future send time")
     fun iSetAFutureSendTime() {
-        try {
-            onNodeWithTag("blast-schedule-toggle").performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // Schedule toggle not available
-        }
+        // Android has no send-time picker: the create dialog offers "Send now" and
+        // "Save draft" only. The old "schedule for later" checkbox carried no time and
+        // posted to a route the server never mounted, so it was removed rather than kept
+        // as a control that cannot work.
     }
 
     @Then("the blast should appear as {string}")

@@ -48,6 +48,7 @@ import org.llamenos.hotline.ui.events.EventsUiState
 import org.llamenos.hotline.ui.events.EventsViewModel
 import org.llamenos.hotline.ui.messaging.BlastsScreen
 import org.llamenos.hotline.ui.messaging.BlastItem
+import org.llamenos.hotline.ui.messaging.BlastStats
 import org.llamenos.hotline.ui.messaging.BlastsUiState
 import org.llamenos.hotline.ui.messaging.BlastsViewModel
 import org.llamenos.hotline.ui.notes.DecryptedNote
@@ -69,6 +70,8 @@ import org.llamenos.hotline.ui.triage.TriageUiState
 import org.llamenos.hotline.ui.triage.TriageViewModel
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.llamenos.hotline.model.ActiveCallResponseStatus
 import org.llamenos.hotline.model.CallHistoryResponseCall
 import org.llamenos.protocol.Record
@@ -907,6 +910,8 @@ class ScreenshotTests {
     // Blasts
     // ─────────────────────────────────────────────────────────────────────────
 
+    private fun blastBody(text: String) = buildJsonObject { put("body", text) }
+
     @Test
     fun blastsScreen() {
         val vm = mockk<BlastsViewModel>(relaxed = true)
@@ -915,23 +920,28 @@ class ScreenshotTests {
                 blasts = listOf(
                     BlastItem(
                         id = "blast-001",
-                        message = "Important shift reminder: Evening shift starts at 6 PM today. Please confirm availability.",
+                        name = "Evening shift reminder",
+                        content = blastBody("Important shift reminder: Evening shift starts at 6 PM today. Please confirm availability."),
                         status = "sent",
-                        recipientCount = 8,
+                        targetChannels = listOf("sms", "signal"),
+                        stats = BlastStats(totalRecipients = 8, sent = 8, delivered = 7),
                         createdAt = sampleTimestamp2,
                     ),
                     BlastItem(
                         id = "blast-002",
-                        message = "Training session tomorrow at 10 AM via video call. Link sent via email.",
-                        status = "sent",
-                        recipientCount = 12,
+                        name = "Training session",
+                        content = blastBody("Training session tomorrow at 10 AM via video call. Link sent via email."),
+                        status = "scheduled",
+                        targetChannels = listOf("whatsapp"),
+                        stats = BlastStats(totalRecipients = 12),
                         createdAt = "2026-04-28T16:00:00Z",
                     ),
                     BlastItem(
                         id = "blast-003",
-                        message = "All volunteers: Please update your availability for next week in the scheduling system.",
-                        status = "scheduled",
-                        recipientCount = 15,
+                        name = "Availability update",
+                        content = blastBody("Please update your availability for next week in the scheduling system."),
+                        status = "draft",
+                        targetChannels = listOf("sms"),
                         createdAt = "2026-04-27T09:00:00Z",
                     ),
                 ),

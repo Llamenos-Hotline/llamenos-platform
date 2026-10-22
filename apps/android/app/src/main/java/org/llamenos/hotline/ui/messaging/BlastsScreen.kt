@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -55,13 +56,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.Member
 
 /**
- * Blasts screen for sending broadcast messages to volunteers.
+ * Blasts screen: broadcast messages to the hub's opted-in subscribers.
  *
- * Lists existing blasts with status badges and provides a FAB
- * to create new blasts with recipient selection.
+ * Lists the hub's blasts with status badges (drafts can be sent from their card)
+ * and provides a FAB to compose a new blast for one or more channels.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,10 +74,10 @@ fun BlastsScreen(
 
     if (uiState.showCreateDialog) {
         CreateBlastDialog(
-            volunteers = uiState.users,
+            isSaving = uiState.isSaving,
             onDismiss = { viewModel.dismissCreateDialog() },
-            onSend = { message, recipientIds, scheduled ->
-                viewModel.sendBlast(message, recipientIds, scheduled)
+            onCreate = { name, message, channels, sendNow ->
+                viewModel.createBlast(name, message, channels, sendNow)
             },
         )
     }
@@ -171,7 +171,11 @@ fun BlastsScreen(
                             items = uiState.blasts,
                             key = { it.id },
                         ) { blast ->
-                            BlastCard(blast = blast)
+                            BlastCard(
+                                blast = blast,
+                                sendEnabled = !uiState.isSaving,
+                                onSend = { viewModel.sendBlast(blast.id) },
+                            )
                         }
                     }
                 }
@@ -199,8 +203,28 @@ fun BlastsScreen(
 }
 
 @Composable
+private fun blastStatusLabel(status: String): String = when (status) {
+    "draft" -> stringResource(R.string.blasts_status_draft)
+    "scheduled" -> stringResource(R.string.blasts_status_scheduled)
+    "sending" -> stringResource(R.string.blasts_status_sending)
+    "sent" -> stringResource(R.string.blasts_status_sent)
+    "cancelled" -> stringResource(R.string.blasts_status_cancelled)
+    else -> status
+}
+
+@Composable
+private fun blastChannelLabel(channel: String): String = when (channel) {
+    "sms" -> stringResource(R.string.blast_channel_sms)
+    "whatsapp" -> stringResource(R.string.blast_channel_whatsapp)
+    "signal" -> stringResource(R.string.blast_channel_signal)
+    else -> channel
+}
+
+@Composable
 private fun BlastCard(
     blast: BlastItem,
+    sendEnabled: Boolean,
+    onSend: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -219,7 +243,14 @@ private fun BlastCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = blast.message,
+                    text = blast.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("blast-name-${blast.id}"),
+                )
+                Text(
+                    text = blast.messagePreview.ifEmpty { stringResource(R.string.blast_no_content) },
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -231,13 +262,13 @@ private fun BlastCard(
                         containerColor = when (blast.status) {
                             "sent" -> MaterialTheme.colorScheme.primary
                             "scheduled" -> MaterialTheme.colorScheme.tertiary
-                            "failed" -> MaterialTheme.colorScheme.error
+                            "cancelled" -> MaterialTheme.colorScheme.error
                             else -> MaterialTheme.colorScheme.outline
                         },
                         modifier = Modifier.testTag("blast-status-${blast.id}"),
                     ) {
                         Text(
-                            text = blast.status.replaceFirstChar { it.uppercase() },
+                            text = blastStatusLabel(blast.status),
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -258,17 +289,26 @@ private fun BlastCard(
                 }
             }
 
-            if (blast.status == "sent") {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
+            when (blast.status) {
+                "draft" -> IconButton(
+                    onClick = onSend,
+                    enabled = sendEnabled,
+                    modifier = Modifier.testTag("blast-send-${blast.id}"),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = stringResource(R.string.blasts_send_now),
+                    )
+                }
+                "sent" -> Icon(
+                    imageVector = Icons.Filled.CheckCircle,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .size(20.dp)
                         .testTag("blast-delivery-${blast.id}"),
                 )
-            } else if (blast.status == "scheduled") {
-                Icon(
+                "scheduled" -> Icon(
                     imageVector = Icons.Filled.Schedule,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.tertiary,
@@ -279,22 +319,40 @@ private fun BlastCard(
     }
 }
 
+/**
+ * Compose a blast: a name, one message, and the channels it goes out on. Recipients are
+ * the hub's opted-in subscribers on those channels — the server resolves them when the
+ * blast is sent, so there is no per-person picker here.
+ */
 @Composable
 private fun CreateBlastDialog(
-    volunteers: List<Member>,
+    isSaving: Boolean,
     onDismiss: () -> Unit,
-    onSend: (message: String, recipientIds: List<String>, scheduled: Boolean) -> Unit,
+    onCreate: (name: String, message: String, channels: List<String>, sendNow: Boolean) -> Unit,
 ) {
+    var name by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
-    var selectAll by remember { mutableStateOf(false) }
-    val selectedIds = remember { mutableStateListOf<String>() }
-    var scheduleForLater by remember { mutableStateOf(false) }
+    val selectedChannels = remember { mutableStateListOf<String>() }
+    val canSubmit = !isSaving && name.isNotBlank() && message.isNotBlank() && selectedChannels.isNotEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.blasts_create)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.blasts_blast_name)) },
+                    placeholder = { Text(stringResource(R.string.blasts_blast_name_placeholder)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("blast-name-input"),
+                )
+
+                Spacer(Modifier.height(8.dp))
+
                 OutlinedTextField(
                     value = message,
                     onValueChange = { message = it },
@@ -308,82 +366,67 @@ private fun CreateBlastDialog(
                 Spacer(Modifier.height(12.dp))
 
                 Text(
-                    text = stringResource(R.string.blasts_recipients),
+                    text = stringResource(R.string.blasts_channels),
                     style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.testTag("blast-recipients-label"),
+                    modifier = Modifier.testTag("blast-channels-label"),
                 )
 
                 Spacer(Modifier.height(4.dp))
 
-                // Select all checkbox
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.testTag("blast-select-all"),
                 ) {
                     Checkbox(
-                        checked = selectAll,
-                        onCheckedChange = {
-                            selectAll = it
-                            if (it) {
-                                selectedIds.clear()
-                                selectedIds.addAll(volunteers.map { v -> v.pubkey })
-                            } else {
-                                selectedIds.clear()
-                            }
+                        checked = selectedChannels.size == BLAST_CHANNELS.size,
+                        onCheckedChange = { checked ->
+                            selectedChannels.clear()
+                            if (checked) selectedChannels.addAll(BLAST_CHANNELS)
                         },
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.blasts_select_all))
                 }
 
-                // Individual volunteer checkboxes
-                volunteers.forEach { vol ->
+                BLAST_CHANNELS.forEach { channel ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.testTag("blast-recipient-${vol.pubkey}"),
+                        modifier = Modifier.testTag("blast-channel-$channel"),
                     ) {
                         Checkbox(
-                            checked = vol.pubkey in selectedIds,
+                            checked = channel in selectedChannels,
                             onCheckedChange = { checked ->
-                                if (checked) selectedIds.add(vol.pubkey)
-                                else selectedIds.remove(vol.pubkey)
+                                if (checked) selectedChannels.add(channel)
+                                else selectedChannels.remove(channel)
                             },
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text(vol.displayName ?: vol.pubkey.take(12) + "...")
+                        Text(blastChannelLabel(channel))
                     }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.testTag("blast-schedule-toggle"),
-                ) {
-                    Checkbox(
-                        checked = scheduleForLater,
-                        onCheckedChange = { scheduleForLater = it },
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.blasts_schedule_later))
                 }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSend(message, selectedIds.toList(), scheduleForLater) },
-                enabled = message.isNotBlank() && selectedIds.isNotEmpty(),
+                onClick = { onCreate(name, message, selectedChannels.toList(), true) },
+                enabled = canSubmit,
                 modifier = Modifier.testTag("confirm-blast-send"),
             ) {
-                Text(
-                    if (scheduleForLater) stringResource(R.string.blasts_schedule)
-                    else stringResource(R.string.blasts_send_now),
-                )
+                Text(stringResource(R.string.blasts_send_now))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(android.R.string.cancel))
+            Row {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+                TextButton(
+                    onClick = { onCreate(name, message, selectedChannels.toList(), false) },
+                    enabled = canSubmit,
+                    modifier = Modifier.testTag("confirm-blast-draft"),
+                ) {
+                    Text(stringResource(R.string.blasts_save_draft))
+                }
             }
         },
     )

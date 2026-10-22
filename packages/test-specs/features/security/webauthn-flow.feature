@@ -18,6 +18,25 @@ Feature: WebAuthn Flow
     Then the response status is 200
     And 0 WebAuthn credentials are listed
 
+  # ─── Passkey rename (#1997) ───────────────────────────────────────
+  # The desktop passkeys screen renames with PATCH; the server used to mount only
+  # DELETE on this path, so every rename 404'd. The owner check is part of the
+  # route's WHERE clause: someone else's credential id is answered as not found.
+
+  @backend
+  Scenario: A user renames their own passkey and the new label persists
+    Given a user with a registered passkey
+    When the passkey owner renames that passkey to "Work laptop"
+    Then the response status is 200
+    And the passkey owner's passkey is labelled "Work laptop"
+
+  @backend
+  Scenario: A user cannot rename another user's passkey
+    Given a user with a registered passkey
+    When a different user renames that passkey to "Hijacked"
+    Then the response status is 404
+    And the passkey owner's passkey is labelled "Test Passkey (BDD)"
+
   @backend
   Scenario: Generate login options (public endpoint)
     When a client requests WebAuthn login options

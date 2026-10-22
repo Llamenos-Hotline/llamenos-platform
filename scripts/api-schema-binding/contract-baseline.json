@@ -8,94 +8,13 @@
     "Matching is exact: client, file, method, path (as the guard prints it) and category. There are no wildcards, and each entry absorbs exactly one call. Two identical broken calls in one file need two entries, and a third identical call fails.",
     "Run: bun scripts/api-schema-binding/contract-guard.ts --all to see every baselined row with its line number."
   ],
-  "size": 19,
+  "size": 8,
   "owners": {
     "1701": "17 API paths the iOS client calls do not exist (contacts-v2, identity, recordings, conversation read)",
-    "1997": "Client/server endpoint contract: client call sites that match no mounted route (missing /api, hp() scope, wrong verb, renamed paths)",
-    "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, contact search)",
+    "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, recovery-group candidates, contact search)",
     "2068": "Webhook URLs shown to admins and registered with providers point at unmounted routes"
   },
   "entries": [
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "POST",
-      "path": "/provider-setup/a2p/brand",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "POST",
-      "path": "/provider-setup/a2p/campaign",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "POST",
-      "path": "/provider-setup/a2p/skip",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "GET",
-      "path": "/provider-setup/a2p/status",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "GET",
-      "path": "/settings/messaging",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "PATCH",
-      "path": "/settings/messaging",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/api/MessagingConfigRepository.kt",
-      "method": "POST",
-      "path": "/settings/messaging/test",
-      "category": "missing-/api-prefix",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/RecordingPlayer.kt",
-      "method": "*",
-      "path": "/api/recordings/:param/audio",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/messaging/BlastsViewModel.kt",
-      "method": "GET",
-      "path": "/api/admin/blasts",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/messaging/BlastsViewModel.kt",
-      "method": "POST",
-      "path": "/api/admin/blasts",
-      "category": "unmounted",
-      "issue": 1997
-    },
     {
       "client": "android",
       "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/WebhookConfirmationScreen.kt",
@@ -118,15 +37,7 @@
       "method": "GET",
       "path": "/api/hubs/:param/recovery-group/candidates",
       "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "desktop",
-      "file": "src/client/lib/queries/devices.ts",
-      "method": "PATCH",
-      "path": "/api/webauthn/credentials/:param",
-      "category": "wrong-verb",
-      "issue": 1997
+      "issue": 2002
     },
     {
       "client": "ios",

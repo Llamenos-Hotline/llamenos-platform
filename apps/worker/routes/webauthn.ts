@@ -9,7 +9,7 @@ import { auth as authMiddleware } from '../middleware/auth'
 import { rateLimit } from '../middleware/rate-limit'
 import { audit } from '../services/audit'
 import { permissionGranted } from '@shared/permissions'
-import { authenticateBodySchema, addCredentialBodySchema, registerCredentialBodySchema, webauthnOptionsResponseSchema, webauthnLoginResponseSchema, webauthnCredentialsListResponseSchema } from '@protocol/schemas/webauthn'
+import { authenticateBodySchema, addCredentialBodySchema, registerCredentialBodySchema, renameCredentialBodySchema, webauthnOptionsResponseSchema, webauthnLoginResponseSchema, webauthnCredentialsListResponseSchema } from '@protocol/schemas/webauthn'
 import { okResponseSchema, errorResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 
@@ -234,11 +234,43 @@ webauthn.get('/credentials',
       credentials: credentials.map(cr => ({
         id: cr.id,
         label: cr.label,
+        transports: cr.transports,
         backedUp: cr.backedUp,
         createdAt: cr.createdAt,
         lastUsedAt: cr.lastUsedAt,
       })),
     })
+  })
+
+webauthn.patch('/credentials/:credId',
+  describeRoute({
+    tags: ['WebAuthn'],
+    summary: 'Rename one of your own WebAuthn credentials',
+    responses: {
+      ...authErrors,
+      200: {
+        description: 'Credential renamed',
+        content: {
+          'application/json': {
+            schema: resolver(okResponseSchema),
+          },
+        },
+      },
+      400: { description: 'Invalid credential ID or label' },
+      404: { description: 'No credential with that ID belongs to the caller' },
+    },
+  }),
+  validator('json', renameCredentialBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const pubkey = c.get('pubkey')
+    const credId = decodeURIComponent(c.req.param('credId'))
+    if (!credId) return c.json({ error: 'Invalid credential ID' }, 400)
+    const { label } = c.req.valid('json')
+
+    await services.identity.renameWebAuthnCredential(pubkey, credId, label)
+    await audit(services.audit, 'webauthnRenamed', pubkey, { credId }, { request: c.req.raw, hmacSecret: c.env.HMAC_SECRET }, null)
+    return c.json({ ok: true })
   })
 
 webauthn.delete('/credentials/:credId',
