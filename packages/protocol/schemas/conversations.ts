@@ -55,6 +55,8 @@ export const conversationListResponseSchema = z.object({
   ...paginatedMeta,
 })
 
+export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>
+
 export const messageListResponseSchema = z.object({
   messages: z.array(messageResponseSchema),
   ...paginatedMeta,
@@ -71,6 +73,65 @@ export const conversationStatsResponseSchema = z.object({
 export const volunteerLoadResponseSchema = z.object({
   loads: z.record(z.string(), z.number()),
 })
+
+// --- Assignee re-wrap (#1512, #2046) ---
+//
+// The client-mediated exchange that makes a conversation's existing messages
+// readable by a newly assigned volunteer. See PROTOCOL.md §2.4.1. The server
+// never sees a content key or plaintext on this path: a client that can
+// already open a message unwraps its content key locally and seals it to the
+// assignee's device keys.
+
+/** One message the current assignee cannot yet open. */
+export const assigneeEnvelopeGapSchema = z.object({
+  id: z.string(),
+  /** The message's existing envelopes, so the re-wrapper can open its own. */
+  readerEnvelopes: z.array(recipientEnvelopeSchema),
+  /** The assignee's X25519 device keys this message has no envelope for. */
+  missingRecipients: z.array(pubkeySchema),
+})
+
+export type AssigneeEnvelopeGap = z.infer<typeof assigneeEnvelopeGapSchema>
+
+/**
+ * `GET /conversations/:id/assignee-envelopes` — at most 200 gaps, oldest
+ * first. The re-wrapper posts envelopes and asks again until `messages` is
+ * empty.
+ */
+export const assigneeEnvelopeGapsResponseSchema = z.object({
+  assignedTo: pubkeySchema.nullable(),
+  /** Every X25519 device key of the assignee — the keys to seal to. */
+  recipients: z.array(pubkeySchema),
+  messages: z.array(assigneeEnvelopeGapSchema),
+})
+
+export type AssigneeEnvelopeGapsResponse = z.infer<typeof assigneeEnvelopeGapsResponseSchema>
+
+/** One client-sealed envelope addressed to one of the assignee's device keys. */
+export const assigneeEnvelopeEntrySchema = z.object({
+  messageId: z.string().min(1).max(64),
+  envelope: recipientEnvelopeSchema,
+})
+
+export type AssigneeEnvelopeEntry = z.infer<typeof assigneeEnvelopeEntrySchema>
+
+/**
+ * `POST /conversations/:id/assignee-envelopes` — append-only, all-or-nothing.
+ * Every envelope must name a registered X25519 device key of the CURRENT
+ * assignee.
+ */
+export const addAssigneeEnvelopesBodySchema = z.object({
+  envelopes: z.array(assigneeEnvelopeEntrySchema).min(1).max(1000),
+})
+
+export type AddAssigneeEnvelopesBody = z.infer<typeof addAssigneeEnvelopesBodySchema>
+
+export const addAssigneeEnvelopesResponseSchema = z.object({
+  /** Envelopes actually written; a recipient that already had one is skipped. */
+  added: z.number().int().nonnegative(),
+})
+
+export type AddAssigneeEnvelopesResponse = z.infer<typeof addAssigneeEnvelopesResponseSchema>
 
 // --- Input schemas ---
 
