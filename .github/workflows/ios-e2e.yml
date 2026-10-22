@@ -835,24 +835,63 @@ jobs:
       # the device being deleted, which is when it should stop applying.
       # Deliberately ONLY this daemon: the others (health, fitness, siri,
       # biome, suggestd...) measured at a few CPU-seconds each, and a missing
-      # daemon can turn a clean failure into a hang. Best effort: a failure
-      # here annotates, because the shard still runs, only slower.
+      # daemon can turn a clean failure into a hang. A failing disable or
+      # bootout only annotates, but the verification at the end does not: it
+      # fails the step unless the daemon is both marked disabled and not
+      # running, so a regression cannot pass silently.
       - name: Quiet the simulator's photo-analysis daemon
         env:
           UDID: ${{ steps.sim.outputs.udid }}
         run: |
           set -uo pipefail
-          for label in com.apple.mediaanalysisd com.apple.mediaanalysisd.service; do
-            xcrun simctl spawn "$UDID" launchctl disable "system/$label" 2>/dev/null \
+          # Every command below names the SAME launchd domain, and it is the
+          # one the daemon actually lives in, so `disable` and `bootout` act on
+          # it and `print-disabled` reads back what `disable` wrote. An earlier
+          # version disabled in `system` but verified and booted out in
+          # `user/$(id -u)` with the HOST uid: it only passed because this
+          # simulator's launchd aliases those domains, a coincidence of the
+          # runtime and not a property of the step. `user/foreground` is the
+          # simulator's own name for the daemon's domain (launchd itself
+          # points at it when asked for `system/...`), needs no uid, and
+          # `id` does not exist inside the simulator anyway. A `system/...`
+          # bootout is accepted but leaves the running daemon up, which is
+          # why the liveness check below is part of the verdict.
+          domain=user/foreground
+          labels="com.apple.mediaanalysisd com.apple.mediaanalysisd.service"
+          sim() { xcrun simctl spawn "$UDID" launchctl "$@"; }
+          for label in $labels; do
+            sim disable "$domain/$label" >/dev/null 2>&1 \
               || echo "::warning::could not disable $label in the simulator"
-            xcrun simctl spawn "$UDID" launchctl bootout "user/$(id -u)/$label" 2>/dev/null || true
+            sim bootout "$domain/$label" >/dev/null 2>&1 || true
           done
-          if xcrun simctl spawn "$UDID" launchctl print-disabled "user/$(id -u)" 2>/dev/null | grep -q 'com.apple.mediaanalysisd" => disabled'; then
-            echo "mediaanalysisd disabled in $UDID"
-          else
-            echo "::warning::mediaanalysisd is not shown as disabled in the simulator; this shard keeps the photo-analysis CPU cost"
+          # Judged on what the simulator reports, never on the exit codes above
+          # (bootout also fails when the service was never loaded). Two
+          # observations, both required: the label is marked disabled in the
+          # domain we wrote, and no process is running for it.
+          disabled=$(sim print-disabled "$domain" 2>&1) || {
+            echo "::error::launchctl print-disabled $domain failed in $UDID: $disabled"
+            exit 1
+          }
+          failed=0
+          for label in $labels; do
+            if ! grep -Fq "\"$label\" => disabled" <<<"$disabled"; then
+              echo "::error::$label is not disabled in the simulator's $domain domain"
+              failed=1
+            fi
+          done
+          # Only the main daemon ever runs; the `.service` label is listed with
+          # "-" for its PID. A numeric first column is a live process.
+          running=$(sim list 2>&1 | awk '$3 ~ /^com\.apple\.mediaanalysisd/ && $1 ~ /^[0-9]+$/')
+          if [ -n "$running" ]; then
+            echo "::error::mediaanalysisd is still running in the simulator: $running"
+            failed=1
           fi
-          xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep mediaanalysisd || true
+          if [ "$failed" -ne 0 ]; then
+            echo "disabled list as the simulator reports it:"
+            grep -i mediaanalysis <<<"$disabled" || echo "  (no mediaanalysis entries)"
+            exit 1
+          fi
+          echo "mediaanalysisd disabled and stopped in $UDID"
 
       # Boot is not warm. Booting the simulator never launches the app, so the
       # FIRST test of a shard paid the whole cold-start bill — installd
