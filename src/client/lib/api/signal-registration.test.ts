@@ -39,12 +39,22 @@ let sent: Recorded[]
 let sidecarStatus: number
 let deleteStatus: number
 
+/**
+ * True when the request targets the sidecar's origin. Compares parsed origins, not a
+ * string prefix: a prefix match would also accept `https://notifier.example.test.evil`,
+ * which would let a request to a look-alike host be counted as "the sidecar" and so
+ * excluded from the app-server assertions. App-server URLs are relative, hence the base.
+ */
+function isSidecarUrl(url: string): boolean {
+  return new URL(url, 'http://app.invalid').origin === new URL(SIDECAR).origin
+}
+
 function appRequests(): Recorded[] {
-  return sent.filter((r) => !r.url.startsWith(SIDECAR))
+  return sent.filter((r) => !isSidecarUrl(r.url))
 }
 
 function sidecarRequests(): Recorded[] {
-  return sent.filter((r) => r.url.startsWith(SIDECAR))
+  return sent.filter((r) => isSidecarUrl(r.url))
 }
 
 beforeEach(() => {
@@ -63,7 +73,7 @@ beforeEach(() => {
         ),
         body: typeof init.body === 'string' ? init.body : '',
       })
-      if (url.startsWith(SIDECAR)) {
+      if (isSidecarUrl(url)) {
         return new Response(sidecarStatus === 200 ? '{"ok":true}' : '{"error":"nope"}', { status: sidecarStatus })
       }
       if (url.endsWith('/signal-notification/contact/sidecar-token')) {
@@ -136,7 +146,7 @@ describe('registerSignalContactEverywhere', () => {
     const fetchMock = vi.mocked(fetch)
     const base = fetchMock.getMockImplementation()!
     fetchMock.mockImplementation(async (input, init) => {
-      if (String(input).startsWith(SIDECAR)) throw new TypeError('refused: not the configured origin')
+      if (isSidecarUrl(String(input))) throw new TypeError('refused: not the configured origin')
       return base(input, init)
     })
 
