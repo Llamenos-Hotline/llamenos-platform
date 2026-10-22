@@ -1493,7 +1493,7 @@ fn open_server_event(
         return Err("Ciphertext too short (need at least 12-byte nonce + 16-byte tag)".into());
     }
 
-    let aad = format!("{}:{}", LABEL_HUB_EVENT_EPOCH, epoch);
+    let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
     let nonce = Nonce::from_slice(&data[..12]);
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid server event key: {e}"))?;
@@ -1516,15 +1516,24 @@ fn open_server_event(
 mod server_event_tests {
     use super::*;
 
-    const KEY: [u8; 32] = [7u8; 32];
     const EPOCH: u64 = 20748;
 
-    /// Seal `json` exactly as the server's `encryptEventContent` does.
-    fn seal_like_server(json: &str, epoch: u64) -> String {
+    /// A fresh random server-event key — the tests never reuse a fixed key.
+    fn random_key() -> [u8; 32] {
+        let mut key = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+        key
+    }
+
+    /// Seal `json` exactly as the server's `encryptEventContent` does: pad to a
+    /// bucket, then AES-256-GCM under `key` with a fresh random nonce, AAD bound
+    /// to the epoch, output `nonce(12) || ciphertext`, hex-encoded.
+    fn seal_like_server(key: &[u8; 32], json: &str, epoch: u64) -> String {
         let padded = llamenos_core::padding::pad_to_bucket(json.as_bytes());
-        let aad = format!("{}:{}", LABEL_HUB_EVENT_EPOCH, epoch);
-        let nonce_bytes = [3u8; 12];
-        let cipher = Aes256Gcm::new_from_slice(&KEY).unwrap();
+        let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
+        let mut nonce_bytes = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
+        let cipher = Aes256Gcm::new_from_slice(key).unwrap();
         let ct = cipher
             .encrypt(
                 Nonce::from_slice(&nonce_bytes),
@@ -1542,18 +1551,28 @@ mod server_event_tests {
     #[test]
     fn a_padded_server_event_opens_to_its_json() {
         let json = r#"{"type":"conversation:assigned","conversationId":"c1","assignedTo":"ab"}"#;
-        let keys = vec![(EPOCH, KEY.to_vec())];
-        let opened = open_server_event(&keys, &seal_like_server(json, EPOCH), EPOCH).unwrap();
+        let key = random_key();
+        let keys = vec![(EPOCH, key.to_vec())];
+        let opened = open_server_event(&keys, &seal_like_server(&key, json, EPOCH), EPOCH).unwrap();
         assert_eq!(opened, json);
     }
 
     #[test]
     fn an_event_sealed_for_another_epoch_does_not_open() {
         let json = r#"{"type":"message:new","conversationId":"c1"}"#;
-        let keys = vec![(EPOCH, KEY.to_vec())];
-        let sealed = seal_like_server(json, EPOCH + 1);
+        let key = random_key();
+        let keys = vec![(EPOCH, key.to_vec())];
+        let sealed = seal_like_server(&key, json, EPOCH + 1);
         assert!(open_server_event(&keys, &sealed, EPOCH).is_err());
         assert!(open_server_event(&keys, &sealed, EPOCH + 1).is_err());
+    }
+
+    #[test]
+    fn an_event_sealed_under_another_key_does_not_open() {
+        let json = r#"{"type":"message:new","conversationId":"c1"}"#;
+        let keys = vec![(EPOCH, random_key().to_vec())];
+        let sealed = seal_like_server(&random_key(), json, EPOCH);
+        assert!(open_server_event(&keys, &sealed, EPOCH).is_err());
     }
 }
 
