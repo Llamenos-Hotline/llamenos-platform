@@ -157,8 +157,12 @@ final class OfflineQueue {
         isReplaying = true
         var toRemove: Set<String> = []
 
-        for i in queue.indices {
-            var op = queue[i]
+        // Iterate a snapshot and write results back by id: `clear()` (logout, wipe) and
+        // `remove(id:)` can run while this is suspended on a request, so indices taken
+        // before the first `await` are not valid after it (#1920 audit).
+        for var op in queue {
+            // Cleared or removed while an earlier operation was in flight — never send it.
+            guard queue.contains(where: { $0.id == op.id }) else { continue }
 
             do {
                 let (statusCode, _) = try await executeRequest(op)
@@ -173,12 +177,12 @@ final class OfflineQueue {
                     if op.attempts >= Self.maxAttempts {
                         toRemove.insert(op.id)
                     }
-                    queue[i] = op
+                    storeReplayResult(op)
                 } else {
                     // Server error / auth / rate limit — retry with backoff
                     op.attempts += 1
                     op.lastError = "HTTP \(statusCode)"
-                    queue[i] = op
+                    storeReplayResult(op)
                     let delay = min(
                         Self.baseRetryDelay * pow(2.0, Double(op.attempts)),
                         Self.maxRetryDelay
@@ -189,7 +193,7 @@ final class OfflineQueue {
                 // Network error — stop processing, retry when online
                 op.attempts += 1
                 op.lastError = error.localizedDescription
-                queue[i] = op
+                storeReplayResult(op)
                 break
             }
         }
@@ -198,6 +202,12 @@ final class OfflineQueue {
         pendingCount = queue.count
         saveToDisk()
         isReplaying = false
+    }
+
+    /// Record a replayed operation's new attempt state, if it is still queued.
+    private func storeReplayResult(_ op: QueuedOperation) {
+        guard let index = queue.firstIndex(where: { $0.id == op.id }) else { return }
+        queue[index] = op
     }
 
     // MARK: - Remove / Clear
