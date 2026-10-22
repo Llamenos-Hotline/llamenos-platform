@@ -9,7 +9,8 @@
  * Zero-knowledge design:
  *   - HMAC key is fetched from the server (per-user derived key)
  *   - Client hashes the identifier locally before sending to the server
- *   - Plaintext is sent separately to the sidecar via a server-proxied endpoint
+ *   - Plaintext goes only to the sidecar, with a short-lived token the app server issued
+ *     for the stored hash — the app server never receives it
  *   - Server stores only the hash + HPKE ciphertext (no plaintext)
  */
 import { useState, useEffect, useCallback } from 'react'
@@ -21,8 +22,7 @@ import { LABEL_CONTACT_ID } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 import {
   getSignalContact,
-  registerSignalContact,
-  registerSignalContactWithSidecar,
+  registerSignalContactEverywhere,
   deleteSignalContact,
   getSignalHmacKey,
   getSecurityPrefs,
@@ -159,25 +159,20 @@ export function SignalNotificationSection({ available = true }: SignalNotificati
       const adminPubkeys = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
       const { ciphertext, envelope } = await encryptIdentifier(normalized, adminPubkeys)
 
-      // Step 4: Store hash + ciphertext in main DB
-      await registerSignalContact({
-        identifierHash,
-        identifierCiphertext: ciphertext,
-        identifierEnvelope: envelope,
-        identifierType,
-      })
-
-      // Step 5: Register plaintext with sidecar (server-proxied, validates hash)
-      await registerSignalContactWithSidecar({
-        plaintextIdentifier: identifier.trim(),
-        identifierType,
-      })
+      // Step 4: Store hash + ciphertext on the app server, then hand the plaintext to
+      // the sidecar directly. All-or-nothing: a failed sidecar step rolls the hash back.
+      await registerSignalContactEverywhere(
+        { identifierHash, identifierCiphertext: ciphertext, identifierEnvelope: envelope, identifierType },
+        normalized,
+      )
 
       setIdentifier('')
       toast(t('signalNotifications.contactRegistered', { defaultValue: 'Signal contact registered' }), 'success')
       await loadData()
     } catch {
       toast(t('common.error'), 'error')
+      // A failed rollback can leave a stored contact behind; show what is actually there.
+      await loadData()
     } finally {
       setRegistering(false)
     }
