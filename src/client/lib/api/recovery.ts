@@ -1,6 +1,6 @@
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import { request } from './client'
+import { request, ApiError } from './client'
 import type { RecoveryGroupInfo } from '@protocol/schemas'
 
 // ── Recovery Group ─────────────────────────────────────────────────────
@@ -46,11 +46,17 @@ export interface RecoveryGroupEnrollBody {
   rotate?: boolean
 }
 
+/**
+ * The hub's recovery group, or `null` when none is enrolled (the server's 404).
+ * Every other failure — wrong path, 403, 5xx, offline — propagates: collapsing
+ * them into `null` is what made a mis-pathed request look like "not configured".
+ */
 export async function getRecoveryGroup(hubId: string): Promise<RecoveryGroupInfo | null> {
   try {
-    return await request<RecoveryGroupInfo>(`/hubs/${hubId}/recovery-group`)
-  } catch {
-    return null
+    return await request<RecoveryGroupInfo>(`/recovery-group/${hubId}`)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null
+    throw err
   }
 }
 

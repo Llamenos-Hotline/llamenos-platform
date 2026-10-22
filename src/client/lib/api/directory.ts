@@ -82,7 +82,7 @@ export async function getDirectoryContact(id: string) {
 
 export async function updateDirectoryContact(id: string, body: Partial<CreateRawContactBody>) {
   return request<RawContact>(hp(`/directory/${id}`), {
-    method: 'PUT',
+    method: 'PATCH',
     body: JSON.stringify(body),
   })
 }
@@ -151,11 +151,13 @@ export async function removeGroupMember(groupId: string, contactId: string) {
 }
 
 // --- Entity file upload (EP06-A2) ---
+// Mounted only unscoped (`/api/uploads/entity-file`); the handler never reads a hub id,
+// so this path must not go through `hp()`.
 
 export async function uploadEntityFile(file: File): Promise<{ fileId: string; uploadedAt: string }> {
   const fd = new FormData()
   fd.append('file', file)
-  return request<{ fileId: string; uploadedAt: string }>(hp('/uploads/entity-file'), {
+  return request<{ fileId: string; uploadedAt: string }>('/uploads/entity-file', {
     method: 'POST',
     body: fd,
     headers: {},  // let browser set Content-Type with boundary
