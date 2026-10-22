@@ -62,6 +62,10 @@ on:
   # client's API contract never runs this suite. The nightly run on main
   # catches that within a day. It also runs the quarantined tests, so each
   # quarantined defect stays visible daily until it is fixed.
+  #
+  # "Visible" means ios-nightly-report.yml: a red scheduled run opens one
+  # `[nightly-ios-e2e]` issue (#2057). Until it existed this run
+  # was red on every night from the first, 2026-09-29, and nobody was told.
   schedule:
     - cron: "17 3 * * *"
 
@@ -1211,6 +1215,18 @@ jobs:
             ${{ runner.temp }}/llamenos-native-backend/server.log
             ${{ runner.temp }}/llamenos-native-backend/watchdog.log
           retention-days: 7
+
+      # The same per-test results, WITHOUT the ~80 MB .xcresult, so the nightly
+      # `report` job can fold them into an issue without downloading four of
+      # those. Scheduled runs only: nothing else reads it.
+      - name: Upload per-test results for the nightly report
+        if: always() && github.event_name == 'schedule'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-e2e-results-json-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
+          retention-days: 3
+          if-no-files-found: ignore
 
       # Reads the ports from the environment the allocation step wrote, so
       # there is exactly one place deriving them. The guard matters: with

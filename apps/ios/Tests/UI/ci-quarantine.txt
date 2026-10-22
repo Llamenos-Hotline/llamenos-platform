@@ -8,7 +8,4 @@
 # Format:  <Class>/<testMethod>  # <why> — #<issue>
 # Checked by: python3 apps/ios/scripts/ui-tests.py check-quarantine
 
-# MainTabView has six tabs; an iPhone tab bar shows four plus More (a product decision).
-# Re-measured 2026-10-22 on main 75fe86d7b (after #1999 landed): fails 3/3 (tab bar has 5 buttons, the test wants 6).
-# The fix is PR #2058 (testAllTabsExist asserts reachability) — it is open, not merged.
-DashboardUITests/testAllTabsExist  # six main tabs, iPhone shows four plus More — #1240
+# (no entries — #1240 testAllTabsExist was fixed by asserting reachability.)
