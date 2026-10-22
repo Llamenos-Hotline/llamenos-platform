@@ -440,6 +440,24 @@ def plan(total: int, mac_shards: list[int], include_quarantined: bool, only_smok
     return 0
 
 
+def execute_failed_verdict(failed: list[dict]) -> str:
+    """What `** TEST EXECUTE FAILED **` means for this run.
+
+    xcodebuild prints it for ANY failing test, an ordinary assertion included,
+    so the phrase alone does not say the harness broke. Shard 1 of the #1992
+    merge group failed on one assertion (a missed tap) and this report called
+    it "a reason other than an assertion", which sent the investigation after a
+    crashed runner that never existed. Only when no case failed or timed out is
+    the run's failure unexplained by a test — then it really is the harness.
+    """
+    if failed:
+        names = ", ".join(f"`{c['class']}.{c['test']}`" for c in failed)
+        return (f"**xcodebuild reported `{EXECUTE_FAILED}`** — it prints this whenever a test fails. "
+                f"The failure is the test case above, not the harness: {names}.")
+    return (f"**xcodebuild reported `{EXECUTE_FAILED}` with no failed or timed-out test case** — the run "
+            "failed for a reason other than an assertion (a crashed runner, a lost simulator, a signal).")
+
+
 def report(log_path: Path, json_out: Path | None) -> int:
     if not log_path.is_file():
         print(f"**No test log at `{log_path}`** — the test step never ran (see the failed step above).")
@@ -522,7 +540,7 @@ def report(log_path: Path, json_out: Path | None) -> int:
             names = ", ".join(f"`{c}.{t}`" for c, t in sorted(timed_out))
             print(f"**Killed for exceeding the execution time allowance:** {names}")
         if execute_failed:
-            print(f"**xcodebuild reported `{EXECUTE_FAILED}`** — the run failed for a reason other than an assertion.")
+            print(execute_failed_verdict(failed))
         return 1
     return 0
 
