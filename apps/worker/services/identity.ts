@@ -1236,6 +1236,26 @@ export class IdentityService {
   }
 
   /**
+   * Rename one of a pubkey's own WebAuthn credentials. The pubkey is part of the
+   * match, so a caller can never relabel a credential that belongs to someone else —
+   * a foreign credId is indistinguishable from a missing one (404).
+   */
+  async renameWebAuthnCredential(pubkey: string, credId: string, label: string): Promise<void> {
+    const result = await this.db
+      .update(webauthnCredentials)
+      .set({ label })
+      .where(
+        and(
+          eq(webauthnCredentials.pubkey, pubkey),
+          eq(webauthnCredentials.credentialId, credId),
+        ),
+      )
+      .returning({ credentialId: webauthnCredentials.credentialId })
+
+    if (result.length === 0) throw new ServiceError(404, 'Credential not found')
+  }
+
+  /**
    * Update the signature counter and lastUsedAt for a credential.
    */
   async updateWebAuthnCounter(data: {

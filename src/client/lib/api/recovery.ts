@@ -131,14 +131,19 @@ export interface RecoveryGroupCandidate {
   lastSeen: string | null
 }
 
+/**
+ * Share-holder candidates for a hub's recovery group: members with a verified
+ * device and the X25519 key each share is HPKE-sealed to.
+ *
+ * The server does not mount this route yet (#2002) — no route exposes another
+ * member's device encryption key. The call is left failing loudly on purpose:
+ * it used to swallow the 404 and return [], which rendered as "no eligible
+ * holders" and hid that enrollment cannot work at all.
+ */
 export async function getRecoveryGroupCandidates(
   hubId: string,
 ): Promise<RecoveryGroupCandidate[]> {
-  try {
-    return await request<RecoveryGroupCandidate[]>(
-      `/hubs/${hubId}/recovery-group/candidates`,
-    )
-  } catch {
-    return []
-  }
+  return request<RecoveryGroupCandidate[]>(
+    `/hubs/${hubId}/recovery-group/candidates`,
+  )
 }

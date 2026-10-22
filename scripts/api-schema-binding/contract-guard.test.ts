@@ -82,6 +82,14 @@ describe('break it: each seeded defect is caught', () => {
     expect(f.category).toBe('missing-/api-prefix')
   })
 
+  test('wrong verb on a binary download (Kotlin requestBytes)', () => {
+    // requestBytes is the signed binary-response entry point (call-recording audio). If the
+    // guard did not know it as a callee, its path would be checked only as a stray literal
+    // with no verb — and a POST to a GET-only route would pass.
+    const f = only(kotlin(`suspend fun audio(id: String) = apiService.requestBytes("POST", apiService.hp("/api/calls/$id/recording"))`))
+    expect(f.category).toBe('wrong-verb')
+  })
+
   test('PUT where the route is PATCH (Kotlin, hp-wrapped)', () => {
     const f = only(kotlin(`suspend fun save(id: String) = apiService.request<Note>("PUT", apiService.hp("/api/notes/$id"))`))
     expect(f.category).toBe('wrong-verb')

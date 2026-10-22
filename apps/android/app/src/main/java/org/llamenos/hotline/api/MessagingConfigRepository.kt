@@ -1,6 +1,11 @@
 package org.llamenos.hotline.api
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -86,40 +91,81 @@ data class A2pRegistrationDto(
     val approvedAt: String? = null,
 )
 
+@Serializable
+data class MessagingChannelTestRequest(val channel: String)
+
+@Serializable
+data class A2pBrandRequest(val hubId: String, val brandInfo: JsonObject)
+
+@Serializable
+data class A2pCampaignRequest(val registrationId: String, val hubId: String, val campaignInfo: JsonObject)
+
+@Serializable
+data class A2pSkipRequest(val hubId: String)
+
+/**
+ * Encode a screen-built `Map<String, Any?>` as JSON. kotlinx.serialization has no
+ * serializer for a map of `Any`, so handing one to [ApiService.request] throws before the
+ * request is sent — which is how every channel save failed even with the right path.
+ */
+internal fun Any?.toJsonElement(): JsonElement = when (this) {
+    null -> JsonNull
+    is JsonElement -> this
+    is String -> JsonPrimitive(this)
+    is Number -> JsonPrimitive(this)
+    is Boolean -> JsonPrimitive(this)
+    is Map<*, *> -> JsonObject(entries.associate { (key, value) -> key.toString() to value.toJsonElement() })
+    is Iterable<*> -> JsonArray(map { it.toJsonElement() })
+    else -> throw IllegalArgumentException("Cannot encode ${this::class.simpleName} as JSON")
+}
+
+private fun Map<String, Any?>.toJsonObject(): JsonObject = toJsonElement() as JsonObject
+
+/**
+ * Messaging channel settings (`/api/settings/messaging`, apps/worker/routes/settings.ts) and
+ * A2P 10DLC registration (`/api/provider-setup/a2p/…`, apps/worker/routes/provider-setup.ts).
+ */
 @Singleton
 class MessagingConfigRepository @Inject constructor(
     private val apiService: ApiService,
 ) {
     suspend fun getConfig(): MessagingConfigDto {
-        return apiService.request("GET", "/settings/messaging")
+        return apiService.request("GET", "/api/settings/messaging")
     }
 
+    /** PATCH a partial config — only the keys in [updates] change on the server. */
     suspend fun updateConfig(updates: Map<String, Any?>): MessagingConfigDto {
-        return apiService.request("PATCH", "/settings/messaging", updates)
+        return apiService.request("PATCH", "/api/settings/messaging", updates.toJsonObject())
     }
 
     suspend fun testChannel(channel: String): Boolean {
         val result: ConnectionTestDto = apiService.request(
             "POST",
-            "/settings/messaging/test",
-            mapOf("channel" to channel),
+            "/api/settings/messaging/test",
+            MessagingChannelTestRequest(channel),
         )
         return result.connected
     }
 
+    /**
+     * The hub's A2P registration, or null when the hub has never submitted one —
+     * the route answers 404 for exactly that case. Every other failure (403,
+     * 5xx, network) propagates so the screen can show it.
+     */
     suspend fun getA2pStatus(hubId: String): A2pRegistrationDto? {
         return try {
-            apiService.request("GET", "/provider-setup/a2p/status?hubId=$hubId")
-        } catch (_: Exception) {
-            null
+            apiService.request("GET", "/api/provider-setup/a2p/status?hubId=$hubId")
+        } catch (e: ApiException) {
+            if (e.code == 404) null else throw e
         }
     }
 
     suspend fun submitBrand(hubId: String, brandInfo: Map<String, Any>): A2pRegistrationDto {
-        return apiService.request("POST", "/provider-setup/a2p/brand", mapOf(
-            "hubId" to hubId,
-            "brandInfo" to brandInfo,
-        ))
+        return apiService.request(
+            "POST",
+            "/api/provider-setup/a2p/brand",
+            A2pBrandRequest(hubId = hubId, brandInfo = brandInfo.toJsonObject()),
+        )
     }
 
     suspend fun submitCampaign(
@@ -127,14 +173,14 @@ class MessagingConfigRepository @Inject constructor(
         hubId: String,
         campaignInfo: Map<String, Any>,
     ): A2pRegistrationDto {
-        return apiService.request("POST", "/provider-setup/a2p/campaign", mapOf(
-            "registrationId" to registrationId,
-            "hubId" to hubId,
-            "campaignInfo" to campaignInfo,
-        ))
+        return apiService.request(
+            "POST",
+            "/api/provider-setup/a2p/campaign",
+            A2pCampaignRequest(registrationId = registrationId, hubId = hubId, campaignInfo = campaignInfo.toJsonObject()),
+        )
     }
 
     suspend fun skipA2p(hubId: String): A2pRegistrationDto {
-        return apiService.request("POST", "/provider-setup/a2p/skip", mapOf("hubId" to hubId))
+        return apiService.request("POST", "/api/provider-setup/a2p/skip", A2pSkipRequest(hubId))
     }
 }

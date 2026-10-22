@@ -17,6 +17,13 @@ export const registerCredentialBodySchema = z.object({
   challengeId: z.string().min(1),
 })
 
+/** PATCH /api/webauthn/credentials/:credId — rename one of the caller's own passkeys. */
+export const renameCredentialBodySchema = z.object({
+  label: z.string().trim().min(1).max(100),
+})
+
+export type RenameCredentialBody = z.infer<typeof renameCredentialBodySchema>
+
 // --- Response schemas ---
 
 export const webauthnCredentialResponseSchema = z.object({
@@ -45,6 +52,8 @@ export const webauthnLoginResponseSchema = z.object({
 export const webauthnCredentialInfoSchema = z.object({
   id: z.string(),
   label: z.string(),
+  /** Authenticator transports reported at registration ('internal', 'usb', 'hybrid', …). */
+  transports: z.array(z.string()),
   backedUp: z.boolean(),
   createdAt: z.string(),
   lastUsedAt: z.string(),

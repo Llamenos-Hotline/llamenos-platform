@@ -226,13 +226,9 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     [`PATCH /api/identity/${PARAM}/role`]: '#1701',
     [`POST /api/conversations/${PARAM}/read`]: '#1701',
   },
-  Android: {
-    // #1149 — blasts: not a path typo (the screen targets users, the server's
-    // blasts target opted-in subscribers); needs a composer rebuilt on
-    // createBlastBodySchema.
-    'GET /api/admin/blasts': '#1149',
-    'POST /api/admin/blasts': '#1149',
-  },
+  // The blasts composer was rebuilt on createBlastBodySchema against the
+  // hub-scoped /blasts routes (#1997), which emptied this list.
+  Android: {},
 }
 
 const PLATFORMS: Platform[] = ['iOS', 'Android']
