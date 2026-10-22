@@ -153,6 +153,10 @@ export const TestIds = {
   CONVERSATION_LIST: 'conversation-list',
   CONVERSATION_ITEM: 'conversation-item',
   CONVERSATION_THREAD: 'conversation-thread',
+  /** A message body this client could not decrypt (rendered `[Encrypted]`). */
+  MESSAGE_ENCRYPTED: 'message-encrypted',
+  /** A message body this client decrypted. */
+  MESSAGE_PLAINTEXT: 'message-plaintext',
   MESSAGE_COMPOSER: 'message-composer',
   CONV_ADD_NOTE_BTN: 'conv-add-note-btn',
   CONV_ASSIGN_BTN: 'conv-assign-btn',
