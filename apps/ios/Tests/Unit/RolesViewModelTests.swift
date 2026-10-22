@@ -33,6 +33,7 @@ final class MockRolesAPIService: RolesAPIServiceProtocol {
     }
 }
 
+@MainActor
 struct RolesViewModelTests {
 
     private func makeSystemRole(
@@ -147,6 +148,7 @@ struct RolesViewModelTests {
     }
 }
 
+@MainActor
 struct EffectivePermissionsViewModelTests {
 
     @Test func loadPopulatesSortedPermissions() async {

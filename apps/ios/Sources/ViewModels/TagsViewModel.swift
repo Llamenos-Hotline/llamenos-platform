@@ -74,6 +74,13 @@ struct DecryptedTag: Identifiable, Sendable {
 
 // MARK: - TagsViewModel
 
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main thread.
+/// Unannotated, the `async` loaders wrote `isLoading`, `tags`… from the global executor while a
+/// view body read them (Thread Sanitizer reports the race on `isLoading`), and an Observation
+/// write that lands while a body is being evaluated is never delivered. Network calls still
+/// suspend off the main thread inside the API service; only the state changes are pinned
+/// here. Same defect class as #1918, #2049 and `ReportsViewModel`.
+@MainActor
 @Observable
 final class TagsViewModel {
     private let tagsAPI: TagsAPIServiceProtocol

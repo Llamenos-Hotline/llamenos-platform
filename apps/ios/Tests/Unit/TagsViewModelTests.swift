@@ -40,6 +40,7 @@ final class MockTagsAPIService: TagsAPIServiceProtocol {
     }
 }
 
+@MainActor
 struct TagsViewModelTests {
 
     // key = 0x42×32 reproduces the desktop-produced ciphertext below

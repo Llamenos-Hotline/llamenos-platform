@@ -97,6 +97,13 @@ struct DecryptedRole: Identifiable, Sendable {
 
 // MARK: - RolesViewModel
 
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main thread.
+/// Unannotated, the `async` loaders wrote `isLoading`, `roles`… from the global executor while a
+/// view body read them (Thread Sanitizer reports the race on `isLoading`), and an Observation
+/// write that lands while a body is being evaluated is never delivered. Network calls still
+/// suspend off the main thread inside the API service; only the state changes are pinned
+/// here. Same defect class as #1918, #2049 and `ReportsViewModel`.
+@MainActor
 @Observable
 final class RolesViewModel {
     private let rolesAPI: RolesAPIServiceProtocol
@@ -218,6 +225,13 @@ private struct RoleFieldEnvelopeWire: Codable {
 
 // MARK: - EffectivePermissionsViewModel
 
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main thread.
+/// Unannotated, the `async` loaders wrote `isLoading`, `permissions`… from the global executor while a
+/// view body read them (Thread Sanitizer reports the race on `isLoading`), and an Observation
+/// write that lands while a body is being evaluated is never delivered. Network calls still
+/// suspend off the main thread inside the API service; only the state changes are pinned
+/// here. Same defect class as #1918, #2049 and `ReportsViewModel`.
+@MainActor
 @Observable
 final class EffectivePermissionsViewModel {
     private let rolesAPI: RolesAPIServiceProtocol
