@@ -431,7 +431,11 @@ function parseEventContent(decrypted: string): LlamenosEvent | null {
       return parsed as LlamenosEvent
     }
   } catch {
-    // Invalid JSON
+    // Reported below.
   }
+  // A server event that decrypted but is not a typed JSON object is a format
+  // disagreement between server and client, never a routine case — #2046 was
+  // every event failing here, silently.
+  console.error('[relay] decrypted server event is not a typed JSON object; dropped')
   return null
 }

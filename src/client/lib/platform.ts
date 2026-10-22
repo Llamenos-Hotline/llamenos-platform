@@ -628,7 +628,12 @@ export async function decryptServerEvent(ciphertextHex: string, epoch: number): 
   if (useTauri) {
     try {
       return await tauriInvoke<string>('decrypt_server_event', { ciphertextHex, epoch })
-    } catch {
+    } catch (err) {
+      // An event for an epoch whose key this client no longer holds is routine
+      // around key rotation; anything else is a defect. Either way it must
+      // leave a trace: a silent null here hid that NO relay event decoded on
+      // desktop (#2046), because REST polling papered over every one.
+      console.warn(`[relay] server event (epoch ${epoch}) did not decrypt — ${ipcErrorMessage(err)}`)
       return null
     }
   }

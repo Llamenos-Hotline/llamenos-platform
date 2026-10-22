@@ -10,27 +10,36 @@
  * `conversations:read-all` and `conversations:update`, and under a hub-scoped
  * mount a conversation from another hub is a 404, not a target.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import conversationsRouter from '../../routes/conversations'
+import { publishEvent } from '../../lib/ws-events'
+import { KIND_CONVERSATION_ASSIGNED } from '@shared/event-kinds'
+
+vi.mock('../../lib/ws-events', () => ({ publishEvent: vi.fn() }))
+
+beforeEach(() => {
+  vi.mocked(publishEvent).mockClear()
+})
 
 const RECIPIENT = 'c'.repeat(64)
 const ENVELOPE = { pubkey: RECIPIENT, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }
 const BODY = JSON.stringify({ envelopes: [{ messageId: 'msg-1', envelope: ENVELOPE }] })
 
-function makeApp(opts: { permissions?: string[]; callerHubId?: string; convHubId?: string | null } = {}) {
+function makeApp(opts: { permissions?: string[]; callerHubId?: string; convHubId?: string | null; added?: number } = {}) {
   const {
     permissions = ['conversations:read-all', 'conversations:update'],
     callerHubId = 'hub-1',
     convHubId = 'hub-1',
+    added = 1,
   } = opts
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
     getById: vi.fn().mockResolvedValue({ id: 'conv-1', hubId: convHubId, assignedTo: 'vol-pubkey', status: 'active' }),
     listAssigneeEnvelopeGaps: vi.fn().mockResolvedValue({ assignedTo: 'd'.repeat(64), recipients: [RECIPIENT], messages: [] }),
-    addAssigneeEnvelopes: vi.fn().mockResolvedValue({ added: 1, assignedTo: 'vol-pubkey' }),
+    addAssigneeEnvelopes: vi.fn().mockResolvedValue({ added, assignedTo: 'vol-pubkey' }),
   }
 
   const app = new Hono<AppEnv>()
@@ -88,6 +97,27 @@ describe('POST /conversations/:id/assignee-envelopes', () => {
       expect.objectContaining({ conversationId: 'conv-1', assignedTo: 'vol-pubkey', added: 1 }),
       'hub-1',
     )
+  })
+
+  it('tells the conversation hub its messages gained readers, without key material', async () => {
+    const { app } = makeApp()
+    expect((await post(app)).status).toBe(200)
+    expect(publishEvent).toHaveBeenCalledTimes(1)
+    expect(publishEvent).toHaveBeenCalledWith(
+      undefined,
+      KIND_CONVERSATION_ASSIGNED,
+      { type: 'conversation:envelopes-added', conversationId: 'conv-1', assignedTo: 'vol-pubkey', added: 1 },
+      'hub-1',
+    )
+  })
+
+  it('publishes and audits nothing when every envelope was already present', async () => {
+    const { app, mockAudit } = makeApp({ added: 0 })
+    const res = await post(app)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ added: 0 })
+    expect(publishEvent).not.toHaveBeenCalled()
+    expect(mockAudit.log).not.toHaveBeenCalled()
   })
 
   it('requires conversations:update as well as read-all', async () => {
