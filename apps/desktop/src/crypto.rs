@@ -1515,14 +1515,15 @@ fn open_server_event(
 #[cfg(test)]
 mod server_event_tests {
     use super::*;
+    use aes_gcm::{AeadCore, aead::OsRng};
 
     const EPOCH: u64 = 20748;
 
     /// A fresh random server-event key — the tests never reuse a fixed key.
+    /// Drawn straight from the AEAD's own generator, so no literal buffer
+    /// ever exists that could be mistaken for key material.
     fn random_key() -> [u8; 32] {
-        let mut key = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
-        key
+        Aes256Gcm::generate_key(OsRng).into()
     }
 
     /// Seal `json` exactly as the server's `encryptEventContent` does: pad to a
@@ -1531,19 +1532,18 @@ mod server_event_tests {
     fn seal_like_server(key: &[u8; 32], json: &str, epoch: u64) -> String {
         let padded = llamenos_core::padding::pad_to_bucket(json.as_bytes());
         let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
-        let mut nonce_bytes = [0u8; 12];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let cipher = Aes256Gcm::new_from_slice(key).unwrap();
         let ct = cipher
             .encrypt(
-                Nonce::from_slice(&nonce_bytes),
+                &nonce,
                 Payload {
                     msg: &padded,
                     aad: aad.as_bytes(),
                 },
             )
             .unwrap();
-        let mut out = nonce_bytes.to_vec();
+        let mut out = nonce.to_vec();
         out.extend_from_slice(&ct);
         hex::encode(out)
     }
@@ -1650,10 +1650,16 @@ mod stored_record_conformance_tests {
 
     /// A CryptoState unlocked with the fixture reader's X25519 secret.
     fn state_for(reader: &FixtureReader) -> CryptoState {
-        let mut encryption_seed = [0u8; 32];
-        encryption_seed.copy_from_slice(&hex::decode(&reader.x25519_secret_hex).unwrap());
+        // The reader's X25519 secret is a published known-answer vector from
+        // the shared fixture (not production key material).
+        let encryption_seed: [u8; 32] = hex::decode(&reader.x25519_secret_hex)
+            .unwrap()
+            .try_into()
+            .expect("fixture x25519 secret is 32 bytes");
+        // The signing seed is irrelevant to these vectors: draw it at random.
+        let signing_seed: [u8; 32] = Aes256Gcm::generate_key(aes_gcm::aead::OsRng).into();
         let secrets = device_keys::DeviceSecrets {
-            signing_seed: [0x5au8; 32],
+            signing_seed,
             encryption_seed,
         };
         let ds = device_keys::DeviceKeyState {
