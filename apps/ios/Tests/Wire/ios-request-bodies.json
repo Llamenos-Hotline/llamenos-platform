@@ -60,7 +60,7 @@
     {
       "id": "createContact",
       "method": "POST",
-      "path": "/api/contacts-v2",
+      "path": "/api/directory",
       "module": "@protocol/schemas/contacts-v2",
       "schema": "createContactBodySchema",
       "swiftType": "CreateContactBody",
@@ -76,7 +76,7 @@
     {
       "id": "updateContact",
       "method": "PATCH",
-      "path": "/api/contacts-v2/:id",
+      "path": "/api/directory/:id",
       "module": "@protocol/schemas/contacts-v2",
       "schema": "updateContactBodySchema",
       "swiftType": "UpdateContactBody",

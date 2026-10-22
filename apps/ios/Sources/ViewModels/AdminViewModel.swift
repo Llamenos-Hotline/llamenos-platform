@@ -1407,14 +1407,6 @@ final class AdminViewModel {
         }
     }
 
-    // MARK: - Recording URL
-
-    /// Build a streaming URL for a recording.
-    func recordingStreamURL(recordingId: String) -> URL? {
-        guard let baseURL = apiService.baseURL else { return nil }
-        return baseURL.appendingPathComponent("/api/recordings/\(recordingId)/stream")
-    }
-
     // MARK: - Deletion Confirmation
 
     /// Request confirmation for a destructive action.

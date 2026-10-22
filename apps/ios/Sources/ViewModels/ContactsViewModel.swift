@@ -216,7 +216,7 @@ final class ContactDetailViewModel {
         do {
             let response: AppContactRelationshipsResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/contacts/\(contactHash)/relationships")
+                path: apiService.hp("/api/directory/\(contactHash)/relationships")
             )
             relationships = response.relationships
         } catch {
@@ -265,7 +265,7 @@ final class ContactTimelineViewModel {
         do {
             let response: ContactTimelineResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/contacts/\(contactHash)/timeline") + "?limit=100"
+                path: apiService.hp("/api/contacts/\(contactHash)")
             )
             events = response.events
             total = response.total
