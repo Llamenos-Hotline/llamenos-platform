@@ -423,7 +423,7 @@ final class APIService: @unchecked Sendable {
                 } else {
                     bodyString = nil
                 }
-                offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
+                await offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
             }
             throw APIError.networkError(error)
         }
@@ -501,7 +501,7 @@ final class APIService: @unchecked Sendable {
             // On network error for write operations, enqueue for offline replay
             if OfflineQueue.isQueueableMethod(method) {
                 let bodyString = String(data: rawBody, encoding: .utf8)
-                offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
+                await offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
             }
             throw APIError.networkError(error)
         }

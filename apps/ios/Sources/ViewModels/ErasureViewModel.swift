@@ -2,6 +2,13 @@ import Foundation
 import UIKit
 
 /// View model for user-facing erasure request lifecycle.
+///
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ErasureViewModel {
     private let apiService: APIService

@@ -103,8 +103,18 @@ private struct WsIncomingEvent: Decodable, Sendable {
 ///     handleEvent(event)
 /// }
 /// ```
+///
+/// `@MainActor` (#1920 audit): `connectionState`, `eventCount` and `memberHubIds` are rendered
+/// by the dashboard, settings and offline banner on the main thread, but the receive loop
+/// wrote them — and `webSocketTask`, `authenticated`, the subscription maps — on the
+/// global executor, while `disconnect()` wrote the same fields from its caller's thread.
+/// Thread Sanitizer reported `disconnect()` racing `receiveLoop()` on `webSocketTask` in
+/// `SecurityHardeningTests`. Isolated, `task.receive()` still suspends off main; only the
+/// message handling and state changes run there. `typedContinuationsLock` stays because
+/// an `AsyncStream` termination handler runs on whichever thread cancels the consumer.
+@MainActor
 @Observable
-final class WebSocketService: @unchecked Sendable {
+final class WebSocketService {
 
     // MARK: - Public State
 
@@ -158,7 +168,9 @@ final class WebSocketService: @unchecked Sendable {
     /// `subscribeToMemberHubs(kinds:)` has not been called.
     private var memberHubKinds: [Int]?
 
-    private var typedContinuations: [UUID: AsyncStream<AttributedHubEvent>.Continuation] = [:]
+    /// Guarded by `typedContinuationsLock`, not by the main actor: a stream's
+    /// `onTermination` handler removes its entry from whichever thread cancels the consumer.
+    @ObservationIgnored nonisolated(unsafe) private var typedContinuations: [UUID: AsyncStream<AttributedHubEvent>.Continuation] = [:]
     private let typedContinuationsLock = NSLock()
 
     private let exponentialBackoffAttempts = 10

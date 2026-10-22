@@ -2,6 +2,12 @@ import Foundation
 
 // MARK: - ContactsViewModel
 
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ContactsViewModel {
     private let apiService: APIService
@@ -167,6 +173,13 @@ final class ContactsViewModel {
 // MARK: - ContactDetailViewModel
 
 /// ViewModel for contact profile detail, including linked cases and relationships.
+///
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ContactDetailViewModel {
     private let apiService: APIService
@@ -242,6 +255,12 @@ final class ContactDetailViewModel {
 
 // MARK: - ContactTimelineViewModel
 
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ContactTimelineViewModel {
     private let apiService: APIService

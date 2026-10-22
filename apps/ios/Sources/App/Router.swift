@@ -52,6 +52,11 @@ enum Route: Hashable {
 /// and provides methods for common navigation transitions. The router observes
 /// the AppState's auth status and resets the stack when the auth state changes
 /// (e.g., lock → unlock, logout).
+///
+/// `@MainActor` (#1920 audit): `NavigationStack(path:)` binds to `path` on the main thread,
+/// and every caller — views and the notification-tap handler, which already hopped — runs
+/// there. Isolation turns that convention into a compile-time guarantee.
+@MainActor
 @Observable
 final class Router {
     /// The current navigation path for NavigationStack.
