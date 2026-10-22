@@ -529,6 +529,12 @@ async function runLiveDispatch(
       // `quotaBreaker` and the per-provider `inQuotaCooldown` backoff above both
       // read back.
       final = { ...base, ...result }
+      // BLOCKED no longer spends the item's attempt budget (ledger.ts,
+      // `TERMINAL_FAILURES`), so the `needs-human` veto is the only thing
+      // keeping a worker that reported it cannot proceed from being
+      // re-dispatched into the same wall on every pass. A person clears the
+      // label once the missing grant or decision exists.
+      if (result.outcome === 'BLOCKED') needsHuman = true
     }
   } catch (e) {
     threw = true

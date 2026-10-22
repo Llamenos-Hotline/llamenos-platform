@@ -1,0 +1,361 @@
+# Post-merge canary on `main` (#2053).
+#
+# THE PROBLEM THIS EXISTS FOR. `e2e (1..4)` (the desktop BDD shards in ci.yml)
+# run ONLY on `merge_group`: `pull_request` skips them (ci.yml's `revalidate`)
+# and `push: main` CI is deliberately absent (#1830). So a defect those suites
+# catch merges green, lands on `main` invisibly, and then fails EVERY later
+# merge group at a 100% rate until a human works out why. On 2026-10-20 two
+# such defects (#2047, #2049) caused 10 of that day's 14 failed groups, each
+# costing 20 min - 2 h of queue wall clock. The queue was the only detector
+# AND the only victim.
+#
+# WHAT THIS DOES. Runs the same desktop BDD shards ONCE PER PUSH TO `main`
+# (a push is one merged group - not once per queue entry), on GitHub-hosted
+# Linux runners. When they fail it opens (or comments on) an issue that names
+# the commit range since the last green canary and the PR behind each commit,
+# so "main is red" is a list of suspects instead of "the queue is flaky".
+#
+# WHAT THIS IS NOT.
+#   * Not a gate. It is not in ci-status's `needs`, it is not a required
+#     context, and it MUST NEVER BE ONE: a required canary recreates exactly
+#     the problem it exists to solve (a queue-blocking check on a tree that
+#     already landed). The `main-canary` ruleset context does not exist.
+#   * Not a retry, quarantine, or skip. A red shard is red.
+#   * Not the iOS suite. ios-e2e holds one of TWO self-hosted Macs for 40-100+
+#     minutes per run, and those same two Macs serve every merge group. A
+#     per-merge iOS canary would add ~15 Mac-hours/day against a queue that is
+#     already Mac-bound. iOS main coverage is the nightly `schedule` run in
+#     ios-e2e.yml. See the PR for the measurements.
+#
+# It lives in its own file rather than in ci.yml on purpose: ci.yml is the
+# hotspot that serialises every CI PR, and a `push: main` trigger there would
+# contradict its #1830 header and rerun the whole suite per merge.
+
+name: Main Canary
+
+on:
+  push:
+    branches: [main]
+    # Mirror of what cannot change the desktop/backend BDD verdict. Skipped
+    # pushes produce no run at all, so "last successful run" below always
+    # means "last run that actually exercised the shards".
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "site/**"
+      - "apps/ios/**"
+      - "apps/android/**"
+  # Manual run for proving the canary works / re-checking main on demand.
+  workflow_dispatch:
+
+# One canary at a time, never cancelled: a cancelled canary is a missing
+# verdict. GitHub keeps at most one run pending behind the running one, which
+# is fine - the pending run tests a tree that contains everything it replaced,
+# and `report` names the range back to the last GREEN run, not just the push.
+concurrency:
+  group: main-canary
+  cancel-in-progress: false
+
+permissions: {} # deny-all; per-job permissions below
+
+env:
+  BUN_VERSION: "1.3.5"
+  TEST_ADMIN_PUBKEY: "79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
+  # The X25519 HPKE recipient derived from the same test seed
+  # (tests/api-helpers.ts ADMIN_SEED). A DIFFERENT key from TEST_ADMIN_PUBKEY,
+  # and required whenever it is set (#1283).
+  TEST_ADMIN_DECRYPTION_PUBKEY: "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
+
+jobs:
+  # Same build ci.yml's `build` does for the e2e shards, minus the validators
+  # (codegen:check, i18n validate, typecheck): those gate PRs and the queue and
+  # have already run on this tree; the canary only needs the artifact.
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run codegen
+        run: bun run codegen
+
+      - name: Run i18n codegen
+        run: bun run i18n:codegen
+
+      - name: Build frontend (with Tauri IPC mocks for test builds)
+        run: PLAYWRIGHT_TEST=true bun run build
+
+      - name: Build server
+        run: bun run build:server
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: app-build
+          path: dist/
+          retention-days: 1
+
+  # The desktop BDD shards, byte-for-byte the ci.yml `e2e` job's steps (kept in
+  # step on purpose: a canary that runs a DIFFERENT command from the queue
+  # proves nothing about the queue). Only the `if:` differs - no path filter,
+  # because paths-ignore above already decided this push is relevant.
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Playwright deps (cached browsers)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+
+      - name: Download build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-build
+          path: dist
+
+      - name: Bootstrap backend
+        uses: ./.github/actions/bootstrap-backend
+        with:
+          admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
+          admin_decryption_pubkey: ${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
+          with_sidecars: "true"
+          wait_for_signal: "true"
+          wait_for_sip_bridge: "true"
+
+      - name: Generate BDD test files
+        # export warms the transform cache single-threaded first - see ci.yml's build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
+      - name: Start Vite preview server
+        run: |
+          bunx vite preview --port 8788 --strictPort &
+          PREVIEW_PID=$!
+          echo "preview_pid=$PREVIEW_PID" >> "$GITHUB_ENV"
+          for _i in $(seq 1 30); do
+            if bun -e "try{await fetch('http://localhost:8788');process.exit(0)}catch{process.exit(1)}" 2>/dev/null; then
+              echo "Preview server ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run E2E tests
+        run: bunx playwright test --project=bootstrap --project=bdd --shard=${{ matrix.shard }}/${{ strategy.job-total }} --workers=1
+        env:
+          CI: "true"
+          PLAYWRIGHT_BASE_URL: "http://localhost:8788"
+          TEST_HUB_URL: http://localhost:3000
+          TEST_RELAY_URL: ws://127.0.0.1:3000/ws
+          SIGNAL_NOTIFIER_URL: http://localhost:3100
+          SIGNAL_NOTIFIER_BEARER_TOKEN: ci-test-notifier-key
+          PBX_TYPE: ari
+          SIP_BRIDGE_URL: http://localhost:3001
+          DEV_RESET_SECRET: test-reset-secret
+          E2E_TEST_SECRET: test-reset-secret
+          DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+
+      - name: Stop Vite preview server
+        if: always()
+        run: kill "$preview_pid" 2>/dev/null || true
+
+      - name: Dump app container logs on failure
+        if: failure()
+        run: |
+          docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            logs app --tail=100 2>&1 || true
+
+      - name: Tear down Docker Compose
+        if: always()
+        run: |
+          docker compose --env-file .env \
+            --profile signal --profile asterisk \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            down -v || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-e2e-results-shard-${{ matrix.shard }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  # Red -> open (or comment on) ONE issue naming the suspects. A red check on
+  # `main` alone is easy to miss; an issue is something the fleet digest and
+  # the operator already read. Deliberately NOT labelled `agent-dispatchable`:
+  # a canary hit needs a human (or the supervisor) to decide revert-vs-forward-
+  # fix; it must not auto-dispatch a worker onto a moving main.
+  report:
+    needs: [build, e2e]
+    # `failure()` only - a cancelled run (operator/runner) is not a verdict.
+    if: ${{ always() && (needs.build.result == 'failure' || needs.e2e.result == 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+      pull-requests: read
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      BEFORE: ${{ github.event.before }}
+    steps:
+      - name: Name the suspects and report
+        run: |
+          set -euo pipefail
+
+          # Lower bound of the suspect range: the head of the last GREEN
+          # canary run, not this push's `before`. Pushes whose run was
+          # superseded while another canary was in flight (see `concurrency`)
+          # are folded into this one, so `before` alone would blame too few
+          # commits. Falls back to `before` when there has never been a green
+          # run, and to just this commit when neither resolves.
+          GREEN="$(gh run list --repo "$REPO" --workflow main-canary.yml --branch main \
+            --status success --limit 1 --json headSha -q '.[0].headSha // empty' || true)"
+          LOWER="${GREEN:-}"
+          if [[ -z "$LOWER" && "$BEFORE" =~ ^[0-9a-f]{40}$ && "$BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            LOWER="$BEFORE"
+          fi
+
+          SUSPECTS="$(mktemp)"
+          if [[ -n "$LOWER" ]] && gh api "repos/$REPO/compare/$LOWER...$SHA" \
+               --jq '.commits[] | [.sha, (.commit.message | split("\n")[0])] | @tsv' > "$SUSPECTS" 2>/dev/null \
+             && [[ -s "$SUSPECTS" ]]; then
+            RANGE="since the last green canary (${LOWER:0:9})"
+          else
+            gh api "repos/$REPO/commits/$SHA" --jq '[.sha, (.commit.message | split("\n")[0])] | @tsv' > "$SUSPECTS"
+            RANGE="this push only (no earlier green canary to bound the range)"
+          fi
+
+          # One line per suspect: "- `sha9` #PR - subject". The PR comes from
+          # the commits->pulls API, not the subject, so it survives subjects
+          # that do not end in "(#N)".
+          LIST="$(mktemp)"
+          while IFS=$'\t' read -r sha subject; do
+            pr="$(gh api "repos/$REPO/commits/$sha/pulls" --jq '.[0].number // empty' 2>/dev/null || true)"
+            # shellcheck disable=SC2016  # literal backticks (markdown), not a command substitution
+            printf -- '- `%s` %s - %s\n' "${sha:0:9}" "${pr:+#$pr}" "$subject" >> "$LIST"
+          done < "$SUSPECTS"
+
+          FAILED="$(gh run view "$RUN_ID" --repo "$REPO" --json jobs \
+            -q '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.url))"')"
+
+          HEAD_PR="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].number // empty' 2>/dev/null || true)"
+          TITLE="[main-canary] main is red at ${SHA:0:9}${HEAD_PR:+ (#$HEAD_PR)}"
+
+          BODY="$(mktemp)"
+          {
+            echo "The post-merge canary (desktop BDD shards, the suites that run **only** in the merge queue) failed on \`main\`."
+            echo
+            echo "**Merge commit:** \`$SHA\`${HEAD_PR:+ - PR #$HEAD_PR}"
+            echo "**Run:** $RUN_URL"
+            echo
+            echo "### Failed jobs"
+            echo "$FAILED"
+            echo
+            echo "### Suspects ($RANGE)"
+            cat "$LIST"
+            echo
+            echo "A defect in one of these has landed and will fail every merge group until fixed: revert or forward-fix it."
+            echo "This is a detector, not a gate - it blocks nothing and is not a required check. It closes itself when a later canary run on \`main\` is green."
+          } > "$BODY"
+
+          {
+            echo "### Main canary RED at \`${SHA:0:9}\`"
+            echo
+            echo "Suspects ($RANGE):"
+            cat "$LIST"
+            echo
+            echo "$FAILED"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=main canary red::main is red at $SHA${HEAD_PR:+ (PR #$HEAD_PR)} - suspects: $(tr '\n' ' ' < "$LIST")"
+
+          # Dedupe on the open canary issue, not on the sha: a second red run
+          # on the same broken main should add a comment, not a second issue.
+          OPEN="$(gh issue list --repo "$REPO" --state open --label ci \
+            --search '"[main-canary]" in:title' --json number -q '.[0].number // empty')"
+          if [[ -n "$OPEN" ]]; then
+            gh issue comment "$OPEN" --repo "$REPO" --body-file "$BODY"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --label ci --body-file "$BODY"
+          fi
+
+  # Green -> close the open canary issue, so an issue that is still open
+  # always means main is still red.
+  recover:
+    needs: [build, e2e]
+    if: ${{ always() && needs.build.result == 'success' && needs.e2e.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Close the open canary issue
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --repo "$REPO" --state open --label ci \
+                       --search '"[main-canary]" in:title' --json number -q '.[].number'); do
+            gh issue close "$n" --repo "$REPO" \
+              --comment "Canary green again at \`$SHA\` ($RUN_URL)."
+          done

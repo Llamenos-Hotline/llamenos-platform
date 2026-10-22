@@ -29,7 +29,7 @@
 //! refreshed.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -203,8 +203,13 @@ fn is_forbidden_request_header(name: &str) -> bool {
         .any(|h| h.eq_ignore_ascii_case(name.trim()))
 }
 
+/// Plain client for the proxy tests, which talk to plaintext loopback servers.
+/// Test-only on purpose: production code never uses a default-trust client —
+/// the configured backend is reached through the pinned client (`PinnedNet`)
+/// and the first-run probe through `cert_pin::build_probe_client`.
+#[cfg(test)]
 fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -342,7 +347,7 @@ fn probe_target(candidate: &str, allow_loopback_http: bool) -> Result<Url, Strin
     Url::parse(&format!("{origin}/api/health")).map_err(|e| format!("invalid URL: {e}"))
 }
 
-async fn probe_health(client: &reqwest::Client, target: Url) -> bool {
+pub(crate) async fn probe_health(client: &reqwest::Client, target: Url) -> bool {
     match client.get(target).timeout(PROBE_TIMEOUT).send().await {
         Ok(res) => res.status().is_success(),
         Err(_) => false,
@@ -351,7 +356,10 @@ async fn probe_health(client: &reqwest::Client, target: Url) -> bool {
 
 /// Test a CANDIDATE server address during first-run configuration. Returns only
 /// whether `<origin>/api/health` answered 2xx — no status, headers or body — and
-/// refuses outright once a backend is configured.
+/// refuses outright once a backend is configured. Certificates are judged the
+/// way `api_config_set` will judge them (TOFU SPKI pinning, #775), so a
+/// self-signed or private-CA backend passes here exactly when it can be
+/// configured.
 #[tauri::command]
 pub async fn net_probe_health(
     app: AppHandle,
@@ -363,7 +371,10 @@ pub async fn net_probe_health(
     if !limiter.try_acquire(Instant::now()) {
         return Err("rate limited: wait a moment before checking again".to_string());
     }
-    Ok(probe_health(http_client(), target).await)
+    // Same trust decision as the pinning step that follows (#1711), not the OS
+    // root store — see `cert_pin::build_probe_client`.
+    let client = cert_pin::build_probe_client(&target, PROBE_TIMEOUT)?;
+    Ok(probe_health(&client, target).await)
 }
 
 // ---------------------------------------------------------------------------

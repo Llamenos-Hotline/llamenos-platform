@@ -3,6 +3,7 @@ import {
   buildBoard, classifyPr, classifyReviewFailure, isBotAuthor,
   normalizeCheckRunState, normalizeStatusContextState, renderBoard, renderBoardPorcelain,
   fetchBoardFactsWith, deriveBranchRuleset, parseCodeOwners, codeOwnersOf,
+  runBoard,
   type BoardFacts, type PrFact, type PrCheckContext, type FleetStateFact, type BoardFetchDeps,
   type BranchGate, type BranchRuleset, type CheckState,
 } from '../../orchestrator/src/board.js'
@@ -388,14 +389,100 @@ describe('renderBoardPorcelain', () => {
 
 describe('fetchBoardFactsWith', () => {
   const deps = (over: Partial<BoardFetchDeps> = {}): BoardFetchDeps => ({
-    queryOpenPrs: vi.fn(async () => ({ data: { repository: { pullRequests: { nodes: [] } } } })),
+    queryOpenPrs: vi.fn(async () => ({ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } })),
     fetchRunJobs: vi.fn(async () => undefined),
     checkFleetHalt: vi.fn(async () => ({ halted: false })),
     fetchBranchRules: vi.fn(async () => LIVE_MAIN_RULES),
     fetchCodeOwners: vi.fn(async () => null),
     ...over,
   })
-  const onePr = (node: GqlPrNodeFixture) => async () => ({ data: { repository: { pullRequests: { nodes: [node] } } } })
+  const onePr = (node: GqlPrNodeFixture) => async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } })
+
+  it('fetches every page and builds a row for the highest open PR number', async () => {
+    const numbers = Array.from({ length: 61 }, (_, i) => 1768 + i)
+    const pages = [
+      { nodes: numbers.slice(0, 20).map((n) => gqlPr(n)), pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } },
+      { nodes: numbers.slice(20, 40).map((n) => gqlPr(n)), pageInfo: { hasNextPage: true, endCursor: 'cursor-2' } },
+      { nodes: numbers.slice(40, 60).map((n) => gqlPr(n)), pageInfo: { hasNextPage: true, endCursor: 'cursor-3' } },
+      { nodes: numbers.slice(60).map((n) => gqlPr(n)), pageInfo: { hasNextPage: false, endCursor: null } },
+    ]
+    const queryOpenPrs = vi.fn(async (after?: string) => {
+      const pageIndex = after === undefined ? 0 : Number(after.slice(-1))
+      const page = pages[pageIndex]
+      if (page === undefined) throw new Error(`unexpected cursor ${after}`)
+      return { data: { repository: { pullRequests: page } } }
+    })
+
+    const result = await fetchBoardFactsWith(deps({ queryOpenPrs }))
+    const view = buildBoard(result)
+
+    expect(result.prs).toHaveLength(numbers.length)
+    expect(view.rows).toHaveLength(numbers.length)
+    expect(view.rows.some((row) => row.number === 1828)).toBe(true)
+    expect(queryOpenPrs.mock.calls.map(([cursor]) => cursor)).toEqual([undefined, 'cursor-1', 'cursor-2', 'cursor-3'])
+  })
+
+  it('fails instead of treating a missing response as an empty PR list', async () => {
+    const queryOpenPrs = async () => undefined
+    await expect(fetchBoardFactsWith(deps({ queryOpenPrs }))).rejects.toThrow(/no response/i)
+  })
+
+  it('fails with the HTML error cause instead of treating it as an empty PR list', async () => {
+    const queryOpenPrs = vi.fn(async () => '<html><title>Unicorn!</title></html>')
+    await expect(fetchBoardFactsWith(deps({ queryOpenPrs }))).rejects.toThrow(/Unicorn/)
+    expect(queryOpenPrs).toHaveBeenCalledTimes(3)
+  })
+
+  it('includes GraphQL errors when the response has no repository pull requests', async () => {
+    const queryOpenPrs = async () => ({ errors: [{ message: 'repository unavailable' }], stderr: 'GraphQL request failed' })
+    await expect(fetchBoardFactsWith(deps({ queryOpenPrs }))).rejects.toThrow(/repository unavailable.*GraphQL request failed/)
+  })
+
+  it('fails on GraphQL partial data instead of silently using an incomplete PR page', async () => {
+    const queryOpenPrs = async () => ({
+      data: { repository: { pullRequests: { nodes: [gqlPr(1)], pageInfo: { hasNextPage: false, endCursor: null } } } },
+      errors: [{ message: 'files could not be loaded' }],
+    })
+    await expect(fetchBoardFactsWith(deps({ queryOpenPrs }))).rejects.toThrow(/files could not be loaded/)
+  })
+
+  it('retries a transient 5xx page error, but returns the complete page only after success', async () => {
+    const queryOpenPrs = vi.fn()
+      .mockRejectedValueOnce(new Error('HTTP 502: Unicorn!'))
+      .mockResolvedValueOnce({ data: { repository: { pullRequests: { nodes: [gqlPr(1828)], pageInfo: { hasNextPage: false, endCursor: null } } } } })
+    const result = await fetchBoardFactsWith(deps({ queryOpenPrs }))
+    expect(queryOpenPrs).toHaveBeenCalledTimes(2)
+    expect(result.prs.map((item) => item.number)).toEqual([1828])
+  })
+
+  it('fails the pass if a later page throws instead of returning only the first page', async () => {
+    const queryOpenPrs = vi.fn(async (after?: string) => {
+      if (after !== undefined) throw new Error('second page unavailable')
+      return { data: { repository: { pullRequests: { nodes: [gqlPr(1)], pageInfo: { hasNextPage: true, endCursor: 'next' } } } } }
+    })
+    await expect(fetchBoardFactsWith(deps({ queryOpenPrs }))).rejects.toThrow(/second page unavailable/)
+    expect(queryOpenPrs).toHaveBeenCalledTimes(2)
+  })
+
+  it('prints the genuine empty board and returns exit code zero', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      await expect(runBoard([], deps())).resolves.toBe(0)
+      expect(stdout.mock.calls.some(([chunk]) => String(chunk).includes('(no open pull requests)'))).toBe(true)
+    } finally {
+      stdout.mockRestore()
+    }
+  })
+
+  it('does not print a board when an open-PR read fails', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      await expect(runBoard([], deps({ queryOpenPrs: async () => undefined }))).rejects.toThrow(/no response/i)
+      expect(stdout).not.toHaveBeenCalled()
+    } finally {
+      stdout.mockRestore()
+    }
+  })
 
   it('reads the fleet halt state through checkFleetHalt, not a re-implemented file read', async () => {
     const result = await fetchBoardFactsWith(deps({ checkFleetHalt: async () => ({ halted: true, reason: 'halted by hand' }) }))
@@ -574,7 +661,7 @@ describe('deriveBranchRuleset', () => {
 
 describe('fetchBoardFactsWith — ruleset acquisition', () => {
   const baseDeps = (over: Partial<BoardFetchDeps> = {}): BoardFetchDeps => ({
-    queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [gqlPr(1), gqlPr(2), gqlPr(3)] } } } }),
+    queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [gqlPr(1), gqlPr(2), gqlPr(3)], pageInfo: { hasNextPage: false, endCursor: null } } } } }),
     fetchRunJobs: async () => undefined,
     checkFleetHalt: async () => ({ halted: false }),
     fetchBranchRules: async () => LIVE_MAIN_RULES,
@@ -878,7 +965,7 @@ describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)'
         { requestedReviewer: null },
       ],
     }
-    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node] } } } }) })
+    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
     expect(factsOut.prs[0]?.reviewRequests).toEqual(['llamenos-auto', 'core-team'])
   })
 
@@ -886,7 +973,7 @@ describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)'
     const node = gqlPr(7, [
       { __typename: 'CheckRun', name: REVIEW_JOB, title: 'NO-VERDICT:unreviewed — nothing has judged this diff', status: 'COMPLETED', conclusion: 'FAILURE', checkSuite: { workflowRun: { databaseId: 42 } } },
     ])
-    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node] } } } }) })
+    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
     const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
     expect(review?.title).toContain('NO-VERDICT:unreviewed')
   })

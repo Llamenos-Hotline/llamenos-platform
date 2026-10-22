@@ -1,6 +1,6 @@
 {
-  "_comment": "Single reviewable source of truth for which verify-release-live.yml surfaces gate the aggregate (#956, milestone #769). Every surface must be listed. A surface with required=false MUST carry a reason: it is NOT skipped silently and NOT reported green — the Summary job prints 'NOT REQUIRED (out of milestone scope)' plus this reason on every run, so descoping is a visible decision made in a PR. Changing this file is a change to the release gate: it is under .github/workflows/ and therefore code-owned.",
-  "milestone": "Internal beta — Android + desktop (#769); iOS and the desktop auto-update channel deferred",
+  "_comment": "Single reviewable source of truth for which verify-release-live.yml surfaces gate the aggregate (#956, milestone #769). Every surface must be listed. A surface with required=false MUST carry a reason: it is NOT skipped silently and NOT reported green \u2014 the Summary job prints 'NOT REQUIRED (out of milestone scope)' plus this reason on every run, so descoping is a visible decision made in a PR. Changing this file is a change to the release gate: it is under .github/workflows/ and therefore code-owned.",
+  "milestone": "Internal beta \u2014 Android + desktop (#769); iOS and the desktop auto-update channel deferred",
   "surfaces": {
     "desktop-installer": {
       "required": true,
@@ -21,6 +21,10 @@
     "desktop-updater": {
       "required": false,
       "reason": "the desktop auto-update channel (RustFS + llamenos-releases, #714/#715) is out of beta scope; testers install from the GitHub Release, verified by the desktop-installer surface. Re-require this once #714/#715 land"
+    },
+    "container-image": {
+      "required": true,
+      "description": "Latest release's app image tag is anonymously pullable from GHCR at the address release.yml publishes to and the address site/src/config.ts advertises"
     }
   },
   "desktopInstallerPlatforms": {

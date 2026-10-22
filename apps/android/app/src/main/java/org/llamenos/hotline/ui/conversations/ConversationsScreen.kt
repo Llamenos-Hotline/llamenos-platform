@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.MarkChatRead
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,12 +38,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.Conversation
 import org.llamenos.hotline.util.DateFormatUtils
+import org.llamenos.protocol.ConversationListResponseConversation
+import org.llamenos.protocol.SharedReportResponseStatus
 
 /**
  * Conversations list screen showing all E2EE messaging conversations.
@@ -190,7 +189,7 @@ fun ConversationsScreen(
  */
 @Composable
 private fun ConversationCard(
-    conversation: Conversation,
+    conversation: ConversationListResponseConversation,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -200,11 +199,7 @@ private fun ConversationCard(
             .clickable(onClick = onClick)
             .testTag("conversation-card-${conversation.id}"),
         colors = CardDefaults.cardColors(
-            containerColor = if (conversation.unreadCount > 0) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
         ),
     ) {
         Row(
@@ -237,21 +232,16 @@ private fun ConversationCard(
                     Text(
                         text = channelLabel(conversation.channelType),
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = if (conversation.unreadCount > 0) {
-                            FontWeight.Bold
-                        } else {
-                            FontWeight.Normal
-                        },
                         modifier = Modifier.testTag("conversation-channel-${conversation.id}"),
                     )
 
                     // Status badge
                     Text(
-                        text = conversation.status.replaceFirstChar { it.uppercase() },
+                        text = conversation.status?.value.orEmpty().replaceFirstChar { it.uppercase() },
                         style = MaterialTheme.typography.labelSmall,
                         color = when (conversation.status) {
-                            "active" -> MaterialTheme.colorScheme.primary
-                            "waiting" -> MaterialTheme.colorScheme.tertiary
+                            SharedReportResponseStatus.Active -> MaterialTheme.colorScheme.primary
+                            SharedReportResponseStatus.Waiting -> MaterialTheme.colorScheme.tertiary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         modifier = Modifier.testTag("conversation-status-${conversation.id}"),
@@ -262,7 +252,7 @@ private fun ConversationCard(
 
                 // Contact hash (truncated)
                 Text(
-                    text = conversation.contactHash.take(12) + "...",
+                    text = conversation.contactIdentifierHash.take(12) + "...",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -279,19 +269,6 @@ private fun ConversationCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         modifier = Modifier.testTag("conversation-time-${conversation.id}"),
-                    )
-                }
-            }
-
-            // Unread badge
-            if (conversation.unreadCount > 0) {
-                Spacer(Modifier.width(8.dp))
-                Badge(
-                    modifier = Modifier.testTag("conversation-unread-${conversation.id}"),
-                ) {
-                    Text(
-                        text = conversation.unreadCount.toString(),
-                        style = MaterialTheme.typography.labelSmall,
                     )
                 }
             }

@@ -1332,6 +1332,14 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 25
+    # app/build.gradle.kts relocates the build directory off the checkout (to
+    # $RUNNER_TEMP/llamenos-android-build-<hash>) unless ANDROID_BUILD_DIR names
+    # one, so every `apps/android/app/build/...` artifact path below matched
+    # nothing — "No files were found", a warning, never a failure. #1811's queue
+    # ejection by a unit test left no test report behind because of it. A
+    # hosted runner has nothing to share the checkout with, so pin it back.
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/apps/android/app/build
 
     steps:
       - name: Checkout
@@ -1366,12 +1374,16 @@ jobs:
         working-directory: apps/android
         run: ./gradlew assembleDebug assembleDebugAndroidTest --console=plain
 
+      # The JUnit XML carries each failure's full stack and the test's stdout/stderr;
+      # the HTML report is the same, browsable. Only a failure needs either.
       - name: Upload Android test results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-unit-test-results
-          path: apps/android/app/build/test-results/
+          path: |
+            apps/android/app/build/test-results/
+            apps/android/app/build/reports/tests/
           retention-days: 7
 
   # ─── PR-head Android compile gate (#1762) ────────────────────
@@ -1429,6 +1441,9 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 45
+    # See android-build-test: without this the result paths below never exist.
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/apps/android/app/build
 
     strategy:
       fail-fast: false
@@ -1726,6 +1741,7 @@ jobs:
           path: |
             apps/android/app/build/outputs/androidTest-results/
             apps/android/app/build/reports/androidTests/
+            apps/android/app/build/reports/m1-probe/
           retention-days: 7
 
       - name: Upload logcat
@@ -2601,13 +2617,16 @@ jobs:
   #     the queue ref is the invisible-gap bug itself (the #1594 shape)
   #     and fails here.
   #
+  #   every event — `crypto-tests` has no queue-only deferral, so a skip
+  #     with the `crypto` flag set fails here too (#1941).
+  #
   # A separate job rather than a ci-status step because ci-status cannot
   # read these flags: adding `changes` to its `needs` trips the
   # required-context rail in tests/orchestrator/guards.test.ts (`changes`'s
   # own `if:` names `event_name` without `merge_group`), and that rail is
   # load-bearing. This job's `if:` names no event, so the rail passes.
   platform-suite-coverage:
-    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd]
+    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd, crypto-tests]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2622,6 +2641,7 @@ jobs:
           ANDROID: ${{ needs.changes.outputs.android }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           BACKEND: ${{ needs.changes.outputs.backend }}
+          CRYPTO: ${{ needs.changes.outputs.crypto }}
           R_IOS_COMPILE: ${{ needs.ios-compile-check.result }}
           R_ANDROID_COMPILE: ${{ needs.android-compile-check.result }}
           R_IOS_BUILD: ${{ needs.ios-build-test.result }}
@@ -2630,6 +2650,7 @@ jobs:
           R_ANDROID_E2E: ${{ needs.android-e2e.result }}
           R_E2E: ${{ needs.e2e.result }}
           R_BACKEND_BDD: ${{ needs.backend-bdd.result }}
+          R_CRYPTO: ${{ needs.crypto-tests.result }}
         run: |
           set -euo pipefail
           gap=""
@@ -2668,6 +2689,13 @@ jobs:
             if { [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; } && [ "$R_E2E" = "skipped" ]; then gap="$gap e2e"; fi
             if [ "$BACKEND" = "true" ] && [ "$R_BACKEND_BDD" = "skipped" ]; then gap="$gap backend-bdd"; fi
           fi
+
+          # crypto-tests has no `revalidate` deferral: its `if:` is exactly
+          # `crypto == 'true'`, so on EVERY event a skip with the flag set is
+          # wiring drift, never a deliberate deferral. ci-status reads `skipped`
+          # as a pass, so without this the suite could vanish and stay green
+          # (#1941, #1954).
+          if [ "$CRYPTO" = "true" ] && [ "$R_CRYPTO" = "skipped" ]; then gap="$gap crypto-tests"; fi
 
           if [ -n "$gap" ]; then
             echo "::error::Platform suites for the changed paths were SKIPPED on $EVENT_NAME:$gap — ci-status must not report success for a platform nothing verified (#1762). This is a CI wiring defect, not a code failure; check the gate's if: against detect-changed-platforms.sh."

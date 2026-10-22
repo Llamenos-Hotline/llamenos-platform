@@ -1650,6 +1650,9 @@ export async function netFetchViaRust(request: NetRequest): Promise<NetResponse>
 /**
  * First-run only: whether `<candidate origin>/api/health` answers 2xx. Rust
  * refuses once a backend is configured, and rate-limits to one probe per second.
+ * Rust judges the server's certificate the way `api_config_set` will (SPKI
+ * pinning, not OS-root chain validation), so a self-signed or private-CA
+ * backend probes healthy exactly when it can be configured.
  */
 export async function netProbeHealth(candidate: string): Promise<boolean> {
   if (useTauri) {

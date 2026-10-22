@@ -5,15 +5,23 @@
         Print the xcodebuild selection arguments for shard I of N, one per line.
         Every XCTestCase subclass under Tests/UI is assigned to exactly one
         shard, so a new class can never fall through the cracks between shards.
-        Shards are balanced by expected test time (costliest class first, into
-        the lightest shard): the tests the shard will actually run times the
-        class's measured seconds per test from Tests/UI/ci-timings.json (the
-        median class for a class with no measurement). Tests listed in
+        Shards are balanced by expected WALL-CLOCK on the host each one runs on
+        (--mac-shards names the shards routed to the self-hosted Mac; every
+        other shard is a GitHub-hosted runner): costliest class first, into the
+        shard where it would finish earliest. A class costs the tests the shard
+        will actually run times its measured seconds per test ON THAT HOST from
+        Tests/UI/ci-timings.json — see `expected_seconds` for what is used when
+        the class was never measured there. Tests listed in
         Tests/UI/ci-quarantine.txt are skipped unless --include-quarantined.
 
-    ui-tests.py timings REPORT.json...
-        Rewrite Tests/UI/ci-timings.json from `report --json` outputs: each
-        class's mean seconds per executed test.
+    ui-tests.py plan --total N [--mac-shards ...]
+        Print each shard's expected wall-clock under the current timings.
+
+    ui-tests.py timings --host mac|hosted REPORT.json...
+        Fold `report --json` outputs from shards that ran on HOST into that
+        host's section of Tests/UI/ci-timings.json: each class's median, across
+        the reports, of its mean seconds per passed test. Classes the reports
+        do not mention keep their previous figure.
 
     ui-tests.py check-quarantine
         Fail unless every quarantine entry names an existing test method and
@@ -30,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -45,6 +54,12 @@ SMOKE_FILE = UI_TESTS_DIR / "ci-smoke.txt"
 NON_GATING_FILE = UI_TESTS_DIR / "ci-non-gating.txt"
 MAC_SHARDS_FILE = UI_TESTS_DIR / "ci-mac-shards.txt"
 TIMINGS_FILE = UI_TESTS_DIR / "ci-timings.json"
+MAC, HOSTED = "mac", "hosted"
+HOSTS = (MAC, HOSTED)
+# Whole-shard wall-clock, hosted over Mac, on the same classes (#1873: 1.51x).
+# Only the fallback for a timings file with no class measured on both hosts;
+# `host_factor` derives the real figure from the file as soon as there is one.
+FALLBACK_HOSTED_FACTOR = 1.5
 QUARANTINE_RE = re.compile(r"^(?P<cls>\w+)/(?P<test>test\w+)\s+#\s*(?P<why>.*\S)\s*$")
 SMOKE_RE = re.compile(r"^(?P<cls>\w+)\s+#\s*(?P<why>.*\S)\s*$")
 ISSUE_RE = re.compile(r"(?:^|[^\w&/])#\d+\b")
@@ -241,21 +256,54 @@ def check_smoke() -> int:
     return 1 if problems else 0
 
 
-def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = False,
-          include_non_gating: bool = False, mac_shards: list[int] | None = None) -> list[str]:
-    """Balanced by expected seconds, not test count: the admin classes cost ~50s a
-    test and the rest ~20-30s, so count-balanced shards ran 29-43 min in run
-    36368999711, and the 43-min shard hit the 45-min step timeout after its last
-    test had passed."""
-    if not 0 <= index < total:
-        raise SystemExit(f"shard index {index} out of range for {total} shards")
+def load_timings() -> dict[str, dict[str, float]]:
+    """{host: {class: seconds per test}} from ci-timings.json."""
+    if not TIMINGS_FILE.is_file():
+        return {h: {} for h in HOSTS}
+    raw = json.loads(TIMINGS_FILE.read_text(encoding="utf-8"))
+    if set(raw) - set(HOSTS) or not all(isinstance(raw.get(h, {}), dict) for h in HOSTS):
+        raise SystemExit(f"{TIMINGS_FILE.name}: expected {{'mac': {{class: s}}, 'hosted': {{class: s}}}}, "
+                         f"found keys {sorted(raw)}")
+    return {h: dict(raw.get(h, {})) for h in HOSTS}
+
+
+def host_factor(prices: dict[str, dict[str, float]]) -> float:
+    """How many times slower a GitHub-hosted runner is than the Mac: the median
+    over the classes measured on both."""
+    ratios = [prices[HOSTED][c] / prices[MAC][c]
+              for c in prices[MAC] if c in prices[HOSTED] and prices[MAC][c] > 0]
+    return statistics.median(ratios) if ratios else FALLBACK_HOSTED_FACTOR
+
+
+def expected_seconds(prices: dict[str, dict[str, float]], cls: str, host: str) -> float:
+    """Seconds one test of `cls` is expected to take on `host`.
+
+    The class's own measurement on that host when there is one. Otherwise its
+    measurement on the other host, scaled by `host_factor`. A class measured
+    nowhere (new, or never run) costs the median class on that host: the
+    previous behaviour, but per host, so a class added since the last refresh
+    is no longer priced at a figure from the wrong hardware.
+    """
+    scale = {MAC: 1.0, HOSTED: host_factor(prices)}
+    if cls in prices[host]:
+        return prices[host][cls]
+    other = HOSTED if host == MAC else MAC
+    if cls in prices[other]:
+        return prices[other][cls] * scale[host] / scale[other]
+    own = sorted(prices[host].values())
+    if own:
+        return own[len(own) // 2]
+    borrowed = sorted(prices[other].values())
+    return borrowed[len(borrowed) // 2] * scale[host] / scale[other] if borrowed else 1.0
+
+
+def selection(include_quarantined: bool, only_smoke: bool,
+              include_non_gating: bool) -> tuple[dict[str, int], dict[str, int]]:
+    """(class -> test count, class -> quarantined tests skipped) for this run."""
     skipped: dict[str, int] = defaultdict(int)
     if not include_quarantined:
         for cls, _, _ in quarantine():
             skipped[cls] += 1
-    per_test = json.loads(TIMINGS_FILE.read_text(encoding="utf-8")) if TIMINGS_FILE.is_file() else {}
-    known = sorted(per_test.values())
-    default = known[len(known) // 2] if known else 1.0
     selected = test_classes()
     # Excused from the gate unless explicitly asked for. These produce an
     # artefact rather than a verdict (check-non-gating enforces that they
@@ -278,7 +326,50 @@ def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = 
         selected = {c: n for c, n in selected.items() if c in smoke}
         if not selected:
             raise SystemExit("smoke tier selected no classes — refusing to report a vacuous pass")
-    cost = {cls: (n - skipped[cls]) * per_test.get(cls, default) for cls, n in selected.items()}
+    return selected, skipped
+
+
+def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = False,
+          include_non_gating: bool = False, mac_shards: list[int] | None = None) -> list[str]:
+    """Balanced by expected seconds ON THE HOST EACH SHARD RUNS ON, not by test
+    count and not by one host-blind figure: the admin classes cost ~50s a test
+    and the rest ~20-30s, so count-balanced shards ran 29-43 min in run
+    36368999711, and the 43-min shard hit the 45-min step timeout after its last
+    test had passed. And a single per-class average priced the Mac and the
+    hosted runners identically, which predicted a 20s spread across four shards
+    that actually ran 834s apart (#1873) — the hosted pair absorbing the error."""
+    if not 0 <= index < total:
+        raise SystemExit(f"shard index {index} out of range for {total} shards")
+    selected, skipped = selection(include_quarantined, only_smoke, include_non_gating)
+    prices = load_timings()
+    unpriced = sorted(c for c in selected if not any(c in prices[h] for h in HOSTS))
+    if unpriced:
+        # Priced at the host's median class, which is how AdminNavigationUITests
+        # (~40s a test) ran as a 24.9s one for two weeks and set its shard's
+        # wall-clock. Visible, not fatal: a new class cannot be measured before
+        # it has run once.
+        print(f"::warning::ci-timings.json has no measurement for {', '.join(unpriced)}; "
+              f"packed at the median class. Refresh with `ui-tests.py timings --host ...`.",
+              file=sys.stderr)
+    bins, _ = pack(selected, skipped, prices, total, mac_shards or [])
+    mine = sorted(bins[index])
+    args = [f"-only-testing:{TARGET}/{cls}" for cls in mine]
+    if not include_quarantined:
+        args += [f"-skip-testing:{TARGET}/{cls}/{test}" for cls, test, _ in quarantine() if cls in mine]
+    return args
+
+
+def pack(selected: dict[str, int], skipped: dict[str, int], prices: dict[str, dict[str, float]],
+         total: int, mac_shards: list[int]) -> tuple[list[list[str]], list[float]]:
+    """Assign every class to a shard. Returns (classes per shard, expected
+    wall-clock seconds per shard)."""
+    mac_targets = [i for i in mac_shards if 0 <= i < total]
+    host_of = [MAC if i in mac_targets else HOSTED for i in range(total)]
+    # Seconds the class costs on each shard's host.
+    cost = {
+        cls: [(n - skipped[cls]) * expected_seconds(prices, cls, host_of[i]) for i in range(total)]
+        for cls, n in selected.items()
+    }
 
     bins: list[list[str]] = [[] for _ in range(total)]
     loads = [0.0] * total
@@ -294,41 +385,58 @@ def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = 
     # sending shard 3 to the Mac by SecurityUITests' 313s PIN test, while
     # SecurityUITests sat in shard 2, which goes to GitHub.
     pinned = mac_shard_classes() if mac_shards else {}
-    mac_targets = [i for i in (mac_shards or []) if 0 <= i < total]
     if pinned and not mac_targets:
         raise SystemExit(
             f"--mac-shards {mac_shards} names no valid index for --total {total}; "
             f"refusing to silently run Mac-pinned classes on hosted runners")
-    for cls, secs in sorted(((c, cost[c]) for c in pinned if c in cost), key=lambda kv: (-kv[1], kv[0])):
-        lightest = min(mac_targets, key=lambda i: loads[i])
-        bins[lightest].append(cls)
-        loads[lightest] += secs
 
-    for cls, secs in sorted(cost.items(), key=lambda kv: (-kv[1], kv[0])):
-        if cls in pinned and mac_targets:
-            continue
-        lightest = loads.index(min(loads))
-        bins[lightest].append(cls)
-        loads[lightest] += secs
-    mine = sorted(bins[index])
-    args = [f"-only-testing:{TARGET}/{cls}" for cls in mine]
-    if not include_quarantined:
-        args += [f"-skip-testing:{TARGET}/{cls}/{test}" for cls, test, _ in quarantine() if cls in mine]
-    return args
+    def place(cls: str, candidates: list[int]) -> None:
+        # Earliest finish, not lightest bin: with unequal hosts the bin that is
+        # lightest NOW is not the one that finishes the class first. On equal
+        # hosts the two coincide, so this is the old rule there.
+        best = min(candidates, key=lambda i: (loads[i] + cost[cls][i], i))
+        bins[best].append(cls)
+        loads[best] += cost[cls][best]
+
+    for cls in sorted((c for c in pinned if c in cost), key=lambda c: (-max(cost[c]), c)):
+        place(cls, mac_targets)
+    for cls in sorted((c for c in cost if not (c in pinned and mac_targets)), key=lambda c: (-max(cost[c]), c)):
+        place(cls, list(range(total)))
+    return bins, loads
 
 
-def timings(reports: list[Path]) -> int:
-    secs: dict[str, float] = defaultdict(float)
-    runs: dict[str, int] = defaultdict(int)
+def timings(host: str, reports: list[Path]) -> int:
+    per_run: dict[str, list[float]] = defaultdict(list)
     for path in reports:
+        by_class: dict[str, list[float]] = defaultdict(list)
         for case in json.loads(path.read_text(encoding="utf-8")):
-            secs[case["class"]] += case["seconds"]
-            runs[case["class"]] += 1
-    if not runs:
-        raise SystemExit("no executed test cases in the given reports")
-    per_test = {cls: round(secs[cls] / runs[cls], 1) for cls in sorted(runs)}
-    TIMINGS_FILE.write_text(json.dumps(per_test, indent=2) + "\n", encoding="utf-8")
-    print(f"{TIMINGS_FILE.name}: {len(per_test)} classes from {sum(runs.values())} test cases")
+            # A failed or killed test's duration is how long it took to fail,
+            # which says nothing about what the class costs.
+            if case["status"] == "passed":
+                by_class[case["class"]].append(case["seconds"])
+        for cls, secs in by_class.items():
+            per_run[cls].append(sum(secs) / len(secs))
+    if not per_run:
+        raise SystemExit("no passed test cases in the given reports")
+    current = load_timings()
+    # Median across runs: one contended run must not set a class's price.
+    current[host].update({cls: round(statistics.median(v), 1) for cls, v in per_run.items()})
+    out = {h: dict(sorted(current[h].items())) for h in HOSTS}
+    TIMINGS_FILE.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    print(f"{TIMINGS_FILE.name}: {host} now prices {len(out[host])} classes "
+          f"({len(per_run)} refreshed from {len(reports)} report(s)); hosted/mac = {host_factor(out):.2f}x")
+    return 0
+
+
+def plan(total: int, mac_shards: list[int], include_quarantined: bool, only_smoke: bool,
+         include_non_gating: bool) -> int:
+    """Print the wall-clock each shard is expected to take under the timings."""
+    selected, skipped = selection(include_quarantined, only_smoke, include_non_gating)
+    bins, loads = pack(selected, skipped, load_timings(), total, mac_shards)
+    for i in range(total):
+        host = MAC if i in mac_shards else HOSTED
+        print(f"shard {i} ({host:6}) {loads[i]:6.0f}s  {len(bins[i]):2} classes")
+    print(f"slowest {max(loads):.0f}s, fastest {min(loads):.0f}s, spread {max(loads) / min(loads):.2f}x")
     return 0
 
 
@@ -422,33 +530,41 @@ def report(log_path: Path, json_out: Path | None) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("shard")
+    sel = argparse.ArgumentParser(add_help=False)
+    sel.add_argument("--total", type=int, required=True)
+    sel.add_argument("--include-quarantined", action="store_true")
+    sel.add_argument("--only-smoke", action="store_true",
+                     help="restrict selection to the classes in ci-smoke.txt (SMOKE tier)")
+    sel.add_argument("--mac-shards", default="",
+                     help="comma-separated shard indices the workflow routes to the self-hosted Mac; "
+                          "classes in ci-mac-shards.txt are confined to these, and every shard not "
+                          "listed is priced as a GitHub-hosted runner")
+    sel.add_argument("--include-non-gating", action="store_true",
+                     help="also select the classes in ci-non-gating.txt (asset generation; "
+                          "excluded by default because nothing consumes their output)")
+    s = sub.add_parser("shard", parents=[sel])
     s.add_argument("--index", type=int, required=True)
-    s.add_argument("--total", type=int, required=True)
-    s.add_argument("--include-quarantined", action="store_true")
-    s.add_argument("--only-smoke", action="store_true",
-                   help="restrict selection to the classes in ci-smoke.txt (SMOKE tier)")
-    s.add_argument("--mac-shards", default="",
-                   help="comma-separated shard indices the workflow routes to the self-hosted Mac; "
-                        "classes in ci-mac-shards.txt are confined to these")
-    s.add_argument("--include-non-gating", action="store_true",
-                   help="also select the classes in ci-non-gating.txt (asset generation; "
-                        "excluded by default because nothing consumes their output)")
+    sub.add_parser("plan", parents=[sel], help="print each shard's expected wall-clock under the timings")
     sub.add_parser("check-quarantine")
     sub.add_parser("check-smoke")
     sub.add_parser("check-non-gating")
     sub.add_parser("check-mac-shards")
     t = sub.add_parser("timings")
+    t.add_argument("--host", choices=HOSTS, required=True,
+                   help="the kind of runner the reports' shards ran on")
     t.add_argument("reports", type=Path, nargs="+")
     r = sub.add_parser("report")
     r.add_argument("log", type=Path)
     r.add_argument("--json", type=Path)
     args = ap.parse_args()
 
-    if args.cmd == "shard":
+    if args.cmd in ("shard", "plan"):
+        mac_shards = [int(x) for x in args.mac_shards.split(",") if x.strip()]
+        if args.cmd == "plan":
+            return plan(args.total, mac_shards, args.include_quarantined, args.only_smoke,
+                        args.include_non_gating)
         print("\n".join(shard(args.index, args.total, args.include_quarantined, args.only_smoke,
-                              args.include_non_gating,
-                              [int(x) for x in args.mac_shards.split(",") if x.strip()])))
+                              args.include_non_gating, mac_shards)))
         return 0
     if args.cmd == "check-quarantine":
         return check_quarantine()
@@ -459,7 +575,7 @@ def main() -> int:
     if args.cmd == "check-mac-shards":
         return check_mac_shards()
     if args.cmd == "timings":
-        return timings(args.reports)
+        return timings(args.host, args.reports)
     return report(args.log, args.json)
 
 

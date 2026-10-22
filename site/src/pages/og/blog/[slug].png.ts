@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { APIRoute } from 'astro';
 import { getCollection } from 'astro:content';
 import satori from 'satori';
@@ -19,9 +21,10 @@ export const GET: APIRoute = async ({ params }) => {
   const { title, tags } = post.data;
   const tag = tags[0];
 
-  const fontUrl = 'https://fonts.gstatic.com/s/dmsans/v17/rP2tp2ywxg089UriI5-g4vlH9VoD8CmcqZG40F9JadbnoEwAopxhTg.ttf';
-  const fontResponse = await fetch(fontUrl);
-  const fontData = await fontResponse.arrayBuffer();
+  // Read from the repo (build cwd is site/), not fetched: the build must not depend on (or phone home to) a font CDN.
+  const [regular, bold] = await Promise.all(
+    ['400', '700'].map(w => readFile(resolve(process.cwd(), `src/assets/og-fonts/dm-sans-latin-${w}-normal.woff`))),
+  );
 
   const svg = await satori(OgImage({ title, tag }), {
     width: 1200,
@@ -29,13 +32,13 @@ export const GET: APIRoute = async ({ params }) => {
     fonts: [
       {
         name: 'DM Sans',
-        data: fontData,
+        data: regular,
         weight: 400,
         style: 'normal',
       },
       {
         name: 'DM Sans',
-        data: fontData,
+        data: bold,
         weight: 700,
         style: 'normal',
       },

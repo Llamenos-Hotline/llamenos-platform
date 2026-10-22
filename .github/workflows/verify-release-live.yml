@@ -8,7 +8,7 @@
 # the SOURCE builds and tests, never that a tester can install anything.
 # This workflow is the missing check (#721).
 #
-# Five independent surfaces, five independent jobs:
+# Six independent surfaces, six independent jobs:
 #   1. desktop-installer — the latest desktop GitHub Release (`desktop-v<ver>`,
 #      published by tauri-release.yml, and the version must match the latest
 #      `v<ver>` release) carries a signed installer (+ .sig) for every
@@ -28,6 +28,13 @@
 #   5. desktop-updater — the canonical Tauri updater manifest resolves,
 #      and every platform binary it points at downloads and matches the
 #      published CHECKSUMS.txt.
+#   6. container-image — the latest `v<ver>` release's app image can be pulled
+#      ANONYMOUSLY at both addresses an operator can reach it by: where
+#      release.yml's `docker-stable` job publishes it, and where
+#      site/src/config.ts tells them to `docker pull` from. `docker-stable`
+#      reports success when the push lands, so a package GHCR created private
+#      (or a download page still pointing at a stale namespace) left self-
+#      hosters on the previous version while every job here stayed green.
 #
 # RE-SCOPE (#956, milestone #769): on 2026-09-24 the first internal beta was
 # re-scoped to Android + desktop ONLY, with no production auto-update channel.
@@ -105,6 +112,10 @@ on:
         description: "Override the App Store Connect issuer id (testing only — production uses secrets.APPLE_API_ISSUER_ID)"
         required: false
         type: string
+      container_version_override:
+        description: "Check this image tag (e.g. 0.19.18) instead of the one matching the latest v<ver> release (testing only)"
+        required: false
+        type: string
       expected_build_number_override:
         description: "Override the expected TestFlight build number instead of reading it from the latest release's ios-build-meta.json (testing only)"
         required: false
@@ -124,6 +135,7 @@ jobs:
       play-track: ${{ steps.resolve.outputs.play-track }}
       testflight: ${{ steps.resolve.outputs.testflight }}
       desktop-updater: ${{ steps.resolve.outputs.desktop-updater }}
+      container-image: ${{ steps.resolve.outputs.container-image }}
       platforms: ${{ steps.resolve.outputs.platforms }}
     steps:
       - name: Checkout (surfaces config only)
@@ -140,7 +152,7 @@ jobs:
         run: |
           set -euo pipefail
           CFG=.github/workflows/verify-release-live.surfaces.json
-          KNOWN="desktop-installer staging-backend play-track testflight desktop-updater"
+          KNOWN="desktop-installer staging-backend play-track testflight desktop-updater container-image"
           jq -e . "$CFG" >/dev/null || { echo "::error::$CFG is not valid JSON"; exit 1; }
 
           # Every known surface must be listed and every listed surface known:
@@ -911,11 +923,112 @@ jobs:
           fi
           echo "OK: TestFlight build number matches release $EXPECTED_TAG"
 
+  # ─── Surface 6: Container image (GHCR, anonymous pull) ───────────
+  container-image:
+    name: "Surface 6 — App container image is publicly pullable"
+    needs: config
+    if: ${{ needs.config.outputs.container-image == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (advertised registry address only)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            site/src/config.ts
+          sparse-checkout-cone-mode: false
+
+      # Deliberately UNauthenticated against the registry: the runner's own
+      # GITHUB_TOKEN can always read a package this repository wrote, which is
+      # exactly why `docker-stable` goes green on an image nobody else can
+      # pull. A self-hoster has no token, so neither does this check.
+      - name: Verify the latest release's image tag resolves anonymously at every address
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_OVERRIDE: ${{ inputs.container_version_override }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+          if [ -n "$VERSION_OVERRIDE" ]; then
+            VERSION="$VERSION_OVERRIDE"
+            echo "Using overridden image tag: $VERSION (testing only)"
+          else
+            LATEST_V=$(gh release list --repo "$REPO" --limit 50 --json tagName,isDraft \
+              --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^v[0-9]"))) | .tagName) // empty')
+            if [ -z "$LATEST_V" ]; then
+              echo "::error::SURFACE BROKEN: container image — no published v<version> GitHub Release exists to compare against"
+              exit 1
+            fi
+            VERSION="${LATEST_V#v}"
+          fi
+
+          # (label, image path). The first is computed the way release.yml's
+          # docker-stable job computes it (lowercase fold of the repository);
+          # the second is read out of the download page's config so the two
+          # cannot drift apart unnoticed.
+          PUBLISHED="${REPO,,}"
+          ADVERTISED=$(sed -nE "/registry:[[:space:]]*\{/,/\}/ s#^[[:space:]]*app:[[:space:]]*'ghcr\.io/([^']+)'.*#\1#p" site/src/config.ts | head -1)
+          if [ -z "$ADVERTISED" ]; then
+            echo "::error::SURFACE BROKEN: container image — could not read registry.app from site/src/config.ts"
+            exit 1
+          fi
+
+          ACCEPT='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
+          {
+            echo "### Surface 6 — Container image \`:$VERSION\` (anonymous pull)"
+            echo
+            echo "| Address | Result |"
+            echo "|---|---|"
+          } >> "$SUMMARY"
+
+          FAILED=0
+          check() {
+            local label="$1" path="$2" token code
+            # GHCR's token endpoint itself refuses an anonymous pull scope for
+            # a private package, so "no token" is the private case, not an outage.
+            token=$(curl -sS "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" | jq -r '.token // empty' 2>/dev/null) || token=""
+            if [ -z "$token" ]; then
+              code=401
+            else
+              code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+                -H "Authorization: Bearer $token" -H "Accept: $ACCEPT" \
+                "https://ghcr.io/v2/${path}/manifests/${VERSION}") || code="000"
+            fi
+            case "$code" in
+              200)
+                echo "OK: ghcr.io/${path}:${VERSION} ($label) resolves anonymously"
+                echo "| \`ghcr.io/${path}\` ($label) | ✅ |" >> "$SUMMARY" ;;
+              401|403)
+                echo "::error::SURFACE BROKEN: container image — ghcr.io/${path}:${VERSION} ($label) answers HTTP $code to an anonymous pull: the package is private or does not exist. Self-hosters cannot pull this release. Operator action: make the GHCR package public (a package GHCR creates is private by default)."
+                echo "| \`ghcr.io/${path}\` ($label) | ❌ HTTP $code — private or missing |" >> "$SUMMARY"
+                FAILED=1 ;;
+              404)
+                echo "::error::SURFACE BROKEN: container image — ghcr.io/${path} ($label) is reachable but has no tag ${VERSION}: nothing published this release there, so anyone pulling from this address stays on an older version."
+                echo "| \`ghcr.io/${path}\` ($label) | ❌ tag ${VERSION} not found |" >> "$SUMMARY"
+                FAILED=1 ;;
+              *)
+                echo "::error::SURFACE BROKEN: container image — ghcr.io/${path}:${VERSION} ($label) answered HTTP $code"
+                echo "| \`ghcr.io/${path}\` ($label) | ❌ HTTP $code |" >> "$SUMMARY"
+                FAILED=1 ;;
+            esac
+          }
+
+          check "published by release.yml" "$PUBLISHED"
+          if [ "$ADVERTISED" != "$PUBLISHED" ]; then
+            check "advertised by site/src/config.ts" "$ADVERTISED"
+          fi
+
+          if [ "$FAILED" != "0" ]; then
+            exit 1
+          fi
+          echo "Image tag $VERSION is anonymously pullable at every address."
+
   # ─── Aggregate: name exactly which surface broke ─────────────────
   report:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [config, desktop-installer, staging-backend, play-track, testflight, desktop-updater]
+    needs: [config, desktop-installer, staging-backend, play-track, testflight, desktop-updater, container-image]
     if: always()
     steps:
       - name: Checkout (surfaces config, for the exclusion reasons)
@@ -958,7 +1071,7 @@ jobs:
             echo "|---|---|---|"
           } >> "$SUMMARY"
 
-          for ID in desktop-installer staging-backend play-track testflight desktop-updater; do
+          for ID in desktop-installer staging-backend play-track testflight desktop-updater container-image; do
             REQUIRED=$(jq -r --arg id "$ID" '.config.outputs[$id]' <<< "$NEEDS_JSON")
             RESULT=$(jq -r --arg id "$ID" '.[$id].result' <<< "$NEEDS_JSON")
             if [ "$REQUIRED" = "true" ]; then

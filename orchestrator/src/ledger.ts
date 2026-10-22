@@ -154,7 +154,15 @@ export function since(windowMs: number, now = Date.now()): RunRecord[] {
 // human ever looked at it. WEDGED is included, unlike UNVERIFIED — see the
 // `Outcome` doc comment above: a wedge is the item's own lane state, so the
 // per-item bound must still close over it.
-const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'BLOCKED', 'REJECTED', 'WEDGED'])
+//
+// BLOCKED is excluded too (#1841, #1764). A worker reports BLOCKED when it
+// cannot proceed — typically a lane-scope grant it does not hold, or a
+// decision only a person can make. That is "not yet permitted", not a
+// failed attempt: counting it parked an item for good after three
+// scope-gated passes, so the grant, once made, found the item already
+// exhausted. What stops the item being re-claimed meanwhile is the
+// `needs-human` label tick.ts attaches to a BLOCKED outcome, not this budget.
+const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'REJECTED', 'WEDGED'])
 
 /** Counts backward from the newest record for this item and stops at a SUCCESS. */
 export function failedAttemptsIn(rows: RunRecord[], itemId: string): number {

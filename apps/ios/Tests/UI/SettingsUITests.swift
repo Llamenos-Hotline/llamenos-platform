@@ -292,28 +292,13 @@ final class SettingsUITests: BaseUITest {
             XCTAssertTrue(logoutButton.exists, "Logout button should exist")
             logoutButton.tap()
         }
-        then("I should see a confirmation dialog or the login screen") {
-            // Logout may show an alert first
+        then("I am asked to confirm, and confirming returns me to the login screen") {
             let alert = app.alerts.firstMatch
-            if alert.waitForExistence(timeout: 3) {
-                // Tap the destructive button by matching its label (not by index)
-                // NSLocalizedString returns the key when no .strings file exists
-                if alert.buttons["logout_confirm_action"].exists {
-                    alert.buttons["logout_confirm_action"].tap()
-                } else if alert.buttons["Logout"].exists {
-                    alert.buttons["Logout"].tap()
-                } else {
-                    // Fallback: tap whichever button is NOT Cancel
-                    let alertButtons = alert.buttons
-                    for i in 0..<alertButtons.count {
-                        let button = alertButtons.element(boundBy: i)
-                        if button.label != "cancel" && button.label != "Cancel" {
-                            button.tap()
-                            break
-                        }
-                    }
-                }
-            }
+            XCTAssertTrue(alert.waitForExistence(timeout: 5), "Logout removes the identity, so it should ask first")
+            XCTAssertTrue(alert.buttons["Cancel"].exists, "The confirmation should offer Cancel")
+            let confirm = alert.buttons["Logout"]
+            XCTAssertTrue(confirm.exists, "The confirmation should offer Logout")
+            confirm.tap()
             // Should return to login screen
             let loginInput = find("hub-url-input")
             let createButton = find("create-identity")

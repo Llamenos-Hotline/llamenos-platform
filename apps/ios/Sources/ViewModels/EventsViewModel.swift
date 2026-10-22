@@ -310,6 +310,11 @@ final class EventsViewModel {
         defer { isSaving = false }
         errorMessage = nil
 
+        guard let entityType = entityType(for: entityTypeId) else {
+            errorMessage = NSLocalizedString("events_load_error", comment: "Failed to load events")
+            return false
+        }
+
         // Build plaintext details JSON
         var detailsDict: [String: Any] = ["title": title]
         if let desc = description, !desc.isEmpty {
@@ -356,6 +361,8 @@ final class EventsViewModel {
             parentEventId: nil,
             locationPrecision: location != nil ? "neighborhood" : "none",
             locationApproximate: location,
+            eventTypeHash: entityType.id,
+            statusHash: entityType.defaultStatus,
             encryptedDetails: encryptedContent,
             detailEnvelopes: envelopes,
             blindIndexes: [:]

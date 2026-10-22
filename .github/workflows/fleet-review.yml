@@ -62,15 +62,18 @@
 #    different questions; a rebase changes only the first.
 #
 #    WHY IT IS NOT THE QUOTA BURN #812 FIXED. That fix predates #1158's
-#    verdict cache, which is keyed on the DIFF HASH (`review-cache.ts`), so a
-#    rebase with an unchanged diff is a `cache-hit` — no model call, the
-#    stored verdict republished on the new head. A push that DID change the
-#    diff carries the verdict this PR last EARNED forward (`carried`,
-#    `lastEarnedVerdict` in review-cache.ts) — a PASS stays green, a FAIL
-#    stays red, the check naming the head it was earned on — or, on a PR no
-#    review was ever earned on, fails closed saying so (`unreviewed`, #1564:
-#    nothing has judged this diff, so there is no verdict to publish and the
-#    required context must not read as one). Still no model call either way. `run-engine` is unreachable on a push,
+#    verdict cache, which is keyed on the head's TREE sha (`review-cache.ts`,
+#    #2014), so a push whose tree is unchanged — a no-op rebase, a
+#    content-identical one — is a `cache-hit`: no model call, the stored
+#    verdict republished on the new head. A push that DID change the tree has
+#    no verdict for the code it now carries, and is red without a model call:
+#    a FAIL this PR last earned is carried forward (`carried`), a PASS earned
+#    on another tree is reported as exactly that (`tree-changed`, #2014), and
+#    a PR no review was ever earned on says so (`unreviewed`, #1564). The
+#    cache was once keyed on the DIFF HASH, and a rebase onto a newer `main`
+#    leaves the diff byte-identical while changing the code under judgement:
+#    #1975 went CLEAN that way, four green `fleet/review`s re-publishing a
+#    crypto + general PASS for a tree nobody had read. `run-engine` is unreachable on a push,
 #    and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
 #    `decideReviewGate` as `republishOnly`, which refuses `run-engine`
 #    outright rather than resting on a `synchronize` payload happening to
@@ -81,16 +84,17 @@
 #    conclude `not-requested` — a red "nobody asked" — on every push that
 #    changed a Tier 2 diff, and GitHub sends no fresh `review_requested` for
 #    a login that is still requested, so the only way back to green was to
-#    remove and re-add the reviewer by hand, after every push. The operator's
-#    rule: reviews fire only from a review request, and "if there's a review
-#    there's a review; if another review is needed it can be requested". A
-#    verdict, once earned, stands until somebody asks for another. The one
-#    The two reds a push can produce by itself are both absences of a
-#    verdict, never findings about the code: `carry-unreadable`, where the
-#    history could not be read — "could not look" must never carry a FAIL
-#    into a green — and `unreviewed`, where no verdict has ever existed to
-#    carry (#1564). Both clear the moment a review is requested and earns
-#    one; neither is a rejection. Correctness is gated on every push regardless — `ci-status`,
+#    remove and re-add the reviewer by hand, after every push. Reviews still
+#    fire only from a review request. But a verdict covers the TREE it
+#    judged and nothing else (#2014): "if there's a review there's a review"
+#    carried a PASS green across a rebase onto different code, which is a
+#    review bypass. So the reds a push can produce by itself are all
+#    absences of a verdict for THIS tree, never findings about the code:
+#    `tree-changed`, where the last PASS judged another tree;
+#    `carry-unreadable`, where the history could not be read — "could not
+#    look" must never carry a FAIL into a green — and `unreviewed`, where no
+#    verdict has ever existed (#1564). Each clears the moment a review is
+#    requested and earns one for this tree; none is a rejection. Correctness is gated on every push regardless — `ci-status`,
 #    `gitleaks`, `CodeQL` and `fleet/verify` — and the merge queue tests the
 #    real merge commit.
 #
@@ -169,7 +173,7 @@
 # Outcomes of the gate step, all of which reach a real conclusion:
 #   `review-set-unresolved` → FAIL. Could not work out what to review.
 #   `cache-hit`             → no model call. A prior SUBSTANTIVE verdict
-#                             exists for this exact diff AND this exact
+#                             exists for this exact head TREE AND this exact
 #                             review set (`reviewSetTag`, review-cache.ts):
 #                             a cached PASS concludes SUCCESS, a cached FAIL
 #                             concludes RED with the original verdict
@@ -179,10 +183,15 @@
 #                             classifies every changed file Tier 0/1 — no
 #                             reviewable content. Checked before the request
 #                             check so a docs-only PR never sits red.
-#   `carried`               → a PUSH (#1284) that changed the diff: the
-#                             verdict this PR last earned, restated with the
-#                             head it was earned on. PASS → SUCCESS, FAIL →
-#                             RED. No model call.
+#   `carried`               → FAIL. A PUSH (#1284) that changed the tree,
+#                             and the verdict this PR last earned was a FAIL:
+#                             restated with the head it was earned on. No
+#                             model call.
+#   `tree-changed`          → FAIL (#2014). A push that changed the tree, and
+#                             the last verdict was a PASS — for ANOTHER tree,
+#                             so nothing has judged this one. Named with the
+#                             head it was earned on. No model call. Clears on
+#                             a requested review of this tree.
 #   `unreviewed`            → FAIL (#1564). A push, and no review has ever
 #                             been earned on this PR, so NOTHING has judged
 #                             this diff. No model call. A required context
@@ -190,9 +199,9 @@
 #                             false green: on #1549 that SUCCESS was what the
 #                             PR's statusCheckRollup resolved `fleet/review`
 #                             to, while the dispatched run that did read the
-#                             diff rejected it. Clears on the next verdict —
-#                             `cache-hit` over the same diff, `carried` over
-#                             a changed one.
+#                             diff rejected it. Clears on a requested review,
+#                             and every later push over the same tree is a
+#                             `cache-hit` on it.
 #   `carry-unreadable`      → FAIL. A push, and the PR's review history could
 #                             not be read. No model call.
 #   `not-requested`         → FAIL. Tier 2, no cached PASS, and this review
@@ -341,9 +350,9 @@ on:
   #
   # `synchronize` (#1284) exists so the required context REAPPEARS on a head
   # that moved. It can only republish what the PR already earned for this
-  # exact diff (`cache-hit`), conclude on its own terms (`low-tier`,
-  # `bot-authored`), carry the PR's last earned verdict forward (`carried`),
-  # or fail closed because there is none to carry (`unreviewed`,
+  # exact tree (`cache-hit`), conclude on its own terms (`low-tier`,
+  # `bot-authored`), carry a FAIL forward (`carried`), or fail closed because
+  # no verdict covers this tree (`tree-changed`, `unreviewed`,
   # `carry-unreadable`) — never a model call, structurally
   # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
   # `fleet/review` at all and the PR unmergeable until a human removes and
@@ -507,6 +516,11 @@ jobs:
       # one that says which head it judged is visibly stale once the PR
       # moves on, rather than merely old.
       head_sha: ${{ steps.ctx.outputs.head_sha }}
+      # The TREE of that commit (#2014) — what a verdict actually judged, and
+      # the review cache's key. Every comment names it beside the sha, so
+      # "does this verdict cover the PR's head?" is one comparison against
+      # the head's `.commit.tree.sha`, not an inference from commit ancestry.
+      head_tree: ${{ steps.head_export.outputs.head_tree }}
       # Written by the smoke step's fail() (#1767): WHICH engine class turned
       # the run red, so `fleet-review/publish` can say on the PR itself that
       # an engine outage is the fleet's own problem, not a rejection of the
@@ -886,7 +900,13 @@ jobs:
       # `~/.local/share/opencode/auth.json`. review.ts strips the same set
       # again (REVIEWER_CONTROL_NAMES) from base code, because this workflow
       # file is the PR's own copy on the ref this job checked out.
+      #
+      # It also records the head's TREE sha (#2014) — the code under
+      # judgement, and the identity every verdict comment names. Read here,
+      # from the same fetched object the export comes from, so the tree a
+      # comment names is the tree the reviewer was handed.
       - name: Export the PR head as data
+        id: head_export
         if: github.event_name != 'merge_group'
         env:
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
@@ -914,6 +934,15 @@ jobs:
             echo "::error::fleet/review FAILED: agent-config-strip — agent configuration survived the strip: $left"
             exit 1
           fi
+          # The tree of the commit just exported (#2014), read from the same
+          # fetched object.
+          head_tree="$(git rev-parse --verify --quiet "$HEAD_SHA^{tree}" || true)"
+          if [[ ! "$head_tree" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+            echo "::error::fleet/review FAILED: head-tree-unreadable — could not read the tree of $HEAD_SHA (got '$head_tree'); no verdict can name what it judged"
+            exit 1
+          fi
+          echo "head_tree=$head_tree" >> "$GITHUB_OUTPUT"
+          echo "judging $HEAD_SHA, tree $head_tree"
 
       - name: Setup Bun
         if: github.event_name != 'merge_group'
@@ -997,9 +1026,9 @@ jobs:
       #     `if:` below reads `outcome == 'run-engine'` and skips, so
       #     nothing past this point spends one. A cached PASS exits 0 and
       #     the job concludes SUCCESS; a cached substantive FAIL exits 1,
-      #     restating the original verdict (#1158) — the diff has not
-      #     changed since, so re-reviewing could only reach the same
-      #     conclusion. An UNREADABLE is never cached.
+      #     restating the original verdict (#1158) — the head's TREE has
+      #     not changed since (the cache key, #2014), so re-reviewing could
+      #     only reach the same conclusion. An UNREADABLE is never cached.
       #   - `low-tier`      → exits 0, with the tier and contributing files
       #     printed to this step's own stdout (`runReviewGate`, cli.ts) —
       #     `tierFor` (impact.ts) classified every changed file as Tier 0/1
@@ -1014,12 +1043,14 @@ jobs:
       #     read, or a review it asks for (by label or by its own content)
       #     does not resolve to a known agent. Fail closed — "we could not
       #     work out what to review" never becomes "nothing needed it".
-      #   - `carried` / `unreviewed` / `carry-unreadable` → a PUSH that
-      #     changed the diff (#1284), which can never start a review whatever
-      #     else is true (`republishOnly`, ci.ts). `carried` restates the
-      #     verdict the PR last earned (exit 0 on PASS, 1 on FAIL);
-      #     `unreviewed` exits 1 — no verdict has ever been earned, so
-      #     nothing judged this diff (#1564); `carry-unreadable` exits 1 —
+      #   - `carried` / `tree-changed` / `unreviewed` / `carry-unreadable` →
+      #     a PUSH that changed the tree (#1284), which can never start a
+      #     review whatever else is true (`republishOnly`, ci.ts), and has no
+      #     verdict for the tree it now carries — so every one exits 1.
+      #     `carried` restates the FAIL the PR last earned; `tree-changed`
+      #     names the PASS it last earned on ANOTHER tree, which does not
+      #     cover this one (#2014); `unreviewed` — no verdict has ever been
+      #     earned, so nothing judged this diff (#1564); `carry-unreadable` —
       #     the history could not be read. Every later step skips.
       #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts): the
       #     review was requested from somebody else. Exiting 1
@@ -1066,6 +1097,27 @@ jobs:
           FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
           GH_TOKEN: ${{ github.token }}
         run: bun orchestrator/src/cli.ts review-gate
+
+      # #2014's transition guard. The gate runs from the PR's BASE, and an
+      # open PR's `base.sha` is only refreshed when the PR itself is updated
+      # — so a PR whose base predates the tree-keyed cache still runs the
+      # orchestrator that keys it on the DIFF HASH, the one that re-published
+      # #1975's PASS for tree f3655875… as a green check on tree 4eeb09ad….
+      # A green `cache-hit` from such a base cannot say WHICH tree it judged,
+      # so it is refused; a review request (a miss on that base runs the
+      # engine) or a rebase onto main is the way through. Matched on the
+      # base's own `isTreeSha` export, which the tree-keyed cache introduced.
+      # Only the green cache hit is gated: every other outcome either is red
+      # already or formed its verdict in this run.
+      - name: Refuse a cache hit from a base that keys the cache on the diff
+        if: github.event_name != 'merge_group' && steps.gate.outputs.outcome == 'cache-hit' && steps.gate.conclusion == 'success'
+        run: |
+          set -euo pipefail
+          if ! grep -q '^export function isTreeSha' orchestrator/src/review-cache.ts 2>/dev/null; then
+            echo "::error::fleet/review FAILED: base-diff-keyed-cache — this PR's base predates the tree-keyed review cache (#2014), so its cache hit was matched on the diff text alone and cannot say which tree it judged. Rebase onto main (or merge main in), then request a review."
+            printf 'base-diff-keyed-cache\n' > "$RUNNER_TEMP/fleet-review-base-diff-keyed"
+            exit 1
+          fi
 
       # Bootstrap guard, the SAME shape as "Check the base provides the
       # review gate itself" / "Check the base provides the gate" above and
@@ -1899,8 +1951,8 @@ jobs:
           # this file — which on a `pull_request` event is the PR's own
           # copy — cannot shrink it.
           FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
-          # Read-only lookup of a prior PASS for this exact diff AND review
-          # set — see `review-cache.ts`. `GH_TOKEN` is what lets that lookup
+          # Read-only lookup of a prior PASS for this exact head tree AND
+          # review set — see `review-cache.ts`. `GH_TOKEN` is what lets that lookup
           # call `gh api`; `FLEET_REVIEW_CACHE_DIR` is where a FRESH pass
           # (never a replayed cache hit — `runReviewCi` in ci.ts only records
           # one it just produced) gets written for the upload step below.
@@ -2089,6 +2141,7 @@ jobs:
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           RESULT_FILE: ${{ runner.temp }}/fleet-review-result
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          HEAD_TREE: ${{ steps.head_export.outputs.head_tree }}
           # The head a CARRIED verdict was earned on — not this run's head.
           EARNED_SHA: ${{ steps.gate.outputs.earned_sha }}
         run: |
@@ -2120,14 +2173,20 @@ jobs:
           # This step still cannot turn a red job green — it only ever ADDS
           # red, which is exactly what failing closed needs. Every green
           # outcome below is named EXPLICITLY, so no legitimate pass is
-          # affected: `low-tier`, `cache-hit`, `carried`, `bot-authored`,
-          # and a `run-engine` that recorded `pass`/`cache-pass`.
+          # affected: `low-tier`, `cache-hit`, `bot-authored`, and a
+          # `run-engine` that recorded `pass`/`cache-pass`.
+          #
+          # `carried` and `tree-changed` have NO passing name, deliberately
+          # (#2014): each is a push onto a tree no verdict covers. A gate
+          # that still concluded one green (a base whose orchestrator
+          # predates #2014 carried a PASS green) lands on the default below
+          # and is turned red by `unnamed` — the PASS it would have restated
+          # judged another tree.
           unnamed=""
           if [ "$JOB_STATUS" = "success" ]; then
             case "$OUTCOME" in
               low-tier) token="PASS:low-tier" ;;
               cache-hit) token="PASS:cached" ;;
-              carried) token="PASS:carried" ;;
               # An automated dependency PR, concluded green with no model
               # call — `REVIEW_SKIP_AUTHORS`/`bot-authored` in ci.ts, whose
               # `REVIEW_GATE_STANDING` is `no-review-needed`, the same class
@@ -2162,10 +2221,11 @@ jobs:
               '') token="NO-VERDICT:gate-error" ;;
               not-requested) token="NO-VERDICT:not-requested" ;;
               unreviewed) token="NO-VERDICT:unreviewed" ;;
+              tree-changed) token="NO-VERDICT:tree-changed" ;;
               carry-unreadable) token="NO-VERDICT:carry-unreadable" ;;
               review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
               carried)
-                # The gate exits 1 on a carried FAIL and 0 on a carried PASS.
+                # Only a FAIL is carried (#2014), and the gate exits 1 on it.
                 if [ "$GATE_CONCLUSION" = "failure" ]; then
                   token="REJECTED:carried"
                 else
@@ -2174,8 +2234,12 @@ jobs:
                 ;;
               cache-hit)
                 # The gate exits 1 on a cached FAIL and 0 on a cached PASS.
+                # A cached PASS that is red anyway was refused by #2014's
+                # transition guard: its base matched the cache on the diff.
                 if [ "$GATE_CONCLUSION" = "failure" ]; then
                   token="REJECTED:cached"
+                elif [ -f "$RUNNER_TEMP/fleet-review-base-diff-keyed" ]; then
+                  token="NO-VERDICT:base-predates-gate"
                 else
                   token="NO-VERDICT:unclassified"
                 fi
@@ -2225,14 +2289,14 @@ jobs:
 
           case "$token" in
             PASS:reviewed) detail="every reviewer read this diff and passed it" ;;
-            PASS:cached) detail="this exact diff and review set already passed; not reviewed again" ;;
-            PASS:carried) detail="a push; the PASS this PR last earned stands — request a review to review this head" ;;
+            PASS:cached) detail="this exact tree and review set already passed; not reviewed again" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:bot-authored) detail="an automated dependency update; no model review, and a human still merges it" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
-            REJECTED:cached) detail="this exact diff was already rejected; push a fix" ;;
+            REJECTED:cached) detail="this exact tree was already rejected; push a fix" ;;
             REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;
             NO-VERDICT:unreviewed) detail="no review has ever been earned on this PR and a push never starts one; request a review" ;;
+            NO-VERDICT:tree-changed) detail="a push changed the tree; the last PASS judged a different tree and does not cover this head — request a review" ;;
             NO-VERDICT:carry-unreadable) detail="a push, and this PR's last verdict could not be read; re-run the job" ;;
             NO-VERDICT:not-requested) detail="this review request does not start the fleet review; the log names whom to ask" ;;
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
@@ -2293,9 +2357,9 @@ jobs:
             echo "$meaning"
             echo
             if [ -n "${EARNED_SHA:-}" ]; then
-              echo "Verdict earned on: \`${EARNED_SHA}\`. Current head: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+              echo "Verdict earned on: \`${EARNED_SHA}\`. Current head: \`${HEAD_SHA:-unknown}\`, tree \`${HEAD_TREE:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
             else
-              echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+              echo "Head judged: \`${HEAD_SHA:-unknown}\`, tree \`${HEAD_TREE:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -2432,6 +2496,7 @@ jobs:
           REVIEW_RESULT: ${{ needs.fleet-review.result }}
           CLEAR_LABELS: ${{ needs.fleet-review.outputs.clear_labels }}
           HEAD_SHA: ${{ needs.fleet-review.outputs.head_sha }}
+          HEAD_TREE: ${{ needs.fleet-review.outputs.head_tree }}
           ENGINE_FAILURE: ${{ needs.fleet-review.outputs.engine_failure }}
         run: |
           set -euo pipefail
@@ -2517,10 +2582,18 @@ jobs:
               echo "::error::report entry $f has no judged head to name (got '$HEAD_SHA') — refusing to post a verdict that cannot say which commit it is about"
               exit 1
             fi
+            # And the TREE it judged (#2014): a verdict covers a head exactly
+            # when the head's `.commit.tree.sha` equals this one. Naming only
+            # the sha left that question to two more API calls, and #1975's
+            # PASS for one tree read as covering a rebased head on another.
+            if [[ ! "$HEAD_TREE" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+              echo "::error::report entry $f has no judged tree to name (got '$HEAD_TREE') — refusing to post a verdict that cannot say which tree it is about"
+              exit 1
+            fi
             {
               printf '%s\n\n' "$marker"
-              printf "### \`fleet/review\` — %s: **%s** on \`%s\`\n\n" "$reviewer" "$verdict" "${HEAD_SHA:0:12}"
-              printf "Judged head \`%s\`. The \`fleet/review\` check on the PR's current head is the verdict of record: if the head has moved since, this comment is about an older commit.\n\n" "$HEAD_SHA"
+              printf "### \`fleet/review\` — %s: **%s** on \`%s\` (tree \`%s\`)\n\n" "$reviewer" "$verdict" "${HEAD_SHA:0:12}" "${HEAD_TREE:0:12}"
+              printf "Judged head \`%s\`, tree \`%s\`. This verdict covers a head exactly when that head's tree is \`%s\`. The \`fleet/review\` check on the PR's current head is the verdict of record: if the head has moved since, this comment is about an older commit.\n\n" "$HEAD_SHA" "$HEAD_TREE" "$HEAD_TREE"
               jq -r '.body' "$f"
             } > "$RUNNER_TEMP/comment.md"
             post_comment "$RUNNER_TEMP/comment.md" "$marker"

@@ -9,6 +9,13 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    groups:
+      # init / analyze / upload-sarif must always be the same release: CodeQL
+      # rejects a mismatched trio. Separate PRs each fail alone and can never
+      # merge (the merge queue gates every entry independently), so every
+      # codeql-action release arrives as ONE PR.
+      codeql-action:
+        patterns: ["github/codeql-action/*", "github/codeql-action"]
   - package-ecosystem: "docker"
     directory: "/deploy/docker"
     schedule:

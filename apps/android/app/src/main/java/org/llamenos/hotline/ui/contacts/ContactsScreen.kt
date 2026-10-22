@@ -174,7 +174,7 @@ fun ContactsScreen(
                         CircularProgressIndicator()
                     }
                 }
-                uiState.contacts.isEmpty() && !uiState.isLoading -> {
+                uiState.visibleContacts.isEmpty() && !uiState.isLoading -> {
                     EmptyContacts(modifier = Modifier.fillMaxSize())
                 }
                 else -> {
@@ -190,7 +190,7 @@ fun ContactsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(
-                            items = uiState.contacts,
+                            items = uiState.visibleContacts,
                             key = { it.contactHash },
                         ) { contact ->
                             ContactCard(

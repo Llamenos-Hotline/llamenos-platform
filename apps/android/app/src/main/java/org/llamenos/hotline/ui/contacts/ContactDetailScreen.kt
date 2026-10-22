@@ -50,7 +50,6 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.model.ContactDetail
 import org.llamenos.hotline.model.ContactIdentifier
 import org.llamenos.hotline.model.ContactLinkedCase
-import org.llamenos.hotline.model.ContactRelationship
 import org.llamenos.hotline.util.DateFormatUtils
 
 /**
@@ -129,7 +128,6 @@ fun ContactDetailScreen(
                 uiState.contact != null -> {
                     ContactProfileContent(
                         contact = uiState.contact!!,
-                        relationships = uiState.relationships,
                         onNavigateToTimeline = { onNavigateToTimeline(uiState.contactHash) },
                     )
                 }
@@ -141,7 +139,6 @@ fun ContactDetailScreen(
 @Composable
 private fun ContactProfileContent(
     contact: ContactDetail,
-    relationships: List<ContactRelationship>,
     onNavigateToTimeline: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -264,21 +261,6 @@ private fun ContactProfileContent(
             }
             items(linkedCases) { linkedCase ->
                 LinkedCaseCard(linkedCase = linkedCase)
-            }
-        }
-
-        // Relationships
-        if (relationships.isNotEmpty()) {
-            item {
-                Text(
-                    text = stringResource(R.string.contact_directory_relationships),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.testTag("contact-relationships-header"),
-                )
-            }
-            items(relationships) { relationship ->
-                RelationshipCard(relationship = relationship)
             }
         }
 
@@ -460,50 +442,3 @@ private fun LinkedCaseCard(
     }
 }
 
-@Composable
-private fun RelationshipCard(
-    relationship: ContactRelationship,
-    modifier: Modifier = Modifier,
-) {
-    val displayId = if (relationship.relatedLast4 != null) {
-        "***${relationship.relatedLast4}"
-    } else {
-        relationship.relatedContactHash.take(8) + "\u2026"
-    }
-
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("relationship-${relationship.relatedContactHash}"),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.People,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = displayId,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    text = relationship.relationshipType,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                )
-            }
-        }
-    }
-}

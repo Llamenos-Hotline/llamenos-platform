@@ -13,6 +13,16 @@ import UIKit
 /// in ShiftsViewModel. Routing picks up changes server-side immediately; these
 /// methods always re-read from the server after a mutation rather than trusting
 /// the mutation response.
+///
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main
+/// thread. Unannotated, every `async` method ran on the global executor and wrote
+/// `ringGroups`, `isLoading`, `errorMessage`… from a GCD worker while the view body read
+/// them (Thread Sanitizer reports each of those as a data race), and an Observation
+/// write that lands while a body is being evaluated is never delivered: Ring Group
+/// detail kept its spinner after the server had answered in 72 ms (#2049, the same
+/// defect class as #1918). Network calls still suspend off the main thread inside
+/// `APIService`; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ShiftAdminViewModel {
     private let apiService: APIService

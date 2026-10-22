@@ -8,10 +8,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.model.ActiveCall
+import org.llamenos.protocol.ConversationListResponseConversation
 import org.llamenos.protocol.SharedEntry
+import org.llamenos.protocol.SharedReportResponseStatus
 import org.llamenos.hotline.model.BanEntry
 import org.llamenos.hotline.model.ContactSummary
-import org.llamenos.hotline.model.Conversation
 import org.llamenos.hotline.model.DecryptedMessage
 import org.llamenos.hotline.model.EntityTypeDefinition
 import org.llamenos.hotline.model.Report
@@ -172,35 +173,38 @@ class ScreenshotTests {
     )
 
     private val sampleConversations = listOf(
-        Conversation(
+        ConversationListResponseConversation(
             id = "conv-001",
             channelType = "sms",
-            contactHash = "hash-abc",
-            assignedVolunteerPubkey = samplePubkey,
-            status = "active",
+            contactIdentifierHash = "hash-abc",
+            assignedTo = samplePubkey,
+            status = SharedReportResponseStatus.Active,
             lastMessageAt = sampleTimestamp,
-            unreadCount = 3,
+            messageCount = 5.0,
             createdAt = sampleTimestamp2,
+            updatedAt = sampleTimestamp,
         ),
-        Conversation(
+        ConversationListResponseConversation(
             id = "conv-002",
             channelType = "signal",
-            contactHash = "hash-def",
-            assignedVolunteerPubkey = null,
-            status = "waiting",
+            contactIdentifierHash = "hash-def",
+            assignedTo = null,
+            status = SharedReportResponseStatus.Waiting,
             lastMessageAt = "2026-04-29T11:00:00Z",
-            unreadCount = 1,
+            messageCount = 1.0,
             createdAt = "2026-04-27T08:00:00Z",
+            updatedAt = "2026-04-29T11:00:00Z",
         ),
-        Conversation(
+        ConversationListResponseConversation(
             id = "conv-003",
             channelType = "whatsapp",
-            contactHash = "hash-ghi",
-            assignedVolunteerPubkey = samplePubkey2,
-            status = "active",
+            contactIdentifierHash = "hash-ghi",
+            assignedTo = samplePubkey2,
+            status = SharedReportResponseStatus.Active,
             lastMessageAt = "2026-04-29T07:30:00Z",
-            unreadCount = 0,
+            messageCount = 2.0,
             createdAt = "2026-04-20T14:00:00Z",
+            updatedAt = "2026-04-29T07:30:00Z",
         ),
     )
 
@@ -605,7 +609,6 @@ class ScreenshotTests {
             ConversationsUiState(
                 conversations = sampleConversations,
                 totalConversations = sampleConversations.size,
-                totalUnread = 4,
             )
         )
         captureRoboImage("$OUT/conversations-android.png") {

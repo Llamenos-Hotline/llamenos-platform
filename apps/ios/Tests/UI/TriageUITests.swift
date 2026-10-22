@@ -3,231 +3,218 @@ import XCTest
 /// XCUITest suite for Triage Queue views.
 /// Tests triage list, filters, detail view, and convert-to-case flow.
 ///
+/// Every test runs as admin on a hub of its own with the jail-support template applied, so
+/// the queue's state is known — it holds exactly the reports the test put there — instead
+/// of being whatever the shared class hub happens to contain.
+///
 /// Maps to BDD scenarios: triage-list, triage-filters, triage-convert.
 final class TriageUITests: BaseUITest {
 
     // MARK: - Helpers
 
-    /// Navigate to the triage screen via the dashboard quick action card.
+    private func launchOnTriageHub() {
+        guard let hubId = TestAdminAPI.createHub(
+            name: "ios-triage-\(UUID().uuidString.prefix(8))", baseURL: testHubURL
+        ) else { return }
+        TestAdminAPI.setCaseManagement(enabled: true, hubId: hubId, baseURL: testHubURL)
+        TestAdminAPI.applyTemplate("jail-support", hubId: hubId, baseURL: testHubURL)
+        launchAsAdminWithAPI(hubId: hubId)
+    }
+
+    /// Navigate to the triage screen via the dashboard quick action card and wait for it to
+    /// settle on a list or an empty state.
     private func navigateToTriage() {
         scrollAndTap("dashboard-triage-action")
+        let settled = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier IN %@", ["triage-list", "triage-empty-state", "triage-error"])
+        ).firstMatch
+        XCTAssertTrue(settled.waitForExistence(timeout: 20), "The triage queue should settle on a state")
+        XCTAssertFalse(find("triage-loading").exists, "The triage queue should have finished loading")
+    }
 
-        _ = anyElementExists([
-            "triage-list",
-            "triage-loading",
-            "triage-empty-state",
-            "triage-error",
-        ], timeout: 10)
+    /// Skip a scenario that needs a triage-eligible report. Triage lists reports of a type that
+    /// allows case conversion, and such a report can only be submitted through the typed report
+    /// form — which iOS cannot open while it cannot decode the hub's report types (#2033).
+    /// Delete this helper and its calls when #2033 is fixed; the bodies are the assertions to keep.
+    private func requireTriageReport() throws {
+        throw XCTSkip("A triage-eligible report needs the typed report form, unreachable on iOS (#2033)")
+    }
+
+    private func firstTriageRow() -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
+            .firstMatch
     }
 
     // MARK: - Scenario: Triage list shows reports or empty state
 
-    /// Verifies the triage queue renders with content or appropriate empty state.
-    func testTriageListShowsReports() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+    /// A report that allows case conversion is in the queue as a row.
+    func testTriageListShowsReports() throws {
+        try requireTriageReport()
+        given("a hub with one arrest report awaiting triage") {
+            launchOnTriageHub()
         }
-        when("I navigate to triage") {
+        when("I open the triage queue") {
             navigateToTriage()
         }
-        then("I should see the triage list, empty state, or loading") {
-            let found = anyElementExists([
-                "triage-list",
-                "triage-loading",
-                "triage-empty-state",
-                "triage-error",
-                "triage-filter-button",
-            ])
-            XCTAssertTrue(found, "Triage view should show list, loading, empty, or error state")
+        then("the queue lists that report") {
+            XCTAssertTrue(find("triage-list").exists, "A queue with a report should show the list")
+            XCTAssertTrue(firstTriageRow().exists, "The report should be a row")
+            XCTAssertFalse(find("triage-empty-state").exists)
         }
     }
 
     // MARK: - Scenario: Triage list shows report cards
 
-    /// Verifies triage report cards render when triage-eligible reports exist.
-    func testTriageListShowsReportCards() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+    /// Exactly one row per eligible report.
+    func testTriageListShowsReportCards() throws {
+        try requireTriageReport()
+        given("a hub with one arrest report awaiting triage") {
+            launchOnTriageHub()
         }
-        when("I navigate to triage") {
+        when("I open the triage queue") {
             navigateToTriage()
         }
-        then("I should see triage report rows if reports exist") {
-            let triageList = find("triage-list")
-            if triageList.waitForExistence(timeout: 10) {
-                let reportRows = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                if reportRows.count > 0 {
-                    XCTAssertTrue(
-                        reportRows.firstMatch.exists,
-                        "At least one triage report row should be visible"
-                    )
-                }
-            }
-            // No triage reports on fresh server is valid
+        then("there is exactly one row") {
+            let rows = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
+            XCTAssertEqual(rows.count, 1, "One report was submitted")
         }
     }
 
-    // MARK: - Scenario: Triage filter button visible
+    // MARK: - Scenario: Triage filter
 
-    /// Verifies the filter button is present on the triage screen.
+    /// The filter menu offers every status and choosing one narrows the queue to that status.
     func testTriageFilterButtonVisible() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
-        }
-        when("I navigate to triage") {
+        given("an admin on a hub with an empty triage queue") {
+            launchOnTriageHub()
             navigateToTriage()
         }
-        then("the filter button should be visible") {
-            let filterButton = find("triage-filter-button")
-            if filterButton.waitForExistence(timeout: 5) {
-                XCTAssertTrue(filterButton.exists, "Triage filter button should be visible")
+        when("I open the filter menu") {
+            let filter = app.buttons["triage-filter-button"]
+            XCTAssertTrue(filter.waitForExistence(timeout: 5), "The queue should offer a status filter")
+            filter.tap()
+        }
+        then("it offers every status") {
+            for status in ["All", "Pending", "Reviewing", "Converted", "Dismissed", "In Progress", "Completed"] {
+                XCTAssertTrue(
+                    app.buttons[status].waitForExistence(timeout: 5),
+                    "The filter should offer '\(status)'"
+                )
             }
+        }
+        when("I choose In Progress") {
+            // Reviewing, Converted and Dismissed are offered too but the server rejects them
+            // with a 400 and the queue lands on its error screen (#2034).
+            app.buttons["In Progress"].tap()
+        }
+        then("the empty queue says there are no in progress reports") {
+            let empty = find("triage-empty-state")
+            XCTAssertTrue(empty.waitForExistence(timeout: 10), "An empty queue should stay on its empty state")
+            XCTAssertTrue(
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'in progress'")).firstMatch
+                    .waitForExistence(timeout: 5),
+                "The empty state should name the filter that produced it"
+            )
         }
     }
 
     // MARK: - Scenario: Triage detail shows report info
 
-    /// Verifies tapping a triage report row opens the detail view
-    /// with title, status, and metadata.
-    func testTriageDetailShowsInfo() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
-        }
-        when("I navigate to triage and tap a report") {
+    /// Opening a queued report shows its title, status and metadata.
+    func testTriageDetailShowsInfo() throws {
+        try requireTriageReport()
+        given("a hub with one arrest report awaiting triage") {
+            launchOnTriageHub()
             navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
-            let firstRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
-            firstRow.tap()
         }
-        then("I should see the triage detail view with report info") {
-            let found = anyElementExists([
-                "triage-detail-view",
-                "triage-report-title",
-                "triage-report-status",
-            ], timeout: 5)
-
-            if found {
-                let title = find("triage-report-title")
-                if title.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(title.exists, "Triage detail should show report title")
-                }
-
-                let status = find("triage-report-status")
-                if status.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(status.exists, "Triage detail should show report status")
-                }
-
-                let metadata = find("triage-metadata")
-                if metadata.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(metadata.exists, "Triage detail should show metadata section")
-                }
-            }
-            // If no triage reports exist, cannot test detail — pass gracefully
+        when("I tap the report") {
+            let row = firstTriageRow()
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "The queue should list the report")
+            row.tap()
+        }
+        then("the detail shows its title, status and metadata") {
+            XCTAssertTrue(find("triage-detail-view").waitForExistence(timeout: 5))
+            XCTAssertTrue(find("triage-report-title").exists, "Triage detail should show the report title")
+            XCTAssertTrue(find("triage-report-status").exists, "Triage detail should show the report status")
+            XCTAssertTrue(find("triage-metadata").exists, "Triage detail should show the metadata section")
         }
     }
 
-    // MARK: - Scenario: Convert to case button visible
+    // MARK: - Scenario: Convert to case
 
-    /// Verifies the "Convert to Case" button is present on the triage detail view.
-    func testConvertToCaseButtonVisible() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
-        }
-        when("I open a triage report detail") {
+    /// A report whose type allows case conversion offers Convert to Case.
+    func testConvertToCaseButtonVisible() throws {
+        try requireTriageReport()
+        given("an arrest report (case conversion allowed) is open in triage") {
+            launchOnTriageHub()
             navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
-            let firstRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
-            firstRow.tap()
+            let row = firstTriageRow()
+            XCTAssertTrue(row.waitForExistence(timeout: 10))
+            row.tap()
+            XCTAssertTrue(find("triage-detail-view").waitForExistence(timeout: 5))
         }
-        then("the convert to case button should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
-
-            let convertButton = scrollToFind("triage-convert-button", maxSwipes: 3)
-            if convertButton.exists {
-                XCTAssertTrue(convertButton.exists, "Convert to case button should be visible")
-                XCTAssertTrue(convertButton.isEnabled, "Convert to case button should be enabled")
-            }
-            // Button may not appear if the report type doesn't support case conversion
+        then("Convert to Case is offered and enabled") {
+            let convert = scrollToFind("triage-convert-button", maxSwipes: 3)
+            XCTAssertTrue(convert.exists, "lo_arrest_report allows case conversion")
+            XCTAssertTrue(convert.isEnabled)
         }
     }
 
-    // MARK: - Scenario: Triage report type label visible
+    // MARK: - Scenario: Triage report type label
 
-    /// Verifies the report type label is displayed on the triage detail.
-    func testTriageReportTypeLabelVisible() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
-        }
-        when("I open a triage report detail") {
+    /// A typed report names its type in the detail.
+    func testTriageReportTypeLabelVisible() throws {
+        try requireTriageReport()
+        given("an arrest report is open in triage") {
+            launchOnTriageHub()
             navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
-            let firstRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
-            firstRow.tap()
+            let row = firstTriageRow()
+            XCTAssertTrue(row.waitForExistence(timeout: 10))
+            row.tap()
+            XCTAssertTrue(find("triage-detail-view").waitForExistence(timeout: 5))
         }
-        then("the report type label should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
-
+        then("the detail names the report's type") {
             let typeLabel = find("triage-report-type")
-            if typeLabel.waitForExistence(timeout: 3) {
-                XCTAssertTrue(typeLabel.exists, "Report type label should be visible in triage detail")
-            }
-            // Type label only shows for typed reports — absence is valid for legacy reports
+            XCTAssertTrue(typeLabel.waitForExistence(timeout: 3), "A typed report shows its type")
+            XCTAssertTrue(typeLabel.label.contains("LO Arrest Report"), "It should be the arrest report type")
         }
     }
 
     // MARK: - Scenario: Dashboard has triage quick action
 
-    /// Verifies the triage quick action card is visible on the dashboard for admins.
+    /// The dashboard's triage card opens the triage queue.
     func testDashboardHasTriageQuickAction() {
         given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+            launchOnTriageHub()
         }
-        then("the dashboard should show a triage quick action") {
-            let triageAction = scrollToFind("dashboard-triage-action")
+        when("I tap the triage card on the dashboard") {
+            scrollAndTap("dashboard-triage-action")
+        }
+        then("the triage queue opens") {
             XCTAssertTrue(
-                triageAction.exists,
-                "Dashboard should have a triage quick action card for admin"
+                find("triage-empty-state").waitForExistence(timeout: 20),
+                "Tapping the triage card should open the queue, which is empty on this hub"
             )
+            XCTAssertFalse(find("dashboard-title").isHittable, "The dashboard should be covered by the queue")
         }
     }
 
     // MARK: - Scenario: Triage empty state
 
-    /// Verifies the empty state displays when no triage-eligible reports exist.
+    /// A hub with no reports has an empty queue: the empty state, with no list, spinner or error.
     func testTriageEmptyState() {
-        given("I am authenticated as admin with API and fresh state") {
-            launchAsAdminWithAPI()
+        given("an admin on a hub with no reports") {
+            launchOnTriageHub()
         }
         when("I navigate to triage") {
             navigateToTriage()
         }
-        then("I should see either reports or the empty state") {
-            let found = anyElementExists([
-                "triage-list",
-                "triage-empty-state",
-                "triage-loading",
-            ], timeout: 10)
-            XCTAssertTrue(found, "Triage should show list, empty state, or loading after navigation")
+        then("the queue is empty") {
+            XCTAssertTrue(find("triage-empty-state").exists, "A hub with no reports has nothing to triage")
+            XCTAssertFalse(find("triage-list").exists)
+            XCTAssertFalse(find("triage-error").exists, "An empty queue is not an error")
+            XCTAssertFalse(firstTriageRow().exists)
         }
     }
 }

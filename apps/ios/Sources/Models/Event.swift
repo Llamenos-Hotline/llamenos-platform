@@ -110,6 +110,10 @@ struct CreateEventRequest: Codable, Sendable {
     let parentEventId: String?
     let locationPrecision: String?
     let locationApproximate: String?
+    /// Server-filterable cleartext discriminators — the create body requires both
+    /// (`createEventBodySchema`), and a request without them is a 400.
+    let eventTypeHash: String
+    let statusHash: String
     let encryptedDetails: String
     let detailEnvelopes: [CaseEnvelope]
     let blindIndexes: [String: String]

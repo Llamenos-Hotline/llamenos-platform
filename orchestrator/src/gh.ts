@@ -29,6 +29,22 @@ const execFileAsync = promisify(execFile)
 export const REPO = 'Llamenos-Hotline/llamenos-platform'
 
 /**
+ * A commit SHA fit to sit in an API path segment, or a throw. Every caller
+ * that builds `repos/${REPO}/commits/${commitSha(x)}/…` goes through here
+ * because the segment is otherwise the caller's to fill: `fetch` and `gh api`
+ * resolve `..` (and `%2e%2e`) under WHATWG URL rules, so a commit's
+ * check-run READ with `..` as its ref lands on the endpoint that CREATES a
+ * check run (#1673). Forty lowercase hex characters cannot contain a dot, a
+ * percent sign or a slash, so a path built from one stays on the commit it
+ * names. The check-run rail in `guards.test.ts` admits a reader outside
+ * `review-and-merge.ts` only when its path is built through this function.
+ */
+export function commitSha(ref: string): string {
+  if (!/^[0-9a-f]{40}$/.test(ref)) throw new Error(`not a 40-hex commit SHA: ${JSON.stringify(ref)}`)
+  return ref
+}
+
+/**
  * `gh api` has no `-R`/`--repo` flag at all — confirmed against the real
  * binary (`gh api <endpoint> -R owner/repo` and `gh -R owner/repo api
  * <endpoint>` both fail with `unknown shorthand flag: 'R' in -R`; `--repo`

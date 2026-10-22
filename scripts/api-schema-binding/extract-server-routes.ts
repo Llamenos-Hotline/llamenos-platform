@@ -54,7 +54,8 @@ import {
 
 const WORKER_ROOT = resolve(import.meta.dirname, '../../apps/worker')
 const APP_ENTRY = join(WORKER_ROOT, 'app.ts')
-const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const
+// `all` is a real verb for the contract guard (`telephony.all('/wait-music')` answers every method).
+const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'all'] as const
 type HttpMethod = (typeof HTTP_METHODS)[number]
 
 export interface ServerRoute {
