@@ -152,6 +152,27 @@ function defNameFromPath(propertyName: string, isArrayItem: boolean): string {
 }
 
 /**
+ * Top-level schemas that an identical inline occurrence must reference BY NAME.
+ *
+ * quicktype names an inline object after the property holding it (`messages`
+ * → `Message`). When two schemas hold differently-shaped objects under the
+ * same property name, quicktype prefixes BOTH with their parent's name — so
+ * adding a schema can silently rename an existing generated type that mobile
+ * code imports (`Message` → `MessageListResponseMessage`). Listing the item
+ * schema here makes the new parent reference it by its own name instead, and
+ * leaves every existing name alone.
+ *
+ * Opt-in, not a general rule: applied to every registered schema it renames
+ * ~60 existing Swift/Kotlin types (measured 2026-10-22), which is a bulk
+ * mobile rename, not a codegen tweak.
+ */
+const REFERENCED_BY_NAME = new Set([
+  // #2046 — assignee re-wrap: `messages` / `envelopes` items
+  'AssigneeEnvelopeGap',
+  'AssigneeEnvelopeEntry',
+])
+
+/**
  * Deduplicate identical anonymous inline objects across all schemas.
  *
  * Walks each schema tree collecting inline `{ type: "object", properties: ... }` and
@@ -312,6 +333,35 @@ function deduplicateAnonymousSchemas(
   }
 
   console.log(`  Deduplicated ${extractedSchemas.length} anonymous sub-schemas into top-level types`)
+
+  // Phase 3: an inline object that is exactly an opted-in top-level schema
+  // (REFERENCED_BY_NAME) is replaced by a $ref to it, so quicktype emits that
+  // schema's name instead of inventing one from the property name.
+  const topLevelByCanonical = new Map<string, string>()
+  for (let i = 0; i < schemas.length; i++) {
+    if (!REFERENCED_BY_NAME.has(schemas[i].name)) continue
+    const { $schema: _dialect, ...body } = JSON.parse(schemas[i].schema) as Record<string, unknown>
+    topLevelByCanonical.set(canonicalize(body), schemas[i].name)
+  }
+  let referenced = 0
+  for (const [canon, refs] of inlinesByHash) {
+    const target = topLevelByCanonical.get(canon)
+    if (!target) continue
+    for (const ref of refs) {
+      if (schemas[ref.schemaIdx].name === target) continue
+      let parent: Record<string, unknown> = parsed[ref.schemaIdx]
+      let valid = true
+      for (let i = 0; i < ref.path.length - 1; i++) {
+        const next = parent[ref.path[i]]
+        if (!next || typeof next !== 'object') { valid = false; break }
+        parent = next as Record<string, unknown>
+      }
+      if (!valid) continue
+      parent[ref.path[ref.path.length - 1]] = { '$ref': target }
+      referenced++
+    }
+  }
+  console.log(`  Referenced ${referenced} inline sub-schemas to opted-in top-level types`)
 
   const updatedSchemas = parsed.map((p, i) => ({
     name: schemas[i].name,
