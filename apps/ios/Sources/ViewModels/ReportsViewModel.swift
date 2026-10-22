@@ -6,6 +6,17 @@ import UIKit
 /// View model for the Reports feature. Fetches reports from the API,
 /// manages status filtering, and handles report creation with E2EE encryption.
 /// Supports both legacy category-based reports and template-driven typed reports.
+///
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main thread.
+/// Unannotated, every `async` method ran on the global executor and wrote `isLoading`,
+/// `reports`, `errorMessage`… from a GCD worker while `ReportsView.body` read them (Thread
+/// Sanitizer reports `isLoading` at the `isLoading = false` in `loadReports()` against the
+/// read in `body`), and an Observation write that lands while a body is being evaluated is
+/// never delivered: with no hub the load fails instantly, so the flip back to `false` lands
+/// right on top of the first render and Reports keeps its spinner forever. Network calls
+/// still suspend off the main thread inside `APIService`; only the state changes are
+/// pinned here. Same defect class as #1918 and #2049.
+@MainActor
 @Observable
 final class ReportsViewModel {
     private let apiService: APIService
