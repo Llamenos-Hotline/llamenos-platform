@@ -8,10 +8,9 @@
     "Matching is exact: client, file, method, path (as the guard prints it) and category. There are no wildcards, and each entry absorbs exactly one call. Two identical broken calls in one file need two entries, and a third identical call fails.",
     "Run: bun scripts/api-schema-binding/contract-guard.ts --all to see every baselined row with its line number."
   ],
-  "size": 86,
+  "size": 69,
   "owners": {
     "1701": "17 API paths the iOS client calls do not exist (contacts-v2, identity, recordings, conversation read)",
-    "1730": "Mobile clients call routes the server does not mount (Android notes PUT, convert-to-case, contact relationships/timeline, conversation actions)",
     "1997": "Client/server endpoint contract: client call sites that match no mounted route (missing /api, hp() scope, wrong verb, renamed paths)",
     "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, contact search)",
     "2068": "Webhook URLs shown to admins and registered with providers point at unmounted routes"
@@ -75,62 +74,6 @@
     },
     {
       "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "GET",
-      "path": "/api/admin/bans",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "POST",
-      "path": "/api/admin/bans",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "DELETE",
-      "path": "/api/admin/bans/:param",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "POST",
-      "path": "/api/admin/bans/bulk",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "GET",
-      "path": "/api/admin/custom-fields",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "PUT",
-      "path": "/api/admin/custom-fields",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/AdminViewModel.kt",
-      "method": "PUT",
-      "path": "/api/admin/custom-fields",
-      "category": "unmounted",
-      "issue": 1997
-    },
-    {
-      "client": "android",
       "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/admin/RecordingPlayer.kt",
       "method": "*",
       "path": "/api/recordings/:param/audio",
@@ -139,62 +82,6 @@
     },
     {
       "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactDetailViewModel.kt",
-      "method": "GET",
-      "path": "hp(/api/contacts/:param/relationships)",
-      "category": "unmounted",
-      "issue": 1730
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactsViewModel.kt",
-      "method": "GET",
-      "path": "hp(/api/contacts/search)",
-      "category": "shadowed-by-param-route",
-      "issue": 2002
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/contacts/ContactTimelineViewModel.kt",
-      "method": "GET",
-      "path": "hp(/api/contacts/:param/timeline)",
-      "category": "unmounted",
-      "issue": 1730
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
-      "method": "POST",
-      "path": "/api/conversations/:param/assign",
-      "category": "unmounted",
-      "issue": 1730
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
-      "method": "POST",
-      "path": "/api/conversations/:param/close",
-      "category": "unmounted",
-      "issue": 1730
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
-      "method": "POST",
-      "path": "/api/conversations/:param/read",
-      "category": "unmounted",
-      "issue": 1730
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/conversations/ConversationsViewModel.kt",
-      "method": "POST",
-      "path": "/api/conversations/:param/reopen",
-      "category": "unmounted",
-      "issue": 1730
-    },
-    {
-      "client": "android",
       "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/messaging/BlastsViewModel.kt",
       "method": "GET",
       "path": "/api/admin/blasts",
@@ -208,14 +95,6 @@
       "path": "/api/admin/blasts",
       "category": "unmounted",
       "issue": 1997
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/notes/NotesViewModel.kt",
-      "method": "PUT",
-      "path": "hp(/api/notes/:param)",
-      "category": "wrong-verb",
-      "issue": 1730
     },
     {
       "client": "android",
@@ -232,14 +111,6 @@
       "path": "/api/telephony/status",
       "category": "unmounted",
       "issue": 2068
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/triage/TriageViewModel.kt",
-      "method": "POST",
-      "path": "hp(/api/reports/:param/convert-to-case)",
-      "category": "unmounted",
-      "issue": 1730
     },
     {
       "client": "desktop",
@@ -680,14 +551,6 @@
       "path": "hp(/api/contacts/:param/timeline)",
       "category": "unmounted",
       "issue": 1701
-    },
-    {
-      "client": "ios",
-      "file": "apps/ios/Sources/ViewModels/ContactsViewModel.swift",
-      "method": "GET",
-      "path": "hp(/api/contacts/search)",
-      "category": "shadowed-by-param-route",
-      "issue": 2002
     },
     {
       "client": "ios",
