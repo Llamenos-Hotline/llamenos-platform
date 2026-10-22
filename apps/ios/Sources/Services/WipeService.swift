@@ -6,6 +6,10 @@ import Foundation
 /// Three wipe levels:
 /// - `wipeAll()`: Full destructive wipe (panic wipe, remote device wipe). Clears everything.
 /// - `logout()`: Session cleanup only. Preserves device keys, crash logs, and caches for re-login.
+///
+/// `@MainActor` (#1920 audit): it disconnects the main-actor `WebSocketService`, and its
+/// callers — the panic-wipe view and `AppState.handleDeviceWipe(reason:)` — run there.
+@MainActor
 final class WipeService {
     private let keychainService: KeychainService
     private let cryptoService: CryptoService
