@@ -115,8 +115,16 @@
 # its job, or if a C/C++ source file appears with no c-cpp leg. Dropping a
 # language is a red check, not a silent loss of coverage.
 #
-# Query suite and threat model match default setup: no `queries:` input means
-# the `default` suite, and no `threat-models` configuration means `remote`.
+# Query suite and config (#2077): every `init` below passes `config-file:
+# ./.github/codeql/codeql-config.yml`, which selects `security-extended` (a
+# superset of default setup's `default` suite — expect alerts default setup
+# never raised) and `paths-ignore`s vendored, generated and test-only files.
+# Until #2077 this file was passed to nothing, so the suite and the exclusions
+# had never applied. The threat model is unchanged: no `threat-models`
+# configuration means `remote`. The config's own header says what
+# `paths-ignore` can and cannot do — notably it cannot see Rust
+# `#[cfg(test)]` modules, which are handled by the dismissal policy in
+# .github/codeql/README.md.
 #
 # ─── Staged, NOT required: java-kotlin and swift (#1243) ────────────────────
 # Default setup never analysed apps/android/ or apps/ios/. The two
@@ -212,6 +220,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
@@ -260,6 +269,7 @@ jobs:
         with:
           languages: java-kotlin
           build-mode: manual
+          config-file: ./.github/codeql/codeql-config.yml
 
       # --no-build-cache: gradle.properties sets org.gradle.caching=true, and
       # a compile task restored FROM-CACHE never runs kotlinc — CodeQL would
@@ -366,6 +376,7 @@ jobs:
         with:
           languages: swift
           build-mode: manual
+          config-file: ./.github/codeql/codeql-config.yml
 
       # A fresh DerivedData path, never a restored one: an incremental build
       # that skips swiftc extracts nothing. One simulator architecture, as
