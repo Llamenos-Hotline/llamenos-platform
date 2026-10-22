@@ -313,7 +313,9 @@
     "noCategoriesMessage": "रिपोर्ट श्रेणियाँ घटनाओं को वर्गीकृत करने में मदद करती हैं।",
     "noInvitesMessage": "नए स्वयंसेवक जोड़ने के लिए आमंत्रण कोड बनाएँ।",
     "noSearchResults": "आपकी खोज से कोई सदस्य मेल नहीं खाता।",
-    "noUsersMessage": "अभी तक कोई सदस्य शामिल नहीं हुआ है।"
+    "noUsersMessage": "अभी तक कोई सदस्य शामिल नहीं हुआ है।",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -3517,7 +3519,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4278,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

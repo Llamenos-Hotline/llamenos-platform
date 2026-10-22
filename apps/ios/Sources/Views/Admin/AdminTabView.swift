@@ -63,6 +63,30 @@ struct AdminTabView: View {
             }
             .accessibilityIdentifier("admin-custom-fields")
 
+            if appState.hasPermission("system:view-roles") {
+                NavigationLink {
+                    RolesView()
+                } label: {
+                    Label(
+                        NSLocalizedString("admin_tab_roles", comment: "Roles"),
+                        systemImage: "person.badge.key.fill"
+                    )
+                }
+                .accessibilityIdentifier("admin-roles")
+            }
+
+            if appState.hasPermission("tags:view") {
+                NavigationLink {
+                    TagsAdminView()
+                } label: {
+                    Label(
+                        NSLocalizedString("admin_tab_tags", comment: "Tags"),
+                        systemImage: "tag.slash.fill"
+                    )
+                }
+                .accessibilityIdentifier("admin-tags")
+            }
+
             NavigationLink {
                 SchemaBrowserView()
             } label: {

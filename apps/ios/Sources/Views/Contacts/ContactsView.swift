@@ -27,12 +27,16 @@ struct ContactsView: View {
             ToolbarItem(placement: .primaryAction) {
                 contactTypeFilterMenu(vm: vm)
             }
-            ToolbarItem(placement: .secondaryAction) {
+            // `.primaryAction`, not `.secondaryAction`: on iPhone a secondary item
+            // is folded into the bar's overflow ("More") menu, which hides the
+            // create action behind an unlabelled ellipsis.
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     showCreateContact = true
                 } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityLabel(NSLocalizedString("contacts_create_title", comment: "New Contact"))
                 .accessibilityIdentifier("contacts-add-button")
             }
         }
