@@ -49,6 +49,26 @@ describe('the Asterisk image ships a DNS resolver module', () => {
     })
   }
 
+  describe('the Ansible-deployed PBX gets the same image', () => {
+    const ANSIBLE_ROLE = path.resolve(DOCKER, '../ansible/roles/llamenos-asterisk')
+    const template = readFileSync(path.join(ANSIBLE_ROLE, 'templates/compose/asterisk.j2'), 'utf8')
+    const tasks = readFileSync(path.join(ANSIBLE_ROLE, 'tasks/main.yml'), 'utf8')
+
+    it('builds the asterisk service from Dockerfile.asterisk and never pulls it', () => {
+      const body = service(template, 'asterisk')
+      expect(body).toMatch(/^ {4}build:\s*\n(?: {6}.*\n)*? {6}dockerfile: Dockerfile\.asterisk$/m)
+      expect(body).toMatch(/^ {4}pull_policy: build$/m)
+      // The bare upstream image has no resolver module: #1690 on a deployed PBX.
+      expect(body).not.toMatch(/^ {4}image: .*andrius\/asterisk/m)
+    })
+
+    it('ships the Dockerfile beside the compose file and builds on start', () => {
+      expect(tasks).toMatch(/docker\/Dockerfile\.asterisk/)
+      expect(tasks).toMatch(/dest: "\{\{ app_dir \}\}\/services\/asterisk\/Dockerfile\.asterisk"/)
+      expect(tasks).toMatch(/- name: Start asterisk service[\s\S]*?build: always/)
+    })
+  })
+
   const dockerfile = read('Dockerfile.asterisk')
 
   it('builds the module with libunbound and fails the build if configure misses it', () => {
