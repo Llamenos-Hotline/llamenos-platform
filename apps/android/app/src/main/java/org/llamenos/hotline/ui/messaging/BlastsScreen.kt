@@ -55,7 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.displayName
+import org.llamenos.hotline.model.Member
 
 /**
  * Blasts screen for sending broadcast messages to volunteers.
@@ -281,7 +281,7 @@ private fun BlastCard(
 
 @Composable
 private fun CreateBlastDialog(
-    volunteers: List<BlastUser>,
+    volunteers: List<Member>,
     onDismiss: () -> Unit,
     onSend: (message: String, recipientIds: List<String>, scheduled: Boolean) -> Unit,
 ) {
@@ -326,7 +326,7 @@ private fun CreateBlastDialog(
                             selectAll = it
                             if (it) {
                                 selectedIds.clear()
-                                selectedIds.addAll(volunteers.map { v -> v.id })
+                                selectedIds.addAll(volunteers.map { v -> v.pubkey })
                             } else {
                                 selectedIds.clear()
                             }
@@ -340,13 +340,13 @@ private fun CreateBlastDialog(
                 volunteers.forEach { vol ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.testTag("blast-recipient-${vol.id}"),
+                        modifier = Modifier.testTag("blast-recipient-${vol.pubkey}"),
                     ) {
                         Checkbox(
-                            checked = vol.id in selectedIds,
+                            checked = vol.pubkey in selectedIds,
                             onCheckedChange = { checked ->
-                                if (checked) selectedIds.add(vol.id)
-                                else selectedIds.remove(vol.id)
+                                if (checked) selectedIds.add(vol.pubkey)
+                                else selectedIds.remove(vol.pubkey)
                             },
                         )
                         Spacer(Modifier.width(8.dp))

@@ -44,9 +44,8 @@ import org.llamenos.hotline.model.TelephonyProviderType
 import org.llamenos.hotline.model.TranscriptionSettings
 import org.llamenos.hotline.model.UpdateCustomFieldsRequest
 import org.llamenos.protocol.CreateBanBody
-import org.llamenos.hotline.model.User
-import org.llamenos.hotline.model.UsersListResponse
-import org.llamenos.hotline.model.displayName
+import org.llamenos.hotline.model.Member
+import org.llamenos.hotline.model.MemberDirectory
 import org.llamenos.hotline.model.id
 import org.llamenos.hotline.model.identifierHash
 import javax.inject.Inject
@@ -108,7 +107,7 @@ data class AdminUiState(
     val selectedAdminSection: String = "location-lookup",
 
     // Users
-    val volunteers: List<User> = emptyList(),
+    val volunteers: List<Member> = emptyList(),
     val isLoadingVolunteers: Boolean = false,
     val volunteersError: String? = null,
     val volunteerSearchQuery: String = "",
@@ -372,13 +371,10 @@ class AdminViewModel @Inject constructor(
             }
 
             try {
-                val response = apiService.request<UsersListResponse>(
-                    "GET",
-                    "/api/users",
-                )
+                val response = apiService.getMemberDirectory()
                 _uiState.update {
                     it.copy(
-                        volunteers = response.users,
+                        volunteers = response.members,
                         isLoadingVolunteers = false,
                     )
                 }
@@ -400,7 +396,7 @@ class AdminViewModel @Inject constructor(
     /**
      * Filter users by search query (matches display name or pubkey prefix).
      */
-    fun filteredVolunteers(): List<User> {
+    fun filteredVolunteers(): List<Member> {
         val query = _uiState.value.volunteerSearchQuery.lowercase()
         if (query.isBlank()) return _uiState.value.volunteers
 

@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.model.Member
+import org.llamenos.hotline.model.MemberDirectory
 import javax.inject.Inject
 
 @Serializable
@@ -26,20 +28,8 @@ data class BlastItem(
 )
 
 @Serializable
-data class BlastUser(
-    val id: String,
-    val pubkey: String,
-    val displayName: String? = null,
-)
-
-@Serializable
 data class BlastsListResponse(
     val blasts: List<BlastItem>,
-)
-
-@Serializable
-data class BlastUsersResponse(
-    val users: List<BlastUser>,
 )
 
 @Serializable
@@ -51,7 +41,7 @@ data class CreateBlastRequest(
 
 data class BlastsUiState(
     val blasts: List<BlastItem> = emptyList(),
-    val users: List<BlastUser> = emptyList(),
+    val users: List<Member> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
     val showCreateDialog: Boolean = false,
@@ -108,10 +98,8 @@ class BlastsViewModel @Inject constructor(
     private fun loadUsers() {
         viewModelScope.launch {
             try {
-                val response = apiService.request<BlastUsersResponse>(
-                    "GET", "/api/users",
-                )
-                _uiState.update { it.copy(users = response.users) }
+                val response = apiService.getMemberDirectory()
+                _uiState.update { it.copy(users = response.members) }
             } catch (_: Exception) {
                 // Silently fail — users list is supplementary
             }

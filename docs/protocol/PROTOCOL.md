@@ -1454,7 +1454,31 @@ Response: { "ok": true }
 
 All user endpoints require `users:read` baseline permission.
 
-> **Canonical Path:** `/api/users/` is the canonical path for user management. `/api/volunteers/` is maintained as an alias for backward compatibility and resolves to the same handlers.
+> **Canonical Path:** `/api/users/` is the canonical path for user management (create, update, delete, per-user reads). `/api/volunteers/` is maintained as an alias for backward compatibility and resolves to the same handlers.
+>
+> **Member directory:** `GET /api/identity/members` is the canonical surface for *listing* members on every client. `GET /api/users` returns raw role ids and is not for client directories.
+
+```
+GET /api/identity/members
+GET /api/hubs/:hubId/identity/members
+Permission: users:read (instance directory: global; hub directory: held in that hub)
+Response: { "members": MemberDirectoryEntry[] }
+
+MemberDirectoryEntry = {
+  "id": string,                        // copy of pubkey
+  "pubkey": hex,
+  "displayName": string | null,
+  "role": "admin" | "volunteer",       // resolved server-side, see below
+  "status": "active" | "inactive",
+  "createdAt": ISO-8601
+}
+```
+
+The entry carries no `phone`, no `roles`/role ids or role names and no `hubRoles`. `role` is `admin` iff the
+member's roles grant `settings:manage`; inside a hub only roles carrying authority *in that hub* count, so a hub
+never learns that one of its members administers another hub. Clients MUST NOT derive role from anything else and
+MUST NOT re-introduce a role id or hub membership into this shape. Schema: `memberDirectoryResponseSchema`
+(`packages/protocol/schemas/users.ts`).
 
 ```
 GET /api/users
