@@ -13,13 +13,12 @@ struct ShiftsView: View {
         let vm = resolvedViewModel
 
         NavigationStack {
-            Group {
-                if vm.isLoading && vm.shifts.isEmpty {
-                    loadingState
-                } else {
-                    shiftList(vm: vm)
-                }
-            }
+            // One stable root. This used to swap between a loading view and the
+            // List, which rebuilt the nav bar (and the Manage toolbar link in
+            // it) the moment the load finished — a tap on Manage landing in
+            // that window was dropped and the Shifts screen stayed up (#1992
+            // merge group, ShiftAdminUITests.testCreateOverridePersistedOnServer).
+            shiftList(vm: vm)
             .navigationTitle(NSLocalizedString("shifts_title", comment: "Shifts"))
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -194,7 +193,12 @@ struct ShiftsView: View {
 
             // Weekly schedule sections, or the empty state inline — replacing the
             // schedule area only, never the clock card above it.
-            if vm.shiftDays.isEmpty {
+            if vm.isLoading && vm.shifts.isEmpty {
+                Section {
+                    loadingState
+                        .listRowBackground(Color.clear)
+                }
+            } else if vm.shiftDays.isEmpty {
                 Section {
                     BrandEmptyState(
                         icon: "calendar",

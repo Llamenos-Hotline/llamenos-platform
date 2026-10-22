@@ -163,6 +163,41 @@ class Timings(unittest.TestCase):
             self.run_timings("mac", [[self.case("A", 10, "failed")]])
 
 
+class Report(unittest.TestCase):
+    """`** TEST EXECUTE FAILED **` is what xcodebuild prints for ANY failing test."""
+
+    def run_report(self, log: str) -> tuple[int, str]:
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "xcodebuild-test.log"
+            path.write_text(log, encoding="utf-8")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = ui.report(path, None)
+            return rc, out.getvalue()
+
+    CASES = (
+        "Test Case '-[LlamenosUITests.AUITests testOk]' passed (1.0 seconds).\n"
+        "Test Case '-[LlamenosUITests.AUITests testBad]' failed (2.0 seconds).\n"
+    )
+
+    def test_an_ordinary_assertion_failure_is_not_called_a_harness_failure(self):
+        rc, out = self.run_report(self.CASES + "** TEST EXECUTE FAILED **\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("`AUITests.testBad`", out)
+        self.assertNotIn("other than an assertion", out)
+
+    def test_execute_failed_with_every_case_green_is_a_harness_failure(self):
+        rc, out = self.run_report(
+            "Test Case '-[LlamenosUITests.AUITests testOk]' passed (1.0 seconds).\n"
+            "** TEST EXECUTE FAILED **\n"
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("other than an assertion", out)
+
+
 class RealTimings(unittest.TestCase):
     def test_the_checked_in_timings_have_both_hosts_and_a_sane_factor(self):
         prices = ui.load_timings()
