@@ -132,11 +132,15 @@ final class TagsViewModel {
 
     func loadTags() async {
         guard !isLoading else { return }
+        guard let hubId = hubIdProvider() else {
+            errorMessage = TagsViewModelError.noActiveHub.localizedDescription
+            return
+        }
         isLoading = true
         errorMessage = nil
         do {
             let decrypt = fieldDecryptor()
-            tags = try await tagsAPI.listTags().map { DecryptedTag(tag: $0, decrypt: decrypt) }
+            tags = try await tagsAPI.listTags(hubId: hubId).map { DecryptedTag(tag: $0, decrypt: decrypt) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -172,6 +176,7 @@ final class TagsViewModel {
             )
         }
         let created = try await tagsAPI.createTag(
+            hubId: hubId,
             id: UUID().uuidString,
             name: Self.slugify(trimmed),
             encryptedLabel: encryptedLabel,
@@ -185,15 +190,20 @@ final class TagsViewModel {
     }
 
     func deleteTag(_ tagId: String) async throws {
-        _ = try await tagsAPI.deleteTag(tagId: tagId)
+        guard let hubId = hubIdProvider() else { throw TagsViewModelError.noActiveHub }
+        _ = try await tagsAPI.deleteTag(hubId: hubId, tagId: tagId)
         tags.removeAll { $0.id == tagId }
     }
 }
 
 enum TagsViewModelError: Error, LocalizedError {
     case noHubKey
+    case noActiveHub
 
     var errorDescription: String? {
-        NSLocalizedString("error_no_hub_key", comment: "Hub key not available")
+        switch self {
+        case .noHubKey: NSLocalizedString("error_no_hub_key", comment: "Hub key not available")
+        case .noActiveHub: NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
+        }
     }
 }

@@ -3,16 +3,19 @@ import Foundation
 // MARK: - TagsAPIServiceProtocol
 
 protocol TagsAPIServiceProtocol {
-    func listTags() async throws -> [Tag]
-    func createTag(id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse
-    func updateTag(tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse
-    func deleteTag(tagId: String) async throws -> TagDeleteResponse
+    func listTags(hubId: String) async throws -> [Tag]
+    func createTag(hubId: String, id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse
+    func updateTag(hubId: String, tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse
+    func deleteTag(hubId: String, tagId: String) async throws -> TagDeleteResponse
 }
 
 // MARK: - TagsAPIService
 
 /// API service for hub tags (E2EE labels — see TagsViewModel for the crypto half).
 /// Wire types are the generated protocol types (`Tag`, `TagResponse`, `CreateTagBody`, …).
+/// Tags are mounted only under `/api/hubs/:hubId/tags`, so every call names its hub
+/// explicitly via `APIService.hubPath` — `hp()` would fall back to the unmounted bare
+/// `/api/tags` when no hub is active.
 /// `Tag` is the element type of `TagListResponse.tags`; quicktype names it from the
 /// property (`tags` → `Tag`), not `TagListResponseTag` — see `generated/swift/Types.swift`.
 @Observable
@@ -23,15 +26,15 @@ final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
         self.apiService = apiService
     }
 
-    func listTags() async throws -> [Tag] {
+    func listTags(hubId: String) async throws -> [Tag] {
         let response: TagListResponse = try await apiService.request(
             method: "GET",
-            path: apiService.hp("/api/tags")
+            path: APIService.hubPath(hubId, "/api/tags")
         )
         return response.tags
     }
 
-    func createTag(id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse {
+    func createTag(hubId: String, id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse {
         let body = CreateTagBody(
             color: color,
             encryptedCategory: encryptedCategory,
@@ -41,7 +44,7 @@ final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
         )
         return try await apiService.request(
             method: "POST",
-            path: apiService.hp("/api/tags"),
+            path: APIService.hubPath(hubId, "/api/tags"),
             body: body
         )
     }
@@ -49,7 +52,7 @@ final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
     /// A nil field is omitted from the PATCH body (left unchanged). The generated
     /// `UpdateTagBody` cannot encode an explicit null, so clearing a set category
     /// stays a desktop-only operation for now.
-    func updateTag(tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse {
+    func updateTag(hubId: String, tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse {
         let body = UpdateTagBody(
             color: color,
             encryptedCategory: encryptedCategory,
@@ -57,15 +60,15 @@ final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
         )
         return try await apiService.request(
             method: "PATCH",
-            path: apiService.hp("/api/tags/\(tagId)"),
+            path: APIService.hubPath(hubId, "/api/tags/\(tagId)"),
             body: body
         )
     }
 
-    func deleteTag(tagId: String) async throws -> TagDeleteResponse {
+    func deleteTag(hubId: String, tagId: String) async throws -> TagDeleteResponse {
         try await apiService.request(
             method: "DELETE",
-            path: apiService.hp("/api/tags/\(tagId)")
+            path: APIService.hubPath(hubId, "/api/tags/\(tagId)")
         )
     }
 }

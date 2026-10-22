@@ -8,15 +8,18 @@ final class MockTagsAPIService: TagsAPIServiceProtocol {
     var deleteTagResult: Result<TagDeleteResponse, Error> = .success(TagDeleteResponse(removedFromContacts: 0))
     var lastCreateArgs: (id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?)?
     var lastDeletedTagId: String?
+    var lastHubIds: [String] = []
 
-    func listTags() async throws -> [Llamenos.Tag] {
+    func listTags(hubId: String) async throws -> [Llamenos.Tag] {
+        lastHubIds.append(hubId)
         switch listTagsResult {
         case .success(let tags): return tags
         case .failure(let error): throw error
         }
     }
 
-    func createTag(id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse {
+    func createTag(hubId: String, id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse {
+        lastHubIds.append(hubId)
         lastCreateArgs = (id: id, name: name, encryptedLabel: encryptedLabel, color: color, encryptedCategory: encryptedCategory)
         if let result = createTagResult {
             switch result {
@@ -27,11 +30,12 @@ final class MockTagsAPIService: TagsAPIServiceProtocol {
         throw URLError(.unsupportedURL)
     }
 
-    func updateTag(tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse {
+    func updateTag(hubId: String, tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse {
         throw URLError(.unsupportedURL)
     }
 
-    func deleteTag(tagId: String) async throws -> TagDeleteResponse {
+    func deleteTag(hubId: String, tagId: String) async throws -> TagDeleteResponse {
+        lastHubIds.append(hubId)
         lastDeletedTagId = tagId
         switch deleteTagResult {
         case .success(let response): return response
@@ -110,18 +114,30 @@ struct TagsViewModelTests {
         #expect(vm.tags[0].id == "tag-1")
         #expect(vm.tags[0].label == "Urgent")
         #expect(vm.isLoading == false)
+        #expect(mock.lastHubIds == ["tags-load"])
     }
 
     @Test func loadTagsFallsBackToTheStoredValueWithoutAKey() async {
         let mock = MockTagsAPIService()
         mock.listTagsResult = .success([makeTag(encryptedLabel: Self.urgentCiphertext)])
-        // No hub active, and an active hub that holds no key: both show the raw value.
-        for activeHubId in [nil, "tags-no-key"] as [String?] {
-            let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: activeHubId)
-            await vm.loadTags()
-            #expect(vm.tags[0].label == Self.urgentCiphertext)
-            #expect(vm.tags[0].category == nil)
-        }
+        // An active hub that holds no key shows the raw value.
+        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: "tags-no-key")
+        await vm.loadTags()
+        #expect(vm.tags[0].label == Self.urgentCiphertext)
+        #expect(vm.tags[0].category == nil)
+    }
+
+    @Test func tagsAreHubScopedSoNoActiveHubSendsNothing() async {
+        // Tags are mounted only at /api/hubs/:hubId/tags: with no hub there is no valid path.
+        let mock = MockTagsAPIService()
+        mock.listTagsResult = .success([makeTag()])
+        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: nil)
+        await vm.loadTags()
+        #expect(vm.errorMessage != nil)
+        #expect(vm.tags.isEmpty)
+        #expect(vm.isLoading == false)
+        await #expect(throws: TagsViewModelError.self) { try await vm.deleteTag("tag-1") }
+        #expect(mock.lastHubIds.isEmpty)
     }
 
     @Test func slugifyMatchesTheDesktopSlug() {
@@ -151,6 +167,7 @@ struct TagsViewModelTests {
             ciphertextHex: encryptedCategory, hubId: "tags-create", label: CryptoLabels.LABEL_TAG_ENCRYPT
         ) == "Care")
         #expect(vm.tags.count == 1)
+        #expect(mock.lastHubIds == ["tags-create"])
     }
 
     @Test func createTagThrowsWithoutAHubKey() async {
@@ -168,7 +185,7 @@ struct TagsViewModelTests {
     @Test func loadTagsSetsErrorOnFailure() async {
         let mock = MockTagsAPIService()
         mock.listTagsResult = .failure(URLError(.notConnectedToInternet))
-        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: nil)
+        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: "tags-fail")
         await vm.loadTags()
         #expect(vm.errorMessage != nil)
         #expect(vm.tags.isEmpty)
@@ -177,11 +194,12 @@ struct TagsViewModelTests {
     @Test func deleteTagRemovesItFromTheList() async throws {
         let mock = MockTagsAPIService()
         mock.listTagsResult = .success([makeTag()])
-        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: nil)
+        let vm = makeViewModel(mock, crypto: makeCrypto(hubId: nil), activeHubId: "tags-delete")
         await vm.loadTags()
         #expect(vm.tags.count == 1)
         try await vm.deleteTag("tag-1")
         #expect(mock.lastDeletedTagId == "tag-1")
+        #expect(mock.lastHubIds == ["tags-delete", "tags-delete"])
         #expect(vm.tags.isEmpty)
     }
 }
