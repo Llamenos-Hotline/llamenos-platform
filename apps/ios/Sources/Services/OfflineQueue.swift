@@ -48,8 +48,15 @@ struct QueuedOperation: Codable, Identifiable, Sendable {
 /// - Wire into APIService: when a write request fails with a network error, call `enqueue(...)`
 /// - The queue replays automatically when connectivity is restored
 /// - UI observes `pendingCount` to show a banner
+///
+/// `@MainActor` (#1920 audit): `OfflineBanner` renders `pendingCount` / `isReplaying` on main
+/// and `replay()` was already main-actor, but `enqueue` ran synchronously inside
+/// `APIService`'s network-error path on the global executor — appending to `queue` while
+/// `replay()` iterated it across suspension points. `APIService` now `await`s the enqueue,
+/// so every mutation of `queue` happens on one actor.
+@MainActor
 @Observable
-final class OfflineQueue: @unchecked Sendable {
+final class OfflineQueue {
 
     // MARK: - Constants
 
@@ -144,7 +151,6 @@ final class OfflineQueue: @unchecked Sendable {
     /// Permanent client errors (4xx except 401/429) increment the attempt counter;
     /// the operation is removed after maxAttempts.
     /// Server errors (5xx) and network errors cause retry with exponential backoff.
-    @MainActor
     func replay() async {
         guard !isReplaying, !queue.isEmpty else { return }
 
@@ -229,7 +235,7 @@ final class OfflineQueue: @unchecked Sendable {
     // MARK: - Classification
 
     /// Classify an API path + method into a queue operation type.
-    static func classifyOperation(path: String, method: String) -> QueuedOperationType {
+    nonisolated static func classifyOperation(path: String, method: String) -> QueuedOperationType {
         if path.contains("/notes") && method.uppercased() == "POST" { return .noteCreate }
         if path.contains("/notes/") && method.uppercased() == "PATCH" { return .noteUpdate }
         // Check report-messages before generic messages (more specific pattern first)
@@ -243,7 +249,7 @@ final class OfflineQueue: @unchecked Sendable {
     }
 
     /// Whether an HTTP method is a write operation eligible for queueing.
-    static func isQueueableMethod(_ method: String) -> Bool {
+    nonisolated static func isQueueableMethod(_ method: String) -> Bool {
         let upper = method.uppercased()
         return upper == "POST" || upper == "PUT" || upper == "PATCH" || upper == "DELETE"
     }

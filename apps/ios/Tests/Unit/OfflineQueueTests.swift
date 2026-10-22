@@ -2,6 +2,8 @@ import Foundation
 import XCTest
 @testable import Llamenos
 
+/// `@MainActor`: `OfflineQueue` is main-actor isolated (#1920 audit).
+@MainActor
 final class OfflineQueueTests: XCTestCase {
 
     private var queue: OfflineQueue!

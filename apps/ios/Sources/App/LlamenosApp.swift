@@ -374,6 +374,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
+@MainActor
 private func decryptWakePayloadAuto(_ service: WakeKeyService, payload: String) throws -> String {
     let trimmed = payload.trimmingCharacters(in: .whitespaces)
     return try service.decryptWakePayload(envelopeJSON: trimmed)
