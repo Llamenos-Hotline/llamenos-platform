@@ -52,6 +52,13 @@ enum PINLockout {
 /// View model for PIN entry, both for setting a new PIN and unlocking with an existing one.
 /// Handles the enter-then-confirm flow for new PINs, PIN validation, escalating lockout,
 /// and biometric unlock via Keychain-stored PIN (C5/H7).
+///
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class PINViewModel {
     private let authService: AuthService

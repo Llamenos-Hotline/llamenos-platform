@@ -15,6 +15,8 @@ import UserNotifications
 // The payloadDecryptorForTesting hook on AppDelegate bypasses real HPKE crypto,
 // allowing pure logic tests without a wake keypair.
 
+/// `@MainActor`: drives `AppState` and `AppDelegate`, both main-actor isolated (#1920 audit).
+@MainActor
 final class PushRoutingTests: XCTestCase {
 
     private var hubContext: HubContext!
