@@ -902,6 +902,80 @@ jobs:
           xcrun simctl boot "$UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$UDID" -b
 
+      # Stop the simulator's photo-analysis daemon. A freshly booted iOS 26.5
+      # simulator starts `mediaanalysisd`, which scans the (empty) photo
+      # library and, on a 3-core hosted VM or a Mac running two shards, takes
+      # most of the machine: measured on the self-hosted Mac, it accounted for
+      # 230-430 of the first ~830 CPU-seconds of every shard's simulator
+      # (about half), peaking near 660% of one core's worth of the 10-core host
+      # while shards were mid-run. Against the same boot WITHOUT it, the first
+      # 5.5 minutes cost 151 CPU-seconds against 596 for a normal shard device.
+      # Nothing in the XCUITest suite uses media analysis.
+      #
+      # The device is created fresh per shard, so this has to run per shard;
+      # `launchctl disable` is stored with the device and survives its reboots
+      # (checked: shutdown + boot, daemon stays down), but it does not survive
+      # the device being deleted, which is when it should stop applying.
+      # Deliberately ONLY this daemon: the others (health, fitness, siri,
+      # biome, suggestd...) measured at a few CPU-seconds each, and a missing
+      # daemon can turn a clean failure into a hang. A failing disable or
+      # bootout only annotates, but the verification at the end does not: it
+      # fails the step unless the daemon is both marked disabled and not
+      # running, so a regression cannot pass silently.
+      - name: Quiet the simulator's photo-analysis daemon
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -uo pipefail
+          # Every command below names the SAME launchd domain, and it is the
+          # one the daemon actually lives in, so `disable` and `bootout` act on
+          # it and `print-disabled` reads back what `disable` wrote. An earlier
+          # version disabled in `system` but verified and booted out in
+          # `user/$(id -u)` with the HOST uid: it only passed because this
+          # simulator's launchd aliases those domains, a coincidence of the
+          # runtime and not a property of the step. `user/foreground` is the
+          # simulator's own name for the daemon's domain (launchd itself
+          # points at it when asked for `system/...`), needs no uid, and
+          # `id` does not exist inside the simulator anyway. A `system/...`
+          # bootout is accepted but leaves the running daemon up, which is
+          # why the liveness check below is part of the verdict.
+          domain=user/foreground
+          labels="com.apple.mediaanalysisd com.apple.mediaanalysisd.service"
+          sim() { xcrun simctl spawn "$UDID" launchctl "$@"; }
+          for label in $labels; do
+            sim disable "$domain/$label" >/dev/null 2>&1 \
+              || echo "::warning::could not disable $label in the simulator"
+            sim bootout "$domain/$label" >/dev/null 2>&1 || true
+          done
+          # Judged on what the simulator reports, never on the exit codes above
+          # (bootout also fails when the service was never loaded). Two
+          # observations, both required: the label is marked disabled in the
+          # domain we wrote, and no process is running for it.
+          disabled=$(sim print-disabled "$domain" 2>&1) || {
+            echo "::error::launchctl print-disabled $domain failed in $UDID: $disabled"
+            exit 1
+          }
+          failed=0
+          for label in $labels; do
+            if ! grep -Fq "\"$label\" => disabled" <<<"$disabled"; then
+              echo "::error::$label is not disabled in the simulator's $domain domain"
+              failed=1
+            fi
+          done
+          # Only the main daemon ever runs; the `.service` label is listed with
+          # "-" for its PID. A numeric first column is a live process.
+          running=$(sim list 2>&1 | awk '$3 ~ /^com\.apple\.mediaanalysisd/ && $1 ~ /^[0-9]+$/')
+          if [ -n "$running" ]; then
+            echo "::error::mediaanalysisd is still running in the simulator: $running"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "disabled list as the simulator reports it:"
+            grep -i mediaanalysis <<<"$disabled" || echo "  (no mediaanalysis entries)"
+            exit 1
+          fi
+          echo "mediaanalysisd disabled and stopped in $UDID"
+
       # Boot is not warm. Booting the simulator never launches the app, so the
       # FIRST test of a shard paid the whole cold-start bill — installd
       # registering the bundle, RunningBoard's first assertion for the process,
@@ -921,9 +995,15 @@ jobs:
       # annotates instead of failing the shard; a missing app is a broken
       # build artifact and does fail.
       - name: Warm the app (install, launch once, terminate)
-        timeout-minutes: 5
+        # A backstop only. The script bounds itself (WARM_BUDGET_SEC) and
+        # annotates when it runs out, as the paragraph above promises; a step
+        # timeout fires first and fails the whole shard instead (#2037: hosted
+        # warm-ups took 63-263s, median 139s, and 6 of 51 sampled ran into the
+        # old 5-minute cap, killing the shard before a single test ran).
+        timeout-minutes: 10
         env:
           UDID: ${{ steps.sim.outputs.udid }}
+          WARM_BUDGET_SEC: "420"
         run: |
           set -uo pipefail
           products="$RUNNER_TEMP/llamenos-build/Build/Products/UITesting-iphonesimulator"
@@ -935,12 +1015,28 @@ jobs:
           fi
           bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${apps[0]}/Info.plist")
           start=$SECONDS
-          if xcrun simctl install "$UDID" "${apps[0]}" \
-              && xcrun simctl launch --terminate-running-process "$UDID" "$bundle_id" \
-              && xcrun simctl terminate "$UDID" "$bundle_id"; then
+          # macOS has no timeout(1); perl's alarm survives exec and kills the
+          # command when the remaining budget is spent.
+          bounded() {
+            local left=$(( WARM_BUDGET_SEC - (SECONDS - start) ))
+            [ "$left" -gt 0 ] || return 124
+            perl -e 'alarm shift; exec @ARGV or exit 127' "$left" "$@"
+          }
+          phase() {
+            local t=$SECONDS
+            if bounded "$@"; then
+              echo "  $2 $3: $((SECONDS - t))s"
+            else
+              echo "  $2 $3: FAILED or timed out after $((SECONDS - t))s"
+              return 1
+            fi
+          }
+          if phase xcrun simctl install "$UDID" "${apps[0]}" \
+              && phase xcrun simctl launch --terminate-running-process "$UDID" "$bundle_id" \
+              && phase xcrun simctl terminate "$UDID" "$bundle_id"; then
             echo "warm-up of $bundle_id took $((SECONDS - start))s"
           else
-            echo "::warning::warm-up of $bundle_id failed after $((SECONDS - start))s; the first test of this shard will launch cold"
+            echo "::warning::warm-up of $bundle_id failed after $((SECONDS - start))s (budget ${WARM_BUDGET_SEC}s); the first test of this shard will launch cold"
           fi
 
       # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
