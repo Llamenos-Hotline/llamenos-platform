@@ -1,12 +1,11 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
-import { z } from 'zod'
 import type { AppEnv, EncryptedMessage } from '../types'
 import type { MessagingChannelType } from '@shared/types'
 import { routeOutboundMessage } from '../messaging/delivery-router'
 import { checkPermission, requirePermission } from '../middleware/permission-guard'
-import { listConversationsQuerySchema, sendMessageBodySchema, updateConversationBodySchema, conversationResponseSchema, messageResponseSchema, conversationListResponseSchema, messageListResponseSchema, conversationStatsResponseSchema, volunteerLoadResponseSchema } from '@protocol/schemas/conversations'
-import { paginationSchema, pubkeySchema, recipientEnvelopeSchema } from '@protocol/schemas/common'
+import { listConversationsQuerySchema, sendMessageBodySchema, updateConversationBodySchema, conversationResponseSchema, messageResponseSchema, conversationListResponseSchema, messageListResponseSchema, conversationStatsResponseSchema, volunteerLoadResponseSchema, assigneeEnvelopeGapsResponseSchema, addAssigneeEnvelopesBodySchema, addAssigneeEnvelopesResponseSchema } from '@protocol/schemas/conversations'
+import { paginationSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { canClaimChannel, getClaimableChannels } from '@shared/permissions'
@@ -585,25 +584,6 @@ function inCallerHub(conversationHubId: string | null, callerHubId: string | und
   return callerHubId === undefined || conversationHubId === callerHubId
 }
 
-const assigneeEnvelopeGapsResponseSchema = z.object({
-  assignedTo: pubkeySchema.nullable(),
-  recipients: z.array(pubkeySchema),
-  messages: z.array(z.object({
-    id: z.string(),
-    readerEnvelopes: z.array(recipientEnvelopeSchema),
-    missingRecipients: z.array(pubkeySchema),
-  })),
-})
-
-const addAssigneeEnvelopesBodySchema = z.object({
-  envelopes: z.array(z.object({
-    messageId: z.string().min(1).max(64),
-    envelope: recipientEnvelopeSchema,
-  })).min(1).max(1000),
-})
-
-const addAssigneeEnvelopesResponseSchema = z.object({ added: z.number().int().nonnegative() })
-
 /**
  * GET /conversations/:id/assignee-envelopes — messages the current assignee
  * cannot yet open, and the device keys to wrap them for. Paged: the re-wrapping
@@ -672,6 +652,16 @@ conversations.post('/:id/assignee-envelopes',
         assignedTo,
         added,
       }, undefined, conv.hubId ?? null)
+
+      // Tell the assignee's open client its messages changed, so the thread
+      // re-reads them now instead of on its next background refresh. The
+      // event carries ids and a count only — never key material.
+      publishEvent(c.env, KIND_CONVERSATION_ASSIGNED, {
+        type: 'conversation:envelopes-added',
+        conversationId: id,
+        assignedTo,
+        added,
+      }, conv.hubId ?? '')
     }
 
     return c.json({ added })

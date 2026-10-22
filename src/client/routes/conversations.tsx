@@ -3,6 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { useConversations } from '@/lib/hooks'
+import { useMemberHubIds } from '@/lib/member-hubs'
+import { useRelaySubscriptions } from '@/lib/relay/hooks'
+import type { ConversationEnvelopesAddedEvent } from '@/lib/relay/types'
+import { KIND_CONVERSATION_ASSIGNED } from '@shared/event-kinds'
 import { useState, useEffect, useCallback } from 'react'
 import {
   getConversationMessages,
@@ -26,6 +30,8 @@ import { ReassignDialog } from '@/components/ReassignDialog'
 export const Route = createFileRoute('/conversations')({
   component: ConversationsPage,
 })
+
+const ENVELOPE_KINDS = [KIND_CONVERSATION_ASSIGNED]
 
 function ConversationsPage() {
   const { t } = useTranslation()
@@ -56,18 +62,30 @@ function ConversationsPage() {
       .finally(() => setMessagesLoading(false))
   }, [selectedId, t, toast])
 
+  const refreshMessages = useCallback((conversationId: string) => {
+    getConversationMessages(conversationId, { limit: 100 })
+      .then(({ messages: msgs }) => setMessages(msgs))
+      .catch(() => {
+        console.error('[conversations] Background message refresh failed')
+      })
+  }, [])
+
   // Refresh messages periodically when a conversation is selected
   useEffect(() => {
     if (!selectedId) return
-    const interval = setInterval(() => {
-      getConversationMessages(selectedId, { limit: 100 })
-        .then(({ messages: msgs }) => setMessages(msgs))
-        .catch(() => {
-          console.error('[conversations] Background message refresh failed')
-        })
-    }, 10_000)
+    const interval = setInterval(() => refreshMessages(selectedId), 10_000)
     return () => clearInterval(interval)
-  }, [selectedId])
+  }, [selectedId, refreshMessages])
+
+  // An admin client re-wrapped this conversation's earlier messages for its
+  // assignee (#2046): re-read them now, so they open without waiting for the
+  // next background refresh.
+  const memberHubIds = useMemberHubIds()
+  useRelaySubscriptions(memberHubIds, ENVELOPE_KINDS, (_kind, content) => {
+    if (content.type !== 'conversation:envelopes-added') return
+    const { conversationId } = content as ConversationEnvelopesAddedEvent
+    if (conversationId === selectedId) refreshMessages(conversationId)
+  }, selectedId !== null)
 
   const handleClaim = useCallback(async (convId: string) => {
     try {

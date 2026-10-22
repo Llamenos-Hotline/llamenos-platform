@@ -646,6 +646,111 @@ When the server receives an inbound message via a messaging webhook (SMS/WhatsAp
 3. Server wraps `message_key` for each authorized reader (assigned volunteer + all admins) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
 4. Plaintext is discarded from memory. The server cannot read stored messages after this point.
 
+### 2.4.1 Assignee Re-wrap (Client-Mediated)
+
+A message's `message_key` is wrapped only for the readers known when it was
+written (§2.4), and the server discards it. So when a conversation is claimed
+(`POST /conversations/:id/claim`) or reassigned (`PATCH /conversations/:id`),
+the messages already in it are sealed to the admins alone. The server holds no
+secret that opens an envelope, by design, so it cannot add the new assignee.
+Sealing to a wider set up front instead — every eligible volunteer, or the hub
+key — would widen who can read caller content, so the protocol does not do it.
+
+The re-wrap therefore runs on a client that can already open the messages: an
+admin client whose device holds an envelope on them (in practice the holder of
+the admin decryption key). Plaintext and `message_key` never reach the server on
+this path. The server only ever **appends** envelopes, so no existing reader
+loses access, and the ciphertext is not touched.
+
+#### Exchange
+
+```
+Trigger (on the re-wrapping client):
+  - a `conversation:assigned` event from ANY member hub (§3.2) — never gated on
+    the active hub; and
+  - every relay (re)connect: sweep the hub's active conversations
+    (GET /conversations?status=active), so an assignment made while no admin
+    client was online is closed by the first one to come online.
+
+Loop, per conversation:
+  1. gaps = GET /hubs/:hubId/conversations/:id/assignee-envelopes
+       → { assignedTo, recipients: x25519_hex[],
+           messages: [{ id, readerEnvelopes: RecipientEnvelope[],
+                        missingRecipients: x25519_hex[] }] }
+     At most 200 messages, oldest first. Messages with NO envelopes are never
+     listed: nobody holds a key that could re-wrap them.
+     If gaps.messages is empty → done.
+
+  2. Refuse an incoherent answer: assignedTo must be set, and every
+     missingRecipients key must appear in recipients and be 64 hex chars.
+
+  3. For each listed message:
+       own = readerEnvelopes.find(e => e.pubkey is this device's key)
+       if none → skip (this device is not a reader; another reader must do it)
+       message_key = HPKE.Open(own, info = UTF-8("llamenos:message"), aad = empty)
+       for each pk in missingRecipients:
+         sealed = HPKE.Seal(pk, message_key, info = UTF-8("llamenos:message"), aad = empty)
+         entry  = { messageId: id,
+                    envelope: { pubkey: pk, enc: hex(sealed[0..32]), ct: hex(sealed[32..]) } }
+     The envelope is byte-for-byte the §2.4 stored-record format; a reader
+     cannot tell a re-wrapped envelope from one sealed at write time.
+
+  4. POST /hubs/:hubId/conversations/:id/assignee-envelopes
+       { envelopes: entry[] }        // 1..1000 per request
+       → { added: number }
+     All-or-nothing. 400 if any envelope names a key that is not a registered
+     X25519 device key of the CURRENT assignee; 404 if a message is not in the
+     conversation; 409 if the conversation has no assignee or a message has no
+     readers. An envelope for a recipient that already has one on that message
+     is skipped — first write wins, because the server cannot tell a correct
+     re-wrap from a wrong one.
+
+  5. If no entry was produced, or added == 0 (another re-wrapper got there
+     first), stop. Otherwise go to 1.
+```
+
+Both routes require `conversations:read-all`; the POST also requires
+`conversations:update` (adding a reader is the same class of authority as
+reassigning). A conversation outside the caller's hub answers 404.
+
+When `added > 0` the server publishes
+`{"type": "conversation:envelopes-added", "conversationId", "assignedTo", "added"}`
+on `KIND_CONVERSATION_ASSIGNED` to the conversation's hub, so the assignee's
+open thread re-reads its messages. It carries ids and a count, never key
+material.
+
+Request/response schemas: `assigneeEnvelopeGapsResponseSchema`,
+`addAssigneeEnvelopesBodySchema` and `addAssigneeEnvelopesResponseSchema` in
+`packages/protocol/schemas/conversations.ts` (codegen'd to Swift and Kotlin as
+`AssigneeEnvelopeGapsResponse`, `AddAssigneeEnvelopesBody`,
+`AddAssigneeEnvelopesResponse`). Desktop implementation:
+`src/client/lib/assignee-rewrap.ts` + `platform.ts` `rewrapMessageKey`.
+
+#### Availability (known dependency, not a defect)
+
+If no admin client is online, the gap stays open until one is: the assignee
+sees the pre-claim messages as `[Encrypted]` until then. This is inherent to a
+zero-knowledge re-wrap: the only parties able to produce the envelope are
+clients that can already read the message. Messages that arrive *after* the
+claim are sealed to the assignee at write time and are unaffected. Platforms
+without a re-wrapper implementation (iOS and Android at the time of writing)
+do not close the gap, so a hub whose admins use only those platforms gets no
+re-wrap.
+
+#### Trust
+
+The keys sealed to come from the server's device registry (`devices.x25519_pubkey`
+of the assignee). That is the same registry every message write path already
+trusts to name a user's readers — the server resolves recipients for inbound
+messages (§2.4 server-side encryption), and clients take the admin recipient
+from server config. A malicious server could list a key of its own as the
+assignee's device and receive content keys for the messages this exchange
+covers. The client refuses answers that are internally inconsistent (step 2),
+but it cannot yet verify a device key independently; that requires the user
+sigchain (§2.11, "Device Authorization (Sigchain)") to be checked before sealing, and when
+it is wired in, the re-wrapper MUST verify each recipient against the
+assignee's sigchain.
+
 ### 2.5 Call Record Metadata Encryption
 
 Active calls remain as plaintext (routing necessity). When a call completes, sensitive metadata is encrypted into an envelope and stored permanently.
@@ -1182,6 +1287,7 @@ The plaintext content is a JSON string with a `type` field identifying the event
 {"type": "message:new", "conversationId": "conv123", "channelType": "sms"}
 {"type": "message:status", "conversationId": "conv123", "messageId": "msg456", "status": "delivered"}
 {"type": "conversation:assigned", "conversationId": "conv123", "assignedTo": "pubkey_hex"}
+{"type": "conversation:envelopes-added", "conversationId": "conv123", "assignedTo": "pubkey_hex", "added": 3}
 {"type": "shift:update", "shiftId": "shift123"}
 {"type": "settings:changed", "section": "spam"}
 {"type": "report:new", "conversationId": "conv123", "category": "harassment"}
@@ -1688,6 +1794,16 @@ POST /api/conversations/:id/claim
 Permission: conversations:claim + channel-specific (e.g., conversations:claim-sms)
 Response: Conversation
 Error: 403 "No permission to claim this channel type"
+
+GET /api/conversations/:id/assignee-envelopes
+Permission: conversations:read-all
+Response: AssigneeEnvelopeGapsResponse   // ≤ 200 messages, oldest first — see §2.4.1
+
+POST /api/conversations/:id/assignee-envelopes
+Permission: conversations:read-all + conversations:update
+Body: { "envelopes": [{ "messageId": string, "envelope": RecipientEnvelope }] }  // 1..1000
+Response: { "added": number }
+Error: 400 recipient not a device key of the current assignee · 404 message not in conversation · 409 no assignee / message has no readers
 ```
 
 Hub-scoped: `/api/hubs/:hubId/conversations/*`

@@ -1537,8 +1537,15 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const ciphertext = data.slice(12)
     const aad = utf8ToBytes(`${LABEL_HUB_EVENT_EPOCH}:${epoch}`)
     const cipher = gcm(key, nonce, aad)
-    const plaintext = cipher.decrypt(ciphertext)
-    return new TextDecoder().decode(plaintext)
+    const padded = cipher.decrypt(ciphertext)
+    // Strip the server's bucket padding — `[4-byte LE length][JSON][random]`,
+    // exactly as `open_server_event` in crypto.rs does. Decoding the padded
+    // buffer whole (as both sides once did) yields a string no JSON parser
+    // accepts, so every relay event was dropped (#2046).
+    if (padded.length < 4) throw new Error('Server event padding is malformed: buffer too short')
+    const actualLen = new DataView(padded.buffer, padded.byteOffset).getUint32(0, true)
+    if (actualLen + 4 > padded.length) throw new Error('Server event padding is malformed: length exceeds buffer')
+    return new TextDecoder('utf-8', { fatal: true }).decode(padded.subarray(4, 4 + actualLen))
   },
 
   // --- Backend address (#738) — mirrors apps/desktop/src/api_config.rs ---

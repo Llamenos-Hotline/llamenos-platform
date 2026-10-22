@@ -628,7 +628,12 @@ export async function decryptServerEvent(ciphertextHex: string, epoch: number): 
   if (useTauri) {
     try {
       return await tauriInvoke<string>('decrypt_server_event', { ciphertextHex, epoch })
-    } catch {
+    } catch (err) {
+      // An event for an epoch whose key this client no longer holds is routine
+      // around key rotation; anything else is a defect. Either way it must
+      // leave a trace: a silent null here hid that NO relay event decoded on
+      // desktop (#2046), because REST polling papered over every one.
+      console.warn(`[relay] server event (epoch ${epoch}) did not decrypt — ${ipcErrorMessage(err)}`)
       return null
     }
   }
@@ -1130,6 +1135,22 @@ export async function encryptMessage(
   return { encryptedContent, readerEnvelopes }
 }
 
+/** The envelope among `readerEnvelopes` addressed to this device, if any. */
+async function findOwnMessageEnvelope(
+  readerEnvelopes: readonly RecipientEnvelope[],
+): Promise<RecipientEnvelope | null> {
+  const deviceState = await getDevicePubkeys()
+  if (!deviceState) return null
+  return readerEnvelopes.find(e =>
+    e.pubkey === deviceState.signingPubkeyHex || e.pubkey === deviceState.encryptionPubkeyHex,
+  ) ?? null
+}
+
+/** Open a stored message's content key from this device's own envelope. */
+async function openMessageKey(envelope: RecipientEnvelope): Promise<string> {
+  return hpkeOpenKeyFromState(toIpcEnvelope(5 /* LABEL_MESSAGE */, envelope), LABEL_MESSAGE, '')
+}
+
 /**
  * Decrypt a message by finding our envelope and HPKE-opening the key.
  */
@@ -1137,18 +1158,11 @@ export async function decryptMessage(
   encryptedContent: string,
   readerEnvelopes: RecipientEnvelope[],
 ): Promise<string | null> {
-  const deviceState = await getDevicePubkeys()
-  if (!deviceState) return null
-
-  // Find envelope for our pubkey (try signing pubkey match first)
-  const myEnvelope = readerEnvelopes.find(e =>
-    e.pubkey === deviceState.signingPubkeyHex || e.pubkey === deviceState.encryptionPubkeyHex,
-  )
+  const myEnvelope = await findOwnMessageEnvelope(readerEnvelopes)
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope = toIpcEnvelope(5 /* LABEL_MESSAGE */, myEnvelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, '')
+    const keyHex = await openMessageKey(myEnvelope)
     return await aesGcmDecrypt(encryptedContent, keyHex, '')
   } catch (err) {
     // An envelope addressed to this device that will not open is a defect, not
@@ -1158,6 +1172,39 @@ export async function decryptMessage(
     reportEnvelopeOpenFailure('message', err)
     return null
   }
+}
+
+/**
+ * Re-wrap a stored message's content key for additional readers (#1512, #2046).
+ *
+ * Opens this device's own envelope on the message and seals the same content
+ * key to each of `recipients` — the X25519 device keys of a newly assigned
+ * volunteer, as listed by `GET /conversations/:id/assignee-envelopes`. The
+ * result is in the exact stored-record format of §2.4: HPKE under
+ * `LABEL_MESSAGE`, empty AAD, hex `enc`/`ct`. The ciphertext is not touched,
+ * so the message stays readable by every existing reader.
+ *
+ * Returns `null` when this device holds no envelope on the message: it is not
+ * a reader, so it has nothing to re-wrap. Throws when an envelope addressed to
+ * this device does not open — that is a defect, not a permission boundary.
+ *
+ * The device private key never leaves Rust; the content key crosses the IPC
+ * boundary only as `decryptMessage` already does, and it opens nothing this
+ * device cannot already read. Nothing here goes to the server but the new
+ * envelopes.
+ */
+export async function rewrapMessageKey(
+  readerEnvelopes: readonly RecipientEnvelope[],
+  recipients: readonly string[],
+): Promise<RecipientEnvelope[] | null> {
+  const myEnvelope = await findOwnMessageEnvelope(readerEnvelopes)
+  if (!myEnvelope) return null
+
+  const keyHex = await openMessageKey(myEnvelope)
+  return Promise.all(recipients.map(async (pubkey) => {
+    const sealed = await hpkeSealKey(keyHex, pubkey, LABEL_MESSAGE, '')
+    return { pubkey, ...toWireEnvelope(sealed) }
+  }))
 }
 
 /**
