@@ -1,0 +1,156 @@
+{
+  "entries": [
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "GET",
+      "path": "hp(/api/teams)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "POST",
+      "path": "hp(/api/teams)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "GET",
+      "path": "hp(/api/teams/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "PATCH",
+      "path": "hp(/api/teams/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "DELETE",
+      "path": "hp(/api/teams/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "GET",
+      "path": "hp(/api/teams/:param/members)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "POST",
+      "path": "hp(/api/teams/:param/members)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "DELETE",
+      "path": "hp(/api/teams/:param/members/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "GET",
+      "path": "hp(/api/teams/:param/contacts)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "POST",
+      "path": "hp(/api/teams/:param/contacts)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/teams.ts",
+      "method": "DELETE",
+      "path": "hp(/api/teams/:param/contacts/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/tags.ts",
+      "method": "GET",
+      "path": "hp(/api/tags)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/tags.ts",
+      "method": "POST",
+      "path": "hp(/api/tags)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/tags.ts",
+      "method": "PATCH",
+      "path": "hp(/api/tags/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/tags.ts",
+      "method": "DELETE",
+      "path": "hp(/api/tags/:param)",
+      "category": "hub-scope-mismatch",
+      "reason": "Teams and tags are mounted only under /api/hubs/:hubId (hubScoped.route('/teams'|'/tags'), apps/worker/app.ts). hp() sends the bare path solely when no hub is active, i.e. for a user who belongs to zero hubs and so has no team or tag list to read or write. Correct by design (#1997)."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/offline-queue.ts",
+      "method": "*",
+      "path": "op.path",
+      "category": "unresolved",
+      "reason": "Offline-queue replay: the path and verb are the ones recorded when the original request was enqueued, and that request went through request() in lib/api/client.ts, whose call site this guard checks. Replay adds no path of its own."
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/OfflineQueue.swift",
+      "method": "*",
+      "path": "op.path",
+      "category": "unresolved",
+      "reason": "Offline-queue replay: the path and verb are the ones recorded when the original request was enqueued, and that request went through APIService.request, whose call site this guard checks. Replay adds no path of its own."
+    },
+    {
+      "client": "android",
+      "file": "apps/android/app/src/main/java/org/llamenos/hotline/service/OfflineQueue.kt",
+      "method": "*",
+      "path": "op.path",
+      "category": "unresolved",
+      "reason": "Offline-queue replay: the path and verb are the ones recorded when the original request was enqueued, and that request went through ApiService.request, whose call site this guard checks. Replay adds no path of its own."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/crash-reporting.ts",
+      "method": "*",
+      "path": "endpoint",
+      "category": "unresolved",
+      "reason": "Crash reports are POSTed to the operator-configured Sentry/GlitchTip DSN (parseSentryDsn), an external error-tracking host. It is not a route of this server, so there is no mounted route to match."
+    }
+  ]
+}
