@@ -1,146 +1,13 @@
 import SwiftUI
 
-// MARK: - CustodyChainEntry (local model)
-
-struct CustodyChainEntry: Identifiable, Decodable {
-    let id: String
-    let action: String
-    let actorPubkey: String
-    let timestamp: String
-}
-
-// MARK: - EvidenceCustodyChainView
-
-/// Displays the chain of custody for a single evidence item.
-struct EvidenceCustodyChainView: View {
-    let evidenceId: String
-    @Environment(AppState.self) private var appState
-
-    @State private var entries: [CustodyChainEntry] = []
-    @State private var isLoading = true
-    @State private var errorMessage: String?
-
-    var body: some View {
-        Group {
-            if isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let errorMessage {
-                ContentUnavailableView(
-                    NSLocalizedString("cms_custody_load_error", comment: "Failed to load custody chain"),
-                    systemImage: "exclamationmark.triangle",
-                    description: Text(errorMessage)
-                )
-            } else if entries.isEmpty {
-                ContentUnavailableView(
-                    NSLocalizedString("cms_custody_empty", comment: "No custody entries"),
-                    systemImage: "shield"
-                )
-            } else {
-                List {
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        CustodyEntryRow(index: index + 1, entry: entry)
-                    }
-                }
-                .listStyle(.insetGrouped)
-            }
-        }
-        .navigationTitle(NSLocalizedString("cms_custody_chain", comment: "Chain of Custody"))
-        .navigationBarTitleDisplayMode(.inline)
-        .task { await loadChain() }
-    }
-
-    private func loadChain() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            let response: AppCustodyChainResponse = try await appState.apiService.request(
-                method: "GET",
-                path: "/evidence/\(evidenceId)/custody"
-            )
-            entries = response.custodyChain
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-}
-
-// MARK: - AppCustodyChainResponse
-
-private struct AppCustodyChainResponse: Decodable {
-    let custodyChain: [CustodyChainEntry]
-    let total: Int
-}
-
-// MARK: - CustodyEntryRow
-
-private struct CustodyEntryRow: View {
-    let index: Int
-    let entry: CustodyChainEntry
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(actionColor.opacity(0.15))
-                    .frame(width: 32, height: 32)
-                Image(systemName: actionIcon)
-                    .font(.caption)
-                    .foregroundStyle(actionColor)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(entry.action.capitalized)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    Spacer()
-                    Text("#\(index)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(entry.actorPubkey.prefix(16) + "…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fontDesign(.monospaced)
-
-                Text(entry.timestamp)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.vertical, 4)
-        .accessibilityIdentifier("custody-entry-\(entry.id)")
-    }
-
-    private var actionIcon: String {
-        switch entry.action {
-        case "upload", "create": return "shield"
-        case "verify": return "checkmark.shield"
-        case "tampered", "integrity_failure": return "exclamationmark.shield"
-        default: return "lock"
-        }
-    }
-
-    private var actionColor: Color {
-        switch entry.action {
-        case "upload", "create": return .blue
-        case "verify": return .green
-        case "tampered", "integrity_failure": return .red
-        default: return .secondary
-        }
-    }
-}
-
 // MARK: - EntityCalendarView (iOS)
 
 /// Groups entity records by month and displays them in a calendar-like list.
 struct EntityCalendarView: View {
-    let records: [CaseRecord]
-    let onSelectRecord: (CaseRecord) -> Void
+    let records: [SharedRecordListResponseRecord]
+    let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
-    private var grouped: [(String, [CaseRecord])] {
+    private var grouped: [(String, [SharedRecordListResponseRecord])] {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM"
 
@@ -186,7 +53,7 @@ struct EntityCalendarView: View {
 }
 
 private struct CalendarRecordRow: View {
-    let record: CaseRecord
+    let record: SharedRecordListResponseRecord
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -211,10 +78,10 @@ private struct CalendarRecordRow: View {
 
 /// Displays entity records in newest-first vertical timeline order.
 struct EntityTimelineView: View {
-    let records: [CaseRecord]
-    let onSelectRecord: (CaseRecord) -> Void
+    let records: [SharedRecordListResponseRecord]
+    let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
-    private var sorted: [CaseRecord] {
+    private var sorted: [SharedRecordListResponseRecord] {
         records.sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -241,7 +108,7 @@ struct EntityTimelineView: View {
 }
 
 private struct TimelineRecordRow: View {
-    let record: CaseRecord
+    let record: SharedRecordListResponseRecord
     let onTap: () -> Void
 
     var body: some View {

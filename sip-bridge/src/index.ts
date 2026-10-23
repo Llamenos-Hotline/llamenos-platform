@@ -4,6 +4,9 @@ import { WebhookSender } from './webhook-sender'
 import { CommandHandler, callRecordingName, voicemailRecordingName, type RingRequest } from './command-handler'
 import { logger } from './logger'
 
+/** Max time to wait for in-flight HTTP requests to finish on SIGTERM/SIGINT. */
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000
+
 /** Load configuration from environment variables */
 function loadConfig(): BridgeConfig {
   const pbxType = parsePbxType(process.env.PBX_TYPE ?? 'asterisk')
@@ -300,17 +303,35 @@ async function main(): Promise<void> {
   logger.info('[bridge]', `sip-bridge is running (PBX_TYPE=${config.pbxType})`)
   logger.info('[bridge]', `Webhook target: ${config.workerWebhookUrl}`)
 
-  // Handle graceful shutdown
-  const shutdown = () => {
-    logger.info('[bridge]', 'Shutting down...')
+  // Graceful shutdown: stop accepting new HTTP commands, let in-flight requests finish
+  // (bounded), then release the PBX connection. Hard-exiting mid-request would drop
+  // commands the Worker already believes were accepted.
+  let shuttingDown = false
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return
+    shuttingDown = true
+    logger.info('[bridge]', `${signal} received — draining (timeout ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms)...`)
     handler.dispose()
+
+    // server.stop() (without `true`) stops accepting and resolves once in-flight requests complete.
+    let drainTimer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<'timeout'>((resolve) => {
+      drainTimer = setTimeout(() => resolve('timeout'), SHUTDOWN_DRAIN_TIMEOUT_MS)
+    })
+    const outcome = await Promise.race([server.stop().then(() => 'drained' as const), timedOut])
+    clearTimeout(drainTimer)
+    if (outcome === 'timeout') {
+      logger.warn('[bridge]', 'Drain timed out — closing remaining connections')
+      await server.stop(true)
+    }
+
     client.disconnect()
-    server.stop()
+    logger.info('[bridge]', 'Shutdown complete')
     process.exit(0)
   }
 
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', () => void shutdown('SIGINT'))
+  process.on('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
 main().catch((err) => {

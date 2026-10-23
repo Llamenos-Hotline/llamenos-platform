@@ -506,29 +506,22 @@ export function uniquePhone(): string {
 /**
  * Fill in the call ID field in the new note form.
  *
- * The form renders exactly one of two mutually exclusive controls (see
- * `src/client/components/notes/new-note-form.tsx`): a plain Input when the hub
- * has no recent calls, or a Select listing them when it does. In Select mode the
- * manual-entry option must be chosen first, which then reveals the same
- * `note-call-id` input.
- *
- * The option is located by `call-id-manual-option`, never by its label: the
- * label is the translated `notes.enterManually` ("Enter call ID manually"), and
- * the previous `getByRole('option', { name: /enter manually/i })` never matched
- * it. That made the Select branch dead code — it timed out the moment a hub
- * acquired a recent call, which is why "Note detail displays decrypted content"
- * failed with a bare `locator.click` timeout.
+ * The form renders a plain input when the admin has no recent calls and a select
+ * (with an "Enter manually" option) when they do. The notes page keeps the form closed
+ * until call history has settled, so the mode is fixed once the form exists; it is read
+ * from the form's `data-call-id-mode` attribute (an auto-waiting read of app state)
+ * rather than guessed from a non-waiting visibility probe.
  */
 export async function fillCallId(page: Page, callId: string): Promise<void> {
-  const callIdInput = page.getByTestId('note-call-id')
-  const callIdSelect = page.getByTestId('call-id-select')
-  // Wait for whichever of the two branches rendered; after that it is settled.
-  await expect(callIdInput.or(callIdSelect)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  if (await callIdSelect.count() > 0) {
-    await callIdSelect.click()
-    await page.getByTestId('call-id-manual-option').click()
+  const form = page.getByTestId(TestIds.NOTE_FORM)
+  const callIdInput = form.getByTestId(TestIds.NOTE_CALL_ID)
+  const mode = await form.getAttribute('data-call-id-mode')
+  if (mode === 'select') {
+    await form.getByTestId(TestIds.CALL_ID_SELECT).click()
+    await page.getByTestId(TestIds.CALL_ID_MANUAL_OPTION).click()
+  } else if (mode !== 'input') {
+    throw new Error(`note-form has unexpected data-call-id-mode: ${String(mode)}`)
   }
-  await expect(callIdInput).toBeVisible({ timeout: Timeouts.ELEMENT })
   await callIdInput.fill(callId)
 }
 

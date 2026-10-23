@@ -23,6 +23,23 @@ enum UserRole: String, Codable, Sendable, CaseIterable {
         case .admin: return "purple"
         }
     }
+
+    /// The server role this choice grants. The server takes role IDs, never
+    /// this two-way display enum — `PATCH /api/users/:pubkey` sets `roles`, and
+    /// `POST /api/invites` sets `roleIds`. "Admin" is the hub-scoped admin role,
+    /// the same one the Android and desktop clients grant.
+    var roleId: String {
+        switch self {
+        case .volunteer: return "role-volunteer"
+        case .admin: return "role-hub-admin"
+        }
+    }
+
+    /// The display role for a set of server role IDs: admin when any of them is
+    /// an admin role, volunteer otherwise.
+    init(roleIds: [String]) {
+        self = roleIds.contains { $0 == "role-hub-admin" || $0 == "role-super-admin" } ? .admin : .volunteer
+    }
 }
 
 // MARK: - ClientUserStatus
@@ -90,55 +107,73 @@ struct ClientUser: Codable, Identifiable, Sendable {
     }
 }
 
-// MARK: - AppBanEntry
-// Client-only: generated `Ban` has different fields (phone, bannedAt, bannedBy)
-// vs our (id, identifierHash, reason?, createdBy, createdAt).
+// MARK: - Ban list UI extensions
+// The three ban-list endpoints each return a different element shape, all
+// generated from packages/protocol/schemas/bans.ts:
+//   GET /api/bans                  → BanListResponse / BanListResponseBan
+//   GET /api/bans/platform         → PlatformBanListResponse / PlatformBanListResponseBan
+//   GET /api/bans/platform/search  → SearchBansResponse / SearchBansResponseBan
+// `BanRowDisplay` is the client-side UI facade over those wire types.
 
-/// A ban list entry from the API (client-side model with UI properties).
-/// Named `AppBanEntry` to avoid conflict with generated `Ban`/`BanResponse`.
-struct AppBanEntry: Codable, Identifiable, Sendable {
-    let id: String
-    let identifierHash: String
-    let reason: String?
-    let createdBy: String
-    let createdAt: String
-    let hubId: String?
+/// Display facade for a ban row from any of the three ban-list endpoints.
+protocol BanRowDisplay: Identifiable, Sendable {
+    var phoneHash: String { get }
+    var reasonText: String? { get }
+    var bannedByDisplay: String { get }
+    var bannedDate: Date? { get }
+    var truncatedHash: String { get }
+}
 
-    /// Truncated identifier hash for display.
-    var truncatedHash: String {
-        guard identifierHash.count > 16 else { return identifierHash }
-        return "\(identifierHash.prefix(8))...\(identifierHash.suffix(6))"
-    }
+extension BanListResponseBan: Identifiable, BanRowDisplay {
+    /// Hub ban rows carry no server id; the phone hash is the unique key and
+    /// is also what `DELETE /api/bans/:phoneHash` accepts.
+    var id: String { phoneHash }
+    var reasonText: String? { reason.isEmpty ? nil : reason }
+    var bannedByDisplay: String { Self.truncated(bannedBy) }
+    var bannedDate: Date? { DateFormatting.parseISO(bannedAt) }
+    var truncatedHash: String { Self.truncated(phoneHash) }
 
-    /// Truncated creator pubkey for display.
-    var creatorDisplay: String {
-        guard createdBy.count > 16 else { return createdBy }
-        return "\(createdBy.prefix(8))...\(createdBy.suffix(6))"
-    }
-
-    /// Parsed creation date.
-    var createdDate: Date? {
-        DateFormatting.parseISO(createdAt)
+    private static func truncated(_ value: String) -> String {
+        guard value.count > 16 else { return value }
+        return "\(value.prefix(8))...\(value.suffix(6))"
     }
 }
 
-// MARK: - AppAuditEntry
-// Client-only: generated `SharedEntry`/`AuditEntryResponse` uses `details: [String: JSONAny]`
-// while this client model uses `details: String?`.
-// `SharedEntry` (formerly a distinct per-schema type) is now shared with
-// `EvidenceAccessLogResponse.entries` — codegen dedups identical entry shapes across schemas.
+extension PlatformBanListResponseBan: Identifiable, BanRowDisplay {
+    var reasonText: String? { reason }
+    var bannedByDisplay: String { Self.truncated(bannedBy ?? "") }
+    var bannedDate: Date? { DateFormatting.parseISO(bannedAt) }
+    var truncatedHash: String { Self.truncated(phoneHash) }
 
-/// A hash-chained audit log entry from the API (client-side model with UI properties).
-/// Named `AppAuditEntry` to avoid conflict with generated `AuditEntryResponse`/`SharedEntry`.
-struct AppAuditEntry: Codable, Identifiable, Sendable {
-    let id: String
-    let action: String
-    let actorPubkey: String
-    let details: String?
-    let entryHash: String
-    let previousEntryHash: String?
-    let timestamp: String
+    private static func truncated(_ value: String) -> String {
+        guard value.count > 16 else { return value }
+        return "\(value.prefix(8))...\(value.suffix(6))"
+    }
+}
 
+extension SearchBansResponseBan: Identifiable, BanRowDisplay {
+    var reasonText: String? { reason }
+    var bannedByDisplay: String { Self.truncated(bannedBy ?? "") }
+    var bannedDate: Date? { DateFormatting.parseISO(bannedAt) }
+    var truncatedHash: String { Self.truncated(phoneHash) }
+
+    private static func truncated(_ value: String) -> String {
+        guard value.count > 16 else { return value }
+        return "\(value.prefix(8))...\(value.suffix(6))"
+    }
+}
+
+// MARK: - Audit log UI extensions
+// `GET /api/audit` decodes to generated `AuditListResponse`; its entries are
+// generated `SharedEntry` (codegen dedups the identical `auditEntryResponseSchema`
+// shape shared with the evidence access log). Wire truth: `details` is a JSON
+// object (`[String: JSONAny]`), not a string.
+
+// `SharedEntry` carries the server `id` column, so it satisfies `Identifiable`
+// with no client-side key.
+extension SharedEntry: Identifiable {}
+
+extension SharedEntry {
     /// Truncated actor pubkey for display.
     var actorDisplay: String {
         guard actorPubkey.count > 16 else { return actorPubkey }
@@ -147,38 +182,42 @@ struct AppAuditEntry: Codable, Identifiable, Sendable {
 
     /// Truncated entry hash for display.
     var truncatedEntryHash: String {
+        guard let entryHash else { return "—" }
         guard entryHash.count > 16 else { return entryHash }
         return "\(entryHash.prefix(8))...\(entryHash.suffix(6))"
     }
 
     /// Parsed timestamp.
     var timestampDate: Date? {
-        DateFormatting.parseISO(timestamp)
+        DateFormatting.parseISO(createdAt)
     }
 
     /// Human-readable action description.
     var actionDisplay: String {
         action.replacingOccurrences(of: "_", with: " ").capitalized
     }
+
+    /// Details object rendered as sorted "key: value" lines for display.
+    var detailsDisplay: String? {
+        guard !details.isEmpty else { return nil }
+        return details
+            .sorted { $0.key < $1.key }
+            .map { key, value in "\(key): \(String(describing: value.value))" }
+            .joined(separator: "\n")
+    }
 }
 
-// MARK: - AppInvite
-// Client-only: generated `Invite` has different fields (name, phone, roleIDs)
-// vs our (code, role, createdBy, claimedBy, expiresAt).
+// MARK: - Invite (generated)
+// `Invite` is generated from `inviteResponseSchema` — the shape `GET /api/invites`
+// lists and `POST /api/invites` returns. The hand-written `AppInvite` this
+// replaced decoded `id`, `role` and `claimedBy`, none of which the server sends,
+// from `/api/identity/invites`, which was never mounted (#1701).
 
-/// An invite code from the API (client-side model with UI properties).
-/// Named `AppInvite` to avoid conflict with generated `Invite` from protocol codegen.
-struct AppInvite: Codable, Identifiable, Sendable {
-    let id: String
-    let code: String
-    let role: String
-    let createdBy: String
-    let claimedBy: String?
-    let expiresAt: String
-    let createdAt: String
+extension Invite: Identifiable {
+    var id: String { code }
 
-    /// Whether this invite has been claimed.
-    var isClaimed: Bool { claimedBy != nil }
+    /// Whether this invite has been redeemed.
+    var isClaimed: Bool { usedBy != nil || usedAt != nil }
 
     /// Whether this invite has expired.
     var isExpired: Bool {
@@ -189,10 +228,8 @@ struct AppInvite: Codable, Identifiable, Sendable {
     /// Whether this invite is currently usable (not claimed and not expired).
     var isActive: Bool { !isClaimed && !isExpired }
 
-    /// Parsed role enum.
-    var inviteRole: UserRole {
-        UserRole(rawValue: role) ?? .volunteer
-    }
+    /// The display role of the roles this invite grants.
+    var inviteRole: UserRole { UserRole(roleIds: roleIDS) }
 
     /// Parsed expiry date.
     var expiresDate: Date? {
@@ -211,6 +248,11 @@ struct AppInvite: Codable, Identifiable, Sendable {
     }
 }
 
+/// Response from `POST /api/invites`: the created invite, wrapped.
+struct CreateInviteResponse: Decodable, Sendable {
+    let invite: Invite
+}
+
 // MARK: - API Response Types
 
 /// API response for the users list.
@@ -218,29 +260,12 @@ struct UsersListResponse: Codable, Sendable {
     let members: [ClientUser]
 }
 
-/// API response for the ban list (client-side).
-/// Named `AppBanListResponse` to avoid conflict with generated `BanListResponse`.
-struct AppBanListResponse: Codable, Sendable {
-    let bans: [AppBanEntry]
-}
-
-/// API response for the audit log.
-struct AuditLogResponse: Codable, Sendable {
-    let entries: [AppAuditEntry]
-    let total: Int
-}
-
-/// API response for the invites list.
-struct InvitesListResponse: Codable, Sendable {
-    let invites: [AppInvite]
-}
+// Ban list, audit log, and invite list responses decode directly to the
+// generated types: `BanListResponse` / `PlatformBanListResponse` /
+// `SearchBansResponse` (see extensions above), `AuditListResponse`, and
+// `InviteListResponse`.
 
 // MARK: - Request Types
-
-/// Request body for `POST /api/identity/invite`.
-struct CreateInviteRequest: Encodable, Sendable {
-    let role: String
-}
 
 /// Request body for `POST /api/bans`.
 struct CreateBanRequest: Encodable, Sendable {
@@ -248,9 +273,20 @@ struct CreateBanRequest: Encodable, Sendable {
     let reason: String?
 }
 
-/// Request body for `PATCH /api/identity/:pubkey/role`.
-struct UpdateRoleRequest: Encodable, Sendable {
-    let role: String
+extension AdminUpdateUserBody {
+    /// A `PATCH /api/users/:pubkey` body that changes only the user's roles.
+    /// Every other field is nil, and nil fields are omitted on the wire, so the
+    /// server leaves them untouched.
+    static func roles(_ roleIds: [String]) -> AdminUpdateUserBody {
+        AdminUpdateUserBody(
+            active: nil, callPreference: nil, maxCaseAssignments: nil,
+            messagingEnabled: nil, name: nil, onBreak: nil, phone: nil,
+            profileCompleted: nil, roles: roleIds, specializations: nil,
+            spokenLanguages: nil, supervisorPubkey: nil,
+            supportedMessagingChannels: nil, teamID: nil,
+            transcriptionEnabled: nil, uiLanguage: nil
+        )
+    }
 }
 
 // MARK: - Report Category

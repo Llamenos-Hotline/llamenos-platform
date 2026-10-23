@@ -74,6 +74,7 @@ function createApp(pubkey = 'user-pk-1', permissions: string[] = []) {
       createSession: vi.fn().mockResolvedValue({ token: 'session-token', pubkey }),
       addWebAuthnCredential: vi.fn().mockResolvedValue(undefined),
       deleteWebAuthnCredential: vi.fn().mockResolvedValue(undefined),
+      renameWebAuthnCredential: vi.fn().mockResolvedValue(undefined),
     },
     settings: {
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
@@ -309,6 +310,39 @@ describe('webauthn routes', () => {
       // Should NOT expose publicKey or counter
       expect(body.credentials[0].publicKey).toBeUndefined()
       expect(body.credentials[0].counter).toBeUndefined()
+    })
+  })
+
+  describe('PATCH /webauthn/credentials/:credId', () => {
+    const rename = (label: unknown) => ({
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    })
+
+    it('renames the caller\'s own credential, scoped to the caller\'s pubkey', async () => {
+      const { app, services } = createApp()
+
+      const res = await app.request('/webauthn/credentials/cred-123', rename('Work laptop'), defaultEnv)
+      expect(res.status).toBe(200)
+      expect(services.identity.renameWebAuthnCredential).toHaveBeenCalledWith('user-pk-1', 'cred-123', 'Work laptop')
+    })
+
+    it('audits the rename without recording the new label', async () => {
+      const { app } = createApp()
+
+      await app.request('/webauthn/credentials/cred-123', rename('Work laptop'), defaultEnv)
+      const args = mockAudit.mock.calls[0]
+      expect(args[1]).toBe('webauthnRenamed')
+      expect(args[2]).toBe('user-pk-1')
+      expect(args[3]).toEqual({ credId: 'cred-123' })
+    })
+
+    it('decodes a URL-encoded credential id', async () => {
+      const { app, services } = createApp()
+
+      await app.request(`/webauthn/credentials/${encodeURIComponent('a/b+c')}`, rename('Key'), defaultEnv)
+      expect(services.identity.renameWebAuthnCredential).toHaveBeenCalledWith('user-pk-1', 'a/b+c', 'Key')
     })
   })
 

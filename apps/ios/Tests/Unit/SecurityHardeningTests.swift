@@ -4,6 +4,9 @@ import XCTest
 /// Unit tests for Epic 260 security hardening fixes.
 /// Tests PIN lockout timing (H7) and API URL validation (H6).
 /// The relay URL (H5) and SAS gate (H4) tests went with the device-link flow (#1300).
+///
+/// `@MainActor`: constructs `WebSocketService`, which is main-actor isolated (#1920 audit).
+@MainActor
 final class SecurityHardeningTests: XCTestCase {
 
     override func tearDown() {

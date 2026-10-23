@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Key, Pencil, Trash2, Check, Usb, Wifi, ShieldCheck } from 'lucide-react'
+import { useToast } from '@/lib/toast'
 import { usePasskeys, renamePasskey, deletePasskey, registerPasskey } from '@/lib/queries/devices'
 
 const TRANSPORT_ICONS: Record<string, typeof Usb> = {
@@ -20,33 +21,70 @@ export const Route = createFileRoute('/security/passkeys')({
 
 function PasskeysPage() {
   const { t } = useTranslation()
+  const { toast } = useToast()
   const { data: passkeys, isLoading, refetch } = usePasskeys()
+  const [newLabel, setNewLabel] = useState('')
+  const [registering, setRegistering] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
 
   if (isLoading) return <div className="animate-pulse">{t('common.loading')}</div>
 
   async function handleRegister() {
-    await registerPasskey()
-    refetch()
+    const label = newLabel.trim()
+    if (!label) return
+    setRegistering(true)
+    try {
+      await registerPasskey(label)
+      setNewLabel('')
+      toast(t('webauthn.registerSuccess'), 'success')
+      refetch()
+    } catch {
+      toast(t('common.error'), 'error')
+    } finally {
+      setRegistering(false)
+    }
   }
 
   async function handleRename(credentialId: string) {
-    await renamePasskey(credentialId, renameValue)
-    setRenamingId(null)
-    refetch()
+    const label = renameValue.trim()
+    if (!label) return
+    try {
+      await renamePasskey(credentialId, label)
+      setRenamingId(null)
+      refetch()
+    } catch {
+      toast(t('common.error'), 'error')
+    }
   }
 
   async function handleDelete(credentialId: string) {
-    await deletePasskey(credentialId)
-    refetch()
+    try {
+      await deletePasskey(credentialId)
+      refetch()
+    } catch {
+      toast(t('common.error'), 'error')
+    }
   }
 
   return (
     <div className="space-y-4" data-testid="security-passkeys">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{t('security.passkeys.title')}</h2>
-        <Button size="sm" onClick={handleRegister}>
+      <h2 className="text-lg font-semibold">{t('security.passkeys.title')}</h2>
+
+      <div className="flex gap-2">
+        <Input
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          placeholder={t('webauthn.label')}
+          className="flex-1"
+          data-testid="passkey-label-input"
+        />
+        <Button
+          size="sm"
+          onClick={handleRegister}
+          disabled={registering || !newLabel.trim()}
+          data-testid="passkey-register"
+        >
           <Key className="h-4 w-4 mr-1" />
           {t('security.passkeys.register')}
         </Button>
@@ -54,24 +92,24 @@ function PasskeysPage() {
 
       <div className="space-y-2">
         {passkeys?.map((passkey) => (
-          <div key={passkey.credentialId} className="flex items-center gap-3 p-3 rounded-md border">
+          <div key={passkey.id} className="flex items-center gap-3 p-3 rounded-md border">
             <Key className="h-5 w-5 text-muted-foreground" />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                {renamingId === passkey.credentialId ? (
+                {renamingId === passkey.id ? (
                   <div className="flex gap-1">
                     <Input
                       value={renameValue}
                       onChange={(e) => setRenameValue(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          handleRename(passkey.credentialId)
+                          handleRename(passkey.id)
                         }
                       }}
                       className="h-7 text-sm"
                       autoFocus
                     />
-                    <Button size="sm" variant="ghost" onClick={() => handleRename(passkey.credentialId)}>
+                    <Button size="sm" variant="ghost" onClick={() => handleRename(passkey.id)}>
                       <Check className="h-3 w-3" />
                     </Button>
                   </div>
@@ -83,7 +121,7 @@ function PasskeysPage() {
                 )}
               </div>
               <div className="flex items-center gap-2 mt-1">
-                {passkey.transports?.map((transport: string) => {
+                {passkey.transports.map((transport) => {
                   const Icon = TRANSPORT_ICONS[transport] ?? Key
                   return (
                     <Badge key={transport} variant="secondary" className="text-xs gap-1">
@@ -104,7 +142,7 @@ function PasskeysPage() {
                 size="icon"
                 variant="ghost"
                 onClick={() => {
-                  setRenamingId(passkey.credentialId)
+                  setRenamingId(passkey.id)
                   setRenameValue(passkey.label ?? '')
                 }}
               >
@@ -113,7 +151,7 @@ function PasskeysPage() {
               <Button
                 size="icon"
                 variant="ghost"
-                onClick={() => handleDelete(passkey.credentialId)}
+                onClick={() => handleDelete(passkey.id)}
               >
                 <Trash2 className="h-4 w-4" />
               </Button>

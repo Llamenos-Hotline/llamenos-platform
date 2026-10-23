@@ -114,11 +114,16 @@ interface Facts {
   engineFailure?: string
   /** The gate's `earned_sha` output — set only for a carried verdict. */
   EARNED_SHA?: string
+  /** #2014's transition guard refused a cache hit from a diff-keyed base. */
+  diffKeyedBase?: boolean
+  /** #2082: the assert step found a green verdict with no report to publish. */
+  reportMissing?: boolean
 }
 
 interface Named { status: number | null; title: string | null; level: string | null; summary: string; stdout: string }
 
 const HEAD = 'f2eea15ba0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5'
+const HEAD_TREE = '4eeb09ad75c143b8a9e7b23df601af79f0379647'
 const EARNED = '0a1b2c3d4e5f60718293a4b5c6d7e8f901234567'
 
 function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Named {
@@ -126,12 +131,15 @@ function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Nam
   const resultFile = join(temp, 'fleet-review-result')
   if (facts.result !== undefined) writeFileSync(resultFile, `${facts.result}\n`)
   if (facts.engineFailure !== undefined) writeFileSync(join(temp, 'fleet-review-engine-failure'), `${facts.engineFailure}\n`)
+  if (facts.diffKeyedBase === true) writeFileSync(join(temp, 'fleet-review-base-diff-keyed'), 'base-diff-keyed-cache\n')
+  if (facts.reportMissing === true) writeFileSync(join(temp, 'fleet-review-report-missing'), 'report-missing\n')
   const summaryFile = join(temp, 'step-summary.md')
   const r = runScript(script, {
     RUNNER_TEMP: temp,
     RESULT_FILE: resultFile,
     GITHUB_STEP_SUMMARY: summaryFile,
     HEAD_SHA: HEAD,
+    HEAD_TREE,
     JOB_STATUS: facts.JOB_STATUS,
     BASE_GATE_OUTCOME: facts.BASE_GATE_OUTCOME ?? 'success',
     GATE_CONCLUSION: facts.GATE_CONCLUSION ?? '',
@@ -219,10 +227,18 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['a cached PASS, found by review-ci', reviewed('cache-pass', 'success'), 'PASS:cached'],
   ['a cached FAIL, restated by the gate', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'cache-hit' }, 'REJECTED:cached'],
   ['a cached FAIL, restated by review-ci', reviewed('cache-fail', 'failure'), 'REJECTED:cached'],
-  // #1394: a push whose diff changed. It never starts a review and is never
-  // red on its own account — the PR's last earned verdict stands.
-  ['a push carries the PASS the PR last earned', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'PASS:carried'],
+  // #1394 / #2014: a push whose tree changed. It never starts a review, and
+  // nothing has judged the tree it now carries, so it is never green: a FAIL
+  // it last earned is carried as the red it was, and a PASS for another tree
+  // is named as exactly that — no verdict for this one.
   ['a push carries the FAIL the PR last earned', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'REJECTED:carried'],
+  ['a push onto a tree the last PASS did not judge', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'tree-changed', EARNED_SHA: EARNED }, 'NO-VERDICT:tree-changed'],
+  // A base predating #2014 still carries a PASS green. There is no passing
+  // name for that any more, so it fails closed as an unnamed green.
+  ['a push carried a PASS green — a base predating #2014', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'NO-VERDICT:unclassified'],
+  // …and its diff-keyed cache hit is refused by the transition guard.
+  ['a cached PASS from a base whose cache is keyed on the diff, refused',
+    { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success', OUTCOME: 'cache-hit', diffKeyedBase: true }, 'NO-VERDICT:base-predates-gate'],
   // #1564: a push to a PR nothing has ever reviewed is RED. It used to
   // conclude `PASS:unreviewed` — a required context satisfied by a run that
   // made no model call and formed no verdict. The enumeration rail that keeps
@@ -257,7 +273,15 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // be named `PASS:unclassified` and stay green; now the step fails it.
   ['a green run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'NO-VERDICT:unclassified'],
   ['bot-authored — an automated dependency update', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'bot-authored' }, 'PASS:bot-authored'],
+  // The knope release PR (#1944): a version-only diff on `release`, concluded
+  // green with no review and its own honest name — never `PASS:reviewed`.
+  ['release-pr — knope\'s version-only release PR', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'release-pr' }, 'PASS:release-pr'],
   ['a verdict of PASS, then a later step failed the job', reviewed('pass', 'failure'), 'NO-VERDICT:unclassified'],
+  // #2082: the review (or the cache) reached a PASS and no report exists for
+  // the publish job to post. The assert step fails the job and leaves the
+  // marker; the check says so instead of the generic catch-all.
+  ['a PASS from the engine with no report to publish (#2082)', { ...reviewed('pass', 'failure'), REVIEW_OUTCOME: 'success', reportMissing: true }, 'NO-VERDICT:report-missing'],
+  ['a cached PASS from the gate with no report to publish (#2082)', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success', OUTCOME: 'cache-hit', reportMissing: true }, 'NO-VERDICT:report-missing'],
 ]
 
 describe('rail: every fleet/review outcome is named on its own check (#1230)', () => {
@@ -269,14 +293,16 @@ describe('rail: every fleet/review outcome is named on its own check (#1230)', (
     expect(named.title).toMatch(new RegExp(`^${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — \\S`))
     // A green check is a notice; anything red is an error annotation.
     expect(named.level).toBe(token.startsWith('PASS:') ? 'notice' : 'error')
-    // The run's summary page carries the same title and the head it judged.
+    // The run's summary page carries the same title, the head it judged,
+    // and that head's tree (#2014).
     expect(named.summary).toContain(named.title as string)
     expect(named.summary).toContain(HEAD)
+    expect(named.summary).toContain(HEAD_TREE)
   })
 
-  it('names the head a carried verdict was EARNED on, apart from the head this run is on', () => {
-    for (const verdict of ['success', 'failure'] as const) {
-      const named = name({ JOB_STATUS: verdict, GATE_CONCLUSION: verdict, OUTCOME: 'carried', EARNED_SHA: EARNED })
+  it('names the head a carried or superseded verdict was EARNED on, apart from the head this run is on', () => {
+    for (const outcome of ['carried', 'tree-changed'] as const) {
+      const named = name({ JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: outcome, EARNED_SHA: EARNED })
       expect(named.summary).toContain(`Verdict earned on: \`${EARNED}\``)
       expect(named.summary).toContain(`Current head: \`${HEAD}\``)
       expect(named.summary, 'a carried verdict must not claim this head was judged').not.toContain('Head judged')
@@ -423,6 +449,11 @@ describe('rail: the verdict assertion tells a rejection from a review that never
     const temp = mkdtempSync(join(work, 'assert-temp-'))
     const resultFile = join(temp, 'fleet-review-result')
     if (env.result !== undefined) writeFileSync(resultFile, `${env.result}\n`)
+    // A review that passed has handed its text to the publish job (#2082):
+    // the report is part of what "passed" means, so the fixture carries one.
+    const reportDir = join(temp, 'review-report')
+    mkdirSync(reportDir, { recursive: true })
+    writeFileSync(join(reportDir, '00-general.json'), '{}')
     return runScript(step('fleet-review', ASSERT_STEP).run, {
       RUNNER_TEMP: temp,
       RESULT_FILE: resultFile,
@@ -431,6 +462,7 @@ describe('rail: the verdict assertion tells a rejection from a review that never
       GATE_CONCLUSION: env.GATE_CONCLUSION ?? 'success',
       OUTCOME: env.OUTCOME ?? 'run-engine',
       REVIEW_OUTCOME: env.REVIEW_OUTCOME,
+      REPORT_DIR: reportDir,
     })
   }
 
@@ -590,6 +622,7 @@ describe('rail: runReviewCi names the result of every return path', () => {
     publishReport: async () => {},
     profileReview: verdict('PASS'),
     recordResult: vi.fn(async () => {}),
+    headTree: async () => '4eeb09ad75c143b8a9e7b23df601af79f0379647',
     ...over,
   })
 
@@ -700,7 +733,7 @@ case "$1" in
 esac
 `
 
-  function publish(headSha: string): { run: Run; comments: string[] } {
+  function publish(headSha: string, headTree = HEAD_TREE): { run: Run; comments: string[] } {
     const bin = mkdtempSync(join(work, 'bin-'))
     writeFileSync(join(bin, 'gh'), FAKE_GH)
     chmodSync(join(bin, 'gh'), 0o755)
@@ -714,7 +747,7 @@ esac
     const run = runScript(step('publish-reviews', PUBLISH_STEP).run, {
       RUNNER_TEMP: temp, FAKE_REPORT_DIR: report, CAPTURE_DIR: capture,
       GH_TOKEN: 'x', FLEET_REVIEW_COMMENT_TOKEN: '', REPO: 'o/r', RUN_ID: '1', ARTIFACT: 'a',
-      PR: '1217', REVIEW_RESULT: 'failure', CLEAR_LABELS: '', HEAD_SHA: headSha,
+      PR: '1217', REVIEW_RESULT: 'failure', CLEAR_LABELS: '', HEAD_SHA: headSha, HEAD_TREE: headTree,
     }, { path: `${bin}${delimiter}${process.env['PATH'] ?? ''}` })
     const comments = readdirSync(capture).sort().map((f) => readFileSync(join(capture, f), 'utf8'))
     return { run, comments }
@@ -724,8 +757,8 @@ esac
     const { run, comments } = publish(HEAD)
     expect(run.status, run.stdout + run.stderr).toBe(0)
     expect(comments).toHaveLength(1)
-    expect(comments[0]).toContain(`### \`fleet/review\` — general: **FAIL** on \`${HEAD.slice(0, 12)}\``)
-    expect(comments[0]).toContain(`Judged head \`${HEAD}\``)
+    expect(comments[0]).toContain(`### \`fleet/review\` — general: **FAIL** on \`${HEAD.slice(0, 12)}\` (tree \`${HEAD_TREE.slice(0, 12)}\`)`)
+    expect(comments[0]).toContain(`Judged head \`${HEAD}\`, tree \`${HEAD_TREE}\``)
     expect(comments[0]).toContain('leaks a key')
   })
 
@@ -735,7 +768,16 @@ esac
     expect(comments).toHaveLength(0)
   })
 
-  it('the review job hands the publishing job the head it judged', () => {
+  // #2014: a verdict that cannot say which TREE it judged cannot be checked
+  // against a head without inference, so it is not posted at all.
+  it.each(['', 'null', '4eeb09ad75c1'])('refuses to post a verdict about an unknown tree ("%s")', (bad) => {
+    const { run, comments } = publish(HEAD, bad)
+    expect(run.status).toBe(1)
+    expect(comments).toHaveLength(0)
+  })
+
+  it('the review job hands the publishing job the head it judged, and its tree', () => {
     expect(job('fleet-review').outputs?.['head_sha']).toBe('${{ steps.ctx.outputs.head_sha }}')
+    expect(job('fleet-review').outputs?.['head_tree']).toBe('${{ steps.head_export.outputs.head_tree }}')
   })
 })

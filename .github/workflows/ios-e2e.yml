@@ -62,6 +62,10 @@ on:
   # client's API contract never runs this suite. The nightly run on main
   # catches that within a day. It also runs the quarantined tests, so each
   # quarantined defect stays visible daily until it is fixed.
+  #
+  # "Visible" means ios-nightly-report.yml: a red scheduled run opens one
+  # `[nightly-ios-e2e]` issue (#2057). Until it existed this run
+  # was red on every night from the first, 2026-09-29, and nobody was told.
   schedule:
     - cron: "17 3 * * *"
 
@@ -91,7 +95,9 @@ jobs:
     # start until 20:14:07 — where android-e2e's shards were already working
     # at 20:13:46. Deleting it lets the build dispatch immediately, which is
     # what pulls the whole iOS gate forward.
-    # The Mac mini (runners `mac-mini-ios-1..4`), not `macos-latest`.
+    # The Mac mini, not `macos-latest`. Runners `mac-mini-ios-1` and `-2`
+    # serve; 3 and 4 are registered but deliberately not running (four
+    # shards on this host completed zero tests in 20 minutes).
     #
     # GitHub's macOS concurrency cap is 5 jobs REPO-WIDE, and money does not
     # move it: Free, Pro and Team are all 5 (only Enterprise Cloud is 50),
@@ -123,7 +129,12 @@ jobs:
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
-    timeout-minutes: 45
+    # 45 minutes for the build itself (measured max 10.0 over 71 green Mac
+    # builds), PLUS the disk guard's 36-minute step cap below. The guard's
+    # wait must not come out of the build's own budget: a wait that ends in a
+    # pass at minute 35 would otherwise leave the build 10 minutes, and turn
+    # an honest fast refusal into a timeout cancellation.
+    timeout-minutes: 81
 
     steps:
       # MANDATORY, and must stay the literal first step: this job now runs on
@@ -198,8 +209,157 @@ jobs:
       #
       # A no-op on a GitHub-hosted runner: that VM is thrown away after the
       # job and shares nothing with anybody.
-      - name: Guard the runner's disk headroom
-        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+      #
+      # A refusal WAITS while another CI job on this host is still running,
+      # because that job's teardown is what returns the space: a `ui` shard
+      # deletes a 2.4-2.6 GiB simulator and its build products, a build
+      # deletes its DerivedData. Refusing at once is the wrong failure when
+      # the shortfall is a co-tenant that will be gone in minutes.
+      #
+      # Measured, 2026-10-18 15:44-15:47 UTC: with one `ui (3)` holding the
+      # disk on mac-mini-ios-1, mac-mini-ios-2 refused SIX jobs from three
+      # merge groups in under three minutes (10.8-10.9 GiB free, 12 needed),
+      # ~15 s each. A runner that refuses in seconds immediately takes the next
+      # queued job and refuses that too, so one co-tenant drained the queue
+      # and ejected all three PRs. That `ui (3)` finished at 15:48:02, two
+      # minutes after the last refusal.
+      #
+      # With NO other CI job on the host there is nothing to wait for, and
+      # the refusal is immediate, as before: the space is held by something
+      # only a human can free.
+      #
+      # 35 minutes covers a whole `ui` shard (p90 29 min over 122 Mac shards)
+      # plus its teardown. A queued or waiting job still spends the merge
+      # queue's 240-minute check_response_timeout: a merge-group run's iOS
+      # leg finishes at p90 72 min, so a full wait leaves it under ~110.
+      #
+      # The job's timeout-minutes is 45 + this step's cap, so the build that
+      # follows a full wait still has its whole 45. Change them together.
+      # THE GUARD ITSELF MUST NOT BE ABLE TO HANG (2026-10-21).
+      #
+      # Six consecutive `build (mac)` jobs across three merge groups failed at
+      # THIS step with the host at 50 GiB free (the threshold is 12) and load
+      # near idle. They did not refuse: the step printed NOTHING for its whole
+      # 36 minutes and was killed by `timeout-minutes`. The loop below
+      # redirects the script's output to a file and only prints it when the
+      # script returns, and the script never returned.
+      #
+      # Measured on the host while it was happening: the script's `bash` was
+      # asleep with no children, and a stack sample put it inside
+      # `opendir()` from a `for dir in "$DERIVED_DATA"/*/` glob. The host's
+      # DerivedData is a symlink onto an external volume, and a process the
+      # runner service spawns blocks on the first directory read there (the
+      # same open from a `launchctl submit` job fails at once with EPERM; from
+      # an ssh session it succeeds). Every attempt hit the same wedge, so
+      # every job that landed on the runner started its own 36-minute wait the
+      # moment the previous one timed out. The free-space check the guard
+      # exists for never ran, because report/reclaim come first.
+      #
+      # So each attempt is now BOUNDED. The script runs under a watchdog, its
+      # output reaches the job log either way (a hang shows where it stopped),
+      # and a hung attempt falls back to what the guard actually protects: the
+      # free space on the volume, read with a plain `df` that touches none of
+      # the paths reclaim walks. Enough free space -> proceed, with a warning
+      # that reclaim did not run. Not enough -> the same refusal/wait as a
+      # normal short attempt. A genuinely starved host still blocks; a host
+      # with room no longer waits on a path that is not about room.
+      #
+      # DISK_MIN_FREE_GIB is exported to the script as MAC_DISK_MIN_FREE_GIB,
+      # so the script's gate and the watchdog's df fallback cannot disagree.
+      # Nothing here signals a process group: only the guard's own pid and
+      # its direct children are ever signalled.
+      - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
+        env:
+          DISK_WAIT_MAX_MIN: "35"
+          DISK_WAIT_POLL_SEC: "60"
+          DISK_GUARD_ATTEMPT_MAX_SEC: "90"
+          DISK_MIN_FREE_GIB: "12"
+        run: |
+          set -uo pipefail
+          export MAC_DISK_MIN_FREE_GIB="$DISK_MIN_FREE_GIB"
+          volume="${MAC_DISK_GUARD_VOLUME:-/System/Volumes/Data}"
+          guard_log="$RUNNER_TEMP/disk-guard.log"
+          guard_summary="$RUNNER_TEMP/disk-guard-summary.md"
+          # This runner's install root, so its own Runner.Worker is not
+          # mistaken for a co-tenant: .../actions-runner-ios-1/_work/<repo>.
+          own_root="${RUNNER_WORKSPACE%%/_work/*}"
+          deadline=$(( SECONDS + DISK_WAIT_MAX_MIN * 60 ))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            # Each attempt's summary goes to a scratch file and only the last
+            # one is published, so a wait that ends well leaves no stale
+            # REFUSED line in the job summary.
+            : > "$guard_summary"
+            : > "$guard_log"
+            # An attempt may not run past the wait deadline, or the step's own
+            # timeout-minutes would kill it and hide the verdict again.
+            cap="$DISK_GUARD_ATTEMPT_MAX_SEC"
+            remaining=$(( deadline - SECONDS ))
+            [ "$remaining" -ge "$cap" ] || cap=$(( remaining > 10 ? remaining : 10 ))
+            GITHUB_STEP_SUMMARY="$guard_summary" \
+              bash scripts/ci/mac-runner-disk-guard.sh guard >"$guard_log" 2>&1 &
+            gpid=$!
+            started=$SECONDS
+            hung=0
+            while kill -0 "$gpid" 2>/dev/null; do
+              if [ $(( SECONDS - started )) -ge "$cap" ]; then hung=1; break; fi
+              sleep 1
+            done
+            if [ "$hung" -eq 1 ]; then
+              last_line=$(tail -n 1 "$guard_log" 2>/dev/null || true)
+              # The script's own pid and its direct children, nothing wider.
+              pkill -TERM -P "$gpid" 2>/dev/null || true
+              kill -TERM "$gpid" 2>/dev/null || true
+              sleep 2
+              pkill -KILL -P "$gpid" 2>/dev/null || true
+              kill -KILL "$gpid" 2>/dev/null || true
+              # Never `wait` on something that may not have died: a process
+              # stuck in the kernel ignores SIGKILL, and waiting is the bug.
+              if kill -0 "$gpid" 2>/dev/null; then disown "$gpid" 2>/dev/null || true; else wait "$gpid" 2>/dev/null || true; fi
+              free_kib=$(df -k "$volume" 2>/dev/null | awk 'NR==2 {print $4}')
+              free_gib=$(awk -v k="${free_kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')
+              echo "::group::disk guard output before it hung (attempt $attempt)"
+              cat "$guard_log"
+              echo "::endgroup::"
+              if awk -v f="$free_gib" -v m="$DISK_MIN_FREE_GIB" 'BEGIN { exit !(f >= m) }'; then
+                echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to df: ${free_gib} GiB free on ${volume}, ${DISK_MIN_FREE_GIB} needed. Proceeding WITHOUT reclaim."
+                printf '### iOS runner disk guard (%s)\n\nGuard script hung after %ss (last output: %s). df fallback: **%s GiB free**, need %s GiB. Proceeded without reclaim.\n\n' \
+                  "${RUNNER_NAME:-local}" "$cap" "$last_line" "$free_gib" "$DISK_MIN_FREE_GIB" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                exit 0
+              fi
+              echo "::error::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}') and the df fallback shows only ${free_gib} GiB free on ${volume} of the ${DISK_MIN_FREE_GIB} GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+              printf 'REFUSED: only %s GiB free, need %s GiB (guard script hung; df fallback). Environmental, not this PR.\n' "$free_gib" "$DISK_MIN_FREE_GIB" > "$guard_summary"
+              rc=1
+            elif wait "$gpid"; then
+              rc=0
+            else
+              rc=$?
+            fi
+            others=$(pgrep -fl '/bin/Runner.Worker' 2>/dev/null | grep -vF "$own_root/" | grep -c . || true)
+            if [ "$rc" -eq 0 ] || [ "$others" -eq 0 ] || [ "$SECONDS" -ge "$deadline" ]; then
+              [ "$hung" -eq 1 ] || cat "$guard_log"
+              cat "$guard_summary" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              waited="$((attempt - 1)) x ${DISK_WAIT_POLL_SEC}s"
+              if [ "$rc" -eq 0 ]; then
+                [ "$attempt" -eq 1 ] || echo "disk headroom passed on attempt $attempt, after waiting $waited for a co-tenant CI job's teardown"
+              elif [ "$others" -gt 0 ]; then
+                echo "::error::still refused after waiting $waited for $others co-tenant CI job(s) on this host to release space"
+              elif [ "$attempt" -gt 1 ]; then
+                echo "::error::still refused after waiting $waited: every co-tenant CI job has finished and the space did not come back, so what holds it is not CI's"
+              fi
+              exit "$rc"
+            fi
+            # Not `::warning::` — a wait that ends in a pass is not a problem.
+            shortfall=$(grep -o 'only [0-9.]* GiB free' "$guard_log" | head -1 || true)
+            [ -n "$shortfall" ] || shortfall="guard hung, df fallback short"
+            echo "disk headroom short (attempt $attempt): $shortfall; $others other CI job(s) on this host will release space at teardown; re-checking in ${DISK_WAIT_POLL_SEC}s ($(( (deadline - SECONDS) / 60 )) min left)"
+            nap="$DISK_WAIT_POLL_SEC"
+            left=$(( deadline - SECONDS ))
+            [ "$nap" -le "$left" ] || nap="$left"
+            sleep "$nap"
+          done
 
       # bun's install temp dir is BUN_TMPDIR, and it must be per-runner. This
       # step exists in every job that can land on the self-hosted Mac — here,
@@ -283,6 +443,12 @@ jobs:
       - name: Check the Mac-pinned classes exist
         run: python3 apps/ios/scripts/ui-tests.py check-mac-shards
 
+      # The packer prices every class per host (ci-timings.json), because one
+      # host-blind figure predicted a 20s spread across shards that ran 834s
+      # apart (#1873). These pin that behaviour, and the timings file's shape.
+      - name: Test the shard packer
+        run: python3 -m unittest discover -s apps/ios/scripts -p "test_*.py"
+
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
       - name: Cache crypto XCFramework + bindings
@@ -303,7 +469,7 @@ jobs:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache
-        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/crypto
 
@@ -322,7 +488,7 @@ jobs:
       - name: Build server crypto library
         run: packages/crypto/scripts/build-server.sh
 
-      # The four runners on this box share one /opt/homebrew prefix, and
+      # The runners on this box share one /opt/homebrew prefix, and
       # concurrent `brew install` against a shared prefix is not safe. This
       # is a no-op on the Mac mini (xcodegen 2.44.1 is installed) and still
       # installs normally anywhere it is genuinely absent.
@@ -448,7 +614,7 @@ jobs:
       # covers the other case — a FULL re-run, where this job runs again and
       # would otherwise collide with attempt-1's artifact under this name.
       - name: Upload test build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}
           path: |
@@ -459,7 +625,7 @@ jobs:
           overwrite: true
 
       - name: Upload server crypto library
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}
           path: packages/crypto/dist/server/libllamenos_core.dylib
@@ -489,6 +655,20 @@ jobs:
     # the same device for all four), its own backend HTTP and PostgreSQL
     # ports, and its own RUNNER_TEMP for every file that used to be a fixed
     # /tmp path.
+    #
+    # There is deliberately NO `concurrency:` group on the Mac jobs. The
+    # runner pool already is the semaphore for this host: two runners, one
+    # job each, and every excess job QUEUES for a runner rather than landing
+    # on the box. Measured over 300 CI runs (101 h, 2026-10-14..19): never
+    # more than 2 CI jobs on the host at once; queue wait p90 28 min, max 83.
+    # One full run is 4 Mac jobs in two waves of two — ios-build-test with
+    # `build (mac)`, then `ui (0)` with `ui (3)` behind `needs: build` — so
+    # one run fits the pool exactly. A concurrency group could only do worse:
+    # each key holds ONE job, so allowing two means fixed per-shard keys,
+    # which idle a free runner whenever both waiting jobs share a key; and
+    # the default `queue: single` CANCELS the older pending job, which in a
+    # merge group is an ejection. The concurrency knob that matters is the
+    # runner count, and it lives on the host (see `build`).
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
@@ -726,6 +906,143 @@ jobs:
           xcrun simctl boot "$UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$UDID" -b
 
+      # Stop the simulator's photo-analysis daemon. A freshly booted iOS 26.5
+      # simulator starts `mediaanalysisd`, which scans the (empty) photo
+      # library and, on a 3-core hosted VM or a Mac running two shards, takes
+      # most of the machine: measured on the self-hosted Mac, it accounted for
+      # 230-430 of the first ~830 CPU-seconds of every shard's simulator
+      # (about half), peaking near 660% of one core's worth of the 10-core host
+      # while shards were mid-run. Against the same boot WITHOUT it, the first
+      # 5.5 minutes cost 151 CPU-seconds against 596 for a normal shard device.
+      # Nothing in the XCUITest suite uses media analysis.
+      #
+      # The device is created fresh per shard, so this has to run per shard;
+      # `launchctl disable` is stored with the device and survives its reboots
+      # (checked: shutdown + boot, daemon stays down), but it does not survive
+      # the device being deleted, which is when it should stop applying.
+      # Deliberately ONLY this daemon: the others (health, fitness, siri,
+      # biome, suggestd...) measured at a few CPU-seconds each, and a missing
+      # daemon can turn a clean failure into a hang. A failing disable or
+      # bootout only annotates, but the verification at the end does not: it
+      # fails the step unless the daemon is both marked disabled and not
+      # running, so a regression cannot pass silently.
+      - name: Quiet the simulator's photo-analysis daemon
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -uo pipefail
+          # Every command below names the SAME launchd domain, and it is the
+          # one the daemon actually lives in, so `disable` and `bootout` act on
+          # it and `print-disabled` reads back what `disable` wrote. An earlier
+          # version disabled in `system` but verified and booted out in
+          # `user/$(id -u)` with the HOST uid: it only passed because this
+          # simulator's launchd aliases those domains, a coincidence of the
+          # runtime and not a property of the step. `user/foreground` is the
+          # simulator's own name for the daemon's domain (launchd itself
+          # points at it when asked for `system/...`), needs no uid, and
+          # `id` does not exist inside the simulator anyway. A `system/...`
+          # bootout is accepted but leaves the running daemon up, which is
+          # why the liveness check below is part of the verdict.
+          domain=user/foreground
+          labels="com.apple.mediaanalysisd com.apple.mediaanalysisd.service"
+          sim() { xcrun simctl spawn "$UDID" launchctl "$@"; }
+          for label in $labels; do
+            sim disable "$domain/$label" >/dev/null 2>&1 \
+              || echo "::warning::could not disable $label in the simulator"
+            sim bootout "$domain/$label" >/dev/null 2>&1 || true
+          done
+          # Judged on what the simulator reports, never on the exit codes above
+          # (bootout also fails when the service was never loaded). Two
+          # observations, both required: the label is marked disabled in the
+          # domain we wrote, and no process is running for it.
+          disabled=$(sim print-disabled "$domain" 2>&1) || {
+            echo "::error::launchctl print-disabled $domain failed in $UDID: $disabled"
+            exit 1
+          }
+          failed=0
+          for label in $labels; do
+            if ! grep -Fq "\"$label\" => disabled" <<<"$disabled"; then
+              echo "::error::$label is not disabled in the simulator's $domain domain"
+              failed=1
+            fi
+          done
+          # Only the main daemon ever runs; the `.service` label is listed with
+          # "-" for its PID. A numeric first column is a live process.
+          running=$(sim list 2>&1 | awk '$3 ~ /^com\.apple\.mediaanalysisd/ && $1 ~ /^[0-9]+$/')
+          if [ -n "$running" ]; then
+            echo "::error::mediaanalysisd is still running in the simulator: $running"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "disabled list as the simulator reports it:"
+            grep -i mediaanalysis <<<"$disabled" || echo "  (no mediaanalysis entries)"
+            exit 1
+          fi
+          echo "mediaanalysisd disabled and stopped in $UDID"
+
+      # Boot is not warm. Booting the simulator never launches the app, so the
+      # FIRST test of a shard paid the whole cold-start bill — installd
+      # registering the bundle, RunningBoard's first assertion for the process,
+      # dyld mapping the app and its frameworks — inside XCTest's
+      # assertion-acquisition budget, which cannot be raised. #1873: on hosted
+      # runners the first two tests of a shard failed with
+      #   Failed to get background assertion for target app ... Timed out
+      # without ever evaluating an assertion (trace: Launch at 1.28s, Tear Down
+      # at 41.32s), and every test after them passed on the same simulator.
+      #
+      # So pay it here, once, outside any test: install the app, launch it,
+      # terminate it. Not a sleep and not a raised timeout — the same work the
+      # first test would have done, done before the clock starts. The elapsed
+      # time is printed, so a run's log shows what the first launch cost.
+      #
+      # A failed warm-up only means the first test is cold again, so it
+      # annotates instead of failing the shard; a missing app is a broken
+      # build artifact and does fail.
+      - name: Warm the app (install, launch once, terminate)
+        # A backstop only. The script bounds itself (WARM_BUDGET_SEC) and
+        # annotates when it runs out, as the paragraph above promises; a step
+        # timeout fires first and fails the whole shard instead (#2037: hosted
+        # warm-ups took 63-263s, median 139s, and 6 of 51 sampled ran into the
+        # old 5-minute cap, killing the shard before a single test ran).
+        timeout-minutes: 10
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+          WARM_BUDGET_SEC: "420"
+        run: |
+          set -uo pipefail
+          products="$RUNNER_TEMP/llamenos-build/Build/Products/UITesting-iphonesimulator"
+          apps=()
+          while IFS= read -r app; do apps+=("$app"); done < <(find "$products" -maxdepth 1 -name "*.app" ! -name "*-Runner.app")
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one app under $products, found ${#apps[@]}: ${apps[*]:-none}"
+            exit 1
+          fi
+          bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${apps[0]}/Info.plist")
+          start=$SECONDS
+          # macOS has no timeout(1); perl's alarm survives exec and kills the
+          # command when the remaining budget is spent.
+          bounded() {
+            local left=$(( WARM_BUDGET_SEC - (SECONDS - start) ))
+            [ "$left" -gt 0 ] || return 124
+            perl -e 'alarm shift; exec @ARGV or exit 127' "$left" "$@"
+          }
+          phase() {
+            local t=$SECONDS
+            if bounded "$@"; then
+              echo "  $2 $3: $((SECONDS - t))s"
+            else
+              echo "  $2 $3: FAILED or timed out after $((SECONDS - t))s"
+              return 1
+            fi
+          }
+          if phase xcrun simctl install "$UDID" "${apps[0]}" \
+              && phase xcrun simctl launch --terminate-running-process "$UDID" "$bundle_id" \
+              && phase xcrun simctl terminate "$UDID" "$bundle_id"; then
+            echo "warm-up of $bundle_id took $((SECONDS - start))s"
+          else
+            echo "::warning::warm-up of $bundle_id failed after $((SECONDS - start))s (budget ${WARM_BUDGET_SEC}s); the first test of this shard will launch cold"
+          fi
+
       # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
       # manual dispatch run it too.
       - name: Select test classes for shard ${{ matrix.shard }}
@@ -879,7 +1196,7 @@ jobs:
 
       - name: Upload screenshots
         if: always() && inputs.take-screenshots == true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-screenshots-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/screenshots-shard-${{ matrix.shard }}
@@ -887,7 +1204,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload test results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: ios-e2e-results-shard-${{ matrix.shard }}
@@ -898,6 +1215,18 @@ jobs:
             ${{ runner.temp }}/llamenos-native-backend/server.log
             ${{ runner.temp }}/llamenos-native-backend/watchdog.log
           retention-days: 7
+
+      # The same per-test results, WITHOUT the ~80 MB .xcresult, so the nightly
+      # `report` job can fold them into an issue without downloading four of
+      # those. Scheduled runs only: nothing else reads it.
+      - name: Upload per-test results for the nightly report
+        if: always() && github.event_name == 'schedule'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-e2e-results-json-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
+          retention-days: 3
+          if-no-files-found: ignore
 
       # Reads the ports from the environment the allocation step wrote, so
       # there is exactly one place deriving them. The guard matters: with

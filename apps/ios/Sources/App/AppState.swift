@@ -17,6 +17,13 @@ enum AuthStatus: Equatable {
 
 /// Root observable state container for the entire app. Holds all service instances
 /// and the current auth status. Injected into the SwiftUI environment at the app root.
+///
+/// `@MainActor` (#1920 audit): every view reads this state on the main thread, and every
+/// mutation already came from a view or an `await MainActor.run` block — except the async
+/// ones. `ensureAdminPubkeyLoaded()` read `adminDecryptionPubkey` on the global executor, and
+/// the relay consumer ran `hubActivityService.handle` there. Isolating the class makes the
+/// compiler hold every path to the main actor instead of relying on per-call hops.
+@MainActor
 @Observable
 final class AppState {
     // MARK: - Services

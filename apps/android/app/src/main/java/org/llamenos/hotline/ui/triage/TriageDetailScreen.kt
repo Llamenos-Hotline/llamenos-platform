@@ -1,6 +1,7 @@
 package org.llamenos.hotline.ui.triage
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
@@ -58,21 +61,62 @@ fun TriageDetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     val report = uiState.reports.find { it.id == reportId }
     var showConvertDialog by remember { mutableStateOf(false) }
+    // The conversion route needs the case type to create (`entityTypeId`); a hub with
+    // exactly one needs no choice.
+    var chosenTypeId by remember { mutableStateOf<String?>(null) }
+    val entityTypeId = chosenTypeId ?: uiState.entityTypes.singleOrNull()?.id
 
     // Convert confirmation dialog
     if (showConvertDialog && report != null) {
         AlertDialog(
             onDismissRequest = { showConvertDialog = false },
             title = { Text(stringResource(R.string.triage_convert_confirm_title)) },
-            text = { Text(stringResource(R.string.triage_convert_confirm_message)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.triage_convert_confirm_message))
+                    if (uiState.entityTypes.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.cases_no_entity_types_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("triage-convert-no-types"),
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.cases_select_type),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        uiState.entityTypes.forEach { type ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = entityTypeId == type.id,
+                                        onClick = { chosenTypeId = type.id },
+                                        role = Role.RadioButton,
+                                    )
+                                    .testTag("triage-convert-type-${type.id}"),
+                            ) {
+                                RadioButton(selected = entityTypeId == type.id, onClick = null)
+                                Text(
+                                    text = type.label.ifBlank { type.name },
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
             confirmButton = {
                 Button(
                     onClick = {
+                        val typeId = entityTypeId ?: return@Button
                         showConvertDialog = false
-                        viewModel.convertToCase(report)
+                        viewModel.convertToEntity(report, typeId)
                         onNavigateBack()
                     },
-                    enabled = !uiState.isConverting,
+                    enabled = !uiState.isConverting && entityTypeId != null,
                 ) {
                     if (uiState.isConverting) {
                         CircularProgressIndicator(

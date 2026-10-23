@@ -427,25 +427,77 @@ test.describe('Cross-platform crypto interop', () => {
     expect(wrongEnvelope).toBeUndefined()
   })
 
-  // ─── Device provisioning key bundle (PROTOCOL.md 6.1.1) ─────
+  // ─── Device provisioning key bundle (PROTOCOL.md 6.3, 6.7.2) ─────
+  //
+  // Both sides of the provisioning ECDH are ephemeral (#1865): the primary's
+  // X25519 key comes from the signed claim, never from its long-term
+  // encryption key.
+
+  /** `provisioning` in test-vectors.json — mirrors `ProvisioningVectors` in interop.rs. */
+  interface ProvisioningVector {
+    primarySigningSeedHex: string
+    primaryEncryptionSeedHex: string
+    primarySigningPubkeyHex: string
+    primaryEncryptionPubkeyHex: string
+    ephemeralSecretHex: string
+    ephemeralPubkeyHex: string
+    claimHex: string
+    claimVersion: number
+    claimLen: number
+    claimLabel: string
+    encryptedHex: string
+    sasCode: string
+    bundleVersion: number
+    bundleLen: number
+    aadLabel: string
+    hkdfSalt: string
+    hkdfInfo: string
+  }
+
+  /** Parse and verify the claim exactly as a new device must, before any use. */
+  function verifiedClaim(p: ProvisioningVector) {
+    const claim = hexToBytes(p.claimHex)
+    expect(claim.length).toBe(p.claimLen)
+    expect(claim[0]).toBe(p.claimVersion)
+    const primaryEphemeralPubkey = claim.slice(1, 33)
+    const signingPubkey = claim.slice(33, 65)
+    const signature = claim.slice(65, 129)
+    const message = new Uint8Array([
+      ...utf8ToBytes(p.claimLabel),
+      p.claimVersion,
+      ...hexToBytes(p.ephemeralPubkeyHex),
+      ...primaryEphemeralPubkey,
+    ])
+    expect(ed25519.verify(signature, message, signingPubkey, { zip215: false })).toBe(true)
+    return { claim, primaryEphemeralPubkey, signingPubkey }
+  }
+
+  function provisioningKey(p: ProvisioningVector, primaryEphemeralPubkey: Uint8Array) {
+    const shared = x25519.getSharedSecret(hexToBytes(p.ephemeralSecretHex), primaryEphemeralPubkey)
+    return { shared, provKey: hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32) }
+  }
+
+  function bundleAad(p: ProvisioningVector, claim: Uint8Array) {
+    return new Uint8Array([...utf8ToBytes(p.aadLabel), ...hexToBytes(p.ephemeralPubkeyHex), ...claim])
+  }
 
   test('device provisioning bundle decrypts to BOTH device seeds', () => {
-    const p = vectors.provisioning
+    const p: ProvisioningVector = vectors.provisioning
 
     // Rust used the generated label constants, not ad-hoc strings.
     expect(p.aadLabel).toBe(labels.LABEL_DEVICE_PROVISION_BUNDLE)
+    expect(p.claimLabel).toBe(labels.LABEL_DEVICE_PROVISION_CLAIM)
     expect(p.hkdfSalt).toBe(labels.LABEL_PROVISIONING_SALT)
     expect(p.hkdfInfo).toBe(labels.LABEL_DEVICE_PROVISION)
 
-    // New-device side: ECDH against the primary's published X25519 pubkey.
-    const shared = x25519.getSharedSecret(
-      hexToBytes(p.ephemeralSecretHex),
-      hexToBytes(p.primaryEncryptionPubkeyHex),
-    )
-    const provKey = hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32)
+    // New-device side: verify the claim, then ECDH against the primary's
+    // EPHEMERAL pubkey from it.
+    const { claim, primaryEphemeralPubkey, signingPubkey } = verifiedClaim(p)
+    expect(bytesToHex(signingPubkey)).toBe(p.primarySigningPubkeyHex)
+    const { provKey } = provisioningKey(p, primaryEphemeralPubkey)
 
     const data = hexToBytes(p.encryptedHex)
-    const plaintext = gcm(provKey, data.slice(0, 12), utf8ToBytes(p.aadLabel)).decrypt(data.slice(12))
+    const plaintext = gcm(provKey, data.slice(0, 12), bundleAad(p, claim)).decrypt(data.slice(12))
 
     // Bundle layout: version || signing seed || encryption seed
     expect(plaintext.length).toBe(p.bundleLen)
@@ -469,31 +521,56 @@ test.describe('Cross-platform crypto interop', () => {
   })
 
   test('provisioning SAS matches the Rust-computed code', () => {
-    const p = vectors.provisioning
-    const shared = x25519.getSharedSecret(
-      hexToBytes(p.ephemeralSecretHex),
-      hexToBytes(p.primaryEncryptionPubkeyHex),
-    )
+    const p: ProvisioningVector = vectors.provisioning
+    const { shared } = provisioningKey(p, verifiedClaim(p).primaryEphemeralPubkey)
     const sasBytes = hkdf(sha256, shared, utf8ToBytes(labels.SAS_SALT), utf8ToBytes(labels.SAS_INFO), 4)
     const num = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
     const code = (num % 1_000_000).toString().padStart(6, '0')
     expect(`${code.slice(0, 3)} ${code.slice(3)}`).toBe(p.sasCode)
   })
 
-  test('provisioning bundle does not authenticate under the pre-bundle AAD', () => {
+  test('provisioning ECDH does not use the primary long-term encryption key', () => {
+    // Forward secrecy (#1865): the primary's ephemeral is not its long-term
+    // key, and the long-term key yields a different, useless shared secret.
+    const p: ProvisioningVector = vectors.provisioning
+    const { claim, primaryEphemeralPubkey } = verifiedClaim(p)
+    expect(bytesToHex(primaryEphemeralPubkey)).not.toBe(p.primaryEncryptionPubkeyHex)
+
+    const { provKey } = provisioningKey(p, hexToBytes(p.primaryEncryptionPubkeyHex))
+    const data = hexToBytes(p.encryptedHex)
+    expect(() => gcm(provKey, data.slice(0, 12), bundleAad(p, claim)).decrypt(data.slice(12))).toThrow()
+  })
+
+  test('provisioning bundle does not authenticate under any other AAD', () => {
     // Domain separation is what prevents a silent downgrade to an older
-    // provisioning payload format.
-    const p = vectors.provisioning
-    const shared = x25519.getSharedSecret(
-      hexToBytes(p.ephemeralSecretHex),
-      hexToBytes(p.primaryEncryptionPubkeyHex),
-    )
-    const provKey = hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32)
+    // provisioning payload format; the transcript binds the payload to the
+    // claim that was verified.
+    const p: ProvisioningVector = vectors.provisioning
+    const { claim, primaryEphemeralPubkey } = verifiedClaim(p)
+    const { provKey } = provisioningKey(p, primaryEphemeralPubkey)
     const data = hexToBytes(p.encryptedHex)
 
-    expect(() =>
-      gcm(provKey, data.slice(0, 12), utf8ToBytes(labels.LABEL_DEVICE_PROVISION)).decrypt(data.slice(12)),
-    ).toThrow()
+    for (const aad of [utf8ToBytes(labels.LABEL_DEVICE_PROVISION), utf8ToBytes(p.aadLabel)]) {
+      expect(() => gcm(provKey, data.slice(0, 12), aad).decrypt(data.slice(12))).toThrow()
+    }
+    // Sanity: the real AAD does open it.
+    expect(() => gcm(provKey, data.slice(0, 12), bundleAad(p, claim)).decrypt(data.slice(12))).not.toThrow()
+  })
+
+  test('provisioning claim signature binds both ephemeral keys', () => {
+    const p: ProvisioningVector = vectors.provisioning
+    const { primaryEphemeralPubkey, signingPubkey } = verifiedClaim(p)
+    const signature = hexToBytes(p.claimHex).slice(65, 129)
+
+    // The same signature over a different new-device key (another room) fails.
+    const otherRoomKey = x25519.getPublicKey(x25519.utils.randomSecretKey())
+    const replayed = new Uint8Array([
+      ...utf8ToBytes(p.claimLabel),
+      p.claimVersion,
+      ...otherRoomKey,
+      ...primaryEphemeralPubkey,
+    ])
+    expect(ed25519.verify(signature, replayed, signingPubkey, { zip215: false })).toBe(false)
   })
 })
 

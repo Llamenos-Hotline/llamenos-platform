@@ -1,5 +1,12 @@
-import { request, hp } from './client'
-import type { Conversation, ConversationMessage } from '@protocol/schemas'
+import { request, hp, hubPath } from './client'
+import type {
+  AddAssigneeEnvelopesBody,
+  AddAssigneeEnvelopesResponse,
+  AssigneeEnvelopeGapsResponse,
+  Conversation,
+  ConversationListResponse,
+  ConversationMessage,
+} from '@protocol/schemas'
 
 export type { Conversation, ConversationMessage }
 
@@ -68,4 +75,33 @@ export async function getConversationStats() {
 
 export async function getUserLoads() {
   return request<{ loads: Record<string, number> }>(hp('/conversations/load'))
+}
+
+// --- Assignee re-wrap (#1512, #2046) ---
+//
+// Hub-explicit, never `hp()`: a re-wrap answers an assignment event from
+// whichever member hub published it, not the hub the user is browsing.
+
+/**
+ * Active conversations in `hubId` — the set an admin client sweeps for
+ * assignee envelope gaps when it comes online.
+ */
+export async function listActiveConversationsInHub(hubId: string, page: number, limit: number) {
+  const qs = new URLSearchParams({ status: 'active', page: String(page), limit: String(limit) })
+  return request<Pick<ConversationListResponse, 'conversations' | 'total'>>(hubPath(hubId, `/conversations?${qs}`))
+}
+
+/** Messages the current assignee cannot open yet (≤ 200, oldest first). */
+export async function getAssigneeEnvelopeGaps(hubId: string, conversationId: string) {
+  return request<AssigneeEnvelopeGapsResponse>(
+    hubPath(hubId, `/conversations/${conversationId}/assignee-envelopes`),
+  )
+}
+
+/** Append client-sealed envelopes for the current assignee. All-or-nothing. */
+export async function addAssigneeEnvelopes(hubId: string, conversationId: string, body: AddAssigneeEnvelopesBody) {
+  return request<AddAssigneeEnvelopesResponse>(
+    hubPath(hubId, `/conversations/${conversationId}/assignee-envelopes`),
+    { method: 'POST', body: JSON.stringify(body) },
+  )
 }

@@ -2,7 +2,7 @@
  * OpenAPI request validation tests for sigchain routes.
  *
  * Sigchain is security-critical — validates Ed25519 signatures, hash-chain
- * continuity, and link types. All schemas are inline in the route file.
+ * continuity, and link types. Schemas live in packages/protocol/schemas/sigchain.ts.
  */
 import { describe, it, expect } from 'vitest'
 import sigchainRoutes from '../../routes/sigchain'
@@ -35,7 +35,7 @@ describe('sigchain route validation', () => {
     const VALID_LINK = {
       seqNo: 1,
       linkType: 'genesis',
-      payload: { ed25519Pubkey: VALID_PUBKEY },
+      payload: { type: 'user_init', deviceId: 'dev-1', devicePubkey: VALID_PUBKEY, deviceEncryptionPubkey: VALID_PUBKEY },
       signature: VALID_SIGNATURE,
       prevHash: null,
       hash: VALID_HASH,
@@ -54,6 +54,15 @@ describe('sigchain route validation', () => {
       const app = createApp()
       const { seqNo: _, ...body } = VALID_LINK
       const res = await sendJSON(app, SIGCHAIN_PATH, body)
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects seqNo 0 (genesis is seq 1, matching packages/crypto verify_sigchain)', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, SIGCHAIN_PATH, {
+        ...VALID_LINK,
+        seqNo: 0,
+      })
       expect(res.status).toBe(400)
     })
 

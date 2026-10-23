@@ -62,6 +62,13 @@ struct AudioInputButton: View {
 
 /// Manages the speech recognition session lifecycle. Handles permission requests,
 /// audio session setup, and real-time transcription via `SFSpeechRecognizer`.
+///
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread.
+/// Every write already happened there — `startRecording` carried a method-level
+/// `@MainActor` and the framework callbacks hop before touching state — but nothing stopped
+/// a new call site from calling `stopRecording()` off main. Class-level isolation makes the
+/// compiler enforce what was previously only convention.
+@MainActor
 @Observable
 final class SpeechInputService {
     private let speechRecognizer: SFSpeechRecognizer?
@@ -91,7 +98,6 @@ final class SpeechInputService {
     // MARK: - Start Recording
 
     /// Request permissions and begin live transcription, appending to the bound text.
-    @MainActor
     func startRecording(appendTo binding: Binding<String>) async {
         textBinding = binding
 
@@ -175,6 +181,13 @@ final class SpeechInputService {
 
     // MARK: - Private
 
+    /// The audio tap block runs on AVAudioEngine's realtime render thread. Built in a
+    /// nonisolated function so it does not inherit this class's main-actor isolation — it
+    /// touches nothing but the request it feeds.
+    private nonisolated static func tapFeeding(_ request: SFSpeechAudioBufferRecognitionRequest) -> AVAudioNodeTapBlock {
+        { buffer, _ in request.append(buffer) }
+    }
+
     private func beginRecognitionSession(speechRecognizer: SFSpeechRecognizer) throws {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -194,17 +207,17 @@ final class SpeechInputService {
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
-        }
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat, block: Self.tapFeeding(request))
 
         audioEngine.prepare()
         try audioEngine.start()
 
         isRecording = true
 
-        // Start recognition task
-        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
+        // Start recognition task. The handler runs on a Speech framework queue, never on
+        // main: `@Sendable` keeps it out of this class's main-actor isolation, and it hops to
+        // the main actor before touching any state.
+        recognitionTask = speechRecognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
             guard let self else { return }
 
             if let result {

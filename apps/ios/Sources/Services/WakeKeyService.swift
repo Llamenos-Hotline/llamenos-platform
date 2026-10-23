@@ -57,8 +57,14 @@ struct DeviceRegistrationRequest: Encodable, Sendable {
 /// 2. On push token receipt: `registerDevice(pushToken:)` sends wake pubkey + token to server
 /// 3. On push receipt: notification service extension calls `decryptWakePayload()` to
 ///    decrypt the HPKE-encrypted notification content
+///
+/// `@MainActor` (#1920 audit): `registerDevice(pushToken:)` ran on the global executor from
+/// the push-token callback's `Task`, reading `publicKeyHex` and writing `isRegistered`,
+/// while `cleanup()` — logout and wipe, on main — cleared both. Every other caller (the
+/// app delegate's push handlers, `AppState`, `WipeService`) already runs on main.
+@MainActor
 @Observable
-final class WakeKeyService: @unchecked Sendable {
+final class WakeKeyService {
 
     // MARK: - Public State
 

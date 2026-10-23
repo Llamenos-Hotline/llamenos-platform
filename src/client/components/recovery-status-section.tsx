@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getRecoveryGroup, getActiveHub } from '@/lib/api'
+import { getRecoveryGroup, getActiveHub, ApiError } from '@/lib/api'
 import type { RecoveryGroupInfo } from '@protocol/schemas/recovery-group'
 import { SettingsSection, usePersistedExpanded } from '@/components/settings-section'
 import { Shield, ShieldOff } from 'lucide-react'
@@ -10,6 +10,9 @@ export function RecoveryStatusSection() {
   const hubId = getActiveHub()
   const [group, setGroup] = useState<RecoveryGroupInfo | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  // The server answers 403 to users without `recovery:view`; they have no status to show.
+  const [forbidden, setForbidden] = useState(false)
   const { expanded, toggleSection } = usePersistedExpanded('settings-expanded:/settings', [])
 
   useEffect(() => {
@@ -18,11 +21,19 @@ export function RecoveryStatusSection() {
       return
     }
     setLoading(true)
+    setLoadFailed(false)
+    setForbidden(false)
     getRecoveryGroup(hubId)
       .then(setGroup)
-      .catch(() => setGroup(null))
+      .catch((err: unknown) => {
+        setGroup(null)
+        if (err instanceof ApiError && err.status === 403) setForbidden(true)
+        else setLoadFailed(true)
+      })
       .finally(() => setLoading(false))
   }, [hubId])
+
+  if (forbidden) return null
 
   const enrolled = group !== null
 
@@ -43,7 +54,9 @@ export function RecoveryStatusSection() {
       statusSummary={
         loading
           ? t('common.loading')
-          : enrolled
+          : loadFailed
+            ? t('common.error')
+            : enrolled
             ? t('recoveryGroup.status.enrolled', { hubId })
             : t('recoveryGroup.status.notConfigured')
       }
@@ -72,7 +85,11 @@ export function RecoveryStatusSection() {
           </div>
         )}
 
-        {!loading && !enrolled && (
+        {!loading && loadFailed && (
+          <div className="text-sm text-destructive" role="alert">{t('common.error')}</div>
+        )}
+
+        {!loading && !loadFailed && !enrolled && (
           <div className="flex items-center gap-2">
             <ShieldOff className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">

@@ -1,0 +1,33 @@
+{
+  "_readme": [
+    "CONTRACT BASELINE. A shrink-only ratchet of client calls that are KNOWN TO BE BROKEN.",
+    "Every entry is one client call site, in desktop, iOS, Android or sip-bridge, that reaches no mounted route on the server. It was frozen on 2026-10-21, from the guard's own output, when the endpoint-contract guard (#2001) landed.",
+    "This file is not an allowlist. contract-allowlist.json holds calls that are correct, each with its reason. This file holds calls that are wrong today. Each one names the open issue that owns fixing it.",
+    "IT MAY ONLY SHRINK. When you fix a call, the guard fails until you delete its entry here and lower \"size\" to match. A fixed call cannot stay listed.",
+    "ADDING AN ENTRY MEANS SHIPPING A KNOWN-BROKEN CLIENT CALL. Fix the call instead. If you truly cannot, you need all of: an entry naming an open owning issue that is listed in \"owners\", \"size\" raised by one, the entry in sorted position, and a reviewer who accepts a new broken call. There is no command that writes this file.",
+    "Matching is exact: client, file, method, path (as the guard prints it) and category. There are no wildcards, and each entry absorbs exactly one call. Two identical broken calls in one file need two entries, and a third identical call fails.",
+    "Run: bun scripts/api-schema-binding/contract-guard.ts --all to see every baselined row with its line number."
+  ],
+  "size": 2,
+  "owners": {
+    "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, recovery-group candidates, contact search)"
+  },
+  "entries": [
+    {
+      "client": "desktop",
+      "file": "src/client/lib/api/recovery.ts",
+      "method": "GET",
+      "path": "/api/hubs/:param/recovery-group/candidates",
+      "category": "unmounted",
+      "issue": 2002
+    },
+    {
+      "client": "ios",
+      "file": "apps/ios/Sources/Services/APIService.swift",
+      "method": "GET",
+      "path": "/api/recovery-group/shares/my",
+      "category": "unmounted",
+      "issue": 2002
+    }
+  ]
+}

@@ -51,6 +51,7 @@ import { IdentityService } from '../../services/identity'
 import { ServiceError } from '../../services/settings'
 import { ed25519Sign, ed25519PubkeyFromSeed } from '../mocks/llamenos-crypto-ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
+import type { SigchainLinkType } from '@protocol/schemas/sigchain'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -114,6 +115,17 @@ const DDL = `
     device_info JSONB
   );
 
+  -- Not FK'd to devices: PUK envelopes are keyed by sigchain device ID (#1050).
+  CREATE TABLE ${TEST_SCHEMA}.puk_envelopes (
+    id          TEXT PRIMARY KEY,
+    user_pubkey TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
+    device_id   TEXT NOT NULL,
+    generation  INTEGER NOT NULL,
+    envelope    JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_pubkey, device_id, generation)
+  );
+
   CREATE TABLE ${TEST_SCHEMA}.security_events (
     id          TEXT PRIMARY KEY,
     user_pubkey TEXT REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE SET NULL,
@@ -151,8 +163,8 @@ const USER_PUBKEY = bytesToHex(ed25519PubkeyFromSeed(identitySeed))
 
 interface LinkInput {
   seqNo: number
-  linkType: string
-  payload: unknown
+  linkType: SigchainLinkType
+  payload: Record<string, unknown>
   signature: string
   /** null for genesis (seqNo 1); '' accepted as a legacy alias. */
   prevHash: string | null
@@ -162,15 +174,29 @@ interface LinkInput {
   timestamp: string
 }
 
-/** Build a correctly-signed link extending `prevHash` at `seqNo`. */
+/** A genesis payload naming the sigchain owner's own device (the server validates its shape). */
+function genesisPayload(deviceId = 'dev-1'): Record<string, unknown> {
+  return { type: 'user_init', deviceId, devicePubkey: USER_PUBKEY, deviceEncryptionPubkey: 'bb'.repeat(32) }
+}
+
+/** A device_add payload authorising another device. */
+function deviceAddPayload(deviceId: string): Record<string, unknown> {
+  return { type: 'device_add', deviceId, devicePubkey: 'cc'.repeat(32), deviceEncryptionPubkey: 'dd'.repeat(32) }
+}
+
+/**
+ * Build a correctly-signed link extending `prevHash` at `seqNo`. The link type
+ * follows the payload (`user_init` → genesis). The signer defaults to the
+ * owner's identity key — the only signer the generic append route accepts.
+ */
 function buildLink(
   seqNo: number,
   prevHash: string | null,
-  payload: unknown,
+  payload: Record<string, unknown>,
   meta: { signerDeviceId?: string; signerPubkey?: string; timestamp?: string } = {},
 ): LinkInput {
   const signerDeviceId = meta.signerDeviceId ?? 'dev-1'
-  const signerPubkey = meta.signerPubkey ?? 'aa'.repeat(32)
+  const signerPubkey = meta.signerPubkey ?? USER_PUBKEY
   const timestamp = meta.timestamp ?? '2026-01-01T00:00:00Z'
   const hash = computeEntryHash(
     seqNo,
@@ -181,7 +207,8 @@ function buildLink(
     payload,
   )
   const signature = bytesToHex(ed25519Sign(identitySeed, hexToBytes(hash)))
-  return { seqNo, linkType: 'device_add', payload, signature, prevHash, hash, signerDeviceId, signerPubkey, timestamp }
+  const linkType: SigchainLinkType = payload.type === 'user_init' ? 'genesis' : 'device_add'
+  return { seqNo, linkType, payload, signature, prevHash, hash, signerDeviceId, signerPubkey, timestamp }
 }
 
 beforeAll(async () => {
@@ -210,13 +237,13 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE sigchain_links`
+  await testSql`TRUNCATE TABLE sigchain_links, puk_envelopes`
 })
 
 describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)', () => {
   it('lets exactly one of N concurrent appends at the same seqNo succeed; the rest get a 409', async () => {
     // Genesis is seqNo 1 with prevHash null (#1537 crate-verifier contract).
-    const genesis = buildLink(1, null, { type: 'user_init', deviceId: 'dev-1' })
+    const genesis = buildLink(1, null, genesisPayload())
     const genesisLink = await service.appendSigchainLink(USER_PUBKEY, genesis)
 
     const CONCURRENCY = 8
@@ -224,7 +251,7 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
     // observed head (seqNo=2, prevHash=genesis.hash) — exactly what two
     // devices racing to add themselves would do.
     const attempts = Array.from({ length: CONCURRENCY }, (_, i) =>
-      buildLink(2, genesisLink.hash, { type: 'device_add', deviceId: `new-device-${i}` }),
+      buildLink(2, genesisLink.hash, deviceAddPayload(`new-device-${i}`)),
     )
 
     const results = await Promise.allSettled(
@@ -263,12 +290,12 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
   })
 
   it('serializes concurrent appends into a single valid chain across many rounds', async () => {
-    let head = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, { type: 'user_init' }))
+    let head = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload()))
 
     for (let round = 0; round < 5; round++) {
       const nextSeqNo = round + 2
       const attempts = Array.from({ length: 4 }, (_, i) =>
-        buildLink(nextSeqNo, head.hash, { type: 'device_add', deviceId: `round-${round}-writer-${i}` }),
+        buildLink(nextSeqNo, head.hash, deviceAddPayload(`round-${round}-writer-${i}`)),
       )
       const results = await Promise.allSettled(
         attempts.map((link) => service.appendSigchainLink(USER_PUBKEY, link)),
@@ -302,7 +329,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
   it('serializes revoke + appends: exactly one racer wins; losers get a 409, never a 500', async () => {
     await service.appendSigchainLink(
       USER_PUBKEY,
-      buildLink(1, null, { type: 'user_init', deviceId: 'dev-1' }),
+      buildLink(1, null, genesisPayload()),
     )
 
     const ROUNDS = 10
@@ -331,7 +358,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
       // Two competing appends — other devices racing to join at the same
       // seqNo — so each round has three concurrent writers at the head.
       const addLinks = [0, 1].map((i) =>
-        buildLink(nextSeqNo, prevHash, { type: 'device_add', deviceId: `dev-r${round}-${i}` }),
+        buildLink(nextSeqNo, prevHash, deviceAddPayload(`dev-r${round}-${i}`)),
       )
 
       const [revokeResult, ...appendResults] = await Promise.allSettled([
@@ -389,5 +416,81 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
         expect(persisted[persisted.length - 1].linkType).toBe('device_add')
       }
     }
+  })
+})
+
+describe('revoking a device removes its PUK envelopes and its authorisation (#1050)', () => {
+  const hpke = { v: 3, labelId: 1, enc: 'ZW5j', ct: 'Y3Q' }
+
+  it('deletes the revoked device\'s envelopes and refuses new ones, though the revoke link names the registry id', async () => {
+    const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))
+    const added = await service.appendSigchainLink(USER_PUBKEY, buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
+    const device2Pubkey = 'cc'.repeat(32) // deviceAddPayload's devicePubkey
+
+    // The push-registry row for the device being revoked — a DIFFERENT id from
+    // its sigchain device id, exactly as production assigns them.
+    await testSql`
+      INSERT INTO devices (id, pubkey, platform, ed25519_pubkey)
+      VALUES ('registry-row-2', ${USER_PUBKEY}, 'ios', ${device2Pubkey})
+    `
+    await service.distributePukEnvelopes(USER_PUBKEY, [
+      { deviceId: 'dev-1', generation: 1, envelope: hpke },
+      { deviceId: 'sig-dev-2', generation: 1, envelope: hpke },
+    ])
+
+    const removeLink = buildLink(
+      3,
+      added.hash,
+      { deviceId: 'registry-row-2', devicePubkey: device2Pubkey, platform: 'ios' },
+      { signerDeviceId: '', signerPubkey: '', timestamp: '' },
+    )
+    await identity.revokeDevice(USER_PUBKEY, 'registry-row-2', {
+      signature: removeLink.signature,
+      sigchainHash: removeLink.hash,
+      sigchainSeqNo: removeLink.seqNo,
+      sigchainPrevHash: removeLink.prevHash ?? undefined,
+    })
+
+    const remaining = await testSql`SELECT device_id FROM puk_envelopes ORDER BY device_id`
+    expect(remaining.map((r) => r.device_id)).toEqual(['dev-1'])
+
+    // The removal names the registry id, not 'sig-dev-2' — it must still take
+    // the sigchain device out of the authorised set (the Rust verifier removes
+    // by devicePubkey), or a revoked device could be handed a new PUK.
+    await expect(
+      service.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'sig-dev-2', generation: 2, envelope: hpke }]),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      service.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'dev-1', generation: 2, envelope: hpke }]),
+    ).resolves.toHaveLength(1)
+  })
+
+  it('keeps the envelopes when the revoke link is rejected (transaction rolls back)', async () => {
+    const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))
+    await service.appendSigchainLink(USER_PUBKEY, buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
+    const device2Pubkey = 'cc'.repeat(32)
+    await testSql`
+      INSERT INTO devices (id, pubkey, platform, ed25519_pubkey)
+      VALUES ('registry-row-2', ${USER_PUBKEY}, 'ios', ${device2Pubkey})
+    `
+    await service.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'sig-dev-2', generation: 1, envelope: hpke }])
+
+    // seqNo 9 does not extend the chain head (3): the append is rejected.
+    const badLink = buildLink(9, 'ab'.repeat(32), { deviceId: 'registry-row-2', devicePubkey: device2Pubkey, platform: 'ios' }, {
+      signerDeviceId: '', signerPubkey: '', timestamp: '',
+    })
+    await expect(
+      identity.revokeDevice(USER_PUBKEY, 'registry-row-2', {
+        signature: badLink.signature,
+        sigchainHash: badLink.hash,
+        sigchainSeqNo: badLink.seqNo,
+        sigchainPrevHash: badLink.prevHash ?? undefined,
+      }),
+    ).rejects.toSatisfy((e: unknown) => e instanceof ServiceError && e.status === 409)
+
+    const kept = await testSql`SELECT device_id FROM puk_envelopes`
+    expect(kept.map((r) => r.device_id)).toEqual(['sig-dev-2'])
+    const [deviceRow] = await testSql`SELECT id FROM devices WHERE id = 'registry-row-2'`
+    expect(deviceRow).toBeDefined()
   })
 })

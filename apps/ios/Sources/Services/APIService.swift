@@ -25,9 +25,83 @@ enum APIError: LocalizedError {
         case .networkError(let error):
             return error.localizedDescription
         case .decodingError(let error):
-            return "Decoding error: \(error.localizedDescription)"
+            return "Decoding error: \(Self.describe(decoding: error))"
         case .authTokenCreationFailed(let error):
             return "Auth token creation failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Dates on the wire.
+///
+/// Every `z.iso.datetime()` in `packages/protocol/schemas/` is generated as a Swift
+/// `Date`, and a `Date` decodes and encodes as a `Double` of seconds unless the coder
+/// is told otherwise. The server speaks ISO-8601 strings (`2026-10-23T07:08:27.123Z`,
+/// what JavaScript's `toISOString()` emits). With the default strategy a single
+/// populated `createdAt` on an entity-type field made the whole `entity-types`
+/// response fail with "expected Double but found a string", which took the Cases
+/// screen down with it. Both directions therefore go through these strategies.
+enum WireDate {
+    /// Parses an ISO-8601 date-time with or without fractional seconds.
+    static func parse(_ string: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: string) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: string)
+    }
+
+    /// Millisecond-precision UTC, the shape `Date.prototype.toISOString` produces.
+    static func format(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+}
+
+extension JSONDecoder.DateDecodingStrategy {
+    static let wireISO8601 = JSONDecoder.DateDecodingStrategy.custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let string = try container.decode(String.self)
+        guard let date = WireDate.parse(string) else {
+            throw DecodingError.dataCorruptedError(
+                in: container, debugDescription: "Expected an ISO-8601 date-time, got '\(string)'"
+            )
+        }
+        return date
+    }
+}
+
+extension JSONEncoder.DateEncodingStrategy {
+    static let wireISO8601 = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(WireDate.format(date))
+    }
+}
+
+extension APIError {
+    /// A `DecodingError`'s `localizedDescription` is "The data couldn't be read
+    /// because it isn't in the correct format" for every case, which names neither
+    /// the field nor the type that failed. The coding path and the case are what
+    /// make a wire-shape mismatch diagnosable from a log, so render those.
+    static func describe(decoding error: Error) -> String {
+        guard let decoding = error as? DecodingError else { return error.localizedDescription }
+        func path(_ context: DecodingError.Context) -> String {
+            let joined = context.codingPath.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }.joined()
+            return joined.isEmpty ? "<root>" : joined
+        }
+        switch decoding {
+        case .keyNotFound(let key, let context):
+            return "missing key '\(key.stringValue)' at \(path(context))"
+        case .valueNotFound(let type, let context):
+            return "null/absent \(type) at \(path(context))"
+        case .typeMismatch(let type, let context):
+            return "expected \(type) at \(path(context)): \(context.debugDescription)"
+        case .dataCorrupted(let context):
+            return "corrupted data at \(path(context)): \(context.debugDescription)"
+        @unknown default:
+            return error.localizedDescription
         }
     }
 }
@@ -61,54 +135,14 @@ struct AppConfig: Decodable {
 }
 
 // MARK: - Recovery Group Response Types
+// Recovery group/session responses decode to the generated types from
+// packages/protocol/schemas/recovery-group.ts: `RecoveryGroupInfo`,
+// `RecoveryInitiateResponse`, `RecoverySessionStatusResponse`,
+// `RecoveryContributeResponse`, `EmergencyOverride`, `Contribution`.
+// `RecoverySessionStatusResponse` gains `Identifiable` below for list UI.
 
-struct AppRecoveryGroupInfo: Decodable {
-    let publicKey: String
-    let threshold: Int
-    let totalShares: Int
-    let commitments: [String]
-    let sigchainLinkHash: String
-    let delayHours: Int
-    let emergencyFloorHours: Int
-    let createdAt: String
-    let rotatedAt: String?
-    let shareHolderLiveness: [ShareHolderLiveness]
-}
-
-
-struct RecoverySessionStatus: Decodable, Identifiable {
-    let sessionId: String
-    let hubId: String
-    let userPubkey: String
-    let newDevicePubkey: String
-    let status: String
-    let contributionCount: Int
-    let threshold: Int
-    let delayRemainingMs: Int?
-    let expiresAt: String
-    let createdAt: String
-    let contributions: [RecoveryContribution]?
-    let emergencyOverride: AppRecoveryEmergencyOverride?
-
-    var id: String { sessionId }
-}
-
-struct RecoveryContribution: Decodable {
-    let contributorPubkey: String
-    let encryptedShare: String
-    let contributorSignature: String
-    let contributedAt: String
-}
-
-struct AppRecoveryEmergencyOverride: Decodable {
-    let justification: String
-    let approverPubkey: String
-    let approverSignature: String
-}
-
-struct AppRecoveryInitiateResponse: Decodable {
-    let sessionId: String
-    let verificationSent: Bool
+extension RecoverySessionStatusResponse: Identifiable {
+    public var id: String { sessionID }
 }
 
 struct RecoveryVerifyResponse: Decodable {
@@ -125,12 +159,6 @@ struct ShareEnvelopeResponse: Decodable {
 
 struct OkResponse: Decodable {
     let ok: Bool
-}
-
-struct ContributeResponse: Decodable {
-    let ok: Bool
-    let status: String
-    let contributionCount: Int
 }
 
 // MARK: - APIService
@@ -151,6 +179,17 @@ final class APIService: @unchecked Sendable {
     /// silently and drive no loading state. See `init` for why it waits.
     private let bootstrapSession: URLSession
     private let encoder: JSONEncoder
+
+    /// Encoder for generated protocol types.
+    ///
+    /// `encoder` applies `.convertToSnakeCase`, which rewrites a type's own
+    /// `CodingKeys` on the way out — a generated `PromoteBanBody` whose key is
+    /// `banId` goes on the wire as `ban_id`. No input schema under
+    /// `packages/protocol/schemas/` accepts a snake_case key, so a body encoded
+    /// that way is rejected (or silently emptied) by the route validator. Types
+    /// generated from those schemas must therefore be encoded with their own
+    /// coding keys and no renaming strategy.
+    private let wireEncoder = APIService.makeWireEncoder()
     private let decoder: JSONDecoder
 
     /// Offline write queue. Set by AppState after initialization.
@@ -217,7 +256,7 @@ final class APIService: @unchecked Sendable {
         // No schema accepts those, and because the schemas are not `strict()` an
         // unknown key is *ignored* rather than rejected: a required field 400'd, but an
         // OPTIONAL one was silently dropped. On the all-optional `.partial()` update
-        // bodies (`PATCH /api/contacts-v2/:id`, `PATCH /api/records/:id`) that meant
+        // bodies (`PATCH /api/directory/:id`, `PATCH /api/records/:id`) that meant
         // every key — ciphertext and HPKE envelopes included — was discarded, the
         // request validated against `{}`, the row was left untouched, and the client
         // was told it had saved.
@@ -229,7 +268,9 @@ final class APIService: @unchecked Sendable {
         // Do not reintroduce a key strategy here. An endpoint that genuinely wants a
         // different wire shape gets its own encoder at its own call site (see
         // `SecurityEventService.uploadBatch`, the one snake_case endpoint we have).
-        self.encoder = JSONEncoder()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .wireISO8601
+        self.encoder = encoder
 
         self.decoder = Self.makeResponseDecoder()
     }
@@ -252,7 +293,17 @@ final class APIService: @unchecked Sendable {
     static func makeResponseDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .wireISO8601
         return decoder
+    }
+
+    /// The encoder for generated protocol types: their own `CodingKeys`, no key
+    /// renaming, and ISO-8601 dates. Exposed (internal) so wire-format tests pin the
+    /// bytes the production encoder produces.
+    static func makeWireEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .wireISO8601
+        return encoder
     }
 
     /// A `URLSession` created with a delegate is retained by the system until it is
@@ -330,6 +381,11 @@ final class APIService: @unchecked Sendable {
         guard let url = components.url else { throw APIError.invalidURL(path) }
         return (url, pathOnly)
     }
+
+    /// The hub being browsed, or nil when none is selected. For request BODIES
+    /// that name a hub on an unscoped route (`POST /api/invites`); paths are
+    /// scoped with `hp(_:)` instead.
+    var activeHubId: String? { hubContext.activeHubId }
 
     /// Scope an `/api/...` path to the active hub (`/api/hubs/{activeHubId}/...`).
     /// Falls back to the bare path if no hub is selected.
@@ -423,7 +479,7 @@ final class APIService: @unchecked Sendable {
                 } else {
                     bodyString = nil
                 }
-                offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
+                await offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
             }
             throw APIError.networkError(error)
         }
@@ -501,7 +557,7 @@ final class APIService: @unchecked Sendable {
             // On network error for write operations, enqueue for offline replay
             if OfflineQueue.isQueueableMethod(method) {
                 let bodyString = String(data: rawBody, encoding: .utf8)
-                offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
+                await offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
             }
             throw APIError.networkError(error)
         }
@@ -537,18 +593,40 @@ final class APIService: @unchecked Sendable {
         let _: EmptyResponse = try await request(method: method, path: path, body: body)
     }
 
+    /// Request whose body is a type generated from `packages/protocol/schemas/`.
+    ///
+    /// Encodes with `wireEncoder` so the generated `CodingKeys` reach the wire
+    /// verbatim. Prefer this over `body:` for every generated request type.
+    func request<T: Decodable>(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws -> T {
+        try await request(method: method, path: path, rawBody: try wireEncoder.encode(wireBody))
+    }
+
+    /// Fire-and-forget variant of `request(method:path:wireBody:)`.
+    func request(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws {
+        let _: EmptyResponse = try await request(method: method, path: path, wireBody: wireBody)
+    }
+
     // MARK: - CMS Report Types
 
     /// Fetch CMS report type definitions from the settings endpoint.
     ///
     /// Calls `GET /api/settings/cms/report-types` which returns the full
-    /// `ClientReportTypeDefinition` schema including CMS-specific fields like
-    /// `hubId`, `isSystem`, `numberingEnabled`, `closedStatuses`, etc.
+    /// generated `CMSReportTypeListResponseReportType` schema including
+    /// CMS-specific fields like `hubId`, `isSystem`, `numberingEnabled`,
+    /// `closedStatuses`, etc.
     ///
     /// Uses a plain `JSONDecoder` (no snake_case conversion) because the
     /// backend returns camelCase keys natively for this endpoint.
-    func fetchCmsReportTypes() async throws -> [ClientReportTypeDefinition] {
-        let response: ClientReportTypesResponse = try await request(
+    func fetchCmsReportTypes() async throws -> [CMSReportTypeListResponseReportType] {
+        let response: CMSReportTypeListResponse = try await request(
             method: "GET",
             path: hp("/api/settings/cms/report-types")
         )
@@ -679,14 +757,14 @@ final class APIService: @unchecked Sendable {
 
     func enrollRecoveryGroup(_ body: [String: Any]) async throws -> OkResponse {
         let jsonData = try JSONSerialization.data(withJSONObject: body)
-        return try await request(method: "POST", path: hp("/api/recovery-group/enroll"), rawBody: jsonData)
+        return try await request(method: "POST", path: "/api/recovery-group/enroll", rawBody: jsonData)
     }
 
-    func getRecoveryGroup(hubId: String) async throws -> AppRecoveryGroupInfo {
-        try await request(method: "GET", path: hp("/api/recovery-group/\(hubId)"))
+    func getRecoveryGroup(hubId: String) async throws -> RecoveryGroupInfo {
+        try await request(method: "GET", path: "/api/recovery-group/\(hubId)")
     }
 
-    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> AppRecoveryInitiateResponse {
+    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> RecoveryInitiateResponse {
         let body: [String: String] = [
             "hubId": hubId,
             "userIdentifier": userIdentifier,
@@ -703,31 +781,35 @@ final class APIService: @unchecked Sendable {
         return try await request(method: "POST", path: "/api/recovery-group/initiate/verify", body: body)
     }
 
-    func listRecoverySessions() async throws -> [RecoverySessionStatus] {
+    func listRecoverySessions() async throws -> [RecoverySessionStatusResponse] {
         guard let hubId = hubContext.activeHubId else { throw APIError.noBaseURL }
-        return try await request(method: "GET", path: hp("/api/recovery-group/sessions?hubId=\(hubId)"))
+        return try await request(method: "GET", path: "/api/recovery-group/sessions?hubId=\(hubId)")
     }
 
     /// Fetch the current user's share envelope from the recovery group.
     /// Returns the HPKE-encrypted Shamir share and its commitment.
+    ///
+    /// The server stores each holder's `shareEnvelope` (`hub_recovery_group_shares`) but mounts no
+    /// route that returns it: `GET /api/recovery-group/:hubId` omits it and there is no `shares/my`.
+    /// This call 404s until the server grows that endpoint (reported on #1997).
     func getMyShareEnvelope(hubId: String) async throws -> ShareEnvelopeResponse {
-        try await request(method: "GET", path: hp("/api/recovery-group/shares/my"))
+        try await request(method: "GET", path: "/api/recovery-group/shares/my")
     }
 
-    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatus {
-        try await request(method: "GET", path: hp("/api/recovery-group/session/\(sessionId)"))
+    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatusResponse {
+        try await request(method: "GET", path: "/api/recovery-group/session/\(sessionId)")
     }
 
-    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> ContributeResponse {
+    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> RecoveryContributeResponse {
         let body: [String: String] = [
             "encryptedShare": encryptedShare,
             "contributorSignature": contributorSignature,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/session/\(sessionId)/contribute"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/session/\(sessionId)/contribute", body: body)
     }
 
     func cancelRecoverySession(sessionId: String) async throws -> OkResponse {
-        try await request(method: "POST", path: hp("/api/recovery-group/session/\(sessionId)/cancel"))
+        try await request(method: "POST", path: "/api/recovery-group/session/\(sessionId)/cancel")
     }
 
     func storeUserRecoveryEnvelope(hubId: String, envelope: String) async throws -> OkResponse {
@@ -735,7 +817,7 @@ final class APIService: @unchecked Sendable {
             "hubId": hubId,
             "envelope": envelope,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/user-envelope"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/user-envelope", body: body)
     }
 
     func submitShareLivenessProof(hubId: String, proof: String) async throws -> OkResponse {
@@ -743,7 +825,7 @@ final class APIService: @unchecked Sendable {
             "hubId": hubId,
             "proof": proof,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/shares/liveness"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/shares/liveness", body: body)
     }
 }
 
@@ -769,7 +851,7 @@ extension APIService {
         body.append(encryptedData)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
-        let target = try Self.resolve(path: hp("/api/uploads/entity-file"), against: baseURL)
+        let target = try Self.resolve(path: "/api/uploads/entity-file", against: baseURL)
         var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -967,19 +1049,6 @@ final class CertificatePinningDelegate: NSObject, URLSessionDelegate {
 }
 
 // MARK: - Dynamic Pin Update
-
-/// Response from `GET /api/config/pins` — server-signed pin list for rotation
-/// without requiring an app update.
-struct PinListResponse: Decodable {
-    let pins: [PinEntry]
-    let signature: String
-    let notBefore: String
-    let notAfter: String
-
-    struct PinEntry: Decodable {
-        let algorithm: String
-        let hash: String
-        let label: String
-    }
-}
+// The pin list response is the generated `ConfigPinsResponse`
+// (packages/protocol/schemas/config.ts): pins, signature, notBefore, notAfter.
 

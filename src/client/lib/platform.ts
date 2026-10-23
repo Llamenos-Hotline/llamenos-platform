@@ -14,6 +14,7 @@
 import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 import type { AdminHpkeRecipient } from './admin-recipient'
+import type { PukHpkeEnvelope } from '@protocol/schemas'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -143,10 +144,14 @@ export interface PukState {
   dhPubkeyHex: string    // X25519 (64 hex chars)
 }
 
-/** PUK creation result. Seed stays in Rust CryptoState — never exposed to JS. */
+/**
+ * PUK creation result. Seed stays in Rust CryptoState — never exposed to JS.
+ * `envelope` is the v3 HPKE envelope of the seed, sealed to this device under
+ * LABEL_PUK_WRAP_TO_DEVICE with AAD `<label>:<deviceId>` (packages/crypto puk.rs).
+ */
 export interface PukCreateResult {
   pukState: PukState
-  envelope: HpkeEnvelope
+  envelope: PukHpkeEnvelope
 }
 
 /** PUK rotation result. */
@@ -628,7 +633,12 @@ export async function decryptServerEvent(ciphertextHex: string, epoch: number): 
   if (useTauri) {
     try {
       return await tauriInvoke<string>('decrypt_server_event', { ciphertextHex, epoch })
-    } catch {
+    } catch (err) {
+      // An event for an epoch whose key this client no longer holds is routine
+      // around key rotation; anything else is a defect. Either way it must
+      // leave a trace: a silent null here hid that NO relay event decoded on
+      // desktop (#2046), because REST polling papered over every one.
+      console.warn(`[relay] server event (epoch ${epoch}) did not decrypt — ${ipcErrorMessage(err)}`)
       return null
     }
   }
@@ -1130,6 +1140,22 @@ export async function encryptMessage(
   return { encryptedContent, readerEnvelopes }
 }
 
+/** The envelope among `readerEnvelopes` addressed to this device, if any. */
+async function findOwnMessageEnvelope(
+  readerEnvelopes: readonly RecipientEnvelope[],
+): Promise<RecipientEnvelope | null> {
+  const deviceState = await getDevicePubkeys()
+  if (!deviceState) return null
+  return readerEnvelopes.find(e =>
+    e.pubkey === deviceState.signingPubkeyHex || e.pubkey === deviceState.encryptionPubkeyHex,
+  ) ?? null
+}
+
+/** Open a stored message's content key from this device's own envelope. */
+async function openMessageKey(envelope: RecipientEnvelope): Promise<string> {
+  return hpkeOpenKeyFromState(toIpcEnvelope(5 /* LABEL_MESSAGE */, envelope), LABEL_MESSAGE, '')
+}
+
 /**
  * Decrypt a message by finding our envelope and HPKE-opening the key.
  */
@@ -1137,18 +1163,11 @@ export async function decryptMessage(
   encryptedContent: string,
   readerEnvelopes: RecipientEnvelope[],
 ): Promise<string | null> {
-  const deviceState = await getDevicePubkeys()
-  if (!deviceState) return null
-
-  // Find envelope for our pubkey (try signing pubkey match first)
-  const myEnvelope = readerEnvelopes.find(e =>
-    e.pubkey === deviceState.signingPubkeyHex || e.pubkey === deviceState.encryptionPubkeyHex,
-  )
+  const myEnvelope = await findOwnMessageEnvelope(readerEnvelopes)
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope = toIpcEnvelope(5 /* LABEL_MESSAGE */, myEnvelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, '')
+    const keyHex = await openMessageKey(myEnvelope)
     return await aesGcmDecrypt(encryptedContent, keyHex, '')
   } catch (err) {
     // An envelope addressed to this device that will not open is a defect, not
@@ -1158,6 +1177,39 @@ export async function decryptMessage(
     reportEnvelopeOpenFailure('message', err)
     return null
   }
+}
+
+/**
+ * Re-wrap a stored message's content key for additional readers (#1512, #2046).
+ *
+ * Opens this device's own envelope on the message and seals the same content
+ * key to each of `recipients` — the X25519 device keys of a newly assigned
+ * volunteer, as listed by `GET /conversations/:id/assignee-envelopes`. The
+ * result is in the exact stored-record format of §2.4: HPKE under
+ * `LABEL_MESSAGE`, empty AAD, hex `enc`/`ct`. The ciphertext is not touched,
+ * so the message stays readable by every existing reader.
+ *
+ * Returns `null` when this device holds no envelope on the message: it is not
+ * a reader, so it has nothing to re-wrap. Throws when an envelope addressed to
+ * this device does not open — that is a defect, not a permission boundary.
+ *
+ * The device private key never leaves Rust; the content key crosses the IPC
+ * boundary only as `decryptMessage` already does, and it opens nothing this
+ * device cannot already read. Nothing here goes to the server but the new
+ * envelopes.
+ */
+export async function rewrapMessageKey(
+  readerEnvelopes: readonly RecipientEnvelope[],
+  recipients: readonly string[],
+): Promise<RecipientEnvelope[] | null> {
+  const myEnvelope = await findOwnMessageEnvelope(readerEnvelopes)
+  if (!myEnvelope) return null
+
+  const keyHex = await openMessageKey(myEnvelope)
+  return Promise.all(recipients.map(async (pubkey) => {
+    const sealed = await hpkeSealKey(keyHex, pubkey, LABEL_MESSAGE, '')
+    return { pubkey, ...toWireEnvelope(sealed) }
+  }))
 }
 
 /**
@@ -1650,6 +1702,9 @@ export async function netFetchViaRust(request: NetRequest): Promise<NetResponse>
 /**
  * First-run only: whether `<candidate origin>/api/health` answers 2xx. Rust
  * refuses once a backend is configured, and rate-limits to one probe per second.
+ * Rust judges the server's certificate the way `api_config_set` will (SPKI
+ * pinning, not OS-root chain validation), so a self-signed or private-CA
+ * backend probes healthy exactly when it can be configured.
  */
 export async function netProbeHealth(candidate: string): Promise<boolean> {
   if (useTauri) {

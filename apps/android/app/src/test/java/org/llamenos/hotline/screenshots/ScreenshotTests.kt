@@ -8,14 +8,17 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.model.ActiveCall
+import org.llamenos.protocol.SharedConversation
 import org.llamenos.protocol.SharedEntry
+import org.llamenos.protocol.SharedReportResponseStatus
+import org.llamenos.protocol.SharedMemberDirectoryEntryStatus
+import org.llamenos.protocol.SharedRole
 import org.llamenos.hotline.model.BanEntry
 import org.llamenos.hotline.model.ContactSummary
-import org.llamenos.hotline.model.Conversation
 import org.llamenos.hotline.model.DecryptedMessage
 import org.llamenos.hotline.model.EntityTypeDefinition
 import org.llamenos.hotline.model.Report
-import org.llamenos.hotline.model.User
+import org.llamenos.hotline.model.Member
 import org.llamenos.hotline.ui.admin.AdminUiState
 import org.llamenos.hotline.ui.admin.AdminViewModel
 import org.llamenos.hotline.ui.admin.AdminScreen
@@ -45,6 +48,7 @@ import org.llamenos.hotline.ui.events.EventsUiState
 import org.llamenos.hotline.ui.events.EventsViewModel
 import org.llamenos.hotline.ui.messaging.BlastsScreen
 import org.llamenos.hotline.ui.messaging.BlastItem
+import org.llamenos.hotline.ui.messaging.BlastStats
 import org.llamenos.hotline.ui.messaging.BlastsUiState
 import org.llamenos.hotline.ui.messaging.BlastsViewModel
 import org.llamenos.hotline.ui.notes.DecryptedNote
@@ -66,6 +70,8 @@ import org.llamenos.hotline.ui.triage.TriageUiState
 import org.llamenos.hotline.ui.triage.TriageViewModel
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.llamenos.hotline.model.ActiveCallResponseStatus
 import org.llamenos.hotline.model.CallHistoryResponseCall
 import org.llamenos.protocol.Record
@@ -172,35 +178,38 @@ class ScreenshotTests {
     )
 
     private val sampleConversations = listOf(
-        Conversation(
+        SharedConversation(
             id = "conv-001",
             channelType = "sms",
-            contactHash = "hash-abc",
-            assignedVolunteerPubkey = samplePubkey,
-            status = "active",
+            contactIdentifierHash = "hash-abc",
+            assignedTo = samplePubkey,
+            status = SharedReportResponseStatus.Active,
             lastMessageAt = sampleTimestamp,
-            unreadCount = 3,
+            messageCount = 5.0,
             createdAt = sampleTimestamp2,
+            updatedAt = sampleTimestamp,
         ),
-        Conversation(
+        SharedConversation(
             id = "conv-002",
             channelType = "signal",
-            contactHash = "hash-def",
-            assignedVolunteerPubkey = null,
-            status = "waiting",
+            contactIdentifierHash = "hash-def",
+            assignedTo = null,
+            status = SharedReportResponseStatus.Waiting,
             lastMessageAt = "2026-04-29T11:00:00Z",
-            unreadCount = 1,
+            messageCount = 1.0,
             createdAt = "2026-04-27T08:00:00Z",
+            updatedAt = "2026-04-29T11:00:00Z",
         ),
-        Conversation(
+        SharedConversation(
             id = "conv-003",
             channelType = "whatsapp",
-            contactHash = "hash-ghi",
-            assignedVolunteerPubkey = samplePubkey2,
-            status = "active",
+            contactIdentifierHash = "hash-ghi",
+            assignedTo = samplePubkey2,
+            status = SharedReportResponseStatus.Active,
             lastMessageAt = "2026-04-29T07:30:00Z",
-            unreadCount = 0,
+            messageCount = 2.0,
             createdAt = "2026-04-20T14:00:00Z",
+            updatedAt = "2026-04-29T07:30:00Z",
         ),
     )
 
@@ -377,25 +386,28 @@ class ScreenshotTests {
     )
 
     private val sampleUsers = listOf(
-        User(
-            active = true,
-            name = "Sarah Chen",
+        Member(
+            id = samplePubkey,
             pubkey = samplePubkey,
-            roles = listOf("role-volunteer"),
+            displayName = "Sarah Chen",
+            role = SharedRole.Volunteer,
+            status = SharedMemberDirectoryEntryStatus.Active,
             createdAt = "2026-01-15T00:00:00Z",
         ),
-        User(
-            active = true,
-            name = "Marcus Rivera",
+        Member(
+            id = samplePubkey2,
             pubkey = samplePubkey2,
-            roles = listOf("role-volunteer"),
+            displayName = "Marcus Rivera",
+            role = SharedRole.Volunteer,
+            status = SharedMemberDirectoryEntryStatus.Active,
             createdAt = "2026-02-01T00:00:00Z",
         ),
-        User(
-            active = true,
-            name = "Jordan Lee",
+        Member(
+            id = "npub1admin000000000000000000000000000000000000000000000000000000ad",
             pubkey = "npub1admin000000000000000000000000000000000000000000000000000000ad",
-            roles = listOf("role-admin"),
+            displayName = "Jordan Lee",
+            role = SharedRole.Admin,
+            status = SharedMemberDirectoryEntryStatus.Active,
             createdAt = "2025-12-01T00:00:00Z",
         ),
     )
@@ -605,7 +617,6 @@ class ScreenshotTests {
             ConversationsUiState(
                 conversations = sampleConversations,
                 totalConversations = sampleConversations.size,
-                totalUnread = 4,
             )
         )
         captureRoboImage("$OUT/conversations-android.png") {
@@ -899,6 +910,8 @@ class ScreenshotTests {
     // Blasts
     // ─────────────────────────────────────────────────────────────────────────
 
+    private fun blastBody(text: String) = buildJsonObject { put("body", text) }
+
     @Test
     fun blastsScreen() {
         val vm = mockk<BlastsViewModel>(relaxed = true)
@@ -907,23 +920,28 @@ class ScreenshotTests {
                 blasts = listOf(
                     BlastItem(
                         id = "blast-001",
-                        message = "Important shift reminder: Evening shift starts at 6 PM today. Please confirm availability.",
+                        name = "Evening shift reminder",
+                        content = blastBody("Important shift reminder: Evening shift starts at 6 PM today. Please confirm availability."),
                         status = "sent",
-                        recipientCount = 8,
+                        targetChannels = listOf("sms", "signal"),
+                        stats = BlastStats(totalRecipients = 8, sent = 8, delivered = 7),
                         createdAt = sampleTimestamp2,
                     ),
                     BlastItem(
                         id = "blast-002",
-                        message = "Training session tomorrow at 10 AM via video call. Link sent via email.",
-                        status = "sent",
-                        recipientCount = 12,
+                        name = "Training session",
+                        content = blastBody("Training session tomorrow at 10 AM via video call. Link sent via email."),
+                        status = "scheduled",
+                        targetChannels = listOf("whatsapp"),
+                        stats = BlastStats(totalRecipients = 12),
                         createdAt = "2026-04-28T16:00:00Z",
                     ),
                     BlastItem(
                         id = "blast-003",
-                        message = "All volunteers: Please update your availability for next week in the scheduling system.",
-                        status = "scheduled",
-                        recipientCount = 15,
+                        name = "Availability update",
+                        content = blastBody("Please update your availability for next week in the scheduling system."),
+                        status = "draft",
+                        targetChannels = listOf("sms"),
                         createdAt = "2026-04-27T09:00:00Z",
                     ),
                 ),

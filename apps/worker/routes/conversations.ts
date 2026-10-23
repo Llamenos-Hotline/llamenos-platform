@@ -4,7 +4,7 @@ import type { AppEnv, EncryptedMessage } from '../types'
 import type { MessagingChannelType } from '@shared/types'
 import { routeOutboundMessage } from '../messaging/delivery-router'
 import { checkPermission, requirePermission } from '../middleware/permission-guard'
-import { listConversationsQuerySchema, sendMessageBodySchema, updateConversationBodySchema, conversationResponseSchema, messageResponseSchema, conversationListResponseSchema, messageListResponseSchema, conversationStatsResponseSchema, volunteerLoadResponseSchema } from '@protocol/schemas/conversations'
+import { listConversationsQuerySchema, sendMessageBodySchema, updateConversationBodySchema, conversationResponseSchema, messageResponseSchema, conversationListResponseSchema, messageListResponseSchema, conversationStatsResponseSchema, volunteerLoadResponseSchema, assigneeEnvelopeGapsResponseSchema, addAssigneeEnvelopesBodySchema, addAssigneeEnvelopesResponseSchema } from '@protocol/schemas/conversations'
 import { paginationSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
@@ -561,6 +561,110 @@ conversations.patch('/:id',
     }, undefined, conv.hubId ?? null)
 
     return c.json(updated)
+  },
+)
+
+// --- Assignee re-wrap (#1512) ---
+//
+// Claiming (or reassigning) a conversation cannot make the messages already in
+// it readable by the new assignee: their content keys were wrapped for the
+// readers known at write time and the server holds no key that opens them.
+// A client that CAN open them (an admin holding the admin decryption key)
+// re-wraps each content key for the assignee's devices on its own machine and
+// submits the envelopes here. Admin clients learn a re-wrap is due from the
+// `conversation:assigned` event `POST /:id/claim` and `PATCH /:id` publish.
+// The server never sees a content key or plaintext on this path.
+
+/**
+ * Under a hub-scoped mount the caller's permissions are this hub's, so a
+ * conversation from any other hub is out of reach — answered as 404, so the
+ * route is not an existence oracle for foreign conversation ids.
+ */
+function inCallerHub(conversationHubId: string | null, callerHubId: string | undefined): boolean {
+  return callerHubId === undefined || conversationHubId === callerHubId
+}
+
+/**
+ * GET /conversations/:id/assignee-envelopes — messages the current assignee
+ * cannot yet open, and the device keys to wrap them for. Paged: the re-wrapping
+ * client posts the envelopes and asks again until `messages` is empty.
+ */
+conversations.get('/:id/assignee-envelopes',
+  describeRoute({
+    tags: ['Conversations'],
+    summary: 'List messages missing an envelope for the assignee',
+    responses: {
+      200: {
+        description: 'Assignee envelope gaps',
+        content: { 'application/json': { schema: resolver(assigneeEnvelopeGapsResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('conversations:read-all'),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const conv = await services.conversations.getById(id)
+    if (!inCallerHub(conv.hubId, c.get('hubId'))) return c.json({ error: 'Conversation not found' }, 404)
+
+    const gaps = await services.conversations.listAssigneeEnvelopeGaps(id)
+    return c.json(gaps)
+  },
+)
+
+/**
+ * POST /conversations/:id/assignee-envelopes — append client-re-wrapped
+ * envelopes for the current assignee. Append-only; never replaces a reader.
+ */
+conversations.post('/:id/assignee-envelopes',
+  describeRoute({
+    tags: ['Conversations'],
+    summary: 'Add re-wrapped message envelopes for the assignee',
+    responses: {
+      200: {
+        description: 'Envelopes appended',
+        content: { 'application/json': { schema: resolver(addAssigneeEnvelopesResponseSchema) } },
+      },
+      409: { description: 'Conversation has no assignee, or a message has no readers' },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  // read-all: the caller must be someone who can open the messages at all.
+  // update: adding a reader to a conversation is a write, the same class of
+  // authority as reassigning it.
+  requirePermission('conversations:read-all', 'conversations:update'),
+  validator('json', addAssigneeEnvelopesBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const body = c.req.valid('json')
+    const conv = await services.conversations.getById(id)
+    if (!inCallerHub(conv.hubId, c.get('hubId'))) return c.json({ error: 'Conversation not found' }, 404)
+
+    const { added, assignedTo } = await services.conversations.addAssigneeEnvelopes(id, body.envelopes)
+
+    if (added > 0) {
+      audit(services.audit, 'conversationAssigneeEnvelopesAdded', c.get('pubkey'), {
+        conversationId: id,
+        assignedTo,
+        added,
+      }, undefined, conv.hubId ?? null)
+
+      // Tell the assignee's open client its messages changed, so the thread
+      // re-reads them now instead of on its next background refresh. The
+      // event carries ids and a count only — never key material.
+      publishEvent(c.env, KIND_CONVERSATION_ASSIGNED, {
+        type: 'conversation:envelopes-added',
+        conversationId: id,
+        assignedTo,
+        added,
+      }, conv.hubId ?? '')
+    }
+
+    return c.json({ added })
   },
 )
 

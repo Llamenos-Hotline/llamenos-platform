@@ -5,7 +5,7 @@
  * file records, contact identifiers, volunteer load, and contact summaries.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, desc, sql, count, isNotNull, ne } from 'drizzle-orm'
+import { eq, and, desc, sql, count, isNotNull, ne, inArray } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   conversations,
@@ -90,6 +90,22 @@ export interface CreateFileInput {
   }>
   totalSize: number
   totalChunks: number
+}
+
+/**
+ * What a re-wrapping client needs to make existing messages readable by the
+ * current assignee (#1512). See `ConversationsService.listAssigneeEnvelopeGaps`.
+ */
+export interface AssigneeEnvelopeGaps {
+  assignedTo: string | null
+  /** Every X25519 device key of the assignee — the keys to seal to. */
+  recipients: HpkeRecipientPubkey[]
+  messages: Array<{
+    id: string
+    /** The message's existing envelopes, so the re-wrapper can open its own. */
+    readerEnvelopes: RecipientEnvelope[]
+    missingRecipients: HpkeRecipientPubkey[]
+  }>
 }
 
 export interface ConversationStats {
@@ -243,7 +259,9 @@ export class ConversationsService {
     if (input.status !== undefined) updates.status = input.status
     if (input.assignedTo !== undefined) updates.assignedTo = input.assignedTo
     if (input.metadata) {
-      updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${input.metadata}::jsonb`
+      // Encoded by the column, never JSON.stringify'd — see the comment on
+      // SettingsService.updateHubSettings for both halves of why.
+      updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${conversations.metadata.mapToDriverValue(input.metadata)}::jsonb`
     }
 
     const [row] = await this.db
@@ -297,6 +315,142 @@ export class ConversationsService {
     }
 
     return row
+  }
+
+  // --- Assignee re-wrap (#1512) ---
+  //
+  // `claim()` (and an admin reassignment through `update()`) changes who the
+  // assignee is, but cannot give them the messages already in the thread: each
+  // message's content key was HPKE-wrapped for the readers known at write time
+  // and then discarded (`encryptMessageForStorage`). An inbound message that
+  // opened a `waiting` conversation has no assignee at all, so it is wrapped for
+  // the platform admin alone, and the volunteer who claims it holds a thread
+  // they cannot read.
+  //
+  // The server cannot close that gap by itself — it holds no key that opens an
+  // envelope, by design. The re-wrap is client-mediated: a reader who CAN open
+  // the message (an admin holding the admin decryption key) unwraps the content
+  // key on their own device, HPKE-seals it to each of the assignee's registered
+  // X25519 device keys under the same LABEL_MESSAGE, and submits the new
+  // envelopes. The server's only part is to say which envelopes are missing and
+  // to append the submitted ones — never to replace or remove an existing
+  // reader, and never to accept a recipient that is not the current assignee.
+
+  /** Most messages a single gap listing returns; the client loops until empty. */
+  static readonly ASSIGNEE_GAP_PAGE = 200
+
+  /**
+   * Messages in the conversation that lack an envelope for at least one of the
+   * current assignee's registered device keys, oldest first, plus the full
+   * recipient set those envelopes must be sealed to.
+   *
+   * Messages with NO envelopes are excluded: they are the deliberately
+   * unreadable records `handleIncoming` stores when no reader existed at all,
+   * and no client holds a key that could re-wrap them.
+   */
+  async listAssigneeEnvelopeGaps(conversationId: string): Promise<AssigneeEnvelopeGaps> {
+    const conv = await this.getById(conversationId)
+    if (!conv.assignedTo) return { assignedTo: null, recipients: [], messages: [] }
+
+    const recipients = await getUserHpkeRecipients(this.db, conv.assignedTo)
+    if (recipients.length === 0) return { assignedTo: conv.assignedTo, recipients, messages: [] }
+
+    const rows = await this.db
+      .select({ id: messages.id, readerEnvelopes: messages.readerEnvelopes })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(messages.createdAt, messages.id)
+
+    const gaps: AssigneeEnvelopeGaps['messages'] = []
+    for (const row of rows) {
+      const readerEnvelopes = row.readerEnvelopes as RecipientEnvelope[]
+      if (readerEnvelopes.length === 0) continue
+      const present = new Set(readerEnvelopes.map((e) => e.pubkey))
+      const missingRecipients = recipients.filter((r) => !present.has(r))
+      if (missingRecipients.length === 0) continue
+      gaps.push({ id: row.id, readerEnvelopes, missingRecipients })
+      if (gaps.length >= ConversationsService.ASSIGNEE_GAP_PAGE) break
+    }
+
+    return { assignedTo: conv.assignedTo, recipients, messages: gaps }
+  }
+
+  /**
+   * Append client-produced envelopes that make existing messages readable by
+   * the current assignee. Append-only: an envelope whose recipient already has
+   * one on that message is ignored, and no existing reader is ever replaced or
+   * dropped.
+   *
+   * Every envelope must name one of the CURRENT assignee's registered X25519
+   * device keys. The conversation row is locked for the duration, so a
+   * reassignment cannot land between the recipient check and the write and
+   * leave the previous assignee holding envelopes on messages they no longer
+   * own. Rejecting the whole batch on one bad entry is deliberate: a partial
+   * write would leave the client unable to tell which half landed.
+   *
+   * First write wins, on purpose. The server cannot open an envelope, so it
+   * cannot tell a correct re-wrap from a wrong one; letting a later submission
+   * replace an earlier one would let any holder of this authority overwrite a
+   * working envelope — including one the server itself sealed at arrival — with
+   * garbage. A wrong envelope therefore stays wrong for that device key; the
+   * recovery is a new device key, which reopens the gap for re-wrapping.
+   */
+  async addAssigneeEnvelopes(
+    conversationId: string,
+    entries: ReadonlyArray<{ messageId: string; envelope: RecipientEnvelope }>,
+  ): Promise<{ added: number; assignedTo: string }> {
+    return this.db.transaction(async (tx) => {
+      const [conv] = await tx
+        .select({ assignedTo: conversations.assignedTo })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .for('update')
+      if (!conv) throw new ServiceError(404, 'Conversation not found')
+      if (!conv.assignedTo) throw new ServiceError(409, 'Conversation has no assignee')
+
+      const recipients = new Set<string>(await getUserHpkeRecipients(this.db, conv.assignedTo))
+      for (const { envelope } of entries) {
+        if (!recipients.has(envelope.pubkey)) {
+          throw new ServiceError(400, 'Envelope recipient is not a registered device key of the conversation assignee')
+        }
+      }
+
+      const messageIds = [...new Set(entries.map((e) => e.messageId))]
+      const rows = await tx
+        .select({ id: messages.id, readerEnvelopes: messages.readerEnvelopes })
+        .from(messages)
+        .where(and(eq(messages.conversationId, conversationId), inArray(messages.id, messageIds)))
+        .for('update')
+      if (rows.length !== messageIds.length) {
+        throw new ServiceError(404, 'Message not found in conversation')
+      }
+
+      const byId = new Map(rows.map((r) => [r.id, [...(r.readerEnvelopes as RecipientEnvelope[])]]))
+      for (const [id, envelopes] of byId) {
+        if (envelopes.length === 0) {
+          throw new ServiceError(409, `Message ${id} has no readers; there is no content key to re-wrap`)
+        }
+      }
+
+      const changed = new Set<string>()
+      let added = 0
+      for (const { messageId, envelope } of entries) {
+        const envelopes = byId.get(messageId)!
+        if (envelopes.some((e) => e.pubkey === envelope.pubkey)) continue
+        envelopes.push({ pubkey: envelope.pubkey, enc: envelope.enc, ct: envelope.ct })
+        changed.add(messageId)
+        added++
+      }
+
+      for (const id of changed) {
+        await tx
+          .update(messages)
+          .set({ readerEnvelopes: byId.get(id)! })
+          .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)))
+      }
+
+      return { added, assignedTo: conv.assignedTo }
+    })
   }
 
   // --- Messages ---

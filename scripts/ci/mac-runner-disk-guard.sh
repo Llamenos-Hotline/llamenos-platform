@@ -45,13 +45,12 @@
 #
 # Deliberately NOT touched, each for a measured reason:
 #
-#   * `~/Library/Developer/Xcode/DerivedData` — 7.7 GiB on this host and it
-#     looks like the obvious win. It is not CI's. Every large directory there
-#     carries an `info.plist` whose `WorkspacePath` points into the operator's
-#     own live iOS worktrees. CI never writes here at all: both iOS build jobs
-#     pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and delete it
-#     themselves. Pruning this would destroy a human's incremental build state
-#     to reclaim space CI did not consume.
+#   * `~/Library/Developer/Xcode/DerivedData` — CI never writes here: both iOS
+#     build jobs pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and
+#     delete it themselves. Each Xcode directory's info.plist names its
+#     WorkspacePath. Only entries whose workspace is gone and whose directory
+#     has been idle for at least 60 minutes are reclaimed; live, recent, and
+#     uninspectable entries are retained and reported.
 #   * simulator devices NOT named `ios-e2e-*` — see the device report this
 #     script prints. Some are Xcode's defaults, one is hand-made for a specific
 #     PR. `report` surfaces the fat ones and what reclaiming them would cost;
@@ -103,11 +102,23 @@
 #   mac-runner-disk-guard.sh report    # measure and print; never fails
 #   mac-runner-disk-guard.sh reclaim   # prune CI-owned space; never fails
 #   mac-runner-disk-guard.sh guard     # report, reclaim, re-measure, then gate
+#   mac-runner-disk-guard.sh install-timer # install hourly launchd reclaim
 #   mac-runner-disk-guard.sh selftest  # prove the delete guard refuses what it must
 #
 # `guard` is what CI calls. On a GitHub-hosted runner it prints one line and
 # exits 0: the volume is thrown away with the VM, and there is no shared host
 # to protect.
+#
+# `install-timer` is run once by hand on each persistent self-hosted Mac runner,
+# from the repository checkout:
+#
+#   bash scripts/ci/mac-runner-disk-guard.sh install-timer
+#
+# It installs the per-user `org.llamenos.mac-reclaim` LaunchAgent, which runs
+# `reclaim` at login and hourly. The agent invokes the script at THIS checkout
+# rather than a copied or pinned script, so re-run `install-timer` if the
+# checkout moves. The job-start `guard` stays in place and still refuses to run
+# below its disk floor; the timer does not change that threshold.
 
 set -euo pipefail
 
@@ -132,12 +143,12 @@ DIAG_MAX_AGE_DAYS="${MAC_DIAG_MAX_AGE_DAYS:-5}"
 SIM_LOG_MAX_AGE_DAYS="${MAC_SIM_LOG_MAX_AGE_DAYS:-7}"
 
 SIM_DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
+DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData"
 
 # Path prefixes this script refuses to delete under, whatever else it is told.
-# The first two are the operator's own files; the third is their live iOS
-# worktrees; the fourth is their Xcode build state, which CI does not write
-# (see the header). A target is deleted only if it passes BOTH this denylist
-# and the allowlist in rm_ci_path, so a future edit has to defeat two checks.
+# These include the operator's files, worktrees, Tart VM, and Xcode build state.
+# A target is deleted only if it passes BOTH this denylist and the allowlist in
+# rm_ci_path, so a future edit has to defeat two checks.
 DENY=(
   "$HOME/Pictures"
   "$HOME/projects"
@@ -145,7 +156,8 @@ DENY=(
   "$HOME/Desktop"
   "$HOME/Downloads"
   "$HOME/.worktrees"
-  "$HOME/Library/Developer/Xcode/DerivedData"
+  "$HOME/.tart/vms"
+  "$DERIVED_DATA"
   "$HOME/.ssh"
 )
 
@@ -155,6 +167,7 @@ ALLOW_PARENTS=(
   "$SIM_DEVICES"
   "$HOME/Library/Developer/CoreSimulator/Caches"
   "$HOME/Library/Logs/CoreSimulator"
+  "$DERIVED_DATA"
 )
 
 log() { printf '%s\n' "$*"; }
@@ -169,7 +182,41 @@ summarize() {
 
 free_kib() {
   # `df -k` on the data volume. POSIX output, 4th column is available 1K blocks.
-  df -k "$VOLUME" | awk 'NR==2 {print $4}'
+  df_available_kib "$VOLUME"
+}
+
+df_available_kib() {
+  df -k "$1" | awk 'NR==2 {print $4}'
+}
+
+apparent_gib() {
+  local kib
+  kib="$(du -sk "$1" 2>/dev/null | awk '{print $1}')"
+  awk -v k="${kib:-0}" 'BEGIN { printf "%.2f", k / 1048576 }'
+}
+
+path_mtime_epoch() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    stat -f %m "$1"
+  else
+    stat -c %Y "$1"
+  fi
+}
+
+workspace_path_from_plist() {
+  local plist="$1"
+  if [ -x /usr/libexec/PlistBuddy ]; then
+    /usr/libexec/PlistBuddy -c 'Print :WorkspacePath' "$plist" 2>/dev/null
+  else
+    python3 -c '
+import plistlib, sys
+with open(sys.argv[1], "rb") as stream:
+    value = plistlib.load(stream).get("WorkspacePath")
+if not isinstance(value, str) or not value:
+    raise SystemExit(1)
+print(value)
+' "$plist" 2>/dev/null
+  fi
 }
 
 free_gib() {
@@ -192,6 +239,13 @@ rm_ci_path() {
   for deny in "${DENY[@]}"; do
     case "$target" in
       "$deny"|"$deny"/*)
+        # DerivedData is protected except for its direct child directories;
+        # the ALLOW_PARENTS check below still rejects every other descendant.
+        if [ "$deny" = "$DERIVED_DATA" ] &&
+           [ "$(dirname "$target")" = "$DERIVED_DATA" ] &&
+           [ "$target" != "$DERIVED_DATA" ]; then
+          continue
+        fi
         log "::error::mac-runner-disk-guard REFUSED to delete '$target': it is under the protected path '$deny'. This is a bug in this script, not a disk problem."
         return 1
         ;;
@@ -269,6 +323,34 @@ report() {
   log "── runner agent _diag (the directory whose write crashed the agent) ──"
   du -sh "$HOME"/actions-runner-*/_diag 2>/dev/null || true
   log ""
+
+  log "── Xcode DerivedData (apparent sizes; df below, not du, measures reclaimed space) ──"
+  if [ -d "$DERIVED_DATA" ]; then
+    local dir plist workspace age_min apparent mtime
+    for dir in "$DERIVED_DATA"/*/; do
+      [ -d "$dir" ] || continue
+      dir="${dir%/}"
+      plist="$dir/info.plist"
+      apparent="$(apparent_gib "$dir")"
+      if [ ! -e "$plist" ]; then
+        log "  ${apparent} GiB apparent  $(basename "$dir"): skipped (missing info.plist)"
+      elif ! workspace="$(workspace_path_from_plist "$plist")"; then
+        log "  ${apparent} GiB apparent  $(basename "$dir"): skipped (unreadable/unparseable info.plist or missing WorkspacePath)"
+      elif [ -e "$workspace" ]; then
+        log "  ${apparent} GiB apparent  $(basename "$dir"): retained (WorkspacePath exists: $workspace)"
+      elif ! mtime="$(path_mtime_epoch "$dir" 2>/dev/null)"; then
+        log "  ${apparent} GiB apparent  $(basename "$dir"): retained (could not determine modification time)"
+      else
+        age_min=$(( ($(date +%s) - mtime) / 60 ))
+        if [ "$age_min" -lt 60 ]; then
+          log "  ${apparent} GiB apparent  $(basename "$dir"): retained (modified ${age_min} min ago; needs 60 min)"
+        else
+          log "  ${apparent} GiB apparent  $(basename "$dir"): orphan candidate (WorkspacePath missing; reclaim checks run during reclaim)"
+        fi
+      fi
+    done
+  fi
+  log ""
 }
 
 # ── reclaim ─────────────────────────────────────────────────────────────────
@@ -328,7 +410,12 @@ reclaim() {
   done < <(find "$HOME/Library/Logs/CoreSimulator" -maxdepth 1 -mindepth 1 \
              -mtime "+${SIM_LOG_MAX_AGE_DAYS}" -print 2>/dev/null || true)
 
-  # 4. The runner agents' own `_diag` logs. Pruned by age so the file the live
+  # 4. Xcode caches for worktrees that no longer exist. CI uses RUNNER_TEMP,
+  #    so only an old cache whose own plist proves its workspace is gone is
+  #    eligible. rm_ci_path applies both the denylist and direct-parent allowlist.
+  reclaim_derived_data "$DERIVED_DATA"
+
+  # 5. The runner agents' own `_diag` logs. Pruned by age so the file the live
   #    agent is writing is never a candidate, and across every runner install
   #    on the host because they share the one volume — which is exactly why
   #    both agents died in the same second. Not routed through rm_ci_path:
@@ -353,6 +440,56 @@ reclaim() {
   log ""
 }
 
+# Remove only old DerivedData entries with a parseable plist naming a workspace
+# that no longer exists. Keep apparent size informational; df deltas are the
+# only measurement of actual reclaimed capacity, especially on APFS clones.
+reclaim_derived_data() {
+  local data_root="${1:-$DERIVED_DATA}" dir plist workspace mtime age_min before after freed apparent rc
+  [ -d "$data_root" ] || return 0
+
+  for dir in "$data_root"/*/; do
+    [ -d "$dir" ] || continue
+    dir="${dir%/}"
+    plist="$dir/info.plist"
+    apparent="$(apparent_gib "$dir")"
+    if [ ! -e "$plist" ]; then
+      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): missing info.plist"
+      continue
+    fi
+    if ! workspace="$(workspace_path_from_plist "$plist")"; then
+      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): info.plist unreadable/unparseable or WorkspacePath missing"
+      continue
+    fi
+    if [ -e "$workspace" ]; then
+      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): WorkspacePath exists ($workspace)"
+      continue
+    fi
+
+    mtime="$(path_mtime_epoch "$dir" 2>/dev/null)" || {
+      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): could not determine modification time"
+      continue
+    }
+    age_min=$(( ($(date +%s) - mtime) / 60 ))
+    if [ "$age_min" -lt 60 ]; then
+      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): modified ${age_min} min ago; needs 60 min"
+      continue
+    fi
+
+    before="$(df_available_kib "$dir")"
+    rc=0
+    rm_ci_path "$dir" || rc=$?
+    case "$rc" in
+      0)
+        after="$(df_available_kib "$data_root")"
+        freed="$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')"
+        log "  removed orphaned DerivedData $(basename "$dir") (WorkspacePath missing; ${age_min} min old); df available: $(awk -v k="$before" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after" 'BEGIN{printf "%.2f", k/1048576}') GiB (delta ${freed} GiB)"
+        ;;
+      2) : ;;
+      *) exit 1 ;;
+    esac
+  done
+}
+
 # ── gate ────────────────────────────────────────────────────────────────────
 
 gate() {
@@ -370,8 +507,10 @@ of size on this host, and read the script header before touching any of them:
     sizes). 'xcrun simctl erase <udid>' reclaims a device's data without
     deleting the device, which is usually what you want for an Xcode default.
   * ~/Library/Developer/Xcode/DerivedData — the operator's incremental build
-    state, NOT CI's. Each directory's info.plist names the worktree it belongs
-    to; a directory whose WorkspacePath no longer exists is dead weight.
+    state, NOT CI's. Reclaim removes only entries whose info.plist names a
+    WorkspacePath that no longer exists and whose directory is at least 60
+    minutes old. The report above names anything retained and why; apparent
+    directory sizes are informational, while df deltas measure actual space.
   * /System/Volumes/VM/swapfile* — grows on demand, returned only by a reboot.
 
 EOF
@@ -393,10 +532,23 @@ EOF
 # watching it refuse does. Run it on the host after any change to this file.
 
 selftest() {
-  local sandbox rc fails=0
+  local sandbox rc fails=0 original_derived_data before_kib after_kib reclaim_output
   sandbox="$(mktemp -d "${TMPDIR:-/tmp}/disk-guard-selftest.XXXXXX")"
   # shellcheck disable=SC2064
   trap "rm -rf '$sandbox'" EXIT
+
+  # Point the deny/allow policy at the sandbox so the real DerivedData
+  # exception and reclaim path are exercised without touching the host cache.
+  original_derived_data="$DERIVED_DATA"
+  DERIVED_DATA="$sandbox/DerivedData"
+  local -a test_deny=("${DENY[@]}") test_allow=("${ALLOW_PARENTS[@]}")
+  local entry
+  test_deny+=("$DERIVED_DATA")
+  DENY=("${test_deny[@]}")
+  test_allow+=("$sandbox/sim-devices" "$sandbox/sim-caches" "$sandbox/sim-logs")
+  test_allow+=("$DERIVED_DATA")
+  ALLOW_PARENTS=("${test_allow[@]}")
+  mkdir -p "$DERIVED_DATA" "$sandbox/sim-devices" "$sandbox/sim-caches" "$sandbox/sim-logs"
 
   check() { # check <label> <expected-rc> <path>
     local label="$1" want="$2" path="$3" got=0
@@ -415,9 +567,14 @@ selftest() {
   # policy must not depend on what is on disk at the time.
   local deny
   for deny in "${DENY[@]}"; do
-    check "refuses under $(basename "$deny")" 1 "$deny/selftest-should-never-be-touched"
+    if [ "$deny" = "$DERIVED_DATA" ]; then
+      check "refuses nested path under DerivedData" 1 "$deny/nested/selftest-should-never-be-touched"
+    else
+      check "refuses under $(basename "$deny")" 1 "$deny/selftest-should-never-be-touched"
+    fi
     check "refuses the protected root itself ($(basename "$deny"))" 1 "$deny"
   done
+  check "refuses the host DerivedData root" 1 "$original_derived_data"
 
   # A real file somewhere plausible but not CI-owned.
   : > "$sandbox/decoy"
@@ -430,16 +587,82 @@ selftest() {
   fi
 
   log "── selftest: the deletions it must allow ──"
-  check "nothing to do for an absent CI-owned leaf" 2 "$SIM_DEVICES/selftest-absent"
-  if [ -d "$SIM_DEVICES" ]; then
-    : > "$SIM_DEVICES/selftest-leaf"
-    check "deletes a CI-owned leaf" 0 "$SIM_DEVICES/selftest-leaf"
-    if [ -e "$SIM_DEVICES/selftest-leaf" ]; then
-      log "  FAIL  the allowed leaf survived"
-      rm -f "$SIM_DEVICES/selftest-leaf"
+  local allowed_parent leaf
+  for allowed_parent in "$sandbox/sim-devices" "$sandbox/sim-caches" "$sandbox/sim-logs" "$DERIVED_DATA"; do
+    check "nothing to do for absent CI-owned leaf under $(basename "$allowed_parent")" 2 "$allowed_parent/selftest-absent"
+    leaf="$allowed_parent/selftest-leaf"
+    : > "$leaf"
+    check "deletes CI-owned leaf under $(basename "$allowed_parent")" 0 "$leaf"
+    if [ -e "$leaf" ]; then
+      log "  FAIL  the allowed leaf survived under '$allowed_parent'"
+      rm -f "$leaf"
       fails=$((fails + 1))
     fi
+  done
+
+  log "── selftest: DerivedData safety predicates ──"
+  local orphan="$DERIVED_DATA/orphan" live="$DERIVED_DATA/live" missing="$DERIVED_DATA/missing-plist"
+  local malformed="$DERIVED_DATA/malformed-plist" fresh="$DERIVED_DATA/fresh"
+  mkdir -p "$orphan" "$live" "$missing" "$malformed" "$fresh" "$sandbox/live-workspace"
+  cat > "$orphan/info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>WorkspacePath</key><string>$sandbox/gone-workspace</string></dict></plist>
+EOF
+  cat > "$live/info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>WorkspacePath</key><string>$sandbox/live-workspace</string></dict></plist>
+EOF
+  cat > "$malformed/info.plist" <<'EOF'
+this is not a property list
+EOF
+  cat > "$fresh/info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>WorkspacePath</key><string>$sandbox/also-gone</string></dict></plist>
+EOF
+  # Use allocated random data so df can prove actual free-space movement. du is
+  # informational only; APFS clones can make its apparent size misleading.
+  dd if=/dev/urandom of="$orphan/payload" bs=1048576 count=64 2>/dev/null
+  touch -t 202001010000 "$orphan"
+  before_kib="$(df_available_kib "$sandbox")"
+  reclaim_output="$(reclaim_derived_data "$DERIVED_DATA")"
+  after_kib="$(df_available_kib "$sandbox")"
+  log "$reclaim_output"
+  if [ ! -e "$orphan" ]; then
+    log "  ok    orphaned DerivedData was removed"
+  else
+    log "  FAIL  orphaned DerivedData survived"
+    fails=$((fails + 1))
   fi
+  if awk -v before="$before_kib" -v after="$after_kib" 'BEGIN { exit !(after > before) }'; then
+    log "  ok    df available increased: $(awk -v k="$before_kib" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after_kib" 'BEGIN{printf "%.2f", k/1048576}') GiB"
+  else
+    log "  FAIL  df did not show space returned: ${before_kib} KiB -> ${after_kib} KiB"
+    fails=$((fails + 1))
+  fi
+  for leaf in "$live" "$missing" "$malformed" "$fresh"; do
+    if [ -d "$leaf" ]; then
+      log "  ok    retained $(basename "$leaf")"
+    else
+      log "  FAIL  unsafe DerivedData entry was removed: $leaf"
+      fails=$((fails + 1))
+    fi
+  done
+  for entry in \
+    "live|WorkspacePath exists" \
+    "missing-plist|missing info.plist" \
+    "malformed-plist|unreadable/unparseable" \
+    "fresh|modified"; do
+    local report_name="${entry%%|*}" report_reason="${entry#*|}"
+    if [[ "$reclaim_output" == *"DerivedData $report_name ("*"$report_reason"* ]]; then
+      log "  ok    report names skip reason: $report_name ($report_reason)"
+    else
+      log "  FAIL  report omitted skip reason: $report_name ($report_reason)"
+      fails=$((fails + 1))
+    fi
+  done
 
   log ""
   if [ "$fails" -ne 0 ]; then
@@ -449,7 +672,59 @@ selftest() {
   log "selftest passed: every protected path refused, every CI-owned path handled"
 }
 
+install_timer() {
+  local launch_agents="$HOME/Library/LaunchAgents"
+  local plist="$launch_agents/org.llamenos.mac-reclaim.plist"
+  local script_dir repo_root script_path log_dir stdout_path stderr_path domain
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null)" || {
+    log "::error::install-timer must be run from a Git checkout."
+    return 1
+  }
+  script_path="$repo_root/scripts/ci/mac-runner-disk-guard.sh"
+  if [ ! -f "$script_path" ]; then
+    log "::error::install-timer could not find the disk guard at '$script_path'."
+    return 1
+  fi
+  log_dir="$HOME/Library/Logs"
+  stdout_path="$log_dir/org.llamenos.mac-reclaim.log"
+  stderr_path="$log_dir/org.llamenos.mac-reclaim.err"
+  domain="gui/$(id -u)"
+  mkdir -p "$launch_agents" "$log_dir"
+  launchctl bootout "$domain/org.llamenos.mac-reclaim" >/dev/null 2>&1 || true
+
+  local script_xml stdout_xml stderr_xml
+  script_xml="$(printf '%s' "$script_path" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+  stdout_xml="$(printf '%s' "$stdout_path" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+  stderr_xml="$(printf '%s' "$stderr_path" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+  umask 077
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.llamenos.mac-reclaim</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$script_xml</string><string>reclaim</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>StandardOutPath</key><string>$stdout_xml</string>
+  <key>StandardErrorPath</key><string>$stderr_xml</string>
+</dict>
+</plist>
+EOF
+  chmod 600 "$plist"
+  launchctl bootstrap "$domain" "$plist"
+  log "Installed hourly DerivedData and CI-cache reclaim: $plist"
+  log "The LaunchAgent executes the checked-out script at: $script_path"
+}
+
 # ── main ────────────────────────────────────────────────────────────────────
+
+if [ "$MODE" = "selftest" ]; then
+  selftest
+  exit $?
+fi
 
 if [ "$(uname -s)" != "Darwin" ]; then
   log "::error::mac-runner-disk-guard.sh is for the self-hosted macOS runners; this host is $(uname -s)."
@@ -466,7 +741,7 @@ fi
 case "$MODE" in
   report)   report ;;
   reclaim)  reclaim ;;
-  selftest) selftest ;;
+  install-timer) install_timer ;;
   guard)
     report
     reclaim
@@ -478,7 +753,7 @@ case "$MODE" in
     fi
     ;;
   *)
-    log "usage: $(basename "$0") <report|reclaim|guard|selftest>"
+    log "usage: $(basename "$0") <report|reclaim|guard|install-timer|selftest>"
     exit 2
     ;;
 esac

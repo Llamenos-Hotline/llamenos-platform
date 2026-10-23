@@ -20,6 +20,7 @@ import {
   availableNumberSchema,
   signalRegistrationStateSchema,
   a2pRegistrationStateSchema,
+  webhookUrlsResponseSchema,
 } from '@protocol/schemas/provider-setup'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { getProviderCapability } from '../services/provider-setup/registry'
@@ -535,6 +536,26 @@ providerSetup.get('/status/:provider',
     )
     return c.json(result)
   },
+)
+
+// ── Webhook URLs ───────────────────────────────────────────────────────────
+// What a provider must be configured to call. Admin screens show these for
+// manual setup; configureWebhooks registers the same ones (#2068). Hub-scoped
+// when mounted under /hubs/:hubId, so messaging URLs carry that hub.
+providerSetup.get('/webhook-urls',
+  requirePermission('telephony:view-providers'),
+  describeRoute({
+    tags: ['Provider Setup'],
+    summary: 'Get the webhook URLs to configure on a telephony or messaging provider',
+    responses: {
+      200: {
+        description: 'Webhook URLs',
+        content: { 'application/json': { schema: resolver(webhookUrlsResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  (c) => c.json(c.get('services').providerSetup.webhookUrls(c.get('hubId'))),
 )
 
 // ── List Phone Numbers ─────────────────────────────────────────────────────

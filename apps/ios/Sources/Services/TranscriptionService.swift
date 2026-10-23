@@ -23,6 +23,13 @@ enum TranscriptionState: Equatable {
 /// On-device speech transcription using Apple's Speech framework.
 /// Audio never leaves the device — all processing is local (on-device mode).
 /// Supports real-time streaming transcription during calls.
+///
+/// `@MainActor` (#1920 audit): `TranscriptionOverlay` and the transcription settings render
+/// this state on main, but `requestPermissions()` / `startTranscription()` were nonisolated
+/// `async` and wrote `state` / `liveTranscript` on the global executor, and the audio tap
+/// read `recognitionRequest` on the render thread while `stopTranscriptionInternal()` cleared
+/// it. The Speech and AVAudioEngine callbacks stay explicitly off the main actor.
+@MainActor
 @Observable
 final class TranscriptionService {
     // MARK: - Public State
@@ -160,16 +167,16 @@ final class TranscriptionService {
         let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-        }
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat, block: Self.tapFeeding(request))
 
         engine.prepare()
         try engine.start()
         audioEngine = engine
 
-        // Start recognition task
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        // Start recognition task. The handler runs on a Speech framework queue, never on
+        // main: `@Sendable` keeps it out of this class's main-actor isolation, and it hops to
+        // the main actor before touching any state.
+        recognitionTask = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
             guard let self else { return }
 
             if let result {
@@ -199,6 +206,14 @@ final class TranscriptionService {
         }
 
         state = .transcribing
+    }
+
+    /// The audio tap block runs on AVAudioEngine's realtime render thread. Built in a
+    /// nonisolated function so it does not inherit this class's main-actor isolation; it
+    /// feeds the request it was given rather than reading `recognitionRequest`, which
+    /// `stopTranscriptionInternal()` clears on main.
+    private nonisolated static func tapFeeding(_ request: SFSpeechAudioBufferRecognitionRequest) -> AVAudioNodeTapBlock {
+        { buffer, _ in request.append(buffer) }
     }
 
     // MARK: - Stop Transcription

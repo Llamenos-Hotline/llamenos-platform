@@ -14,10 +14,26 @@ final class BlastsUITests: BaseUITest {
             "Dashboard blasts quick action should exist for admin"
         )
         blastsAction.tap()
+        XCTAssertTrue(
+            app.navigationBars["Message Blasts"].waitForExistence(timeout: 10),
+            "Tapping the blasts card should open Message Blasts"
+        )
+    }
 
-        _ = anyElementExists([
-            "blasts-list", "blasts-empty-state", "blasts-loading", "blasts-error",
-        ])
+    /// Launch as admin on a hub of its own, so the blasts screen starts empty and no other
+    /// test's blasts are in it.
+    private func launchOnFreshHub() -> String {
+        launchAsAdminOnFreshHub(named: "ios-blasts") ?? ""
+    }
+
+    /// Open the create sheet from the toolbar button, which is there whether or not any blast
+    /// exists.
+    private func openCreateSheet() {
+        scrollAndTap("dashboard-blasts-action")
+        let create = find("create-blast-button")
+        XCTAssertTrue(create.waitForExistence(timeout: 15), "The toolbar should offer to create a blast")
+        create.tap()
+        XCTAssertTrue(find("blast-name-input").waitForExistence(timeout: 5), "The create sheet should open")
     }
 
     // MARK: - Scenario: Blasts quick action visible for admin
@@ -42,10 +58,15 @@ final class BlastsUITests: BaseUITest {
         given("I am authenticated as a volunteer") {
             launchAuthenticated()
         }
-        then("the dashboard should not show a blasts quick action") {
-            let blastsAction = find("dashboard-blasts-action")
+        then("the dashboard is up and does not show a blasts quick action") {
+            XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15), "The dashboard should have loaded")
+            XCTAssertTrue(
+                find("dashboard-reports-action").waitForExistence(timeout: 10) || scrollToFind("dashboard-reports-action").exists,
+                "The quick actions section should have rendered"
+            )
+            let blastsAction = scrollToFind("dashboard-blasts-action", maxSwipes: 3, timeout: 1)
             XCTAssertFalse(
-                blastsAction.waitForExistence(timeout: 3),
+                blastsAction.exists,
                 "Dashboard should not have blasts quick action for volunteer"
             )
         }
@@ -53,183 +74,140 @@ final class BlastsUITests: BaseUITest {
 
     // MARK: - Scenario: Blasts list shows content or empty state
 
+    /// A hub with no blasts shows the empty state — not a list, a spinner or an error.
     func testBlastsListShowsContent() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+        given("I am authenticated as admin on a hub with no blasts") {
+            _ = launchOnFreshHub()
         }
         when("I navigate to blasts") {
-            // Scroll to find the blasts action first
             scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists([
-                "blasts-list", "blasts-empty-state", "blasts-loading", "blasts-error",
-            ])
         }
-        then("I should see the blasts list or empty state") {
-            let found = anyElementExists([
-                "blasts-list", "blasts-empty-state", "blasts-loading", "blasts-error",
-            ])
-            XCTAssertTrue(found, "Blasts view should show list, empty state, loading, or error")
+        then("I should see the empty state") {
+            XCTAssertTrue(
+                find("blasts-empty-state").waitForExistence(timeout: 20),
+                "A hub with no blasts should show the empty state"
+            )
+            XCTAssertFalse(find("blasts-list").exists)
+            XCTAssertFalse(find("blasts-error").exists)
+            XCTAssertFalse(find("blasts-loading").exists)
         }
     }
 
-    // MARK: - Scenario: Create blast button exists
+    // MARK: - Scenario: Create blast button opens the sheet
 
     func testCreateBlastButtonExists() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+        given("I am authenticated as admin on a hub with no blasts") {
+            _ = launchOnFreshHub()
         }
-        when("I navigate to blasts") {
-            scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists([
-                "blasts-list", "blasts-empty-state", "blasts-loading",
-            ])
+        when("I tap the create button in the toolbar") {
+            openCreateSheet()
         }
-        then("I should see the create blast button") {
-            let found = anyElementExists(["create-blast-button", "create-first-blast"], timeout: 5)
-            XCTAssertTrue(found, "Create blast button should exist in toolbar or empty state")
+        then("a blast cannot be sent without a name and a message") {
+            XCTAssertFalse(
+                find("blast-send-button").isEnabled,
+                "Send Now must stay off until the blast has a name, a message and a channel"
+            )
         }
     }
 
     // MARK: - Scenario: Create blast sheet opens with all elements
 
     func testCreateBlastSheetOpens() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+        given("I am authenticated as admin on a hub with no blasts") {
+            _ = launchOnFreshHub()
         }
-        when("I navigate to blasts and tap create") {
-            scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"])
-
-            // Try toolbar button first, then empty state button
-            let createButton = find("create-blast-button")
-            if createButton.waitForExistence(timeout: 3) {
-                createButton.tap()
-            } else {
-                let createFirst = find("create-first-blast")
-                if createFirst.waitForExistence(timeout: 3) {
-                    createFirst.tap()
-                }
+        when("I open the create sheet") {
+            openCreateSheet()
+        }
+        then("each channel is a toggle and Send Now needs content") {
+            for (channel, identifier) in [
+                ("sms", "blast-channel-sms"), ("whatsapp", "blast-channel-whatsapp"), ("signal", "blast-channel-signal"),
+            ] {
+                let toggle = find(identifier)
+                XCTAssertTrue(toggle.exists, "\(channel) channel toggle should exist")
+                XCTAssertNotNil(toggle.value as? String, "\(channel) should be a toggle with an on/off value")
             }
-        }
-        then("I should see the blast creation form with all channels") {
-            let nameInput = find("blast-name-input")
-            XCTAssertTrue(
-                nameInput.waitForExistence(timeout: 5),
-                "Blast name input should appear in create sheet"
-            )
+            XCTAssertEqual(find("blast-channel-sms").value as? String, "1", "SMS is the default channel")
+            XCTAssertEqual(find("blast-channel-whatsapp").value as? String, "0")
+            XCTAssertEqual(find("blast-channel-signal").value as? String, "0")
+            XCTAssertFalse(find("blast-send-button").isEnabled, "Send Now should be off while the form is empty")
 
-            let messageInput = find("blast-message-input")
-            XCTAssertTrue(messageInput.exists, "Message input should exist")
+            let name = find("blast-name-input")
+            name.tap()
+            name.typeText("Evening update")
+            XCTAssertFalse(find("blast-send-button").isEnabled, "A name alone is not a blast")
+            let message = find("blast-message-input")
+            message.tap()
+            message.typeText("Rally moved to 6pm")
+            XCTAssertTrue(find("blast-send-button").isEnabled, "A name, a message and a channel make a sendable blast")
 
-            let smsToggle = find("blast-channel-sms")
-            XCTAssertTrue(smsToggle.exists, "SMS channel toggle should exist")
-
-            let whatsappToggle = find("blast-channel-whatsapp")
-            XCTAssertTrue(whatsappToggle.exists, "WhatsApp channel toggle should exist")
-
-            let signalToggle = find("blast-channel-signal")
-            XCTAssertTrue(signalToggle.exists, "Signal channel toggle should exist")
-
-            let sendButton = find("blast-send-button")
-            XCTAssertTrue(sendButton.exists, "Send Now button should exist")
-
-            let scheduleButton = find("blast-schedule-button")
-            XCTAssertTrue(scheduleButton.exists, "Schedule button should exist")
-
-            let cancelButton = find("cancel-blast-create")
-            XCTAssertTrue(cancelButton.exists, "Cancel button should exist")
+            find("blast-channel-sms").switches.firstMatch.tap()
+            XCTAssertFalse(find("blast-send-button").isEnabled, "A blast with no channel cannot be sent")
         }
     }
 
     // MARK: - Scenario: Schedule button toggles date picker
 
     func testScheduleButtonTogglesDatePicker() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+        given("I am authenticated as admin with the create sheet open") {
+            _ = launchOnFreshHub()
+            openCreateSheet()
+            XCTAssertFalse(find("blast-schedule-picker").exists, "The schedule picker is hidden until asked for")
         }
-        when("I open the create blast sheet and tap schedule") {
-            scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"])
-
-            let createButton = find("create-blast-button")
-            if createButton.waitForExistence(timeout: 3) {
-                createButton.tap()
-            } else {
-                let createFirst = find("create-first-blast")
-                if createFirst.waitForExistence(timeout: 3) {
-                    createFirst.tap()
-                }
-            }
-
-            let nameInput = find("blast-name-input")
-            _ = nameInput.waitForExistence(timeout: 5)
-
-            let scheduleButton = find("blast-schedule-button")
-            scheduleButton.tap()
+        when("I tap Schedule for Later") {
+            find("blast-schedule-button").tap()
         }
-        then("I should see the date picker") {
-            let schedulePicker = find("blast-schedule-picker")
+        then("the date picker and Confirm Schedule appear, and tapping again hides them") {
+            XCTAssertTrue(find("blast-schedule-picker").waitForExistence(timeout: 5), "The schedule date picker should appear")
+            XCTAssertTrue(find("blast-confirm-schedule").exists, "Confirm schedule button should appear")
+
+            find("blast-schedule-button").tap()
             XCTAssertTrue(
-                schedulePicker.waitForExistence(timeout: 5),
-                "Schedule date picker should appear when schedule button is tapped"
+                find("blast-schedule-picker").waitForNonExistence(timeout: 5),
+                "Hide Schedule should remove the date picker"
             )
-
-            let confirmSchedule = find("blast-confirm-schedule")
-            XCTAssertTrue(confirmSchedule.exists, "Confirm schedule button should appear")
+            XCTAssertFalse(find("blast-confirm-schedule").exists)
         }
     }
 
     // MARK: - Scenario: Cancel blast creation
 
     func testCancelBlastCreation() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+        var hubId = ""
+        let name = "Cancelled \(UUID().uuidString.prefix(8))"
+        given("I am authenticated as admin with the create sheet open and a name typed") {
+            hubId = launchOnFreshHub()
+            openCreateSheet()
+            let input = find("blast-name-input")
+            input.tap()
+            input.typeText(name)
         }
-        when("I open the create blast sheet and cancel") {
-            scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"])
-
-            let createButton = find("create-blast-button")
-            if createButton.waitForExistence(timeout: 3) {
-                createButton.tap()
-            } else {
-                let createFirst = find("create-first-blast")
-                if createFirst.waitForExistence(timeout: 3) {
-                    createFirst.tap()
-                }
-            }
-
-            let nameInput = find("blast-name-input")
-            _ = nameInput.waitForExistence(timeout: 5)
-
-            let cancelButton = find("cancel-blast-create")
-            cancelButton.tap()
+        when("I cancel") {
+            app.buttons["cancel-blast-create"].tap()
         }
-        then("I should be back on the blasts screen") {
-            let found = anyElementExists([
-                "blasts-list", "blasts-empty-state", "create-blast-button",
-            ])
-            XCTAssertTrue(found, "Should return to blasts after cancel")
+        then("the sheet is gone and no blast was created") {
+            XCTAssertTrue(find("blast-name-input").waitForNonExistence(timeout: 10), "Cancel should close the sheet")
+            let data = TestAdminAPI.send("GET", "/api/hubs/\(hubId)/blasts", baseURL: testHubURL)
+            let text = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            XCTAssertFalse(text.contains(name), "A cancelled blast must not reach the server: \(text)")
         }
     }
 
     // MARK: - Scenario: Empty state shows create button
 
+    /// A hub with no blasts offers to create the first one, and the button opens the sheet.
     func testEmptyStateShowsCreateButton() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+        given("I am authenticated as admin on a hub with no blasts") {
+            _ = launchOnFreshHub()
         }
-        when("I navigate to blasts") {
+        when("I open blasts and tap the empty state's button") {
             scrollAndTap("dashboard-blasts-action")
-            _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"])
+            let createFirst = find("create-first-blast")
+            XCTAssertTrue(createFirst.waitForExistence(timeout: 20), "The empty state should offer to create the first blast")
+            createFirst.tap()
         }
-        then("the empty state should have a create button if no blasts exist") {
-            let emptyState = find("blasts-empty-state")
-            if emptyState.waitForExistence(timeout: 5) {
-                let createFirst = find("create-first-blast")
-                XCTAssertTrue(createFirst.exists, "Empty state should have a create button")
-            }
-            // If blasts exist, that's fine too
+        then("the create sheet opens") {
+            XCTAssertTrue(find("blast-name-input").waitForExistence(timeout: 5), "Create First Blast should open the sheet")
         }
     }
 }

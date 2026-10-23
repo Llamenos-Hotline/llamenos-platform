@@ -192,8 +192,8 @@ struct BanListView: View {
 // MARK: - BanRowView
 
 /// A single ban entry row showing the identifier hash, reason, creator, and date.
-struct BanRowView: View {
-    let ban: AppBanEntry
+struct BanRowView<Row: BanRowDisplay>: View {
+    let ban: Row
     let onDelete: () -> Void
 
     var body: some View {
@@ -224,7 +224,7 @@ struct BanRowView: View {
             }
 
             // Reason
-            if let reason = ban.reason, !reason.isEmpty {
+            if let reason = ban.reasonText, !reason.isEmpty {
                 Text(reason)
                     .font(.brand(.subheadline))
                     .foregroundStyle(Color.brandMutedForeground)
@@ -236,12 +236,12 @@ struct BanRowView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "person.fill")
                         .font(.caption2)
-                    Text(ban.creatorDisplay)
+                    Text(ban.bannedByDisplay)
                         .font(.brand(.caption))
                 }
                 .foregroundStyle(.tertiary)
 
-                if let date = ban.createdDate {
+                if let date = ban.bannedDate {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
                         .font(.brand(.caption))
                         .foregroundStyle(.tertiary)

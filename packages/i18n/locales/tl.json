@@ -313,7 +313,9 @@
     "noCategoriesMessage": "Report categories help classify incidents.",
     "noInvitesMessage": "Generate invite codes to add new volunteers.",
     "noSearchResults": "No members match your search.",
-    "noUsersMessage": "No members have joined yet."
+    "noUsersMessage": "No members have joined yet.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -2774,6 +2776,7 @@
     "errorTitle": "Error sa Imbitasyon",
     "expired": "Nag-expire na ang imbitasyong ito",
     "generatingKeys": "Gumagawa ng iyong mga susi...",
+    "identityInitFailed": "Hindi ma-set up ang iyong mga encryption key. Pakisubukan muli.",
     "getStarted": "Magsimula",
     "goToLogin": "Pumunta sa Login",
     "invalidCode": "Hindi valid ang invite code",
@@ -3517,7 +3520,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4279,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

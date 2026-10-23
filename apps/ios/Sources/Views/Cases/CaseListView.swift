@@ -24,24 +24,17 @@ struct CaseListView: View {
 
         NavigationStack {
             Group {
-                switch vm.loadState {
+                switch vm.screen {
                 case .loading:
                     loadingView
                 case .disabled:
                     cmsDisabledView
                 case .failed(let message):
                     loadErrorView(message: message, vm: vm)
-                case .ready:
-                    if vm.isLoading && vm.records.isEmpty {
-                        loadingView
-                    } else if vm.records.isEmpty, let recordsError = vm.recordsLoadError {
-                        // Without this, a failed fetch rendered as "No cases yet".
-                        loadErrorView(message: recordsError, vm: vm)
-                    } else if vm.records.isEmpty && vm.entityTypeFilter == nil && vm.statusFilter == nil {
-                        emptyStateView(vm: vm)
-                    } else {
-                        caseListContent(vm: vm)
-                    }
+                case .empty(let canCreate):
+                    emptyStateView(canCreate: canCreate, vm: vm)
+                case .list:
+                    caseListContent(vm: vm)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -160,17 +153,17 @@ struct CaseListView: View {
 
     // MARK: - Empty State
 
-    private func emptyStateView(vm: CaseManagementViewModel) -> some View {
+    private func emptyStateView(canCreate: Bool, vm: CaseManagementViewModel) -> some View {
         BrandEmptyState(
             icon: "folder.badge.plus",
             title: NSLocalizedString("cases_empty", comment: "No cases yet"),
-            message: vm.entityTypes.isEmpty
-                ? NSLocalizedString("cases_apply_template_hint", comment: "Apply a case management template to get started.")
-                : NSLocalizedString("cases_empty_hint", comment: "Cases will appear here as your team creates them."),
-            action: vm.entityTypes.isEmpty ? nil : {
+            message: canCreate
+                ? NSLocalizedString("cases_empty_hint", comment: "Cases will appear here as your team creates them.")
+                : NSLocalizedString("cases_apply_template_hint", comment: "Apply a case management template to get started."),
+            action: canCreate ? {
                 vm.showCreateSheet = true
-            },
-            actionLabel: vm.entityTypes.isEmpty ? nil : NSLocalizedString("cases_new", comment: "New Case"),
+            } : nil,
+            actionLabel: canCreate ? NSLocalizedString("cases_new", comment: "New Case") : nil,
             actionAccessibilityID: "case-empty-create-btn",
             accessibilityID: "case-empty-state"
         )
@@ -207,7 +200,7 @@ struct CaseListView: View {
                     ForEach(vm.records) { record in
                         CaseCardRow(
                             record: record,
-                            entityType: vm.entityType(for: record.entityTypeId),
+                            entityType: vm.entityType(for: record.entityTypeID),
                             statusDef: vm.statusDef(for: record),
                             decryptedTitle: vm.decryptedTitle(for: record.id)
                         )
@@ -396,9 +389,9 @@ struct CaseListView: View {
 /// A single case card in the list showing case number, decrypted title, status,
 /// entity type, assigned count, and relative timestamp.
 private struct CaseCardRow: View {
-    let record: CaseRecord
-    let entityType: CaseEntityTypeDefinition?
-    let statusDef: CaseEnumOption?
+    let record: SharedRecordListResponseRecord
+    let entityType: EntityType?
+    let statusDef: SharedStatus?
     let decryptedTitle: String?
 
     var body: some View {
@@ -508,7 +501,7 @@ private struct CaseCardRow: View {
 /// Form for creating a new case record. Encrypts summary data (title, description,
 /// default status/severity) and POSTs to `/api/records`.
 private struct CreateCaseSheet: View {
-    let entityTypes: [CaseEntityTypeDefinition]
+    let entityTypes: [EntityType]
     let appState: AppState
     let onCreated: (String) -> Void
 
@@ -520,7 +513,7 @@ private struct CreateCaseSheet: View {
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String?
 
-    private var selectedType: CaseEntityTypeDefinition? {
+    private var selectedType: EntityType? {
         entityTypes.first(where: { $0.id == selectedTypeId })
     }
 
@@ -722,7 +715,7 @@ private struct CreateCaseSheet: View {
             ]
 
             let jsonData = try JSONSerialization.data(withJSONObject: body)
-            let response: CaseRecord = try await appState.apiService.request(
+            let response: SharedRecordListResponseRecord = try await appState.apiService.request(
                 method: "POST",
                 path: appState.apiService.hp("/api/records"),
                 rawBody: jsonData

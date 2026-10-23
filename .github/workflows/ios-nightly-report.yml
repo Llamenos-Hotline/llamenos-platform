@@ -1,0 +1,223 @@
+# Tells somebody when the nightly iOS E2E run (ios-e2e.yml, `schedule`) is red (#2057).
+#
+# THE PROBLEM. The nightly run is the ONLY standing signal about iOS on `main`
+# outside a merge group (ios-e2e is skipped on pull_request, and push-to-main CI
+# is deliberately thin). It was red on every scheduled run from the first,
+# 2026-09-29, to the day it was looked at, and nothing told anyone — the signal
+# went to an Actions tab nobody opens, while merge groups paid for the same
+# failures one group at a time.
+#
+# WHAT THIS DOES. A red (or cancelled) scheduled run opens, or comments on, ONE
+# issue — the same way the post-merge canary does for the desktop shards
+# (main-canary.yml, #2053): a `ci`-labelled issue whose title carries a fixed
+# prefix, deduplicated on that prefix, closed again by the first green run. An
+# open issue therefore always means "the last nightly was red".
+#
+# What it adds beyond "the job failed":
+#   * the failing tests, split into those NO quarantine entry owns (news) and
+#     those ci-quarantine.txt already names (known, shown so they stay visible
+#     daily, which is what running the quarantine nightly is for);
+#   * quarantined tests that PASSED, whose entry is stale;
+#   * shards that never reported (runner refused, toolchain stale) — a run that
+#     lost half its tests must not read as a short list of failures;
+#   * how long it has been red, and the commits since the previous nightly.
+# A repeat of an unchanged failing set adds no comment: ten identical comments
+# are how a signal becomes wallpaper.
+#
+# WHY A SEPARATE WORKFLOW, NOT JOBS IN ios-e2e.yml. ci.yml calls ios-e2e.yml as a
+# reusable workflow from a job that grants `contents: read` only, and a called
+# workflow's jobs cannot be granted more than their caller has. A `report` job
+# asking for `issues: write` inside ios-e2e.yml therefore made GitHub reject
+# EVERY ci.yml run on the PR that added it with `startup_failure` — no `CI` run,
+# so the required `ci-status` context was never created and the PR sat BLOCKED
+# with zero failing checks (#2058). Widening ci.yml's grant instead would hand an
+# issues-write token to the merge-group jobs that run PR code on the Macs.
+# `workflow_run` runs in the default branch's context, needs nothing from ci.yml,
+# and is not triggered by a `workflow_call` (merge groups report through
+# ci-status), only by a run of ios-e2e.yml in its own right.
+#
+# Not a gate and never a required context. Runs on a GitHub-hosted Linux runner:
+# it must never queue for a Mac, because the two Macs serve every merge group.
+# Only scheduled runs are judged — a manual `workflow_dispatch` of some branch
+# says nothing about `main`.
+
+name: iOS Nightly Report
+
+on:
+  workflow_run:
+    workflows: ["iOS E2E"]
+    types: [completed]
+
+permissions: {} # deny-all; per-job permissions below
+
+# One reporter at a time, never cancelled: two completions racing could each find
+# no open issue and open two.
+concurrency:
+  group: ios-nightly-report
+  cancel-in-progress: false
+
+jobs:
+  # `failure` AND `cancelled` AND `timed_out`. A job that exceeds its
+  # timeout-minutes is recorded as cancelled, not failed: the 2026-09-30 and
+  # 2026-10-01 nightlies both ended that way (ui shards cancelled after 65-70
+  # min waiting on a starved Mac), delivered no verdict, and a failure-only
+  # condition would have reported neither. A run with no verdict is a red
+  # nightly. `skipped` is left alone: nothing ran, so nothing is known.
+  report:
+    name: report
+    if: >-
+      ${{ github.event.workflow_run.event == 'schedule'
+      && contains(fromJSON('["failure","cancelled","timed_out","startup_failure"]'), github.event.workflow_run.conclusion) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      # The commit the nightly TESTED, not the default branch's tip now.
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Tolerated: if every shard died there is nothing to download, and that
+      # absence is itself what the report has to say.
+      - name: Download per-test results
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
+        with:
+          pattern: ios-e2e-results-json-shard-*
+          path: ${{ runner.temp }}/results
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Open or update the nightly issue
+        env:
+          RESULTS: ${{ runner.temp }}/results
+          SHARDS: "4"
+        run: |
+          set -euo pipefail
+          PREFIX='[nightly-ios-e2e]'
+
+          FAILED_JOBS="$(gh run view "$RUN_ID" --repo "$REPO" --json jobs \
+            -q '[.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled") | .name] | join("|")')"
+
+          BODY="$(mktemp)"
+          python3 apps/ios/scripts/ui-tests.py nightly-report "$RESULTS" --shards "$SHARDS" \
+            --failed-jobs "$FAILED_JOBS" --run-url "$RUN_URL" > "$BODY"
+          SIGNATURE="$(head -n1 "$BODY")"
+
+          # How long has it been red? Walk the scheduled runs newest-first until
+          # one is green. Cancelled and skipped runs carry no verdict either way,
+          # so they neither extend nor break the streak.
+          RUNS="$(gh run list --repo "$REPO" --workflow ios-e2e.yml --event schedule --limit 60 \
+            --json databaseId,conclusion,createdAt,headSha)"
+          STREAK="$(jq -c --argjson id "$RUN_ID" '
+            [ .[] | select(.conclusion != "cancelled" and .conclusion != "skipped" and .conclusion != "") ] as $done
+            | ($done | map(.conclusion == "success") | index(true)) as $green
+            | (if $green == null then $done else $done[0:$green] end) as $red
+            | {count: ($red | length),
+               since: ($red | last | .createdAt // ""),
+               sinceSha: ($red | last | .headSha // ""),
+               everGreen: ($green != null)}' <<<"$RUNS")"
+          COUNT="$(jq -r .count <<<"$STREAK")"
+          SINCE="$(jq -r '.since[0:10]' <<<"$STREAK")"
+          SINCE_SHA="$(jq -r .sinceSha <<<"$STREAK")"
+          if [[ "$(jq -r .everGreen <<<"$STREAK")" == "true" ]]; then
+            HISTORY="Red on the last $COUNT consecutive scheduled run(s), since $SINCE (\`${SINCE_SHA:0:9}\`)."
+          else
+            HISTORY="Red on all $COUNT scheduled run(s) on record, since $SINCE (\`${SINCE_SHA:0:9}\`) — there is no green nightly to compare with."
+          fi
+
+          # Suspects: commits since the last GREEN nightly when there is one,
+          # else since the previous nightly. Newest 40 are listed.
+          LOWER="$(jq -r '[.[] | select(.conclusion == "success")][0].headSha // empty' <<<"$RUNS")"
+          if [[ -z "$LOWER" ]]; then
+            LOWER="$(jq -r --argjson id "$RUN_ID" '[.[] | select(.databaseId != $id)][0].headSha // empty' <<<"$RUNS")"
+            RANGE="since the previous nightly (${LOWER:0:9})"
+          else
+            RANGE="since the last green nightly (${LOWER:0:9})"
+          fi
+          SUSPECTS="$(mktemp)"
+          # shellcheck disable=SC2016  # literal backticks (markdown) inside a jq program, not a substitution
+          if [[ -n "$LOWER" && "$LOWER" != "$SHA" ]] && gh api "repos/$REPO/compare/$LOWER...$SHA" \
+               --jq '"\(.total_commits)\n" + ([.commits | reverse | .[0:40][] | "- `\(.sha[0:9])` \(.commit.message | split("\n")[0])"] | join("\n"))' \
+               > "$SUSPECTS" 2>/dev/null; then
+            TOTAL="$(head -n1 "$SUSPECTS")"; tail -n +2 "$SUSPECTS" > "$SUSPECTS.list"
+            if [[ "$TOTAL" -gt 40 ]]; then echo "- … and $((TOTAL - 40)) older commit(s)" >> "$SUSPECTS.list"; fi
+          elif [[ "$LOWER" == "$SHA" ]]; then
+            RANGE="since the previous nightly: none, it ran on this same commit"
+            : > "$SUSPECTS.list"
+          else
+            RANGE="(no earlier run to bound the range)"
+            echo "- \`${SHA:0:9}\`" > "$SUSPECTS.list"
+          fi
+
+          FULL="$(mktemp)"
+          {
+            echo "The nightly iOS E2E run on \`main\` failed. It is the only standing check of the iOS suite outside a merge group."
+            echo
+            echo "**Commit:** \`$SHA\`  "
+            echo "**Run:** $RUN_URL  "
+            echo "**History:** $HISTORY"
+            echo
+            sed '1d' "$BODY"
+            echo
+            echo "### Commits $RANGE"
+            cat "$SUSPECTS.list"
+            echo
+            echo "This is a detector, not a gate: it blocks nothing and is not a required check. It closes itself when a later scheduled run is green."
+            echo "$SIGNATURE"
+          } > "$FULL"
+
+          { echo "### iOS nightly RED at \`${SHA:0:9}\`"; echo; echo "$HISTORY"; echo; sed '1d' "$BODY"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=nightly iOS E2E red::main is red at $SHA — $HISTORY"
+
+          # One issue at a time, found by title prefix. Comment only when the
+          # failing set changed since the issue (or its newest comment) last
+          # recorded it.
+          OPEN="$(gh issue list --repo "$REPO" --state open --label ci \
+            --search "\"$PREFIX\" in:title" --json number -q '.[0].number // empty')"
+          if [[ -z "$OPEN" ]]; then
+            gh issue create --repo "$REPO" --label ci \
+              --title "$PREFIX nightly iOS E2E is red on main (since $SINCE)" --body-file "$FULL"
+          else
+            LAST="$(gh issue view "$OPEN" --repo "$REPO" --json body,comments \
+              -q '[.body, (.comments[].body)] | map(select(contains("<!-- ios-nightly-signature:"))) | last // ""' \
+              | grep -o '<!-- ios-nightly-signature:[0-9a-f]* -->' | tail -n1 || true)"
+            if [[ "$LAST" == "$SIGNATURE" ]]; then
+              echo "Failing set unchanged since the last report on #$OPEN; not commenting again."
+            else
+              gh issue comment "$OPEN" --repo "$REPO" --body-file "$FULL"
+            fi
+          fi
+
+  # Green -> close the open nightly issue, so an issue that is still open always
+  # means the last scheduled run was red.
+  recover:
+    name: recover
+    if: ${{ github.event.workflow_run.event == 'schedule' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - name: Close the open nightly issue
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --repo "$REPO" --state open --label ci \
+                       --search '"[nightly-ios-e2e]" in:title' --json number -q '.[].number'); do
+            gh issue close "$n" --repo "$REPO" \
+              --comment "Nightly iOS E2E green again at \`$SHA\` ($RUN_URL)."
+          done

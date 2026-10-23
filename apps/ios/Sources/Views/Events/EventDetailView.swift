@@ -5,7 +5,7 @@ import SwiftUI
 /// Detail view for a single event. Shows header info, date range, location,
 /// description, sub-events, and linked records/reports.
 struct EventDetailView: View {
-    let event: AppCaseEvent
+    let event: EventListResponseEvent
     let viewModel: EventsViewModel
 
     @Environment(AppState.self) private var appState
@@ -138,17 +138,17 @@ struct EventDetailView: View {
                 HStack(spacing: 16) {
                     statBadge(
                         icon: "folder.fill",
-                        count: event.caseCount ?? 0,
+                        count: Int(event.caseCount),
                         label: NSLocalizedString("events_cases", comment: "Cases")
                     )
                     statBadge(
                         icon: "doc.text.fill",
-                        count: event.reportCount ?? 0,
+                        count: Int(event.reportCount),
                         label: NSLocalizedString("events_reports", comment: "Reports")
                     )
                     statBadge(
                         icon: "square.stack.fill",
-                        count: event.subEventCount ?? 0,
+                        count: Int(event.subEventCount),
                         label: NSLocalizedString("events_sub_events", comment: "Sub-Events")
                     )
                 }
@@ -301,12 +301,10 @@ struct EventDetailView: View {
                         label: NSLocalizedString("events_updated", comment: "Updated"),
                         value: formattedDate(event.updatedAt)
                     )
-                    if let precision = event.locationPrecision {
-                        metadataRow(
-                            label: NSLocalizedString("events_location_precision", comment: "Location Precision"),
-                            value: precision.capitalized
-                        )
-                    }
+                    metadataRow(
+                        label: NSLocalizedString("events_location_precision", comment: "Location Precision"),
+                        value: event.locationPrecision.rawValue.capitalized
+                    )
                 }
             }
         }
@@ -383,7 +381,7 @@ struct EventDetailView: View {
                 )
             } else {
                 VStack(spacing: 8) {
-                    ForEach(viewModel.linkedCases, id: \.recordId) { link in
+                    ForEach(viewModel.linkedCases, id: \.recordID) { link in
                         BrandCard(padding: 12) {
                             HStack(spacing: 10) {
                                 Image(systemName: "folder.fill")
@@ -391,11 +389,11 @@ struct EventDetailView: View {
                                     .foregroundStyle(Color.brandPrimary)
 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(String(link.recordId.prefix(12)) + "...")
+                                    Text(String(link.recordID.prefix(12)) + "...")
                                         .font(.brandMono(.subheadline))
                                         .foregroundStyle(Color.brandForeground)
-                                    if let linkedAt = link.linkedAt {
-                                        Text(formattedDate(linkedAt))
+                                    if !link.linkedAt.isEmpty {
+                                        Text(formattedDate(link.linkedAt))
                                             .font(.brand(.caption))
                                             .foregroundStyle(Color.brandMutedForeground)
                                     }
@@ -432,7 +430,7 @@ struct EventDetailView: View {
                 )
             } else {
                 VStack(spacing: 8) {
-                    ForEach(viewModel.linkedReports, id: \.reportId) { link in
+                    ForEach(viewModel.linkedReports, id: \.reportID) { link in
                         BrandCard(padding: 12) {
                             HStack(spacing: 10) {
                                 Image(systemName: "doc.text.fill")
@@ -440,11 +438,11 @@ struct EventDetailView: View {
                                     .foregroundStyle(Color.brandPrimary)
 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(String(link.reportId.prefix(12)) + "...")
+                                    Text(String(link.reportID.prefix(12)) + "...")
                                         .font(.brandMono(.subheadline))
                                         .foregroundStyle(Color.brandForeground)
-                                    if let linkedAt = link.linkedAt {
-                                        Text(formattedDate(linkedAt))
+                                    if !link.linkedAt.isEmpty {
+                                        Text(formattedDate(link.linkedAt))
                                             .font(.brand(.caption))
                                             .foregroundStyle(Color.brandMutedForeground)
                                     }
@@ -543,27 +541,29 @@ enum EventDetailTab: String, CaseIterable, Sendable {
 #Preview("Event Detail") {
     NavigationStack {
         EventDetailView(
-            event: AppCaseEvent(
-                id: "test-id",
-                hubId: "hub-1",
-                entityTypeId: "et-1",
-                caseNumber: "EVT-001",
-                startDate: "2026-03-15T10:00:00Z",
-                endDate: "2026-03-15T18:00:00Z",
-                parentEventId: nil,
-                locationPrecision: "neighborhood",
-                locationApproximate: "Downtown Portland",
-                eventTypeHash: "protest",
-                statusHash: "active",
-                blindIndexes: nil,
-                encryptedDetails: nil,
-                detailEnvelopes: nil,
+            event: EventListResponseEvent(
+                blindIndexes: [:],
                 caseCount: 3,
-                reportCount: 5,
-                subEventCount: 1,
+                caseNumber: "EVT-001",
                 createdAt: "2026-03-15T08:00:00Z",
-                updatedAt: "2026-03-15T12:00:00Z",
-                createdBy: "pubkey123"
+                createdBy: "pubkey123",
+                detailEnvelopes: [
+                    SharedAdminEnvelope(ct: "ct", enc: "enc", pubkey: "pubkey123"),
+                ],
+                encryptedDetails: "ciphertext",
+                endDate: "2026-03-15T18:00:00Z",
+                entityTypeID: "et-1",
+                eventTypeHash: "protest",
+                hubID: "hub-1",
+                id: "test-id",
+                locationApproximate: "Downtown Portland",
+                locationPrecision: .neighborhood,
+                parentEventID: nil,
+                reportCount: 5,
+                startDate: "2026-03-15T10:00:00Z",
+                statusHash: "active",
+                subEventCount: 1,
+                updatedAt: "2026-03-15T12:00:00Z"
             ),
             viewModel: EventsViewModel(
                 apiService: APIService(cryptoService: CryptoService(), hubContext: HubContext()),

@@ -27,12 +27,16 @@ struct ContactsView: View {
             ToolbarItem(placement: .primaryAction) {
                 contactTypeFilterMenu(vm: vm)
             }
-            ToolbarItem(placement: .secondaryAction) {
+            // `.primaryAction`, not `.secondaryAction`: on iPhone a secondary item
+            // is folded into the bar's overflow ("More") menu, which hides the
+            // create action behind an unlabelled ellipsis.
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     showCreateContact = true
                 } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityLabel(NSLocalizedString("contacts_create_title", comment: "New Contact"))
                 .accessibilityIdentifier("contacts-add-button")
             }
         }
@@ -64,11 +68,8 @@ struct ContactsView: View {
                     contactHash: contactHash,
                     displayIdentifier: displayIdentifier
                 )
-            case .detail(let contactHash, let displayIdentifier):
-                ContactDetailView(
-                    contactHash: contactHash,
-                    displayIdentifier: displayIdentifier
-                )
+            case .detail(let summary):
+                ContactDetailView(summary: summary)
             }
         }
     }
@@ -118,10 +119,7 @@ struct ContactsView: View {
     private func contactsList(vm: ContactsViewModel) -> some View {
         List {
             ForEach(vm.contacts) { contact in
-                NavigationLink(value: ContactNavDestination.detail(
-                    contactHash: contact.contactHash,
-                    displayIdentifier: contact.displayIdentifier
-                )) {
+                NavigationLink(value: ContactNavDestination.detail(contact)) {
                     ContactRowView(contact: contact)
                 }
                 .accessibilityIdentifier("contact-row-\(contact.contactHash)")
@@ -216,13 +214,15 @@ struct ContactsView: View {
 
 enum ContactNavDestination: Hashable {
     case timeline(contactHash: String, displayIdentifier: String)
-    case detail(contactHash: String, displayIdentifier: String)
+    /// Carries the whole summary row: the profile is that row plus the activity
+    /// the server returns for the contact, so it needs no second lookup of it.
+    case detail(SharedContactTimelineListResponseContact)
 }
 
 // MARK: - ContactRowView
 
 struct ContactRowView: View {
-    let contact: ContactSummary
+    let contact: SharedContactTimelineListResponseContact
 
     var body: some View {
         HStack(spacing: 12) {
@@ -265,11 +265,11 @@ struct ContactRowView: View {
     }
 
     @ViewBuilder
-    private func interactionBadge(icon: String, count: Int, color: Color) -> some View {
+    private func interactionBadge(icon: String, count: Double, color: Color) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
                 .font(.brand(.caption))
-            Text("\(count)")
+            Text("\(Int(count))")
                 .font(.brand(.caption))
                 .fontWeight(.medium)
         }

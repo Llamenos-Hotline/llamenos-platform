@@ -48,8 +48,15 @@ struct QueuedOperation: Codable, Identifiable, Sendable {
 /// - Wire into APIService: when a write request fails with a network error, call `enqueue(...)`
 /// - The queue replays automatically when connectivity is restored
 /// - UI observes `pendingCount` to show a banner
+///
+/// `@MainActor` (#1920 audit): `OfflineBanner` renders `pendingCount` / `isReplaying` on main
+/// and `replay()` was already main-actor, but `enqueue` ran synchronously inside
+/// `APIService`'s network-error path on the global executor — appending to `queue` while
+/// `replay()` iterated it across suspension points. `APIService` now `await`s the enqueue,
+/// so every mutation of `queue` happens on one actor.
+@MainActor
 @Observable
-final class OfflineQueue: @unchecked Sendable {
+final class OfflineQueue {
 
     // MARK: - Constants
 
@@ -144,15 +151,18 @@ final class OfflineQueue: @unchecked Sendable {
     /// Permanent client errors (4xx except 401/429) increment the attempt counter;
     /// the operation is removed after maxAttempts.
     /// Server errors (5xx) and network errors cause retry with exponential backoff.
-    @MainActor
     func replay() async {
         guard !isReplaying, !queue.isEmpty else { return }
 
         isReplaying = true
         var toRemove: Set<String> = []
 
-        for i in queue.indices {
-            var op = queue[i]
+        // Iterate a snapshot and write results back by id: `clear()` (logout, wipe) and
+        // `remove(id:)` can run while this is suspended on a request, so indices taken
+        // before the first `await` are not valid after it (#1920 audit).
+        for var op in queue {
+            // Cleared or removed while an earlier operation was in flight — never send it.
+            guard queue.contains(where: { $0.id == op.id }) else { continue }
 
             do {
                 let (statusCode, _) = try await executeRequest(op)
@@ -167,12 +177,12 @@ final class OfflineQueue: @unchecked Sendable {
                     if op.attempts >= Self.maxAttempts {
                         toRemove.insert(op.id)
                     }
-                    queue[i] = op
+                    storeReplayResult(op)
                 } else {
                     // Server error / auth / rate limit — retry with backoff
                     op.attempts += 1
                     op.lastError = "HTTP \(statusCode)"
-                    queue[i] = op
+                    storeReplayResult(op)
                     let delay = min(
                         Self.baseRetryDelay * pow(2.0, Double(op.attempts)),
                         Self.maxRetryDelay
@@ -183,7 +193,7 @@ final class OfflineQueue: @unchecked Sendable {
                 // Network error — stop processing, retry when online
                 op.attempts += 1
                 op.lastError = error.localizedDescription
-                queue[i] = op
+                storeReplayResult(op)
                 break
             }
         }
@@ -192,6 +202,12 @@ final class OfflineQueue: @unchecked Sendable {
         pendingCount = queue.count
         saveToDisk()
         isReplaying = false
+    }
+
+    /// Record a replayed operation's new attempt state, if it is still queued.
+    private func storeReplayResult(_ op: QueuedOperation) {
+        guard let index = queue.firstIndex(where: { $0.id == op.id }) else { return }
+        queue[index] = op
     }
 
     // MARK: - Remove / Clear
@@ -229,7 +245,7 @@ final class OfflineQueue: @unchecked Sendable {
     // MARK: - Classification
 
     /// Classify an API path + method into a queue operation type.
-    static func classifyOperation(path: String, method: String) -> QueuedOperationType {
+    nonisolated static func classifyOperation(path: String, method: String) -> QueuedOperationType {
         if path.contains("/notes") && method.uppercased() == "POST" { return .noteCreate }
         if path.contains("/notes/") && method.uppercased() == "PATCH" { return .noteUpdate }
         // Check report-messages before generic messages (more specific pattern first)
@@ -243,7 +259,7 @@ final class OfflineQueue: @unchecked Sendable {
     }
 
     /// Whether an HTTP method is a write operation eligible for queueing.
-    static func isQueueableMethod(_ method: String) -> Bool {
+    nonisolated static func isQueueableMethod(_ method: String) -> Bool {
         let upper = method.uppercased()
         return upper == "POST" || upper == "PUT" || upper == "PATCH" || upper == "DELETE"
     }

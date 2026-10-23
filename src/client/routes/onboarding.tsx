@@ -3,10 +3,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
-import { validateInvite, redeemInvite, appendSigchainLink, distributePukEnvelopes, encodePukEnvelopeWire, getMyDevices } from '@/lib/api'
-import { ensureDeviceRegistered } from '@/lib/device-registration'
-import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, getDevicePubkeys, pukCreateFromState, sigchainCreateLinkFromState, type GenerateAndLoadResult } from '@/lib/platform'
+import { validateInvite, redeemInvite } from '@/lib/api'
+import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin, markUnlocked } from '@/lib/key-manager'
+import { initializeUserIdentity } from '@/lib/user-identity'
 import { downloadBackupFile, type BackupFile } from '@/lib/backup'
 import { useToast } from '@/lib/toast'
 import { setLanguage } from '@/lib/i18n'
@@ -171,49 +171,6 @@ function OnboardingPage() {
       const parsed = JSON.parse(tokenJson) as { timestamp: number; token: string }
       await redeemInvite(inviteCode, result.publicKey, parsed.timestamp, parsed.token)
 
-      // The user now exists server-side and the device key is loaded in
-      // CryptoState, so authenticated requests can be signed. Mark the key
-      // manager unlocked here (loginAfterKeyLoaded would do it later, but the
-      // identity writes below need auth headers first).
-      markUnlocked(result.publicKey)
-
-      // M2 (#1050): every fresh identity starts with a sigchain genesis link
-      // and a PUK. Both are created in Rust — the device key and the PUK seed
-      // never enter the webview — and only their public/signed products are
-      // posted. The genesis payload shape (`user_init`, seq 1, prevHash null)
-      // is fixed by the crate verifier (packages/crypto/src/sigchain.rs) and
-      // re-validated server-side on append.
-      const deviceState = await getDevicePubkeys()
-      if (!deviceState) throw new Error('Device not unlocked')
-
-      const genesisPayload = JSON.stringify({ type: 'user_init', deviceId: deviceState.deviceId })
-      const genesisLink = await sigchainCreateLinkFromState(
-        crypto.randomUUID(),
-        1,
-        null,
-        new Date().toISOString(),
-        genesisPayload,
-      )
-      await appendSigchainLink(result.publicKey, genesisLink, 'genesis')
-
-      // The PUK envelope table is FK'd to the server device registry, and
-      // /puk/envelopes/:deviceId reads by that registry id — so the device
-      // must be registered first and the envelope keyed by the id the server
-      // assigned, not the CryptoState device id (which stays the wrap AAD).
-      await ensureDeviceRegistered()
-      const myDevices = await getMyDevices()
-      const serverDevice = myDevices.find((d) => d.ed25519Pubkey === deviceState.signingPubkeyHex)
-      if (!serverDevice) throw new Error('Device registration not visible after POST /devices/register')
-
-      const puk = await pukCreateFromState()
-      await distributePukEnvelopes([
-        {
-          deviceId: serverDevice.id,
-          generation: puk.pukState.generation,
-          envelope: encodePukEnvelopeWire(puk.envelope),
-        },
-      ])
-
       // Generate recovery key (shown to user instead of device key)
       const rk = await generateRecoveryKey()
       setRecoveryKeyStr(rk)
@@ -247,13 +204,27 @@ function OnboardingPage() {
   async function handleComplete() {
     if (!genResult) return
     try {
+      // Sigchain genesis + first PUK for this device, created BEFORE the session
+      // is committed: loginAfterKeyLoaded flips the app into its logged-in
+      // routes (unmounting this page), so a logged-in user always already has
+      // an identity. The device key is already in CryptoState — markUnlocked
+      // only syncs the key manager so API requests are signed with it.
+      // Idempotent, so pressing Continue again after a failure resumes (#1050).
+      markUnlocked(genResult.publicKey)
+      await initializeUserIdentity(genResult.publicKey)
+    } catch {
+      toast(t('onboarding.identityInitFailed'), 'error')
+      return
+    }
+    try {
       // Key is already in CryptoState (loaded by generateKeypairAndLoad).
       // Use loginAfterKeyLoaded — do NOT call signIn() which would double-import the key.
       await loginAfterKeyLoaded(genResult.publicKey)
-      navigate({ to: '/profile-setup' })
     } catch {
       toast(t('common.error'), 'error')
+      return
     }
+    navigate({ to: '/profile-setup' })
   }
 
   if (step === 'loading') {

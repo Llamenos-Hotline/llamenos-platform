@@ -52,7 +52,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.19.19"
+        versionName = "0.19.21"
 
         testInstrumentationRunner = "org.llamenos.hotline.CucumberHiltRunner"
 
@@ -244,6 +244,15 @@ val copyProductionNetworkSecurityConfig by tasks.registering(Copy::class) {
 
 tasks.withType<Test>().configureEach {
     dependsOn(copyProductionNetworkSecurityConfig)
+    // A failure prints its message, cause chain and stack in the build log itself. The
+    // default ("AssertionError at Foo.kt:757", no expected/actual) left #1811's queue
+    // ejection undiagnosable from CI, where the log is often the only evidence.
+    testLogging {
+        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showCauses = true
+        showStackTraces = true
+    }
 }
 // The copied fixture is consumed as a test `resources.srcDir`, so the resource-merging task
 // for each unit test variant (e.g. processDebugUnitTestJavaRes) also needs an explicit

@@ -27,23 +27,49 @@ final class SecurityUITests: BaseUITest {
         executionTimeAllowance = 900
     }
 
+    // MARK: - Helpers
+
+    /// Lock the app from the dashboard (or Settings) and wait for the PIN pad.
+    private func lockApp() {
+        let lockButton = find("lock-app")
+        if lockButton.waitForExistence(timeout: 10) {
+            lockButton.tap()
+        } else {
+            navigateToSettings()
+            let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
+            XCTAssertTrue(settingsLock.exists, "No lock button found on the dashboard or in Settings")
+            settingsLock.tap()
+        }
+        XCTAssertTrue(find("pin-pad").waitForExistence(timeout: 10), "Locking the app should show the PIN pad")
+    }
+
+    /// A wrong PIN as long as the pad takes: it submits when the last digit of a 6-digit PIN
+    /// is tapped, so a longer string would leave digits in the next attempt and count it
+    /// twice.
+    private let wrongPIN = "999999"
+
+    /// Enter a wrong PIN and wait for the error that answers it.
+    @discardableResult
+    private func enterWrongPIN() -> String {
+        enterPIN(wrongPIN)
+        let error = find("pin-error")
+        XCTAssertTrue(error.waitForExistence(timeout: 5), "A wrong PIN should be answered with an error")
+        return error.label
+    }
+
     // MARK: - Emergency Wipe (emergency-wipe.feature)
 
+    /// A launch with nothing in the keychain starts at the login screen: no unlock pad, no
+    /// main tab view — there is no session to resume.
     func testEmergencyWipeFromLoginScreen() {
-        given("the app is on the login screen") {
+        given("the keychain is empty") {
             launchClean()
         }
-        when("I look for emergency wipe options") {
-            // Emergency wipe may be available as a hidden gesture or menu
-            // on the login screen (varies by implementation)
-        }
-        then("the app should not crash") {
-            // Verify the login screen is stable
-            let hubInput = find("hub-url-input")
-            XCTAssertTrue(
-                hubInput.waitForExistence(timeout: 5),
-                "Login screen should be stable and accessible"
-            )
+        then("the app shows the login screen and nothing of a session") {
+            XCTAssertTrue(find("hub-url-input").waitForExistence(timeout: 20), "A clean launch should show login")
+            XCTAssertTrue(find("create-identity").exists, "Login should offer to create an identity")
+            XCTAssertFalse(find("pin-pad").exists, "There is no identity to unlock")
+            XCTAssertFalse(find("main-tab-view").exists, "There is no session to resume")
         }
     }
 
@@ -88,32 +114,25 @@ final class SecurityUITests: BaseUITest {
     func testPINUnlockWithWrongPINShowsError() {
         given("the app is locked") {
             launchAuthenticated()
-            // Lock it
-            let lockButton = find("lock-app")
-            if lockButton.waitForExistence(timeout: 10) {
-                lockButton.tap()
-            } else {
-                navigateToSettings()
-                let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else { return }
-                settingsLock.tap()
-            }
-            let pinPad = find("pin-pad")
-            _ = pinPad.waitForExistence(timeout: 5)
+            lockApp()
         }
         when("I enter the wrong PIN") {
-            enterPIN("99999999")
+            enterPIN(wrongPIN)
         }
-        then("I should see an error message") {
+        then("I should be told the PIN is incorrect") {
             let pinError = find("pin-error")
             XCTAssertTrue(
                 pinError.waitForExistence(timeout: 5),
                 "PIN error should be displayed for wrong PIN"
             )
+            XCTAssertTrue(
+                pinError.label.contains("Incorrect PIN"),
+                "A first wrong PIN is 'Incorrect PIN', not a lockout (got '\(pinError.label)')"
+            )
         }
-        and("the PIN pad should still be visible") {
-            let pinPad = find("pin-pad")
-            XCTAssertTrue(pinPad.exists, "PIN pad should remain for retry")
+        and("the PIN pad should still be visible, and the app still locked") {
+            XCTAssertTrue(find("pin-pad").exists, "PIN pad should remain for retry")
+            XCTAssertFalse(find("main-tab-view").exists, "A wrong PIN must not unlock the app")
         }
     }
 
@@ -278,150 +297,77 @@ final class SecurityUITests: BaseUITest {
     func testPINLockoutAfterFiveWrongAttempts() {
         given("the app is locked with an existing identity") {
             launchAuthenticated()
-            // Lock the app
-            let lockButton = find("lock-app")
-            if lockButton.waitForExistence(timeout: 10) {
-                lockButton.tap()
-            } else {
-                navigateToSettings()
-                let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else {
-                    XCTFail("No lock mechanism found")
-                    return
-                }
-                settingsLock.tap()
-            }
-            let pinPad = find("pin-pad")
-            _ = pinPad.waitForExistence(timeout: 5)
+            lockApp()
         }
-        when("I enter the wrong PIN 5 times") {
-            for _ in 1...5 {
-                enterPIN("99999999")
-                // Brief wait for the error to appear and the PIN pad to reset
-                let pinError = find("pin-error")
-                _ = pinError.waitForExistence(timeout: 3)
+        when("I enter the wrong PIN 4 times") {
+            for attempt in 1...4 {
+                let message = enterWrongPIN()
+                XCTAssertTrue(
+                    message.contains("Incorrect PIN"),
+                    "Attempt \(attempt) is still just incorrect, not a lockout (got '\(message)')"
+                )
             }
         }
-        then("I should see a lockout message") {
+        and("a fifth time") {
+            enterWrongPIN()
+        }
+        then("I should be locked out for 30 seconds") {
             let pinError = find("pin-error")
             XCTAssertTrue(
-                pinError.waitForExistence(timeout: 5),
-                "A lockout or error message should be displayed after 5 failed PIN attempts"
+                pinError.label.contains("Try again in 30 seconds"),
+                "The fifth wrong PIN should lock the pad for 30 seconds (got '\(pinError.label)')"
             )
         }
         and("the PIN pad should still be visible for when lockout expires") {
-            let pinPad = find("pin-pad")
-            XCTAssertTrue(
-                pinPad.exists,
-                "PIN pad should remain visible during lockout"
-            )
+            XCTAssertTrue(find("pin-pad").exists, "PIN pad should remain visible during lockout")
+            XCTAssertFalse(find("main-tab-view").exists)
         }
     }
 
     func testPINLockoutShowsRemainingTime() {
         given("the app is locked") {
             launchAuthenticated()
-            let lockButton = find("lock-app")
-            if lockButton.waitForExistence(timeout: 10) {
-                lockButton.tap()
-            } else {
-                navigateToSettings()
-                let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else {
-                    XCTFail("No lock mechanism found")
-                    return
-                }
-                settingsLock.tap()
-            }
-            let pinPad = find("pin-pad")
-            _ = pinPad.waitForExistence(timeout: 5)
+            lockApp()
         }
         when("I exceed the lockout threshold with wrong PINs") {
-            // Enter wrong PIN 5 times to trigger the 30-second lockout
-            for _ in 1...5 {
-                enterPIN("99999999")
-                let pinError = find("pin-error")
-                _ = pinError.waitForExistence(timeout: 3)
-            }
+            for _ in 1...5 { enterWrongPIN() }
         }
-        then("the lockout error should be displayed") {
-            // After 5 failed PIN attempts, PINLockout escalation triggers a 30-second
-            // lockout. The error message (pin-error) shows the lockout duration,
-            // and the subtitle shows remaining time countdown.
-            // Check the pin-error element exists (it shows the lockout message).
-            let pinError = find("pin-error")
-            XCTAssertTrue(
-                pinError.waitForExistence(timeout: 5),
-                "Lockout error message should be displayed after 5 failed attempts"
-            )
-            // Additionally verify the lockout text mentions time-related content,
-            // or fallback to just verifying the error element is visible.
-            let lockoutText = app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS[c] 'seconds' OR label CONTAINS[c] 'locked' OR label CONTAINS[c] 'wait' OR label CONTAINS[c] 'lockout'")
+        then("the lock screen counts down the remaining time") {
+            let remaining = app.staticTexts.matching(
+                NSPredicate(format: "label BEGINSWITH 'Locked out. Try again in'")
             ).firstMatch
-            if !lockoutText.waitForExistence(timeout: 3) {
-                // Localization may return raw key names — verify pin-error suffices
-                XCTAssertTrue(pinError.exists, "PIN error element confirms lockout state")
-            }
+            XCTAssertTrue(remaining.waitForExistence(timeout: 5), "The subtitle should say how long the lockout lasts")
+            let seconds = Int(remaining.label.filter(\.isNumber)) ?? -1
+            XCTAssertTrue(
+                (1...30).contains(seconds),
+                "A first lockout lasts at most 30 seconds (reads '\(remaining.label)')"
+            )
         }
     }
 
+    /// Attempts made while locked out are refused, not counted: the policy escalates on
+    /// attempts the app actually evaluated, so hammering the pad during a lockout neither
+    /// unlocks nor advances toward the key wipe. (The ten-attempt wipe itself needs fifteen
+    /// minutes of real lockouts; `PINLockout` is covered by `SecurityHardeningTests`.)
     func testPINWipeAfterTenFailedAttempts() {
-        given("the app is locked") {
+        given("the app is locked and a five-attempt lockout is in force") {
             launchAuthenticated()
-            let lockButton = find("lock-app")
-            if lockButton.waitForExistence(timeout: 10) {
-                lockButton.tap()
-            } else {
-                navigateToSettings()
-                let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else {
-                    XCTFail("No lock mechanism found")
-                    return
-                }
-                settingsLock.tap()
-            }
-            let pinPad = find("pin-pad")
-            _ = pinPad.waitForExistence(timeout: 5)
+            lockApp()
+            for _ in 1...5 { enterWrongPIN() }
+            XCTAssertTrue(find("pin-error").label.contains("Try again in 30 seconds"))
         }
-        when("I enter the wrong PIN 10 times to trigger key wipe") {
-            for i in 1...10 {
-                enterPIN("99999999")
-                let pinError = find("pin-error")
-                _ = pinError.waitForExistence(timeout: 3)
-                // After lockout kicks in (attempt 5+), we may need to wait for
-                // the lockout to expire. In test mode, lockouts may be shortened.
-                // If the PIN pad is not accepting input (locked out), wait briefly.
-                if i >= 5 {
-                    // Check if we need to wait for lockout to expire
-                    let lockedText = app.staticTexts.matching(
-                        NSPredicate(format: "label CONTAINS[c] 'locked' OR label CONTAINS[c] 'wait'")
-                    ).firstMatch
-                    if lockedText.exists {
-                        // Wait for lockout to expire (in test mode this should be fast)
-                        sleep(2)
-                    }
-                }
-            }
+        when("I keep entering wrong PINs during the lockout") {
+            for _ in 1...5 { enterPIN(wrongPIN) }
         }
-        then("the app should transition to the login/setup state after key wipe") {
-            // After 10 failed attempts, PINLockout.shouldWipeKeys returns true,
-            // authService.logout() is called, and the app returns to the login screen.
-            // The wipe error message "All keys have been wiped" may flash briefly
-            // before the login screen appears.
-            let loginScreen = find("hub-url-input")
-            let pinError = find("pin-error")
-            let createButton = find("create-identity")
-
-            // Either the login screen appears (wipe completed) or the wipe error is shown
-            let foundLoginOrWipe = loginScreen.waitForExistence(timeout: 15)
-                || pinError.waitForExistence(timeout: 5)
-                || createButton.waitForExistence(timeout: 5)
-
+        then("they are refused, and the app is neither unlocked nor wiped") {
             XCTAssertTrue(
-                foundLoginOrWipe,
-                "App should transition to login screen or show wipe message after 10 failed PIN attempts"
+                find("pin-error").waitForExistence(timeout: 5)
+                    && find("pin-error").label.contains("Please wait and try again"),
+                "Attempts during a lockout should be refused (got '\(find("pin-error").label)')"
             )
+            XCTAssertTrue(find("pin-pad").exists, "The app should still be locked")
+            XCTAssertFalse(find("hub-url-input").exists, "Refused attempts must not wipe the keys")
+            XCTAssertFalse(find("main-tab-view").exists)
         }
     }
 

@@ -108,7 +108,7 @@ async function seedMemberOf(hubIds: string[]): Promise<ReturnType<typeof reader>
     userPubkey: u.pubkey,
     deviceId: device!.id,
     generation: 1,
-    envelope: 'cHVrLWVudmVsb3Bl',
+    envelope: { v: 3, labelId: 1, enc: 'cHVr', ct: 'ZW52ZWxvcGU' },
   })
   return u
 }

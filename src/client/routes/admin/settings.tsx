@@ -5,10 +5,8 @@ import { useEffect, useState, useRef } from 'react'
 import { channelConfigRegistry, CHANNEL_ORDER } from '@/components/channel-config/registry'
 import {
   getSpamSettings,
-  updateSpamSettings,
   getCallSettings,
   getTranscriptionSettings,
-  updateTranscriptionSettings,
   getIvrLanguages,
   listIvrAudio,
   getCustomFields,
@@ -27,6 +25,8 @@ import { Settings2 } from 'lucide-react'
 import { usePersistedExpanded } from '@/components/settings-section'
 import { IVR_LANGUAGES } from '@shared/languages'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { useSpamConfirmToggle } from '@/lib/use-spam-confirm-toggle'
+import { useTranscriptionConfirmToggle } from '@/lib/use-transcription-confirm-toggle'
 import { PasskeyPolicySection } from '@/components/admin-settings/passkey-policy-section'
 import { TelephonyProviderSection } from '@/components/admin-settings/telephony-provider-section'
 import { TranscriptionSection } from '@/components/admin-settings/transcription-section'
@@ -59,7 +59,6 @@ function AdminSettingsPage() {
   const [ivrEnabled, setIvrEnabled] = useState<string[]>([...IVR_LANGUAGES])
   const [ivrAudio, setIvrAudio] = useState<IvrAudioRecording[]>([])
   const [loading, setLoading] = useState(true)
-  const [confirmToggle, setConfirmToggle] = useState<{ key: string; newValue: boolean } | null>(null)
   const [webauthnSettings, setWebauthnSettings] = useState<WebAuthnSettings | null>(null)
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDefinition[]>([])
   const [providerConfig, setProviderConfig] = useState<TelephonyProviderConfig | null>(null)
@@ -104,40 +103,8 @@ function AdminSettingsPage() {
     }
   }, [loading, section])
 
-  function handleConfirmToggle(key: string, newValue: boolean) {
-    setConfirmToggle({ key, newValue })
-  }
-
-  async function applyConfirmToggle() {
-    if (!confirmToggle) return
-    const { key, newValue } = confirmToggle
-    try {
-      if (key === 'transcription') {
-        const res = await updateTranscriptionSettings({ globalEnabled: newValue })
-        setGlobalTranscription(res.globalEnabled)
-      } else if (key === 'captcha') {
-        const res = await updateSpamSettings({ voiceCaptchaEnabled: newValue })
-        setSpam(res)
-      } else if (key === 'rateLimit') {
-        const res = await updateSpamSettings({ rateLimitEnabled: newValue })
-        setSpam(res)
-      }
-    } catch {
-      toast(t('common.error'), 'error')
-    }
-  }
-
-  const confirmTitles: Record<string, string> = {
-    transcription: t('confirm.transcriptionTitle'),
-    captcha: t('confirm.captchaTitle'),
-    rateLimit: t('confirm.rateLimitTitle'),
-  }
-
-  const confirmDescriptions: Record<string, string> = {
-    transcription: confirmToggle?.newValue ? t('confirm.transcriptionEnable') : t('confirm.transcriptionDisable'),
-    captcha: confirmToggle?.newValue ? t('confirm.captchaEnable') : t('confirm.captchaDisable'),
-    rateLimit: confirmToggle?.newValue ? t('confirm.rateLimitEnable') : t('confirm.rateLimitDisable'),
-  }
+  const spamToggle = useSpamConfirmToggle(setSpam)
+  const transcriptionToggle = useTranscriptionConfirmToggle(setGlobalTranscription)
 
   // Compute status summaries for collapsed sections
   const passkeyStatus = webauthnSettings
@@ -214,7 +181,7 @@ function AdminSettingsPage() {
         allowOptOut={allowUserOptOut}
         onGlobalChange={setGlobalTranscription}
         onOptOutChange={setAllowUserOptOut}
-        onConfirmToggle={handleConfirmToggle}
+        onConfirmToggle={transcriptionToggle.requestToggle}
         expanded={expanded.has('transcription')}
         onToggle={(open) => toggleSection('transcription', open)}
         statusSummary={transcriptionStatus}
@@ -265,7 +232,7 @@ function AdminSettingsPage() {
         <SpamSection
           settings={spam}
           onChange={setSpam}
-          onConfirmToggle={handleConfirmToggle}
+          onConfirmToggle={spamToggle.requestToggle}
           expanded={expanded.has('spam')}
           onToggle={(open) => toggleSection('spam', open)}
           statusSummary={spamStatus}
@@ -306,12 +273,20 @@ function AdminSettingsPage() {
       />
 
       <ConfirmDialog
-        open={!!confirmToggle}
-        onOpenChange={(open) => { if (!open) setConfirmToggle(null) }}
-        title={confirmToggle ? confirmTitles[confirmToggle.key] : ''}
-        description={confirmToggle ? confirmDescriptions[confirmToggle.key] : ''}
+        open={!!spamToggle.pending}
+        onOpenChange={(open) => { if (!open) spamToggle.cancel() }}
+        title={spamToggle.title}
+        description={spamToggle.description}
         variant="default"
-        onConfirm={applyConfirmToggle}
+        onConfirm={spamToggle.confirm}
+      />
+      <ConfirmDialog
+        open={!!transcriptionToggle.pending}
+        onOpenChange={(open) => { if (!open) transcriptionToggle.cancel() }}
+        title={transcriptionToggle.title}
+        description={transcriptionToggle.description}
+        variant="default"
+        onConfirm={transcriptionToggle.confirm}
       />
     </div>
   )

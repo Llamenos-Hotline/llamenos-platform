@@ -6,6 +6,17 @@ import UIKit
 /// View model for the Reports feature. Fetches reports from the API,
 /// manages status filtering, and handles report creation with E2EE encryption.
 /// Supports both legacy category-based reports and template-driven typed reports.
+///
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main thread.
+/// Unannotated, every `async` method ran on the global executor and wrote `isLoading`,
+/// `reports`, `errorMessage`… from a GCD worker while `ReportsView.body` read them (Thread
+/// Sanitizer reports `isLoading` at the `isLoading = false` in `loadReports()` against the
+/// read in `body`), and an Observation write that lands while a body is being evaluated is
+/// never delivered: with no hub the load fails instantly, so the flip back to `false` lands
+/// right on top of the first render and Reports keeps its spinner forever. Network calls
+/// still suspend off the main thread inside `APIService`; only the state changes are
+/// pinned here. Same defect class as #1918 and #2049.
+@MainActor
 @Observable
 final class ReportsViewModel {
     private let apiService: APIService
@@ -15,7 +26,7 @@ final class ReportsViewModel {
     // MARK: - Public State
 
     /// Reports from the server.
-    var reports: [ClientReportResponse] = []
+    var reports: [SharedConversation] = []
 
     /// Available report categories from the server.
     var categories: [String] = []
@@ -23,11 +34,11 @@ final class ReportsViewModel {
     /// Report type definitions fetched from CMS settings.
     /// Populated from `GET /api/settings/cms/report-types` (preferred) with fallback
     /// to `GET /api/reports/types` (legacy).
-    var reportTypes: [ClientReportTypeDefinition] = []
+    var reportTypes: [CMSReportTypeListResponseReportType] = []
 
     /// CMS report types fetched directly from the settings endpoint.
     /// Includes full CMS-specific fields (hubId, isSystem, numberingEnabled, etc.).
-    var cmsReportTypes: [ClientReportTypeDefinition] = []
+    var cmsReportTypes: [CMSReportTypeListResponseReportType] = []
 
     /// Current status filter.
     var selectedFilter: ReportStatusFilter = .all
@@ -54,10 +65,10 @@ final class ReportsViewModel {
     var totalCount: Int = 0
 
     /// Reports filtered by the selected status filter and optional type filter.
-    var filteredReports: [ClientReportResponse] {
+    var filteredReports: [SharedConversation] {
         var result = reports
         if selectedFilter != .all {
-            result = result.filter { $0.status == selectedFilter.rawValue }
+            result = result.filter { $0.status?.rawValue == selectedFilter.rawValue }
         }
         if let typeFilter = selectedTypeFilter {
             result = result.filter { $0.reportTypeId == typeFilter }
@@ -66,7 +77,7 @@ final class ReportsViewModel {
     }
 
     /// Mobile-optimized, non-archived report types available for submission.
-    var mobileReportTypes: [ClientReportTypeDefinition] {
+    var mobileReportTypes: [CMSReportTypeListResponseReportType] {
         reportTypes.filter { $0.mobileOptimized && !$0.isArchived }
     }
 
@@ -185,7 +196,7 @@ final class ReportsViewModel {
                     }
             )
 
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports"),
                 body: request
@@ -236,17 +247,19 @@ final class ReportsViewModel {
                 readerPubkeys: adminPubkeys
             )
 
-            let body = CreateTypedReportRequest(
-                title: title,
+            let body = CreateReportBody(
                 category: nil,
-                reportTypeId: reportTypeId,
                 encryptedContent: encrypted.encryptedContent,
-                readerEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes.map { env in
+                    SharedAdminEnvelope(ct: env.ct, enc: env.enc, pubkey: env.pubkey)
+                },
+                reportTypeID: reportTypeId,
+                title: title
             )
 
             // #1633: the shared encoder applies no key conversion, so the plain-encoder
             // `rawBody:` detour this used to need is gone.
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports"),
                 body: body
@@ -277,7 +290,7 @@ final class ReportsViewModel {
 
         do {
             let request = ReportAssignRequest(assignedTo: signingPubkey)
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports/\(id)/assign"),
                 body: request
@@ -301,7 +314,7 @@ final class ReportsViewModel {
 
         do {
             let request = ReportUpdateRequest(status: "closed")
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "PATCH",
                 path: apiService.hp("/api/reports/\(id)"),
                 body: request
@@ -322,12 +335,12 @@ final class ReportsViewModel {
 
     private func fetchReports() async {
         do {
-            let response: ReportsListResponse = try await apiService.request(
+            let response: ReportListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/reports") + "?limit=50"
             )
             reports = response.conversations
-            totalCount = response.total
+            totalCount = Int(response.total)
         } catch {
             if case APIError.noBaseURL = error {
                 // Hub not configured — show empty state, no error
@@ -352,7 +365,7 @@ final class ReportsViewModel {
 
     private func fetchReportTypes() async {
         do {
-            let response: ClientReportTypesResponse = try await apiService.request(
+            let response: CMSReportTypeListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/reports/types")
             )

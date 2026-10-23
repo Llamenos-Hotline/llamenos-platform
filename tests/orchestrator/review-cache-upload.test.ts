@@ -39,6 +39,9 @@ function steps(): Step[] {
   return s
 }
 
+/** The tree a verdict judged — the cache key since #2014. */
+const TREE = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+
 const dirs: string[] = []
 const saved = process.env['GITHUB_OUTPUT']
 afterEach(() => {
@@ -55,7 +58,7 @@ async function recordBothNamespaces(scope: string): Promise<{ outputs: Map<strin
   const out = join(root, 'github-output')
   const cacheDir = join(root, 'review-cache')
   process.env['GITHUB_OUTPUT'] = out
-  const key = { pr: '1170', diffHash: 'b4cc12c676f607c3'.padEnd(64, '0') }
+  const key = { pr: '1170', diffHash: 'b4cc12c676f607c3'.padEnd(64, '0'), headTree: TREE }
   for (const s of [scope, undefined]) {
     await artifactReviewCache(cacheDir, () => {}, s).record(key, { verdict: 'PASS', text: 'VERDICT: PASS' })
   }
@@ -71,7 +74,7 @@ async function recordBothNamespaces(scope: string): Promise<{ outputs: Map<strin
 describe('rail: every namespace a verdict is recorded under is uploaded under the name lookup() queries', () => {
   const scope = reviewSetTag(['crypto-security-reviewer'])
   if (scope === undefined) throw new Error('reviewSetTag gave no scope for a profile — this rail must not pass vacuously')
-  const hash = 'b4cc12c676f607c3'.padEnd(64, '0')
+  const hash = TREE
 
   it('record() names each namespace under its own output key — neither overwrites the other', async () => {
     const { outputs, files } = await recordBothNamespaces(scope)
@@ -102,4 +105,44 @@ describe('rail: every namespace a verdict is recorded under is uploaded under th
       expect(String(upload?.with?.['path'] ?? '')).toBe(cacheDir)
     },
   )
+})
+
+/**
+ * #2014: the tree IS the key. A record names the tree it judged — in the
+ * artifact name and in its content — and with no readable tree there is no
+ * key, so nothing is recorded and nothing is looked up.
+ */
+describe('rail: the review cache is keyed on the judged tree, and has no key without one', () => {
+  function scratch(): { out: string; cacheDir: string } {
+    const root = mkdtempSync(join(tmpdir(), 'review-cache-tree-'))
+    dirs.push(root)
+    process.env['GITHUB_OUTPUT'] = join(root, 'github-output')
+    return { out: join(root, 'github-output'), cacheDir: join(root, 'review-cache') }
+  }
+
+  it('records the judged tree in the artifact name and in the record itself', async () => {
+    const { cacheDir } = scratch()
+    await artifactReviewCache(cacheDir, () => {}).record(
+      { pr: '1975', diffHash: 'ab'.repeat(32), headTree: TREE }, { verdict: 'PASS', text: 'VERDICT: PASS' },
+    )
+    const files = readdirSync(cacheDir)
+    expect(files).toEqual([`fleet-review-pass-pr1975-tree-${TREE}.json`])
+    const record = JSON.parse(readFileSync(join(cacheDir, files[0] ?? ''), 'utf8')) as { headTree?: string }
+    expect(record.headTree).toBe(TREE)
+  })
+
+  for (const [label, headTree] of [['unreadable', undefined], ['not a tree id', 'ab'.repeat(12)]] as const) {
+    it(`records nothing, and looks nothing up, when the head tree is ${label}`, async () => {
+      const { out, cacheDir } = scratch()
+      const logs: string[] = []
+      const cache = artifactReviewCache(cacheDir, (m) => logs.push(m))
+      const key = { pr: '1975', diffHash: 'ab'.repeat(32), headTree }
+      await cache.record(key, { verdict: 'PASS', text: 'VERDICT: PASS' })
+      expect(() => readdirSync(cacheDir), 'a verdict with no tree was recorded').toThrow()
+      expect(() => readFileSync(out, 'utf8'), 'a cache artifact name was emitted for no tree').toThrow()
+      // Returns before any `gh` call — a miss that never left this process.
+      expect(await cache.lookup(key)).toBeUndefined()
+      expect(logs.some((m) => m.includes('no readable head tree'))).toBe(true)
+    })
+  }
 })

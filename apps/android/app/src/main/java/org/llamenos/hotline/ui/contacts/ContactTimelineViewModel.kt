@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.model.ContactTimelineEvent
-import org.llamenos.hotline.model.ContactTimelineResponse
+import org.llamenos.protocol.ContactTimelineDetailResponse
 import javax.inject.Inject
 
 data class ContactTimelineUiState(
@@ -24,7 +24,8 @@ data class ContactTimelineUiState(
 /**
  * ViewModel for the contact timeline screen.
  *
- * Loads timeline events from GET /contacts/{hash}/timeline.
+ * Loads timeline events from GET /contacts/{hash} — that route *is* the timeline
+ * (PROTOCOL §4.29); there is no `/timeline` sub-path (#1730).
  */
 @HiltViewModel
 class ContactTimelineViewModel @Inject constructor(
@@ -41,14 +42,15 @@ class ContactTimelineViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val response = apiService.request<ContactTimelineResponse>(
+                val response = apiService.request<ContactTimelineDetailResponse>(
                     "GET",
-                    apiService.hp("/api/contacts/$contactHash/timeline") + "?limit=100",
+                    apiService.hp("/api/contacts/$contactHash"),
                 )
+                val events = response.toTimelineEvents()
                 _uiState.update {
                     it.copy(
-                        events = response.events,
-                        total = response.total,
+                        events = events,
+                        total = events.size,
                         isLoading = false,
                     )
                 }
