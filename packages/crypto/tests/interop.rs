@@ -116,6 +116,14 @@ struct ProvisioningVectors {
     /// The linking device's ephemeral X25519 keypair.
     ephemeral_secret_hex: String,
     ephemeral_pubkey_hex: String,
+    /// hex(claim): version || primary ephemeral X25519 pubkey || primary Ed25519
+    /// signing pubkey || signature (PROTOCOL.md 6.3). The primary's ephemeral is
+    /// fresh per room, so this differs on every run.
+    claim_hex: String,
+    claim_version: u8,
+    claim_len: usize,
+    /// Ed25519 signature context for the claim.
+    claim_label: String,
     /// hex(nonce_12 + ciphertext + tag_16) produced by Rust.
     encrypted_hex: String,
     /// SAS both sides must display.
@@ -123,7 +131,8 @@ struct ProvisioningVectors {
     /// Bundle plaintext layout.
     bundle_version: u8,
     bundle_len: usize,
-    /// AEAD associated data label for the bundle.
+    /// AEAD associated data prefix for the bundle. The full AAD is
+    /// UTF-8(aad_label) || ephemeral_pubkey || claim.
     aad_label: String,
     /// HKDF salt / info for the provisioning key.
     hkdf_salt: String,
@@ -599,10 +608,20 @@ fn generate_and_verify_test_vectors() {
     )
     .unwrap();
 
+    // The new device derives the SAS from the claim alone, before the payload.
+    assert_eq!(
+        llamenos_core::provisioning::compute_provisioning_sas(
+            &provisioning_result.claim_hex,
+            &ephemeral_secret_bytes,
+        )
+        .unwrap(),
+        provisioning_result.sas_code
+    );
+
     // Round-trips in Rust, recovering BOTH seeds unchanged.
     let provisioning_decrypted = llamenos_core::provisioning::decrypt_provisioned_bundle(
         &provisioning_result.encrypted_hex,
-        &primary_encryption_pubkey,
+        &provisioning_result.claim_hex,
         &ephemeral_secret_bytes,
     )
     .unwrap();
@@ -765,6 +784,10 @@ fn generate_and_verify_test_vectors() {
             primary_encryption_pubkey_hex: primary_encryption_pubkey,
             ephemeral_secret_hex: hex::encode(ephemeral_secret_bytes),
             ephemeral_pubkey_hex: ephemeral_pubkey,
+            claim_hex: provisioning_result.claim_hex,
+            claim_version: llamenos_core::provisioning::PROVISIONING_CLAIM_VERSION,
+            claim_len: llamenos_core::provisioning::PROVISIONING_CLAIM_LEN,
+            claim_label: LABEL_DEVICE_PROVISION_CLAIM.to_string(),
             encrypted_hex: provisioning_result.encrypted_hex,
             sas_code: provisioning_result.sas_code,
             bundle_version: llamenos_core::provisioning::PROVISIONING_BUNDLE_VERSION,
