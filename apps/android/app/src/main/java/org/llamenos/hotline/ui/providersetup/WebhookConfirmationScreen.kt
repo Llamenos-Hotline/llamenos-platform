@@ -85,6 +85,10 @@ fun WebhookConfirmationScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // The mounted webhook routes (#2068): `/api/telephony/status` and
+            // `/api/messaging/incoming` were never mounted, so a provider set
+            // up from this screen sent call status and inbound SMS to a 404.
+            // The server's table is apps/worker/lib/provider-webhook-urls.ts.
             WebhookUrlCard(
                 label = stringResource(R.string.voice_incoming_webhook),
                 url = "${webhookBaseUrl}/api/telephony/incoming",
@@ -94,14 +98,14 @@ fun WebhookConfirmationScreen(
 
             WebhookUrlCard(
                 label = stringResource(R.string.voice_status_webhook),
-                url = "${webhookBaseUrl}/api/telephony/status",
+                url = "${webhookBaseUrl}/api/telephony/call-status",
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             WebhookUrlCard(
                 label = stringResource(R.string.sms_webhook),
-                url = "${webhookBaseUrl}/api/messaging/incoming",
+                url = "${webhookBaseUrl}/api/messaging/sms/webhook",
             )
 
             Spacer(modifier = Modifier.height(24.dp))

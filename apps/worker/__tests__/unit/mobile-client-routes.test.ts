@@ -214,17 +214,11 @@ function distinct(sites: CallSite[]): Map<string, string> {
  */
 const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
   iOS: {
-    // #1701 — iOS admin screens against routes that do not exist. The invite
-    // endpoints live under /api/invites. (GET /api/identity/members is now
-    // mounted — routes/identity.ts.)
-    'GET /api/identity/invites': '#1701',
-    'POST /api/identity/invite': '#1701',
-    'GET /api/recovery-group/shares/my': '#1701',
-
-    // Also #1701, found by this test rather than by reading the client. Both
-    // are live 404s on a real backend.
-    [`PATCH /api/identity/${PARAM}/role`]: '#1701',
-    [`POST /api/conversations/${PARAM}/read`]: '#1701',
+    // A route the server owes, not a client mistake: it stores each holder's
+    // share envelope but mounts no route that returns it (#2002). #1701's
+    // client-side gaps — the invite, role and conversation-read paths — are
+    // fixed, and were deleted from this list.
+    'GET /api/recovery-group/shares/my': '#2002',
   },
   // The blasts composer was rebuilt on createBlastBodySchema against the
   // hub-scoped /blasts routes (#1997), which emptied this list.

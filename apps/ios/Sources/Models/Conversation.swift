@@ -73,7 +73,9 @@ extension SharedReportResponseStatus: CaseIterable {
 /// decode at all — and `assignedVolunteerPubkey` was optional and absent, so
 /// every conversation silently read as unassigned. The server's names are
 /// `contactIdentifierHash` and `assignedTo`; it has no per-user unread count at
-/// all, so that one is tolerated as absent rather than invented.
+/// all, so that one is tolerated as absent rather than invented. Nor does it
+/// track per-user read state: the `POST /api/conversations/:id/read` this
+/// client used to send after loading messages was never mounted (#1701).
 struct AppConversation: Codable, Identifiable, Sendable {
     let id: String
     let channelType: String
@@ -200,11 +202,4 @@ struct SendMessageRequest: Encodable, Sendable {
     /// schema does not declare — and since it is `.optional()`, one the validator
     /// dropped instead of rejecting.
     let readerEnvelopes: [RecipientEnvelope]
-}
-
-// MARK: - MarkReadResponse
-
-/// Response from `POST /api/conversations/:id/read`.
-struct MarkReadResponse: Codable, Sendable {
-    let ok: Bool
 }

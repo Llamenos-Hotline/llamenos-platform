@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { SetupData } from './SetupWizard'
 import { OAuthConnectButton } from './OAuthConnectButton'
 import { PhoneNumberSelector } from './PhoneNumberSelector'
-import { WebhookConfirmation } from './WebhookConfirmation'
+import { VoiceWebhookConfirmation } from './VoiceWebhookConfirmation'
 import { SignalRegistrationFlow } from './SignalRegistrationFlow'
 import { ProviderStatusBadge } from './ProviderStatusBadge'
 import { VoiceSmsProviderForm } from './VoiceSmsProviderForm'
@@ -149,18 +149,7 @@ export function StepProviders({ data, onChange, headingRef }: Props) {
 
               {/* Webhook Confirmation */}
               {data.providerValidated && data.telephonyProvider.phoneNumber && (
-                <WebhookConfirmation
-                  urls={[
-                    {
-                      label: t('setup.webhooks.voice', { defaultValue: 'Voice' }),
-                      url: `${window.location.origin}/api/telephony/incoming`,
-                    },
-                    {
-                      label: t('setup.webhooks.status', { defaultValue: 'Status' }),
-                      url: `${window.location.origin}/api/telephony/status`,
-                    },
-                  ]}
-                  visible={true}
+                <VoiceWebhookConfirmation
                   onReconfigure={() => {
                     // Reconfigure webhooks
                     setTestResult(null)

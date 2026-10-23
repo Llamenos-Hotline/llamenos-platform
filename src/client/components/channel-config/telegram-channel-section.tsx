@@ -5,12 +5,13 @@ import { SettingsSection } from '@/components/settings-section'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { Copy, Send } from 'lucide-react'
+import { Send } from 'lucide-react'
 import { updateMessagingConfig } from '@/lib/api'
 import { ChannelStatusBanner } from './channel-status-banner'
 import { ConnectionTestButton } from './connection-test-button'
 import { AutoResponseFields } from './auto-response-fields'
 import type { ChannelConfigProps } from './types'
+import { WebhookUrlField } from './webhook-url-field'
 
 export function TelegramChannelSection({
   config,
@@ -32,7 +33,6 @@ export function TelegramChannelSection({
     afterHoursResponse: '',
   }
 
-  const webhookUrl = `${window.location.origin}/api/messaging/telegram/webhook`
 
   function updateTelegram(updates: Record<string, unknown>) {
     onConfigChange({ ...config, telegram: { ...telegram, ...updates } })
@@ -102,20 +102,7 @@ export function TelegramChannelSection({
           />
         </div>
 
-        <div className="space-y-2">
-          <Label>{t('channels.telegram.webhookUrl')}</Label>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 break-all rounded-md bg-muted px-3 py-2 text-xs">{webhookUrl}</code>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => { navigator.clipboard.writeText(webhookUrl); toast(t('common.success'), 'success') }}
-              aria-label={t('a11y.copyToClipboard')}
-            >
-              <Copy className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </div>
+        <WebhookUrlField channel="telegram" label={t('channels.telegram.webhookUrl')} />
 
         <div className="space-y-2">
           <Label htmlFor="telegram-webhook-secret">{t('channels.telegram.webhookSecret')}</Label>
