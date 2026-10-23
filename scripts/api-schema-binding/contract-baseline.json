@@ -8,29 +8,11 @@
     "Matching is exact: client, file, method, path (as the guard prints it) and category. There are no wildcards, and each entry absorbs exactly one call. Two identical broken calls in one file need two entries, and a third identical call fails.",
     "Run: bun scripts/api-schema-binding/contract-guard.ts --all to see every baselined row with its line number."
   ],
-  "size": 8,
+  "size": 2,
   "owners": {
-    "1701": "17 API paths the iOS client calls do not exist (contacts-v2, identity, recordings, conversation read)",
-    "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, recovery-group candidates, contact search)",
-    "2068": "Webhook URLs shown to admins and registered with providers point at unmounted routes"
+    "2002": "Endpoint contract: routes the server owes (recovery-group shares/my, recovery-group candidates, contact search)"
   },
   "entries": [
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/WebhookConfirmationScreen.kt",
-      "method": "*",
-      "path": "/api/messaging/incoming",
-      "category": "unmounted",
-      "issue": 2068
-    },
-    {
-      "client": "android",
-      "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/providersetup/WebhookConfirmationScreen.kt",
-      "method": "*",
-      "path": "/api/telephony/status",
-      "category": "unmounted",
-      "issue": 2068
-    },
     {
       "client": "desktop",
       "file": "src/client/lib/api/recovery.ts",
@@ -46,38 +28,6 @@
       "path": "/api/recovery-group/shares/my",
       "category": "unmounted",
       "issue": 2002
-    },
-    {
-      "client": "ios",
-      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
-      "method": "PATCH",
-      "path": "/api/identity/:param/role",
-      "category": "unmounted",
-      "issue": 1701
-    },
-    {
-      "client": "ios",
-      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
-      "method": "POST",
-      "path": "/api/identity/invite",
-      "category": "unmounted",
-      "issue": 1701
-    },
-    {
-      "client": "ios",
-      "file": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
-      "method": "GET",
-      "path": "/api/identity/invites",
-      "category": "unmounted",
-      "issue": 1701
-    },
-    {
-      "client": "ios",
-      "file": "apps/ios/Sources/ViewModels/ConversationsViewModel.swift",
-      "method": "POST",
-      "path": "/api/conversations/:param/read",
-      "category": "unmounted",
-      "issue": 1701
     }
   ]
 }

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
-  Shield, Copy, Loader2,
+  Shield, Loader2,
   Phone, KeyRound, AlertTriangle, RefreshCw, Activity,
 } from 'lucide-react'
 import {
@@ -22,6 +22,7 @@ import { SignalRegistrationFlow } from '@/components/setup/SignalRegistrationFlo
 import { ConnectionTestButton } from '@/components/channel-config/connection-test-button'
 import { AutoResponseFields } from '@/components/channel-config/auto-response-fields'
 import type { ChannelConfigProps } from '@/components/channel-config/types'
+import { WebhookUrlField } from '@/components/channel-config/webhook-url-field'
 
 export function SignalChannelSection({
   config,
@@ -42,7 +43,6 @@ export function SignalChannelSection({
     autoResponse: '',
   }
 
-  const webhookUrl = `${window.location.origin}/api/messaging/signal/webhook`
 
   function updateSignal(updates: Record<string, unknown>) {
     const updated = { ...config, signal: { ...signal, ...updates } }
@@ -106,20 +106,7 @@ export function SignalChannelSection({
           />
         </div>
 
-        <div className="space-y-2">
-          <Label>{t('signal.webhookUrl', { defaultValue: 'Webhook URL' })}</Label>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 break-all rounded-md bg-muted px-3 py-2 text-xs">{webhookUrl}</code>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => { navigator.clipboard.writeText(webhookUrl); toast(t('common.success'), 'success') }}
-              aria-label={t('a11y.copyToClipboard')}
-            >
-              <Copy className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </div>
+        <WebhookUrlField channel="signal" label={t('signal.webhookUrl', { defaultValue: 'Webhook URL' })} />
 
         <div className="space-y-2">
           <Label htmlFor="signal-webhook-secret">{t('signal.webhookSecret', { defaultValue: 'Webhook Secret' })}</Label>

@@ -134,7 +134,7 @@ final class AdminViewModel {
     // MARK: - Invites State
 
     /// All invite codes from the server.
-    var invites: [AppInvite] = []
+    var invites: [Invite] = []
 
     /// Whether invites are loading.
     var isLoadingInvites: Bool = false
@@ -144,6 +144,12 @@ final class AdminViewModel {
 
     /// Selected role for new invite.
     var newInviteRole: UserRole = .volunteer
+
+    /// Name of the person being invited (required by the server).
+    var newInviteName: String = ""
+
+    /// Phone number of the person being invited.
+    var newInvitePhone: String = ""
 
     // MARK: - Custom Fields State
 
@@ -413,11 +419,13 @@ final class AdminViewModel {
         successMessage = nil
 
         do {
-            let request = UpdateRoleRequest(role: newRole.rawValue)
+            // The server has no role-only endpoint: a role change is a user
+            // update carrying role IDs, scoped to the hub being browsed — the
+            // same call the desktop client makes (#1701).
             try await apiService.request(
                 method: "PATCH",
-                path: "/api/identity/\(pubkey)/role",
-                body: request
+                path: apiService.hp("/api/users/\(pubkey)"),
+                body: AdminUpdateUserBody.roles([newRole.roleId])
             )
 
             let generator = UINotificationFeedbackGenerator()
@@ -566,9 +574,11 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: InvitesListResponse = try await apiService.request(
+            // Not hp(): the server mounts invites at /api/invites only,
+            // unscoped (#1701).
+            let response: InviteListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/identity/invites"
+                path: "/api/invites"
             )
             invites = response.invites.sorted { lhs, rhs in
                 (lhs.createdDate ?? Date.distantPast) > (rhs.createdDate ?? Date.distantPast)
@@ -586,10 +596,18 @@ final class AdminViewModel {
         successMessage = nil
 
         do {
-            let request = CreateInviteRequest(role: newInviteRole.rawValue)
-            let _: AppInvite = try await apiService.request(
+            // The server requires a name and phone and takes role IDs. The
+            // route is not hub-scoped, so the hub travels in the body — without
+            // it the server 400s once it has several hubs (#1037).
+            let request = CreateInviteBody(
+                hubID: apiService.activeHubId,
+                name: newInviteName.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: newInvitePhone.trimmingCharacters(in: .whitespacesAndNewlines),
+                roleIDS: [newInviteRole.roleId]
+            )
+            let _: CreateInviteResponse = try await apiService.request(
                 method: "POST",
-                path: "/api/identity/invite",
+                path: "/api/invites",
                 body: request
             )
 
@@ -597,6 +615,8 @@ final class AdminViewModel {
             generator.notificationOccurred(.success)
 
             showCreateInviteSheet = false
+            newInviteName = ""
+            newInvitePhone = ""
             successMessage = NSLocalizedString("admin_invite_created", comment: "Invite code created")
             await loadInvites()
         } catch {

@@ -1,4 +1,5 @@
 import { request } from '../api'
+import { hp } from './client'
 import type {
   StartOAuthRequest,
   StartOAuthResponse,
@@ -9,6 +10,7 @@ import type {
   NumberProvisionRequest,
   OwnedNumber,
   AvailableNumber,
+  WebhookUrlsResponse,
 } from '@protocol/schemas/provider-setup'
 import type { TelephonyProviderType } from '@shared/types'
 
@@ -27,6 +29,18 @@ export async function startOAuth(
 
 export async function getOAuthStatus(state: string): Promise<OauthFlowState> {
   return request<OauthFlowState>(`/provider-setup/oauth/status/${encodeURIComponent(state)}`)
+}
+
+// ── Webhook URLs ───────────────────────────────────────────────────────────
+
+/**
+ * The webhook URLs a provider must be configured to call, built by the server
+ * on its public webhook origin — the same ones its own auto-configuration
+ * registers (#2068). Never assemble them here: `window.location.origin` is the
+ * desktop webview's origin, not the server's.
+ */
+export async function getWebhookUrls(): Promise<WebhookUrlsResponse> {
+  return request<WebhookUrlsResponse>(hp('/provider-setup/webhook-urls'))
 }
 
 // ── Provider Configuration ─────────────────────────────────────────────────

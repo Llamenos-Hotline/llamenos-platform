@@ -130,9 +130,6 @@ final class ConversationsViewModel {
 
             currentMessages = response.messages.compactMap { decryptConversationMessage($0) }
                 .sorted { $0.createdAt < $1.createdAt }
-
-            // Mark as read
-            await markAsRead(conversationId: conversationId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -199,26 +196,6 @@ final class ConversationsViewModel {
         }
 
         isSending = false
-    }
-
-    // MARK: - Mark as Read
-
-    /// Mark all messages in a conversation as read.
-    private func markAsRead(conversationId: String) async {
-        do {
-            let _: MarkReadResponse = try await apiService.request(
-                method: "POST",
-                path: "/api/conversations/\(conversationId)/read"
-            )
-
-            // Update the local unread count
-            if let index = allConversations.firstIndex(where: { $0.id == conversationId }) {
-                // Re-fetch to get updated count since Conversation is immutable
-                await loadConversations()
-            }
-        } catch {
-            // Non-critical — don't surface this error
-        }
     }
 
     // MARK: - Real-time Events

@@ -331,6 +331,11 @@ final class APIService: @unchecked Sendable {
         return (url, pathOnly)
     }
 
+    /// The hub being browsed, or nil when none is selected. For request BODIES
+    /// that name a hub on an unscoped route (`POST /api/invites`); paths are
+    /// scoped with `hp(_:)` instead.
+    var activeHubId: String? { hubContext.activeHubId }
+
     /// Scope an `/api/...` path to the active hub (`/api/hubs/{activeHubId}/...`).
     /// Falls back to the bare path if no hub is selected.
     ///

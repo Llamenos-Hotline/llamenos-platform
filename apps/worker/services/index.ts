@@ -42,6 +42,7 @@ import { TeamsService } from './teams'
 import { TagsService } from './tags'
 import { IvrSpeechService } from './ivr-speech'
 import { parseSignalQueueRetentionDays } from '../messaging/signal/queue'
+import { webhookOrigin } from '../lib/provider-webhook-urls'
 
 export interface Services {
   identity: IdentityService
@@ -114,7 +115,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     tokenSecret: opts?.notifierTokenSecret ?? opts?.hmacSecret ?? '',
   })
   const digestCron = new DigestCronService(db, userNotifications, securityPrefs)
-  const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', opts?.env?.DOMAIN ?? 'localhost')
+  const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', webhookOrigin(opts?.env ?? {}))
 
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
   const hubShred = new HubShredService(db, opts?.blobStorage)

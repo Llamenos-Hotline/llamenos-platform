@@ -23,6 +23,23 @@ enum UserRole: String, Codable, Sendable, CaseIterable {
         case .admin: return "purple"
         }
     }
+
+    /// The server role this choice grants. The server takes role IDs, never
+    /// this two-way display enum — `PATCH /api/users/:pubkey` sets `roles`, and
+    /// `POST /api/invites` sets `roleIds`. "Admin" is the hub-scoped admin role,
+    /// the same one the Android and desktop clients grant.
+    var roleId: String {
+        switch self {
+        case .volunteer: return "role-volunteer"
+        case .admin: return "role-hub-admin"
+        }
+    }
+
+    /// The display role for a set of server role IDs: admin when any of them is
+    /// an admin role, volunteer otherwise.
+    init(roleIds: [String]) {
+        self = roleIds.contains { $0 == "role-hub-admin" || $0 == "role-super-admin" } ? .admin : .volunteer
+    }
 }
 
 // MARK: - ClientUserStatus
@@ -162,23 +179,17 @@ struct AppAuditEntry: Codable, Identifiable, Sendable {
     }
 }
 
-// MARK: - AppInvite
-// Client-only: generated `Invite` has different fields (name, phone, roleIDs)
-// vs our (code, role, createdBy, claimedBy, expiresAt).
+// MARK: - Invite (generated)
+// `Invite` is generated from `inviteResponseSchema` — the shape `GET /api/invites`
+// lists and `POST /api/invites` returns. The hand-written `AppInvite` this
+// replaced decoded `id`, `role` and `claimedBy`, none of which the server sends,
+// from `/api/identity/invites`, which was never mounted (#1701).
 
-/// An invite code from the API (client-side model with UI properties).
-/// Named `AppInvite` to avoid conflict with generated `Invite` from protocol codegen.
-struct AppInvite: Codable, Identifiable, Sendable {
-    let id: String
-    let code: String
-    let role: String
-    let createdBy: String
-    let claimedBy: String?
-    let expiresAt: String
-    let createdAt: String
+extension Invite: Identifiable {
+    var id: String { code }
 
-    /// Whether this invite has been claimed.
-    var isClaimed: Bool { claimedBy != nil }
+    /// Whether this invite has been redeemed.
+    var isClaimed: Bool { usedBy != nil || usedAt != nil }
 
     /// Whether this invite has expired.
     var isExpired: Bool {
@@ -189,10 +200,8 @@ struct AppInvite: Codable, Identifiable, Sendable {
     /// Whether this invite is currently usable (not claimed and not expired).
     var isActive: Bool { !isClaimed && !isExpired }
 
-    /// Parsed role enum.
-    var inviteRole: UserRole {
-        UserRole(rawValue: role) ?? .volunteer
-    }
+    /// The display role of the roles this invite grants.
+    var inviteRole: UserRole { UserRole(roleIds: roleIDS) }
 
     /// Parsed expiry date.
     var expiresDate: Date? {
@@ -209,6 +218,11 @@ struct AppInvite: Codable, Identifiable, Sendable {
         guard createdBy.count > 16 else { return createdBy }
         return "\(createdBy.prefix(8))...\(createdBy.suffix(6))"
     }
+}
+
+/// Response from `POST /api/invites`: the created invite, wrapped.
+struct CreateInviteResponse: Decodable, Sendable {
+    let invite: Invite
 }
 
 // MARK: - API Response Types
@@ -230,17 +244,7 @@ struct AuditLogResponse: Codable, Sendable {
     let total: Int
 }
 
-/// API response for the invites list.
-struct InvitesListResponse: Codable, Sendable {
-    let invites: [AppInvite]
-}
-
 // MARK: - Request Types
-
-/// Request body for `POST /api/identity/invite`.
-struct CreateInviteRequest: Encodable, Sendable {
-    let role: String
-}
 
 /// Request body for `POST /api/bans`.
 struct CreateBanRequest: Encodable, Sendable {
@@ -248,9 +252,20 @@ struct CreateBanRequest: Encodable, Sendable {
     let reason: String?
 }
 
-/// Request body for `PATCH /api/identity/:pubkey/role`.
-struct UpdateRoleRequest: Encodable, Sendable {
-    let role: String
+extension AdminUpdateUserBody {
+    /// A `PATCH /api/users/:pubkey` body that changes only the user's roles.
+    /// Every other field is nil, and nil fields are omitted on the wire, so the
+    /// server leaves them untouched.
+    static func roles(_ roleIds: [String]) -> AdminUpdateUserBody {
+        AdminUpdateUserBody(
+            active: nil, callPreference: nil, maxCaseAssignments: nil,
+            messagingEnabled: nil, name: nil, onBreak: nil, phone: nil,
+            profileCompleted: nil, roles: roleIds, specializations: nil,
+            spokenLanguages: nil, supervisorPubkey: nil,
+            supportedMessagingChannels: nil, teamID: nil,
+            transcriptionEnabled: nil, uiLanguage: nil
+        )
+    }
 }
 
 // MARK: - Report Category

@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { PhoneInput } from '@/components/phone-input'
 import { Radio, Save, Loader2, RefreshCw } from 'lucide-react'
 import { ProviderStatusBadge } from '@/components/setup/ProviderStatusBadge'
-import { WebhookConfirmation } from '@/components/setup/WebhookConfirmation'
+import { VoiceWebhookConfirmation } from '@/components/setup/VoiceWebhookConfirmation'
 import { InAppAudioNotice } from '@/components/setup/InAppAudioNotice'
 import { supportsInAppAudio } from '@/lib/in-app-audio'
 
@@ -373,19 +373,7 @@ export function TelephonyProviderSection({ config, draft, onConfigChange, onDraf
 
         {/* Webhook URLs */}
         {showWebhooks && (
-          <WebhookConfirmation
-            urls={[
-              {
-                label: t('setup.webhooks.voice', { defaultValue: 'Voice' }),
-                url: `${window.location.origin}/api/telephony/incoming`,
-              },
-              {
-                label: t('setup.webhooks.status', { defaultValue: 'Status' }),
-                url: `${window.location.origin}/api/telephony/status`,
-              },
-            ]}
-            visible={true}
-          />
+          <VoiceWebhookConfirmation />
         )}
       </div>
     </SettingsSection>
