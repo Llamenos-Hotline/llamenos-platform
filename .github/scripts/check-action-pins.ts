@@ -278,7 +278,9 @@ async function main() {
   const problems: Array<{ pin: Pin; message: string }> = [];
   const pending: Array<{ pin: Pin; ref: string }> = [];
   for (const pin of pins) {
-    const v = evaluate(pin, refsByRepo.get(pin.repo)!);
+    const refs = refsByRepo.get(pin.repo);
+    if (!refs) throw new Error(`no upstream refs loaded for ${pin.repo}`); // unreachable: lookup errors exit above
+    const v = evaluate(pin, refs);
     if (v.kind === "bad") problems.push({ pin, message: v.message });
     else if (v.kind === "ancestor-check") pending.push({ pin, ref: v.ref });
   }
