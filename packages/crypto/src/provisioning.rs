@@ -568,7 +568,17 @@ pub fn decrypt_provisioned_bundle(
         ))
     });
 
-    Ok(BundleDecryptionResult { secrets, sas_code })
+    // The seeds are [u8; 32] (Copy): constructing the result *copies* them, so
+    // `secrets` is not moved out of and its zeroize-on-drop runs when this frame
+    // exits. Moving `secrets` itself into the result would instead leave both
+    // seeds in the abandoned stack slot, un-zeroized (#2037).
+    Ok(BundleDecryptionResult {
+        secrets: DeviceSecrets {
+            signing_seed: secrets.signing_seed,
+            encryption_seed: secrets.encryption_seed,
+        },
+        sas_code,
+    })
 }
 
 // Test-only hook: the addresses of `decrypt_provisioned_bundle`'s two seed
@@ -673,14 +683,13 @@ mod tests {
         assert_eq!(&decrypted.sas_code[3..4], " ");
     }
 
-    /// Regression test for the un-zeroized stack locals fixed in #1864: the
-    /// two `[u8; 32]` seed locals in decrypt_provisioned_bundle are Copy, so
-    /// building the returned DeviceSecrets copies the seeds out of them, and
-    /// without an explicit wipe both seeds survive on the abandoned stack
-    /// frame after the function returns. Follows the raw-pointer pattern of
+    /// Regression test for the un-zeroized stack seed storage fixed in #1864
+    /// and #2037: decrypt_provisioned_bundle writes the seeds into a local
+    /// DeviceSecrets, and returning that local by move would leave both seeds
+    /// in the abandoned stack slot. Follows the raw-pointer pattern of
     /// device_keys.rs's secrets_zeroize_on_drop: read the exact slots through
-    /// saved pointers after the wipe, and assert the seeds were non-zero
-    /// before so a zero read cannot be mistaken for a seed that was always
+    /// saved pointers after the function returns, and assert the seeds were
+    /// non-zero so a zero read cannot be mistaken for a seed that was always
     /// zeros.
     #[test]
     fn bundle_import_zeroizes_stack_seed_locals() {
@@ -692,7 +701,7 @@ mod tests {
             decrypt_provisioned_bundle(&encrypted.encrypted_hex, &encrypted.claim_hex, &new_sk)
                 .unwrap();
 
-        // Addresses of the two stack locals, recorded while they were live.
+        // Addresses of the two seed slots, recorded while they were live.
         let (sig_ptr, enc_ptr) = SEED_LOCAL_PTRS.with(|p| p.get());
         assert_ne!(
             sig_ptr, 0,
