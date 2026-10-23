@@ -509,56 +509,6 @@ class BaseUITest: XCTestCase {
         }
     }
 
-    /// Navigate through full onboarding: create identity, set + confirm PIN, reach dashboard.
-    ///
-    /// V3 device key model: there is no backup-confirmation step and no digit
-    /// PIN pad here — PINSetView.swift uses a free-text SecureField
-    /// ("pin-input"/"pin-submit") so a PIN or passphrase (8+ characters) can
-    /// be entered, and device keys are generated atomically once the same
-    /// value is entered twice (PINViewModel.handleSetPIN). The digit
-    /// PINPadView ("pin-pad", `enterPIN`) is only used on the lock/unlock
-    /// screen — see PINUnlockView.swift.
-    func completeOnboarding(hubURL: String = "https://test.example.org", pin: String = "12345678") {
-        // Enter hub URL
-        let hubURLInput = find("hub-url-input")
-        if hubURLInput.waitForExistence(timeout: 5) {
-            hubURLInput.tap()
-            hubURLInput.typeText(hubURL)
-            dismissKeyboard()
-        }
-
-        // Create identity
-        let createButton = find("create-identity")
-        if createButton.waitForExistence(timeout: 3) {
-            createButton.tap()
-        }
-
-        // Enter PIN (first entry)
-        let pinInput = find("pin-input")
-        guard pinInput.waitForExistence(timeout: 10) else { return }
-        pinInput.tap()
-        pinInput.typeText(pin)
-
-        let submitButton = find("pin-submit")
-        if submitButton.waitForExistence(timeout: 3) {
-            submitButton.tap()
-        }
-
-        // Confirm PIN (second entry)
-        if pinInput.waitForExistence(timeout: 5) {
-            pinInput.tap()
-            pinInput.typeText(pin)
-
-            if submitButton.waitForExistence(timeout: 3) {
-                submitButton.tap()
-            }
-        }
-
-        // Wait for dashboard
-        let dashboardTitle = find("dashboard-title")
-        _ = dashboardTitle.waitForExistence(timeout: 10)
-    }
-
     /// Dismiss the keyboard by tapping a neutral area of the screen.
     func dismissKeyboard() {
         let coordinate = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
