@@ -271,9 +271,9 @@ Found while validating this procedure without a server. They are real and each
 one stops or silently degrades the deploy:
 
 1. **The default app image does not exist.** `llamenos_app_image` defaults to
-   `docker.io/llamenos/llamenos:latest`; that repository does not resolve, the
-   `Docker Build` workflow has only ever run once (failed, 2026-04-29), and it
-   never pushes a `latest` tag anyway. You **must** set `llamenos_app_image`
+   `docker.io/llamenos/llamenos:latest`; that repository does not resolve, and no
+   CI workflow publishes images (they are published from a local machine) — nothing
+   ever pushed a `latest` tag. You **must** set `llamenos_app_image`
    explicitly — see [Getting the app image onto the server](#getting-the-app-image-onto-the-server).
 2. **Android pins `llamenos.org` only.** `network_security_config.xml` has a
    single `<domain-config>` for `llamenos.org` (with `includeSubdomains`). If the
@@ -463,10 +463,8 @@ Use a bare `llamenos:<version>` tag. It resolves to Docker Hub's reserved
 for a tag that is not actually published, because the role runs a `pull: always`
 (errors ignored) before starting and would fetch whatever that namespace serves.
 
-**B. Publish to a registry.** `.github/workflows/docker.yml` builds and pushes
-`<DOCKERHUB_USERNAME>/llamenos:<version>` (with SBOM, SLSA provenance, cosign
-signature, Trivy scan), but it needs the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`
-secrets and a successful run first. After that, pin by digest:
+**B. Publish to a registry.** Build and push `<user>/llamenos:<version>` from
+your own machine (CI never publishes images). Then pin by digest:
 `llamenos_app_image: docker.io/<user>/llamenos:<version>@sha256:…`.
 
 ### Step 5 — Preflight (still on port 22, before any change to the server)

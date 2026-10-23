@@ -39,7 +39,7 @@ All platforms implement the same protocol: `docs/protocol/PROTOCOL.md`
 - **Telephony**: 8 providers via `TelephonyAdapter` interface (Twilio, SignalWire, Vonage, Plivo, Telnyx, Bandwidth, Asterisk, FreeSWITCH). `SipBridgeAdapter` base class for ARI/ESL/Kamailio backends. `PBX_TYPE` env var selects backend for `sip-bridge/`.
 - **Auth**: Ed25519/X25519 per-device keys for E2EE + WebAuthn session tokens for multi-device support
 - **i18n**: `packages/i18n/` — 22 locales (source of truth: `packages/i18n/languages.ts`; never hardcode a count/list elsewhere — `bun run i18n:validate` fails loudly if one drifts from `packages/i18n/locales/`) + codegen for iOS `.strings` and Android `strings.xml`
-- **Deployment**: Docker Compose / Helm (VPS self-hosted), provisioned by the Ansible playbooks in `deploy/ansible/`. **Ingress is Caddy on the origin host** — it terminates TLS itself with a Let's Encrypt certificate (`deploy/ansible/roles/llamenos-caddy/templates/caddy.j2`). There is no Cloudflare Tunnel and no CDN in front of it. EU/GDPR-compatible.
+- **Deployment**: Docker Compose / Helm (VPS self-hosted), provisioned by the Ansible playbooks in `deploy/ansible/`. **Ingress is Caddy on the origin host** — it terminates TLS itself with a Let's Encrypt certificate (`deploy/ansible/roles/llamenos-caddy/templates/caddy.j2`). There is no Cloudflare Tunnel and no CDN in front of it. EU/GDPR-compatible. **Publishing (site, apps, ISOs, Docker images) is local-only; CI builds and gates but never ships** — see "Publishing vs deploying" under Development Commands.
 - **Testing**: E2E via Playwright (desktop), XCUITest (iOS), Compose UI tests (Android), Cucumber BDD (Android E2E), backend BDD; Rust tests via `cargo test`
 - **Desktop Security**: Tauri Stronghold (encrypted vault), isolation pattern, CSP, single-instance
 - **Load Testing**: k6-based load tests for calls, messages, and mixed traffic (`bun run load:*`)
@@ -296,10 +296,10 @@ bun run test:worker                      # Worker: codegen → typecheck → int
 bun run test:crypto                      # Crypto: cargo test + clippy
 bun run test:backend:bdd                 # Backend BDD against local backend (API-level)
 
-# Deploy (runs on Linux machine)
-# These deploy ONLY the marketing site (Cloudflare Pages). `deploy` is an alias for `deploy:site`.
+# Publish the marketing site (run LOCALLY — CI never publishes; see "Publishing vs deploying" below)
+# These touch ONLY the marketing site (Cloudflare Pages). `deploy` is an alias for `deploy:site`.
 # The server is deployed by the Ansible playbooks in `deploy/ansible/`, dispatched from the
-# `deploy-*.yml` GitHub Actions workflows — there is no `bun run` script for it.
+# `deploy-prod.yml` / `deploy-demo.yml` GitHub Actions workflows — there is no `bun run` script for it.
 bun run deploy                           # Marketing site (alias for deploy:site)
 bun run deploy:site                      # Marketing site
 
@@ -313,6 +313,13 @@ bun run version:bump <major|minor|patch> [description]     # Bump version across
 # Utilities
 bun run bootstrap-admin                  # Generate admin keypair
 ```
+
+**Publishing vs deploying — read this before adding a workflow.** Two different things, two different homes:
+
+- **Publishing is LOCAL, never CI.** The marketing site (Cloudflare Pages), the Android/iOS/desktop apps (including store submission), the ISOs and the Docker images are all published from the operator's own machine. **CI builds and gates; it never ships.** Do not add a workflow, job or step that uploads to Cloudflare Pages, an app store, a container registry or any other distribution channel, and do not wire Cloudflare/Docker Hub/store credentials into Actions secrets for one. (`deploy-site.yml` and `docker.yml` were removed for this reason, #2095.)
+- **Deploying the server is CI.** `deploy-prod.yml` and `deploy-demo.yml` dispatch the Ansible playbooks in `deploy/ansible/` against our own VPSes. That is intended and stays.
+- **Known exceptions that predate this rule — do not extend them:** `release.yml` (the tag and the draft GitHub Release it attaches build outputs to, and the `docker-stable` GHCR image) and `tauri-release.yml` (desktop updater channel). They are tracked for an operator decision, not a precedent for new publish steps.
+- The marketing site is the only thing that may sit on a CDN (Cloudflare Pages, published locally). That is separate from the app-host rule in Gotchas: the app host terminates TLS on the origin and must never be behind a CDN or proxy.
 
 **Deployment rules — NEVER run `wrangler pages deploy` or `wrangler deploy` directly.** Always use `bun run deploy` or `bun run deploy:site` from the root. Running wrangler from the wrong directory will deploy the wrong artifact. Wrangler only ever touches the marketing site; the server never goes near it.
 

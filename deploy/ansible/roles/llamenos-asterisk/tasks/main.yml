@@ -140,7 +140,7 @@
          else _sip_bridge_derived }}
   vars:
     # `-sip-bridge` goes on the REPOSITORY, before the tag — which is how
-    # .github/workflows/docker.yml publishes it (`user/llamenos-sip-bridge`
+    # the image is named when published (`user/llamenos-sip-bridge`
     # tagged `1.2.3`), and not how the old template derived it
     # (`user/llamenos:1.2.3-sip-bridge`, which nothing has ever pushed).
     #
@@ -208,7 +208,7 @@
       Supply the image by whichever route this deployment uses for the app
       image — the bridge is obtained the same way, never a different one:
 
-        * Docker Hub release path: .github/workflows/docker.yml publishes
+        * Docker Hub release path: the operator publishes
           <user>/llamenos-sip-bridge:<version> beside <user>/llamenos:<version>.
           Point llamenos_app_image at the app image and this is derived.
 

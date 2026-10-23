@@ -3,7 +3,7 @@
 **Epic 99 -- Manual prerequisites before desktop releases can ship.**
 
 This document covers every manual step a human must complete before the automated
-CI/CD pipelines (`ci.yml`, `tauri-release.yml`, `docker.yml`) can produce signed,
+CI/CD pipelines (`ci.yml`, `tauri-release.yml`) can produce signed,
 notarized, distributable release artifacts. Automated processes reference these
 secrets and accounts; without them, builds will fail or produce unsigned binaries
 that operating systems will block.
@@ -612,7 +612,7 @@ credentials are only required for the marketing site (`site/`) deployment via
 | `CLOUDFLARE_API_TOKEN` | Marketing site deploy (`site/`) only | Cloudflare dashboard > API Tokens | Only for `bun run deploy:site` |
 | `CLOUDFLARE_ACCOUNT_ID` | Marketing site deploy (`site/`) only | Cloudflare dashboard > Account Home | Only for `bun run deploy:site` |
 
-### Docker Secrets (`docker.yml`)
+### Release image secrets (`release.yml` `docker-stable`)
 
 | Secret | Used By | How to Get | Required |
 |--------|---------|------------|----------|
@@ -738,9 +738,9 @@ script to keep all four version files in sync.
    macOS (universal), Windows (x64), and Linux (x64). Creates GitHub Release
    with `latest.json` manifest for auto-updater.
 
-3. **Docker image releases** (tag-triggered): Any `v*` tag triggers
-   `docker.yml`, which builds and pushes to GHCR with Trivy vulnerability
-   scanning.
+3. **Docker image releases**: `release.yml`'s `docker-stable` job builds and
+   pushes the app image to GHCR with Trivy vulnerability scanning when a
+   release PR merges.
 
 The desktop release is independent of the API release. Version numbers should
 be coordinated but do not need to match exactly -- the desktop app connects to
