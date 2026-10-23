@@ -227,8 +227,8 @@ export async function readIdentityFromPage(page: Page): Promise<PageIdentity> {
     if (!device) throw new Error('device keys are not unlocked')
 
     const authedGet = async (path: string) => {
-      const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
-      const token = await platform.createAuthToken(Date.now(), 'GET', `/api${path}`, nonce)
+      // No nonce argument: the CryptoState generates and signs its own, and returns it inside the token JSON.
+      const token = await platform.createAuthToken(Date.now(), 'GET', `/api${path}`)
       return fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } })
     }
 
