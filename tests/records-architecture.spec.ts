@@ -7,8 +7,25 @@
  * - Contact view (admin-only, unified timeline)
  * - Custom field context filtering (call-notes, conversation-notes, reports)
  */
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts, fillCallId } from './helpers'
+
+/**
+ * Create a note from the notes page and return its card. Content is made unique per
+ * call so the card can never be confused with a note left by an earlier attempt of
+ * this serial group (a retry re-runs every test against the same database).
+ */
+async function createNote(page: Page, callId: string, content: string) {
+  const text = `${content} ${callId}`
+  await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
+  await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible()
+  await fillCallId(page, callId)
+  await page.getByTestId(TestIds.NOTE_CONTENT).fill(text)
+  await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
+  const detail = page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: text })
+  await expect(detail).toBeVisible({ timeout: 10000 })
+  return page.getByTestId(TestIds.NOTE_CARD).filter({ has: detail })
+}
 
 test.describe('Records Architecture', () => {
   test.describe.configure({ mode: 'serial' })
@@ -24,87 +41,58 @@ test.describe('Records Architecture', () => {
   test('admin can create a note and see reply button', async ({ page }) => {
     await Navigation.goToNotes(page)
 
-    // Create a note
-    await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible()
-    const callId = 'thread-test-' + Date.now()
-    await fillCallId(page, callId)
-    await page.getByTestId(TestIds.NOTE_CONTENT).fill('Note for threading test')
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
+    const card = await createNote(page, 'thread-test-' + Date.now(), 'Note for threading test')
 
-    // Note should appear
-    await expect(page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: 'Note for threading test' }).first()).toBeVisible({ timeout: 10000 })
-
-    // Reply button should be visible
-    await expect(page.getByTestId(TestIds.NOTE_REPLY_BTN).first()).toBeVisible()
+    // Reply button should be visible on the new note
+    await expect(card.getByTestId(TestIds.NOTE_REPLY_BTN)).toBeVisible()
   })
 
   test('admin can expand reply thread and send a reply', async ({ page }) => {
     await Navigation.goToNotes(page)
 
-    // Create a note first
-    await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible()
-    const callId = 'reply-test-' + Date.now()
-    await fillCallId(page, callId)
-    await page.getByTestId(TestIds.NOTE_CONTENT).fill('Note with reply')
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: 'Note with reply' }).first()).toBeVisible({ timeout: 10000 })
+    const card = await createNote(page, 'reply-test-' + Date.now(), 'Note with reply')
 
     // Click reply button
-    await page.getByTestId(TestIds.NOTE_REPLY_BTN).first().click()
+    await card.getByTestId(TestIds.NOTE_REPLY_BTN).click()
 
     // Thread area should appear
-    await expect(page.getByTestId(TestIds.NOTE_THREAD)).toBeVisible({ timeout: 5000 })
+    await expect(card.getByTestId(TestIds.NOTE_THREAD)).toBeVisible({ timeout: 5000 })
 
     // Reply text area should be visible
-    const replyTextarea = page.getByTestId(TestIds.NOTE_REPLY_TEXT)
+    const replyTextarea = card.getByTestId(TestIds.NOTE_REPLY_TEXT)
     await expect(replyTextarea).toBeVisible({ timeout: 5000 })
 
-    // Type a reply
+    // Type and send a reply
     await replyTextarea.fill('This is a threaded reply')
-
-    // Send the reply
-    await page.getByTestId(TestIds.NOTE_REPLY_SEND).click()
-
-    // After sending, the reply count should update
-    // Wait for the reply to be sent
+    await card.getByTestId(TestIds.NOTE_REPLY_SEND).click()
 
     // The reply button text should now show "1 replies"
     // Wait for the async send (encrypt → API → state update) to complete
-    const replyBtn = page.getByTestId(TestIds.NOTE_REPLY_BTN).first()
-    await expect(replyBtn).toContainText(/1 repl/i, { timeout: Timeouts.API })
+    await expect(card.getByTestId(TestIds.NOTE_REPLY_BTN)).toContainText(/1 repl/i, { timeout: Timeouts.API })
   })
 
   test('reply button shows count after collapse and re-expand', async ({ page }) => {
     await Navigation.goToNotes(page)
 
-    // Create a note and add a reply
-    await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible()
-    const callId = 'collapse-test-' + Date.now()
-    await fillCallId(page, callId)
-    await page.getByTestId(TestIds.NOTE_CONTENT).fill('Note for collapse test')
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: 'Note for collapse test' }).first()).toBeVisible({ timeout: 10000 })
+    const card = await createNote(page, 'collapse-test-' + Date.now(), 'Note for collapse test')
+    const replyBtn = card.getByTestId(TestIds.NOTE_REPLY_BTN)
 
     // Expand thread and send reply
-    await page.getByTestId(TestIds.NOTE_REPLY_BTN).first().click()
-    await expect(page.getByTestId(TestIds.NOTE_THREAD)).toBeVisible({ timeout: 5000 })
-    const replyTextarea = page.getByTestId(TestIds.NOTE_REPLY_TEXT)
+    await replyBtn.click()
+    await expect(card.getByTestId(TestIds.NOTE_THREAD)).toBeVisible({ timeout: 5000 })
+    const replyTextarea = card.getByTestId(TestIds.NOTE_REPLY_TEXT)
     await expect(replyTextarea).toBeVisible({ timeout: 5000 })
     await replyTextarea.fill('Reply to collapse test')
-    await page.getByTestId(TestIds.NOTE_REPLY_SEND).click()
+    await card.getByTestId(TestIds.NOTE_REPLY_SEND).click()
 
     // Wait for the reply to be registered before collapsing
-    await expect(page.getByTestId(TestIds.NOTE_REPLY_BTN).first()).toContainText(/1 repl/i, { timeout: Timeouts.API })
+    await expect(replyBtn).toContainText(/1 repl/i, { timeout: Timeouts.API })
 
     // Collapse thread
-    await page.getByTestId(TestIds.NOTE_REPLY_BTN).first().click()
-    await expect(page.getByTestId(TestIds.NOTE_THREAD)).not.toBeVisible()
+    await replyBtn.click()
+    await expect(card.getByTestId(TestIds.NOTE_THREAD)).not.toBeVisible()
 
     // Re-expand — reply count should persist
-    const replyBtn = page.getByTestId(TestIds.NOTE_REPLY_BTN).first()
     await expect(replyBtn).toContainText(/1 repl/i)
   })
 
@@ -211,24 +199,14 @@ test.describe('Records Architecture', () => {
 
     // Create two notes for the same call
     const callId = 'group-' + Date.now()
+    await createNote(page, callId, 'Grouped note A')
+    await createNote(page, callId, 'Grouped note B')
 
-    await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible()
-    await fillCallId(page, callId)
-    await page.getByTestId(TestIds.NOTE_CONTENT).fill('Grouped note A')
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: 'Grouped note A' }).first()).toBeVisible({ timeout: 10000 })
-
-    await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible()
-    await fillCallId(page, callId)
-    await page.getByTestId(TestIds.NOTE_CONTENT).fill('Grouped note B')
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-    await expect(page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: 'Grouped note B' }).first()).toBeVisible({ timeout: 10000 })
-
-    // Both should be grouped under the same card
-    const callCard = page.locator('div').filter({ hasText: callId.slice(0, 12) }).first()
-    await expect(callCard).toBeVisible()
+    // Both should be grouped under the same call card
+    const callCard = page.getByTestId(TestIds.NOTE_GROUP)
+      .filter({ has: page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: `Grouped note A ${callId}` }) })
+      .filter({ has: page.getByTestId(TestIds.NOTE_DETAIL_TEXT).filter({ hasText: `Grouped note B ${callId}` }) })
+    await expect(callCard).toHaveCount(1)
   })
 
   // ============ Report Isolation ============

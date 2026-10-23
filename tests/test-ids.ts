@@ -87,6 +87,7 @@ export const TestIds = {
 
   // ============ Notes ============
   NOTE_LIST: 'note-list',
+  NOTE_GROUP: 'note-group',
   NOTE_CARD: 'note-card',
   NOTE_AUTHOR: 'note-author',
   NOTE_NEW_BTN: 'note-new-btn',
@@ -96,6 +97,8 @@ export const TestIds = {
   NOTE_SEARCH: 'note-search',
   NOTE_FORM: 'note-form',
   NOTE_CALL_ID: 'note-call-id',
+  CALL_ID_SELECT: 'call-id-select',
+  CALL_ID_MANUAL_OPTION: 'call-id-manual-option',
   NOTE_CONTENT: 'note-content',
   NOTE_REPLY_BTN: 'note-reply-btn',
   NOTE_THREAD: 'note-thread',
