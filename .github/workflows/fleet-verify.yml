@@ -190,7 +190,7 @@ jobs:
       # GitHub's cache service for anything, belt-and-suspenders on top of
       # the trigger-scoping fix.
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
         with:
           bun-version: ${{ env.BUN_VERSION }}
           no-cache: true
