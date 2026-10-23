@@ -33,6 +33,28 @@ extension SharedContactTimelineListResponseContact: Identifiable {
     }
 }
 
+// Generated structs are `Codable, Sendable` only, and synthesis cannot reach
+// across files, so the navigation destination's `Hashable` is spelled out.
+extension SharedContactTimelineListResponseContact: Hashable {
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.contactHash == rhs.contactHash && lhs.last4 == rhs.last4
+            && lhs.firstSeen == rhs.firstSeen && lhs.lastSeen == rhs.lastSeen
+            && lhs.callCount == rhs.callCount && lhs.conversationCount == rhs.conversationCount
+            && lhs.noteCount == rhs.noteCount && lhs.reportCount == rhs.reportCount
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(contactHash)
+        hasher.combine(last4)
+        hasher.combine(firstSeen)
+        hasher.combine(lastSeen)
+        hasher.combine(callCount)
+        hasher.combine(conversationCount)
+        hasher.combine(noteCount)
+        hasher.combine(reportCount)
+    }
+}
+
 // MARK: - Timeline Event
 // Client-only: generated `ContactTimelineDetailResponse` uses `[[String: JSONAny]]`
 // for unstructured event data. This client model has typed fields.

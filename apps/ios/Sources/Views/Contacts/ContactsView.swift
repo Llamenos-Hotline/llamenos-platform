@@ -216,7 +216,7 @@ enum ContactNavDestination: Hashable {
     case timeline(contactHash: String, displayIdentifier: String)
     /// Carries the whole summary row: the profile is that row plus the activity
     /// the server returns for the contact, so it needs no second lookup of it.
-    case detail(ContactSummary)
+    case detail(SharedContactTimelineListResponseContact)
 }
 
 // MARK: - ContactRowView

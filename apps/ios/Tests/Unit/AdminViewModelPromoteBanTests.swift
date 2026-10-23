@@ -13,6 +13,7 @@ import XCTest
 /// `POST /api/bans/platform`, whose validator is `createPlatformBanBodySchema`
 /// (`{phone: <E.164>, reason?}`) — every call would have 400'd. The real route
 /// is `POST /api/bans/platform/promote` with `promoteBanBodySchema` (`{banId}`).
+@MainActor
 final class AdminViewModelPromoteBanTests: XCTestCase {
 
     private let testBaseURL = URL(string: "https://hub.example.org")!

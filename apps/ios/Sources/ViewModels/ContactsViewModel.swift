@@ -125,9 +125,9 @@ final class ContactsViewModel {
     ///
     /// Each contact once: the server appends the contacts known only from
     /// conversations to every page of the list, so pages overlap.
-    private func fetchAllContacts() async throws -> [ContactSummary] {
+    private func fetchAllContacts() async throws -> [SharedContactTimelineListResponseContact] {
         let pageSize = 200
-        var all: [ContactSummary] = []
+        var all: [SharedContactTimelineListResponseContact] = []
         var seen = Set<String>()
         var page = 1
         while true {
@@ -136,13 +136,13 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactsListResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             let fresh = response.contacts.filter { seen.insert($0.contactHash).inserted }
             all.append(contentsOf: fresh)
-            if fresh.isEmpty || all.count >= response.total { return all }
+            if fresh.isEmpty || Double(all.count) >= response.total { return all }
             page += 1
         }
     }
@@ -183,7 +183,7 @@ final class ContactsViewModel {
 @Observable
 final class ContactDetailViewModel {
     private let apiService: APIService
-    let summary: ContactSummary
+    let summary: SharedContactTimelineListResponseContact
     var contactHash: String { summary.contactHash }
 
     var contact: ContactDetail?
@@ -192,7 +192,7 @@ final class ContactDetailViewModel {
     var isLoadingRelationships = false
     var errorMessage: String?
 
-    init(apiService: APIService, summary: ContactSummary) {
+    init(apiService: APIService, summary: SharedContactTimelineListResponseContact) {
         self.apiService = apiService
         self.summary = summary
     }

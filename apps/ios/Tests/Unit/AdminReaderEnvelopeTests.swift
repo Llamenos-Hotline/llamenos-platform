@@ -96,14 +96,26 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         let (crypto, authorPubkey, adminPubkey) = try makeAuthorAndAdminKeys()
         let apiService = makeAPIService(cryptoService: crypto)
 
+        let eventTypes = ProtocolFixtures.entityTypeListJSON([
+            ProtocolFixtures.entityTypeJSON(id: "et-1", name: "meeting", category: "event"),
+        ])
         MockURLProtocol.requestHandler = { request in
             if request.httpMethod == "GET" {
-                return (200, Data(#"{"events":[],"total":0}"#.utf8))
+                let path = request.url?.path ?? ""
+                if path.hasSuffix("/settings/cms/case-management") {
+                    return (200, Data(#"{"enabled":true}"#.utf8))
+                }
+                if path.hasSuffix("/settings/cms/entity-types") {
+                    return (200, Data(eventTypes.utf8))
+                }
+                return (200, Data(ProtocolFixtures.emptyEventList.utf8))
             }
             return (201, Data(#"{"id":"evt-1"}"#.utf8))
         }
 
+        // createEvent takes its event type's identifiers from the loaded entity types.
         let viewModel = EventsViewModel(apiService: apiService, cryptoService: crypto)
+        await viewModel.loadInitial()
         _ = await viewModel.createEvent(
             entityTypeId: "et-1",
             title: "community meeting",
@@ -119,6 +131,9 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         // camelCase keys, or `createEventBodySchema` rejects the request.
         XCTAssertNotNil(json["entityTypeId"], "got \(json.keys.sorted())")
         XCTAssertNil(json["entity_type_id"], "body must not be snake_cased: \(json.keys.sorted())")
+        // `createEventBodySchema` requires both discriminators; they come from the entity type.
+        XCTAssertEqual(json["eventTypeHash"] as? String, "et-1", "got \(json.keys.sorted())")
+        XCTAssertEqual(json["statusHash"] as? String, "open", "got \(json.keys.sorted())")
 
         let pubkeys = try envelopePubkeys(json["detailEnvelopes"])
         XCTAssertTrue(
