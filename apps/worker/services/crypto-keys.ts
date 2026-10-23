@@ -6,7 +6,7 @@
  *   - PUK envelopes: HPKE-encrypted PUK seed distribution
  *   - MLS messages: pending handshake message delivery
  */
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { sigchainLinks, pukEnvelopes, mlsPendingMessages } from '../db/schema'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
@@ -462,25 +462,65 @@ function validateLinkSemantics(userPubkey: string, link: AppendLink): void {
   }
 }
 
+type SigchainRow = typeof sigchainLinks.$inferSelect
+
 /**
- * Device IDs the user's sigchain currently authorises — the only valid
- * addresses for a PUK envelope. Mirrors the device-set walk in
- * packages/crypto `verify_sigchain` (genesis / device_add add, device_remove
- * removes), keyed by device ID because that is what the PUK envelope's HPKE
- * AAD binds (`<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>`).
+ * The devices the user's sigchain currently authorises, as sigchain device ID →
+ * device signing pubkey — the only valid addresses for a PUK envelope.
+ * Mirrors the device-set walk in packages/crypto `verify_sigchain` (genesis /
+ * device_add add, device_remove removes). Addresses are device IDs because
+ * that is what the PUK envelope's HPKE AAD binds
+ * (`<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>`).
+ *
+ * A `device_remove` removes by device ID OR by `devicePubkey`: the Rust verifier
+ * removes by pubkey, and the revoke path (identity.revokeDevice) names the
+ * push-registry row ID in `deviceId`, so matching on the ID alone would leave a
+ * revoked device authorised for new envelopes.
  */
-function authorizedDeviceIds(links: Array<typeof sigchainLinks.$inferSelect>): Set<string> {
-  const ids = new Set<string>()
+function authorizedDevices(links: SigchainRow[]): Map<string, string> {
+  const devices = new Map<string, string>()
   for (const link of links) {
-    const payload = link.payload as { deviceId?: unknown } | null
-    if (typeof payload?.deviceId !== 'string') continue
+    const payload = link.payload as { deviceId?: unknown; devicePubkey?: unknown } | null
+    const deviceId = typeof payload?.deviceId === 'string' ? payload.deviceId : undefined
+    const devicePubkey = typeof payload?.devicePubkey === 'string' ? payload.devicePubkey : undefined
     if (link.linkType === 'genesis' || link.linkType === 'device_add' || link.linkType === 'recovery-device-add') {
-      ids.add(payload.deviceId)
+      if (deviceId !== undefined) devices.set(deviceId, devicePubkey ?? '')
     } else if (link.linkType === 'device_remove') {
-      ids.delete(payload.deviceId)
+      for (const [id, pubkey] of [...devices]) {
+        if (id === deviceId || (devicePubkey !== undefined && pubkey === devicePubkey)) devices.delete(id)
+      }
     }
   }
-  return ids
+  return devices
+}
+
+async function loadSigchainRows(db: Pick<Database, 'select'>, userPubkey: string): Promise<SigchainRow[]> {
+  return db
+    .select()
+    .from(sigchainLinks)
+    .where(eq(sigchainLinks.userPubkey, userPubkey))
+    .orderBy(asc(sigchainLinks.seqNo))
+}
+
+/**
+ * Delete the PUK envelopes sealed to the sigchain device(s) whose signing key
+ * is `devicePubkey`. Called by the revoke path BEFORE it appends the
+ * `device_remove` link (while the chain still names the device) and inside the
+ * same transaction, so a failed append rolls the deletion back. PUK envelopes
+ * no longer reference the push registry, so deleting the registry row does not
+ * cascade to them.
+ */
+export async function deletePukEnvelopesForDevicePubkey(
+  tx: SigchainTx,
+  userPubkey: string,
+  devicePubkey: string,
+): Promise<void> {
+  const authorized = authorizedDevices(await loadSigchainRows(tx, userPubkey))
+  const deviceIds = [...authorized].filter(([, pubkey]) => pubkey === devicePubkey).map(([id]) => id)
+  if (deviceIds.length === 0) return
+  await tx
+    .delete(pukEnvelopes)
+    .where(and(eq(pukEnvelopes.userPubkey, userPubkey), inArray(pukEnvelopes.deviceId, deviceIds)))
 }
 
 // ---------------------------------------------------------------------------
@@ -560,12 +600,7 @@ export class CryptoKeysService {
   ): Promise<PukEnvelopeResponse[]> {
     if (envelopes.length === 0) return []
 
-    const chain = await this.db
-      .select()
-      .from(sigchainLinks)
-      .where(eq(sigchainLinks.userPubkey, userPubkey))
-      .orderBy(asc(sigchainLinks.seqNo))
-    const authorized = authorizedDeviceIds(chain)
+    const authorized = authorizedDevices(await loadSigchainRows(this.db, userPubkey))
     const unknown = envelopes.filter(e => !authorized.has(e.deviceId))
     if (unknown.length > 0) {
       throw new CryptoKeyError(

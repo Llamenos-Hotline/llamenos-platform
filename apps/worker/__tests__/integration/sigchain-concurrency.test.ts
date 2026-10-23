@@ -115,6 +115,17 @@ const DDL = `
     device_info JSONB
   );
 
+  -- Not FK'd to devices: PUK envelopes are keyed by sigchain device ID (#1050).
+  CREATE TABLE ${TEST_SCHEMA}.puk_envelopes (
+    id          TEXT PRIMARY KEY,
+    user_pubkey TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
+    device_id   TEXT NOT NULL,
+    generation  INTEGER NOT NULL,
+    envelope    JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_pubkey, device_id, generation)
+  );
+
   CREATE TABLE ${TEST_SCHEMA}.security_events (
     id          TEXT PRIMARY KEY,
     user_pubkey TEXT REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE SET NULL,
@@ -226,7 +237,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE sigchain_links`
+  await testSql`TRUNCATE TABLE sigchain_links, puk_envelopes`
 })
 
 describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)', () => {
@@ -405,5 +416,81 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
         expect(persisted[persisted.length - 1].linkType).toBe('device_add')
       }
     }
+  })
+})
+
+describe('revoking a device removes its PUK envelopes and its authorisation (#1050)', () => {
+  const hpke = { v: 3, labelId: 1, enc: 'ZW5j', ct: 'Y3Q' }
+
+  it('deletes the revoked device\'s envelopes and refuses new ones, though the revoke link names the registry id', async () => {
+    const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))
+    const added = await service.appendSigchainLink(USER_PUBKEY, buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
+    const device2Pubkey = 'cc'.repeat(32) // deviceAddPayload's devicePubkey
+
+    // The push-registry row for the device being revoked — a DIFFERENT id from
+    // its sigchain device id, exactly as production assigns them.
+    await testSql`
+      INSERT INTO devices (id, pubkey, platform, ed25519_pubkey)
+      VALUES ('registry-row-2', ${USER_PUBKEY}, 'ios', ${device2Pubkey})
+    `
+    await service.distributePukEnvelopes(USER_PUBKEY, [
+      { deviceId: 'dev-1', generation: 1, envelope: hpke },
+      { deviceId: 'sig-dev-2', generation: 1, envelope: hpke },
+    ])
+
+    const removeLink = buildLink(
+      3,
+      added.hash,
+      { deviceId: 'registry-row-2', devicePubkey: device2Pubkey, platform: 'ios' },
+      { signerDeviceId: '', signerPubkey: '', timestamp: '' },
+    )
+    await identity.revokeDevice(USER_PUBKEY, 'registry-row-2', {
+      signature: removeLink.signature,
+      sigchainHash: removeLink.hash,
+      sigchainSeqNo: removeLink.seqNo,
+      sigchainPrevHash: removeLink.prevHash ?? undefined,
+    })
+
+    const remaining = await testSql`SELECT device_id FROM puk_envelopes ORDER BY device_id`
+    expect(remaining.map((r) => r.device_id)).toEqual(['dev-1'])
+
+    // The removal names the registry id, not 'sig-dev-2' — it must still take
+    // the sigchain device out of the authorised set (the Rust verifier removes
+    // by devicePubkey), or a revoked device could be handed a new PUK.
+    await expect(
+      service.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'sig-dev-2', generation: 2, envelope: hpke }]),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      service.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'dev-1', generation: 2, envelope: hpke }]),
+    ).resolves.toHaveLength(1)
+  })
+
+  it('keeps the envelopes when the revoke link is rejected (transaction rolls back)', async () => {
+    const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))
+    await service.appendSigchainLink(USER_PUBKEY, buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
+    const device2Pubkey = 'cc'.repeat(32)
+    await testSql`
+      INSERT INTO devices (id, pubkey, platform, ed25519_pubkey)
+      VALUES ('registry-row-2', ${USER_PUBKEY}, 'ios', ${device2Pubkey})
+    `
+    await service.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'sig-dev-2', generation: 1, envelope: hpke }])
+
+    // seqNo 9 does not extend the chain head (3): the append is rejected.
+    const badLink = buildLink(9, 'ab'.repeat(32), { deviceId: 'registry-row-2', devicePubkey: device2Pubkey, platform: 'ios' }, {
+      signerDeviceId: '', signerPubkey: '', timestamp: '',
+    })
+    await expect(
+      identity.revokeDevice(USER_PUBKEY, 'registry-row-2', {
+        signature: badLink.signature,
+        sigchainHash: badLink.hash,
+        sigchainSeqNo: badLink.seqNo,
+        sigchainPrevHash: badLink.prevHash ?? undefined,
+      }),
+    ).rejects.toSatisfy((e: unknown) => e instanceof ServiceError && e.status === 409)
+
+    const kept = await testSql`SELECT device_id FROM puk_envelopes`
+    expect(kept.map((r) => r.device_id)).toEqual(['sig-dev-2'])
+    const [deviceRow] = await testSql`SELECT id FROM devices WHERE id = 'registry-row-2'`
+    expect(deviceRow).toBeDefined()
   })
 })

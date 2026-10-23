@@ -1059,6 +1059,22 @@ describe('CryptoKeysService — PUK Envelopes', () => {
       expect(db.insert).not.toHaveBeenCalled()
     })
 
+    it('treats a device_remove that names the device by pubkey (registry id in deviceId) as removing it', async () => {
+      // identity.revokeDevice writes the push-registry row id into payload.deviceId; the Rust
+      // verifier removes by devicePubkey, so the authorised set must follow the pubkey.
+      const removed = makeLink({
+        seqNo: 3, hash: 'h3', prevHash: 'h2', linkType: 'device_remove',
+        payload: { deviceId: 'registry-row-2', devicePubkey: DEVICE_ADD_PAYLOAD.devicePubkey, platform: 'ios' },
+        userPubkey: USER_PUBKEY,
+      })
+      const db = makePukDb([...authorisingChain, removed])
+      const svc = new CryptoKeysService(db as never)
+      await expect(
+        svc.distributePukEnvelopes(USER_PUBKEY, [{ deviceId: 'dev-2', generation: 2, envelope: hpkeEnvelope('Y3Q') }]),
+      ).rejects.toMatchObject({ status: 400 })
+      expect(db.insert).not.toHaveBeenCalled()
+    })
+
     it('rejects every envelope when the user has no sigchain at all', async () => {
       const db = makePukDb([])
       const svc = new CryptoKeysService(db as never)
