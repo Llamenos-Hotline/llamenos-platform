@@ -105,7 +105,8 @@ const DESKTOP_CARGO_TOML = resolve(REPO_ROOT, 'apps/desktop/Cargo.toml')
 // runner (the incident this rewrite fixes — see file docstring above for the
 // full story: CI killed cargo mid-resolve and the old code reported the kill
 // as "lockfile no longer satisfies manifest", which was false). CI now also
-// warms this cache ahead of the Playwright run (see desktop-e2e.yml), so this
+// warms this cache ahead of the Playwright run (see ci.yml's `desktop-e2e`
+// job), so this
 // number is a safety margin for a cache miss, not the expected path.
 const CARGO_METADATA_TIMEOUT_MS = 300_000
 

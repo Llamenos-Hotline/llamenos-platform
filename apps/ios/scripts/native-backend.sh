@@ -99,7 +99,7 @@ WATCHDOG_PID="$STATE_DIR/watchdog.pid"
 PG_FORMULA="postgresql@17"
 CRYPTO_LIB="$ROOT/packages/crypto/dist/server/libllamenos_core.dylib"
 DATABASE_URL="postgresql://llamenos@127.0.0.1:${PGPORT}/llamenos"
-# Same value as TEST_ADMIN_PUBKEY in ci.yml / desktop-e2e.yml.
+# Same value as TEST_ADMIN_PUBKEY in ci.yml.
 ADMIN_PUBKEY="${ADMIN_PUBKEY:-79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183}"
 # Stamped into the server's argv by `start` and looked for by `reclaim`. The
 # server ignores argv entirely, so this is a label and nothing else.

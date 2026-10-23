@@ -182,8 +182,8 @@ jobs:
   # ─── Required legs: exact parity with default setup ───────────────────
   analyze:
     name: Analyze advanced (${{ matrix.language }})
-    # Release-PR exemption (#1817) — the SAME predicate desktop-e2e.yml,
-    # semgrep.yml and security-audit.yml carry; keep them byte-identical.
+    # Release-PR exemption (#1817) — the SAME predicate semgrep.yml
+    # and security-audit.yml carry; keep them byte-identical.
     # The knope release PR (head branch `release`) diffs version strings and
     # a changelog — no code — yet every merge to main regenerated it and ran
     # all five legs (~8 min each) over that diff, 6 times on 2026-10-11
