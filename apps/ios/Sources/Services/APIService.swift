@@ -25,9 +25,83 @@ enum APIError: LocalizedError {
         case .networkError(let error):
             return error.localizedDescription
         case .decodingError(let error):
-            return "Decoding error: \(error.localizedDescription)"
+            return "Decoding error: \(Self.describe(decoding: error))"
         case .authTokenCreationFailed(let error):
             return "Auth token creation failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Dates on the wire.
+///
+/// Every `z.iso.datetime()` in `packages/protocol/schemas/` is generated as a Swift
+/// `Date`, and a `Date` decodes and encodes as a `Double` of seconds unless the coder
+/// is told otherwise. The server speaks ISO-8601 strings (`2026-10-23T07:08:27.123Z`,
+/// what JavaScript's `toISOString()` emits). With the default strategy a single
+/// populated `createdAt` on an entity-type field made the whole `entity-types`
+/// response fail with "expected Double but found a string", which took the Cases
+/// screen down with it. Both directions therefore go through these strategies.
+enum WireDate {
+    /// Parses an ISO-8601 date-time with or without fractional seconds.
+    static func parse(_ string: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: string) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: string)
+    }
+
+    /// Millisecond-precision UTC, the shape `Date.prototype.toISOString` produces.
+    static func format(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+}
+
+extension JSONDecoder.DateDecodingStrategy {
+    static let wireISO8601 = JSONDecoder.DateDecodingStrategy.custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let string = try container.decode(String.self)
+        guard let date = WireDate.parse(string) else {
+            throw DecodingError.dataCorruptedError(
+                in: container, debugDescription: "Expected an ISO-8601 date-time, got '\(string)'"
+            )
+        }
+        return date
+    }
+}
+
+extension JSONEncoder.DateEncodingStrategy {
+    static let wireISO8601 = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(WireDate.format(date))
+    }
+}
+
+extension APIError {
+    /// A `DecodingError`'s `localizedDescription` is "The data couldn't be read
+    /// because it isn't in the correct format" for every case, which names neither
+    /// the field nor the type that failed. The coding path and the case are what
+    /// make a wire-shape mismatch diagnosable from a log, so render those.
+    static func describe(decoding error: Error) -> String {
+        guard let decoding = error as? DecodingError else { return error.localizedDescription }
+        func path(_ context: DecodingError.Context) -> String {
+            let joined = context.codingPath.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }.joined()
+            return joined.isEmpty ? "<root>" : joined
+        }
+        switch decoding {
+        case .keyNotFound(let key, let context):
+            return "missing key '\(key.stringValue)' at \(path(context))"
+        case .valueNotFound(let type, let context):
+            return "null/absent \(type) at \(path(context))"
+        case .typeMismatch(let type, let context):
+            return "expected \(type) at \(path(context)): \(context.debugDescription)"
+        case .dataCorrupted(let context):
+            return "corrupted data at \(path(context)): \(context.debugDescription)"
+        @unknown default:
+            return error.localizedDescription
         }
     }
 }
@@ -115,7 +189,7 @@ final class APIService: @unchecked Sendable {
     /// that way is rejected (or silently emptied) by the route validator. Types
     /// generated from those schemas must therefore be encoded with their own
     /// coding keys and no renaming strategy.
-    private let wireEncoder = JSONEncoder()
+    private let wireEncoder = APIService.makeWireEncoder()
     private let decoder: JSONDecoder
 
     /// Offline write queue. Set by AppState after initialization.
@@ -194,7 +268,9 @@ final class APIService: @unchecked Sendable {
         // Do not reintroduce a key strategy here. An endpoint that genuinely wants a
         // different wire shape gets its own encoder at its own call site (see
         // `SecurityEventService.uploadBatch`, the one snake_case endpoint we have).
-        self.encoder = JSONEncoder()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .wireISO8601
+        self.encoder = encoder
 
         self.decoder = Self.makeResponseDecoder()
     }
@@ -217,7 +293,17 @@ final class APIService: @unchecked Sendable {
     static func makeResponseDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .wireISO8601
         return decoder
+    }
+
+    /// The encoder for generated protocol types: their own `CodingKeys`, no key
+    /// renaming, and ISO-8601 dates. Exposed (internal) so wire-format tests pin the
+    /// bytes the production encoder produces.
+    static func makeWireEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .wireISO8601
+        return encoder
     }
 
     /// A `URLSession` created with a delegate is retained by the system until it is
