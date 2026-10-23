@@ -36,6 +36,7 @@ import {
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
+import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 import {
   settle as settleWorktree,
   destroyWorktree,
@@ -1485,6 +1486,10 @@ async function runReviewGate(): Promise<number> {
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
+    // The BASE checkout's knope.toml (REPO_ROOT is the trusted base, never
+    // the head export): the list of files knope versions, which is what a
+    // release PR's diff is checked against (release-shape.ts).
+    knopeConfig: async () => readFileSync(join(REPO_ROOT, 'knope.toml'), 'utf8'),
     reviewSet: (changedFiles) => decideReviewSet({
       labels: facts?.labels,
       changedFiles,
@@ -1639,6 +1644,19 @@ async function runReviewGate(): Promise<number> {
       `${REVIEW_JOB}: ${outcome.reason}\n` +
       `  - a diff-level review of a lockfile or action pin cannot see the code the registry publishes,\n` +
       `    so the model adds little here; the human who presses Merge is the checkpoint.\n` +
+      `  - label the PR for a named reviewer to force a real review anyway.\n`,
+    )
+  }
+  // knope's release PR: the same rule as the two branches above. The check
+  // says that NO review ran, and why, and what it was keyed on — so
+  // "why did nothing review this?" is answerable from the check itself.
+  if (outcome.kind === 'release-pr') {
+    process.stdout.write(
+      `${REVIEW_JOB}: knope's release PR (${outcome.from} → ${outcome.to}) — no review was run\n` +
+      `  - the head branch is "${KNOPE_RELEASE_BRANCH}" AND the diff is nothing but a version swap in ` +
+      `${outcome.files.length} file(s) knope.toml lists (plus changelog additions):\n` +
+      `${outcome.files.map((f) => `      ${f}`).join('\n')}\n` +
+      `  - the operator's ruling is that release PRs need no review; a human still merges it.\n` +
       `  - label the PR for a named reviewer to force a real review anyway.\n`,
     )
   }

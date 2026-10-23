@@ -273,6 +273,9 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // be named `PASS:unclassified` and stay green; now the step fails it.
   ['a green run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'NO-VERDICT:unclassified'],
   ['bot-authored — an automated dependency update', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'bot-authored' }, 'PASS:bot-authored'],
+  // The knope release PR (#1944): a version-only diff on `release`, concluded
+  // green with no review and its own honest name — never `PASS:reviewed`.
+  ['release-pr — knope\'s version-only release PR', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'release-pr' }, 'PASS:release-pr'],
   ['a verdict of PASS, then a later step failed the job', reviewed('pass', 'failure'), 'NO-VERDICT:unclassified'],
   // #2082: the review (or the cache) reached a PASS and no report exists for
   // the publish job to post. The assert step fails the job and leaves the

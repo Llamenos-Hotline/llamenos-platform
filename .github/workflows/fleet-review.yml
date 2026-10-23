@@ -221,6 +221,21 @@
 #                             forever). Named `PASS:bot-authored` — it used
 #                             to have no case in the naming step at all and
 #                             went green as `PASS:unclassified` (#1588).
+#   `release-pr`            → SUCCESS, no model call, NO REVIEW (the operator's
+#                             standing ruling for release PRs, #1944). knope
+#                             force-pushes `release` on every merge to main,
+#                             each time onto a tree no verdict covers, and a
+#                             push never starts a review — so before this the
+#                             release PR was `tree-changed` red forever and
+#                             knope prepared no release at all. Matched on
+#                             STRUCTURE (release-shape.ts), never a label:
+#                             the head branch is `release` AND the diff is
+#                             nothing but a version swap in files
+#                             `knope.toml` itself lists (plus changelog
+#                             additions). Named `PASS:release-pr`. A
+#                             non-release PR can never reach it: a branch
+#                             named `release` carrying anything else gets
+#                             the ordinary gate.
 #   `run-engine`            → the real review, then the label clear. Reached
 #                             from a `review_requested`, or from a
 #                             `workflow_dispatch` — both run the same review
@@ -351,7 +366,7 @@ on:
   # `synchronize` (#1284) exists so the required context REAPPEARS on a head
   # that moved. It can only republish what the PR already earned for this
   # exact tree (`cache-hit`), conclude on its own terms (`low-tier`,
-  # `bot-authored`), carry a FAIL forward (`carried`), or fail closed because
+  # `bot-authored`, `release-pr`), carry a FAIL forward (`carried`), or fail closed because
   # no verdict covers this tree (`tree-changed`, `unreviewed`,
   # `carry-unreadable`) — never a model call, structurally
   # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
@@ -476,8 +491,8 @@ jobs:
     # colleague — and, since #1284, on every push too. The "Decide whether to
     # run the review engine" step is what used to be this `if:`; the
     # difference is that its `not-requested` branch FAILS the job instead of
-    # skipping it, and its `cache-hit`, `low-tier` and `bot-authored`
-    # branches SUCCEED the job instead of skipping it — either way the job
+    # skipping it, and its `cache-hit`, `low-tier`, `bot-authored` and
+    # `release-pr` branches SUCCEED the job instead of skipping it — either way the job
     # reaches a real, reported conclusion, which a job-level `if:` can never
     # guarantee once GitHub decides the job merely "didn't run". That is also
     # why the push arm is not an `if:` on this job: a skipped `fleet/review`
@@ -2224,6 +2239,12 @@ jobs:
               # needs no review, so it gets a `PASS:` name of its own rather
               # than the catch-all it used to land on.
               bot-authored) token="PASS:bot-authored" ;;
+              # knope's own version-bump PR (`release-pr` — release-shape.ts):
+              # the operator's ruling that release PRs need no review, as a
+              # real conclusion with its own `PASS:` name, never a skip and
+              # never the unnamed-green default. `no-review-needed` in
+              # REVIEW_GATE_STANDING, the same class as `low-tier`.
+              release-pr) token="PASS:release-pr" ;;
               run-engine)
                 case "$result" in
                   pass) token="PASS:reviewed" ;;
@@ -2328,6 +2349,7 @@ jobs:
             PASS:cached) detail="this exact tree and review set already passed; not reviewed again" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:bot-authored) detail="an automated dependency update; no model review, and a human still merges it" ;;
+            PASS:release-pr) detail="knope's release PR, a version-only diff (release branch + only knope.toml-listed files changed by a version swap); no review was run, by the operator's ruling, and a human still merges it" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
             REJECTED:cached) detail="this exact tree was already rejected; push a fix" ;;
             REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;

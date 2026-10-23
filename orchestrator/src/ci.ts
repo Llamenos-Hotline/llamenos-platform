@@ -13,6 +13,7 @@ import { buildGateTrace } from './trace.js'
 import { tierFor, type ImpactTier } from './impact.js'
 import { isReviewerLabel, type ReviewerProfile, type ReviewerResolution } from './specialist.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
+import { releasePrShape } from './release-shape.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -628,7 +629,7 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  * entry, never that anything was judged.
  */
 export const REVIEW_OUTCOME_TOKENS = [
-  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:bot-authored',
+  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:bot-authored', 'PASS:release-pr',
   'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried', 'REJECTED:partial',
   'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed', 'NO-VERDICT:tree-changed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
@@ -1606,6 +1607,7 @@ export type ReviewGateOutcome =
   | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict; profiles: string[] }
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
   | { kind: 'bot-authored'; cacheKey: ReviewCacheKey; author: string; reason: string }
+  | { kind: 'release-pr'; cacheKey: ReviewCacheKey; from: string; to: string; files: string[] }
   | { kind: 'carried'; cacheKey: ReviewCacheKey; earned: EarnedVerdict & { verdict: 'FAIL' } }
   | { kind: 'tree-changed'; cacheKey: ReviewCacheKey; earned: EarnedVerdict & { verdict: 'PASS' } }
   | { kind: 'unreviewed'; cacheKey: ReviewCacheKey }
@@ -1657,6 +1659,12 @@ export interface ReviewGateDeps {
    * must never read as "no verdict was ever earned", which is a green.
    */
   lastVerdict?: (() => Promise<LastVerdictLookup>) | undefined
+  /**
+   * The BASE checkout's `knope.toml` text — what `releasePrShape` reads the
+   * list of knope-versioned files from. Absent or failing means no release
+   * path: the PR gets the ordinary gate, never a guessed list.
+   */
+  knopeConfig?: (() => Promise<string>) | undefined
   /** The PR's author login — `FLEET_REVIEW_PR_AUTHOR`, the same field
    *  `reviewRequestFor` already consumes. Present so the gate can recognise
    *  an automated dependency PR by IDENTITY rather than by branch name. */
@@ -1679,7 +1687,8 @@ export interface ReviewGateDeps {
  *    whose own exit code decides the job.
  *  - `no-review-needed` — a deliberate, stated decision that this diff needs
  *    no model review: no reviewable content (`low-tier`), or an automated
- *    dependency bump (`bot-authored`). Green, with its reason printed into
+ *    dependency bump (`bot-authored`), or knope's own version-bump PR
+ *    (`release-pr`, release-shape.ts). Green, with its reason printed into
  *    the check's own output.
  *  - `no-verdict` — NOTHING judged this diff, and nothing decided it did not
  *    need judging. These MUST be red. `tree-changed` is here, not under
@@ -1714,6 +1723,7 @@ export const REVIEW_GATE_STANDING: Record<ReviewGateOutcome['kind'], ReviewGateS
   'tree-changed': 'no-verdict',
   'low-tier': 'no-review-needed',
   'bot-authored': 'no-review-needed',
+  'release-pr': 'no-review-needed',
   'review-set-unresolved': 'no-verdict',
   'unreviewed': 'no-verdict',
   'carry-unreadable': 'no-verdict',
@@ -1748,6 +1758,39 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   deps.log(set.profiles.length === 0
     ? `review set for pr=${cacheKey.pr}: ${GENERAL_REVIEWER} only`
     : `review set for pr=${cacheKey.pr}: ${GENERAL_REVIEWER}, ${set.reasons.join(', ')}`)
+
+  // The knope release PR: a real check, concluded green, with no model call
+  // and no review — the operator's standing ruling (#1944). It is decided
+  // BEFORE the cache and the content-derived profiles on purpose:
+  //  - knope force-pushes `release` on every merge to main, each time onto a
+  //    tree no verdict covers, and a push can never start a review, so
+  //    without this the PR is `tree-changed` red forever;
+  //  - the PR body is knope's changelog, and its prose is what pulls the
+  //    crypto reviewer into the set (#1944 resolved to "general,
+  //    crypto-security-reviewer (required by the PR's own content)") — for a
+  //    diff proven to be nothing but version strings that is noise.
+  // A LABEL is not noise: somebody deliberately asked for a reviewer, so a
+  // labelled release PR (`set.fromLabels`) gets the ordinary gate. The match
+  // is `releasePrShape` — branch AND a diff that is only a version swap in
+  // files knope.toml itself lists — so a non-release PR cannot reach this
+  // line's green, and a release PR that stops looking like one goes red
+  // again rather than green.
+  if (set.fromLabels.length === 0 && deps.knopeConfig !== undefined) {
+    try {
+      const shape = releasePrShape({
+        branch: deps.ctx.branch, diff, changedFiles, knopeToml: await deps.knopeConfig(),
+      })
+      if (shape.ok) {
+        deps.log(`pr=${cacheKey.pr} is knope's release PR (${shape.from} → ${shape.to}, ${shape.files.length} changed files, all knope-versioned or the changelog) — no model review`)
+        return { kind: 'release-pr', cacheKey, from: shape.from, to: shape.to, files: shape.files }
+      }
+      if (deps.ctx.branch === KNOPE_RELEASE_BRANCH) {
+        deps.log(`pr=${cacheKey.pr} is on the "${KNOPE_RELEASE_BRANCH}" branch but is NOT a version-only release diff: ${shape.reason}`)
+      }
+    } catch (e) {
+      deps.log(`could not read knope.toml — pr=${cacheKey.pr} gets the ordinary gate: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   // Identical fail-safe direction as `runReviewCi`: a lookup failure and a
   // genuine miss are indistinguishable on purpose, because both mean "this
