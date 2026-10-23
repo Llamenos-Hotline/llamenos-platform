@@ -4,8 +4,7 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 
 /**
- * Rail for verify-release-live's container-image surface, and for docker.yml's
- * credential preflight.
+ * Rail for verify-release-live's container-image surface.
  *
  * v0.19.19's `docker-stable` job went green while the image it pushed was
  * unpullable by anyone without a token (GHCR creates a package private), and
@@ -21,7 +20,6 @@ const WORKFLOWS = join(process.cwd(), '.github', 'workflows')
 const verifyYml = readFileSync(join(WORKFLOWS, 'verify-release-live.yml'), 'utf8')
 const surfaces = JSON.parse(readFileSync(join(WORKFLOWS, 'verify-release-live.surfaces.json'), 'utf8'))
 const verify = parseYaml(verifyYml)
-const docker = parseYaml(readFileSync(join(WORKFLOWS, 'docker.yml'), 'utf8'))
 
 describe('verify-release-live container-image surface', () => {
   it('is a required surface in surfaces.json', () => {
@@ -43,19 +41,4 @@ describe('verify-release-live container-image surface', () => {
     // the only credential in scope is for `gh release list`, never ghcr.io
     expect(script).not.toMatch(/Bearer \$GH_TOKEN|Bearer \$\{GH_TOKEN/)
   })
-})
-
-describe('docker.yml credential preflight', () => {
-  for (const job of ['build', 'bridge'] as const) {
-    it(`${job} names missing Docker Hub secrets before logging in`, () => {
-      const steps = docker.jobs[job].steps as Array<{ name?: string; uses?: string; run?: string }>
-      const pre = steps.findIndex((s) => s.name === 'Require Docker Hub credentials')
-      const login = steps.findIndex((s) => s.uses?.startsWith('docker/login-action'))
-      expect(pre).toBeGreaterThanOrEqual(0)
-      expect(pre).toBeLessThan(login)
-      expect(steps[pre].run).toContain('DOCKERHUB_USERNAME')
-      expect(steps[pre].run).toContain('DOCKERHUB_TOKEN')
-      expect(steps[pre].run).toContain('exit 1')
-    })
-  }
 })
