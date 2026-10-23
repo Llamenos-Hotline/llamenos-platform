@@ -810,14 +810,3 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: security delete-keychain build.keychain 2>/dev/null || true
-
-  # ─── Redeploy the marketing site so its download links see the new APK ───
-  # The site resolves the newest `android-v*` release at build time
-  # (site/src/utils/releases.ts). Waits on build-android only: the iOS job publishes
-  # build metadata, not an installer the site links.
-  deploy-site:
-    needs: [build-android]
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy-site.yml
-    secrets: inherit

@@ -2,9 +2,8 @@
 
 app:
   image:
-    # REQUIRED — no default. `.github/workflows/docker.yml` publishes the app
-    # image to Docker Hub (`docker.io/<DOCKERHUB_USERNAME>/llamenos`), not
-    # GHCR — set this to wherever your own build actually pushed it. A chart
+    # REQUIRED — no default. Images are published from a local machine, never
+    # by CI — set this to wherever your own build actually pushed it. A chart
     # that filled in a plausible-looking default here (as this one used to:
     # `ghcr.io/your-org/llamenos`) fails with a silent, confusing
     # ImagePullBackOff instead of a clear error at install time (#1120).
