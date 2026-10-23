@@ -232,6 +232,9 @@ export const entityTypeDefinitions = pgTable('entity_type_definitions', {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
+  notifyContactsOnStatusChange: boolean('notify_contacts_on_status_change')
+    .notNull()
+    .default(false),
   isArchived: boolean('is_archived').default(false),
   isSystem: boolean('is_system').default(false),
   createdAt: timestamp('created_at', { withTimezone: true })
