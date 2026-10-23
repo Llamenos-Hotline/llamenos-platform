@@ -19,7 +19,7 @@ import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPA
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { workspaceAliases } from '../../orchestrator/src/verify.js'
-import { knopeVersionedPaths, knopeChangelogPath } from '../../orchestrator/src/release-shape.js'
+import { knopeVersionedPaths, knopeChangelogPath, releasePrShape } from '../../orchestrator/src/release-shape.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
 
 describe('rail: a live lane must have a write scope', () => {
@@ -2787,6 +2787,24 @@ describe('rail: the knope release PR concludes green without a review, and nothi
     // its own terms (`low-tier`). The point is the name: never `release-pr`.
     const docsOnly = realDiff((d) => writeFileSync(join(d, 'CHANGELOG.md'), `new line\n${readFileSync(join(d, 'CHANGELOG.md'), 'utf8')}`))
     expect((await gate({ diff: docsOnly.diff, files: docsOnly.files })).kind).toBe('low-tier')
+  })
+
+  it('(b) a dependency line that merely carries the old version string cannot ride along a version swap', () => {
+    const hunk = (path: string, pairs: Array<[string, string]>): string =>
+      `diff --git a/${path} b/${path}\nindex ${'1'.repeat(40)}..${'2'.repeat(40)} 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,9 +1,9 @@\n` +
+      pairs.map(([a, b]) => `-${a}\n+${b}`).join('\n') + '\n'
+    const files = ['package.json', 'apps/desktop/Cargo.toml']
+    const pkg = hunk('package.json', [[`  "version": "${CURRENT}",`, `  "version": "${NEXT}",`]])
+    const ok = pkg + hunk('apps/desktop/Cargo.toml', [[`version = "${CURRENT}"`, `version = "${NEXT}"`]])
+    expect(releasePrShape({ branch: 'release', diff: ok, changedFiles: files, knopeToml: KNOPE_TOML }).ok).toBe(true)
+    const smuggled = pkg + hunk('apps/desktop/Cargo.toml', [
+      [`version = "${CURRENT}"`, `version = "${NEXT}"`],
+      [`evil = { version = "${CURRENT}" }`, `evil = { version = "${NEXT}" }`],
+    ])
+    const r = releasePrShape({ branch: 'release', diff: smuggled, changedFiles: files, knopeToml: KNOPE_TOML })
+    expect(r.ok).toBe(false)
+    const dep = pkg + hunk('apps/desktop/Cargo.toml', [[`evil = { version = "${CURRENT}" }`, `evil = { version = "${NEXT}" }`]])
+    expect(releasePrShape({ branch: 'release', diff: dep, changedFiles: files, knopeToml: KNOPE_TOML }).ok).toBe(false)
   })
 
   it('(b) a diff that is the release diff PLUS a smuggled file is refused even when the changed-file list lies', async () => {

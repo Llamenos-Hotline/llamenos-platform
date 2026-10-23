@@ -31,8 +31,9 @@ import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
  *     never a match against a stale list.
  *  3. The diff is a pure version swap: `package.json` carries exactly one
  *     `"version": "A"` → `"version": "B"` (semver, B > A), every other
- *     versioned file changes only by swapping A for B on lines that are
- *     otherwise byte-identical, and the changelog only gains lines. A PR on a
+ *     versioned file changes by exactly ONE line, a bare version-key line,
+ *     swapping A for B and otherwise byte-identical, and the changelog only
+ *     gains lines. A PR on a
  *     branch named `release` that touches anything else — a dependency, a
  *     script, a workflow — fails (3) and gets the ordinary gate.
  *
@@ -58,6 +59,12 @@ export interface ReleasePrInput {
 }
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/
+
+/** The whole-line shapes knope's version rewrites take across the files in
+ *  knope.toml: JSON `"version": "X"`, TOML/Cargo `version = "X"`, Gradle
+ *  `versionName = "X"`, plist `<string>X</string>`, Helm `appVersion: "X"`.
+ *  A dependency spec such as `foo = { version = "X" }` is not one of them. */
+const VERSION_KEY_LINE = /^(?:"version"\s*:\s*"[^"]+",?|version\s*=\s*"[^"]+"|versionName\s*=\s*"[^"]+"|<string>[^<]+<\/string>|appVersion\s*:\s*"[^"]+")$/
 
 /** The paths `knope.toml`'s `[package]` lists as `versioned_files`. Empty
  *  when the array cannot be found or never closes — an empty list matches
@@ -180,14 +187,19 @@ export function releasePrShape(input: ReleasePrInput): ReleasePrShape {
       if (f.removed.length > 0) return no(`${f.path} loses ${f.removed.length} line(s); a release only adds to it`)
       continue
     }
-    if (f.removed.length === 0 || f.removed.length !== f.added.length) {
-      return no(`${f.path}: ${f.removed.length} removed vs ${f.added.length} added lines — not a version swap`)
+    // knope rewrites exactly ONE line per versioned file (Cargo.lock: only the
+    // desktop crate's own entry). Allowing several would let a dependency line
+    // that happens to carry the old version string ride along.
+    if (f.removed.length !== 1 || f.added.length !== 1) {
+      return no(`${f.path}: ${f.removed.length} removed vs ${f.added.length} added lines — knope changes exactly one version line per file`)
     }
-    for (let i = 0; i < f.removed.length; i++) {
-      const swapped = swapVersion(f.removed[i] as string, from, to)
-      if (swapped === undefined || swapped !== f.added[i]) {
-        return no(`${f.path}: line "${(f.added[i] as string).trim().slice(0, 80)}" is not the removed line with ${from} → ${to}`)
-      }
+    const [was, now] = [f.removed[0] as string, f.added[0] as string]
+    if (!VERSION_KEY_LINE.test(was.trim())) {
+      return no(`${f.path}: removed line "${was.trim().slice(0, 80)}" is not a bare version-key line`)
+    }
+    const swapped = swapVersion(was, from, to)
+    if (swapped === undefined || swapped !== now) {
+      return no(`${f.path}: line "${now.trim().slice(0, 80)}" is not the removed line with ${from} → ${to}`)
     }
   }
   return { ok: true, from, to, files }
