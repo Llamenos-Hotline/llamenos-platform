@@ -19,6 +19,10 @@ vi.mock('hono-openapi', () => ({
 }))
 
 import pukRoutes from '@worker/routes/puk'
+import { CryptoKeyError } from '@worker/services/crypto-keys'
+import type { PukHpkeEnvelope } from '@protocol/schemas/sigchain'
+
+const ENVELOPE: PukHpkeEnvelope = { v: 3, labelId: 44, enc: 'enc-b64url', ct: 'ct-b64url' }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,7 +59,7 @@ describe('PUK routes', () => {
     it('distributes PUK envelopes', async () => {
       const { app, services } = createApp()
       const stored = [
-        { id: 'env-1', userPubkey: 'user-pk-1', deviceId: 'dev-1', generation: 0, envelope: 'encrypted', createdAt: '2026-01-01' },
+        { id: 'env-1', userPubkey: 'user-pk-1', deviceId: 'dev-1', generation: 1, envelope: ENVELOPE, createdAt: '2026-01-01' },
       ]
       services.cryptoKeys.distributePukEnvelopes.mockResolvedValue(stored)
 
@@ -63,7 +67,7 @@ describe('PUK routes', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          envelopes: [{ deviceId: 'dev-1', generation: 0, envelope: 'encrypted' }],
+          envelopes: [{ deviceId: 'dev-1', generation: 1, envelope: ENVELOPE }],
         }),
       })
 
@@ -81,14 +85,31 @@ describe('PUK routes', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          envelopes: [{ deviceId: 'd1', generation: 1, envelope: 'enc' }],
+          envelopes: [{ deviceId: 'd1', generation: 1, envelope: ENVELOPE }],
         }),
       })
 
       expect(services.cryptoKeys.distributePukEnvelopes).toHaveBeenCalledWith(
         'my-pubkey',
-        [{ deviceId: 'd1', generation: 1, envelope: 'enc' }],
+        [{ deviceId: 'd1', generation: 1, envelope: ENVELOPE }],
       )
+    })
+
+    it('returns the service status for an envelope addressed to an unauthorised device', async () => {
+      const { app, services } = createApp()
+      services.cryptoKeys.distributePukEnvelopes.mockRejectedValue(
+        new CryptoKeyError('PUK envelope addressed to a device the user\'s sigchain does not authorise: d9', 400),
+      )
+
+      const res = await app.request('/puk/envelopes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ envelopes: [{ deviceId: 'd9', generation: 1, envelope: ENVELOPE }] }),
+      })
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toContain('does not authorise')
     })
   })
 
@@ -100,7 +121,7 @@ describe('PUK routes', () => {
         userPubkey: 'user-pk-1',
         deviceId: 'dev-1',
         generation: 2,
-        envelope: 'encrypted-data',
+        envelope: ENVELOPE,
         createdAt: '2026-01-01',
       }
       services.cryptoKeys.getPukEnvelopeForDevice.mockResolvedValue(envelope)

@@ -1657,13 +1657,20 @@ export class IdentityService {
         // to construct the service. Loading it only when a device is
         // actually being revoked keeps IdentityService's own import graph
         // native-FFI-free.
-        const { appendValidatedSigchainLink, sigchainLockKey, CryptoKeyError } = await import('./crypto-keys')
+        const { appendValidatedSigchainLink, deletePukEnvelopesForDevicePubkey, sigchainLockKey, CryptoKeyError } = await import('./crypto-keys')
         try {
           // Per-user advisory lock BEFORE the chain-head read inside
           // appendValidatedSigchainLink — same lock, same ordering as
           // CryptoKeysService.appendSigchainLink and recovery-group
           // completion.
           await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sigchainLockKey(pubkey)}))`)
+          // PUK envelopes are keyed by sigchain device ID, not by this registry
+          // row, so deleting the row below does not cascade to them. Drop the
+          // revoked device's envelopes while the chain still names it; the
+          // transaction rolls the deletion back if the link below is rejected.
+          if (device.ed25519Pubkey) {
+            await deletePukEnvelopesForDevicePubkey(tx, pubkey, device.ed25519Pubkey)
+          }
           await appendValidatedSigchainLink(tx, pubkey, {
             seqNo: sigchainData.sigchainSeqNo,
             linkType: 'device_remove',
