@@ -23,7 +23,7 @@ import org.llamenos.hotline.model.SendMessageRequest
 import org.llamenos.hotline.model.Member
 import org.llamenos.hotline.model.MemberDirectory
 import org.llamenos.protocol.ConversationListResponse
-import org.llamenos.protocol.ConversationListResponseConversation
+import org.llamenos.protocol.SharedConversation
 import org.llamenos.protocol.Message
 import org.llamenos.protocol.MessageListResponse
 import org.llamenos.protocol.RecipientEnvelope
@@ -42,7 +42,7 @@ enum class ConversationFilter(val queryParam: String) {
 }
 
 data class ConversationsUiState(
-    val conversations: List<ConversationListResponseConversation> = emptyList(),
+    val conversations: List<SharedConversation> = emptyList(),
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
     val error: String? = null,
@@ -50,7 +50,7 @@ data class ConversationsUiState(
     val totalConversations: Int = 0,
 
     // Detail view
-    val selectedConversation: ConversationListResponseConversation? = null,
+    val selectedConversation: SharedConversation? = null,
     val messages: List<DecryptedMessage> = emptyList(),
     val isLoadingMessages: Boolean = false,
     val messagesError: String? = null,
@@ -186,7 +186,7 @@ class ConversationsViewModel @Inject constructor(
     /**
      * Select a conversation and load its messages.
      */
-    fun openConversation(conversation: ConversationListResponseConversation) {
+    fun openConversation(conversation: SharedConversation) {
         _uiState.update {
             it.copy(
                 selectedConversation = conversation,
@@ -332,7 +332,7 @@ class ConversationsViewModel @Inject constructor(
     /**
      * Get conversations filtered by the current search query.
      */
-    fun filteredConversations(): List<ConversationListResponseConversation> {
+    fun filteredConversations(): List<SharedConversation> {
         val query = _uiState.value.searchQuery.lowercase()
         if (query.isBlank()) return _uiState.value.conversations
         return _uiState.value.conversations.filter { conversation ->

@@ -8,7 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.model.ActiveCall
-import org.llamenos.protocol.ConversationListResponseConversation
+import org.llamenos.protocol.SharedConversation
 import org.llamenos.protocol.SharedEntry
 import org.llamenos.protocol.SharedReportResponseStatus
 import org.llamenos.protocol.SharedMemberDirectoryEntryStatus
@@ -178,7 +178,7 @@ class ScreenshotTests {
     )
 
     private val sampleConversations = listOf(
-        ConversationListResponseConversation(
+        SharedConversation(
             id = "conv-001",
             channelType = "sms",
             contactIdentifierHash = "hash-abc",
@@ -189,7 +189,7 @@ class ScreenshotTests {
             createdAt = sampleTimestamp2,
             updatedAt = sampleTimestamp,
         ),
-        ConversationListResponseConversation(
+        SharedConversation(
             id = "conv-002",
             channelType = "signal",
             contactIdentifierHash = "hash-def",
@@ -200,7 +200,7 @@ class ScreenshotTests {
             createdAt = "2026-04-27T08:00:00Z",
             updatedAt = "2026-04-29T11:00:00Z",
         ),
-        ConversationListResponseConversation(
+        SharedConversation(
             id = "conv-003",
             channelType = "whatsapp",
             contactIdentifierHash = "hash-ghi",
