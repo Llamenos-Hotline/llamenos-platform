@@ -116,6 +116,8 @@ interface Facts {
   EARNED_SHA?: string
   /** #2014's transition guard refused a cache hit from a diff-keyed base. */
   diffKeyedBase?: boolean
+  /** #2082: the assert step found a green verdict with no report to publish. */
+  reportMissing?: boolean
 }
 
 interface Named { status: number | null; title: string | null; level: string | null; summary: string; stdout: string }
@@ -130,6 +132,7 @@ function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Nam
   if (facts.result !== undefined) writeFileSync(resultFile, `${facts.result}\n`)
   if (facts.engineFailure !== undefined) writeFileSync(join(temp, 'fleet-review-engine-failure'), `${facts.engineFailure}\n`)
   if (facts.diffKeyedBase === true) writeFileSync(join(temp, 'fleet-review-base-diff-keyed'), 'base-diff-keyed-cache\n')
+  if (facts.reportMissing === true) writeFileSync(join(temp, 'fleet-review-report-missing'), 'report-missing\n')
   const summaryFile = join(temp, 'step-summary.md')
   const r = runScript(script, {
     RUNNER_TEMP: temp,
@@ -271,6 +274,11 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['a green run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'NO-VERDICT:unclassified'],
   ['bot-authored — an automated dependency update', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'bot-authored' }, 'PASS:bot-authored'],
   ['a verdict of PASS, then a later step failed the job', reviewed('pass', 'failure'), 'NO-VERDICT:unclassified'],
+  // #2082: the review (or the cache) reached a PASS and no report exists for
+  // the publish job to post. The assert step fails the job and leaves the
+  // marker; the check says so instead of the generic catch-all.
+  ['a PASS from the engine with no report to publish (#2082)', { ...reviewed('pass', 'failure'), REVIEW_OUTCOME: 'success', reportMissing: true }, 'NO-VERDICT:report-missing'],
+  ['a cached PASS from the gate with no report to publish (#2082)', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success', OUTCOME: 'cache-hit', reportMissing: true }, 'NO-VERDICT:report-missing'],
 ]
 
 describe('rail: every fleet/review outcome is named on its own check (#1230)', () => {
@@ -438,6 +446,11 @@ describe('rail: the verdict assertion tells a rejection from a review that never
     const temp = mkdtempSync(join(work, 'assert-temp-'))
     const resultFile = join(temp, 'fleet-review-result')
     if (env.result !== undefined) writeFileSync(resultFile, `${env.result}\n`)
+    // A review that passed has handed its text to the publish job (#2082):
+    // the report is part of what "passed" means, so the fixture carries one.
+    const reportDir = join(temp, 'review-report')
+    mkdirSync(reportDir, { recursive: true })
+    writeFileSync(join(reportDir, '00-general.json'), '{}')
     return runScript(step('fleet-review', ASSERT_STEP).run, {
       RUNNER_TEMP: temp,
       RESULT_FILE: resultFile,
@@ -446,6 +459,7 @@ describe('rail: the verdict assertion tells a rejection from a review that never
       GATE_CONCLUSION: env.GATE_CONCLUSION ?? 'success',
       OUTCOME: env.OUTCOME ?? 'run-engine',
       REVIEW_OUTCOME: env.REVIEW_OUTCOME,
+      REPORT_DIR: reportDir,
     })
   }
 
