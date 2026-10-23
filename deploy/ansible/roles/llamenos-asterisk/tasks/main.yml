@@ -15,6 +15,21 @@
     groups.get('llamenos_asterisk', []) | length > 0 and
     inventory_hostname not in groups.get('llamenos_asterisk', [])
 
+# The PBX image is built from deploy/docker/Dockerfile.asterisk now, so the
+# upstream pin has one home. An inventory still setting the old variable would be
+# silently ignored — a pin that looks honoured and is not — so refuse it.
+- name: Assert the retired llamenos_asterisk_image override is not set
+  ansible.builtin.assert:
+    that:
+      - llamenos_asterisk_image is not defined
+    fail_msg: >-
+      llamenos_asterisk_image is no longer read. The Asterisk image is built on
+      the host from deploy/docker/Dockerfile.asterisk (the vetted upstream image
+      plus the DNS resolver module, #1690), and the upstream digest is pinned in
+      that Dockerfile. Remove llamenos_asterisk_image from your vars and
+      inventory; to change the base image, edit the Dockerfile and its
+      ASTERISK_VERSION/ASTERISK_SHA256 together.
+
 - name: Create asterisk service directory
   ansible.builtin.file:
     path: "{{ app_dir }}/services/asterisk"
@@ -78,6 +93,18 @@
     - asterisk-entrypoint.sh
     - sip-tls-cert.sh
   notify: Restart asterisk service
+
+# The image the asterisk service is BUILT from (templates/compose/asterisk.j2):
+# the vetted upstream PBX image plus res_resolver_unbound, which it ships
+# without (#1690). Without the module Asterisk resolves no SIP target named only
+# by /etc/hosts. The upstream digest pin lives in this file, not in a variable.
+- name: Install the Dockerfile the Asterisk image is built from
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../docker/Dockerfile.asterisk"
+    dest: "{{ app_dir }}/services/asterisk/Dockerfile.asterisk"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0644"
 
 # Media, not signalling. SIP reaches the PBX through Kamailio, which is a
 # signalling proxy with no media relay, so RTP runs directly between the
@@ -233,4 +260,7 @@
   community.docker.docker_compose_v2:
     project_src: "{{ app_dir }}/services/asterisk"
     state: present
+    # Rebuild every run: the layer cache makes an unchanged Dockerfile a no-op,
+    # and a changed one (a bumped base digest) must reach the running PBX.
+    build: always
   register: asterisk_compose

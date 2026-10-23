@@ -51,11 +51,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.User
-import org.llamenos.hotline.model.displayName
-import org.llamenos.hotline.model.id
-import org.llamenos.hotline.model.role
-import org.llamenos.hotline.model.status
+import org.llamenos.hotline.model.Member
+import org.llamenos.hotline.model.labelRes
 import org.llamenos.hotline.ui.components.SecureWindowEffect
 
 /**
@@ -94,7 +91,7 @@ fun VolunteersTab(
     // Delete confirmation dialog
     if (uiState.showDeleteVolunteerDialog != null) {
         val volunteerId = uiState.showDeleteVolunteerDialog!!
-        val volunteer = uiState.volunteers.find { it.id == volunteerId }
+        val volunteer = uiState.volunteers.find { it.pubkey == volunteerId }
         AlertDialog(
             onDismissRequest = { viewModel.dismissDeleteVolunteerDialog() },
             title = { Text(stringResource(R.string.users_delete)) },
@@ -216,12 +213,12 @@ fun VolunteersTab(
                     ) {
                         items(
                             items = filteredVolunteers,
-                            key = { it.id },
+                            key = { it.pubkey },
                         ) { volunteer ->
                             VolunteerCard(
                                 volunteer = volunteer,
                                 onClick = { onNavigateToVolunteerDetail(volunteer.pubkey) },
-                                onDelete = { viewModel.showDeleteVolunteerDialog(volunteer.id) },
+                                onDelete = { viewModel.showDeleteVolunteerDialog(volunteer.pubkey) },
                             )
                         }
                     }
@@ -255,7 +252,7 @@ fun VolunteersTab(
  */
 @Composable
 private fun VolunteerCard(
-    volunteer: User,
+    volunteer: Member,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
@@ -264,7 +261,7 @@ private fun VolunteerCard(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
-            .testTag("volunteer-card-${volunteer.id}"),
+            .testTag("volunteer-card-${volunteer.pubkey}"),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
         ),
@@ -293,7 +290,7 @@ private fun VolunteerCard(
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("volunteer-name-${volunteer.id}"),
+                    modifier = Modifier.testTag("volunteer-name-${volunteer.pubkey}"),
                 )
 
                 // Truncated pubkey
@@ -303,7 +300,7 @@ private fun VolunteerCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("volunteer-pubkey-${volunteer.id}"),
+                    modifier = Modifier.testTag("volunteer-pubkey-${volunteer.pubkey}"),
                 )
             }
 
@@ -314,13 +311,13 @@ private fun VolunteerCard(
                 onClick = {},
                 label = {
                     Text(
-                        text = volunteer.role.replaceFirstChar { it.uppercase() },
+                        text = stringResource(volunteer.role.labelRes),
                         style = MaterialTheme.typography.labelSmall,
                     )
                 },
                 modifier = Modifier
                     .height(28.dp)
-                    .testTag("volunteer-role-${volunteer.id}"),
+                    .testTag("volunteer-role-${volunteer.pubkey}"),
             )
 
             Spacer(Modifier.width(4.dp))
@@ -330,19 +327,19 @@ private fun VolunteerCard(
                 onClick = {},
                 label = {
                     Text(
-                        text = volunteer.status.replaceFirstChar { it.uppercase() },
+                        text = stringResource(volunteer.status.labelRes),
                         style = MaterialTheme.typography.labelSmall,
                     )
                 },
                 modifier = Modifier
                     .height(28.dp)
-                    .testTag("volunteer-status-${volunteer.id}"),
+                    .testTag("volunteer-status-${volunteer.pubkey}"),
             )
 
             // Delete button
             IconButton(
                 onClick = onDelete,
-                modifier = Modifier.testTag("delete-volunteer-${volunteer.id}"),
+                modifier = Modifier.testTag("delete-volunteer-${volunteer.pubkey}"),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Delete,

@@ -1,0 +1,84 @@
+# The Asterisk PBX image: the vetted upstream image plus the DNS resolver
+# module it was built without (#1690).
+#
+# andrius/asterisk is configured without libunbound, so it ships no
+# res_resolver_unbound — and with no resolver module Asterisk cannot resolve a
+# NAME at all. res_pjsip reports it as "0 viable targets", which reads like a
+# typo in the configuration rather than a missing module. Only IP literals
+# worked: every trunk, outbound proxy or contact addressed by hostname failed.
+#
+# Only that one module is added. Rebuilding the whole PBX would replace a vetted,
+# digest-pinned artefact (see tests/telephony/asterisk-image-dtls-pin.test.ts —
+# the DTLS fingerprint fix is a media-plane security control) with one nobody
+# vetted. So the module is compiled from the SAME Asterisk release, with the
+# same configure and menuselect options as the upstream build, and dropped into
+# the vetted image. Asterisk refuses a module built with different build
+# options, so a mismatch fails loudly at load, not silently at call time.
+#
+# Bumping the base digest means bumping ASTERISK_VERSION and ASTERISK_SHA256
+# together; the dtls-pin test reads this file as well as the compose files.
+
+ARG ASTERISK_VERSION=22.10.1
+
+# ── Build the resolver module ────────────────────────────────────────────────
+FROM debian:trixie@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 AS resolver-builder
+ARG ASTERISK_VERSION
+ARG ASTERISK_SHA256=0953564c44fa49827f3c9d70ca6e80db83828c9848440852c6be44c961855353
+ARG DEBIAN_FRONTEND=noninteractive
+
+# The upstream build dependencies (configure needs them to produce the same
+# autoconfig.h) plus libunbound-dev, which is the whole point.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates build-essential autoconf binutils-dev curl file \
+        libcurl4-openssl-dev libedit-dev libgsm1-dev libicu-dev libjansson-dev \
+        libncurses-dev libogg-dev libpopt-dev libpqxx-dev libresample1-dev \
+        libspandsp-dev libspeex-dev libspeexdsp-dev libsqlite3-dev libssl-dev \
+        libtool libvorbis-dev libxml2-dev libxslt1-dev odbcinst patch pkg-config \
+        portaudio19-dev procps python3-dev unixodbc unixodbc-dev uuid uuid-dev \
+        xmlstarlet libsrtp2-dev libunbound-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/asterisk
+RUN curl -fsSL -o /tmp/asterisk.tar.gz \
+        "https://downloads.asterisk.org/pub/telephony/asterisk/releases/asterisk-${ASTERISK_VERSION}.tar.gz" \
+    && echo "${ASTERISK_SHA256}  /tmp/asterisk.tar.gz" | sha256sum -c - \
+    && tar --strip-components=1 -xzf /tmp/asterisk.tar.gz \
+    && rm /tmp/asterisk.tar.gz
+
+# Upstream's configure line and the menuselect options that change the build
+# option checksum Asterisk compares at module load.
+RUN ./configure --with-pjproject-bundled --with-ssl=ssl --with-crypto --with-unbound \
+    && make menuselect \
+    && menuselect/menuselect --disable BUILD_NATIVE menuselect.makeopts \
+    && menuselect/menuselect --enable BETTER_BACKTRACES menuselect.makeopts \
+    && menuselect/menuselect --enable res_resolver_unbound menuselect.makeopts
+
+# Fail here, with a legible message, if configure did not find libunbound: the
+# module would otherwise be silently skipped and the image built without it.
+RUN grep -q '^#define HAVE_UNBOUND\b' include/asterisk/autoconfig.h \
+    || { echo "libunbound was not detected by configure" >&2; exit 1; }
+
+# Build ONLY that module: every other res_* module is deselected, so this does
+# not rebuild the PBX. `make res` (not `make -C res`) is what supplies the include
+# paths and flags the sub-make needs.
+RUN menuselect/menuselect --disable-category MENUSELECT_RES menuselect.makeopts \
+    && menuselect/menuselect --enable res_resolver_unbound menuselect.makeopts \
+    && make -j"$(nproc)" res \
+    && test -s res/res_resolver_unbound.so
+
+# ── The vetted PBX image, plus the module ────────────────────────────────────
+# 22.10.1 — NOT below 22.10.0, see #1687
+FROM andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libunbound8 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=resolver-builder --chown=asterisk:asterisk /usr/src/asterisk/res/res_resolver_unbound.so /usr/lib/asterisk/modules/res_resolver_unbound.so
+RUN strip --strip-unneeded /usr/lib/asterisk/modules/res_resolver_unbound.so
+
+# The image's default user is the one Asterisk runs as. The upstream image has no
+# USER and relies on Asterisk dropping privilege itself (-U); compose still sets
+# `user: root` for the entrypoint's chown of the astdb volume, and the daemon
+# still drops to asterisk from there. Anything that runs this image without that
+# override gets an unprivileged process, not root.
+USER asterisk

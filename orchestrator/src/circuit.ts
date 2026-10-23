@@ -24,10 +24,11 @@ const HOUR = 3_600_000
  * over a day, needing a human `resume` more than a dozen times on 2026-09-19
  * alone. Re-reading the BLOCKED reasoning above against REJECTED's own
  * definition shows the distinction this file used to draw does not hold:
- * REJECTED sits in `ledger.ts`'s `TERMINAL_FAILURES` set, the EXACT SAME
- * per-item bound BLOCKED is excused by ("the per-item attempt limit already
- * bounds it, so it must not also feed a fleet-wide halt") — REJECTED is
- * bounded by `MAX_ATTEMPTS_PER_ITEM` in precisely the same way. A mechanical
+ * REJECTED sits in `ledger.ts`'s `TERMINAL_FAILURES` set, so it is bounded
+ * per item by `MAX_ATTEMPTS_PER_ITEM` ("the per-item attempt limit already
+ * bounds it, so it must not also feed a fleet-wide halt"). BLOCKED is
+ * excused from the halt too, though no longer by that budget (#1841): it is
+ * bounded by the `needs-human` hand-off tick.ts attaches instead. A mechanical
  * scope/test failure or a review `FAIL` verdict is the verification pipeline
  * catching a bad diff and refusing to merge it — the system working as
  * designed, exactly like BLOCKED, not a runaway fleet. Three REJECTEDs on

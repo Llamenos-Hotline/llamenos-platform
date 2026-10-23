@@ -178,6 +178,13 @@ class CallHistoryViewModel @Inject constructor(
         loadCalls(page = 1)
     }
 
+    /**
+     * A call's recording audio, for in-app playback (`GET /calls/:callId/recording`,
+     * apps/worker/routes/calls.ts). Hub-scoped like the list it was picked from.
+     */
+    suspend fun loadRecording(callId: String): ByteArray =
+        apiService.requestBytes("GET", apiService.hp("/api/calls/$callId/recording"))
+
     fun dismissError() {
         _uiState.update { it.copy(error = null) }
     }

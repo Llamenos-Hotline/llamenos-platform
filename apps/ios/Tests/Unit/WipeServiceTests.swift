@@ -1,6 +1,8 @@
 import XCTest
 @testable import Llamenos
 
+/// `@MainActor`: constructs `WipeService` and `WebSocketService`, which are main-actor isolated (#1920 audit).
+@MainActor
 final class WipeServiceTests: XCTestCase {
 
     private var wipeService: WipeService!

@@ -47,10 +47,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import org.llamenos.hotline.R
 import org.llamenos.protocol.SharedEntry
 import org.llamenos.hotline.model.detailsString
-import org.llamenos.hotline.model.displayName
 import org.llamenos.hotline.model.name
-import org.llamenos.hotline.model.role
-import org.llamenos.hotline.model.status
+import org.llamenos.hotline.model.labelRes
 import org.llamenos.hotline.model.timestamp
 
 /**
@@ -192,7 +190,7 @@ fun UserDetailScreen(
                                     onClick = {},
                                     label = {
                                         Text(
-                                            text = volunteer.role.removePrefix("role-").replaceFirstChar { it.uppercase() },
+                                            text = stringResource(volunteer.role.labelRes),
                                             style = MaterialTheme.typography.labelMedium,
                                         )
                                     },
@@ -209,7 +207,7 @@ fun UserDetailScreen(
                                     onClick = {},
                                     label = {
                                         Text(
-                                            text = volunteer.status.replaceFirstChar { it.uppercase() },
+                                            text = stringResource(volunteer.status.labelRes),
                                             style = MaterialTheme.typography.labelMedium,
                                         )
                                     },

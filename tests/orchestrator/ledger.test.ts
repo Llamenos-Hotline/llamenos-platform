@@ -53,6 +53,24 @@ describe('ledger', () => {
     expect(failedAttemptsIn(rows, '7')).toBe(1)
   })
 
+  // #1841/#1764: BLOCKED is a worker saying "not yet permitted" (a missing
+  // lane-scope grant), not a failed attempt. Three of them used to park the
+  // item for good, so the grant, once made, found it already exhausted.
+  it('does not count BLOCKED as a failed attempt — a scope-gated item keeps its budget', () => {
+    const rows = [
+      rec({ itemId: '7', outcome: 'BLOCKED', ts: 1 }),
+      rec({ itemId: '7', outcome: 'BLOCKED', ts: 2 }),
+      rec({ itemId: '7', outcome: 'BLOCKED', ts: 3 }),
+    ]
+    expect(failedAttemptsIn(rows, '7')).toBe(0)
+  })
+
+  it('leaves the attempt count unchanged when a BLOCKED row lands between real failures', () => {
+    const before = [rec({ itemId: '7', outcome: 'FAILED', ts: 1 })]
+    const after = [...before, rec({ itemId: '7', outcome: 'BLOCKED', ts: 2 })]
+    expect(failedAttemptsIn(after, '7')).toBe(failedAttemptsIn(before, '7'))
+  })
+
   it('ignores DISPATCHED rows when counting attempts', () => {
     const rows = [rec({ itemId: '7', outcome: 'DISPATCHED', ts: 1 }), rec({ itemId: '7', outcome: 'FAILED', ts: 2 })]
     expect(failedAttemptsIn(rows, '7')).toBe(1)

@@ -481,7 +481,7 @@ jobs:
         run: bun run build:server
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-build
           path: dist/
@@ -724,7 +724,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-results-shard-${{ matrix.shard }}
           path: |
@@ -814,7 +814,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-bdd-results
           path: |
@@ -863,7 +863,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-unit-results
           path: test-results/
@@ -1026,11 +1026,115 @@ jobs:
 
       - name: Upload test log
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-integration-bun-log
           path: test-results/
           retention-days: 7
+
+  # ─── Backend Integration Tests (real PostgreSQL) ───────────
+  backend-integration:
+    needs: changes
+    # NOT gated on `revalidate` (merge-queue-only), unlike e2e/backend-bdd/
+    # ios-e2e. That gate exists for suites that are expensive or contend for
+    # something scarce; this one is neither, and it is the cheapest place in
+    # CI to catch a whole class of defect.
+    #
+    #  - Cost profile is `backend-unit`'s, not `e2e`'s: one ubuntu-latest
+    #    runner, one postgres service container, no Docker Compose build, no
+    #    Playwright browsers, no macOS runner. The `revalidate` rationale
+    #    above explicitly exempts suites that "are cheap [and] contend for
+    #    nothing scarce" for exactly this reason.
+    #  - Queue-only means a break takes its whole merge group down and forces
+    #    a rebuild (see the ALLGREEN trade stated on `revalidate`). These
+    #    tests cover server boot on a fresh database and the response shapes
+    #    clients decode — the two things most likely to be broken by an
+    #    ordinary backend change, and the worst things to discover from
+    #    inside a five-entry group.
+    #  - It is path-scoped on `backend`, so a PR that cannot affect the
+    #    backend never spins a database.
+    #
+    # If this job's wall time ever becomes the constraint, move it behind
+    # `revalidate` then — not pre-emptively.
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured 2026-10-03 on a 4-core dev box: 119s of vitest, with the
+    # slowest single test (a full migration reconcile) at 65s. Budget covers
+    # a cold rust-cache (~3.5 min, per crypto-tests) on top of that.
+    timeout-minutes: 25
+    env:
+      # packages/crypto/rust-toolchain.toml pins eleven extra targets this job
+      # never builds — same override as crypto-tests, same `stable` compiler.
+      RUSTUP_TOOLCHAIN: stable
+      DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+
+    services:
+      postgres:
+        # Same pin deploy/docker/docker-compose.dev.yml uses, so the suite runs
+        # against the server version a developer runs it against locally.
+        image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af
+        env:
+          POSTGRES_USER: llamenos
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: llamenos
+        ports:
+          - 5432:5432
+        # Steps do not start until this health check passes, so the suite needs
+        # no wait-for-postgres step of its own.
+        options: >-
+          --health-cmd "pg_isready -U llamenos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      # After the toolchain step: rust-cache keys on the installed rustc.
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/crypto
+
+      # startup-init.test.ts boots src/server/index.ts as a real Bun
+      # subprocess. Vitest's `@llamenos/crypto/ffi` -> mock alias does not
+      # reach a subprocess, so that process loads the genuine native library
+      # through bun:ffi and the .so must exist. Same step as ios-e2e.yml's
+      # "Build server crypto library".
+      - name: Build server crypto library
+        run: packages/crypto/scripts/build-server.sh
+
+      # The wrapper runs vitest and then asserts the suite actually ran: every
+      # *.test.ts on disk was collected, and the executed-test count cleared its
+      # floor. `passWithNoTests` used to make this suite green on an empty glob;
+      # see the script's header and #1167.
+      - name: Run backend integration tests
+        run: bun scripts/test-worker-integration.ts
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-integration-results
+          path: test-results/
+          retention-days: 7
+
 
   # ─── Ansible Validation ───────────────────────────────────
   ansible-validate:
@@ -1318,7 +1422,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-unit-results
           path: test-results/
@@ -1332,6 +1436,14 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 25
+    # app/build.gradle.kts relocates the build directory off the checkout (to
+    # $RUNNER_TEMP/llamenos-android-build-<hash>) unless ANDROID_BUILD_DIR names
+    # one, so every `apps/android/app/build/...` artifact path below matched
+    # nothing — "No files were found", a warning, never a failure. #1811's queue
+    # ejection by a unit test left no test report behind because of it. A
+    # hosted runner has nothing to share the checkout with, so pin it back.
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/apps/android/app/build
 
     steps:
       - name: Checkout
@@ -1346,13 +1458,13 @@ jobs:
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       - name: Setup Java 17
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
 
       - name: Run unit tests
         working-directory: apps/android
@@ -1366,12 +1478,16 @@ jobs:
         working-directory: apps/android
         run: ./gradlew assembleDebug assembleDebugAndroidTest --console=plain
 
+      # The JUnit XML carries each failure's full stack and the test's stdout/stderr;
+      # the HTML report is the same, browsable. Only a failure needs either.
       - name: Upload Android test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-unit-test-results
-          path: apps/android/app/build/test-results/
+          path: |
+            apps/android/app/build/test-results/
+            apps/android/app/build/reports/tests/
           retention-days: 7
 
   # ─── PR-head Android compile gate (#1762) ────────────────────
@@ -1409,13 +1525,13 @@ jobs:
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       - name: Setup Java 17
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
 
       - name: Compile every Kotlin source set (no tests run)
         working-directory: apps/android
@@ -1429,6 +1545,9 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 45
+    # See android-build-test: without this the result paths below never exist.
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/apps/android/app/build
 
     strategy:
       fail-fast: false
@@ -1454,13 +1573,13 @@ jobs:
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       - name: Setup Java 17
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
 
       # ── Build native crypto library for emulator (x86_64) ───────
       # The Android app requires the Rust crypto .so to function —
@@ -1482,7 +1601,7 @@ jobs:
 
       - name: Rust cache
         if: steps.crypto-cache.outputs.cache-hit != 'true'
-        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/crypto
 
@@ -1719,17 +1838,18 @@ jobs:
             down -v || true
 
       - name: Upload test results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
           name: android-e2e-results-shard-${{ matrix.shard }}
           path: |
             apps/android/app/build/outputs/androidTest-results/
             apps/android/app/build/reports/androidTests/
+            apps/android/app/build/reports/m1-probe/
           retention-days: 7
 
       - name: Upload logcat
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
           name: android-e2e-logcat-shard-${{ matrix.shard }}
@@ -1847,7 +1967,7 @@ jobs:
 
       - name: Rust cache
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/crypto
 
@@ -1935,7 +2055,7 @@ jobs:
 
       - name: Upload iOS test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-test-results
           path: test-results/
@@ -2015,7 +2135,7 @@ jobs:
 
       - name: Rust cache
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/crypto
 
@@ -2601,13 +2721,16 @@ jobs:
   #     the queue ref is the invisible-gap bug itself (the #1594 shape)
   #     and fails here.
   #
+  #   every event — `crypto-tests` has no queue-only deferral, so a skip
+  #     with the `crypto` flag set fails here too (#1941).
+  #
   # A separate job rather than a ci-status step because ci-status cannot
   # read these flags: adding `changes` to its `needs` trips the
   # required-context rail in tests/orchestrator/guards.test.ts (`changes`'s
   # own `if:` names `event_name` without `merge_group`), and that rail is
   # load-bearing. This job's `if:` names no event, so the rail passes.
   platform-suite-coverage:
-    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd]
+    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd, crypto-tests]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2622,6 +2745,7 @@ jobs:
           ANDROID: ${{ needs.changes.outputs.android }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           BACKEND: ${{ needs.changes.outputs.backend }}
+          CRYPTO: ${{ needs.changes.outputs.crypto }}
           R_IOS_COMPILE: ${{ needs.ios-compile-check.result }}
           R_ANDROID_COMPILE: ${{ needs.android-compile-check.result }}
           R_IOS_BUILD: ${{ needs.ios-build-test.result }}
@@ -2630,6 +2754,7 @@ jobs:
           R_ANDROID_E2E: ${{ needs.android-e2e.result }}
           R_E2E: ${{ needs.e2e.result }}
           R_BACKEND_BDD: ${{ needs.backend-bdd.result }}
+          R_CRYPTO: ${{ needs.crypto-tests.result }}
         run: |
           set -euo pipefail
           gap=""
@@ -2669,6 +2794,13 @@ jobs:
             if [ "$BACKEND" = "true" ] && [ "$R_BACKEND_BDD" = "skipped" ]; then gap="$gap backend-bdd"; fi
           fi
 
+          # crypto-tests has no `revalidate` deferral: its `if:` is exactly
+          # `crypto == 'true'`, so on EVERY event a skip with the flag set is
+          # wiring drift, never a deliberate deferral. ci-status reads `skipped`
+          # as a pass, so without this the suite could vanish and stay green
+          # (#1941, #1954).
+          if [ "$CRYPTO" = "true" ] && [ "$R_CRYPTO" = "skipped" ]; then gap="$gap crypto-tests"; fi
+
           if [ -n "$gap" ]; then
             echo "::error::Platform suites for the changed paths were SKIPPED on $EVENT_NAME:$gap — ci-status must not report success for a platform nothing verified (#1762). This is a CI wiring defect, not a code failure; check the gate's if: against detect-changed-platforms.sh."
             exit 1
@@ -2688,7 +2820,7 @@ jobs:
           echo "coverage audit: event=$EVENT_NAME gap='${gap:-none}' deferred='${deferred:-none}'"
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-compile-check, android-e2e, e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard, production-smoke, platform-suite-coverage]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, backend-integration, desktop-unit, android-build-test, android-compile-check, android-e2e, e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard, production-smoke, platform-suite-coverage]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2714,6 +2846,7 @@ jobs:
           check_job "backend-bdd" "${{ needs.backend-bdd.result }}"
           check_job "backend-unit" "${{ needs.backend-unit.result }}"
           check_job "backend-integration-bun" "${{ needs.backend-integration-bun.result }}"
+          check_job "backend-integration" "${{ needs.backend-integration.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
           check_job "android-compile-check" "${{ needs.android-compile-check.result }}"

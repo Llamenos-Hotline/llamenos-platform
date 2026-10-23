@@ -4,6 +4,7 @@
  * Tests recovery group enrollment, session lifecycle, share contributions,
  * user envelopes, liveness proofs, and permission enforcement.
  */
+import { SIGCHAIN_GENESIS_SEQ } from '@protocol/schemas/sigchain'
 import { expect } from '@playwright/test'
 import { Given, When, Then, Before, After, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
@@ -1304,7 +1305,9 @@ When('the new device completes recovery with a self-authorizing sigchain link', 
   const s = getS(world)
   const cer = s.ceremony!
 
-  const seqNo = 1
+  // The recovering user in this scenario never initialised an identity, so
+  // the recovery link takes the first slot (SIGCHAIN_GENESIS_SEQ).
+  const seqNo = SIGCHAIN_GENESIS_SEQ
   const prevHash = null
   const timestamp = new Date().toISOString()
   const signerDeviceId = `recovered-device-${cer.newDeviceEdPubkey.slice(0, 8)}`

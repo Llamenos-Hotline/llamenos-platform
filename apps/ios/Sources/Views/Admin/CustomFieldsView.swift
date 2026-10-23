@@ -47,7 +47,7 @@ struct CustomFieldsView: View {
         List {
             ForEach(viewModel.customFields) { field in
                 FieldRowView(field: field)
-                    .accessibilityIdentifier("field-row-\(field.id)")
+                    .accessibilityIdentifier("field-row-\(field.name)")
                     .contentShape(Rectangle())
                     .onTapGesture {
                         viewModel.editingField = field
@@ -55,7 +55,7 @@ struct CustomFieldsView: View {
                     }
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
-                            Task { await viewModel.deleteField(id: field.id) }
+                            Task { await viewModel.deleteField(name: field.name) }
                         } label: {
                             Label(
                                 NSLocalizedString("delete", comment: "Delete"),
@@ -104,7 +104,7 @@ struct CustomFieldsView: View {
 // MARK: - FieldRowView
 
 struct FieldRowView: View {
-    let field: CustomFieldDefinition
+    let field: CustomFieldsBodyField
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -119,7 +119,7 @@ struct FieldRowView: View {
                 // Context badge
                 contextBadge(field.context)
 
-                if field.required {
+                if field.isRequired {
                     Text(NSLocalizedString("field_required", comment: "Required"))
                         .font(.brand(.caption2))
                         .fontWeight(.medium)
@@ -136,7 +136,7 @@ struct FieldRowView: View {
     }
 
     @ViewBuilder
-    private func typeBadge(_ type: CustomFieldDefinition.FieldType) -> some View {
+    private func typeBadge(_ type: SharedCustomFieldDefinitionType) -> some View {
         Text(type.rawValue.capitalized)
             .font(.brand(.caption2))
             .fontWeight(.medium)
@@ -147,11 +147,13 @@ struct FieldRowView: View {
     }
 
     @ViewBuilder
-    private func contextBadge(_ context: CustomFieldDefinition.FieldContext) -> some View {
+    private func contextBadge(_ context: String?) -> some View {
+        // Wire contexts (packages/protocol/schemas/settings.ts):
+        // call-notes, conversation-notes, reports, all.
         let label: String = switch context {
-        case .callNotes: NSLocalizedString("field_context_notes", comment: "Notes")
-        case .reports: NSLocalizedString("field_context_reports", comment: "Reports")
-        case .both: NSLocalizedString("field_context_both", comment: "Both")
+        case "call-notes": NSLocalizedString("field_context_notes", comment: "Notes")
+        case "reports": NSLocalizedString("field_context_reports", comment: "Reports")
+        default: NSLocalizedString("field_context_both", comment: "Both")
         }
         Text(label)
             .font(.brand(.caption2))

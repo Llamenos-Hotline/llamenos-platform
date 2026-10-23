@@ -10,26 +10,39 @@ import { gh, ghJson, describeGhFailure, REPO } from './gh.js'
  * the queue itself performs against other entries, and each re-entry is a
  * fresh `merge_group` event with a full review, even when the PR's OWN diff
  * has not changed at all. This is the second half of the same fix: exactly
- * one review per PR per DIFF, not per queue attempt.
+ * one review per PR per JUDGED TREE, not per queue attempt.
  *
- * Keyed by a hash of the diff's own content, never the head SHA — a rebase
- * that only replays the PR on top of a newer `main` changes the head SHA but
- * not what the PR actually touches, and that replayed diff must still hit.
+ * Keyed by the head commit's TREE sha (`.commit.tree.sha`), never the head
+ * SHA and never the diff (#2014). A verdict is a judgement of the code a
+ * merge would land, and that is exactly the head's tree:
+ *
+ *  - an UNCHANGED tree is the same code whatever commit carries it — a no-op
+ *    rebase, a re-request, a rebase whose result is content-identical
+ *    (#1987) — so it must still hit; keying on the head SHA would re-spend a
+ *    review on every one of those, on a gate that runs on ONE shared runner;
+ *  - a CHANGED tree is different code, even when the PR's own diff text is
+ *    byte-identical. It used to be keyed on `sha256(git diff base...head)`,
+ *    and #1975 is what that cost: rebased onto a newer `main`, its diff was
+ *    unchanged, so the `crypto-security-reviewer` + general PASS earned on
+ *    tree `f3655875…` was re-published four times as a green `fleet/review`
+ *    on tree `4eeb09ad…`, which nobody had judged. The diff a reviewer reads
+ *    is only half the code under judgement; the base it now sits on is the
+ *    other half.
  *
  * Both a PASS and a SUBSTANTIVE FAIL are recorded (#1158). Caching only the
  * PASS was measurably expensive: in one 12-hour window there were 60 Fleet
  * Review runs, 10 of them on one PR and 8 on another — the two PRs that were
  * FAILING. Every branch-freshness rebase re-fired the gate, and the identical
  * diff was reviewed from scratch to reach the identical conclusion, burning a
- * provider call each time. The moment the author pushes anything the diff
- * hash changes and the cache is bypassed naturally, which is exactly when a
- * re-review is warranted.
+ * provider call each time. The moment the tree changes — the author pushes
+ * anything, or the branch is rebased onto a `main` that moved — the cache is
+ * bypassed naturally, which is exactly when a re-review is warranted.
  *
  * An INFRASTRUCTURE failure is never recorded, and the distinction is not
  * negotiable: a parsed `VERDICT: FAIL` means the reviewer looked and decided;
  * an UNREADABLE (an API error, a timeout, exhausted quota, an unparseable
  * response) means it could not look at all. Pinning a transient outage to a
- * diff hash would be far worse than the waste it saves — the PR would stay
+ * tree would be far worse than the waste it saves — the PR would stay
  * red until someone pushed a commit, for a reason that had already gone away.
  * `runReviewCi` (ci.ts) is the only caller, and it records nothing when any
  * member of the review set came back UNREADABLE.
@@ -39,7 +52,14 @@ export interface ReviewCacheKey {
    *  key (not just the hash) so a diff that happens to match byte-for-byte
    *  across two different PRs is never cross-published between them. */
   pr: string
+  /** `sha256` of the PR's diff — logged, written into the record for
+   *  continuity, and NOT part of the lookup: the same diff on a different
+   *  tree is different code (see the module docstring). */
   diffHash: string
+  /** The head commit's tree sha — THE key. `undefined` when it could not be
+   *  read, and then there is no key at all: a lookup misses and nothing is
+   *  recorded, so an unreadable tree can never become a hit. */
+  headTree: string | undefined
 }
 
 export interface CachedVerdict {
@@ -55,7 +75,7 @@ export interface ReviewCache {
   /** Called only with a fresh, SUBSTANTIVE verdict this process itself just
    *  produced — never a cache hit it is re-publishing, and never an
    *  UNREADABLE (see the module docstring: an infrastructure failure must
-   *  never be pinned to a diff hash). */
+   *  never be pinned to a tree). */
   record(key: ReviewCacheKey, verdict: CachedVerdict): Promise<void>
 }
 
@@ -66,17 +86,26 @@ export function diffHash(diff: string): string {
 }
 
 /**
+ * A git tree object id: 40 hex (SHA-1) or 64 hex (SHA-256 object format).
+ * Anything else is not a tree this cache can be keyed on.
+ */
+export function isTreeSha(s: string | undefined): s is string {
+  return s !== undefined && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(s)
+}
+
+/**
  * The artifact name IS the cache key, so a lookup is one filtered list call
  * and needs no content downloaded (existence alone proves PASS, since
  * nothing is ever uploaded under this name for anything else — see the
  * module docstring). GitHub artifact names accept far more than this, but
- * `pr` and a hex hash are already exactly the safe subset: no path
+ * `pr` and a hex tree sha are already exactly the safe subset: no path
  * separators, no characters a URL query parameter would need to escape.
- * Truncated to 24 hex characters (96 bits) — short enough to stay readable
- * in the Actions UI artifact list, far more collision resistance than a
- * per-repo review cache will ever need.
+ *
+ * The FULL tree sha, after a literal `tree-`: the name states exactly which
+ * tree was judged, and no record from the diff-keyed era (whose names end in
+ * 24 hex characters of a diff hash) can ever be found under it (#2014).
  */
-export function cacheArtifactName(pr: string, hash: string, scope?: string, verdict: 'PASS' | 'FAIL' = 'PASS'): string {
+export function cacheArtifactName(pr: string, headTree: string, scope?: string, verdict: 'PASS' | 'FAIL' = 'PASS'): string {
   // `scope` namespaces a PASS to the exact REVIEW SET that produced it
   // (`reviewSetTag` below). Without it, a PR reviewed by the general
   // reviewer alone and then labelled `crypto-security-reviewer` would find
@@ -89,7 +118,7 @@ export function cacheArtifactName(pr: string, hash: string, scope?: string, verd
   // other, and `pass` is spelled exactly as it always was — every artifact
   // recorded before FAILs were cached at all stays a hit.
   const prefix = scope === undefined ? '' : `${scope}-`
-  return `fleet-review-${prefix}${verdict.toLowerCase()}-pr${pr}-${hash.slice(0, 24)}`
+  return `fleet-review-${prefix}${verdict.toLowerCase()}-pr${pr}-tree-${headTree}`
 }
 
 /**
@@ -117,7 +146,7 @@ interface ArtifactListResponse {
  * repository can create an artifact with any name it likes — so without
  * this check a same-repo PR could add its own `pull_request`-triggered
  * workflow that uploads an empty artifact named
- * `fleet-review-pass-pr<N>-<sha256(diff)[0:24]>` and the next review
+ * `fleet-review-pass-pr<N>-tree-<head tree>` and the next review
  * request would find it, conclude `cache-hit`, and go green with no review
  * ever run. The name is not a capability; the producing workflow is.
  */
@@ -228,31 +257,36 @@ export function artifactReviewCache(
 ): ReviewCache {
   return {
     async lookup(key) {
+      // No tree, no key: a miss, never a lookup under a guessed name.
+      if (!isTreeSha(key.headTree)) {
+        log(`review cache: no readable head tree for PR #${key.pr} — treating it as a miss (fail safe)`)
+        return undefined
+      }
       // PASS first: it is the common case, and its artifact's existence
       // alone is the verdict, so the whole lookup is one list call.
-      const passName = cacheArtifactName(key.pr, key.diffHash, scope, 'PASS')
+      const passName = cacheArtifactName(key.pr, key.headTree, scope, 'PASS')
       const pass = await findArtifact(passName, log)
       if (pass !== undefined) {
         return {
           verdict: 'PASS',
-          text: `VERDICT: PASS (cached)\n\nan earlier run already reviewed this exact diff ` +
-            `(PR #${key.pr}, sha256:${key.diffHash.slice(0, 12)}…) and it passed — re-published from artifact ` +
+          text: `VERDICT: PASS (cached)\n\nan earlier run already reviewed this exact tree ` +
+            `(PR #${key.pr}, tree ${key.headTree}) and it passed — re-published from artifact ` +
             `"${passName}" (id ${pass.id}) instead of invoking the review engine again.`,
         }
       }
       // Then the SUBSTANTIVE FAIL (#1158). A rebase that does not change the
-      // diff must not re-spend a review to reach the same conclusion.
-      const failName = cacheArtifactName(key.pr, key.diffHash, scope, 'FAIL')
+      // tree must not re-spend a review to reach the same conclusion.
+      const failName = cacheArtifactName(key.pr, key.headTree, scope, 'FAIL')
       const fail = await findArtifact(failName, log)
       if (fail === undefined) return undefined
       const original = await recordedText(fail, failName, log)
       if (original === undefined) return undefined
       return {
         verdict: 'FAIL',
-        text: `VERDICT: FAIL (cached)\n\nan earlier run already reviewed this exact diff ` +
-          `(PR #${key.pr}, sha256:${key.diffHash.slice(0, 12)}…) and it FAILED; nothing in the diff has ` +
-          `changed since, so it has not been reviewed again. Push a fix — the cache is keyed on the diff's ` +
-          `own content, so any real change is reviewed afresh. The original verdict follows, from artifact ` +
+        text: `VERDICT: FAIL (cached)\n\nan earlier run already reviewed this exact tree ` +
+          `(PR #${key.pr}, tree ${key.headTree}) and it FAILED; nothing in the tree has ` +
+          `changed since, so it has not been reviewed again. Push a fix — the cache is keyed on the head's ` +
+          `tree, so any real change is reviewed afresh. The original verdict follows, from artifact ` +
           `"${failName}" (id ${fail.id}).\n\n---\n\n${original}`,
       }
     },
@@ -261,11 +295,17 @@ export function artifactReviewCache(
       // record — a missing cache write is never fatal to the review that
       // just passed; it only costs the NEXT identical diff its cache hit.
       if (outputDir === undefined) return
-      const name = cacheArtifactName(key.pr, key.diffHash, scope, verdict.verdict)
+      // No tree, no key — and a verdict recorded under no tree could only
+      // ever be found by a guess. Costs the next run its hit, nothing more.
+      if (!isTreeSha(key.headTree)) {
+        log(`review cache: no readable head tree for PR #${key.pr} — not recording this verdict`)
+        return
+      }
+      const name = cacheArtifactName(key.pr, key.headTree, scope, verdict.verdict)
       await mkdir(outputDir, { recursive: true })
       await writeFile(
         join(outputDir, `${name}.json`),
-        JSON.stringify({ pr: key.pr, diffHash: key.diffHash, ...verdict, recordedAt: new Date().toISOString() }),
+        JSON.stringify({ pr: key.pr, headTree: key.headTree, diffHash: key.diffHash, ...verdict, recordedAt: new Date().toISOString() }),
       )
       // The workflow's upload steps read this name back via
       // `steps.<review-step-id>.outputs.<CACHE_ARTIFACT_OUTPUT…>` — the one
@@ -347,13 +387,13 @@ export interface LastVerdictDeps {
  * record nothing, so the newest run holding one IS the last earned verdict,
  * and that run's `head_sha` is the commit it was earned on.
  *
- * What a push under `fleet/review` republishes when its diff changed (#1284,
- * `decideReviewGate`). A push is not a review request: the verdict the PR
- * earned stands until somebody requests another. The cache above answers a
- * narrower question — "was THIS diff judged by THIS review set" — and still
- * wins where it hits; this answers "what did the last review say", which is
- * the operator's rule: "If there's a review there's a review. If another
- * review is needed it can be requested."
+ * What a push under `fleet/review` reports when its tree changed (#1284,
+ * `decideReviewGate`). The cache above answers the question that can turn
+ * the check green — "was THIS tree judged by THIS review set" — and wins
+ * where it hits; this answers "what did the last review say", which a push
+ * that missed the cache can only REPORT. A FAIL carries forward as a red; a
+ * PASS earned on another tree is not a verdict about this one (#2014) and
+ * never concludes green — `decideReviewGate` turns it into `stale`.
  *
  * Whether a verdict was a PASS or a FAIL is read from the artifact NAME
  * (`cacheArtifactName`), so an EXPIRED record still carries its verdict —
@@ -378,7 +418,10 @@ export async function lastEarnedVerdict(deps: LastVerdictDeps): Promise<LastVerd
   // Same producing-workflow rule as the cache (`CACHE_WRITER_WORKFLOW`): an
   // artifact's name is not a capability, so a record from any other
   // workflow is never believed. Scoped or general, PASS or FAIL, THIS PR.
-  const recordName = new RegExp(`^fleet-review-(?:set-[0-9a-f]{12}-)?(pass|fail)-pr${deps.pr}-[0-9a-f]{24}$`)
+  // Both naming eras: a tree-keyed record (#2014) and a diff-keyed one from
+  // before it. Either is a verdict this PR earned; neither is a verdict about
+  // THIS head's tree, which only a cache hit can be (`decideReviewGate`).
+  const recordName = new RegExp(`^fleet-review-(?:set-[0-9a-f]{12}-)?(pass|fail)-pr${deps.pr}-(?:[0-9a-f]{24}|tree-[0-9a-f]{40}|tree-[0-9a-f]{64})$`)
   let searched = 0
   for (const run of runs.workflow_runs) {
     if (String(run.id) === deps.currentRunId) continue
@@ -400,11 +443,13 @@ export async function lastEarnedVerdict(deps: LastVerdictDeps): Promise<LastVerd
     }
     const verdict: 'PASS' | 'FAIL' = verdicts.has('FAIL') ? 'FAIL' : 'PASS'
     const earnedOn = `PR #${deps.pr}'s last review — ${verdict} on ${run.head_sha} (${run.html_url})`
-    const stands = 'This push changed the diff, and a push never starts a review, so that verdict stands until a ' +
-      'review is requested again.'
     if (verdict === 'PASS') {
-      return { kind: 'found', earned: { verdict, headSha: run.head_sha, runUrl: run.html_url, text: `VERDICT: PASS (carried)\n\n${earnedOn}. ${stands}` } }
+      const covers = 'This push changed the tree, so that PASS does not cover this head, and a push never starts a ' +
+        'review: request one to have this head judged.'
+      return { kind: 'found', earned: { verdict, headSha: run.head_sha, runUrl: run.html_url, text: `VERDICT: PASS (earlier tree)\n\n${earnedOn}. ${covers}` } }
     }
+    const stands = 'This push changed the tree, and a push never starts a review, so that FAIL stands until a ' +
+      'review is requested again.'
     const live = records.find((a) => !a.expired)
     const original = live === undefined ? undefined : await deps.failText({ id: live.id, runId: run.id }, live.name)
     const body = original ?? `(the reviewer's text is no longer readable — see ${run.html_url})`

@@ -52,7 +52,17 @@ jobs:
     # otherwise we'd recursively try to prepare a release of the release.
     # The head_commit.message is consumed only by the Actions expression
     # engine, never by a shell, so this is safe from injection.
-    if: "!contains(github.event.head_commit.message, 'chore: prepare release')"
+    #
+    # `startsWith`, NOT `contains` (#2004): head_commit.message is the WHOLE
+    # message — subject AND body — and a squash merge puts the PR description
+    # in the body. With `contains`, any PR whose description merely mentions
+    # this phrase silently disabled release preparation: #1987 (589009eca)
+    # quoted it twice, the job was `skipped`, and release PR #1944 went
+    # stale. The release PR's squash commit always has the phrase at the very
+    # start of its subject (`chore: prepare release 0.19.19 (#1219)`), so
+    # anchoring at the start of the message matches it and nothing else.
+    # Do not "simplify" this back to `contains`.
+    if: "!startsWith(github.event.head_commit.message, 'chore: prepare release')"
     # knope-dev/action's entrypoint.sh shells out to `gh` to fetch the knope
     # binary from GitHub Releases. On the self-hosted runners this fails with
     # "gh: command not found" (exit 127) even after gh was installed manually

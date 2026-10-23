@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { getTranscriptionSettings } from '@/lib/api'
 import { TranscriptionSection as TranscriptionSectionInner } from '@/components/admin-settings/transcription-section'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { useTranscriptionConfirmToggle } from '@/lib/use-transcription-confirm-toggle'
 
 export function TranscriptionSection() {
   const { t } = useTranslation()
@@ -10,6 +12,7 @@ export function TranscriptionSection() {
   const [globalEnabled, setGlobalEnabled] = useState(false)
   const [allowOptOut, setAllowOptOut] = useState(false)
   const [loading, setLoading] = useState(true)
+  const { pending, requestToggle, confirm, cancel, title, description } = useTranscriptionConfirmToggle(setGlobalEnabled)
 
   useEffect(() => {
     getTranscriptionSettings()
@@ -28,19 +31,25 @@ export function TranscriptionSection() {
     : t('common.disabled', { defaultValue: 'Disabled' })
 
   return (
-    <TranscriptionSectionInner
-      globalEnabled={globalEnabled}
-      allowOptOut={allowOptOut}
-      onGlobalChange={setGlobalEnabled}
-      onOptOutChange={setAllowOptOut}
-      onConfirmToggle={(key, newValue) => {
-        if (key === 'transcription') {
-          setGlobalEnabled(newValue)
-        }
-      }}
-      expanded={true}
-      onToggle={() => {}}
-      statusSummary={statusSummary}
-    />
+    <>
+      <TranscriptionSectionInner
+        globalEnabled={globalEnabled}
+        allowOptOut={allowOptOut}
+        onGlobalChange={setGlobalEnabled}
+        onOptOutChange={setAllowOptOut}
+        onConfirmToggle={requestToggle}
+        expanded={true}
+        onToggle={() => {}}
+        statusSummary={statusSummary}
+      />
+      <ConfirmDialog
+        open={!!pending}
+        onOpenChange={(open) => { if (!open) cancel() }}
+        title={title}
+        description={description}
+        variant="default"
+        onConfirm={confirm}
+      />
+    </>
   )
 }

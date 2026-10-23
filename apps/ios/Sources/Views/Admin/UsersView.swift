@@ -7,6 +7,7 @@ import SwiftUI
 struct UsersView: View {
     @Bindable var viewModel: AdminViewModel
     @Environment(HubContext.self) private var hubContext
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         ZStack {
@@ -40,21 +41,21 @@ struct UsersView: View {
             Section {
                 HStack {
                     StatCard(
-                        title: NSLocalizedString("admin_total_members", comment: "Total"),
+                        title: L10n.format("admin_total_members", viewModel.users.count),
                         value: "\(viewModel.users.count)",
                         icon: "person.3.fill",
                         color: Color.brandPrimary
                     )
 
                     StatCard(
-                        title: NSLocalizedString("admin_admin_count", comment: "Admins"),
+                        title: L10n.format("admin_admin_count", viewModel.users.filter { $0.userRole == .admin }.count),
                         value: "\(viewModel.users.filter { $0.userRole == .admin }.count)",
                         icon: "shield.fill",
                         color: Color.brandDarkTeal
                     )
 
                     StatCard(
-                        title: NSLocalizedString("admin_active_count", comment: "Active"),
+                        title: L10n.format("admin_active_count", viewModel.users.filter { $0.userStatus == .active }.count),
                         value: "\(viewModel.users.filter { $0.userStatus == .active }.count)",
                         icon: "checkmark.circle.fill",
                         color: Color.statusActive
@@ -69,6 +70,7 @@ struct UsersView: View {
                 ForEach(viewModel.filteredUsers) { user in
                     UserRowView(
                         user: user,
+                        appState: appState,
                         onRoleChange: { newRole in
                             Task {
                                 await viewModel.updateUserRole(
@@ -76,8 +78,15 @@ struct UsersView: View {
                                     newRole: newRole
                                 )
                             }
-                        }
+                        },
+                        canViewPermissions: appState.hasPermission("users:read")
                     )
+                    // `.contain` keeps the row's own controls addressable. A bare
+                    // identifier here is applied to every child that has none of
+                    // its own AND overrides the ones that do, which collapsed the
+                    // permissions button and the role menu into
+                    // "volunteer-row-<id>" in the accessibility tree.
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("volunteer-row-\(user.id)")
                 }
             } header: {
@@ -137,7 +146,9 @@ struct UsersView: View {
 /// A single user row showing display name, pubkey, role badge, and status.
 struct UserRowView: View {
     let user: ClientUser
+    let appState: AppState
     let onRoleChange: (UserRole) -> Void
+    var canViewPermissions = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -173,6 +184,27 @@ struct UserRowView: View {
             }
 
             Spacer()
+
+            if canViewPermissions {
+                NavigationLink {
+                    EffectivePermissionsView(
+                        viewModel: EffectivePermissionsViewModel(
+                            rolesAPI: RolesAPIService(apiService: appState.apiService),
+                            userId: user.id
+                        ),
+                        displayName: user.displayLabel
+                    )
+                } label: {
+                    Image(systemName: "key.fill")
+                        .font(.caption)
+                        .foregroundStyle(Color.brandPrimary)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.brandPrimary.opacity(0.1)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(NSLocalizedString("roles_effective_permissions", comment: "Effective Permissions"))
+                .accessibilityIdentifier("effective-permissions-\(user.id)")
+            }
 
             // Role menu
             Menu {

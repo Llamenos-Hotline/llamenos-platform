@@ -26,6 +26,6 @@
 # Checked by: python3 apps/ios/scripts/ui-tests.py check-mac-shards
 
 ShiftFlowUITests        # testWeeklyScheduleHeader failed 3 of 3 merge groups on hosted (26-32s against a 10s+2s anyElementExists budget); passed on the Mac in #1428
-AdminSettingsUITests    # testTelephonySettingsHasProviderPicker 51s and testCallSettingsHasSliders 53s failed on hosted; both passed on the Mac in #1428
+AdminSettingsUITests    # UNPROVEN SINCE #1731 RENAMED ITS TESTS: #1428 measured testTelephonySettingsHasProviderPicker at 51s and testCallSettingsHasSliders at 53s failing on hosted and passing on the Mac, but both were replaced by testTelephonySettingsShowTheStoredProvider and testCallSettingsShowTheStoredValues, which have never been measured on hosted. Kept because removing it unmeasured would put the class back on the host it once failed on; drop it after one hosted run of the successors (#1873)
 SecurityUITests         # testPINWipeAfterTenFailedAttempts hit XCTest's 300s allowance at 313s on hosted and passes at 168s on the Mac (#1425)
 APIConnectedUITests     # testClockInViaAPI and testShiftStatusWithAPI failed on hosted at 26-28s, passed on the Mac at 13-15s

@@ -854,6 +854,7 @@
     "errorTitle": "خطای دعوتنامه",
     "expired": "این دعوتنامه منقضی شده است",
     "generatingKeys": "در حال تولید کلیدهای شما...",
+    "identityInitFailed": "تنظیم کلیدهای رمزگذاری شما ممکن نشد. لطفاً دوباره تلاش کنید.",
     "getStarted": "شروع کنید",
     "goToLogin": "رفتن به صفحه ورود",
     "invalidCode": "کد دعوت نامعتبر",
@@ -2464,7 +2465,9 @@
     "noCategoriesMessage": "دسته‌بندی‌های گزارش به طبقه‌بندی رویدادها کمک می‌کنند.",
     "noInvitesMessage": "برای افزودن داوطلبان جدید، کد دعوت بسازید.",
     "noSearchResults": "هیچ عضوی با جستجوی شما مطابقت ندارد.",
-    "noUsersMessage": "هنوز هیچ عضوی نپیوسته است."
+    "noUsersMessage": "هنوز هیچ عضوی نپیوسته است.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "platformBans": {
     "reason": "دلیل",
@@ -3820,7 +3823,9 @@
     "createTagNamed": "Create \"{{name}}\"",
     "noTagsFound": "No tags found.",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "adminEntityType": {
     "sectionGeneral": "عمومی",
@@ -4224,7 +4229,11 @@
     "suggestedRoleCount": "{{count}} roles",
     "slugPlaceholder": "e.g. intake-coordinator",
     "title": "Roles & Permissions",
-    "updated": "Role updated"
+    "updated": "Role updated",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "deviceKey": {
     "placeholder": "Enter key hex",

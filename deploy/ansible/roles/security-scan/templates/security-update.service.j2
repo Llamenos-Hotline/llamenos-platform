@@ -15,14 +15,19 @@ ExecStart=/bin/bash -c '\
     --only-upgrade \
     $(apt list --upgradable 2>/dev/null | grep -i security | cut -d/ -f1 | tail -n +2) 2>/dev/null || true; \
   \
-  # Pull latest container images and recreate if changed \
-  cd {{ app_dir }} && \
-  docker compose pull --quiet 2>/dev/null && \
-  docker compose up -d --remove-orphans 2>/dev/null && \
+  # Pull latest container images and recreate if changed, one Compose \
+  # project per service (see group_vars/all/compose.yml) \
+  for f in {{ llamenos_compose_glob }}; do \
+    [ -f "$f" ] || continue; \
+    docker compose -f "$f" pull --quiet 2>/dev/null; \
+    docker compose -f "$f" up -d --remove-orphans 2>/dev/null; \
+  done && \
   \
-  # Wait for health check \
+  # Wait for health check (the app's, so only on a host that runs the app) \
   sleep 10 && \
+{% if 'app' in llamenos_compose_names_here %}
   curl -sf http://localhost:3000/api/health/ready >/dev/null 2>&1 && \
+{% endif %}
   echo "Security update completed successfully" || \
   echo "Warning: health check failed after security update" \
 '

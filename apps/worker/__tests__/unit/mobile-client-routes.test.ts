@@ -213,45 +213,10 @@ function distinct(sites: CallSite[]): Map<string, string> {
  * into a blanket exemption.
  */
 const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
-  iOS: {
-    // #1701 — iOS admin screens against routes that do not exist. The invite
-    // endpoints live under /api/invites. (GET /api/identity/members is now
-    // mounted — routes/identity.ts.)
-    'GET /api/identity/invites': '#1701',
-    'POST /api/identity/invite': '#1701',
-
-    // Also #1701, found by this test rather than by reading the client. Both
-    // are live 404s on a real backend.
-    [`PATCH /api/identity/${PARAM}/role`]: '#1701',
-    [`POST /api/conversations/${PARAM}/read`]: '#1701',
-  },
-  Android: {
-    // #1149 — Android admin screens against the /api/admin/* prefix, which
-    // carries only security-events and devices/overview. The shift, audit and
-    // invite (#1047) halves are fixed; bans, blasts and custom fields are not.
-    'GET /api/admin/bans': '#1149',
-    'POST /api/admin/bans': '#1149',
-    'POST /api/admin/bans/bulk': '#1149',
-    [`DELETE /api/admin/bans/${PARAM}`]: '#1149',
-    'GET /api/admin/blasts': '#1149',
-    'POST /api/admin/blasts': '#1149',
-    'GET /api/admin/custom-fields': '#1149',
-    'PUT /api/admin/custom-fields': '#1149',
-
-    // Found by this test, on the run that introduced it — not by reading the
-    // client. All six are live 404s on a real backend and none is an admin
-    // settings screen, so they are recorded here rather than fixed in the same
-    // change. `PUT /api/notes/:id` is a fifth instance of the wrong-verb defect
-    // this test exists for: the server mounts `PATCH /api/notes/:id`.
-    [`PUT /api/notes/${PARAM}`]: '#1730',
-    [`POST /api/reports/${PARAM}/convert-to-case`]: '#1730',
-    [`GET /api/contacts/${PARAM}/relationships`]: '#1730',
-    [`GET /api/contacts/${PARAM}/timeline`]: '#1730',
-    [`POST /api/conversations/${PARAM}/read`]: '#1730',
-    [`POST /api/conversations/${PARAM}/close`]: '#1730',
-    [`POST /api/conversations/${PARAM}/reopen`]: '#1730',
-    [`POST /api/conversations/${PARAM}/assign`]: '#1730',
-  },
+  iOS: {},
+  // The blasts composer was rebuilt on createBlastBodySchema against the
+  // hub-scoped /blasts routes (#1997), which emptied this list.
+  Android: {},
 }
 
 const PLATFORMS: Platform[] = ['iOS', 'Android']

@@ -854,6 +854,7 @@
     "errorTitle": "Kúachi de Invitación",
     "expired": "Invitación yóꞌo xa̱ ni̱ ndíꞌi",
     "generatingKeys": "Kúu savaꞌa llave miíún...",
+    "identityInitFailed": "Ñá ni̱ kúu chiñúꞌún llave cifrado miíún. Náku̱ún inka vuelta tá kúni.",
     "getStarted": "Kíxáꞌá",
     "goToLogin": "Kuaꞌan nu̱ú Kivi",
     "invalidCode": "Código de invitación ña va̱ꞌa",
@@ -2723,7 +2724,9 @@
     "noCategoriesMessage": "Report categories help classify incidents.",
     "noInvitesMessage": "Generate invite codes to add new volunteers.",
     "noSearchResults": "No members match your search.",
-    "noUsersMessage": "No members have joined yet."
+    "noUsersMessage": "No members have joined yet.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "recovery": {
     "title": "Account Recovery",
@@ -3713,7 +3716,11 @@
     "suggestedRoleCount": "{{count}} roles",
     "slugPlaceholder": "e.g. intake-coordinator",
     "title": "Roles & Permissions",
-    "updated": "Role updated"
+    "updated": "Role updated",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "schema": {
     "description": "Descripción",
@@ -4071,7 +4078,9 @@
     "createTagNamed": "Create \"{{name}}\"",
     "noTagsFound": "No tags found.",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "note": {
     "detailAuthor": "Ña̱yivi ni̱ tee",

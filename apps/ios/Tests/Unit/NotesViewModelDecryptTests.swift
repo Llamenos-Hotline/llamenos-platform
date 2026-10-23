@@ -8,6 +8,8 @@ import Testing
 /// the server's `authorPubkey` — the author's SIGNING key — against our ENCRYPTION
 /// key. That comparison can never match, and while it gated the author envelope, every
 /// note you wrote yourself decrypted to nothing and vanished from the list (#1293).
+/// `@MainActor`: exercises `NotesViewModel`, which is main-actor isolated (#1920 audit).
+@MainActor
 struct NotesViewModelDecryptTests {
 
     private func makeNote(

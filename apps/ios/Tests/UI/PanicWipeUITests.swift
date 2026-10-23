@@ -72,25 +72,12 @@ final class PanicWipeUITests: BaseUITest {
             XCTAssertTrue(confirmButton.waitForExistence(timeout: 5), "Confirm button should exist")
             confirmButton.tap()
 
-            // Handle the final alert confirmation
+            // The wipe asks one last time.
             let alert = app.alerts.firstMatch
-            if alert.waitForExistence(timeout: 5) {
-                // Tap the destructive "Yes, Wipe Everything" button
-                let wipeButton = alert.buttons["Yes, Wipe Everything"]
-                if wipeButton.exists {
-                    wipeButton.tap()
-                } else {
-                    // Fallback: tap whichever button is NOT Cancel
-                    let alertButtons = alert.buttons
-                    for i in 0..<alertButtons.count {
-                        let button = alertButtons.element(boundBy: i)
-                        if button.label != "cancel" && button.label != "Cancel" {
-                            button.tap()
-                            break
-                        }
-                    }
-                }
-            }
+            XCTAssertTrue(alert.waitForExistence(timeout: 5), "Confirming should raise a final confirmation alert")
+            let wipeButton = alert.buttons["Yes, Wipe Everything"]
+            XCTAssertTrue(wipeButton.exists, "The alert should offer 'Yes, Wipe Everything'")
+            wipeButton.tap()
         }
         then("I should see the login screen") {
             let hubURLInput = find("hub-url-input")

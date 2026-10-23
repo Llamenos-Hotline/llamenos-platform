@@ -8,6 +8,11 @@ import Foundation
 /// - Exact match: "calls:answer"
 /// - Domain wildcard: "calls:*" matches "calls:answer"
 /// - Global wildcard: "*" matches everything
+///
+/// `@MainActor` (#1920 audit): only `AppState` (main-actor) writes it, and views read
+/// `isAdmin` / `hasPermission` while rendering. Isolation turns that convention into a
+/// compile-time guarantee.
+@MainActor
 @Observable
 final class PermissionService {
     /// The user's effective permissions, loaded from `GET /api/auth/me`.

@@ -1236,6 +1236,26 @@ export class IdentityService {
   }
 
   /**
+   * Rename one of a pubkey's own WebAuthn credentials. The pubkey is part of the
+   * match, so a caller can never relabel a credential that belongs to someone else —
+   * a foreign credId is indistinguishable from a missing one (404).
+   */
+  async renameWebAuthnCredential(pubkey: string, credId: string, label: string): Promise<void> {
+    const result = await this.db
+      .update(webauthnCredentials)
+      .set({ label })
+      .where(
+        and(
+          eq(webauthnCredentials.pubkey, pubkey),
+          eq(webauthnCredentials.credentialId, credId),
+        ),
+      )
+      .returning({ credentialId: webauthnCredentials.credentialId })
+
+    if (result.length === 0) throw new ServiceError(404, 'Credential not found')
+  }
+
+  /**
    * Update the signature counter and lastUsedAt for a credential.
    */
   async updateWebAuthnCounter(data: {
@@ -1637,13 +1657,20 @@ export class IdentityService {
         // to construct the service. Loading it only when a device is
         // actually being revoked keeps IdentityService's own import graph
         // native-FFI-free.
-        const { appendValidatedSigchainLink, sigchainLockKey, CryptoKeyError } = await import('./crypto-keys')
+        const { appendValidatedSigchainLink, deletePukEnvelopesForDevicePubkey, sigchainLockKey, CryptoKeyError } = await import('./crypto-keys')
         try {
           // Per-user advisory lock BEFORE the chain-head read inside
           // appendValidatedSigchainLink — same lock, same ordering as
           // CryptoKeysService.appendSigchainLink and recovery-group
           // completion.
           await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sigchainLockKey(pubkey)}))`)
+          // PUK envelopes are keyed by sigchain device ID, not by this registry
+          // row, so deleting the row below does not cascade to them. Drop the
+          // revoked device's envelopes while the chain still names it; the
+          // transaction rolls the deletion back if the link below is rejected.
+          if (device.ed25519Pubkey) {
+            await deletePukEnvelopesForDevicePubkey(tx, pubkey, device.ed25519Pubkey)
+          }
           await appendValidatedSigchainLink(tx, pubkey, {
             seqNo: sigchainData.sigchainSeqNo,
             linkType: 'device_remove',

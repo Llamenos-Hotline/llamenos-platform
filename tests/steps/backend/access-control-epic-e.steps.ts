@@ -38,6 +38,16 @@ import {
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
+import type { PukHpkeEnvelope, SigchainLinkRecord } from '@protocol/schemas/sigchain'
+import {
+  buildSigchainLink,
+  deviceAddPayload,
+  genesisPayload,
+  randomTestDevice,
+  sealPukSeed,
+  testDevice,
+  type TestDevice,
+} from '../../identity-helpers'
 import { validateExternalUrlWithDns } from '@worker/lib/ssrf-guard'
 
 // ── State ──────────────────────────────────────────────────────────
@@ -60,8 +70,6 @@ interface EpicEState {
   contacts: Record<string, string>
   /** Gherkin record labels ("R-001", ...) -> real record id */
   records: Record<string, string>
-  /** Gherkin device labels ("dev-1", ...) -> real device id */
-  devices: Record<string, string>
 
   /** Context set by "hub X has two case records for contact Y", consumed by
    *  the "record is created by volunteer" steps that follow it. */
@@ -73,9 +81,13 @@ interface EpicEState {
   currentHubId?: string
 
   pukUserSeed?: string
+  pukUserPubkey?: string
+  /** Sigchain-authorised devices of the PUK user, by Gherkin label ("dev-1", ...). */
+  pukDevices?: Record<string, TestDevice>
+  pukSigchainHead?: Pick<SigchainLinkRecord, 'seqNo' | 'hash'>
   concurrentPukResults?: Array<{ status: number; data: unknown }>
-  lastPukEnvelopeValue?: string
-  newPukEnvelopeValue?: string
+  lastPukEnvelopeValue?: PukHpkeEnvelope
+  newPukEnvelopeValue?: PukHpkeEnvelope
 
   sessionToken?: string
   freshUserSeed?: string
@@ -99,7 +111,6 @@ Before(async ({ world }) => {
     hubEntityTypes: {},
     contacts: {},
     records: {},
-    devices: {},
   })
 })
 
@@ -163,20 +174,45 @@ async function hubHasRecordForContact(
   s.records[`${hubLabel}:${contactLabel}`] = recordId
 }
 
-async function registerDeviceFor(
+/**
+ * PUK envelopes are addressed by SIGCHAIN device ID and the server only accepts
+ * addresses the caller's own sigchain authorises (PROTOCOL.md §4.38). So a PUK
+ * scenario's device is a sigchain-authorised device: the first is the user's
+ * identity device (genesis), later ones are added by it (device_add).
+ * Returns the device ID the envelope routes address it by.
+ */
+async function authorisePukDevice(
   request: APIRequestContext,
-  seedHex: string,
+  s: EpicEState,
+  label: string,
 ): Promise<string> {
-  const wakeKeyPublic = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
-  const pushToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
-  const reg = await apiPost(request, '/devices/register', { platform: 'ios', pushToken, wakeKeyPublic }, seedHex)
-  expect(reg.status).toBe(204)
-  const list = await apiGet<{ devices: Array<{ id: string }> }>(request, '/devices', seedHex)
-  return list.data.devices[list.data.devices.length - 1].id
+  if (!s.pukUserSeed) {
+    const user = await createUserViaApi(request)
+    s.pukUserSeed = user.seedHex
+    s.pukUserPubkey = user.pubkey
+  }
+  s.pukDevices ??= {}
+  const existing = s.pukDevices[label]
+  if (existing) return existing.deviceId
+
+  const isFirst = s.pukSigchainHead === undefined
+  const device = isFirst
+    ? testDevice(s.pukUserSeed, `${label}-${s.pukUserPubkey!.slice(0, 8)}`)
+    : randomTestDevice(`${label}-${crypto.randomUUID()}`)
+  const identityDevice = isFirst ? device : Object.values(s.pukDevices)[0]
+  const body = isFirst
+    ? buildSigchainLink(identityDevice, null, 'genesis', genesisPayload(device))
+    : buildSigchainLink(identityDevice, s.pukSigchainHead!, 'device_add', deviceAddPayload(device))
+  const res = await apiPost<SigchainLinkRecord>(request, `/users/${s.pukUserPubkey}/sigchain`, { ...body }, s.pukUserSeed)
+  expect(res.status).toBe(201)
+  s.pukSigchainHead = { seqNo: res.data.seqNo, hash: res.data.hash }
+  s.pukDevices[label] = device
+  return device.deviceId
 }
 
-function fakeEnvelope(): string {
-  return bytesToHex(crypto.getRandomValues(new Uint8Array(64)))
+/** A real HPKE envelope of a fresh PUK seed sealed to the labelled device. */
+async function sealForPukDevice(s: EpicEState, label: string): Promise<PukHpkeEnvelope> {
+  return sealPukSeed(crypto.getRandomValues(new Uint8Array(32)), s.pukDevices![label])
 }
 
 function resolveApproverPubkey(world: Record<string, unknown>, label: string): string {
@@ -569,18 +605,18 @@ Then('the error message mentions internal address', ({ world }) => {
 
 Given('I am authenticated as a volunteer with two active devices', async ({ request, world }) => {
   const s = getS(world)
-  const user = await createUserViaApi(request)
-  s.pukUserSeed = user.seedHex
-  s.devices['dev-1'] = await registerDeviceFor(request, user.seedHex)
-  s.devices['dev-2'] = await registerDeviceFor(request, user.seedHex)
+  await authorisePukDevice(request, s, 'dev-1')
+  await authorisePukDevice(request, s, 'dev-2')
 })
 
 When('two simultaneous POST \\/api\\/puk\\/envelopes requests are sent for generation {int} on device {string}', async ({ request, world }, generation: number, deviceLabel: string) => {
   const s = getS(world)
-  const deviceId = s.devices[deviceLabel]
+  const deviceId = s.pukDevices![deviceLabel].deviceId
   const [first, second] = await Promise.all([
-    apiPost(request, '/puk/envelopes', { envelopes: [{ deviceId, generation, envelope: fakeEnvelope() }] }, s.pukUserSeed!),
-    apiPost(request, '/puk/envelopes', { envelopes: [{ deviceId, generation, envelope: fakeEnvelope() }] }, s.pukUserSeed!),
+    sealForPukDevice(s, deviceLabel).then((envelope) =>
+      apiPost(request, '/puk/envelopes', { envelopes: [{ deviceId, generation, envelope }] }, s.pukUserSeed!)),
+    sealForPukDevice(s, deviceLabel).then((envelope) =>
+      apiPost(request, '/puk/envelopes', { envelopes: [{ deviceId, generation, envelope }] }, s.pukUserSeed!)),
   ])
   s.concurrentPukResults = [first, second]
 })
@@ -592,63 +628,61 @@ Then('both responses have status {int}', ({ world }, status: number) => {
 
 Then('exactly one envelope record exists for \\(device {string}, generation {int}\\)', async ({ request, world }, deviceLabel: string, generation: number) => {
   const s = getS(world)
-  const deviceId = s.devices[deviceLabel]
+  const deviceId = s.pukDevices![deviceLabel].deviceId
   // "Exactly one" is enforced at the database layer by the unique constraint
-  // on (deviceId, generation) with ON CONFLICT DO UPDATE (H09 — see
+  // on (userPubkey, deviceId, generation) with ON CONFLICT DO UPDATE (H09 — see
   // apps/worker/services/crypto-keys.ts distributePukEnvelopes). GET
   // deterministically returning a single, well-formed record for this
   // (device, generation) is what a colliding duplicate row would break.
-  const res = await apiGet(request, `/puk/envelopes/${deviceId}`, s.pukUserSeed!)
+  const res = await apiGet(request, `/puk/envelopes/${encodeURIComponent(deviceId)}`, s.pukUserSeed!)
   expect(res.status).toBe(200)
   expect((res.data as { generation: number }).generation).toBe(generation)
 })
 
 Given('device {string} has a PUK envelope for generation {int}', async ({ request, world }, deviceLabel: string, generation: number) => {
   const s = getS(world)
-  if (!s.pukUserSeed) s.pukUserSeed = (await createUserViaApi(request)).seedHex
-  if (!s.devices[deviceLabel]) s.devices[deviceLabel] = await registerDeviceFor(request, s.pukUserSeed)
-  const envelope = fakeEnvelope()
+  const deviceId = await authorisePukDevice(request, s, deviceLabel)
+  const envelope = await sealForPukDevice(s, deviceLabel)
   const res = await apiPost(request, '/puk/envelopes', {
-    envelopes: [{ deviceId: s.devices[deviceLabel], generation, envelope }],
-  }, s.pukUserSeed)
+    envelopes: [{ deviceId, generation, envelope }],
+  }, s.pukUserSeed!)
   expect(res.status).toBe(201)
   s.lastPukEnvelopeValue = envelope
 })
 
 When('I call POST \\/api\\/puk\\/envelopes with a new envelope for generation {int} on device {string}', async ({ request, world }, generation: number, deviceLabel: string) => {
   const s = getS(world)
-  const newEnvelope = fakeEnvelope()
+  const newEnvelope = await sealForPukDevice(s, deviceLabel)
   s.newPukEnvelopeValue = newEnvelope
   setLastResponse(world, await apiPost(request, '/puk/envelopes', {
-    envelopes: [{ deviceId: s.devices[deviceLabel], generation, envelope: newEnvelope }],
+    envelopes: [{ deviceId: s.pukDevices![deviceLabel].deviceId, generation, envelope: newEnvelope }],
   }, s.pukUserSeed!))
 })
 
 Then('the stored envelope for \\(device {string}, generation {int}\\) is updated to the new value', async ({ request, world }, deviceLabel: string, generation: number) => {
   const s = getS(world)
-  const res = await apiGet(request, `/puk/envelopes/${s.devices[deviceLabel]}`, s.pukUserSeed!)
+  const res = await apiGet(request, `/puk/envelopes/${encodeURIComponent(s.pukDevices![deviceLabel].deviceId)}`, s.pukUserSeed!)
   expect(res.status).toBe(200)
-  const data = res.data as { generation: number; envelope: string }
+  const data = res.data as { generation: number; envelope: PukHpkeEnvelope }
   expect(data.generation).toBe(generation)
-  expect(data.envelope).toBe(s.newPukEnvelopeValue)
-  expect(data.envelope).not.toBe(s.lastPukEnvelopeValue)
+  expect(data.envelope).toEqual(s.newPukEnvelopeValue)
+  expect(data.envelope).not.toEqual(s.lastPukEnvelopeValue)
 })
 
 Given('device {string} has PUK envelopes for generations {int}, {int}, and {int}', async ({ request, world }, deviceLabel: string, g0: number, g1: number, g2: number) => {
   const s = getS(world)
-  if (!s.pukUserSeed) s.pukUserSeed = (await createUserViaApi(request)).seedHex
-  if (!s.devices[deviceLabel]) s.devices[deviceLabel] = await registerDeviceFor(request, s.pukUserSeed)
+  const deviceId = await authorisePukDevice(request, s, deviceLabel)
   for (const generation of [g0, g1, g2]) {
     const res = await apiPost(request, '/puk/envelopes', {
-      envelopes: [{ deviceId: s.devices[deviceLabel], generation, envelope: fakeEnvelope() }],
-    }, s.pukUserSeed)
+      envelopes: [{ deviceId, generation, envelope: await sealForPukDevice(s, deviceLabel) }],
+    }, s.pukUserSeed!)
     expect(res.status).toBe(201)
   }
 })
 
 When('I call GET \\/api\\/puk\\/envelopes\\/{word}', async ({ request, world }, deviceLabel: string) => {
   const s = getS(world)
-  setLastResponse(world, await apiGet(request, `/puk/envelopes/${s.devices[deviceLabel]}`, s.pukUserSeed!))
+  setLastResponse(world, await apiGet(request, `/puk/envelopes/${encodeURIComponent(s.pukDevices![deviceLabel].deviceId)}`, s.pukUserSeed!))
 })
 
 Then('the returned generation is {int}', ({ world }, generation: number) => {

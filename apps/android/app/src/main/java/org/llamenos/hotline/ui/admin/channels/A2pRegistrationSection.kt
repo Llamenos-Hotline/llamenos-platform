@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -32,6 +33,7 @@ fun A2pRegistrationSection(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsState()
+    LaunchedEffect(viewModel) { viewModel.loadA2pStatus() }
     val registration = state.a2pRegistration
     val brandStatus = registration?.brandStatus ?: "not_submitted"
     val campaignStatus = registration?.campaignStatus ?: "not_submitted"
@@ -82,7 +84,7 @@ fun A2pRegistrationSection(
                 }
                 Spacer(Modifier.height(8.dp))
                 TextButton(
-                    onClick = { viewModel.skipA2p(registration?.hubId ?: "") },
+                    onClick = { viewModel.skipA2p() },
                 ) { Text(stringResource(R.string.channels_a2p_skip)) }
             } else if (brandStatus == "approved" && (campaignStatus == "not_submitted" || campaignStatus == "failed")) {
                 Button(

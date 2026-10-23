@@ -415,6 +415,47 @@ pub fn decrypt_draft(packed_hex: &str, secret_key_hex: &str) -> Result<String, C
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
+// ── Hub Field Encryption ────────────────────────────────────────────
+
+/// Reject any AAD that is not a registered domain-separation label (Albrecht
+/// defense). The tombstoned registry slot is the empty string, which
+/// `label_to_id` refuses, so an empty label cannot slip through either.
+fn require_registered_label(label: &str) -> Result<(), CryptoError> {
+    crate::labels::label_to_id(label)
+        .map(|_| ())
+        .ok_or_else(|| {
+            CryptoError::InvalidInput("Unknown crypto label: not in LABEL_REGISTRY".into())
+        })
+}
+
+/// Encrypt a small hub-scoped field (tag label, tag category, team name) under
+/// the hub key, binding `label` as AAD.
+///
+/// Wire format: `hex(nonce_12 ‖ ciphertext ‖ tag_16)` — identical to the
+/// desktop `encrypt_hub_field` Tauri command.
+pub fn encrypt_hub_field(
+    plaintext: &str,
+    hub_key: &[u8; 32],
+    label: &str,
+) -> Result<String, CryptoError> {
+    require_registered_label(label)?;
+    let packed = aes256gcm_encrypt(hub_key, plaintext.as_bytes(), label.as_bytes())?;
+    Ok(hex::encode(&packed))
+}
+
+/// Decrypt a field produced by [`encrypt_hub_field`]. Fails on a wrong key,
+/// wrong label, truncated or corrupted data.
+pub fn decrypt_hub_field(
+    packed_hex: &str,
+    hub_key: &[u8; 32],
+    label: &str,
+) -> Result<String, CryptoError> {
+    require_registered_label(label)?;
+    let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
+    let plaintext = Zeroizing::new(aes256gcm_decrypt(hub_key, &data, label.as_bytes())?);
+    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
+}
+
 // ── Export Encryption ───────────────────────────────────────────────
 
 /// Encrypt a JSON export blob. Returns base64-encoded ciphertext.
@@ -586,6 +627,105 @@ mod tests {
         let decrypted =
             decrypt_note(&encrypted.encrypted_content, &admin1_envelope, &admin1_sk).unwrap();
         assert_eq!(decrypted, payload);
+    }
+
+    // Fixed vectors: key = 0x42×32, nonce = 0x07×12, AAD = LABEL_TAG_ENCRYPT.
+    // Produced by the desktop `encrypt_hub_field` construction; they pin the
+    // wire format every client (desktop, iOS, Android) must agree on.
+    const HUB_FIELD_KEY: [u8; 32] = [0x42; 32];
+    const HUB_FIELD_VECTOR_ASCII: &str =
+        "0707070707070707070707072d903ac9db856df12c7b9e44a64e237900b1010e005d";
+    const HUB_FIELD_VECTOR_UNICODE: &str =
+        "0707070707070707070707072b9734dadcd11f388a308553bc37a65d51dc8bcad51787b8425520b91510";
+
+    #[test]
+    fn hub_field_opens_the_desktop_wire_vectors() {
+        assert_eq!(
+            decrypt_hub_field(
+                HUB_FIELD_VECTOR_ASCII,
+                &HUB_FIELD_KEY,
+                crate::labels::LABEL_TAG_ENCRYPT
+            )
+            .unwrap(),
+            "Urgent"
+        );
+        assert_eq!(
+            decrypt_hub_field(
+                HUB_FIELD_VECTOR_UNICODE,
+                &HUB_FIELD_KEY,
+                crate::labels::LABEL_TAG_ENCRYPT
+            )
+            .unwrap(),
+            "Suivi médical"
+        );
+    }
+
+    #[test]
+    fn hub_field_roundtrips_and_binds_key_and_label() {
+        let label = crate::labels::LABEL_TAG_ENCRYPT;
+        let sealed = encrypt_hub_field("Test Label", &HUB_FIELD_KEY, label).unwrap();
+        assert_eq!(
+            decrypt_hub_field(&sealed, &HUB_FIELD_KEY, label).unwrap(),
+            "Test Label"
+        );
+        // 12-byte nonce + 10-byte plaintext + 16-byte tag, hex-encoded.
+        assert_eq!(sealed.len(), (12 + 10 + 16) * 2);
+        // A fresh nonce per call: sealing twice never repeats.
+        assert_ne!(
+            sealed,
+            encrypt_hub_field("Test Label", &HUB_FIELD_KEY, label).unwrap()
+        );
+
+        assert!(decrypt_hub_field(&sealed, &[0xFF; 32], label).is_err());
+        assert!(
+            decrypt_hub_field(
+                &sealed,
+                &HUB_FIELD_KEY,
+                crate::labels::LABEL_PLATFORM_ROLE_NAME_ENCRYPT
+            )
+            .is_err(),
+            "a registered label other than the one sealed under must not open"
+        );
+    }
+
+    #[test]
+    fn hub_field_refuses_unregistered_and_empty_labels() {
+        assert!(encrypt_hub_field("x", &HUB_FIELD_KEY, "wrong-label:v1").is_err());
+        assert!(encrypt_hub_field("x", &HUB_FIELD_KEY, "").is_err());
+
+        // The decrypt side must refuse on registration alone. A wrong AAD would
+        // fail the AEAD tag anyway, so seal under the unregistered label with
+        // the raw primitive: only the registry check can reject these.
+        for label in ["wrong-label:v1", ""] {
+            let packed = aes256gcm_encrypt(&HUB_FIELD_KEY, b"x", label.as_bytes()).unwrap();
+            assert!(
+                decrypt_hub_field(&hex::encode(&packed), &HUB_FIELD_KEY, label).is_err(),
+                "decrypt opened a field bound to unregistered label {label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hub_field_rejects_malformed_ciphertext() {
+        let label = crate::labels::LABEL_TAG_ENCRYPT;
+        assert!(
+            decrypt_hub_field("zz", &HUB_FIELD_KEY, label).is_err(),
+            "not hex"
+        );
+        assert!(
+            decrypt_hub_field("", &HUB_FIELD_KEY, label).is_err(),
+            "empty"
+        );
+        assert!(
+            decrypt_hub_field(&"07".repeat(27), &HUB_FIELD_KEY, label).is_err(),
+            "shorter than nonce + tag"
+        );
+        let mut tampered = HUB_FIELD_VECTOR_ASCII.to_string();
+        tampered.replace_range(30..32, "00");
+        assert!(
+            decrypt_hub_field(&tampered, &HUB_FIELD_KEY, label).is_err(),
+            "bit flip"
+        );
     }
 
     #[test]

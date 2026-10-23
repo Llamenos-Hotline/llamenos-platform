@@ -2,6 +2,8 @@ import Foundation
 import XCTest
 @testable import Llamenos
 
+/// `@MainActor`: `OfflineQueue` is main-actor isolated (#1920 audit).
+@MainActor
 final class OfflineQueueTests: XCTestCase {
 
     private var queue: OfflineQueue!
@@ -197,4 +199,77 @@ final class OfflineQueueTests: XCTestCase {
         let queue2 = OfflineQueue(apiService: api)
         XCTAssertEqual(queue2.pendingCount, 0)
     }
+
+    // MARK: - replay
+
+    /// Logout and wipe call `clear()` on main while `replay()` is suspended on a request.
+    /// `replay()` used to write each result back with `queue[i] = op` against indices it
+    /// took before the first `await` — so a clear that landed mid-request trapped with an
+    /// out-of-range index, and an operation the user had just cleared was still sent.
+    func testClearDuringReplayNeitherTrapsNorSendsTheClearedOperations() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [GatedReplayURLProtocol.self]
+        let gatedAPI = APIService(cryptoService: CryptoService(), hubContext: HubContext(), sessionConfiguration: config)
+        try gatedAPI.configure(hubURLString: "https://offline-queue.test")
+        let gatedQueue = OfflineQueue(apiService: gatedAPI)
+        gatedQueue.clear()
+        GatedReplayURLProtocol.reset()
+
+        gatedQueue.enqueue(path: "/api/notes", method: "POST", body: #"{"n":1}"#)
+        gatedQueue.enqueue(path: "/api/notes", method: "POST", body: #"{"n":2}"#)
+
+        let replay = Task { await gatedQueue.replay() }
+        let arrived = await Task.detached { GatedReplayURLProtocol.firstRequestArrived.wait(timeout: .now() + 10) }.value
+        XCTAssertEqual(arrived, .success, "replay() never sent the first queued operation")
+
+        // The user logs out while that request is in flight.
+        gatedQueue.clear()
+        GatedReplayURLProtocol.releaseFirstRequest.signal()
+        await replay.value
+
+        XCTAssertEqual(GatedReplayURLProtocol.requestCount(), 1, "an operation cleared before its turn must not be sent")
+        XCTAssertTrue(gatedQueue.getQueue().isEmpty, "replay() must not resurrect operations cleared while it ran")
+        XCTAssertEqual(gatedQueue.pendingCount, 0)
+        XCTAssertFalse(gatedQueue.isReplaying)
+    }
+}
+
+// MARK: - GatedReplayURLProtocol
+
+/// Holds the first request until the test releases it, then answers 400 — a permanent
+/// client error, which `replay()` records against the operation rather than removing it.
+/// Registered per-session through `protocolClasses`, never globally.
+private final class GatedReplayURLProtocol: URLProtocol {
+    static let firstRequestArrived = DispatchSemaphore(value: 0)
+    static let releaseFirstRequest = DispatchSemaphore(value: 0)
+    private static let lock = NSLock()
+    private static var count = 0
+
+    static func reset() {
+        lock.withLock { count = 0 }
+    }
+
+    static func requestCount() -> Int {
+        lock.withLock { count }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let ordinal = Self.lock.withLock { () -> Int in
+            Self.count += 1
+            return Self.count
+        }
+        if ordinal == 1 {
+            Self.firstRequestArrived.signal()
+            Self.releaseFirstRequest.wait()
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("{}".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

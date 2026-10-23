@@ -44,10 +44,16 @@ COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/test-specs/package.json packages/test-specs/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY site/package.json site/package.json
-RUN bun install --frozen-lockfile --production --ignore-scripts
+# `site/` (the Cloudflare Pages marketing site: astro, satori, resvg) is a
+# workspace of the same lockfile, so its manifest stub above is required for
+# --frozen-lockfile — but it is not part of the server. Without the filter,
+# --production still installs the site's runtime dependencies, and astro hard-
+# depends on esbuild (a Go binary that drags Go-stdlib CVEs into image-scan)
+# plus vite. `--filter` installs only the root (server) workspace's graph.
+RUN bun install --frozen-lockfile --production --ignore-scripts --filter '!llamenos-site'
 
 # Stage 2: Build Rust crypto FFI (.so)
-FROM rust:1-slim@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7 AS rust-builder
+FROM rust:1-slim@sha256:4df2ae8cfdfebdfc13a65da7f253b73d68983dc0339f2719bc17a279c913b13d AS rust-builder
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY packages/crypto/ packages/crypto/

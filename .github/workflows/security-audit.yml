@@ -24,6 +24,10 @@ on:
       - 'bun.lockb'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      # The files that can mute an advisory: editing one must re-run the expiry
+      # enforcer, or a bare ignore lands without ever being checked.
+      - 'deny.toml'
+      - '**/audit.toml'
       - '**/Dockerfile*'
       - 'deploy/docker/**'
       - '.github/workflows/security-audit.yml'
@@ -33,8 +37,11 @@ on:
       - 'bun.lockb'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - 'deny.toml'
+      - '**/audit.toml'
       - '**/Dockerfile*'
       - 'deploy/docker/**'
+      - '.github/workflows/security-audit.yml'
   workflow_dispatch:
 
 concurrency:
@@ -116,7 +123,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-audit (pinned — avoid silent behaviour drift)
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-audit@0.22.1
           # Prebuilt binary or a hard failure — never a silent source build.
@@ -227,7 +234,7 @@ jobs:
           exit-code: '1'
 
       - name: Upload Dockerfile.build scan results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         # upload-sarif requires GitHub Advanced Security (public repos or GHAS license).
         # Skip on private repos to avoid action_required failures.
         if: always() && github.repository_visibility == 'public'
@@ -236,14 +243,14 @@ jobs:
           category: 'dockerfile-build'
 
       - name: Upload deploy Dockerfile scan results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         if: always() && github.repository_visibility == 'public'
         with:
           sarif_file: 'dockerfile-deploy-results.sarif'
           category: 'dockerfile-deploy'
 
       - name: Upload Docker Compose scan results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         if: always() && github.repository_visibility == 'public'
         with:
           sarif_file: 'docker-compose-results.sarif'
@@ -399,7 +406,7 @@ jobs:
           exit-code: '1'
 
       - name: Upload image scan results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         if: always() && github.repository_visibility == 'public'
         with:
           sarif_file: 'image-results.sarif'
@@ -494,8 +501,9 @@ jobs:
   # on a TLS-library vulnerability, so it is blocking now.
   #
   # The only sanctioned way to accept an advisory is a per-ID, justified,
-  # dated entry in deny.toml `[advisories].ignore` — enforced by the expiry
-  # step below.
+  # dated entry in deny.toml `[advisories].ignore` (cargo-deny) or an audit.toml
+  # `[advisories].ignore` (cargo-audit, the `rust-audit` job) — enforced by the
+  # expiry step below, which reads both.
   cargo-deny:
     # Release-PR exemption (#1817) — see the comment above dependency-audit.
     if: github.event_name != 'pull_request' || github.head_ref != 'release'
@@ -518,39 +526,109 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-deny (pinned — avoid silent config-schema drift)
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-deny@0.20.2
           # Prebuilt binary or a hard failure — never a silent source build.
           fallback: none
 
-      # cargo-deny has no native expiry for `ignore` entries, so enforce it:
-      # every entry must be a per-ID table with a reason ending in
-      # `[expires YYYY-MM-DD]`, and that date must not have passed.
-      - name: Enforce advisory ignore expiry (deny.toml)
+      # Neither cargo-deny nor cargo-audit has a native expiry for an ignored
+      # advisory, so enforce one for EVERY file that can mute an advisory:
+      # deny.toml (read by cargo-deny) and each audit.toml (read by cargo-audit,
+      # the `rust-audit` job). The two tools read different files, so a policy
+      # that checked only one left the other muted for good. Files are
+      # enumerated from git, never hardcoded, so a new audit.toml is covered
+      # the day it is committed.
+      #
+      #   deny.toml   { id = "RUSTSEC-…", reason = "… [expires YYYY-MM-DD]" }
+      #   audit.toml  "RUSTSEC-…", # … [expires YYYY-MM-DD]
+      #
+      # cargo-audit's `ignore` is a plain list of strings with no reason field,
+      # so its justification is the trailing comment on the ID's own line. Every
+      # entry needs a reason ending in `[expires YYYY-MM-DD]`, and that date
+      # must not have passed. The step fails closed: an ID that is not on its
+      # own commented line (bare, several to a line, inline array) is an error.
+      - name: Enforce advisory ignore expiry (deny.toml + every audit.toml)
         run: |
           python3 - <<'PY'
-          import datetime, re, sys, tomllib
+          import datetime, os, re, subprocess, sys, tomllib
 
-          with open("deny.toml", "rb") as f:
-              ignores = tomllib.load(f).get("advisories", {}).get("ignore", [])
-
+          EXPIRES = re.compile(r"\[expires (\d{4}-\d{2}-\d{2})\]\s*$")
           today = datetime.date.today()
-          bad = []
-          for entry in ignores:
-              if not isinstance(entry, dict) or "id" not in entry or not entry.get("reason"):
-                  bad.append(f"{entry!r}: must be {{ id = \"RUSTSEC-…\", reason = \"…\" }} (bare IDs carry no justification)")
-                  continue
-              m = re.search(r"\[expires (\d{4}-\d{2}-\d{2})\]\s*$", entry["reason"])
-              if not m:
-                  bad.append(f"{entry['id']}: reason must end with `[expires YYYY-MM-DD]`")
-              elif datetime.date.fromisoformat(m.group(1)) < today:
-                  bad.append(f"{entry['id']}: ignore EXPIRED on {m.group(1)} — re-triage (fix, or renew with a fresh justification)")
+          problems = 0
+          checked = 0
 
-          for msg in bad:
-              print(f"::error file=deny.toml::{msg}")
-          print(f"{len(ignores)} advisory ignore(s) checked, {len(bad)} problem(s)")
-          sys.exit(1 if bad else 0)
+
+          def fail(path, line, msg):
+              global problems
+              problems += 1
+              print(f"::error file={path},line={line}::{msg}")
+
+
+          def check_reason(path, line, rid, reason):
+              global checked
+              checked += 1
+              m = EXPIRES.search(reason)
+              if not m:
+                  fail(path, line, f"{rid}: reason must end with `[expires YYYY-MM-DD]`")
+                  return
+              if not reason[: m.start()].strip():
+                  fail(path, line, f"{rid}: reason needs a justification before the expiry marker")
+              try:
+                  expires = datetime.date.fromisoformat(m.group(1))
+              except ValueError:
+                  fail(path, line, f"{rid}: `{m.group(1)}` is not a real date")
+                  return
+              if expires < today:
+                  fail(path, line, f"{rid}: ignore EXPIRED on {m.group(1)} — re-triage (fix, or renew with a fresh justification)")
+
+
+          def code_line(lines, rid):
+              # First non-comment line naming the ID, so the annotation lands on the entry.
+              for n, text in enumerate(lines, 1):
+                  if rid in text and not text.lstrip().startswith("#"):
+                      return n
+              return 1
+
+
+          tracked = subprocess.run(
+              ["git", "ls-files", "-z"], check=True, capture_output=True, text=True
+          ).stdout.split("\0")
+          deny_files = sorted(p for p in tracked if os.path.basename(p) == "deny.toml")
+          audit_files = sorted(p for p in tracked if os.path.basename(p) == "audit.toml")
+          if not deny_files:
+              print("::error::no deny.toml is tracked — the cargo-deny job has nothing to enforce")
+              sys.exit(1)
+          print(f"deny.toml:  {', '.join(deny_files)}")
+          print(f"audit.toml: {', '.join(audit_files) or '(none)'}")
+
+          for path in deny_files:
+              with open(path, encoding="utf-8") as f:
+                  text = f.read()
+              lines = text.splitlines()
+              for entry in tomllib.loads(text).get("advisories", {}).get("ignore", []):
+                  if not isinstance(entry, dict) or "id" not in entry or not entry.get("reason"):
+                      fail(path, 1, f"{entry!r}: must be {{ id = \"RUSTSEC-…\", reason = \"…\" }} (bare IDs carry no justification)")
+                      continue
+                  check_reason(path, code_line(lines, entry["id"]), entry["id"], entry["reason"])
+
+          for path in audit_files:
+              with open(path, encoding="utf-8") as f:
+                  text = f.read()
+              lines = text.splitlines()
+              for rid in tomllib.loads(text).get("advisories", {}).get("ignore", []):
+                  if not isinstance(rid, str):
+                      fail(path, 1, f"{rid!r}: cargo-audit ignores are plain RUSTSEC id strings")
+                      continue
+                  entry_line = re.compile(r"""^\s*(["'])""" + re.escape(rid) + r"""\1\s*,?\s*#\s*(.*?)\s*$""")
+                  hits = [(n, m.group(2)) for n, l in enumerate(lines, 1) if (m := entry_line.match(l))]
+                  if not hits:
+                      fail(path, code_line(lines, rid), f"{rid}: must sit on its own line as `\"{rid}\", # reason [expires YYYY-MM-DD]` (a bare ID carries no justification)")
+                  for n, reason in hits:
+                      check_reason(path, n, rid, reason)
+
+          print(f"{checked} advisory ignore(s) checked across {len(deny_files) + len(audit_files)} file(s), {problems} problem(s)")
+          sys.exit(1 if problems else 0)
           PY
 
       - name: Check packages/crypto (licenses, bans, sources)

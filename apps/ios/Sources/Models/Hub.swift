@@ -53,19 +53,8 @@ typealias HubsListResponse = HubListResponse
 typealias AppHubResponse = HubDetailResponse
 
 // MARK: - Request Bodies
-
-struct CreateHubRequest: Codable, Sendable {
-    let name: String
-    let slug: String?
-    let description: String?
-    let phoneNumber: String?
-}
-
-struct UpdateHubRequest: Codable, Sendable {
-    let name: String?
-    let description: String?
-    let phoneNumber: String?
-}
+// Create/update bodies are the generated `CreateHubBody` / `UpdateHubBody`
+// (updateHubBodySchema adds optional `slug` and `status`).
 
 // HubKeyEnvelopeResponse and HubKeyEnvelopeResponseEnvelope are generated from
 // packages/protocol/generated/swift/Types.swift — do not redefine here.

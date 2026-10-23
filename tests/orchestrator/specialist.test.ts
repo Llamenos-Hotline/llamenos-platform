@@ -10,7 +10,7 @@ import {
   decideReviewSet, reviewIsRequested, REVIEW_REQUEST_LOGIN, RELEASE_REVIEW_REQUEST_LOGIN,
 } from '../../orchestrator/src/ci.js'
 import { VERDICT_CONTRACT, READ_ONLY_CONTRACT } from '../../orchestrator/src/review.js'
-import { cacheArtifactName, diffHash, reviewSetTag } from '../../orchestrator/src/review-cache.js'
+import { cacheArtifactName, reviewSetTag } from '../../orchestrator/src/review-cache.js'
 import { COMMANDS } from '../../orchestrator/src/cli.js'
 import { parse as parseYaml } from 'yaml'
 
@@ -297,10 +297,11 @@ describe('reviewIsRequested', () => {
 // ---------------------------------------------------------------------------
 
 describe('reviewSetTag / cacheArtifactName namespacing', () => {
-  const h = diffHash('same diff')
-  it('leaves the general reviewer\'s own name exactly as it was before #1158', () => {
+  // A head tree — the cache key since #2014.
+  const h = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+  it('gives the general reviewer\'s own name no set prefix at all', () => {
     expect(reviewSetTag([])).toBeUndefined()
-    expect(cacheArtifactName('42', h, reviewSetTag([]))).toBe(`fleet-review-pass-pr42-${h.slice(0, 24)}`)
+    expect(cacheArtifactName('42', h, reviewSetTag([]))).toBe(`fleet-review-pass-pr42-tree-${h}`)
   })
   it('gives a set with a profile a different name from the general reviewer\'s', () => {
     expect(cacheArtifactName('42', h, reviewSetTag([CRYPTO]))).not.toBe(cacheArtifactName('42', h))
@@ -315,12 +316,11 @@ describe('reviewSetTag / cacheArtifactName namespacing', () => {
   })
 
   // #1158: the VERDICT is in the name too, so a PASS lookup can never find a
-  // FAIL record or the reverse — and `pass` is spelled exactly as it always
-  // was, so every artifact recorded before FAILs were cached stays a hit.
-  it('encodes the verdict, and leaves the PASS spelling untouched', () => {
-    expect(cacheArtifactName('42', h)).toBe(`fleet-review-pass-pr42-${h.slice(0, 24)}`)
+  // FAIL record or the reverse.
+  it('encodes the verdict', () => {
+    expect(cacheArtifactName('42', h)).toBe(`fleet-review-pass-pr42-tree-${h}`)
     expect(cacheArtifactName('42', h, undefined, 'PASS')).toBe(cacheArtifactName('42', h))
-    expect(cacheArtifactName('42', h, undefined, 'FAIL')).toBe(`fleet-review-fail-pr42-${h.slice(0, 24)}`)
+    expect(cacheArtifactName('42', h, undefined, 'FAIL')).toBe(`fleet-review-fail-pr42-tree-${h}`)
     expect(cacheArtifactName('42', h, undefined, 'FAIL')).not.toBe(cacheArtifactName('42', h, undefined, 'PASS'))
   })
 })

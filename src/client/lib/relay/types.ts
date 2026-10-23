@@ -72,6 +72,18 @@ export interface ConversationAssignedEvent extends LlamenosEvent {
   assignedTo: string
 }
 
+/**
+ * Envelopes were added to a conversation's messages for its assignee (#2046).
+ * Rides `KIND_CONVERSATION_ASSIGNED`. The assignee's open thread re-reads its
+ * messages so pre-claim messages become readable without a manual refresh.
+ */
+export interface ConversationEnvelopesAddedEvent extends LlamenosEvent {
+  type: 'conversation:envelopes-added'
+  conversationId: string
+  assignedTo: string
+  added: number
+}
+
 /** Conversation closed */
 export interface ConversationClosedEvent extends LlamenosEvent {
   type: 'conversation:closed'

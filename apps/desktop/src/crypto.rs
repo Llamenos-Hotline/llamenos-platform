@@ -1455,7 +1455,7 @@ fn encrypt_secrets_with_pin(
 /// Input: hex-encoded nonce(12) + ciphertext + epoch number.
 /// AAD: `"{LABEL_HUB_EVENT_EPOCH}:{epoch}"` for domain separation (epoch-keyed events
 /// use LABEL_HUB_EVENT_EPOCH, not LABEL_HUB_EVENT which is for hub-key-encrypted events).
-/// Returns the decrypted plaintext string.
+/// Returns the event's JSON, with the server's bucket padding stripped.
 #[tauri::command]
 pub fn decrypt_server_event(
     state: tauri::State<'_, CryptoState>,
@@ -1463,22 +1463,41 @@ pub fn decrypt_server_event(
     epoch: u64,
 ) -> Result<String, String> {
     let keys = lock_mutex(&state.server_event_keys)?;
+    open_server_event(&keys, &ciphertext_hex, epoch)
+}
+
+/// The body of [`decrypt_server_event`], free of Tauri state so it can be tested.
+///
+/// The server pads every event to a power-of-2 bucket before sealing it
+/// (`apps/worker/lib/hub-event-crypto.ts` `padToBucket`, the same format as
+/// [`llamenos_core::padding::pad_to_bucket`]):
+/// `[4-byte LE length][JSON][random padding]`. The plaintext must be unpadded
+/// before it is UTF-8 decoded. Returning the padded buffer instead failed every
+/// event — the random tail is not UTF-8, and when it happened to be, the length
+/// prefix still made the JSON unparseable — and the relay client drops an
+/// undecodable event without a trace, so no desktop handler ever ran (#2046).
+/// Mobile's `mobile_decrypt_server_event_with_epoch` already unpads.
+fn open_server_event(
+    keys: &[(u64, Vec<u8>)],
+    ciphertext_hex: &str,
+    epoch: u64,
+) -> Result<String, String> {
     let key = keys
         .iter()
         .find(|(e, _)| *e == epoch)
         .map(|(_, k)| k)
         .ok_or_else(|| format!("No server event key for epoch {epoch}"))?;
 
-    let data = hex::decode(&ciphertext_hex).map_err(err_str)?;
+    let data = hex::decode(ciphertext_hex).map_err(err_str)?;
     if data.len() < 28 {
         return Err("Ciphertext too short (need at least 12-byte nonce + 16-byte tag)".into());
     }
 
-    let aad = format!("{}:{}", LABEL_HUB_EVENT_EPOCH, epoch);
+    let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
     let nonce = Nonce::from_slice(&data[..12]);
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid server event key: {e}"))?;
-    let plaintext = cipher
+    let padded = cipher
         .decrypt(
             nonce,
             Payload {
@@ -1488,7 +1507,73 @@ pub fn decrypt_server_event(
         )
         .map_err(|_| "Server event decryption failed (wrong key or corrupted data)".to_string())?;
 
+    let plaintext = llamenos_core::padding::unpad(&padded)
+        .map_err(|e| format!("Server event padding is malformed: {e}"))?;
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 in decrypted content: {e}"))
+}
+
+#[cfg(test)]
+mod server_event_tests {
+    use super::*;
+    use aes_gcm::{AeadCore, aead::OsRng};
+
+    const EPOCH: u64 = 20748;
+
+    /// A fresh random server-event key — the tests never reuse a fixed key.
+    /// Drawn straight from the AEAD's own generator, so no literal buffer
+    /// ever exists that could be mistaken for key material.
+    fn random_key() -> [u8; 32] {
+        Aes256Gcm::generate_key(OsRng).into()
+    }
+
+    /// Seal `json` exactly as the server's `encryptEventContent` does: pad to a
+    /// bucket, then AES-256-GCM under `key` with a fresh random nonce, AAD bound
+    /// to the epoch, output `nonce(12) || ciphertext`, hex-encoded.
+    fn seal_like_server(key: &[u8; 32], json: &str, epoch: u64) -> String {
+        let padded = llamenos_core::padding::pad_to_bucket(json.as_bytes());
+        let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let cipher = Aes256Gcm::new_from_slice(key).unwrap();
+        let ct = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: &padded,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .unwrap();
+        let mut out = nonce.to_vec();
+        out.extend_from_slice(&ct);
+        hex::encode(out)
+    }
+
+    #[test]
+    fn a_padded_server_event_opens_to_its_json() {
+        let json = r#"{"type":"conversation:assigned","conversationId":"c1","assignedTo":"ab"}"#;
+        let key = random_key();
+        let keys = vec![(EPOCH, key.to_vec())];
+        let opened = open_server_event(&keys, &seal_like_server(&key, json, EPOCH), EPOCH).unwrap();
+        assert_eq!(opened, json);
+    }
+
+    #[test]
+    fn an_event_sealed_for_another_epoch_does_not_open() {
+        let json = r#"{"type":"message:new","conversationId":"c1"}"#;
+        let key = random_key();
+        let keys = vec![(EPOCH, key.to_vec())];
+        let sealed = seal_like_server(&key, json, EPOCH + 1);
+        assert!(open_server_event(&keys, &sealed, EPOCH).is_err());
+        assert!(open_server_event(&keys, &sealed, EPOCH + 1).is_err());
+    }
+
+    #[test]
+    fn an_event_sealed_under_another_key_does_not_open() {
+        let json = r#"{"type":"message:new","conversationId":"c1"}"#;
+        let keys = vec![(EPOCH, random_key().to_vec())];
+        let sealed = seal_like_server(&random_key(), json, EPOCH);
+        assert!(open_server_event(&keys, &sealed, EPOCH).is_err());
+    }
 }
 
 // ── Stored-record conformance (#1927) ───────────────────────────────
@@ -1565,10 +1650,16 @@ mod stored_record_conformance_tests {
 
     /// A CryptoState unlocked with the fixture reader's X25519 secret.
     fn state_for(reader: &FixtureReader) -> CryptoState {
-        let mut encryption_seed = [0u8; 32];
-        encryption_seed.copy_from_slice(&hex::decode(&reader.x25519_secret_hex).unwrap());
+        // The reader's X25519 secret is a published known-answer vector from
+        // the shared fixture (not production key material).
+        let encryption_seed: [u8; 32] = hex::decode(&reader.x25519_secret_hex)
+            .unwrap()
+            .try_into()
+            .expect("fixture x25519 secret is 32 bytes");
+        // The signing seed is irrelevant to these vectors: draw it at random.
+        let signing_seed: [u8; 32] = Aes256Gcm::generate_key(aes_gcm::aead::OsRng).into();
         let secrets = device_keys::DeviceSecrets {
-            signing_seed: [0x5au8; 32],
+            signing_seed,
             encryption_seed,
         };
         let ds = device_keys::DeviceKeyState {

@@ -313,7 +313,9 @@
     "noCategoriesMessage": "Les catégories de rapport aident à classer les incidents.",
     "noInvitesMessage": "Générez des codes d'invitation pour ajouter de nouveaux bénévoles.",
     "noSearchResults": "Aucun membre ne correspond à votre recherche.",
-    "noUsersMessage": "Aucun membre n'a encore rejoint."
+    "noUsersMessage": "Aucun membre n'a encore rejoint.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -2774,6 +2776,7 @@
     "errorTitle": "Erreur d'invitation",
     "expired": "Cette invitation a expiré",
     "generatingKeys": "Génération de vos clés...",
+    "identityInitFailed": "Impossible de configurer vos clés de chiffrement. Veuillez réessayer.",
     "getStarted": "Commencer",
     "goToLogin": "Aller à la connexion",
     "invalidCode": "Code d'invitation invalide",
@@ -3517,7 +3520,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4279,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

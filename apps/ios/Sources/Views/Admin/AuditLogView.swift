@@ -131,7 +131,7 @@ struct AuditLogView: View {
 
 /// A single audit log entry row showing the action, actor, timestamp, and hash chain info.
 struct AuditEntryRowView: View {
-    let entry: AppAuditEntry
+    let entry: SharedEntry
 
     @State private var isExpanded: Bool = false
 
@@ -186,7 +186,7 @@ struct AuditEntryRowView: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 6) {
                     // Details
-                    if let details = entry.details, !details.isEmpty {
+                    if let details = entry.detailsDisplay, !details.isEmpty {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(NSLocalizedString("admin_audit_details", comment: "Details"))
                                 .font(.brand(.caption2))

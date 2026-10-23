@@ -323,7 +323,9 @@
     "noCategoriesMessage": "Report categories help classify incidents.",
     "noInvitesMessage": "Generate invite codes to add new volunteers.",
     "noSearchResults": "No members match your search.",
-    "noUsersMessage": "No members have joined yet."
+    "noUsersMessage": "No members have joined yet.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminNav": {
     "groups": {
@@ -2710,6 +2712,7 @@
     "errorTitle": "Invite Error",
     "expired": "This invite has expired",
     "generatingKeys": "Generating your keys...",
+    "identityInitFailed": "Could not set up your encryption keys. Please try again.",
     "getStarted": "Get Started",
     "goToLogin": "Go to Login",
     "invalidCode": "Invalid invite code",
@@ -3362,7 +3365,11 @@
     "summary": "Summary",
     "system": "System",
     "title": "Roles & Permissions",
-    "updated": "Role updated"
+    "updated": "Role updated",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4117,7 +4124,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

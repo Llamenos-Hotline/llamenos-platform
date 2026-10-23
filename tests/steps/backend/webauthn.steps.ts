@@ -3,13 +3,17 @@
  * Tests registration options, login challenge generation, and rate limiting.
  */
 import { expect } from '@playwright/test'
-import { When, Then, Before, getState, setState } from './fixtures'
+import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse, getSharedState } from './shared-state'
 import {
   apiGet,
+  apiPatch,
   apiPost,
+  createUserViaApi,
+  devPost,
   simulatedClientIp,
 } from '../../api-helpers'
+import type { WebAuthnCredentialInfo } from '@protocol/schemas'
 import { harnessClientHeaders } from '../../dev-surface-secret'
 import { bytesToHex } from '@shared/encoding'
 
@@ -29,6 +33,8 @@ interface WebAuthnTestState {
    * scenarios that are not about rate limiting (#1625).
    */
   scenarioIp: string
+  /** The credential seeded for this scenario's passkey owner. */
+  passkey?: { owner: { deviceKey: string; pubkey: string }; credentialId: string }
 }
 
 const STATE_KEY = 'webauthn_test'
@@ -52,6 +58,20 @@ Before(async ({ world }) => {
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
+// ── Given ─────────────────────────────────────────────────────────
+
+Given('a user with a registered passkey', async ({ request, world }) => {
+  const owner = await createUserViaApi(request)
+  // Real registration needs an authenticator's private key, which BDD cannot
+  // produce — the dev-only helper inserts the credential row directly.
+  const seed = await devPost<{ credentialId: string }>(request, '/test-add-webauthn-credential', { pubkey: owner.pubkey })
+  expect(seed.status).toBe(200)
+  getS(world).passkey = {
+    owner: { deviceKey: owner.deviceKey, pubkey: owner.pubkey },
+    credentialId: seed.data.credentialId,
+  }
+})
+
 // ── When ──────────────────────────────────────���─────────────────────
 
 When('the user requests WebAuthn registration options', async ({ request, world }) => {
@@ -64,6 +84,29 @@ When('the user lists their WebAuthn credentials', async ({ request, world }) => 
   const s = getS(world)
   expect(s.user).toBeDefined()
   setLastResponse(world, await apiGet(request, '/webauthn/credentials', s.user!.deviceKey))
+})
+
+When('the passkey owner renames that passkey to {string}', async ({ request, world }, label: string) => {
+  const { passkey } = getS(world)
+  expect(passkey).toBeDefined()
+  setLastResponse(world, await apiPatch(
+    request,
+    `/webauthn/credentials/${encodeURIComponent(passkey!.credentialId)}`,
+    { label },
+    passkey!.owner.deviceKey,
+  ))
+})
+
+When('a different user renames that passkey to {string}', async ({ request, world }, label: string) => {
+  const { passkey } = getS(world)
+  expect(passkey).toBeDefined()
+  const other = await createUserViaApi(request)
+  setLastResponse(world, await apiPatch(
+    request,
+    `/webauthn/credentials/${encodeURIComponent(passkey!.credentialId)}`,
+    { label },
+    other.deviceKey,
+  ))
 })
 
 When('a client requests WebAuthn login options', async ({ request, world }) => {
@@ -146,4 +189,14 @@ Then('at least one response is {int}', async ({ world }, expectedStatus: number)
   const shared = getSharedState(world)
   expect(shared.floodResponses.length).toBeGreaterThan(0)
   expect(shared.floodResponses.some(st => st === expectedStatus)).toBe(true)
+})
+
+Then('the passkey owner\'s passkey is labelled {string}', async ({ request, world }, label: string) => {
+  const { passkey } = getS(world)
+  expect(passkey).toBeDefined()
+  const listed = await apiGet<{ credentials: WebAuthnCredentialInfo[] }>(request, '/webauthn/credentials', passkey!.owner.deviceKey)
+  expect(listed.status).toBe(200)
+  const credential = listed.data.credentials.find(c => c.id === passkey!.credentialId)
+  expect(credential, 'the seeded passkey is no longer listed for its owner').toBeDefined()
+  expect(credential!.label).toBe(label)
 })

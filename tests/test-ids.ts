@@ -87,6 +87,7 @@ export const TestIds = {
 
   // ============ Notes ============
   NOTE_LIST: 'note-list',
+  NOTE_GROUP: 'note-group',
   NOTE_CARD: 'note-card',
   NOTE_AUTHOR: 'note-author',
   NOTE_NEW_BTN: 'note-new-btn',
@@ -96,6 +97,8 @@ export const TestIds = {
   NOTE_SEARCH: 'note-search',
   NOTE_FORM: 'note-form',
   NOTE_CALL_ID: 'note-call-id',
+  CALL_ID_SELECT: 'call-id-select',
+  CALL_ID_MANUAL_OPTION: 'call-id-manual-option',
   NOTE_CONTENT: 'note-content',
   NOTE_REPLY_BTN: 'note-reply-btn',
   NOTE_THREAD: 'note-thread',
@@ -153,6 +156,10 @@ export const TestIds = {
   CONVERSATION_LIST: 'conversation-list',
   CONVERSATION_ITEM: 'conversation-item',
   CONVERSATION_THREAD: 'conversation-thread',
+  /** A message body this client could not decrypt (rendered `[Encrypted]`). */
+  MESSAGE_ENCRYPTED: 'message-encrypted',
+  /** A message body this client decrypted. */
+  MESSAGE_PLAINTEXT: 'message-plaintext',
   MESSAGE_COMPOSER: 'message-composer',
   CONV_ADD_NOTE_BTN: 'conv-add-note-btn',
   CONV_ASSIGN_BTN: 'conv-assign-btn',
@@ -272,6 +279,7 @@ export const TestIds = {
   SETTINGS_TELEPHONY: 'telephony-provider',
   SETTINGS_TRANSCRIPTION: 'transcription',
   SETTINGS_SPAM: 'spam',
+  SPAM_CAPTCHA_TOGGLE: 'spam-captcha-toggle',
   SETTINGS_KEY_BACKUP: 'key-backup',
   SETTINGS_LINKED_DEVICES: 'linked-devices',
   SETTINGS_ADVANCED: 'advanced',

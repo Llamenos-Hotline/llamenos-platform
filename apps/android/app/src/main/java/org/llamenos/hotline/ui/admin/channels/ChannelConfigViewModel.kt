@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.A2pRegistrationDto
 import org.llamenos.hotline.api.MessagingConfigDto
 import org.llamenos.hotline.api.MessagingConfigRepository
+import org.llamenos.hotline.hub.ActiveHubState
 import javax.inject.Inject
 
 data class ChannelConfigUiState(
@@ -31,6 +32,7 @@ enum class ChannelType(val key: String, val displayName: String, val iconName: S
 @HiltViewModel
 class ChannelConfigViewModel @Inject constructor(
     private val repository: MessagingConfigRepository,
+    private val activeHubState: ActiveHubState,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChannelConfigUiState())
@@ -74,10 +76,26 @@ class ChannelConfigViewModel @Inject constructor(
         }
     }
 
-    fun loadA2pStatus(hubId: String) {
+    /**
+     * A2P registration is per hub; the SMS screen configures the hub the user is browsing.
+     * With no active hub there is nothing to load, and saying so beats rendering
+     * "not submitted" for a hub nobody asked about.
+     */
+    private fun activeHubOrError(): String? {
+        val hubId = activeHubState.activeHubId.value
+        if (hubId == null) _state.value = _state.value.copy(error = "No active hub")
+        return hubId
+    }
+
+    fun loadA2pStatus() {
+        val hubId = activeHubOrError() ?: return
         viewModelScope.launch {
-            val registration = repository.getA2pStatus(hubId)
-            _state.value = _state.value.copy(a2pRegistration = registration)
+            try {
+                val registration = repository.getA2pStatus(hubId)
+                _state.value = _state.value.copy(a2pRegistration = registration)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = e.message)
+            }
         }
     }
 
@@ -103,7 +121,8 @@ class ChannelConfigViewModel @Inject constructor(
         }
     }
 
-    fun skipA2p(hubId: String) {
+    fun skipA2p() {
+        val hubId = activeHubOrError() ?: return
         viewModelScope.launch {
             try {
                 val result = repository.skipA2p(hubId)

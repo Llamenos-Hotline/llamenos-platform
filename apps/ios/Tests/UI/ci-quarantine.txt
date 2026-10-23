@@ -8,18 +8,4 @@
 # Format:  <Class>/<testMethod>  # <why> — #<issue>
 # Checked by: python3 apps/ios/scripts/ui-tests.py check-quarantine
 
-# MainTabView has six tabs; an iPhone tab bar shows four plus More (a product decision).
-DashboardUITests/testAllTabsExist  # six main tabs, iPhone shows four plus More — #1240
-
-# Recovery-group calls are hub-scoped with hp() but the server mounts them unscoped (404).
-RecoveryGroupUITests/testAdminCanConfigureRecoveryTeam  # recovery-group paths 404 — #1032
-
-# navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
-EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245
-
-# The Blasts screen renders none of its four states — no list, empty state, loading
-# or error — while GET /blasts returns 200. Navigation succeeds and the data
-# arrives; the view produces nothing. Not a flake: the same single test failed on
-# #1397 (CI diff ranges) and #1406 (hub template permissions), two PRs with nothing
-# in common, and no blast/broadcast path on main has changed since 2026-09-28.
-BlastsUITests/testBlastsListShowsContent  # view renders no state on a 200 — #1410
+# (no entries — #1240 testAllTabsExist was fixed by asserting reachability.)

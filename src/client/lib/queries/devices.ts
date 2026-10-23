@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { request } from '@/lib/api'
+import { registerCredential } from '@/lib/webauthn'
+import type { RenameCredentialBody, WebAuthnCredentialInfo } from '@protocol/schemas/webauthn'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -38,13 +40,6 @@ export interface SecurityEvent {
   createdAt: string
 }
 
-export interface PasskeyInfo {
-  credentialId: string
-  label: string | null
-  transports: string[]
-  backedUp: boolean
-  lastUsedAt: string | null
-}
 
 export interface AdminDeviceOverviewEntry {
   userPubkey: string
@@ -214,7 +209,7 @@ export function useAdminDeviceOverview(hubId?: string) {
 // ── Passkey hooks ────────────────────────────────────────────────────
 
 export function usePasskeys() {
-  const [data, setData] = useState<PasskeyInfo[] | null>(null)
+  const [data, setData] = useState<WebAuthnCredentialInfo[] | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
 
@@ -222,7 +217,7 @@ export function usePasskeys() {
     setIsLoading(true)
     setError(null)
     try {
-      const res = await request<{ credentials: PasskeyInfo[] }>('/webauthn/credentials')
+      const res = await request<{ credentials: WebAuthnCredentialInfo[] }>('/webauthn/credentials')
       setData(res.credentials)
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)))
@@ -237,9 +232,10 @@ export function usePasskeys() {
 }
 
 export async function renamePasskey(credentialId: string, label: string) {
+  const body: RenameCredentialBody = { label }
   await request(`/webauthn/credentials/${credentialId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ label }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -247,8 +243,13 @@ export async function deletePasskey(credentialId: string) {
   await request(`/webauthn/credentials/${credentialId}`, { method: 'DELETE' })
 }
 
-export async function registerPasskey() {
-  return request<{ ok: boolean }>('/webauthn/register', { method: 'POST' })
+/**
+ * Run the full WebAuthn registration ceremony (`/webauthn/register/options`, the
+ * authenticator prompt, then `/webauthn/register/verify`). There is no single
+ * `/webauthn/register` route — the ceremony lives in `lib/webauthn.ts`.
+ */
+export async function registerPasskey(label: string): Promise<void> {
+  await registerCredential(label)
 }
 
 // ── Mutations (side-effect helpers for invalidating caches) ──────────

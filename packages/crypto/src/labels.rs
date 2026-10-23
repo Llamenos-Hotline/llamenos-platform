@@ -77,6 +77,14 @@ pub const LABEL_PROVISIONING_SALT: &str = "llamenos:provisioning:v1";
 /// old-format payload simply fails the GCM tag check.
 pub const LABEL_DEVICE_PROVISION_BUNDLE: &str = "llamenos:device-provision-bundle:v1";
 
+/// Ed25519 signature context for a device provisioning claim.
+///
+/// The primary device's long-term signing key signs its fresh per-room X25519
+/// ephemeral public key, together with the new device's ephemeral public key,
+/// under this label. The long-term key authenticates the exchange; it is never
+/// an ECDH input (PROTOCOL.md §6.3, #1865).
+pub const LABEL_DEVICE_PROVISION_CLAIM: &str = "llamenos:device-provision-claim:v1";
+
 // --- SAS Verification ---
 
 /// SAS HKDF salt for provisioning verification
@@ -425,6 +433,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Index 96: IVR media URL signing
 // Index 98: Per-volunteer SIP registrar (#1556)
 // Index 99: Device provisioning key bundle
+// Index 100: Device provisioning claim signature (#1865)
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -563,6 +572,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     HMAC_SIP_VOLUNTEER_SECRET, // 98
     // 99: Device provisioning key bundle
     LABEL_DEVICE_PROVISION_BUNDLE, // 99
+    // 100: Device provisioning claim signature (#1865)
+    LABEL_DEVICE_PROVISION_CLAIM, // 100
 ];
 
 /// Look up a label string by its numeric ID.
@@ -748,12 +759,16 @@ mod tests {
             LABEL_DEVICE_PROVISION_BUNDLE,
             "llamenos:device-provision-bundle:v1"
         );
+        assert_eq!(
+            LABEL_DEVICE_PROVISION_CLAIM,
+            "llamenos:device-provision-claim:v1"
+        );
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 59 of the 100 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 60 of the 101 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -817,6 +832,7 @@ mod tests {
         assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
         assert_eq!(id_to_label(98), Some(HMAC_SIP_VOLUNTEER_SECRET));
         assert_eq!(id_to_label(99), Some(LABEL_DEVICE_PROVISION_BUNDLE));
+        assert_eq!(id_to_label(100), Some(LABEL_DEVICE_PROVISION_CLAIM));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

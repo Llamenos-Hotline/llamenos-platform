@@ -133,7 +133,7 @@ jobs:
         run: rustup target add aarch64-apple-darwin
 
       - name: Rust cache
-        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             apps/desktop
@@ -412,7 +412,7 @@ jobs:
       # Previously only the updater-only variants were captured for Windows/Linux —
       # meaning no human-runnable Windows or Linux installer ever left this workflow.
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tauri-${{ matrix.os_label }}
           path: |
@@ -1117,3 +1117,13 @@ jobs:
           RUSTFS_BUCKET: ${{ secrets.RUSTFS_STAGING_BUCKET }}
         run: |
           echo "::error::PARTIAL RELEASE: v${VERSION} binaries were uploaded to s3://${RUSTFS_BUCKET}/desktop/v${VERSION} (and s3://${RUSTFS_BUCKET}/desktop/latest.json was updated to point at them), but a later step in this job failed — the llamenos-releases metadata commit and/or the GitHub Release for v${VERSION} may be missing or incomplete. Re-run this workflow with the same version (${VERSION}) to converge: the upload, metadata commit, and GitHub Release steps are all idempotent. If you are abandoning this version instead, manually delete s3://${RUSTFS_BUCKET}/desktop/v${VERSION} and restore s3://${RUSTFS_BUCKET}/desktop/latest.json from the previous version."
+
+  # ─── Redeploy the marketing site so its download links see the new installers ───
+  # The site resolves the newest `desktop-v*` release at build time
+  # (site/src/utils/releases.ts); without this it keeps linking the previous version.
+  deploy-site:
+    needs: [release]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-site.yml
+    secrets: inherit

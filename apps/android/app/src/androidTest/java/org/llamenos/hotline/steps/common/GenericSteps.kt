@@ -48,7 +48,7 @@ class GenericSteps : BaseSteps() {
             "Go to Dashboard" to listOf("go-to-dashboard"),
             "Create Invite" to listOf("create-invite-fab"),
             "Cancel" to listOf("cancel-ban-button", "cancel-shift-button", "cancel-logout-button", "cancel-bulk-import"),
-            "Send" to listOf("send-button"),
+            "Send" to listOf("send-button", "confirm-blast-send"),
             "Confirm" to listOf("confirm-logout-button", "confirm-delete-volunteer"),
             "Delete" to listOf("confirm-delete-volunteer"),
         )

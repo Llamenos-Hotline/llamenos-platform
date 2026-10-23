@@ -41,8 +41,10 @@ import { IdentityService } from '../../services/identity'
 import identityRoutes from '../../routes/identity'
 import type { AppEnv } from '../../types'
 import { revokedSigningKeys } from '../../lib/revoked-signing-keys'
+import { memberDirectoryResponseSchema } from '@protocol/schemas/users'
 import {
   DEFAULT_ROLES,
+  permissionGranted,
   resolveHubPermissions,
   resolvePermissions,
   type Role,
@@ -213,6 +215,29 @@ describe('GET /api/identity/members — response shape (iOS UsersListResponse)',
     expect(raw).not.toContain('role-hub-admin')
   })
 
+  it('matches the protocol schema every client decodes from, in the instance and a hub directory', async () => {
+    for (const { body } of [await directory(SUPER_ADMIN), await directory(HUB_A_ADMIN, HUB_A)]) {
+      expect(memberDirectoryResponseSchema.safeParse(body).success).toBe(true)
+    }
+  })
+
+  it('carries no role id, role name, hub membership or phone on any member, instance or hub', async () => {
+    // The point of this surface over /api/users: role is resolved server-side to
+    // admin|volunteer, so a hub never learns who administers a different hub.
+    // Asserted on the key set AND on the serialised text (a role id smuggled in
+    // under a renamed key would pass the first check and fail the second).
+    for (const { body } of [await directory(SUPER_ADMIN), await directory(HUB_A_ADMIN, HUB_A)]) {
+      for (const member of body.members as Record<string, unknown>[]) {
+        for (const forbidden of ['roles', 'roleIds', 'hubRoles', 'hubs', 'phone']) {
+          expect(Object.keys(member), `member exposes ${forbidden}`).not.toContain(forbidden)
+        }
+      }
+      const raw = JSON.stringify(body)
+      expect(raw).not.toMatch(/role-[a-z-]+/)
+      expect(raw).not.toContain(PHONE)
+    }
+  })
+
   it('maps role, status and a missing name the way the Volunteers screen reads them', async () => {
     const members = byPubkey((await directory(SUPER_ADMIN)).body)
     expect(members.get(SUPER_ADMIN.pubkey)).toMatchObject({ role: 'admin', status: 'active', displayName: 'Directory Super' })
@@ -252,6 +277,38 @@ describe('GET /api/identity/members — authorisation boundary', () => {
 })
 
 describe('GET /api/hubs/:hubId/identity/members — one hub’s directory', () => {
+  it('serves a hub admin who holds users:read in the hub and NOT globally — the Android member directory', async () => {
+    // The precondition IS the scenario: hub-scoped users:read, no global users:read.
+    // Android reads this route for VolunteersTab, UserDetail, ShiftDetail, Conversations
+    // and Blasts; the unscoped route would 403 a hub admin out of all five (#1992).
+    expect(permissionGranted(resolvePermissions(HUB_A_ADMIN.roles, ALL_ROLES), 'users:read')).toBe(false)
+    expect(
+      permissionGranted(resolveHubPermissions(HUB_A_ADMIN.roles, HUB_A_ADMIN.hubRoles, ALL_ROLES, HUB_A), 'users:read'),
+    ).toBe(true)
+
+    const scoped = await directory(HUB_A_ADMIN, HUB_A)
+    expect(scoped.status).toBe(200)
+    const members = byPubkey(scoped.body)
+    for (const actor of [HUB_A_ADMIN, SPLIT_ROLE, INACTIVE_VOLUNTEER, GLOBAL_ROLE_VOLUNTEER]) {
+      expect(members.has(actor.pubkey), `${actor.pubkey} missing from hub A`).toBe(true)
+    }
+    expect(memberDirectoryResponseSchema.safeParse(scoped.body).success).toBe(true)
+    // Same confidentiality properties as the instance directory, on the hub-scoped response.
+    const raw = JSON.stringify(scoped.body)
+    expect(raw).not.toMatch(/role-[a-z-]+/)
+    expect(raw).not.toContain(PHONE)
+    for (const member of scoped.body.members as Record<string, unknown>[]) {
+      for (const forbidden of ['roles', 'roleIds', 'hubRoles', 'hubs', 'phone']) {
+        expect(Object.keys(member)).not.toContain(forbidden)
+      }
+    }
+
+    // The unscoped route still refuses the same actor — the reason Android must not use it.
+    const unscoped = await directory(HUB_A_ADMIN)
+    expect(unscoped.status).toBe(403)
+    expect(unscoped.body.members).toBeUndefined()
+  })
+
   it('lets a hub admin read their own hub, confined to its members', async () => {
     const { status, body } = await directory(HUB_A_ADMIN, HUB_A)
     expect(status).toBe(200)

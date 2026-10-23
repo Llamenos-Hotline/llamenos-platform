@@ -1,48 +1,21 @@
 /**
- * PUK (Pre-User Key) distribution routes — Phase 6 key management.
+ * PUK (Per-User Key) distribution routes — Phase 6 key management.
  *
- * POST /api/puk/envelopes           — Distribute PUK seed envelopes after rotation.
+ * POST /api/puk/envelopes           — Store PUK seed envelopes (identity init + each rotation).
  * GET  /api/puk/envelopes/:deviceId — Fetch the latest PUK envelope for a device.
  */
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
-import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { authErrors } from '../openapi/helpers'
+import { CryptoKeyError } from '../services/crypto-keys'
+import {
+  distributePukEnvelopesBodySchema,
+  distributePukEnvelopesResponseSchema,
+  pukEnvelopeResponseSchema,
+} from '@protocol/schemas/sigchain'
 
 const pukRoutes = new Hono<AppEnv>()
-
-// ---------------------------------------------------------------------------
-// Zod schemas
-// ---------------------------------------------------------------------------
-
-const pukEnvelopeItemSchema = z.object({
-  deviceId: z.string().min(1),
-  generation: z.number().int().nonnegative(),
-  /**
-   * HPKE-encrypted PUK seed envelope.
-   * Encoding: base64url(kem_output || ciphertext)
-   */
-  envelope: z.string().min(1),
-})
-
-const distributePukBodySchema = z.object({
-  envelopes: z.array(pukEnvelopeItemSchema).min(1, 'At least one envelope required'),
-})
-
-const pukEnvelopeResponseSchema = z.object({
-  id: z.string(),
-  userPubkey: z.string(),
-  deviceId: z.string(),
-  generation: z.number(),
-  envelope: z.string(),
-  createdAt: z.string(),
-})
-
-const distributeResponseSchema = z.object({
-  distributed: z.number(),
-  envelopes: z.array(pukEnvelopeResponseSchema),
-})
 
 // ---------------------------------------------------------------------------
 // POST /api/puk/envelopes
@@ -53,35 +26,42 @@ pukRoutes.post('/envelopes',
     tags: ['PUK'],
     summary: 'Distribute PUK seed envelopes to devices',
     description: [
-      'Called after a PUK epoch rotation.',
-      'The caller provides one HPKE-encrypted envelope per registered device.',
-      'Each device decrypts its own envelope using its X25519 private key.',
-      'The server stores envelopes keyed by (deviceId, generation).',
+      'Called when the user\'s identity is initialised and after each PUK rotation.',
+      'The caller provides one HPKE envelope per device, addressed by sigchain device ID;',
+      'every address must be a device the caller\'s own sigchain authorises.',
+      'Each device opens its own envelope with its X25519 private key.',
     ].join(' '),
     responses: {
       201: {
         description: 'Envelopes stored',
         content: {
           'application/json': {
-            schema: resolver(distributeResponseSchema),
+            schema: resolver(distributePukEnvelopesResponseSchema),
           },
         },
       },
       ...authErrors,
+      400: { ...authErrors[400], description: 'Validation error, or an envelope addressed to a device the user\'s sigchain does not authorise' },
     },
   }),
-  validator('json', distributePukBodySchema),
+  validator('json', distributePukEnvelopesBodySchema),
   async (c) => {
     const userPubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const services = c.get('services')
 
-    const stored = await services.cryptoKeys.distributePukEnvelopes(
-      userPubkey,
-      body.envelopes,
-    )
-
-    return c.json({ distributed: stored.length, envelopes: stored }, 201)
+    try {
+      const stored = await services.cryptoKeys.distributePukEnvelopes(
+        userPubkey,
+        body.envelopes,
+      )
+      return c.json({ distributed: stored.length, envelopes: stored }, 201)
+    } catch (err) {
+      if (err instanceof CryptoKeyError) {
+        return c.json({ error: err.message }, err.status)
+      }
+      throw err
+    }
   },
 )
 

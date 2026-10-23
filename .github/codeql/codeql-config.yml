@@ -1,9 +1,35 @@
 name: "Llamenos CodeQL Configuration"
 
-# Use security-extended suite for more thorough analysis
+# Applied by all three `github/codeql-action/init` steps in
+# .github/workflows/codeql.yml via `config-file:` (#2077). Before that wiring
+# this file was inert: every scan ran the default suite with no exclusions.
+
+# security-extended is a superset of the default suite. Never narrow this to
+# keep the alert list short — triage what it finds instead.
 queries:
   - uses: security-extended
 
+# ─── What `paths-ignore` can and cannot do ──────────────────────────────────
+# It is a PATH filter, honoured for the languages scanned without a build
+# (javascript-typescript, python, ruby, rust). It is NOT honoured for
+# java-kotlin or swift, which are built (build-mode: manual) — those are
+# staged, non-required legs and are not filtered here.
+#
+# It cannot separate Rust unit tests from production code. Rust unit tests
+# live in `#[cfg(test)] mod tests` inside the production source file
+# (apps/desktop/src/crypto.rs, packages/crypto/src/*.rs), so ignoring such a
+# file would stop scanning the production crypto beside the tests. Nor can
+# anything else scope a rule to "not in test code, same file": `query-filters`
+# match query metadata only (never a path), and CodeQL ships no inline
+# `codeql[...]` suppression for Rust (AlertSuppression.ql exists for C/C++,
+# C#, Go, Java/Kotlin, JavaScript and Python only). Those alerts are handled
+# by a dismissal policy instead — see .github/codeql/README.md —
+# NOT by moving tests into separate files and NOT by excluding
+# rust/hard-coded-cryptographic-value repo-wide, which would also silence it
+# on production crypto.
+#
+# So the entries below are limited to code that is ALREADY a separate file:
+# generated/vendored/build output, and files that only exist to test.
 paths-ignore:
   # Vendored Ruby gems (iOS Fastlane)
   - apps/ios/vendor
@@ -16,5 +42,24 @@ paths-ignore:
   # Dependencies
   - node_modules
   - .bun
+
+  # ─── Test code that is already its own file ───────────────────────────────
+  # Hard-coded keys, passwords and tokens are fine in a test and not in
+  # production code, and a known-answer test needs its known values inline.
   # Test fixtures with intentional mock patterns
   - tests/mocks
+  # Playwright / BDD / orchestrator / load / live suites
+  - tests
+  # Backend unit + integration tests
+  - '**/__tests__'
+  # Co-located JS/TS tests
+  - '**/*.test.ts'
+  - '**/*.test.tsx'
+  - '**/*.spec.ts'
+  - '**/*.spec.tsx'
+  # Docker image smoke tests
+  - deploy/docker/tests
+  # Rust integration tests (their own crate targets, not #[cfg(test)] modules)
+  - packages/crypto/tests
+  # pytest modules
+  - '**/test_*.py'

@@ -404,6 +404,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.19.21 (2026-10-23)
+
+### Features
+
+- resumable sigchain genesis + PUK at onboarding and admin bootstrap, envelopes addressed by sigchain device (#1050) (#2086)
+
+### Fixes
+
+- keep the call-id control from swapping under the user (#2087)
+
+## 0.19.20 (2026-10-23)
+
+### Features
+
+- changelog page rendered at build time, with release links and verification (#1979)
+- check every client call against the mounted routes (#1997) (#2001)
+- add role viewer, tags management, and tag picker (#1811)
+
+### Fixes
+
+- compact locale diffs for review (#1860)
+- validate Helm chart in CI, fix image/version drift, forbid unsafe multi-replica (#1481)
+- point invite list/create at the routes the server mounts (#1047) (#1785)
+- grant deferred.json to every platform lane; name the sync remedy (#1947)
+- grant docs/security/ to the shared lane (#1955)
+- pin dev-bun.sh's compose project instead of inheriting COMPOSE_PROJECT_NAME (#1957)
+- clear rust-audit and cargo-deny on main (#1958)
+- narrow hpkeEncSchema to hex-only (#1961)
+- key the quota cooldown on provider and make doctor report it (#1963)
+- verify remote wipes and stop every relay event reaching the wipe path (#1965)
+- hand the reviewer the generated protocol types (#1964)
+- verify remote wipes and stop inferring one from hub events (#1978)
+- make the device-wipe signature encoding injective (#1981)
+- attach installers to v<version> before publishing, and fail if none are there (#1982)
+- resync Helm appVersion and check knope versioned_files on every PR (#1987)
+- a BLOCKED outcome no longer spends the item's attempt budget (#1962)
+- a disk-starved build waits for its co-tenant instead of draining the merge queue (#1980)
+- verify the app image is pullable; docker.yml fails by name on missing secrets (#1971)
+- match knope's anti-recursion guard on the commit subject only (#2005)
+- a skipped crypto-tests no longer reads as green (#1941, #1954) (#1970)
+- reclaim orphaned iOS DerivedData safely (#1838)
+- paginate open PRs in board (#1832) (#1837)
+- per-host shard pricing, app warm-up, and a Cases screen that cannot depend on load order (#1873, #1893) (#1976)
+- admin sidebar CAPTCHA/rate-limit/transcription toggles now PATCH (#1184)
+- key the review verdict cache on the judged tree, not the diff (#2014) (#2015)
+- replace unfalsifiable UI test assertions with real expectations (#1825)
+- let a claiming volunteer read pre-claim messages via client re-wrap (#1512) (#2031)
+- repoint update, rollback and security-update at the per-service compose layout (#1478)
+- CAPTCHA reload step stranded on PIN screen — wait for sidebar after unlock (#2047) (#2048)
+- first-run probe judges the server certificate like api_config_set (#1711) (#2025)
+- pin shift and shift-admin view-model state to the main actor (#2049) (#2050)
+- detect a required context that is ABSENT on the head, not red (#1673)
+- survive PBX reconnects, fail-closed recording guard, graceful shutdown (#1377)
+- bound the disk guard so a hung report/reclaim cannot burn 36 min at 50 GiB free (#2063)
+- clear the 3 new HIGH advisories failing audit in every merge group (#2065)
+- wait for the typed case title before tapping Create (#2052)
+- clear nanoid HIGH advisories; re-justify braces + http-cache-semantics (#2064) (#2066)
+- socket-free SipRegistrationTest, close ApiService responses, upload test reports (#1984)
+- zeroize the two device seeds left on the stack after bundle import (#2037)
+- contacts search + profile speak the server's contract (#2002) (#2069)
+- point messaging, notes, bans, custom-field, contacts and triage screens at mounted routes (#2070)
+- Shifts keeps one stable root while loading; TEST EXECUTE FAILED was an assertion, not the harness (#2071)
+- fix the desktop half of the endpoint contract (#1997) (#2000)
+- align client request paths with the mounted routes (#1997) (#1999)
+- read the member directory from the hub-scoped /identity/members (#1766, #1992) (#1992)
+- ship res_resolver_unbound so SIP targets known only from /etc/hosts resolve (#1690) (#2030)
+- main-actor isolate every @Observable that SwiftUI reads (45-type audit, #1920) (#2073)
+- apply the CodeQL config — security-extended + path exclusions (#2077) (#2078)
+- admin clients re-wrap pre-claim messages for the claimer; desktop relay events decode (#2046) (#2074)
+- the red nightly now reports; testAllTabsExist asserts reachability (#2057) (#2058)
+- wire the 12 #1997 client calls to mounted routes (baseline 19 → 8) (#2079)
+- wire #1701 iOS calls and #2068 webhook URLs to mounted routes (baseline 8 → 2) (#2081)
+- bind step definitions for ban list BDD coverage (#1182)
+- ephemeral ECDH for device provisioning, signed claim (#1865) (#1975)
+- keep esbuild, vite and the marketing-site toolchain out of the app image (#1990)
+- fleet/review fails closed when a claimed verdict has no report to publish (#2082) (#2083)
+- knope's release PR concludes a real green on fleet/review, keyed on structure (#2085)
+
 ## 0.19.19 (2026-10-18)
 
 ### Features

@@ -231,6 +231,28 @@ describe('tick', () => {
     expect(r.attempted).toBe(0)
   })
 
+  // #1841/#1764: BLOCKED no longer spends the attempt budget, so the
+  // `needs-human` hand-off is the only thing stopping an immediate
+  // re-dispatch into the same wall. Dropping `needsHuman = true` for BLOCKED
+  // in tick.ts makes this fail.
+  it('hands a BLOCKED outcome to a human instead of leaving it re-claimable', async () => {
+    const d = deps({
+      lanes: [lane('ios', 'live')],
+      dispatch: vi.fn(async () => ({ outcome: 'BLOCKED' as const, note: 'path not owned' })),
+    })
+    await tick(d)
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'BLOCKED', needsHuman: true }))
+  })
+
+  it('keeps dispatching an item whose only history is BLOCKED rows', async () => {
+    const rows: RunRecord[] = [1, 2, 3].map((ts) => (
+      { ts, runId: `r${ts}`, lane: 'ios', itemId: '1', itemName: 't1', engine: 'claude', outcome: 'BLOCKED' as const }
+    ))
+    const d = deps({ lanes: [lane('ios', 'live')], readLedger: () => rows, resumedAt: () => 10 })
+    await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+  })
+
   // E4: cap must be tracked per lane. The mutation this guards against is
   // hoisting `let taken = 0` out of the per-lane loop so it accumulates across
   // lanes — that would starve every lane after the first.

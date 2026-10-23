@@ -9,7 +9,9 @@ import type {
   NumberSearchQuery,
   NumberProvisionRequest,
   ProviderStatusResponse,
+  WebhookUrlsResponse,
 } from '@protocol/schemas/provider-setup'
+import { buildProviderWebhookUrls } from '../../lib/provider-webhook-urls'
 import { SettingsService } from '../settings'
 import { getProviderCapability, hasCapability } from './registry'
 import { encryptCredentials, decryptCredentials } from './crypto'
@@ -22,7 +24,8 @@ export class ProviderSetup {
   constructor(
     private readonly db: Database,
     private readonly hmacSecret: string,
-    private readonly baseUrl: string,
+    /** Public webhook origin — see `webhookOrigin` in lib/provider-webhook-urls.ts. */
+    private readonly webhookOrigin: string,
   ) {
     this.settings = new SettingsService(db)
   }
@@ -154,6 +157,11 @@ export class ProviderSetup {
     return number
   }
 
+  /** Every provider-facing webhook URL for a hub (or the global config). */
+  webhookUrls(hubId?: string): WebhookUrlsResponse {
+    return buildProviderWebhookUrls(this.webhookOrigin, hubId || undefined)
+  }
+
   async configureWebhooks(
     provider: TelephonyProviderType,
     numberId: string,
@@ -165,12 +173,14 @@ export class ProviderSetup {
       'autoWebhooks',
     )
 
+    // The same table GET /provider-setup/webhook-urls shows an admin (#2068).
+    const all = this.webhookUrls(options.hubId)
     const urls: WebhookUrls = {
-      voiceIncoming: `https://${this.baseUrl}/telephony/incoming`,
-      voiceStatus: `https://${this.baseUrl}/telephony/status`,
+      voiceIncoming: all.voiceIncoming,
+      voiceStatus: all.voiceStatus,
     }
     if (options.enableSms) {
-      urls.sms = `https://${this.baseUrl}/api/messaging/sms/webhook`
+      urls.sms = all.messaging.sms
     }
 
     await impl.configureWebhooks(creds, numberId, urls)

@@ -9,6 +9,7 @@ struct CreateEventView: View {
     var parentEventId: String? = nil
     let onDismiss: () -> Void
 
+    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
     @State private var title: String = ""
@@ -148,6 +149,11 @@ struct CreateEventView: View {
             return
         }
 
+        // Resolve the admin decryption pubkey before encrypting: the server
+        // stores `detailEnvelopes` verbatim, so details wrapped only for the
+        // author stay permanently unreadable to admins.
+        await appState.ensureAdminPubkeyLoaded()
+
         let success = await viewModel.createEvent(
             entityTypeId: entityTypeId,
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -158,7 +164,8 @@ struct CreateEventView: View {
             endDate: hasEndDate ? endDate : nil,
             location: location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil
-                : location.trimmingCharacters(in: .whitespacesAndNewlines)
+                : location.trimmingCharacters(in: .whitespacesAndNewlines),
+            adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
         )
 
         if success {
@@ -179,5 +186,6 @@ struct CreateEventView: View {
         ),
         onDismiss: {}
     )
+    .environment(AppState(hubContext: HubContext()))
 }
 #endif
