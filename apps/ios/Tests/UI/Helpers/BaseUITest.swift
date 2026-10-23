@@ -681,4 +681,44 @@ class BaseUITest: XCTestCase {
             XCTFail("Element '\(identifier)' not found after \(maxSwipes) swipes")
         }
     }
+
+    /// Wait until `element` is on screen (hittable), enabled (a tap on a disabled
+    /// control is silently dropped) AND has held the same frame for `settle` seconds. `exists` is true for a SwiftUI `List` row that is mid-push-
+    /// transition or about to be reflowed by rows inserted above it, and a tap that
+    /// lands then is swallowed with no error (#2091: hosted `macos-15` lost the tap on
+    /// `admin-events` while the Mac, which settles in time, never did). Waiting on the
+    /// element's state — not a fixed delay — makes the tap land on a stable target.
+    @discardableResult
+    func waitUntilSettled(_ element: XCUIElement, timeout: TimeInterval = 10, settle: TimeInterval = 0.5) -> Bool {
+        final class FrameWatch {
+            var frame = CGRect.null
+            var since = Date()
+        }
+        let watch = FrameWatch()
+        let settled = NSPredicate { _, _ in
+            guard element.exists, element.isHittable, element.isEnabled else {
+                watch.frame = .null
+                return false
+            }
+            let frame = element.frame
+            if frame != watch.frame {
+                watch.frame = frame
+                watch.since = Date()
+            }
+            return Date().timeIntervalSince(watch.since) >= settle
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: settled, object: app)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Tap `element` once it is settled on screen, failing the test if it never is.
+    func tapWhenSettled(
+        _ element: XCUIElement, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard waitUntilSettled(element, timeout: timeout) else {
+            XCTFail("\(element) should be on screen, enabled and still before it is tapped", file: file, line: line)
+            return
+        }
+        element.tap()
+    }
 }
