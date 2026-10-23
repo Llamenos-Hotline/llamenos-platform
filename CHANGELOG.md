@@ -404,6 +404,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.19.21 (2026-10-23)
+
+### Features
+
+- resumable sigchain genesis + PUK at onboarding and admin bootstrap, envelopes addressed by sigchain device (#1050) (#2086)
+
+### Fixes
+
+- keep the call-id control from swapping under the user (#2087)
+
 ## 0.19.20 (2026-10-23)
 
 ### Features
