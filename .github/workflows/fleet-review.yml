@@ -221,6 +221,21 @@
 #                             forever). Named `PASS:bot-authored` — it used
 #                             to have no case in the naming step at all and
 #                             went green as `PASS:unclassified` (#1588).
+#   `release-pr`            → SUCCESS, no model call, NO REVIEW (the operator's
+#                             standing ruling for release PRs, #1944). knope
+#                             force-pushes `release` on every merge to main,
+#                             each time onto a tree no verdict covers, and a
+#                             push never starts a review — so before this the
+#                             release PR was `tree-changed` red forever and
+#                             knope prepared no release at all. Matched on
+#                             STRUCTURE (release-shape.ts), never a label:
+#                             the head branch is `release` AND the diff is
+#                             nothing but a version swap in files
+#                             `knope.toml` itself lists (plus changelog
+#                             additions). Named `PASS:release-pr`. A
+#                             non-release PR can never reach it: a branch
+#                             named `release` carrying anything else gets
+#                             the ordinary gate.
 #   `run-engine`            → the real review, then the label clear. Reached
 #                             from a `review_requested`, or from a
 #                             `workflow_dispatch` — both run the same review
@@ -351,7 +366,7 @@ on:
   # `synchronize` (#1284) exists so the required context REAPPEARS on a head
   # that moved. It can only republish what the PR already earned for this
   # exact tree (`cache-hit`), conclude on its own terms (`low-tier`,
-  # `bot-authored`), carry a FAIL forward (`carried`), or fail closed because
+  # `bot-authored`, `release-pr`), carry a FAIL forward (`carried`), or fail closed because
   # no verdict covers this tree (`tree-changed`, `unreviewed`,
   # `carry-unreadable`) — never a model call, structurally
   # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
@@ -476,8 +491,8 @@ jobs:
     # colleague — and, since #1284, on every push too. The "Decide whether to
     # run the review engine" step is what used to be this `if:`; the
     # difference is that its `not-requested` branch FAILS the job instead of
-    # skipping it, and its `cache-hit`, `low-tier` and `bot-authored`
-    # branches SUCCEED the job instead of skipping it — either way the job
+    # skipping it, and its `cache-hit`, `low-tier`, `bot-authored` and
+    # `release-pr` branches SUCCEED the job instead of skipping it — either way the job
     # reaches a real, reported conclusion, which a job-level `if:` can never
     # guarantee once GitHub decides the job merely "didn't run". That is also
     # why the push arm is not an `if:` on this job: a skipped `fleet/review`
@@ -1991,6 +2006,7 @@ jobs:
           OUTCOME: ${{ steps.gate.outputs.outcome }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           RESULT_FILE: ${{ runner.temp }}/fleet-review-result
+          REPORT_DIR: ${{ runner.temp }}/review-report
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
@@ -2029,7 +2045,36 @@ jobs:
             echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME, result=$result — the review reached a result; the Review step's own failure is this job's red"
             exit 0
           fi
-          echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME"
+          # #2082: a green that CLAIMS a reviewer's verdict must have that
+          # verdict on its way to the PR. Two outcomes conclude green by
+          # having read the diff — `run-engine` (the Review step succeeded)
+          # and `cache-hit` (a prior PASS for this exact tree, re-published)
+          # — and both hand their text to `writeReviewReport`, which is
+          # deliberately non-fatal (a report that cannot be written must not
+          # cost the PR its verdict). Upload then runs with
+          # `if-no-files-found: ignore` and publish treats a missing artifact
+          # as "nothing to post" and succeeds, so a report that was never
+          # written left a green `PASS:reviewed` / `PASS:cached` with no
+          # comment anywhere: a verdict nothing on the PR can show. Every
+          # link in that chain was written to tolerate absence because
+          # absence is LEGITIMATE for the outcomes that never review
+          # (`bot-authored`, `low-tier` — they claim no verdict, and name
+          # themselves `PASS:bot-authored` / `PASS:low-tier` on the check) —
+          # so this is the one place that knows which absences are not.
+          # The marker file is how the naming step below tells this refusal
+          # from a generic unnamed green.
+          if [ "$OUTCOME" = "cache-hit" ] || [ "$OUTCOME" = "run-engine" ]; then
+            shopt -s nullglob
+            reports=("$REPORT_DIR"/*.json)
+            if [ "${#reports[@]}" -eq 0 ]; then
+              printf 'report-missing\n' > "$RUNNER_TEMP/fleet-review-report-missing"
+              echo "::error::fleet/review FAILED: report-missing — gate outcome=$OUTCOME concluded green having read the diff, but no review report exists in $REPORT_DIR, so fleet-review/publish has no verdict to put on the PR; refusing to conclude green on a verdict nothing can show"
+              exit 1
+            fi
+            echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME, ${#reports[@]} review report(s) to publish"
+            exit 0
+          fi
+          echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME — no verdict claimed, none to publish; the naming step below states which outcome this is"
 
       # Every reviewer's FULL text, for `fleet-review/publish` to post on
       # the PR. `if: always()` because a FAIL is exactly the case that most
@@ -2043,7 +2088,7 @@ jobs:
       # would otherwise collide with attempt-1's artifact under this name.
       - name: Upload the review report for publishing
         if: always() && github.event_name != 'merge_group'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fleet-review-report-${{ github.run_id }}
           path: ${{ runner.temp }}/review-report
@@ -2064,7 +2109,7 @@ jobs:
       # write.
       - name: Cache the verdict, if this run produced a fresh substantive one
         if: always() && steps.review.outputs.cache_artifact_name != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.review.outputs.cache_artifact_name }}
           path: ${{ runner.temp }}/review-cache
@@ -2083,7 +2128,7 @@ jobs:
       # Each namespace has its own output and its own upload step now.
       - name: Cache the verdict under its exact review set, if it has a profile
         if: always() && steps.review.outputs.cache_artifact_name_scoped != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.review.outputs.cache_artifact_name_scoped }}
           path: ${{ runner.temp }}/review-cache
@@ -2194,6 +2239,12 @@ jobs:
               # needs no review, so it gets a `PASS:` name of its own rather
               # than the catch-all it used to land on.
               bot-authored) token="PASS:bot-authored" ;;
+              # knope's own version-bump PR (`release-pr` — release-shape.ts):
+              # the operator's ruling that release PRs need no review, as a
+              # real conclusion with its own `PASS:` name, never a skip and
+              # never the unnamed-green default. `no-review-needed` in
+              # REVIEW_GATE_STANDING, the same class as `low-tier`.
+              release-pr) token="PASS:release-pr" ;;
               run-engine)
                 case "$result" in
                   pass) token="PASS:reviewed" ;;
@@ -2216,6 +2267,12 @@ jobs:
             else
               token="NO-VERDICT:setup-failed"
             fi
+          elif [ -f "$RUNNER_TEMP/fleet-review-report-missing" ]; then
+            # #2082: the gate (or the Review step) concluded it had read the
+            # diff, and the assert step above found no report to publish.
+            # Named on its own — folded into `unclassified` it would read as
+            # "the vocabulary needs an entry", which is the wrong action.
+            token="NO-VERDICT:report-missing"
           else
             case "$OUTCOME" in
               '') token="NO-VERDICT:gate-error" ;;
@@ -2292,6 +2349,7 @@ jobs:
             PASS:cached) detail="this exact tree and review set already passed; not reviewed again" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:bot-authored) detail="an automated dependency update; no model review, and a human still merges it" ;;
+            PASS:release-pr) detail="knope's release PR, a version-only diff (release branch + only knope.toml-listed files changed by a version swap); no review was run, by the operator's ruling, and a human still merges it" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
             REJECTED:cached) detail="this exact tree was already rejected; push a fix" ;;
             REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;
@@ -2308,6 +2366,7 @@ jobs:
             NO-VERDICT:budget-exhausted) detail="a reviewer used its whole turn budget without reaching a verdict, and nothing could be salvaged from the session either; raise DEFAULT_MAX_TURNS/HIGH_IMPACT_MAX_TURNS in orchestrator/src/review.ts, or cut what the reviewer has to explore to answer the diff — re-requesting will exhaust again, and splitting the PR usually will not help (#1485 exhausted on 10 files / +137-63)" ;;
             REJECTED:partial) detail="a reviewer rejected what it had read and then ran out of turns; fix what it names, then request a review — the rest of the diff was never read" ;;
             NO-VERDICT:partial-pass) detail="a reviewer ran out of turns having found nothing wrong in the part it did read; its comment lists what it never reviewed — read that, then request a review of the whole diff" ;;
+            NO-VERDICT:report-missing) detail="the review reached a verdict but wrote no report, so nothing could be published to the PR; re-request the review (#2082)" ;;
             NO-VERDICT:did-not-run) detail="the gate chose to review but no review result was produced" ;;
             NO-VERDICT:engine-quota) detail="the review engine hit a usage limit before reviewing anything" ;;
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
@@ -2509,8 +2568,11 @@ jobs:
           mkdir -p "$dir"
           # No report is a legitimate state (a `not-requested` or
           # `review-set-unresolved` run reviews nothing), so a missing
-          # artifact is not an error — but a report that EXISTS and cannot be
+          # artifact is not an error here — but a report that EXISTS and cannot be
           # read is, because that is a review silently not reaching the PR.
+          # (A verdict that SHOULD have a report and has none never gets this
+          # far: the fleet-review job's assert step fails it as report-missing,
+          # #2082. This job tolerates absence only because that one cannot.)
           if gh run download "$RUN_ID" -R "$REPO" -n "$ARTIFACT" -D "$dir" 2>/dev/null; then
             echo "downloaded $ARTIFACT"
           else

@@ -29,7 +29,10 @@ COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/test-specs/package.json packages/test-specs/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY site/package.json site/package.json
-RUN bun install --frozen-lockfile --production --ignore-scripts
+# `--filter` keeps the marketing-site workspace (astro -> esbuild, vite) out of the
+# runtime image; its manifest stub above is only there for the frozen lockfile.
+# See the same install in deploy/docker/Dockerfile.
+RUN bun install --frozen-lockfile --production --ignore-scripts --filter '!llamenos-site'
 
 # Stage 2: Build Rust crypto FFI (.so)
 FROM rust:1-slim AS rust-builder

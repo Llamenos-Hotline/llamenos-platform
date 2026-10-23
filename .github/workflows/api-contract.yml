@@ -1,0 +1,67 @@
+# Endpoint-contract guard (#1997).
+#
+# Every HTTP call in the desktop, iOS, Android and sip-bridge clients is
+# resolved to a method + path and matched against the routes the worker
+# actually mounts. A call that matches no route — wrong path, missing `/api`,
+# wrong verb, `hp()` on an unscoped-only route, or a path a `:param` route
+# silently answers with 200 — fails this job.
+#
+# Why its own file: ci.yml is a serialising hotspot, and this guard needs
+# nothing ci.yml builds (no codegen, no database, no native crypto library).
+#
+# Why a static check: a status code cannot see the worst of these. `GET
+# /api/contacts/search` has no route and returns 200 from `GET
+# /api/contacts/:hash`. See scripts/api-schema-binding/contract-guard.ts.
+#
+# Not a required check yet: promoting it is a ruleset change, made once main is
+# green. It triggers on `merge_group` too so that promotion cannot strand the
+# queue on a context that never reports there.
+name: API contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('api-contract-pr-{0}', github.ref) || format('api-contract-{0}', github.sha) }}
+  # Never cancelled on merge_group/push: a cancelled queue check never reports.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  BUN_VERSION: "1.3.5"
+
+jobs:
+  # The check-run name a ruleset would require is this job's name.
+  api-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The guard proven by breaking it, and its static route table proven equal
+      # to the routes the live Hono app registers. An explicit path: `bun test`
+      # exits non-zero if the file is missing rather than passing on zero tests.
+      - name: Test the guard
+        run: bun test ./scripts/api-schema-binding/contract-guard.test.ts
+
+      # Exits non-zero on any mismatch, any stale or reason-less allowlist
+      # entry, and any client whose call sites could not be found.
+      - name: Check client calls against mounted routes
+        run: bun scripts/api-schema-binding/contract-guard.ts

@@ -854,6 +854,7 @@
     "errorTitle": "Помилка запрошення",
     "expired": "Це запрошення вже не дійсне",
     "generatingKeys": "Генерація ваших ключів...",
+    "identityInitFailed": "Не вдалося налаштувати ключі шифрування. Спробуйте ще раз.",
     "getStarted": "Розпочати",
     "goToLogin": "Перейти до входу",
     "invalidCode": "Недійсний код запрошення",
@@ -2287,7 +2288,9 @@
     "noCategoriesMessage": "Категорії звітів допомагають класифікувати інциденти.",
     "noInvitesMessage": "Створіть коди запрошення, щоб додати нових волонтерів.",
     "noSearchResults": "Немає учасників, що відповідають запиту.",
-    "noUsersMessage": "Поки що ніхто не приєднався."
+    "noUsersMessage": "Поки що ніхто не приєднався.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "contactDirectory": {
     "editContact": "Редагувати контакт",
@@ -4071,7 +4074,11 @@
     "suggestedRoleCount": "{{count}} roles",
     "slugPlaceholder": "e.g. intake-coordinator",
     "title": "Roles & Permissions",
-    "updated": "Role updated"
+    "updated": "Role updated",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "apiKeyLabel": "API Key",
   "apiKeyProvider": {
@@ -4352,7 +4359,9 @@
     "createTagNamed": "Create \"{{name}}\"",
     "noTagsFound": "No tags found.",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "connectionFailed": "Зʼєднання не вдалося",
   "methodVoice": "Голос",

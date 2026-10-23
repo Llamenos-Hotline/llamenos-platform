@@ -216,6 +216,14 @@ private func ffiMobileClearHubKeys() {
     mobileClearHubKeys()
 }
 
+private func ffiMobileEncryptHubField(plaintext: String, hubId: String, label: String) throws -> String {
+    try mobileEncryptHubField(plaintext: plaintext, hubId: hubId, label: label)
+}
+
+private func ffiMobileDecryptHubField(packedHex: String, hubId: String, label: String) throws -> String {
+    try mobileDecryptHubField(packedHex: packedHex, hubId: hubId, label: label)
+}
+
 private func ffiMobileSetServerEventKeys(currentHex: String, previousHex: String?) throws {
     try mobileSetServerEventKeys(currentHex: currentHex, previousHex: previousHex)
 }
@@ -561,6 +569,23 @@ final class CryptoService: @unchecked Sendable {
     /// Evict all hub keys from Rust memory. Called on lock and logout.
     func clearHubKeys() {
         ffiMobileClearHubKeys()
+    }
+
+    // MARK: - Hub Field Encryption
+
+    /// Seal a small hub-scoped field (tag label, tag category) under the hub key
+    /// held in Rust. `label` is the domain-separation constant bound as AAD
+    /// (e.g. `CryptoLabels.LABEL_TAG_ENCRYPT`); Rust refuses an unregistered one.
+    /// Returns `hex(nonce_12 || ciphertext || tag_16)` — the desktop wire format.
+    func encryptHubField(plaintext: String, hubId: String, label: String) throws -> String {
+        try ffiMobileEncryptHubField(plaintext: plaintext, hubId: hubId, label: label)
+    }
+
+    /// Open a hub-scoped field. Returns nil on any failure (no key for the hub,
+    /// wrong key or label, corrupted data) — matching desktop's `decryptHubField`,
+    /// so callers fall back to the raw stored value.
+    func decryptHubField(ciphertextHex: String, hubId: String, label: String) -> String? {
+        try? ffiMobileDecryptHubField(packedHex: ciphertextHex, hubId: hubId, label: label)
     }
 
     // MARK: - Hub Event Decryption

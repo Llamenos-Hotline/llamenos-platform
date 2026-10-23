@@ -12,17 +12,38 @@ final class HubManagementUITests: BaseUITest {
     private func navigateToHubs() {
         navigateToSettings()
         scrollAndTap("settings-hubs-link")
+        XCTAssertTrue(
+            find("hubs-list").waitForExistence(timeout: 20),
+            "The hub list should render for a member of a hub"
+        )
+        XCTAssertFalse(find("hubs-loading").exists, "The hub list should have finished loading")
+        XCTAssertFalse(find("hubs-empty").exists, "A member of a hub is not hubless")
+    }
 
-        _ = anyElementExists([
-            "hubs-list",
-            "hubs-loading",
-            "hubs-empty",
-        ], timeout: 10)
+    /// The prefix of this class's hub row id: server slug of "ios-<ClassName>-<ms>"
+    /// (apps/worker/routes/dev.ts test-create-hub).
+    private var classHubRowPrefix: String {
+        "hub-row-ios-\(String(describing: type(of: self)).lowercased())-"
+    }
+
+    /// A hub row by id prefix. A super-admin lists every hub on the server — and every
+    /// test in a shard creates one — so the row can be many screens down; a SwiftUI List
+    /// only instantiates the rows near the viewport.
+    private func hubRow(idPrefix: String) -> XCUIElement {
+        scrollToMatch(NSPredicate(format: "identifier BEGINSWITH %@", idPrefix), maxSwipes: 60)
+    }
+
+    private func openCreateHubForm() {
+        let createButton = app.buttons["hubs-create-btn"]
+        XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create Hub should be in the toolbar for an admin")
+        XCTAssertTrue(createButton.isEnabled, "Create Hub should be enabled")
+        createButton.tap()
+        XCTAssertTrue(find("hub-name-field").waitForExistence(timeout: 5), "The create form should open")
     }
 
     // MARK: - Scenario: Hub list shows hubs
 
-    /// Verifies the hub list screen renders after navigating from Settings.
+    /// A hub member sees the hub list — not the loading or the "no hubs" state.
     func testHubListShowsHubs() {
         given("I am authenticated as admin") {
             launchAsAdminWithAPI()
@@ -30,13 +51,10 @@ final class HubManagementUITests: BaseUITest {
         when("I navigate to Settings > Hubs") {
             navigateToHubs()
         }
-        then("I should see the hub list or empty/loading state") {
-            let found = anyElementExists([
-                "hubs-list",
-                "hubs-loading",
-                "hubs-empty",
-            ])
-            XCTAssertTrue(found, "Hub management should show the hub list, loading, or empty state")
+        then("the list shows at least one hub row") {
+            let rows = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'hub-row-'"))
+            XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "The list should contain a hub row")
         }
     }
 
@@ -54,140 +72,178 @@ final class HubManagementUITests: BaseUITest {
         when("I navigate to hub management") {
             navigateToHubs()
         }
-        then("I should see hub cards or the empty state") {
-            XCTAssertTrue(find("hubs-list").waitForExistence(timeout: 15), "The hub list should render")
-            // Server slug of "ios-<ClassName>-<ms>" (apps/worker/routes/dev.ts test-create-hub).
-            let classHubPrefix = "hub-row-ios-\(String(describing: type(of: self)).lowercased())-"
+        then("I should see this class's hub card") {
             // A super-admin lists every hub on the server, so this class's hub can
             // sit below the fold — and a SwiftUI List does not instantiate rows it
             // has not scrolled to.
-            let classHubRow = scrollToMatch(
-                NSPredicate(format: "identifier BEGINSWITH %@", classHubPrefix)
-            )
+            let classHubRow = hubRow(idPrefix: classHubRowPrefix)
             XCTAssertTrue(
                 classHubRow.exists,
-                "The card for this test class's hub (\(classHubPrefix)…) should be listed"
+                "The card for this test class's hub (\(classHubRowPrefix)…) should be listed"
             )
         }
     }
 
     // MARK: - Scenario: Active hub indicator visible
 
-    /// Verifies the currently active hub has a visual indicator.
+    /// Switching to a hub marks it — and only it — as the active one.
+    ///
+    /// The row is tapped first rather than read at launch: a freshly launched test app has
+    /// the class hub as its working hub, yet its row is not marked selected until the hub
+    /// is chosen in this list (observed; not asserted here).
     func testActiveHubIndicatorVisible() {
-        given("I am authenticated as admin with API") {
+        var activeRow: XCUIElement!
+        given("I am authenticated as admin and on the Hubs screen") {
             launchAsAdminWithAPI()
-        }
-        when("I navigate to Settings > Hubs") {
             navigateToHubs()
+            activeRow = hubRow(idPrefix: classHubRowPrefix)
+            XCTAssertTrue(activeRow.exists, "This class's hub should be listed")
         }
-        then("the active hub should have a visual indicator") {
-            let hubList = find("hubs-list")
-            guard hubList.waitForExistence(timeout: 10) else { return }
-
-            // The current hub URL is set in launch args, so one hub row
-            // should be marked as active
-            let hubRows = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'hub-row-'"))
-            if hubRows.count > 0 {
-                // At least one hub exists — verify the list rendered
-                XCTAssertTrue(hubRows.firstMatch.exists, "Hub rows should render in the list")
-            }
+        when("I choose this class's hub") {
+            activeRow.tap()
+        }
+        then("its row is the one selected row") {
+            let becomesSelected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "isSelected == true"), object: activeRow
+            )
+            XCTAssertEqual(
+                XCTWaiter().wait(for: [becomesSelected], timeout: 10), .completed,
+                "The chosen hub should be marked as the active one"
+            )
+            let selected = app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH 'hub-row-' AND isSelected == true")
+            )
+            XCTAssertEqual(
+                selected.allElementsBoundByIndex.map(\.identifier), [activeRow.identifier],
+                "Exactly one hub is active at a time"
+            )
         }
     }
 
     // MARK: - Scenario: Create hub button visible for admin
 
-    /// Verifies the "Create Hub" button is visible on the hub management screen.
+    /// An admin's Create Hub button is live: it opens the creation form.
     func testCreateHubButtonVisible() {
         given("I am authenticated as admin") {
             launchAsAdminWithAPI()
-        }
-        when("I navigate to Settings > Hubs") {
             navigateToHubs()
         }
-        then("the create hub button should be visible") {
-            let createButton = find("hubs-create-btn")
-            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create Hub button should be visible for admins")
-            XCTAssertTrue(createButton.isEnabled, "Create Hub button should be enabled")
+        when("I tap Create Hub") {
+            openCreateHubForm()
+        }
+        then("a hub cannot be created without a name") {
+            XCTAssertFalse(
+                app.buttons["hub-create-submit"].isEnabled,
+                "Create must stay off until the hub has a name"
+            )
         }
     }
 
     // MARK: - Scenario: Create hub form opens
 
-    /// Verifies tapping the create hub button opens the creation form.
+    /// The form has a name, a slug, Create and Cancel; Create waits for a name.
     func testCreateHubFormOpens() {
-        given("I am authenticated as admin") {
+        given("I am authenticated as admin on the Hubs screen") {
             launchAsAdminWithAPI()
-        }
-        when("I navigate to Hubs and tap Create Hub") {
             navigateToHubs()
-            let createButton = find("hubs-create-btn")
-            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create Hub button should be visible for admins")
-            createButton.tap()
         }
-        then("the hub creation form should appear with fields") {
-            XCTAssertTrue(find("hub-name-field").waitForExistence(timeout: 5), "Hub name field should be visible")
-            XCTAssertTrue(find("hub-slug-field").waitForExistence(timeout: 3), "Hub slug field should be visible")
-            XCTAssertTrue(
-                find("hub-create-submit").waitForExistence(timeout: 3),
-                "Hub create submit button should exist"
-            )
-            XCTAssertTrue(
-                find("hub-create-cancel").waitForExistence(timeout: 3),
-                "Hub create cancel button should exist"
-            )
+        when("I open the create form") {
+            openCreateHubForm()
+        }
+        then("it offers name and slug fields, and Create is available only with a name") {
+            XCTAssertTrue(find("hub-slug-field").exists, "The slug field should be on the form")
+            XCTAssertTrue(app.buttons["hub-create-cancel"].exists)
+            XCTAssertFalse(app.buttons["hub-create-submit"].isEnabled, "An unnamed hub cannot be created")
+            let name = find("hub-name-field")
+            name.tap()
+            name.typeText("Harbor Watch")
+            XCTAssertTrue(app.buttons["hub-create-submit"].isEnabled, "A named hub can be created")
+        }
+    }
+
+    // MARK: - Scenario: Slug follows the name
+
+    /// The slug is generated from the name as it is typed. Skipped while #2035 stands: the
+    /// slug handler marks the generated value as hand-edited, so it stops after one character.
+    /// Delete the `XCTSkipIf` line when it is fixed.
+    func testHubSlugFollowsName() throws {
+        try XCTSkipIf(true, "The slug stops following the name after the first character (#2035)")
+        launchAsAdminWithAPI()
+        navigateToHubs()
+        openCreateHubForm()
+        let name = find("hub-name-field")
+        name.tap()
+        name.typeText("Harbor Watch")
+        XCTAssertEqual(find("hub-slug-field").value as? String, "harbor-watch", "The slug should be generated from the name")
+    }
+
+    // MARK: - Scenario: Create a hub
+
+    /// Creating a hub puts it in the list.
+    func testCreateHubAddsHubToList() {
+        let slug = "created-\(UUID().uuidString.prefix(8).lowercased())"
+        given("I am authenticated as admin on the Hubs screen") {
+            launchAsAdminWithAPI()
+            navigateToHubs()
+        }
+        when("I create a hub") {
+            openCreateHubForm()
+            let name = find("hub-name-field")
+            name.tap()
+            name.typeText("Created hub")
+            // The slug is typed explicitly: the generated one stops after a character (#2035).
+            let slugField = find("hub-slug-field")
+            slugField.tap()
+            let existing = (slugField.value as? String) ?? ""
+            slugField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + slug)
+            app.buttons["hub-create-submit"].tap()
+        }
+        then("the form closes and the new hub is listed") {
+            XCTAssertTrue(find("hub-name-field").waitForNonExistence(timeout: 20), "A created hub closes the form")
+            let row = hubRow(idPrefix: "hub-row-\(slug)")
+            XCTAssertTrue(row.exists, "The new hub '\(slug)' should be in the list")
         }
     }
 
     // MARK: - Scenario: Cancel hub creation
 
-    /// Verifies cancelling the hub creation form returns to the hub list.
+    /// Cancelling the form creates nothing.
     func testCancelHubCreation() {
-        given("I am authenticated as admin") {
+        let slug = "cancelled-\(UUID().uuidString.prefix(8).lowercased())"
+        given("I am authenticated as admin with the create form open and a name typed") {
             launchAsAdminWithAPI()
-        }
-        when("I open the hub creation form and cancel") {
             navigateToHubs()
-            let createButton = find("hubs-create-btn")
-            if createButton.waitForExistence(timeout: 5) {
-                createButton.tap()
-            }
-
-            let cancelButton = find("hub-create-cancel")
-            if cancelButton.waitForExistence(timeout: 5) {
-                cancelButton.tap()
-            }
+            openCreateHubForm()
+            let name = find("hub-name-field")
+            name.tap()
+            name.typeText(slug)
         }
-        then("I should be back on the hub list") {
-            let found = anyElementExists([
-                "hubs-list",
-                "hubs-loading",
-                "hubs-empty",
-                "hubs-create-btn",
-            ])
-            XCTAssertTrue(found, "Hub list should be visible after cancelling creation")
+        when("I cancel") {
+            app.buttons["hub-create-cancel"].tap()
+        }
+        then("I am back on the hub list, and no such hub exists on the server") {
+            XCTAssertTrue(find("hub-name-field").waitForNonExistence(timeout: 10), "Cancel should close the form")
+            XCTAssertTrue(find("hubs-list").exists, "The hub list should be visible after cancelling")
+            let data = TestAdminAPI.send("GET", "/api/hubs", baseURL: testHubURL)
+            let text = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            XCTAssertFalse(text.contains(slug), "A cancelled hub must not reach the server")
         }
     }
 
     // MARK: - Scenario: Hub URL displayed in settings
 
-    /// Verifies the current hub URL is displayed in account settings.
-    ///
-    /// SettingsView only renders "settings-hub-url" `if let hubURL =
-    /// appState.authService.hubURL` — `launchAuthenticated()` never
-    /// configures a hub URL, so the row is guaranteed absent here.
-    /// `APIConnectedUITests.testSettingsShowsHubURL` covers the
-    /// hub-configured case against a real connection.
-    func testHubUrlDisplayedInSettings() throws {
-        given("I am authenticated") {
-            launchAuthenticated()
+    /// Settings shows the hub the app is connected to.
+    func testHubUrlDisplayedInSettings() {
+        given("I am connected to the test hub") {
+            launchWithAPI()
         }
         when("I navigate to Settings") {
             navigateToSettings()
         }
-        try then("I should see the hub URL") {
-            throw XCTSkip("This test class launches with no hub configured; settings-hub-url never renders")
+        then("I should see the hub URL I am connected to") {
+            let hubUrl = find("settings-hub-url")
+            XCTAssertTrue(hubUrl.waitForExistence(timeout: 10), "Hub URL should be displayed in settings")
+            XCTAssertEqual(hubUrl.label, testHubURL, "Settings should show the hub the app is connected to")
         }
     }
 }

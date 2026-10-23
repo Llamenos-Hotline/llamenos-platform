@@ -1,32 +1,26 @@
 import Foundation
 
 // MARK: - Volunteer suggestion model
+// Suggestions decode to generated `SuggestAssigneesResponse` whose elements
+// are generated `Suggestion` (packages/protocol/schemas/records.ts).
 
-struct VolunteerSuggestion: Decodable, Identifiable, Sendable {
-    var id: String { pubkey }
-    let pubkey: String
-    let score: Int
-    let workloadScore: Int
-    let languageScore: Int
-    let specializationScore: Int
-    let availabilityScore: Int
-    let reasons: [String]
-    let activeCaseCount: Int
-    let maxCases: Int
-    let matchedSpecializations: [String]
-}
-
-struct AppSuggestAssigneesResponse: Decodable, Sendable {
-    let suggestions: [VolunteerSuggestion]
+extension Suggestion: Identifiable {
+    public var id: String { pubkey }
 }
 
 // MARK: - AssignmentViewModel
 
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class AssignmentViewModel {
     private let apiService: APIService
 
-    var suggestions: [VolunteerSuggestion] = []
+    var suggestions: [Suggestion] = []
     var isLoading = false
     var isAssigning = false
     var errorMessage: String?
@@ -44,7 +38,7 @@ final class AssignmentViewModel {
             if let lang = language {
                 path += "?language=\(lang)"
             }
-            let response: AppSuggestAssigneesResponse = try await apiService.request(method: "GET", path: path)
+            let response: SuggestAssigneesResponse = try await apiService.request(method: "GET", path: path)
             suggestions = response.suggestions
         } catch {
             errorMessage = error.localizedDescription
@@ -57,7 +51,7 @@ final class AssignmentViewModel {
         errorMessage = nil
         do {
             let body = ["pubkeys": [pubkey]]
-            let _: CaseRecord = try await apiService.request(
+            let _: SharedRecordListResponseRecord = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/records/\(recordId)/assign"),
                 body: body

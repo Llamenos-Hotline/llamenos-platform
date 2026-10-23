@@ -172,7 +172,10 @@ export const vonageProvider: ProviderCapabilityImpl = {
       ;(appBody.capabilities as Record<string, unknown>).messages = {
         webhooks: {
           inbound_url: { address: urls.sms, http_method: 'POST' },
-          status_url: { address: urls.sms.replace('/webhook', '/status'), http_method: 'POST' },
+          // Delivery-status updates arrive on the same route as inbound messages
+          // (messaging/router.ts tries parseStatusWebhook first). There is no
+          // `/status` sibling — the old replace() registered a 404 (#2068).
+          status_url: { address: urls.sms, http_method: 'POST' },
         },
       }
     }

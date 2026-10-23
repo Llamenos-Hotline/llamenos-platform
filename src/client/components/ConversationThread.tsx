@@ -125,7 +125,10 @@ export function ConversationThread({ conversationId: _conversationId, messages, 
                     : 'bg-primary text-primary-foreground rounded-br-md'
                 }`}
               >
-                <p className="text-sm whitespace-pre-wrap break-words">
+                <p
+                  data-testid={isEncrypted ? 'message-encrypted' : 'message-plaintext'}
+                  className="text-sm whitespace-pre-wrap break-words"
+                >
                   {isEncrypted ? (
                     <span className="italic text-muted-foreground">{t('conversations.encrypted', '[Encrypted]')}</span>
                   ) : (

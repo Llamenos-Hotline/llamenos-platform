@@ -56,7 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 import org.llamenos.hotline.model.CustomFieldDef
-import org.llamenos.protocol.Context
+import org.llamenos.protocol.SharedContext
 import org.llamenos.hotline.model.CustomFieldDefinitionType
 
 /**
@@ -410,8 +410,8 @@ private fun CustomFieldDialog(
                     val slug = label.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
                     val fieldType = CustomFieldDefinitionType.entries.find { it.value == type }
                         ?: CustomFieldDefinitionType.Text
-                    val fieldContext = Context.entries.find { it.value == context }
-                        ?: Context.All
+                    val fieldContext = SharedContext.entries.find { it.value == context }
+                        ?: SharedContext.All
                     val field = CustomFieldDef(
                         id = existingField?.id ?: slug,
                         name = existingField?.name ?: slug,

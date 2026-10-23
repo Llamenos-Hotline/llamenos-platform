@@ -9,12 +9,14 @@ import okhttp3.CertificatePinner
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ClearPushTokenRequest
 import org.llamenos.hotline.model.HubsListResponse
+import org.llamenos.hotline.model.MemberDirectory
 import org.llamenos.hotline.model.OkResponse
 import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.hotline.model.RecoveryContributeRequest
@@ -217,13 +219,10 @@ class ApiService @Inject constructor(
             throw e
         }
 
-        if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: response.message
-            throw ApiException(response.code, errorBody)
+        val responseBody = response.use {
+            throwUnlessSuccessful(it)
+            it.body.string()
         }
-
-        val responseBody = response.body?.string()
-            ?: throw ApiException(response.code, "Empty response body")
 
         json.decodeFromString<T>(responseBody)
     }
@@ -277,10 +276,7 @@ class ApiService @Inject constructor(
             throw e
         }
 
-        if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: response.message
-            throw ApiException(response.code, errorBody)
-        }
+        response.use { throwUnlessSuccessful(it) }
     }
 
     /**
@@ -319,9 +315,38 @@ class ApiService @Inject constructor(
 
         val response = client.newCall(request).execute()
 
+        response.use { throwUnlessSuccessful(it) }
+    }
+
+    /**
+     * Execute a request whose response is binary — call-recording audio — and return the
+     * body bytes. Signed exactly like [request]: the [AuthInterceptor] sits on [client], which
+     * is why audio is fetched here rather than handed to a media player as a bare URL.
+     */
+    suspend fun requestBytes(
+        method: String,
+        path: String,
+    ): ByteArray = withContext(ioDispatcher) {
+        val request = Request.Builder()
+            .url("${getBaseUrl()}$path")
+            .method(method.uppercase(), null)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            throwUnlessSuccessful(response)
+            response.body.bytes()
+        }
+    }
+
+    /**
+     * Throw [ApiException] for a non-2xx [response]. The caller closes it — every helper here
+     * wraps the response in `use`: a success response whose body is never read still holds its
+     * connection until closed, and before this each no-content call leaked one.
+     */
+    @PublishedApi
+    internal fun throwUnlessSuccessful(response: Response) {
         if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: response.message
-            throw ApiException(response.code, errorBody)
+            throw ApiException(response.code, response.body.string())
         }
     }
 
@@ -388,6 +413,21 @@ class ApiService @Inject constructor(
      * every active hub). This is the member-hub list for multi-hub routing.
      */
     suspend fun getHubs(): HubsListResponse = request("GET", "/api/hubs")
+
+    /**
+     * The member directory of the hub being browsed (GET /api/hubs/{hubId}/identity/members).
+     *
+     * Hub-scoped on purpose: the unscoped route needs the global `users:read`, which a hub admin
+     * does not hold, and it resolves admin-vs-volunteer globally rather than in this hub's
+     * context. Throws [IllegalStateException] when no hub is active — it never falls back to
+     * the unscoped path, which would turn a missing hub into a 403.
+     */
+    suspend fun getMemberDirectory(): MemberDirectory {
+        val hubId = checkNotNull(activeHubIdOrNull()) {
+            "The member directory is hub-scoped, but no hub is active"
+        }
+        return request("GET", "/api/hubs/$hubId/identity/members")
+    }
 
     // ---- Telephony API ----
 

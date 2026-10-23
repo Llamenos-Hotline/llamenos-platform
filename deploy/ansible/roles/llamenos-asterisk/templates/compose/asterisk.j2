@@ -2,7 +2,18 @@ name: llamenos-asterisk
 
 services:
   asterisk:
-    image: {{ llamenos_asterisk_image | default('andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6') }} # 22.x
+    # Built on the host from Dockerfile.asterisk (placed beside this file by the
+    # role): the digest-pinned, vetted upstream PBX image plus the DNS resolver
+    # module it ships without (#1690). The upstream pin and its #1687 floor live
+    # in that Dockerfile and nowhere else — this is the same file
+    # deploy/docker/docker-compose.yml builds. `llamenos-asterisk:local` exists
+    # in no registry, so pull_policy: build keeps `docker compose pull` from
+    # failing "pull access denied" on it (#2030).
+    build:
+      context: .
+      dockerfile: Dockerfile.asterisk
+    image: llamenos-asterisk:local
+    pull_policy: build
     restart: unless-stopped
     # Root for the entrypoint ONLY, so it can hand the fresh astdb volume to
     # the asterisk user — Docker creates a mount point the image lacks as root.

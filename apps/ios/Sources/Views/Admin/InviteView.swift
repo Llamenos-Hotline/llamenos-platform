@@ -108,6 +108,23 @@ struct InviteView: View {
         NavigationStack {
             Form {
                 Section {
+                    TextField(
+                        NSLocalizedString("invite_name_label", comment: "Volunteer name"),
+                        text: $viewModel.newInviteName
+                    )
+                    .textContentType(.name)
+                    .accessibilityIdentifier("invite-name-input")
+
+                    TextField(
+                        NSLocalizedString("invite_phone_label", comment: "Phone number"),
+                        text: $viewModel.newInvitePhone
+                    )
+                    .textContentType(.telephoneNumber)
+                    .keyboardType(.phonePad)
+                    .accessibilityIdentifier("invite-phone-input")
+                }
+
+                Section {
                     Picker(
                         NSLocalizedString("admin_invite_role", comment: "Role"),
                         selection: $viewModel.newInviteRole
@@ -151,6 +168,7 @@ struct InviteView: View {
                         Task { await viewModel.createInvite() }
                     }
                     .fontWeight(.semibold)
+                    .disabled(viewModel.newInviteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("submit-create-invite")
                 }
             }
@@ -202,7 +220,7 @@ struct InviteView: View {
 
 /// A single invite row showing the code, role, status, and sharing option.
 struct InviteRowView: View {
-    let invite: AppInvite
+    let invite: Invite
 
     @State private var showCopied: Bool = false
 

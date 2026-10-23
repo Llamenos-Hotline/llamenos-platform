@@ -400,6 +400,20 @@
       "when": 1791851692587,
       "tag": "0056_secure_signal_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1792743467257,
+      "tag": "0057_entity_type_notify_contacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1792759689495,
+      "tag": "0058_puk_envelopes_sigchain_devices",
+      "breakpoints": true
     }
   ]
 }

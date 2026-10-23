@@ -313,7 +313,9 @@
     "noCategoriesMessage": "报告分类有助于对事件进行归类。",
     "noInvitesMessage": "生成邀请码以添加新的志愿者。",
     "noSearchResults": "没有符合搜索条件的成员。",
-    "noUsersMessage": "还没有成员加入。"
+    "noUsersMessage": "还没有成员加入。",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -2774,6 +2776,7 @@
     "errorTitle": "邀请错误",
     "expired": "此邀请已过期",
     "generatingKeys": "正在生成您的密钥...",
+    "identityInitFailed": "无法设置您的加密密钥。请重试。",
     "getStarted": "开始",
     "goToLogin": "前往登录",
     "invalidCode": "邀请码无效",
@@ -3517,7 +3520,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4279,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

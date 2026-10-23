@@ -152,6 +152,27 @@ function defNameFromPath(propertyName: string, isArrayItem: boolean): string {
 }
 
 /**
+ * Top-level schemas that an identical inline occurrence must reference BY NAME.
+ *
+ * quicktype names an inline object after the property holding it (`messages`
+ * → `Message`). When two schemas hold differently-shaped objects under the
+ * same property name, quicktype prefixes BOTH with their parent's name — so
+ * adding a schema can silently rename an existing generated type that mobile
+ * code imports (`Message` → `MessageListResponseMessage`). Listing the item
+ * schema here makes the new parent reference it by its own name instead, and
+ * leaves every existing name alone.
+ *
+ * Opt-in, not a general rule: applied to every registered schema it renames
+ * ~60 existing Swift/Kotlin types (measured 2026-10-22), which is a bulk
+ * mobile rename, not a codegen tweak.
+ */
+const REFERENCED_BY_NAME = new Set([
+  // #2046 — assignee re-wrap: `messages` / `envelopes` items
+  'AssigneeEnvelopeGap',
+  'AssigneeEnvelopeEntry',
+])
+
+/**
  * Deduplicate identical anonymous inline objects across all schemas.
  *
  * Walks each schema tree collecting inline `{ type: "object", properties: ... }` and
@@ -312,6 +333,35 @@ function deduplicateAnonymousSchemas(
   }
 
   console.log(`  Deduplicated ${extractedSchemas.length} anonymous sub-schemas into top-level types`)
+
+  // Phase 3: an inline object that is exactly an opted-in top-level schema
+  // (REFERENCED_BY_NAME) is replaced by a $ref to it, so quicktype emits that
+  // schema's name instead of inventing one from the property name.
+  const topLevelByCanonical = new Map<string, string>()
+  for (let i = 0; i < schemas.length; i++) {
+    if (!REFERENCED_BY_NAME.has(schemas[i].name)) continue
+    const { $schema: _dialect, ...body } = JSON.parse(schemas[i].schema) as Record<string, unknown>
+    topLevelByCanonical.set(canonicalize(body), schemas[i].name)
+  }
+  let referenced = 0
+  for (const [canon, refs] of inlinesByHash) {
+    const target = topLevelByCanonical.get(canon)
+    if (!target) continue
+    for (const ref of refs) {
+      if (schemas[ref.schemaIdx].name === target) continue
+      let parent: Record<string, unknown> = parsed[ref.schemaIdx]
+      let valid = true
+      for (let i = 0; i < ref.path.length - 1; i++) {
+        const next = parent[ref.path[i]]
+        if (!next || typeof next !== 'object') { valid = false; break }
+        parent = next as Record<string, unknown>
+      }
+      if (!valid) continue
+      parent[ref.path[ref.path.length - 1]] = { '$ref': target }
+      referenced++
+    }
+  }
+  console.log(`  Referenced ${referenced} inline sub-schemas to opted-in top-level types`)
 
   const updatedSchemas = parsed.map((p, i) => ({
     name: schemas[i].name,
@@ -1086,6 +1136,42 @@ function reorderKotlinConstructorParams(output: string): string {
 }
 
 /**
+ * UniFFI Swift bindings for packages/crypto. The iOS target compiles these into the SAME
+ * module as the generated protocol Types.swift, so a protocol type that shares a name with
+ * a UniFFI type is an "invalid redeclaration" / "ambiguous for type lookup" build error
+ * (PR #1088: protocol `SigchainLink` vs UniFFI `SigchainLink`). Kotlin is unaffected: the
+ * UniFFI Kotlin bindings live in `org.llamenos.core`, protocol types in `org.llamenos.protocol`.
+ */
+const UNIFFI_SWIFT_BINDINGS = resolve(__dirname, '../../crypto/bindings/swift/LlamenosCore.swift')
+
+/** Top-level nominal type names declared in a Swift source file. */
+function swiftTopLevelTypeNames(source: string): Set<string> {
+  const names = new Set<string>()
+  const decl = /^(?:public |internal |fileprivate |private )?(?:final )?(?:struct|enum|class|protocol|typealias|actor) ([A-Za-z_][A-Za-z0-9_]*)/gm
+  for (const match of source.matchAll(decl)) names.add(match[1])
+  return names
+}
+
+/**
+ * Fail codegen when a generated Swift protocol type collides with a UniFFI type. Fix a
+ * collision at the schema (rename the export so every platform gets the same distinct name),
+ * not with a Swift-only rename.
+ */
+function assertNoUniffiSwiftCollisions(swiftContent: string): void {
+  if (!existsSync(UNIFFI_SWIFT_BINDINGS)) {
+    console.error(`UniFFI Swift bindings not found at ${UNIFFI_SWIFT_BINDINGS} — cannot check for type collisions.`)
+    process.exit(1)
+  }
+  const uniffiNames = swiftTopLevelTypeNames(readFileSync(UNIFFI_SWIFT_BINDINGS, 'utf-8'))
+  const collisions = [...swiftTopLevelTypeNames(swiftContent)].filter((name) => uniffiNames.has(name)).sort()
+  if (collisions.length > 0) {
+    console.error(`SWIFT TYPE COLLISION: generated protocol types share a name with UniFFI types in LlamenosCore.swift: ${collisions.join(', ')}`)
+    console.error('Both compile into the iOS module, so the iOS build fails. Rename the Zod schema export in packages/protocol/schemas/.')
+    process.exit(1)
+  }
+}
+
+/**
  * In normal mode: write content to outputPath.
  * In --check mode: compare content to existing file; exit 1 if different.
  */
@@ -1156,6 +1242,7 @@ async function main() {
   let swiftOutput = stripSwiftConvenienceExtensions(swiftLines)
   swiftOutput = fixSwiftIntegerTypes(swiftOutput, integerPerType, integerAlwaysInt)
   const swiftContent = header + swiftOutput + '\n'
+  assertNoUniffiSwiftCollisions(swiftContent)
 
   // Post-process Kotlin: inject defaults, fix integer types.
   // Package name is now handled by quicktype's package renderer option.

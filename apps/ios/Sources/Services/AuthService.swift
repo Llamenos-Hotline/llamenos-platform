@@ -47,6 +47,12 @@ enum AuthError: LocalizedError {
 /// Device keys (Ed25519 signing + X25519 encryption) are generated once per device.
 /// The PIN encrypts the device key blob which is stored in the Keychain.
 /// Secrets are held exclusively in Rust memory and never exposed to Swift.
+///
+/// `@MainActor` (#1920 audit): every mutator is synchronous and every caller —
+/// `AppState`, `AuthViewModel`, `PINViewModel`, the preferences view — already runs on
+/// main, so its state was main-confined by convention only. Isolation lets the compiler
+/// hold that line.
+@MainActor
 @Observable
 final class AuthService {
     let cryptoService: CryptoService

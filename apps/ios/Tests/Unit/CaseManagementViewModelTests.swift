@@ -101,12 +101,11 @@ final class CaseManagementViewModelTests: XCTestCase {
 
     private static let enabled = #"{"enabled":true}"#
     private static let disabled = #"{"enabled":false}"#
-    private static let oneEntityType = """
-    {"entityTypes":[{"id":"et-1","name":"case","label":"Case","labelPlural":"Cases","fields":[],\
-    "statuses":[{"label":"Open","order":0,"value":"open"}],"defaultStatus":"open"}]}
-    """
-    private static let noEntityTypes = #"{"entityTypes":[]}"#
-    private static let noRecords = #"{"records":[],"total":0}"#
+    private static let oneEntityType = ProtocolFixtures.entityTypeListJSON([
+        ProtocolFixtures.entityTypeJSON(id: "et-1", name: "case", category: "case"),
+    ])
+    private static let noEntityTypes = ProtocolFixtures.entityTypeListJSON([])
+    private static let noRecords = ProtocolFixtures.emptyRecordList
 
     private func makeViewModel() throws -> CaseManagementViewModel {
         let configuration = URLSessionConfiguration.ephemeral

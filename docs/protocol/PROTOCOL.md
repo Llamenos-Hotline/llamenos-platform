@@ -646,6 +646,111 @@ When the server receives an inbound message via a messaging webhook (SMS/WhatsAp
 3. Server wraps `message_key` for each authorized reader (assigned volunteer + all admins) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
 4. Plaintext is discarded from memory. The server cannot read stored messages after this point.
 
+### 2.4.1 Assignee Re-wrap (Client-Mediated)
+
+A message's `message_key` is wrapped only for the readers known when it was
+written (§2.4), and the server discards it. So when a conversation is claimed
+(`POST /conversations/:id/claim`) or reassigned (`PATCH /conversations/:id`),
+the messages already in it are sealed to the admins alone. The server holds no
+secret that opens an envelope, by design, so it cannot add the new assignee.
+Sealing to a wider set up front instead — every eligible volunteer, or the hub
+key — would widen who can read caller content, so the protocol does not do it.
+
+The re-wrap therefore runs on a client that can already open the messages: an
+admin client whose device holds an envelope on them (in practice the holder of
+the admin decryption key). Plaintext and `message_key` never reach the server on
+this path. The server only ever **appends** envelopes, so no existing reader
+loses access, and the ciphertext is not touched.
+
+#### Exchange
+
+```
+Trigger (on the re-wrapping client):
+  - a `conversation:assigned` event from ANY member hub (§3.2) — never gated on
+    the active hub; and
+  - every relay (re)connect: sweep the hub's active conversations
+    (GET /conversations?status=active), so an assignment made while no admin
+    client was online is closed by the first one to come online.
+
+Loop, per conversation:
+  1. gaps = GET /hubs/:hubId/conversations/:id/assignee-envelopes
+       → { assignedTo, recipients: x25519_hex[],
+           messages: [{ id, readerEnvelopes: RecipientEnvelope[],
+                        missingRecipients: x25519_hex[] }] }
+     At most 200 messages, oldest first. Messages with NO envelopes are never
+     listed: nobody holds a key that could re-wrap them.
+     If gaps.messages is empty → done.
+
+  2. Refuse an incoherent answer: assignedTo must be set, and every
+     missingRecipients key must appear in recipients and be 64 hex chars.
+
+  3. For each listed message:
+       own = readerEnvelopes.find(e => e.pubkey is this device's key)
+       if none → skip (this device is not a reader; another reader must do it)
+       message_key = HPKE.Open(own, info = UTF-8("llamenos:message"), aad = empty)
+       for each pk in missingRecipients:
+         sealed = HPKE.Seal(pk, message_key, info = UTF-8("llamenos:message"), aad = empty)
+         entry  = { messageId: id,
+                    envelope: { pubkey: pk, enc: hex(sealed[0..32]), ct: hex(sealed[32..]) } }
+     The envelope is byte-for-byte the §2.4 stored-record format; a reader
+     cannot tell a re-wrapped envelope from one sealed at write time.
+
+  4. POST /hubs/:hubId/conversations/:id/assignee-envelopes
+       { envelopes: entry[] }        // 1..1000 per request
+       → { added: number }
+     All-or-nothing. 400 if any envelope names a key that is not a registered
+     X25519 device key of the CURRENT assignee; 404 if a message is not in the
+     conversation; 409 if the conversation has no assignee or a message has no
+     readers. An envelope for a recipient that already has one on that message
+     is skipped — first write wins, because the server cannot tell a correct
+     re-wrap from a wrong one.
+
+  5. If no entry was produced, or added == 0 (another re-wrapper got there
+     first), stop. Otherwise go to 1.
+```
+
+Both routes require `conversations:read-all`; the POST also requires
+`conversations:update` (adding a reader is the same class of authority as
+reassigning). A conversation outside the caller's hub answers 404.
+
+When `added > 0` the server publishes
+`{"type": "conversation:envelopes-added", "conversationId", "assignedTo", "added"}`
+on `KIND_CONVERSATION_ASSIGNED` to the conversation's hub, so the assignee's
+open thread re-reads its messages. It carries ids and a count, never key
+material.
+
+Request/response schemas: `assigneeEnvelopeGapsResponseSchema`,
+`addAssigneeEnvelopesBodySchema` and `addAssigneeEnvelopesResponseSchema` in
+`packages/protocol/schemas/conversations.ts` (codegen'd to Swift and Kotlin as
+`AssigneeEnvelopeGapsResponse`, `AddAssigneeEnvelopesBody`,
+`AddAssigneeEnvelopesResponse`). Desktop implementation:
+`src/client/lib/assignee-rewrap.ts` + `platform.ts` `rewrapMessageKey`.
+
+#### Availability (known dependency, not a defect)
+
+If no admin client is online, the gap stays open until one is: the assignee
+sees the pre-claim messages as `[Encrypted]` until then. This is inherent to a
+zero-knowledge re-wrap: the only parties able to produce the envelope are
+clients that can already read the message. Messages that arrive *after* the
+claim are sealed to the assignee at write time and are unaffected. Platforms
+without a re-wrapper implementation (iOS and Android at the time of writing)
+do not close the gap, so a hub whose admins use only those platforms gets no
+re-wrap.
+
+#### Trust
+
+The keys sealed to come from the server's device registry (`devices.x25519_pubkey`
+of the assignee). That is the same registry every message write path already
+trusts to name a user's readers — the server resolves recipients for inbound
+messages (§2.4 server-side encryption), and clients take the admin recipient
+from server config. A malicious server could list a key of its own as the
+assignee's device and receive content keys for the messages this exchange
+covers. The client refuses answers that are internally inconsistent (step 2),
+but it cannot yet verify a device key independently; that requires the user
+sigchain (§2.11, "Device Authorization (Sigchain)") to be checked before sealing, and when
+it is wired in, the re-wrapper MUST verify each recipient against the
+assignee's sigchain.
+
 ### 2.5 Call Record Metadata Encryption
 
 Active calls remain as plaintext (routing necessity). When a call completes, sensitive metadata is encrypted into an envelope and stored permanently.
@@ -981,6 +1086,53 @@ PIN Encryption (Phase 6):
 
 New devices are authorized via an append-only hash-chained sigchain. Each sigchain entry is Ed25519-signed by an existing authorized device and contains the new device's Ed25519 + X25519 public keys. The PUK (Per-User Key) is wrapped for each authorized device via `LABEL_PUK_WRAP_TO_DEVICE`.
 
+Link hashing, signing and verification are implemented once in `packages/crypto` (`sigchain::create_sigchain_link`, `sigchain::verify_sigchain`):
+
+```
+entryHash = hex(SHA-256(compact JSON of
+  { payload, prevHash, seq, signerDeviceId, signerPubkey, timestamp }
+  with object keys sorted by UTF-8 bytes at every level;
+  prevHash = null for the first link)))
+signature = hex(Ed25519.sign(signing_key, bytes(entryHash)))
+```
+
+`verify_sigchain` requires the first link to be `seq = 1`, `prevHash = null`, `payload.type = "user_init"` and self-signed; its signer is the first authorized device. Each later link must be `seq = prev + 1`, chain to the previous `entryHash` and be signed by a device in the authorized set; `device_add` / `device_remove` payloads add / remove `payload.devicePubkey`. Pinned test vectors: `packages/crypto/tests/identity_init.rs`.
+
+Wire payloads (Zod: `packages/protocol/schemas/sigchain.ts`):
+
+| `linkType` | `payload.type` | Payload fields |
+|------------|----------------|----------------|
+| `genesis` | `user_init` | `deviceId`, `devicePubkey` (Ed25519 hex), `deviceEncryptionPubkey` (X25519 hex) |
+| `device_add` | `device_add` | `deviceId`, `devicePubkey`, `deviceEncryptionPubkey` |
+| `device_remove` | `device_remove` | `deviceId`, `devicePubkey` |
+| `puk_epoch` | `puk_epoch` | `generation` (≥ 1), `signPubkey` (Ed25519 hex, `LABEL_PUK_SIGN`), `dhPubkey` (X25519 hex, `LABEL_PUK_DH`) |
+| `key_rotate` | `key_rotate` | — |
+
+#### Identity Initialisation
+
+Every user is created with the same sigchain and PUK state, produced by the device that creates the user (invite onboarding, or admin bootstrap) once the user exists server-side and before the client commits its logged-in session (requests are signed with the device key):
+
+```
+1. POST /api/users/:self/sigchain   seq 1, linkType "genesis"
+     payload { type: "user_init", deviceId, devicePubkey, deviceEncryptionPubkey }
+     signed by the new device (devicePubkey = signerPubkey = the user's pubkey)
+
+2. (pukState, seed, envelope) = puk::create_initial_puk(deviceEncryptionPubkey, deviceId)
+     seed: random 32 bytes, kept in CryptoState — never exposed to the UI layer
+     envelope: HPKE v3 seal of seed, label LABEL_PUK_WRAP_TO_DEVICE,
+               AAD = UTF-8("<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>")
+   POST /api/puk/envelopes { envelopes: [{ deviceId, generation: 1, envelope }] }
+
+3. POST /api/users/:self/sigchain   seq 2, linkType "puk_epoch"
+     payload { type: "puk_epoch", generation: 1, signPubkey, dhPubkey }
+
+4. GET /api/users/:self/sigchain → verify_sigchain → must authorise the device
+```
+
+The envelope is stored before the chain names the PUK, so a chain never binds a PUK whose seed was lost. Each step is keyed off the server's current chain, so a retry after a partial failure resumes where it stopped. Until step 4 succeeds the client does not proceed. The server accepts the identity-initialisation routes from a session that has not yet registered a passkey (they are self-only).
+
+PUK envelopes are addressed by the **sigchain** `deviceId` (the ID the envelope's AAD binds), not by the push-registry device ID, and the server rejects any address the user's sigchain does not currently authorise.
+
 #### Relationship to WebSocket Identity
 
 WebSocket events are signed by the server's derived event keypair. Clients verify the server signature on all WebSocket events. Device Ed25519 keys handle application-level auth and sigchain. Device X25519 keys handle HPKE encryption. These are NOT derived from the server event key.
@@ -1182,6 +1334,7 @@ The plaintext content is a JSON string with a `type` field identifying the event
 {"type": "message:new", "conversationId": "conv123", "channelType": "sms"}
 {"type": "message:status", "conversationId": "conv123", "messageId": "msg456", "status": "delivered"}
 {"type": "conversation:assigned", "conversationId": "conv123", "assignedTo": "pubkey_hex"}
+{"type": "conversation:envelopes-added", "conversationId": "conv123", "assignedTo": "pubkey_hex", "added": 3}
 {"type": "shift:update", "shiftId": "shift123"}
 {"type": "settings:changed", "section": "spam"}
 {"type": "report:new", "conversationId": "conv123", "category": "harassment"}
@@ -1454,7 +1607,31 @@ Response: { "ok": true }
 
 All user endpoints require `users:read` baseline permission.
 
-> **Canonical Path:** `/api/users/` is the canonical path for user management. `/api/volunteers/` is maintained as an alias for backward compatibility and resolves to the same handlers.
+> **Canonical Path:** `/api/users/` is the canonical path for user management (create, update, delete, per-user reads). `/api/volunteers/` is maintained as an alias for backward compatibility and resolves to the same handlers.
+>
+> **Member directory:** `GET /api/identity/members` is the canonical surface for *listing* members on every client. `GET /api/users` returns raw role ids and is not for client directories.
+
+```
+GET /api/identity/members
+GET /api/hubs/:hubId/identity/members
+Permission: users:read (instance directory: global; hub directory: held in that hub)
+Response: { "members": MemberDirectoryEntry[] }
+
+MemberDirectoryEntry = {
+  "id": string,                        // copy of pubkey
+  "pubkey": hex,
+  "displayName": string | null,
+  "role": "admin" | "volunteer",       // resolved server-side, see below
+  "status": "active" | "inactive",
+  "createdAt": ISO-8601
+}
+```
+
+The entry carries no `phone`, no `roles`/role ids or role names and no `hubRoles`. `role` is `admin` iff the
+member's roles grant `settings:manage`; inside a hub only roles carrying authority *in that hub* count, so a hub
+never learns that one of its members administers another hub. Clients MUST NOT derive role from anything else and
+MUST NOT re-introduce a role id or hub membership into this shape. Schema: `memberDirectoryResponseSchema`
+(`packages/protocol/schemas/users.ts`).
 
 ```
 GET /api/users
@@ -1664,6 +1841,16 @@ POST /api/conversations/:id/claim
 Permission: conversations:claim + channel-specific (e.g., conversations:claim-sms)
 Response: Conversation
 Error: 403 "No permission to claim this channel type"
+
+GET /api/conversations/:id/assignee-envelopes
+Permission: conversations:read-all
+Response: AssigneeEnvelopeGapsResponse   // ≤ 200 messages, oldest first — see §2.4.1
+
+POST /api/conversations/:id/assignee-envelopes
+Permission: conversations:read-all + conversations:update
+Body: { "envelopes": [{ "messageId": string, "envelope": RecipientEnvelope }] }  // 1..1000
+Response: { "added": number }
+Error: 400 recipient not a device key of the current assignee · 404 message not in conversation · 409 no assignee / message has no readers
 ```
 
 Hub-scoped: `/api/hubs/:hubId/conversations/*`
@@ -2176,7 +2363,7 @@ Auth: None (token is the room's access control)
 Response, 200, one of:
   { "status": "waiting", "ephemeralPubkey": hex64 }
   { "status": "ready",   "ephemeralPubkey": hex64,
-    "encryptedNsec": string,          // §6.7 in-force payload, hex120
+    "encryptedNsec": string,          // §6.7.2 bundle payload, hex186
     "primaryPubkey": hex64 }          // primary Ed25519 signing pubkey
   { "status": "expired" }             // status only; the row is deleted
 Room not found: 404.  Wrong token: 403.
@@ -2187,7 +2374,7 @@ POST /api/provision/rooms/:id/payload
 Auth: Required (primary device must be authenticated)
 Body: {
   "token": string,
-  "encryptedNsec": string,   // hex(nonce||ct||tag), §6.7 — hex120 in force
+  "encryptedNsec": string,   // hex(nonce||ct||tag), §6.7.2 — hex186
   "primaryPubkey": string    // primary Ed25519 signing pubkey, hex64
 }
 Response: { "ok": true }
@@ -2204,8 +2391,9 @@ The server relays ciphertext only: it cannot decrypt the payload or compute the 
 and it stores `encryptedNsec` as an opaque column.
 
 > **Not implemented.** §6.3/§6.8 specify a `POST /api/provision/rooms/:id/claim` step and
-> a `primaryEncryptionPubkey` field on the GET response. Neither exists in the server, the
-> database schema, or any client — see §6.14. Do not build against them until they land.
+> a `primaryClaim` field on the GET response — the primary's signed, per-room ephemeral
+> X25519 key (§6.3.1). Neither exists in the server, the database schema, or any client —
+> see §6.14. Do not build against them until they land.
 
 ### 4.20 Telephony Webhooks
 
@@ -2736,13 +2924,17 @@ Per-device key authorization sigchain (Phase 6).
 ```
 GET  /api/users/:targetPubkey/sigchain
 Auth: Required (self or admin)
-Response: { "links": SigchainLink[] }
+Response: { "links": SigchainLinkRecord[], "integrityBreak": { "seqNo": number, "reason": string } | null }
+  integrityBreak is non-null when the stored chain forks or has a gap; readers MUST check it before trusting links
 
 POST /api/users/:targetPubkey/sigchain
 Auth: Required (self only)
-Body: { "seqNo": number, "linkType": "genesis"|"device_add"|"device_remove"|"key_rotate"|"puk_epoch", "payload": object, "signature": hex128, "prevHash": hex64|null, "hash": hex64 }
-Response: SigchainLink (201)
-Error: 409 on hash-chain continuity violation, 400 on non-canonical payload
+Body: { "seqNo": number (≥ 1), "linkType": "genesis"|"device_add"|"device_remove"|"key_rotate"|"puk_epoch", "payload": object, "signature": hex128, "prevHash": hex64|null, "hash": hex64, "signerDeviceId": string, "signerPubkey": hex64, "timestamp": ISO8601 }
+Response: SigchainLinkRecord (201) — includes "timestamp" (part of the hashed form)
+Error: 400 on invalid link semantics (genesis only at seq 1, payload.type must match linkType,
+       payload shape per §2.11, signerPubkey must be the user's identity key, genesis must name
+       its signing device), non-canonical payload numbers, or entry-hash mismatch
+Error: 409 on hash-chain continuity violation (seqNo / prevHash, incl. a concurrent append)
 ```
 
 Canonical rules (binding — the crate verifier in `packages/crypto` is the
@@ -2770,8 +2962,11 @@ PUK envelope distribution and retrieval (Phase 6).
 ```
 POST /api/puk/envelopes
 Auth: Required
-Body: { "envelopes": [{ "deviceId": string, "generation": number, "envelope": string }] }
+Body: { "envelopes": [{ "deviceId": string, "generation": number (≥ 1), "envelope": HpkeEnvelope }] }
+  deviceId: sigchain device ID (§2.11); must be authorised by the caller's sigchain
+  envelope: { "v": 3, "labelId": number, "enc": base64url, "ct": base64url }
 Response: { "distributed": number, "envelopes": PukEnvelope[] } (201)
+Error: 400 if any envelope is addressed to a device the sigchain does not authorise (nothing stored)
 
 GET  /api/puk/envelopes/:deviceId
 Auth: Required (own device only)
@@ -4436,23 +4631,23 @@ This section also records the three divergent implementations that #1027 replace
 | iOS Nostr-relay WebSocket transport (`kind 20001`) | **Dropped** — the server never accepted client-published events on the WebSocket at all, and 20001 is the typing-indicator kind in `packages/shared/event-kinds.ts`; the server implements only the HTTP room API |
 | Android mock flow (ECDH against `SecureRandom`, `delay(2000)` success) | **Dropped** — never a protocol; the §6.10 success-reporting rule exists to make this class of defect impossible |
 | Desktop HTTP-room transport, new device displays QR | **Design kept** — matches Signal's role assignment and the deployed server API; the screens themselves were removed |
-| Two-seed key-bundle payload (PR #1382) | **Implemented in Rust and desktop crypto** (§6.7.2); the end-to-end linking screens and mobile encrypt path remain unimplemented |
+| Two-seed key-bundle payload (PR #1382) | **Implemented in Rust** (§6.7.2), with the ephemeral key agreement of #1865 (§6.3); the desktop IPC commands still drive the pre-#1865 key agreement and fail closed against it (§6.14); the end-to-end linking screens and mobile encrypt path remain unimplemented |
 
-> **Profile split.** The roles (§6.1), transport, and SAS ceremony (§6.3–§6.6) are the final design and change no further. **v0** (§6.7.1) is the historical single-seed payload; PR #1382 implements **v1** (§6.7.2), the two-seed bundle, in Rust and desktop crypto. The end-to-end linking UI and mobile encrypt path are still unimplemented. The **target profile** (§6.12) replaces the payload again once the identity layer has a PUK and sigchain in active use. Each payload revision changes only the payload and, for the target profile, the claim body — the QR format, room transport, SAS ceremony and failure rules do not change.
+> **Profile split.** The roles (§6.1), transport, and SAS ceremony (§6.3–§6.6) are the final design. They changed once more before any client shipped: #1865 took the primary's long-term X25519 key out of the key agreement — replacing it with a per-room ephemeral authenticated by a signed claim (§6.3.1) — and made the QR carry the new device's ephemeral key (§6.4). **v0** (§6.7.1) is the historical single-seed payload; PR #1382 implements **v1** (§6.7.2), the two-seed bundle, in Rust and desktop crypto. The end-to-end linking UI and mobile encrypt path are still unimplemented. The **target profile** (§6.12) replaces the payload again once the identity layer has a PUK and sigchain in active use. Each payload revision changes only the payload and, for the target profile, the claim body — the QR format, room transport, SAS ceremony and failure rules do not change.
 
 ### 6.1 Roles
 
 *Status: specified; no platform implements either side (§6.14).*
 
-- **New device** — the device being linked. It holds no account credentials yet. It generates the ephemeral ECDH keypair, creates the room, and **displays** the QR code. This is Signal's role assignment and matches the deployed server API. Note that the retired iOS and Android screens had the *new* device scanning, the reverse of this assignment; implementations MUST follow this section, not the retired code.
-- **Primary device** — an already-authorized device holding the user's device keys (§2.11). It **scans** the QR, drives the SAS ceremony, and posts the encrypted key bundle. The payload endpoint requires an authenticated session. That session is the interim authorization proof, with an important caveat: the server accepts a `senderPubkey` from the session but does not store or check it (`apps/worker/services/identity.ts`, `setProvisionPayload`), so the payload is bound to the room token, not to a particular authorized device. See §6.12 for what the identity layer adds.
+- **New device** — the device being linked. It holds no account credentials yet. It generates its ephemeral ECDH keypair, creates the room, and **displays** the QR code, which carries that ephemeral public key (§6.4). This is Signal's role assignment and matches the deployed server API. Note that the retired iOS and Android screens had the *new* device scanning, the reverse of this assignment; implementations MUST follow this section, not the retired code.
+- **Primary device** — an already-authorized device holding the user's device keys (§2.11). It **scans** the QR, drives the SAS ceremony, and posts the encrypted key bundle. For every room it generates a fresh ephemeral X25519 keypair of its own: its long-term keys never enter the key agreement, and its long-term Ed25519 key only signs the claim (§6.3.1). The payload endpoint requires an authenticated session. That session is the interim authorization proof, with an important caveat: the server accepts a `senderPubkey` from the session but does not store or check it (`apps/worker/services/identity.ts`, `setProvisionPayload`), so the payload is bound to the room token, not to a particular authorized device. See §6.12 for what the identity layer adds.
 - **Server** — untrusted relay. It stores the ephemeral pubkey and the encrypted payload. It never sees plaintext key material, the provisioning key, or the SAS; no server-side code derives any of them.
 
 Both devices MUST execute the flow with a human present: the SAS comparison (§6.6) is a user action, not a background check. An implementation that "links" without one is non-conformant.
 
 ### 6.2 Primitives and Domain Separation
 
-All cryptography is X25519 ECDH (32-byte Montgomery u-coordinate keys, hex-encoded on the wire; implementations MUST reject the all-zero shared secret, which indicates a low-order peer key), HKDF-SHA256, and AES-256-GCM (12-byte nonce, 16-byte tag).
+All cryptography is X25519 ECDH between two ephemeral keys (32-byte Montgomery u-coordinate keys, hex-encoded on the wire; implementations MUST reject the all-zero shared secret, which indicates a low-order peer key), HKDF-SHA256, AES-256-GCM (12-byte nonce, 16-byte tag), and Ed25519 for the claim signature (§6.3.1).
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
@@ -4460,75 +4655,113 @@ All cryptography is X25519 ECDH (32-byte Montgomery u-coordinate keys, hex-encod
 | `LABEL_DEVICE_PROVISION` | `llamenos:device-provision` | HKDF info for the payload AEAD key; also the v0 AEAD associated data |
 | `SAS_SALT` | `llamenos:sas` | SAS HKDF salt |
 | `SAS_INFO` | `llamenos:provisioning-sas` | SAS HKDF info |
+| `LABEL_DEVICE_PROVISION_CLAIM` | `llamenos:device-provision-claim:v1` | Ed25519 signature context for the claim (§6.3.1) |
 
 Every constant above is registered in `packages/protocol/crypto-labels.json` — the single authoritative source for domain-separation constants (§2.1) — and mirrored in `packages/crypto/src/labels.rs`.
 
-The v1 bundle payload (§6.7.2) uses the registered format-binding AAD label `LABEL_DEVICE_PROVISION_BUNDLE` (`llamenos:device-provision-bundle:v1`). It is appended at `labelId` 99 in `packages/crypto/src/labels.rs`; the `HMAC_SIP_VOLUNTEER_SECRET` label from main remains at 98. Registry positions are append-only and permanent: index 53 is a tombstone that must never be reused, and a label may only be appended, never inserted. The JSON object member order is not the `labelId`; the Rust `LABEL_REGISTRY` array assigns IDs by position, and `packages/crypto/label-registry.wire.snapshot` pins every index-to-string mapping. New labels must be added to `crypto-labels.json`, appended to the registry, and shipped through codegen before use. Implementations MUST NOT define crypto labels locally as raw string literals.
+The v1 bundle payload (§6.7.2) uses the registered format-binding AAD label `LABEL_DEVICE_PROVISION_BUNDLE` (`llamenos:device-provision-bundle:v1`). It is appended at `labelId` 99 in `packages/crypto/src/labels.rs`; the `HMAC_SIP_VOLUNTEER_SECRET` label from main remains at 98. `LABEL_DEVICE_PROVISION_CLAIM` is appended at `labelId` 100 (#1865). Registry positions are append-only and permanent: index 53 is a tombstone that must never be reused, and a label may only be appended, never inserted. The JSON object member order is not the `labelId`; the Rust `LABEL_REGISTRY` array assigns IDs by position, and `packages/crypto/label-registry.wire.snapshot` pins every index-to-string mapping. New labels must be added to `crypto-labels.json`, appended to the registry, and shipped through codegen before use. Implementations MUST NOT define crypto labels locally as raw string literals.
 
 ### 6.3 Protocol Flow
 
-*Status: steps 1–4 and 10–14 map onto endpoints that exist; steps 5–8 (the claim step) do not — see the callout below.*
+*Status: steps 1–4 and 10–14 map onto endpoints that exist; steps 5–8 (the claim step) do not — see the callout below. The cryptography of every step is implemented in `packages/crypto/src/provisioning.rs`.*
 
 ```
 New Device                           Server                    Primary Device
 ----------                           ------                    ----------------
-1. eSK, ePK = X25519.generate()
+1. eSK_n, ePK_n = X25519.generate()
    (fresh per linking attempt)
 
 2. POST /api/provision/rooms
-   { ephemeralPubkey: hex(ePK) }
+   { ephemeralPubkey: hex(ePK_n) }
                                   creates room: roomId, token
    <-- { roomId, token }
 
-3. Display QR: llamenos-link://provision?r=<roomId>&t=<token> (§6.4)
+3. Display QR: llamenos-link://provision?r=<roomId>&t=<token>&k=<b64url(ePK_n)> (§6.4)
 
 4. Poll GET /api/provision/rooms/:id?token
-                                                           5. Scan QR; GET room (token)
-                                                              <-- { ephemeralPubkey: hex(ePK) }
-                                                           6. shared = X25519(encSK, ePK)
+                                                           5. Scan QR → roomId, token, ePK_n
+                                                              GET room (token)
+                                                              <-- { ephemeralPubkey }
+                                                              ABORT unless ephemeralPubkey == ePK_n from the QR
+                                                           6. eSK_p, ePK_p = X25519.generate()
+                                                              (fresh per room — NOT the long-term encSK)
+                                                              shared = X25519(eSK_p, ePK_n)
+                                                              discard eSK_p: it performs this one ECDH only
+                                                              claim = §6.3.1, signed with the long-term sigSK
                                                               sas = derive (§6.6)
                                                               DISPLAY sas on primary screen
                                                            7. POST /api/provision/rooms/:id/claim    [NOT IMPLEMENTED]
-                                                              { token, primaryEncryptionPubkey: hex(encPK) }
-                                  stores primaryEncryptionPubkey                                      [NOT IMPLEMENTED]
-   <-- poll now returns primaryEncryptionPubkey                                                       [NOT IMPLEMENTED]
-8. shared = X25519(eSK, encPK)
+                                                              { token, primaryClaim: hex(claim) }
+                                  stores primaryClaim                                                 [NOT IMPLEMENTED]
+   <-- poll now returns primaryClaim                                                                  [NOT IMPLEMENTED]
+8. VERIFY claim against ePK_n (§6.3.1);
+   failure → ABORT (§6.10)
+   shared = X25519(eSK_n, ePK_p)
    sas = derive (§6.6)
    DISPLAY sas on new-device screen
 
 9. USER COMPARES BOTH SCREENS (§6.6)
    match → continue;  mismatch → ABORT (§6.10)
 
-                                                           10. payload = §6.7 (v1 bundle)
+                                                           10. payload = §6.7.2 bundle
                                                                prov_key = HKDF(SHA-256, shared,
                                                                  salt=LABEL_PROVISIONING_SALT,
                                                                  info=LABEL_DEVICE_PROVISION, len=32)
                                                                nonce = random(12)
                                                                ct = AES-256-GCM(prov_key, nonce, payload,
-                                                                 aad per §6.7.1 / §6.7.2)
+                                                                 aad = LABEL_DEVICE_PROVISION_BUNDLE || ePK_n || claim)
                                                            11. POST /api/provision/rooms/:id/payload (authenticated)
                                                                { token, encryptedNsec: hex(nonce||ct),
-                                                                 primaryPubkey: hex(...) }
+                                                                 primaryPubkey: hex(sigPK) }
 
    <-- poll returns status "ready" + encryptedNsec + primaryPubkey
-12. data = hex_decode(encryptedNsec)
+12. VERIFY claim again (§6.3.1)
+    data = hex_decode(encryptedNsec)
     plaintext = AES-256-GCM.decrypt(prov_key, nonce=data[0..12], ct=data[12..],
-      aad per §6.7.1 / §6.7.2)
-    CHECK: tag authenticates, then the length/version rules of the active profile
+      aad = LABEL_DEVICE_PROVISION_BUNDLE || ePK_n || claim)
+    CHECK: tag authenticates; then the §6.7.2 length/version rules; then
+      Ed25519.public(bundle signing seed)  == sigPK in the claim, and
+      X25519.public(bundle encryption seed) != ePK_p
 13. re-derive sas from shared; assert equal to the code confirmed in step 9
 14. import the transported key material into §2.11 PIN-encrypted device storage
     report success (§6.10 rule)
 ```
 
-> **Steps 5–8 do not exist.** There is no `POST /api/provision/rooms/:id/claim` route, no claim body schema, no `primary_encryption_pubkey` column, and the string `primaryEncryptionPubkey` appears nowhere outside this document. Consequently the new device has, today, **no way to learn the primary's encryption pubkey**, so it cannot derive `shared` and cannot display a SAS at step 8. The deployed server returns the primary's pubkey only in the `status: "ready"` response — i.e. with the payload, after the point where the SAS must already have been compared. Implementing §6.3 requires the claim endpoint; until it exists, a conforming two-screen SAS ceremony is not constructible.
+> **Steps 5–8 do not exist.** There is no `POST /api/provision/rooms/:id/claim` route, no claim body schema, no `primary_claim` column, and `primaryClaim` appears nowhere outside this document and `packages/crypto`. Consequently the new device has, today, **no way to learn `ePK_p`**, so it cannot derive `shared` and cannot display a SAS at step 8. The deployed server returns `primaryPubkey` only in the `status: "ready"` response — i.e. with the payload, after the point where the SAS must already have been compared. Implementing §6.3 requires the claim endpoint; until it exists, a conforming two-screen SAS ceremony is not constructible.
 >
-> In the retired desktop implementation the field named `primaryPubkey` carried the primary's **X25519 encryption** pubkey, and the new device fed it straight into the ECDH. The Ed25519 signing pubkey was never sent. Implementations MUST NOT copy that conflation; see the note below.
+> In the retired desktop implementation the field named `primaryPubkey` carried the primary's **X25519 encryption** pubkey, and the new device fed it straight into the ECDH. Implementations MUST NOT copy that: no long-term key of either device is an ECDH input, and `primaryPubkey` is the Ed25519 signing key.
 
 Notes:
 
-- `encSK`/`encPK` are the primary device's long-term X25519 encryption keypair (§2.11). The ECDH uses the long-term encryption key so the new device can compute the same SAS from the claimed `primaryEncryptionPubkey` before any payload exists.
-- The `primaryPubkey` field of the payload post is specified to be the primary's **Ed25519 signing** pubkey — a different key from the `primaryEncryptionPubkey` claimed in step 7. Servers and clients MUST NOT conflate them. The deployed server treats the field as an opaque string and does not validate which key it is, and the retired client put the encryption pubkey there, so this rule is a forward obligation on implementors, not current behaviour.
-- The JSON envelope schemas live in `packages/protocol/schemas/provisioning.ts`: `createRoomBodySchema`, `roomPayloadBodySchema`, `provisionRoomResponseSchema` and `provisionRoomStatusResponseSchema`. There is no claim-body schema. The binary payload (§6.7) is not JSON and has no Zod schema.
+- **Both ECDH inputs are ephemeral.** `eSK_p`/`ePK_p` are generated for one room and used for exactly one ECDH. The primary's long-term X25519 encryption keypair (`encSK`/`encPK`, §2.11) is **not** an input to the key agreement, and implementations MUST NOT substitute it for `eSK_p`. The new device enforces this after decryption (step 12): a bundle whose encryption key is `ePK_p` is rejected.
+- **Why: forward secrecy of a payload that carries the signing identity.** The §6.7.2 bundle transports both long-term seeds, including the Ed25519 signing seed, which authors sigchain records. When the ECDH used `encSK` (before #1865), anyone who captured a `provision_rooms` row — the server operator, a database backup, a subpoena — and later obtained `encSK` alone could decrypt the row and recover the signing seed, collapsing §2.11's independence of the two seeds. With both inputs ephemeral, `shared` exists only while the two ephemeral secrets do. Compromising every long-term key afterwards decrypts no past room. `long_term_keys_cannot_open_a_past_provisioning_room` in `provisioning.rs` tests exactly that, with positive controls.
+- The `primaryPubkey` field of the payload post is the primary's **Ed25519 signing** pubkey and MUST equal `sigPK` in the claim. The new device makes no decision on it: the verified claim and the AEAD-authenticated bundle are authoritative (§6.10, unauthenticated metadata). The deployed server treats the field as an opaque string and does not validate it.
+- The JSON envelope schemas live in `packages/protocol/schemas/provisioning.ts`: `createRoomBodySchema`, `roomPayloadBodySchema`, `provisionRoomResponseSchema` and `provisionRoomStatusResponseSchema`. There is no claim-body schema. The claim (§6.3.1) and the payload (§6.7) are binary, hex-encoded, and have no Zod schema.
+
+#### 6.3.1 Claim
+
+The claim is how the primary's ephemeral key reaches the new device, signed by the identity being transported. It is binary, hex-encoded on the wire (`hex258`):
+
+```
+byte  0       : claim version = 0x01                    (PROVISIONING_CLAIM_VERSION)
+bytes 1..33   : ePK_p  — the primary's ephemeral X25519 public key for this room
+bytes 33..65  : sigPK  — the primary's long-term Ed25519 signing public key
+bytes 65..129 : sig    = Ed25519.sign(sigSK,
+                           UTF-8("llamenos:device-provision-claim:v1")   // LABEL_DEVICE_PROVISION_CLAIM
+                           || 0x01 || ePK_n || ePK_p)
+total         : 129 bytes = 258 hex chars
+```
+
+Every field after the label is fixed-length, so the signed message is unambiguous. The new device verifies the claim when it arrives (step 8, before any SAS is shown) and again before decrypting (step 12). Verification uses the new device's **own** `ePK_n`, never a value from the relay:
+
+1. Length exactly 129 bytes and version byte `0x01`; otherwise failure.
+2. `ePK_p` is a valid 32-byte X25519 key, not all-zero.
+3. `sigPK` decodes to an Ed25519 point and is not of small order.
+4. `sig` verifies under RFC 8032 **strict** rules — canonical `S`, no small-order components — over the message above. A claim minted for another room covers a different `ePK_n` and fails here.
+
+What the claim provides: it binds `ePK_p` to this room and to the identity whose seeds the bundle carries. Step 12 checks that the bundle's signing seed derives `sigPK`, so a payload cannot transport an identity other than the one that authorized the room's key. The AAD binds the ciphertext to the exact claim that was verified.
+
+What it does not provide: authentication of the primary to a new device that has no prior knowledge of `sigPK`. An attacker can sign a claim with a key of their own. Defeating a man in the middle is the job of the SAS (§6.6), and that relies on the QR carrying `ePK_n` (§6.4).
 
 #### Server Implementation
 
@@ -4542,7 +4775,7 @@ The server stores only the ephemeral pubkey and the encrypted payload — it can
 
 Section 6.1 requires a PUK and a sigchain: the new device generates its own keypairs, and the primary wraps the PUK to the new device's X25519 key and authorizes it with a signed sigchain entry. The PUK and sigchain modules exist (`packages/crypto/src/puk.rs`, `packages/crypto/src/sigchain.rs`) but have no application call sites yet, so there is no PUK to wrap and no chain to append to.
 
-Until they are wired, linking transports the primary device's seeds. Steps 1–10 and 13–16 of §6.1 are unchanged (ephemeral X25519 ECDH, SAS, `LABEL_PROVISIONING_SALT`/`LABEL_DEVICE_PROVISION` HKDF, `hex(iv || ct_with_tag)` wire format). Steps 11–12 and 17–18 are replaced by:
+Until they are wired, linking transports the primary device's seeds. The §6.3 flow is unchanged (ephemeral–ephemeral X25519 ECDH, signed claim, SAS, `LABEL_PROVISIONING_SALT`/`LABEL_DEVICE_PROVISION` HKDF, `hex(iv || ct_with_tag)` wire format); the payload and import steps are:
 
 ```
 11'. Build the device key bundle (65 bytes, binary):
@@ -4563,6 +4796,7 @@ Until they are wired, linking transports the primary device's seeds. Steps 1–1
        iv  = iv,
        message = bundle,
        aad = UTF-8("llamenos:device-provision-bundle:v1")   // LABEL_DEVICE_PROVISION_BUNDLE
+             || ePK_n || claim                              // transcript (§6.3.1)
      )
      encryptedPayload = hex(iv || ct_with_tag)
 
@@ -4596,7 +4830,7 @@ Relative to §6.1, seed-transport linking gives up:
 | Long-term secrets never transported | **Not delivered** — both seeds cross the wire (AEAD-protected, SAS-verified) |
 | Compromise of one device does not expose others | **Not delivered** — all linked devices share one keypair |
 
-What it does deliver, and §6.1 also requires: a linked device can actually read the user's existing data, and Section 2.11's independence of the signing and encryption seeds is preserved end to end — the encryption key is never a function of the signing key.
+What it does deliver, and §6.1 also requires: a linked device can actually read the user's existing data, and Section 2.11's independence of the signing and encryption seeds is preserved end to end — the encryption key is never a function of the signing key. Since #1865 it also delivers **forward secrecy of the transport**: no long-term key is an ECDH input, so a captured room stays sealed even after every long-term key is compromised (§6.3 notes). Before #1865, a captured room plus the primary's long-term encryption key yielded both seeds, the signing seed included.
 
 Wiring the PUK and sigchain layers, and then implementing §6.1 as written, is the remaining work.
 
@@ -4607,14 +4841,17 @@ Wiring the PUK and sigchain layers, and then implementing §6.1 as written, is t
 One canonical form on all platforms:
 
 ```
-llamenos-link://provision?r=<roomId>&t=<token>
+llamenos-link://provision?r=<roomId>&t=<token>&k=<ePK_n>
 ```
 
 - `r` — the server-issued room ID.
 - `t` — the server-issued opaque token, presented by both devices on every room request.
+- `k` — REQUIRED. Unpadded base64url of `ePK_n`, the new device's 32-byte ephemeral X25519 public key (43 characters). The primary MUST take `ePK_n` from here, MUST abort if the room's `ephemeralPubkey` differs (§6.3 step 5), and MUST NOT fall back to the relay's copy. A QR without a well-formed `k` is a parse error.
 - `s` — OPTIONAL base64url-encoded server origin, for clients linking against a non-default server. Implementations MUST default to their configured server when `s` is absent.
 
 Parsing rules: the scheme is case-insensitive; unknown query parameters are ignored; any other QR content (raw JSON, `llamenos:provision:…`, a relay host in the authority position, wrong scheme) MUST be rejected with a parse error, never interpreted.
+
+**Why `k` is required.** The QR is the only channel between the two devices that the server and the network cannot write to, and a 6-digit SAS (~20 bits) is only sound if `ePK_n` reaches the primary through it. If a man in the middle can substitute `ePK_n` on the primary's leg, it holds both secrets of that leg, so it learns the primary's SAS the moment the claim is published. It then signs forged claims with its own key, grinding `ePK_p'` until `X25519(eSK_n, ePK_p')` yields the same six digits on the new device. That takes about 10^6 X25519 operations: seconds. With `ePK_n` pinned by the QR, the attacker cannot compute the primary's SAS. A forged claim on the new device's leg then matches with probability 10^-6, and only as one online attempt per ceremony. This defect predates #1865, which closes it here.
 
 ### 6.5 Short Code (Manual Entry)
 
@@ -4629,7 +4866,7 @@ short_code = roomId[0..8].toUpperCase()
 
 `roomId` is a `crypto.randomUUID()`, so the first eight characters are its first group.
 
-The short code is a UX fallback for locating the room, not a secret; the token still comes from the primary scanning the full QR or from the user transcribing it. **The short code alone is not sufficient to complete a link** — the retired desktop implementation offered a short-code input that could not proceed without the full token, which is a dead end rather than a fallback. An implementation of §6.5 MUST therefore also provide transcribed-token entry, or omit the short code entirely rather than offer a path that cannot complete.
+The short code is a UX fallback for locating the room, not a secret; the token still comes from the primary scanning the full QR or from the user transcribing it. **So does `ePK_n`:** manual entry has no authenticated channel for it other than the user, and without it the SAS is grindable (§6.4). An implementation that offers manual entry MUST require the user to transcribe `k` as well as `t`, and MUST treat the transcribed values exactly as the QR's. **The short code alone is not sufficient to complete a link** — the retired desktop implementation offered a short-code input that could not proceed without the full token, which is a dead end rather than a fallback. An implementation of §6.5 MUST therefore also provide transcribed-token entry, or omit the short code entirely rather than offer a path that cannot complete.
 
 ### 6.6 SAS Verification Ceremony
 
@@ -4650,10 +4887,11 @@ display = "XXX XXX"   // two groups of three digits, space-separated
 Ceremony rules:
 
 1. Each device displays the code **on its own screen**. The SAS or its derivative MUST NOT travel through the relay.
-2. The primary device MUST NOT post the payload (step 11) until the user confirms the codes match. The claim step (step 7) is the only pre-confirmation write the primary makes, and it exposes only the primary's public encryption key.
+2. The primary device MUST NOT post the payload (step 11) until the user confirms the codes match. The claim step (step 7) is the only pre-confirmation write the primary makes. It exposes the per-room ephemeral public key `ePK_p`, the primary's public signing key, and a signature, and nothing else.
 3. The new device MUST NOT import keys (step 14) until the user has confirmed the code it displayed in step 8. A payload that arrives before confirmation is held, unimported.
 4. After decryption, the new device re-derives the SAS from the ECDH shared secret and asserts equality with the confirmed code before importing (step 13). Because the payload AEAD key derives from the same shared secret the SAS attests, a party that fails the comparison cannot produce a payload the new device accepts.
 5. A mismatch at any point aborts the attempt (§6.10). Both devices discard the ephemeral state and, if the user retries, start a fresh room with fresh ephemeral keys.
+6. The primary MUST have obtained `ePK_n` from the QR (or from user transcription, §6.5), never from the relay alone. The 6-digit code resists a man in the middle only under that condition (§6.4).
 
 Security note: 6 digits is ~20 bits of verification entropy. `packages/crypto/src/sas.rs` implements an 80-bit emoji SAS (10 symbols from a 256-entry table, canonically ordered `min(pk) || max(pk) || nonce` as a role-confusion defence) for EP02; it is **not** used by provisioning, which has its own 6-digit `compute_sas`. Migrating the ceremony to the emoji SAS changes only §6.6 and is wire-compatible with the same transport.
 
@@ -4682,9 +4920,9 @@ The historical decrypt side rejected any plaintext whose length was not exactly 
 
 **v0 carries only one seed, and the primary's Ed25519 signing seed is not transported.** That is the defect recorded in issue #1026 and fixed by §6.7.2. Clients MUST NOT re-derive the missing seed from the transported one: the signing and encryption seeds are generated by independent `getrandom` calls (`packages/crypto/src/device_keys.rs`, and §2.11), so a re-derived key is simply a different key — it silently fails to open every ciphertext wrapped to the real one, with no error on either side. Note that the surviving desktop import path does exactly this re-derivation, which is why it cannot produce a working linked device (§6.14).
 
-#### 6.7.2 Device Key Bundle (v1 — implemented in Rust and desktop crypto)
+#### 6.7.2 Device Key Bundle (v1 — implemented in Rust)
 
-> **Status:** Rust and desktop crypto implement this format, and the format-binding AAD label is registered (§6.2). The end-to-end linking UI and mobile encrypt path remain unimplemented. A v0 and a v1 payload are mutually undecryptable — the AAD differs — so the two formats cannot coexist on one deployment and the cutover must be atomic across compatible clients.
+> **Status:** Rust implements this format with the #1865 key agreement and transcript AAD, and the format-binding AAD label is registered (§6.2). The desktop IPC commands predate #1865 and fail closed (§6.14). The end-to-end linking UI and mobile encrypt path remain unimplemented. A v0 and a v1 payload are mutually undecryptable — the AAD differs — so the two formats cannot coexist on one deployment and the cutover must be atomic across compatible clients.
 
 The AEAD plaintext is a 65-byte binary bundle — not JSON:
 
@@ -4705,11 +4943,12 @@ prov_key = HKDF(SHA-256, ikm=shared,
              length=32)
 nonce    = random(12)                            // fresh per payload, never reused under one prov_key
 ct       = AES-256-GCM(key=prov_key, nonce=nonce, message=bundle,
-             aad=UTF-8("llamenos:device-provision-bundle:v1"))   // LABEL_DEVICE_PROVISION_BUNDLE (§6.2)
+             aad=UTF-8("llamenos:device-provision-bundle:v1")    // LABEL_DEVICE_PROVISION_BUNDLE (§6.2)
+                 || ePK_n || claim)                              // 32 + 129 bytes, §6.3.1
 wire     = hex(nonce || ct)                      // 12 + 65 + 16 = 93 bytes = 186 hex chars
 ```
 
-The associated data binds the payload to format v1: a payload built for any other provisioning format fails the GCM tag check rather than being accepted, so format changes cannot be silently downgraded. The version byte is checked only **after** the tag verifies, so distinguishing tag failures from version failures leaks nothing. `PROVISIONING_BUNDLE_VERSION` is defined in Rust; generated client constants are not required because the version is parsed inside the crypto implementation.
+The associated data binds the payload to format v1 and to the room's transcript: a payload built for any other provisioning format, or under any other claim, fails the GCM tag check rather than being accepted, so format changes cannot be silently downgraded. `shared` here is the ephemeral–ephemeral secret of §6.3; the bundle layout itself did not change in #1865, and a payload sealed the pre-#1865 way (long-term ECDH, bare-label AAD) fails the tag check under this one. No shipped client ever exchanged one. The version byte is checked only **after** the tag verifies, so distinguishing tag failures from version failures leaks nothing. `PROVISIONING_BUNDLE_VERSION` is defined in Rust; generated client constants are not required because the version is parsed inside the crypto implementation.
 
 ### 6.8 Wire Payloads
 
@@ -4729,8 +4968,8 @@ Payload post (primary device, authenticated):
 POST /api/provision/rooms/:id/payload
 Auth:   Required (primary device session)
 Body:   { "token": string,
-          "encryptedNsec": hex120,           // §6.7.1 in force; hex186 under §6.7.2
-          "primaryPubkey": hex64 }
+          "encryptedNsec": hex186,           // §6.7.2 bundle
+          "primaryPubkey": hex64 }          // Ed25519 sigPK; MUST equal the claim's
 Response: { "ok": true }
 Room not found: 404.  Wrong token: 403.  Room expired: 410.
 ```
@@ -4741,7 +4980,7 @@ Room poll (either device, token required):
 GET /api/provision/rooms/:id?token=<token>
 Response, 200, status "waiting":  { "status": "waiting", "ephemeralPubkey": hex64 }
 Response, 200, status "ready":    { "status": "ready", "ephemeralPubkey": hex64,
-                                    "encryptedNsec": hex120, "primaryPubkey": hex64 }
+                                    "encryptedNsec": hex186, "primaryPubkey": hex64 }
 Response, 200, status "expired":  { "status": "expired" }          // status only; the row is deleted
 Room not found: 404.  Wrong token: 403.
 Per-room cap: 3 token presentations per room per 10 minutes → 429 + Retry-After.
@@ -4754,14 +4993,14 @@ A `status: "ready"` read **consumes** the room via an atomic `DELETE … RETURNI
 > ```
 > POST /api/provision/rooms/:id/claim                                   [NOT IMPLEMENTED]
 > Auth:   Required (primary device session)
-> Body:   { "token": string, "primaryEncryptionPubkey": hex64 }
+> Body:   { "token": string, "primaryClaim": hex258 }                 // §6.3.1
 > Response: { "ok": true }
-> Effect: room status stays "waiting"; GET responses begin including primaryEncryptionPubkey
+> Effect: room status stays "waiting"; GET responses begin including primaryClaim
 > ```
 >
-> and, consequently, a fourth GET shape: `{ "status": "waiting", "ephemeralPubkey": hex64, "primaryEncryptionPubkey": hex64 }`. Neither exists in the server, the `provision_rooms` table, the Zod schemas, or any client. The new device needs `primaryEncryptionPubkey` from the poll before it can display the SAS (§6.3 step 8), which is why the claim step exists and why §6.3 is not executable without it.
+> and, consequently, a fourth GET shape: `{ "status": "waiting", "ephemeralPubkey": hex64, "primaryClaim": hex258 }` (the `ready` shape also carries `primaryClaim`, so a new device that missed the waiting poll can still verify). Neither exists in the server, the `provision_rooms` table, the Zod schemas, or any client. The new device needs `primaryClaim` from the poll before it can display the SAS (§6.3 step 8), which is why the claim step exists and why §6.3 is not executable without it. The server stores the claim opaquely; it cannot forge one the new device accepts for this room without the signer's key, and a claim signed with any other key changes the SAS.
 
-Implementations MUST validate field lengths before decoding: `hex64` = 64 hex chars (32 bytes), `hex120` = 120 hex chars (60 bytes), `hex186` = 186 hex chars (93 bytes). This is a **client-side obligation only**: the server's Zod schemas enforce minimum lengths (`ephemeralPubkey` ≥ 60 characters; `token`, `encryptedNsec`, `primaryPubkey` ≥ 1) and no hex charset or exact-length check, so a client MUST NOT infer a well-formed peer value from the fact that the server accepted it.
+Implementations MUST validate field lengths before decoding: `hex64` = 64 hex chars (32 bytes), `hex120` = 120 hex chars (60 bytes), `hex186` = 186 hex chars (93 bytes), `hex258` = 258 hex chars (129 bytes). This is a **client-side obligation only**: the server's Zod schemas enforce minimum lengths (`ephemeralPubkey` ≥ 60 characters; `token`, `encryptedNsec`, `primaryPubkey` ≥ 1) and no hex charset or exact-length check, so a client MUST NOT infer a well-formed peer value from the fact that the server accepted it.
 
 ### 6.9 Ordering, Freshness, and Nonce Rules
 
@@ -4771,13 +5010,13 @@ Implementations MUST validate field lengths before decoding: `hex64` = 64 hex ch
 - **Nonce discipline.** The 12-byte GCM nonce MUST be fresh random per payload. Since each room has a fresh ECDH shared secret, `prov_key` is per-room; nonce reuse across rooms is impossible for an honest implementation and catastrophic within one.
 - **Token entropy.** The server-issued token is 16 random bytes from `crypto.getRandomValues` — exactly 128 bits, the floor this specification requires, with no margin. It is the room's only access control after creation. The `t` parameter travels in the QR, so the QR itself is the secret — treat displayed-linking screens like a password prompt (auto-hide, no screenshots where the platform supports blocking them).
 - **Per-room request cap, and its conflict with polling.** The server caps **token presentations** per room at 3 per 10-minute window, returning `429` with `Retry-After`. The limiter is keyed on the room id and runs *before* the token is validated, so it counts every GET — including correct ones — and the budget is shared between both devices. A new device that polls as §6.3 step 4 directs is therefore rate-limited on its fourth request, and the primary's own GET (step 5) spends from the same three. **An implementation of §6.3 cannot complete the ceremony against the current server without either long-polling/push for the room state or a server change that counts only failed token presentations.** Clients MUST NOT work around this by retry-looping through the 429 (§6.10).
-- **Key zeroization.** Ephemeral keys and the shared secret are zeroized after the attempt terminates, success or failure (§2.11 storage applies to the imported seeds).
+- **Key zeroization.** Ephemeral keys and the shared secret are zeroized after the attempt terminates, success or failure (§2.11 storage applies to the imported seeds). The primary's `eSK_p` lives shorter still: it is consumed by its single ECDH at step 6 and never persisted, so it no longer exists when the payload is posted. Forward secrecy depends on neither ephemeral secret being written to disk or logs.
 
 ### 6.10 Failure Modes and the Success-Reporting Rule
 
 The success-reporting rule (issue #1028) is normative:
 
-> **A client MUST NOT report linking success, transition to a success state, enable account access, or persist any "linked" flag unless it has (a) authenticated the payload AEAD tag, (b) satisfied the length and version rules of the payload profile it implements (§6.7.1: plaintext exactly 32 bytes; §6.7.2: 65 bytes with leading `0x01`), and (c) persisted the imported key material in §2.11 PIN-encrypted storage.** Every other terminal outcome MUST surface as an explicit failure to the user. A success screen for an exchange that did not happen — including simulated delays standing in for cryptography — is a protocol violation, not a UX choice. This rule is why device linking was withdrawn from the pilot build (#1405) rather than left in place reporting success.
+> **A client MUST NOT report linking success, transition to a success state, enable account access, or persist any "linked" flag unless it has (a) authenticated the payload AEAD tag, (b) satisfied the length and version rules of the payload profile it implements (§6.7.1: plaintext exactly 32 bytes; §6.7.2: 65 bytes with leading `0x01`, plus the step-12 identity checks of §6.3), and (c) persisted the imported key material in §2.11 PIN-encrypted storage.** Every other terminal outcome MUST surface as an explicit failure to the user. A success screen for an exchange that did not happen — including simulated delays standing in for cryptography — is a protocol violation, not a UX choice. This rule is why device linking was withdrawn from the pilot build (#1405) rather than left in place reporting success.
 
 Required behaviour per failure:
 
@@ -4785,6 +5024,10 @@ Required behaviour per failure:
 |---|---|---|
 | SAS mismatch | user comparison (§6.6) | Abort. Primary MUST NOT post the payload; new device MUST NOT import. Discard ephemeral state. |
 | SAS re-derivation mismatch after decrypt | new device, step 13 | Treat as tampering: failure, no import, no success state. |
+| Room `ephemeralPubkey` ≠ QR `k`, or QR without `k` | primary, step 5 | Abort. Post no claim; the relay has substituted the new device's key. |
+| Claim malformed, wrong version, or signature fails (§6.3.1) | new device, steps 8 and 12 | Abort. Display no SAS; no import. A claim for another room fails here. |
+| Bundle signing key ≠ claim `sigPK` | new device, step 12, after the tag verifies | Failure; no import. |
+| Bundle encryption key = `ePK_p` (primary used its long-term key as the ephemeral) | new device, step 12, after the tag verifies | Failure; no import. Accepting it would adopt an identity whose transport was decryptable by its own long-term key. |
 | GCM tag failure | new device decrypt | Failure. Never import partial plaintext. Under §6.7.2 a payload from another format is indistinguishable from tampering at this layer — that is the downgrade defence working; under §6.7.1 there is no such binding. |
 | Wrong bundle version byte (§6.7.2 only) | new device, after tag verifies | Failure; no partial import; no downgrade to "best effort". |
 | Plaintext length wrong for the active profile | new device | Failure. |
@@ -4814,63 +5057,67 @@ The target profile — to be specified as a payload revision once the identity l
 2. The payload becomes an HPKE-wrapped PUK (`LABEL_PUK_WRAP_TO_DEVICE`, §2.1) to the new device's X25519 key, **plus a mandatory primary-signed sigchain entry** authorizing the new device. The sigchain entry travels inside the AEAD; there is no optional authorization field, and a missing entry is a hard failure — never a skipped check.
 3. The new device opens the PUK, verifies the sigchain entry against the primary's signing key, appends the entry to its local chain view, and only then reports success (the §6.10 rule is unchanged: success means imported keys **and** verified authorization).
 
-Current state of the prerequisites, stated precisely because the gap is what makes the target profile unbuildable today: the PUK envelope endpoints exist (`POST/GET /api/puk/envelopes`) and every platform wraps the PUK FFI, but **no client code calls any of it**; sigchain is wired for recovery-group enrollment (one desktop flow) and for the optional fields on device revoke, which no client sends. Shipping half the target — a PUK wrap with no sigchain entry — would create an unauthorized device the system accepts: a live cryptographic hole traded for today's honest limitation. Implementations MUST therefore exchange the §6.7.1 payload (and §6.7.2 once it lands) and MUST NOT improvise authorization proofs.
+Current state of the prerequisites, stated precisely because the gap is what makes the target profile unbuildable today: the PUK envelope endpoints exist (`POST/GET /api/puk/envelopes`) and every platform wraps the PUK FFI, but **no client code calls any of it**; sigchain is wired for recovery-group enrollment (one desktop flow) and for the optional fields on device revoke, which no client sends. Shipping half the target — a PUK wrap with no sigchain entry — would create an unauthorized device the system accepts: a live cryptographic hole traded for today's honest limitation. Implementations MUST therefore exchange the §6.7.2 payload and MUST NOT improvise authorization proofs.
 
 Wire compatibility: the payload field is opaque, versioned hex. The target profile mints a new AAD label and bundle version and changes only the §6.7 payload and the claim body; the QR format (§6.4), room transport (§6.8), SAS ceremony (§6.6), and all failure rules (§6.10) are unchanged. Every new AAD label is subject to the registration rule in §6.2.
 
 ### 6.13 Worked Examples (Test Vectors)
 
-Fixed inputs, shared by both vectors (test vector only — never real keys):
+Fixed inputs (test vector only — never real keys):
 
 | Value | Hex |
 |---|---|
 | Primary X25519 encryption seed | `0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20` |
 | Primary Ed25519 signing seed | `2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40` |
-| Ephemeral secret key eSK | `65666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8081828384` |
+| New-device ephemeral secret `eSK_n` | `65666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8081828384` |
+| Primary ephemeral secret `eSK_p` | `a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0` |
 | GCM nonce | `c9cacbcccdcecfd0d1d2d3d4` |
 
-Values common to both profiles, which an implementation must reproduce:
+Public keys an implementation must reproduce:
+
+| Value | Hex |
+|---|---|
+| Primary encryption pubkey `encPK` (long-term) | `07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c` |
+| Primary signing pubkey `sigPK` (long-term) | `e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0` |
+| New-device ephemeral pubkey `ePK_n` | `5714769d116bf76436ae74bc793d2c30ad1903c59ac5273805c7e2698b410c36` |
+| Primary ephemeral pubkey `ePK_p` | `ad438bfae31f6c093d61d4339255ea798092c9fadd07b97827f4b0ae9dee7c1c` |
+
+#### 6.13.1 Historical vectors (pre-#1865 key agreement — not accepted)
+
+Before #1865 the ECDH was `X25519(encSK, ePK_n)`, with the primary's **long-term** key. These values identify that wire format; the current implementation rejects both payloads, because the key agreement and the AAD both differ.
 
 | Value | Hex / result |
 |---|---|
-| Primary encryption pubkey encPK | `07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c` |
-| Ephemeral pubkey ePK | `5714769d116bf76436ae74bc793d2c30ad1903c59ac5273805c7e2698b410c36` |
-| ECDH shared secret | `c9ea6a3f79a000b60b076d4afc990b272f3f0b5aaa3f0b8713c209273e363863` |
-| `prov_key` (HKDF, §6.7) | `27daf7f82e9d4b2403fdc17443328eb86392ae64a4fac8685f3f3c65057c643c` |
-| SAS HKDF output (4 bytes) | `e4751a4b` (= 3832879691 unsigned big-endian; `3832879691 % 1000000 = 879691`) |
-| SAS code | **`879 691`** |
+| ECDH shared secret `X25519(encSK, ePK_n)` | `c9ea6a3f79a000b60b076d4afc990b272f3f0b5aaa3f0b8713c209273e363863` |
+| `prov_key` | `27daf7f82e9d4b2403fdc17443328eb86392ae64a4fac8685f3f3c65057c643c` |
+| SAS code | `879 691` |
+| v0 payload (§6.7.1; 32-byte encryption seed; AAD `llamenos:device-provision`) | `c9cacbcccdcecfd0d1d2d3d411e7a3b9316aa1661a22d9e86b6b2b015249daa992dd539befc2907ea6efc1d8e9aed88786ec11cc010a453950c37aca` |
+| Pre-#1865 v1 payload (65-byte bundle; AAD `llamenos:device-provision-bundle:v1` alone) | `c9cacbcccdcecfd0d1d2d3d411c4829e104980493b01f8cf4a480a3e736afb8eb3fe72b4cee1b15987cce0c73f461cd2912f7b48fa0a7ca96122c00a7f25065905402ac27d9efcc201bb98825d7c072b748c37c2db0bd9a07da456e8ad` |
 
-#### 6.13.1 v0 payload (§6.7.1 — historical)
+#### 6.13.2 v1 bundle payload with signed claim (§6.3.1, §6.7.2 — implemented)
 
-Plaintext is the 32-byte primary X25519 encryption seed; AAD is `llamenos:device-provision`.
-
-| Value | Hex |
+| Value | Hex / result |
 |---|---|
-| Ciphertext with tag | `11e7a3b9316aa1661a22d9e86b6b2b015249daa992dd539befc2907ea6efc1d8e9aed88786ec11cc010a453950c37aca` |
-| Wire payload `encryptedNsec` (120 hex chars) | `c9cacbcccdcecfd0d1d2d3d411e7a3b9316aa1661a22d9e86b6b2b015249daa992dd539befc2907ea6efc1d8e9aed88786ec11cc010a453950c37aca` |
+| ECDH shared secret `X25519(eSK_p, ePK_n)` = `X25519(eSK_n, ePK_p)` | `668b4fdf4b11fe97f88760b64ea39652f57fdea46b4df43b3ea4ea9948f7680a` |
+| `prov_key` (HKDF, §6.7.2) | `7bcd50b37c674739a2cb7e33383701e91adcd8eb5ee169050272203ae605f87e` |
+| SAS HKDF output (4 bytes) | `e91868d4` (= 3910691028 unsigned big-endian; `3910691028 % 1000000 = 691028`) |
+| SAS code | **`691 028`** |
+| Claim signed message (`LABEL_DEVICE_PROVISION_CLAIM` ‖ `01` ‖ `ePK_n` ‖ `ePK_p`) | `6c6c616d656e6f733a6465766963652d70726f766973696f6e2d636c61696d3a7631015714769d116bf76436ae74bc793d2c30ad1903c59ac5273805c7e2698b410c36ad438bfae31f6c093d61d4339255ea798092c9fadd07b97827f4b0ae9dee7c1c` |
+| Ed25519 signature (deterministic, RFC 8032) | `a9a87061ba9144381a58c15b1abb30ef27cbb5b0506f8a8da3a034a9f09b4069f327fd151f70544c88c2761bee46d1b1f8fdcc0e96b370bffe36a53f76d09e0c` |
+| Claim `primaryClaim` (258 hex chars) | `01ad438bfae31f6c093d61d4339255ea798092c9fadd07b97827f4b0ae9dee7c1ce7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0a9a87061ba9144381a58c15b1abb30ef27cbb5b0506f8a8da3a034a9f09b4069f327fd151f70544c88c2761bee46d1b1f8fdcc0e96b370bffe36a53f76d09e0c` |
+| Ciphertext with tag | `87dfa871dd6003ff9ef91ba34caa45b28cfdaa97fad9cb1df66b4316bb4bc162eb95d3453505ea3cd9f70d3f3e121c028bef21259069df3598fe2fb67bd5e523ed81d37cae5d420e0e36f90dcada15c374` |
+| Wire payload `encryptedNsec` (186 hex chars) | `c9cacbcccdcecfd0d1d2d3d487dfa871dd6003ff9ef91ba34caa45b28cfdaa97fad9cb1df66b4316bb4bc162eb95d3453505ea3cd9f70d3f3e121c028bef21259069df3598fe2fb67bd5e523ed81d37cae5d420e0e36f90dcada15c374` |
 
 Verification procedure:
 
-1. Recompute the ECDH shared secret from either side (`X25519(encSK, ePK)` or `X25519(eSK, encPK)`) — both give the value above.
-2. Derive `prov_key` and the SAS per §6.6/§6.7; both devices must display `879 691`.
-3. Decrypt the wire payload with `prov_key`, nonce `c9cacbcccdcecfd0d1d2d3d4`, AAD `llamenos:device-provision`; the plaintext must be exactly the 32-byte primary X25519 encryption seed.
-
-This historical vector is not accepted by the current v1 reference implementation; its AAD differs, so decryption fails authentication.
-
-#### 6.13.2 v1 bundle payload (§6.7.2 — implemented)
-
-Plaintext is the 65-byte bundle `0x01 || signing_seed || encryption_seed`; AAD is the registered `llamenos:device-provision-bundle:v1` (§6.2).
-
-| Value | Hex |
-|---|---|
-| Ciphertext with tag | `11c4829e104980493b01f8cf4a480a3e736afb8eb3fe72b4cee1b15987cce0c73f461cd2912f7b48fa0a7ca96122c00a7f25065905402ac27d9efcc201bb98825d7c072b748c37c2db0bd9a07da456e8ad` |
-| Wire payload `encryptedNsec` (186 hex chars) | `c9cacbcccdcecfd0d1d2d3d411c4829e104980493b01f8cf4a480a3e736afb8eb3fe72b4cee1b15987cce0c73f461cd2912f7b48fa0a7ca96122c00a7f25065905402ac27d9efcc201bb98825d7c072b748c37c2db0bd9a07da456e8ad`|
-
-Verification procedure: as §6.13.1 steps 1–2, then decrypt with AAD `llamenos:device-provision-bundle:v1`; the plaintext must be `01` followed by the signing seed and then the encryption seed from the table above. Downgrade check: decryption of the §6.13.2 payload under the v0 AAD `llamenos:device-provision` MUST fail the tag check, and vice versa.
+1. Rebuild the claim from `ePK_p`, `sigPK` and the signature, and verify it per §6.3.1 against `ePK_n`.
+2. Compute the shared secret from either side; both give the value above. Derive `prov_key` and the SAS per §6.6/§6.7.2; both devices must display `691 028`.
+3. Decrypt the wire payload with `prov_key`, nonce `c9cacbcccdcecfd0d1d2d3d4`, and AAD `UTF-8("llamenos:device-provision-bundle:v1") || ePK_n || claim`. The plaintext must be `01`, then the signing seed, then the encryption seed, all from the table above.
+4. Negative checks: the same payload under the bare label AAD, or under the v0 AAD, MUST fail the tag check. The long-term `X25519(encSK, ePK_n)` shared secret of §6.13.1 MUST NOT open it.
 
 #### Pinning
 
-`packages/crypto/tests/interop.rs` now exercises v1 provisioning with fixed seed inputs, verifies that both seeds round-trip unchanged, and emits the resulting bundle fields in `packages/crypto/tests/fixtures/test-vectors.json` (gitignored, written at test time). Its nonce is random, so this does not pin the exact ciphertext in §6.13.2; the static v0 and v1 vectors above remain useful for independent cross-platform checks.
+`protocol_worked_example_6_13_2` in `packages/crypto/src/provisioning.rs` decrypts the §6.13.2 payload and reproduces its claim byte for byte, so this table and the implementation cannot drift apart. The values were computed independently with `@noble/curves`, `@noble/hashes` and `@noble/ciphers`. `packages/crypto/tests/interop.rs` additionally emits a fresh provisioning vector into `packages/crypto/tests/fixtures/test-vectors.json` (gitignored, written at test time), and `tests/crypto-interop.spec.ts` verifies it in JS: claim signature, ECDH against `ePK_p`, transcript AAD, both seeds, SAS, and that the long-term key does not open it. That vector's primary ephemeral and nonce are random, so it differs on every run.
 
 ### 6.14 Conformance Matrix
 
@@ -4881,13 +5128,17 @@ What exists at the time of writing, with evidence. This table is the thing to up
 | `POST /api/provision/rooms` | **Implemented** | `apps/worker/routes/provisioning.ts`; unauthenticated, min-length validation only |
 | `GET /api/provision/rooms/:id` | **Implemented**, shapes per §6.8 | `apps/worker/services/identity.ts` `getProvisionRoom`; atomic single-use consume |
 | `POST /api/provision/rooms/:id/payload` | **Implemented**, authenticated | `provisioning.ts`; `senderPubkey` accepted but never stored or checked |
-| `POST /api/provision/rooms/:id/claim` | **Not implemented** | No route, no schema, no column; `primaryEncryptionPubkey` appears nowhere in code |
-| `primaryEncryptionPubkey` on GET | **Not implemented** | `provision_rooms` has no such column |
+| `POST /api/provision/rooms/:id/claim` | **Not implemented** | No route, no schema, no column; `primaryClaim` appears nowhere outside this document and `packages/crypto` |
+| `primaryClaim` on GET | **Not implemented** | `provision_rooms` has no such column |
 | Per-room cap (3 / 10 min) | **Implemented**, counts correct polls too | `provisioning.ts`; blocks a conforming polling client (§6.9) |
 | Room TTL 5 min | **Implemented**, hardcoded | `identity.ts` `PROVISION_ROOM_TTL_MS` |
 | Exact hex-length validation (§6.8) | **Not implemented** server-side | `packages/protocol/schemas/provisioning.ts` uses `min()` only |
 | §6.7.1 v0 payload (seal/open) | **Superseded** | Historical format; current Rust provisioning uses v1 |
-| §6.7.2 v1 bundle payload | **Implemented** in Rust and desktop crypto | `packages/crypto/src/provisioning.rs`, `apps/desktop/src/crypto.rs` |
+| §6.7.2 v1 bundle payload, transcript AAD | **Implemented** in Rust | `packages/crypto/src/provisioning.rs` |
+| Ephemeral–ephemeral key agreement (§6.3) | **Implemented** in Rust | `provisioning.rs` `encrypt_device_bundle_for_provisioning` (fresh `EphemeralSecret` per room, consumed by its one ECDH); forward secrecy pinned by `long_term_keys_cannot_open_a_past_provisioning_room` |
+| Claim seal / verify (§6.3.1) | **Implemented** in Rust | `provisioning.rs` `compute_provisioning_sas` (verify, then SAS) and `decrypt_provisioned_bundle` (verify, decrypt, identity checks); not yet exported over UniFFI or WASM |
+| `LABEL_DEVICE_PROVISION_CLAIM` | **Registered** as `labelId` 100 | `crypto-labels.json`, `labels.rs`, `label-registry.wire.snapshot`, generated constants |
+| QR `k` parameter (§6.4) | **Not implemented** | no QR encoder or parser exists |
 | `LABEL_DEVICE_PROVISION_BUNDLE` | **Registered** as `labelId` 99 | `crypto-labels.json`, `labels.rs`, generated constants (§6.2) |
 | `PROVISIONING_BUNDLE_VERSION` | **Defined** in Rust | `packages/crypto/src/provisioning.rs` |
 | 6-digit SAS derivation | **Implemented** in Rust + reachable via FFI on all platforms | `provisioning.rs` `compute_sas`; `packages/crypto/src/ffi.rs` |
@@ -4896,8 +5147,8 @@ What exists at the time of writing, with evidence. This table is the thing to up
 | `llamenos-link` URI scheme registration | **Not registered** | iOS `Info.plist` and the Android manifest register only `llamenos://` |
 | Short code (§6.5) | **Not implemented** | no derivation in any client |
 | Primary-device encrypt path, mobile | **Not implemented** | iOS and Android wrap only `compute_shared_x_hex` / `decrypt_with_shared_key_hex`; neither has an encrypt side, so neither can act as primary |
-| Primary-device encrypt path, desktop | **Implemented in crypto; no linking UI** | `apps/desktop/src/crypto.rs` `provision_encrypt_for_device` seals both seeds, and `provision_decrypt_and_import` imports both unchanged |
-| Desktop Playwright IPC mock | **Matches the v1 bundle format** | `tests/mocks/tauri-core.ts` validates the versioned 65-byte bundle and imports both seeds |
+| Desktop IPC commands | **Pre-#1865; fail closed; no linking UI** | `apps/desktop/src/crypto.rs`: `provision_encrypt_for_device` calls the ephemeral Rust seal, but returns the long-term `primaryEncPubkeyHex` and drops `claimHex`. `provision_compute_sas` runs a raw ECDH against whatever key it is given. `provision_decrypt_and_import` passes that key where the claim is expected and is rejected with `InvalidFormat`. To conform, desktop must forward `claimHex` and call `compute_provisioning_sas` |
+| Desktop Playwright IPC mock | **Pre-#1865** | `tests/mocks/tauri-core.ts` still mirrors the long-term-key ECDH and bare-label AAD |
 | Target profile (PUK + sigchain) | **Not implemented** | PUK endpoints and FFI exist with no client callers; sigchain wired only for recovery-group enrollment and the unused revoke fields (§6.12) |
 
 ---

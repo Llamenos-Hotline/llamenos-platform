@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhoneDisabled
 import androidx.compose.material.icons.filled.PhoneInTalk
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Voicemail
 import androidx.compose.material3.Card
@@ -65,6 +66,7 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.model.ActiveCallResponseStatus
 import org.llamenos.hotline.model.durationSeconds
 import org.llamenos.hotline.model.hasRecordingFlag
+import org.llamenos.hotline.ui.admin.RecordingPlayer
 import org.llamenos.hotline.model.hasTranscriptionFlag
 import org.llamenos.hotline.model.hasVoicemailFlag
 import org.llamenos.hotline.util.DateFormatUtils
@@ -222,6 +224,7 @@ fun CallHistoryScreen(
                                 CallHistoryRecordCard(
                                     decryptedCall = decryptedCall,
                                     onAddNote = { onNavigateToNoteCreate(decryptedCall.record.id) },
+                                    loadRecording = viewModel::loadRecording,
                                 )
                             }
 
@@ -266,10 +269,12 @@ fun CallHistoryScreen(
 private fun CallHistoryRecordCard(
     decryptedCall: DecryptedCallRecord,
     onAddNote: () -> Unit = {},
+    loadRecording: suspend (callId: String) -> ByteArray,
     modifier: Modifier = Modifier,
 ) {
     val call = decryptedCall.record
     val isUnanswered = call.status == ActiveCallResponseStatus.Unanswered
+    var showRecording by remember(call.id) { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -283,136 +288,162 @@ private fun CallHistoryRecordCard(
             },
         ),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Status icon
-            Icon(
-                imageVector = if (isUnanswered) {
-                    Icons.Filled.PhoneDisabled
-                } else {
-                    Icons.Filled.PhoneInTalk
-                },
-                contentDescription = null,
-                tint = if (isUnanswered) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.primary
-                },
+        Column {
+            Row(
                 modifier = Modifier
-                    .size(24.dp)
-                    .testTag("call-status-icon"),
-            )
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Status icon
+                Icon(
+                    imageVector = if (isUnanswered) {
+                        Icons.Filled.PhoneDisabled
+                    } else {
+                        Icons.Filled.PhoneInTalk
+                    },
+                    contentDescription = null,
+                    tint = if (isUnanswered) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    modifier = Modifier
+                        .size(24.dp)
+                        .testTag("call-status-icon"),
+                )
 
-            Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(12.dp))
 
-            // Call info
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    // Prefer decrypted caller number, fall back to masked last-4
-                    val callerDisplay = decryptedCall.decryptedCallerNumber
-                        ?: call.callerLast4?.let { "***$it" }
-                        ?: stringResource(R.string.calls_unknown_caller)
-                    Text(
-                        text = callerDisplay,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.testTag("call-caller-id"),
-                    )
-
-                    if (isUnanswered) {
-                        Text(
-                            text = stringResource(R.string.call_history_filter_unanswered),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-
-                // Show decrypted answered-by volunteer name when available
-                if (decryptedCall.decryptedAnsweredBy != null) {
-                    Text(
-                        text = decryptedCall.decryptedAnsweredBy,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("call-answered-by"),
-                    )
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Timestamp
-                    Text(
-                        text = DateFormatUtils.formatTimestamp(call.startedAt),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("call-timestamp"),
-                    )
-
-                    // Duration
-                    if (call.durationSeconds != null && call.durationSeconds!! > 0) {
-                        Text(
-                            text = DateFormatUtils.formatDuration(call.durationSeconds!!),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.testTag("call-duration"),
-                        )
-                    }
-                }
-
-                // Metadata badges
-                if (call.hasVoicemailFlag || call.hasTranscriptionFlag || call.hasRecordingFlag) {
-                    Spacer(Modifier.height(6.dp))
+                // Call info
+                Column(modifier = Modifier.weight(1f)) {
                     Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (call.hasVoicemailFlag) {
-                            MetadataBadge(
-                                icon = Icons.Filled.Voicemail,
-                                label = stringResource(R.string.calls_voicemail),
-                                testTag = "call-voicemail-badge",
-                            )
-                        }
-                        if (call.hasTranscriptionFlag) {
-                            MetadataBadge(
-                                icon = Icons.Filled.GraphicEq,
-                                label = stringResource(R.string.calls_transcription),
-                                testTag = "call-transcription-badge",
-                            )
-                        }
-                        if (call.hasRecordingFlag) {
-                            MetadataBadge(
-                                icon = Icons.Filled.GraphicEq,
-                                label = stringResource(R.string.calls_recording),
-                                testTag = "call-recording-badge",
+                        // Prefer decrypted caller number, fall back to masked last-4
+                        val callerDisplay = decryptedCall.decryptedCallerNumber
+                            ?: call.callerLast4?.let { "***$it" }
+                            ?: stringResource(R.string.calls_unknown_caller)
+                        Text(
+                            text = callerDisplay,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.testTag("call-caller-id"),
+                        )
+
+                        if (isUnanswered) {
+                            Text(
+                                text = stringResource(R.string.call_history_filter_unanswered),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
                             )
                         }
                     }
+
+                    // Show decrypted answered-by volunteer name when available
+                    if (decryptedCall.decryptedAnsweredBy != null) {
+                        Text(
+                            text = decryptedCall.decryptedAnsweredBy,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("call-answered-by"),
+                        )
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Timestamp
+                        Text(
+                            text = DateFormatUtils.formatTimestamp(call.startedAt),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("call-timestamp"),
+                        )
+
+                        // Duration
+                        if (call.durationSeconds != null && call.durationSeconds!! > 0) {
+                            Text(
+                                text = DateFormatUtils.formatDuration(call.durationSeconds!!),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("call-duration"),
+                            )
+                        }
+                    }
+
+                    // Metadata badges
+                    if (call.hasVoicemailFlag || call.hasTranscriptionFlag || call.hasRecordingFlag) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (call.hasVoicemailFlag) {
+                                MetadataBadge(
+                                    icon = Icons.Filled.Voicemail,
+                                    label = stringResource(R.string.calls_voicemail),
+                                    testTag = "call-voicemail-badge",
+                                )
+                            }
+                            if (call.hasTranscriptionFlag) {
+                                MetadataBadge(
+                                    icon = Icons.Filled.GraphicEq,
+                                    label = stringResource(R.string.calls_transcription),
+                                    testTag = "call-transcription-badge",
+                                )
+                            }
+                            if (call.hasRecordingFlag) {
+                                MetadataBadge(
+                                    icon = Icons.Filled.GraphicEq,
+                                    label = stringResource(R.string.calls_recording),
+                                    testTag = "call-recording-badge",
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Play recording — the server allows admins and the volunteer who answered;
+                // anyone else gets a 403, which the player shows as a load failure.
+                if (call.hasRecordingFlag) {
+                    IconButton(
+                        onClick = { showRecording = !showRecording },
+                        modifier = Modifier.testTag("call-play-recording-${call.id}"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = stringResource(R.string.admin_recording_play),
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+
+                // Add Note button
+                IconButton(
+                    onClick = onAddNote,
+                    modifier = Modifier.testTag("call-add-note-${call.id}"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.NoteAdd,
+                        contentDescription = stringResource(R.string.calls_add_note),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
 
-            // Add Note button
-            IconButton(
-                onClick = onAddNote,
-                modifier = Modifier.testTag("call-add-note-${call.id}"),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.NoteAdd,
-                    contentDescription = stringResource(R.string.calls_add_note),
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
+            if (showRecording) {
+                RecordingPlayer(
+                    callId = call.id,
+                    loadAudio = loadRecording,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                 )
             }
         }

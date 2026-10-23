@@ -163,12 +163,119 @@ class Timings(unittest.TestCase):
             self.run_timings("mac", [[self.case("A", 10, "failed")]])
 
 
+class Report(unittest.TestCase):
+    """`** TEST EXECUTE FAILED **` is what xcodebuild prints for ANY failing test."""
+
+    def run_report(self, log: str) -> tuple[int, str]:
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "xcodebuild-test.log"
+            path.write_text(log, encoding="utf-8")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = ui.report(path, None)
+            return rc, out.getvalue()
+
+    CASES = (
+        "Test Case '-[LlamenosUITests.AUITests testOk]' passed (1.0 seconds).\n"
+        "Test Case '-[LlamenosUITests.AUITests testBad]' failed (2.0 seconds).\n"
+    )
+
+    def test_an_ordinary_assertion_failure_is_not_called_a_harness_failure(self):
+        rc, out = self.run_report(self.CASES + "** TEST EXECUTE FAILED **\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("`AUITests.testBad`", out)
+        self.assertNotIn("other than an assertion", out)
+
+    def test_execute_failed_with_every_case_green_is_a_harness_failure(self):
+        rc, out = self.run_report(
+            "Test Case '-[LlamenosUITests.AUITests testOk]' passed (1.0 seconds).\n"
+            "** TEST EXECUTE FAILED **\n"
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("other than an assertion", out)
+
+
 class RealTimings(unittest.TestCase):
     def test_the_checked_in_timings_have_both_hosts_and_a_sane_factor(self):
         prices = ui.load_timings()
         self.assertTrue(prices["mac"] and prices["hosted"])
         self.assertTrue(all(v > 0 for h in prices.values() for v in h.values()))
         self.assertTrue(1.0 < ui.host_factor(prices) < 3.0, ui.host_factor(prices))
+
+
+class NightlyReport(unittest.TestCase):
+    """The body of the issue a red scheduled run opens (#2057)."""
+
+    QUARANTINE = [("OwnedUITests", "testKnown", "a filed defect — #1240"),
+                  ("OwnedUITests", "testFixedSince", "was broken — #1410")]
+
+    def report(self, shards: dict[int, list[dict]], total: int = 4, failed_jobs: list[str] | None = None) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, cases in shards.items():
+                # download-artifact puts each artifact in its own directory.
+                d = Path(tmp) / f"ios-e2e-results-json-shard-{index}"
+                d.mkdir()
+                (d / f"ui-test-results-shard-{index}.json").write_text(json.dumps(cases), encoding="utf-8")
+            with mock.patch.object(ui, "quarantine", return_value=self.QUARANTINE):
+                return ui.nightly_report(Path(tmp), total, failed_jobs or [], "https://run")
+
+    @staticmethod
+    def case(cls: str, test: str, status: str = "passed") -> dict:
+        return {"class": cls, "test": test, "status": status, "seconds": 1.0}
+
+    def section(self, body: str, heading: str) -> str:
+        return body.split(heading, 1)[1].split("###", 1)[0]
+
+    def test_a_failure_no_quarantine_entry_owns_is_reported_as_new(self):
+        body = self.report({0: [self.case("FreshUITests", "testBroken", "failed")], 1: [], 2: [], 3: []})
+        new = self.section(body, "### Not owned by any filed defect (1)")
+        self.assertIn("`FreshUITests.testBroken` — shard 0", new)
+
+    def test_a_quarantined_failure_is_known_and_names_its_issue(self):
+        body = self.report({0: [self.case("OwnedUITests", "testKnown", "failed")], 1: [], 2: [], 3: []})
+        self.assertIn("### Not owned by any filed defect (0)\n_none_", body)
+        self.assertIn("`OwnedUITests.testKnown` — shard 0 — #1240", self.section(body, "### Quarantined and still failing (1)"))
+
+    def test_a_quarantined_test_that_passed_is_flagged_stale(self):
+        body = self.report({0: [self.case("OwnedUITests", "testFixedSince")], 1: [], 2: [], 3: []})
+        self.assertIn("`OwnedUITests.testFixedSince` — #1410", self.section(body, "the entry is stale"))
+
+    def test_a_quarantined_test_that_did_not_run_is_not_called_stale(self):
+        body = self.report({0: [], 1: [], 2: [], 3: []})
+        self.assertNotIn("stale", body)
+
+    def test_a_shard_that_wrote_no_results_is_named_not_skipped(self):
+        body = self.report({0: [self.case("A", "testOk")], 2: [], 3: []})
+        self.assertIn("Shard(s) 1 wrote no results", body)
+
+    def test_a_timed_out_test_counts_as_failing_and_says_so(self):
+        body = self.report({0: [self.case("FreshUITests", "testSlow", "timed-out")], 1: [], 2: [], 3: []})
+        self.assertIn("killed for exceeding its time allowance", body)
+
+    def test_failed_jobs_are_listed(self):
+        body = self.report({}, failed_jobs=["build (mac)"])
+        self.assertIn("`build (mac)`", body)
+        self.assertIn("Shard(s) 0, 1, 2, 3 wrote no results", body)
+
+    def test_the_signature_is_stable_for_the_same_failures_and_changes_with_them(self):
+        def signature(body: str) -> str:
+            return body.splitlines()[0]
+        a = self.report({0: [self.case("FreshUITests", "testBroken", "failed")], 1: [], 2: [], 3: []})
+        again = self.report({0: [self.case("FreshUITests", "testBroken", "failed"), self.case("Z", "testOk")],
+                             1: [], 2: [], 3: []})
+        other = self.report({0: [self.case("FreshUITests", "testOther", "failed")], 1: [], 2: [], 3: []})
+        self.assertEqual(signature(a), signature(again))
+        self.assertNotEqual(signature(a), signature(other))
+        self.assertTrue(signature(a).startswith(ui.SIGNATURE_PREFIX))
+
+    def test_an_empty_results_directory_still_produces_a_report(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(ui, "quarantine", return_value=[]):
+            body = ui.nightly_report(Path(tmp) / "never-downloaded", 4, ["ui (1)"])
+        self.assertIn("0 failing test(s) of 0 executed on 0 of 4 shard(s)", body)
+        self.assertIn("Shard(s) 0, 1, 2, 3 wrote no results", body)
 
 
 if __name__ == "__main__":

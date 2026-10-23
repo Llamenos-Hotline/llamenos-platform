@@ -19,10 +19,11 @@ typealias UserInfo = org.llamenos.protocol.Users
 typealias ServiceStatus = org.llamenos.protocol.SystemHealthResponseService
 
 // ---- Users ----
-// Generated UserListResponseUser has: pubkey, name, roles, active, createdAt.
-// Extension properties in Extensions.kt provide displayName, role, statusString.
-typealias User = org.llamenos.protocol.UserListResponseUser
-typealias UsersListResponse = org.llamenos.protocol.UserListResponse
+// The member directory (GET /api/identity/members): id, pubkey, displayName?, role
+// (admin | volunteer, resolved server-side), status (active | inactive), createdAt.
+// It carries no role ids, hub memberships or phone — never add them back client-side.
+typealias Member = org.llamenos.protocol.MemberDirectoryResponseMember
+typealias MemberDirectory = org.llamenos.protocol.MemberDirectoryResponse
 
 // ---- Ban List ----
 // Generated BanListResponseBan has: phone, bannedBy, bannedAt, reason.

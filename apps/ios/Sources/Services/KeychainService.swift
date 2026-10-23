@@ -267,7 +267,11 @@ final class KeychainService: @unchecked Sendable {
     func getPINLength() -> Int {
         guard let data = getKeychainItem(account: KeychainKey.pinLength),
               data.count == MemoryLayout<Int>.size else { return 6 }
-        let length = data.withUnsafeBytes { $0.load(as: Int.self) }
+        // `loadUnaligned`, here and below: a small `Data` keeps its bytes inline with no
+        // alignment guarantee, and `load(as:)` traps on a misaligned pointer. Thread
+        // Sanitizer's allocator exposed it — `AuthLoginBDDTests` crashed with "load from
+        // misaligned raw pointer" on every TSan run (#1920 audit).
+        let length = data.withUnsafeBytes { $0.loadUnaligned(as: Int.self) }
         return (length == 6 || length == 8) ? length : 6
     }
 
@@ -283,7 +287,7 @@ final class KeychainService: @unchecked Sendable {
     func getLockoutAttempts() -> Int {
         guard let data = getKeychainItem(account: KeychainKey.pinLockoutAttempts),
               data.count == MemoryLayout<Int>.size else { return 0 }
-        return data.withUnsafeBytes { $0.load(as: Int.self) }
+        return data.withUnsafeBytes { $0.loadUnaligned(as: Int.self) }
     }
 
     /// Persist the lockout expiry timestamp in the Keychain.
@@ -297,7 +301,7 @@ final class KeychainService: @unchecked Sendable {
     func getLockoutUntil() -> Date {
         guard let data = getKeychainItem(account: KeychainKey.pinLockoutUntil),
               data.count == MemoryLayout<Double>.size else { return .distantPast }
-        let interval = data.withUnsafeBytes { $0.load(as: Double.self) }
+        let interval = data.withUnsafeBytes { $0.loadUnaligned(as: Double.self) }
         return Date(timeIntervalSince1970: interval)
     }
 

@@ -24,6 +24,7 @@ import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.CustomFieldDef
+import org.llamenos.hotline.model.CustomFieldsResponse
 import org.llamenos.hotline.model.CustomFieldDefinitionType
 import org.llamenos.hotline.model.NotePayload
 import org.llamenos.hotline.model.NoteRepliesResponse
@@ -35,6 +36,7 @@ import org.llamenos.hotline.model.CreateNoteBodyAuthorEnvelope
 import org.llamenos.protocol.CreateReplyBody
 import org.llamenos.hotline.model.CreateReplyBodyReaderEnvelope
 import org.llamenos.hotline.model.Note
+import org.llamenos.hotline.model.UpdateNoteBody
 import org.llamenos.protocol.NoteResponse
 import org.llamenos.protocol.RecipientEnvelope
 import javax.inject.Inject
@@ -119,7 +121,10 @@ class NotesViewModel @Inject constructor(
     init {
         activeHubState.activeHubId
             .filterNotNull()
-            .onEach { loadNotes() }
+            .onEach {
+                loadNotes()
+                loadCustomFields()
+            }
             .launchIn(viewModelScope)
     }
 
@@ -216,10 +221,13 @@ class NotesViewModel @Inject constructor(
     private fun loadCustomFields() {
         viewModelScope.launch {
             try {
-                val fields = apiService.request<List<CustomFieldDef>>(
+                // The route answers `{ fields: [...] }`, not a bare array — decoding it
+                // as a list threw on every load and the catch below hid that, so notes
+                // never offered the hub's custom fields.
+                val fields = apiService.request<CustomFieldsResponse>(
                     "GET",
                     "/api/settings/custom-fields",
-                )
+                ).fields
                 _uiState.update {
                     it.copy(
                         customFields = fields.filter {  field ->
@@ -429,7 +437,11 @@ class NotesViewModel @Inject constructor(
                     authorPubkey,
                 )
 
-                val request = CreateNoteBody(
+                // The server mounts `PATCH /api/notes/:id` and no PUT, and its body is
+                // `updateNoteBodySchema` — encryptedContent plus the two envelope sets.
+                // The create body was sent here before (#1730), which both used the wrong
+                // verb and named a schema whose callId/conversationId rule this route lacks.
+                val request = UpdateNoteBody(
                     encryptedContent = encrypted.ciphertextHex,
                     authorEnvelope = CreateNoteBodyAuthorEnvelope(
                         enc = authorEnv.hpkeEnvelope.enc,
@@ -444,7 +456,7 @@ class NotesViewModel @Inject constructor(
                     },
                 )
 
-                apiService.request<NoteResponse>("PUT", apiService.hp("/api/notes/$noteId"), request)
+                apiService.request<NoteResponse>("PATCH", apiService.hp("/api/notes/$noteId"), request)
 
                 // Update local state with edited content
                 val updatedNote = _uiState.value.selectedNote?.copy(

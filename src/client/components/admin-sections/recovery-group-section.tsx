@@ -21,18 +21,18 @@ export function RecoveryGroupSection() {
   async function loadData() {
     if (!hubId) return
     setLoading(true)
-    try {
-      const [groupData, candidatesData] = await Promise.all([
-        getRecoveryGroup(hubId),
-        getRecoveryGroupCandidates(hubId),
-      ])
-      setGroup(groupData)
-      setCandidates(candidatesData)
-    } catch {
+    // Settled independently: a failed candidates lookup (#2002 — the route is
+    // not mounted yet) must not also blank out an already-configured group.
+    const [groupResult, candidatesResult] = await Promise.allSettled([
+      getRecoveryGroup(hubId),
+      getRecoveryGroupCandidates(hubId),
+    ])
+    if (groupResult.status === 'fulfilled') setGroup(groupResult.value)
+    if (candidatesResult.status === 'fulfilled') setCandidates(candidatesResult.value)
+    if (groupResult.status === 'rejected' || candidatesResult.status === 'rejected') {
       toast(t('common.error'), 'error')
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
   }
 
   useEffect(() => {

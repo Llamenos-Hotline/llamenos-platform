@@ -34,8 +34,8 @@ final class APIServiceURLTests: XCTestCase {
     }
 
     func testUserInputInTheQueryStaysInTheQuery() throws {
-        let target = try APIService.resolve(path: "/api/contacts/search?q=ana maria#1", against: base)
-        XCTAssertEqual(target.url.path, "/api/contacts/search")
+        let target = try APIService.resolve(path: "/api/bans/platform/search?q=ana maria#1", against: base)
+        XCTAssertEqual(target.url.path, "/api/bans/platform/search")
         let items = URLComponents(url: target.url, resolvingAgainstBaseURL: false)?.queryItems
         XCTAssertEqual(items?.first?.name, "q")
         XCTAssertEqual(items?.first?.value, "ana maria#1")

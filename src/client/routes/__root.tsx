@@ -11,6 +11,7 @@ import { needsServerAddress } from '@/lib/api-config'
 import { ServerAddressScreen } from '@/components/setup/ServerAddressScreen'
 import { RelayProvider } from '@/lib/relay/context'
 import { useCalls, useShiftStatus } from '@/lib/hooks'
+import { useAssigneeRewrap } from '@/lib/assignee-rewrap'
 import { CommandPalette, triggerCommandPalette } from '@/components/command-palette'
 import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog'
 import { NoteSheet } from '@/components/note-sheet'
@@ -288,6 +289,10 @@ function AuthenticatedLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { currentCall } = useCalls()
   const { onShift, currentShift, nextShift } = useShiftStatus()
+  // Admin clients re-wrap pre-claim messages for a conversation's new assignee
+  // (#2046). Lives here, not on the conversations page: an assignment must be
+  // served whatever screen the admin is on.
+  useAssigneeRewrap()
   useKeyboardShortcuts()
 
   // Close sidebar on navigation

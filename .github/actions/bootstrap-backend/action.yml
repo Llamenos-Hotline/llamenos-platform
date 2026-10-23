@@ -79,13 +79,18 @@ runs:
       if: inputs.with_sidecars == 'true'
       shell: bash
       run: |
-        # Registry-hosted images only (bbernhard/signal-cli-rest-api,
-        # andrius/asterisk) — sip-bridge and signal-notifier are local builds
-        # and unaffected by this. A single Docker Hub connection reset must
+        # Registry-hosted images only (bbernhard/signal-cli-rest-api). sip-bridge,
+        # signal-notifier and asterisk are local builds: asterisk is
+        # llamenos-asterisk:local (deploy/docker/Dockerfile.asterisk, the vetted
+        # andrius/asterisk image plus the resolver module), which exists in no
+        # registry and carries `pull_policy: build`, so `pull asterisk` skips it
+        # instead of failing "pull access denied" (#2030). The asterisk pull is
+        # kept so that a future registry-hosted asterisk image is still pulled
+        # with retry. A single Docker Hub connection reset must
         # not fail the whole job: the core `app` service is already up from
         # the previous step and is all the BDD suite strictly requires. Pull
         # each registry image independently with retry/backoff, so a failure
-        # on one (e.g. asterisk) doesn't also withhold the other (signal-cli)
+        # on one doesn't also withhold the other (signal-cli)
         # that pulled fine — then fall through without starting the affected
         # sidecar(s) rather than letting `up` (which also pulls) propagate a
         # transient registry error as a job failure.

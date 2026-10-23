@@ -1,15 +1,18 @@
 package org.llamenos.hotline.model
 
+import androidx.annotation.StringRes
+import org.llamenos.hotline.R
 import org.llamenos.protocol.BanListResponseBan
 import org.llamenos.protocol.CallRecordResponse
 import org.llamenos.protocol.Calls
 import org.llamenos.protocol.SharedEntry
+import org.llamenos.protocol.SharedMemberDirectoryEntryStatus
+import org.llamenos.protocol.SharedRole
 import org.llamenos.protocol.HubResponse
 import org.llamenos.protocol.Invite
 import org.llamenos.protocol.Server
 import org.llamenos.protocol.Shift
 import org.llamenos.protocol.SystemHealthResponseService
-import org.llamenos.protocol.UserListResponseUser
 import org.llamenos.protocol.Users
 
 /**
@@ -19,33 +22,37 @@ import org.llamenos.protocol.Users
  * compatibility with existing Android client code.
  */
 
-// ── UserListResponseUser (typealias User) ──────────────────────────────────
+// ── Member directory (typealias Member) ───────────────────────────────────
 
-/** Alias pubkey as id for UI code that uses `user.id` as a unique key. */
-val UserListResponseUser.id: String
-    get() = pubkey
+/** Localized label for the server-resolved admin/volunteer distinction. */
+@get:StringRes
+val SharedRole.labelRes: Int
+    get() = when (this) {
+        SharedRole.Admin -> R.string.users_role_admin
+        SharedRole.Volunteer -> R.string.users_role_volunteer
+    }
 
-/** Display name — the generated type uses `name` directly. */
-val UserListResponseUser.displayName: String?
-    get() = name.takeIf { it.isNotBlank() }
-
-/** Primary role as a simple String (generated type uses `roles: List<String>`). */
-val UserListResponseUser.role: String
-    get() = roles.firstOrNull()?.removePrefix("role-") ?: "volunteer"
-
-/** Status string derived from the `active` boolean. */
-val UserListResponseUser.status: String
-    get() = if (active) "active" else "inactive"
+/** Localized label for a member's active/inactive status. */
+@get:StringRes
+val SharedMemberDirectoryEntryStatus.labelRes: Int
+    get() = when (this) {
+        SharedMemberDirectoryEntryStatus.Active -> R.string.users_active
+        SharedMemberDirectoryEntryStatus.Inactive -> R.string.users_inactive
+    }
 
 // ── BanListResponseBan (typealias BanEntry) ───────────────────────────────
 
-/** Use phone hash as unique key (generated BanListResponseBan has no `id` field). */
+/**
+ * The ban's `phoneHash` — the server's HMAC of the number. It is the key
+ * `DELETE /api/bans/:phoneHash` takes and the only stable identity a ban has
+ * (`phone` is the masked display form, `***1234`, and is not unique).
+ */
 val BanListResponseBan.id: String
-    get() = phone
+    get() = phoneHash
 
-/** The hashed identifier — maps to `phone` in the generated type. */
+/** The hashed identifier (`phoneHash`). */
 val BanListResponseBan.identifierHash: String
-    get() = phone
+    get() = phoneHash
 
 /** Who created the ban — maps to `bannedBy` in the generated type. */
 val BanListResponseBan.createdBy: String

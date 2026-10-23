@@ -17,11 +17,12 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -61,19 +62,58 @@ import java.util.Collections
 /**
  * #1188: clocking in must leave this device registered to ring for every member hub.
  *
- * The HTTP side is real — a real [ApiService] talks to [MockWebServer] serving the server's
- * actual response shapes — and so are [SipRegistrar] and [LinphoneService]. Only liblinphone
- * itself is replaced: its native library does not load on the JVM, so an actual SIP REGISTER
- * cannot happen here. These tests therefore assert everything up to the liblinphone boundary:
- * one account per SIP identity added to the core, an [AuthInfo] carrying the password, every
- * member hub bound to a registration, and registration state following liblinphone's callbacks.
+ * The request side is real — a real [ApiService] builds every request, and the server's actual
+ * response shapes are parsed by its real JSON decoding — and so are [SipRegistrar] and
+ * [LinphoneService]. Only liblinphone itself is replaced: its native library does not load on
+ * the JVM, so an actual SIP REGISTER cannot happen here. These tests therefore assert everything
+ * up to the liblinphone boundary: one account per SIP identity added to the core, an [AuthInfo]
+ * carrying the password, every member hub bound to a registration, and registration state
+ * following liblinphone's callbacks.
+ *
+ * The backend is answered in-process by [backend], an OkHttp interceptor that never calls
+ * `proceed()` — so no socket is ever opened. These tests are about clock and registration
+ * STATE, not transport; a real loopback socket made them fail on any transient `IOException`
+ * (one of the three clock POSTs failing leaves `clockedIn` wrong), and the view model swallows
+ * that exception into its error state, so the only symptom was a misleading set assertion
+ * (#1811's queue ejection). Every clock action is also checked for a swallowed failure — see
+ * [assertNoClockError] — so a request that does fail names itself instead.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SipRegistrationTest {
 
-    private val server = MockWebServer()
     private val requests = Collections.synchronizedList(mutableListOf<String>())
-    @Volatile private var sipTokenResponse: MockResponse = sipTokenOk()
+    @Volatile private var sipTokenResponse: FakeResponse = sipTokenOk()
+
+    /** A backend answer: status code and JSON body. */
+    private data class FakeResponse(val code: Int, val body: String)
+
+    /**
+     * The backend, answered without a socket: the interceptor returns the response itself
+     * instead of calling `chain.proceed()`, so OkHttp never reaches its connect step.
+     */
+    private val backend = Interceptor { chain ->
+        val request = chain.request()
+        val path = request.url.encodedPath
+        requests += "${request.method} $path"
+        // The shapes apps/worker/routes/shifts.ts actually returns.
+        val answer = when {
+            path.endsWith("/shifts/clock-in") || path.endsWith("/shifts/clock-out") ->
+                FakeResponse(200, """{"ok":true}""")
+            path.endsWith("/shifts/my-status") ->
+                FakeResponse(200, """{"onShift":false,"currentShift":null,"nextShift":null}""")
+            path.endsWith("/shifts") -> FakeResponse(200, """{"shifts":[]}""")
+            path == "/api/hubs" -> FakeResponse(200, HUBS_JSON)
+            path == "/api/telephony/sip-token" -> sipTokenResponse
+            else -> FakeResponse(404, """{"error":"Not Found"}""")
+        }
+        Response.Builder()
+            .request(request)
+            .protocol(Protocol.HTTP_1_1)
+            .code(answer.code)
+            .message(if (answer.code in 200..299) "OK" else "Error")
+            .body(answer.body.toResponseBody("application/json".toMediaType()))
+            .build()
+    }
 
     private val factory = mockk<Factory>()
     private val core = mockk<Core>(relaxed = true)
@@ -121,25 +161,6 @@ class SipRegistrationTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
-        server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse {
-                val path = request.path ?: ""
-                requests += "${request.method} $path"
-                // The shapes apps/worker/routes/shifts.ts actually returns.
-                return when {
-                    path.endsWith("/shifts/clock-in") || path.endsWith("/shifts/clock-out") ->
-                        MockResponse().setBody("""{"ok":true}""")
-                    path.endsWith("/shifts/my-status") ->
-                        MockResponse().setBody("""{"onShift":false,"currentShift":null,"nextShift":null}""")
-                    path.endsWith("/shifts") -> MockResponse().setBody("""{"shifts":[]}""")
-                    path == "/api/hubs" -> MockResponse().setBody(HUBS_JSON)
-                    path == "/api/telephony/sip-token" -> sipTokenResponse
-                    else -> MockResponse().setResponseCode(404).setBody("""{"error":"Not Found"}""")
-                }
-            }
-        }
-        server.start()
-
         mockkStatic(Factory::class)
         every { Factory.instance() } returns factory
         every { factory.createCore(any(), any(), any()) } returns core
@@ -185,7 +206,7 @@ class SipRegistrationTest {
         every { core.addAccount(any()) } returns 0
 
         val store = mockk<KeyValueStore>(relaxed = true)
-        every { store.retrieve(KeystoreService.KEY_HUB_URL) } returns server.url("/").toString().trimEnd('/')
+        every { store.retrieve(KeystoreService.KEY_HUB_URL) } returns HUB_URL
         apiService = ApiService(
             authInterceptor = mockk(relaxed = true),
             retryInterceptor = mockk(relaxed = true),
@@ -193,7 +214,7 @@ class SipRegistrationTest {
             activeHubState = activeHubState,
         ).also {
             it.ioDispatcher = UnconfinedTestDispatcher()
-            it.client = OkHttpClient()
+            it.client = OkHttpClient.Builder().addInterceptor(backend).build()
         }
         linphoneService = LinphoneService(
             mockk<Context>(relaxed = true),
@@ -210,7 +231,6 @@ class SipRegistrationTest {
 
     @After
     fun tearDown() {
-        server.shutdown()
         unmockkStatic(Factory::class)
         Dispatchers.resetMain()
     }
@@ -538,7 +558,7 @@ class SipRegistrationTest {
         // The renewal fetch fails. Before this fix nothing retried, so the TURN credential — the
         // one a symmetric-NAT volunteer needs — stayed stale for the rest of the shift while the
         // device still showed as registered.
-        sipTokenResponse = MockResponse().setResponseCode(500).setBody("""{"error":"boom"}""")
+        sipTokenResponse = FakeResponse(500, """{"error":"boom"}""")
         scheduler.advanceTimeBy(SipRegistrar.MIN_REFRESH_DELAY_MS + 1_000)
         scheduler.runCurrent()
         assertEquals("the renewal was attempted", afterClockIn + 1, sipTokenFetches())
@@ -703,8 +723,8 @@ class SipRegistrationTest {
 
     @Test
     fun `phone-only call preference registers nothing and reports no error`() {
-        sipTokenResponse = MockResponse().setResponseCode(400)
-            .setBody("""{"error":"Call preference is set to phone only. Enable VoIP in settings."}""")
+        sipTokenResponse =
+            FakeResponse(400, """{"error":"Call preference is set to phone only. Enable VoIP in settings."}""")
         val vm = shiftsViewModel()
 
         vm.clockIn()
@@ -716,7 +736,7 @@ class SipRegistrationTest {
 
     @Test
     fun `a failed credential fetch is surfaced instead of swallowed`() {
-        sipTokenResponse = MockResponse().setResponseCode(500).setBody("""{"error":"boom"}""")
+        sipTokenResponse = FakeResponse(500, """{"error":"boom"}""")
         val vm = shiftsViewModel()
 
         vm.clockIn()
@@ -743,16 +763,30 @@ class SipRegistrationTest {
     }
 
     // ---- Clock state is per hub: clocking out of one hub keeps the others ringing ----
+    //
+    // Both view models catch a failed clock request into their UI state, so a failure there
+    // used to surface only as a wrong `clockedIn` set further down. Each action is checked on
+    // its own, so a failing request is reported as the failing request.
+
+    /** Fails on a clock action's own error rather than on the state it left behind. */
+    private fun ShiftsViewModel.assertClockSucceeded(action: String) =
+        assertNull("$action failed: ${uiState.value.error}", uiState.value.error)
+
+    private fun DashboardViewModel.assertClockSucceeded(action: String) =
+        assertNull("$action failed (errorRes=${uiState.value.errorRes})", uiState.value.errorRes)
 
     @Test
     fun `clocking out of one hub keeps registrations while still clocked in to another`() {
         val vm = shiftsViewModel()
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_A")
         activeHubId.value = HUB_B
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_B")
         val account = accounts.single()
 
         vm.clockOut()
+        vm.assertClockSucceeded("clock-out of $HUB_B")
 
         assertEquals(setOf(HUB_A), shiftClockRepository.clockedIn.value.keys)
         assertEquals(setOf(HUB_A, HUB_B), linphoneService.registeredHubIds())
@@ -763,12 +797,16 @@ class SipRegistrationTest {
     fun `clocking out of the last clocked-in hub unregisters`() {
         val vm = shiftsViewModel()
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_A")
         activeHubId.value = HUB_B
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_B")
         vm.clockOut()
+        vm.assertClockSucceeded("clock-out of $HUB_B")
         activeHubId.value = HUB_A
 
         vm.clockOut()
+        vm.assertClockSucceeded("clock-out of $HUB_A")
 
         assertEquals(emptyMap<String, String>(), shiftClockRepository.clockedIn.value)
         assertEquals(emptySet<String>(), linphoneService.registeredHubIds())
@@ -777,16 +815,19 @@ class SipRegistrationTest {
 
     @Test
     fun `a clock-out that leaves a hub clocked in retries a registration that had failed`() {
-        sipTokenResponse = MockResponse().setResponseCode(500).setBody("""{"error":"boom"}""")
+        sipTokenResponse = FakeResponse(500, """{"error":"boom"}""")
         val vm = shiftsViewModel()
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_A")
         activeHubId.value = HUB_B
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_B")
         assertEquals(emptySet<String>(), linphoneService.registeredHubIds())
         assertEquals(R.string.dashboard_error_in_app_calls_unavailable, vm.uiState.value.callSetupErrorRes)
 
         sipTokenResponse = sipTokenOk()
         vm.clockOut()
+        vm.assertClockSucceeded("clock-out of $HUB_B")
 
         assertEquals(setOf(HUB_A), shiftClockRepository.clockedIn.value.keys)
         assertEquals(setOf(HUB_A, HUB_B), linphoneService.registeredHubIds())
@@ -797,15 +838,20 @@ class SipRegistrationTest {
     fun `dashboard clockOut of one hub keeps registrations while another is clocked in`() {
         val vm = dashboardViewModel()
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_A")
         activeHubId.value = HUB_B
         vm.clockIn()
+        vm.assertClockSucceeded("clock-in to $HUB_B")
 
         vm.clockOut()
+        vm.assertClockSucceeded("clock-out of $HUB_B")
 
+        assertEquals(setOf(HUB_A), shiftClockRepository.clockedIn.value.keys)
         assertEquals(setOf(HUB_A, HUB_B), linphoneService.registeredHubIds())
 
         activeHubId.value = HUB_A
         vm.clockOut()
+        vm.assertClockSucceeded("clock-out of $HUB_A")
 
         assertEquals(emptySet<String>(), linphoneService.registeredHubIds())
     }
@@ -858,6 +904,8 @@ class SipRegistrationTest {
     }
 
     private companion object {
+        /** Never resolved or connected to: [backend] answers before OkHttp's connect step. */
+        const val HUB_URL = "http://hub.test"
         const val HUB_A = "hub-a"
         const val HUB_B = "hub-b"
         const val SIP_USERNAME = "vol_0123456789abcdef"
@@ -927,9 +975,10 @@ class SipRegistrationTest {
             mediaEncryption: String = "dtls-srtp",
             iceServers: String = TURN_ICE_SERVERS,
             trustAnchor: String? = TRUST_ANCHOR_PEM,
-        ): MockResponse {
+        ): FakeResponse {
             val anchor = trustAnchor?.let { ",\"tlsTrustAnchorPem\":${jsonString(it)}" } ?: ""
-            return MockResponse().setBody(
+            return FakeResponse(
+                200,
                 "{\"provider\":\"asterisk\",\"sip\":{" +
                     "\"domain\":\"$SIP_DOMAIN\",\"transport\":\"tls\"," +
                     "\"username\":\"$SIP_USERNAME\",\"password\":\"$SIP_PASSWORD\"," +

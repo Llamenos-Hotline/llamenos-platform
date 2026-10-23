@@ -8,6 +8,9 @@ import Testing
 /// comparing the server's `authorPubkey` — the author's SIGNING key — against our
 /// ENCRYPTION key. That comparison can never match, and while it gated the author
 /// envelope, the dashboard dropped every note the volunteer wrote themselves (#1024).
+///
+/// `@MainActor`: constructs `WebSocketService`, which is main-actor isolated (#1920 audit).
+@MainActor
 struct DashboardNoteDecryptTests {
 
     private func makeViewModel(cryptoService: CryptoService) -> DashboardViewModel {

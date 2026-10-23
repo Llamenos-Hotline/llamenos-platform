@@ -5,6 +5,13 @@ import UIKit
 
 /// View model for the Conversations tab. Fetches conversations from the API,
 /// manages status filtering, and handles real-time message updates via WebSocket.
+///
+/// `@MainActor` (#1920 audit): SwiftUI reads this `@Observable` state on the main thread,
+/// so every write has to land there too. Unisolated, each `async` method ran on the global
+/// executor under Swift 5.9 and wrote state from a GCD worker mid-render — the data race
+/// Thread Sanitizer reported in #1918, #2049 and #1811. Network calls still suspend off the
+/// main thread inside the API layer; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ConversationsViewModel {
     private let apiService: APIService
@@ -54,7 +61,11 @@ final class ConversationsViewModel {
 
     // MARK: - Private State
 
-    private var eventTask: Task<Void, Never>?
+    /// Exempt from main-actor isolation only so the nonisolated `deinit` can cancel it:
+    /// a `Task` handle is `Sendable` and `cancel()` is thread-safe, every other read and
+    /// write happens on the main actor, and `deinit` runs once the last reference is
+    /// gone, so nothing can race it. Not observed — no view reads it.
+    @ObservationIgnored nonisolated(unsafe) private var eventTask: Task<Void, Never>?
 
     // MARK: - Initialization
 
@@ -119,9 +130,6 @@ final class ConversationsViewModel {
 
             currentMessages = response.messages.compactMap { decryptConversationMessage($0) }
                 .sorted { $0.createdAt < $1.createdAt }
-
-            // Mark as read
-            await markAsRead(conversationId: conversationId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -190,26 +198,6 @@ final class ConversationsViewModel {
         isSending = false
     }
 
-    // MARK: - Mark as Read
-
-    /// Mark all messages in a conversation as read.
-    private func markAsRead(conversationId: String) async {
-        do {
-            let _: MarkReadResponse = try await apiService.request(
-                method: "POST",
-                path: "/api/conversations/\(conversationId)/read"
-            )
-
-            // Update the local unread count
-            if let index = allConversations.firstIndex(where: { $0.id == conversationId }) {
-                // Re-fetch to get updated count since Conversation is immutable
-                await loadConversations()
-            }
-        } catch {
-            // Non-critical — don't surface this error
-        }
-    }
-
     // MARK: - Real-time Events
 
     /// Start listening for typed WebSocket events related to conversations.
@@ -232,7 +220,6 @@ final class ConversationsViewModel {
     }
 
     /// Handle a decrypted, typed hub event — only react to conversation-related events.
-    @MainActor
     private func handleTypedEvent(_ eventType: HubEventType) {
         switch eventType {
         case .messageNew, .conversationAssigned, .conversationClosed:

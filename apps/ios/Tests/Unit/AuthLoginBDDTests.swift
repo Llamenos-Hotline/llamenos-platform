@@ -23,6 +23,8 @@ import XCTest
 /// These exercise the escalating PIN lockout ladder (H7), which is the control that
 /// protects a seized volunteer device: 1–4 free retries, 30s at 5, 2min at 7,
 /// 10min at 9, full key wipe at 10.
+/// `@MainActor`: drives `PINViewModel`, which is main-actor isolated (#1920 audit).
+@MainActor
 final class AuthLoginBDDTests: XCTestCase {
 
     private var crypto: CryptoService!

@@ -9,6 +9,16 @@ import UIKit
 /// SIP integration: when the volunteer clocks in, `onShiftStarted` fetches a short-lived
 /// SIP token from the hub and registers a Linphone account. On clock out, `onShiftEnded`
 /// unregisters the account so the volunteer stops receiving VoIP calls.
+///
+/// `@MainActor` because this is `@Observable` state that SwiftUI reads on the main
+/// thread. Without it every `async` method ran on the global executor and wrote
+/// `isLoading`, `shifts`, `isLoadingAvailability`… from a GCD worker while the view body
+/// read them (Thread Sanitizer reports the race on `isLoadingAvailability`), and an
+/// Observation write that lands while a body is being evaluated is never delivered —
+/// the screen keeps showing the old state although the server has long since answered
+/// (#2049, the same defect class as #1918). Network calls still suspend off the main
+/// thread inside `APIService`; only the state changes are pinned here.
+@MainActor
 @Observable
 final class ShiftsViewModel {
     private let apiService: APIService
@@ -82,7 +92,11 @@ final class ShiftsViewModel {
 
     // MARK: - Private State
 
-    private var timerTask: Task<Void, Never>?
+    /// Exempt from main-actor isolation only so the nonisolated `deinit` can cancel it:
+    /// a `Task` handle is `Sendable` and `cancel()` is thread-safe, every other read and
+    /// write happens on the main actor, and `deinit` runs once the last reference is
+    /// gone, so nothing can race it. Not observed — no view reads it.
+    @ObservationIgnored nonisolated(unsafe) private var timerTask: Task<Void, Never>?
 
     /// Bumped once a second while clocked in so the elapsed-time display re-evaluates.
     private var tick: Int = 0

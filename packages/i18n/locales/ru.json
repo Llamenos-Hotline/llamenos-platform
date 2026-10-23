@@ -313,7 +313,9 @@
     "noCategoriesMessage": "Категории отчётов помогают классифицировать инциденты.",
     "noInvitesMessage": "Создайте коды приглашения, чтобы добавить новых волонтёров.",
     "noSearchResults": "Нет участников, соответствующих запросу.",
-    "noUsersMessage": "Пока никто не присоединился."
+    "noUsersMessage": "Пока никто не присоединился.",
+    "tabRoles": "Roles",
+    "tabTags": "Tags"
   },
   "adminEntityType": {
     "edit": "Edit Entity Type",
@@ -2774,6 +2776,7 @@
     "errorTitle": "Ошибка приглашения",
     "expired": "Это приглашение истекло",
     "generatingKeys": "Генерация ваших ключей...",
+    "identityInitFailed": "Не удалось настроить ключи шифрования. Попробуйте ещё раз.",
     "getStarted": "Начать",
     "goToLogin": "Перейти к входу",
     "invalidCode": "Недействительный код приглашения",
@@ -3517,7 +3520,11 @@
     "importAllExist": "All selected roles already exist",
     "importSelected": "Import {{count}} role(s)",
     "importSuccess": "{{count}} role(s) imported",
-    "suggestedRoleCount": "{{count}} roles"
+    "suggestedRoleCount": "{{count}} roles",
+    "effectivePermissions": "Effective Permissions",
+    "effectivePermissionsDescription": "All permissions this member holds through their role assignments.",
+    "noPermissions": "No permissions assigned",
+    "usersLabel": "Users"
   },
   "save": "Save",
   "saveCredentials": "Save Credentials",
@@ -4272,7 +4279,9 @@
     "noTagsFound": "No tags found.",
     "uncategorized": "General",
     "preview": "Preview:",
-    "slugPreview": "Slug: {{slug}}"
+    "slugPreview": "Slug: {{slug}}",
+    "remove": "Remove {{name}}",
+    "selectTags": "Select tags"
   },
   "teams": {
     "addMembers": "Add Members",

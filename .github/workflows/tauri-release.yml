@@ -133,7 +133,7 @@ jobs:
         run: rustup target add aarch64-apple-darwin
 
       - name: Rust cache
-        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             apps/desktop
@@ -412,7 +412,7 @@ jobs:
       # Previously only the updater-only variants were captured for Windows/Linux —
       # meaning no human-runnable Windows or Linux installer ever left this workflow.
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tauri-${{ matrix.os_label }}
           path: |

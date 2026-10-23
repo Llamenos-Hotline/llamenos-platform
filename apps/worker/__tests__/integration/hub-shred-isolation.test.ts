@@ -63,7 +63,7 @@ async function seedUser(hubIds: string[]): Promise<{ pubkey: string }> {
     userPubkey: u.pubkey,
     deviceId: device!.id,
     generation: 1,
-    envelope: 'cHVrLWVudmVsb3Bl',
+    envelope: { v: 3, labelId: 1, enc: 'cHVr', ct: 'ZW52ZWxvcGU' },
   })
   const [role] = await fresh.db
     .insert(schema.roles)

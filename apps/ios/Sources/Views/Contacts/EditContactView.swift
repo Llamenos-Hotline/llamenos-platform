@@ -76,7 +76,9 @@ struct EditContactView: View {
 
 // Shared form fields sub-view
 struct ContactFormFields: View {
+    @Environment(AppState.self) private var appState
     @Bindable var vm: ContactFormViewModel
+    @State private var tagsBox = ViewModelBox<TagsViewModel>()
 
     var body: some View {
         Form {
@@ -93,11 +95,62 @@ struct ContactFormFields: View {
                 TextEditor(text: $vm.notes)
                     .frame(minHeight: 80)
             }
+            if appState.hasPermission("tags:view") {
+                Section(NSLocalizedString("tags_title", comment: "Tags")) {
+                    tagPickerSection
+                }
+            }
             if let error = vm.error {
                 Section {
                     Text(error).foregroundStyle(.red).font(.caption)
                 }
             }
         }
+    }
+
+    /// vm.tags stores slugs (matching the desktop encrypted-summary wire
+    /// format); the picker operates on tag IDs. This binding maps between
+    /// them via the loaded tag list.
+    @ViewBuilder
+    private var tagPickerSection: some View {
+        let tagsVM = resolvedTagsViewModel
+        TagPicker(
+            viewModel: tagsVM,
+            selectedTagIds: Binding(
+                get: {
+                    Set(vm.tags.compactMap { slug in
+                        tagsVM.tags.first(where: { $0.name == slug })?.id
+                    })
+                },
+                set: { newIds in
+                    // Slugs the loaded list cannot resolve (list not loaded yet,
+                    // a failed load) are not the picker's to drop.
+                    let known = Set(tagsVM.tags.map(\.name))
+                    vm.tags = vm.tags.filter { !known.contains($0) }
+                        + tagsVM.tags.filter { newIds.contains($0.id) }.map(\.name)
+                }
+            ),
+            canCreate: appState.hasPermission("tags:create")
+        )
+        // `.contain`: a bare identifier would also replace the picker's own
+        // "tag-picker-trigger" in the accessibility tree.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("contact-tag-picker")
+        .task {
+            if tagsVM.tags.isEmpty {
+                await tagsVM.loadTags()
+            }
+        }
+    }
+
+    private var resolvedTagsViewModel: TagsViewModel {
+        if let existing = tagsBox.value { return existing }
+        let tagsVM = TagsViewModel(
+            tagsAPI: TagsAPIService(apiService: appState.apiService),
+            crypto: appState.cryptoService,
+            hubIdProvider: { [hubContext = appState.hubContext] in hubContext.activeHubId }
+        )
+        tagsBox.value = tagsVM
+        return tagsVM
     }
 }

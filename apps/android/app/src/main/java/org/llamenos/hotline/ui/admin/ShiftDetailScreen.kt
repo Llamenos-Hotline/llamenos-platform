@@ -45,12 +45,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.User
+import org.llamenos.hotline.model.Member
 import org.llamenos.hotline.model.dayIndices
-import org.llamenos.hotline.model.displayName
-import org.llamenos.hotline.model.id
 import org.llamenos.hotline.model.name
-import org.llamenos.hotline.model.role
+import org.llamenos.hotline.model.labelRes
 import org.llamenos.hotline.util.DateFormatUtils
 
 /**
@@ -238,7 +236,7 @@ fun ShiftDetailScreen(
                     // Volunteer list with toggles
                     items(
                         items = uiState.allVolunteers,
-                        key = { it.id },
+                        key = { it.pubkey },
                     ) { volunteer ->
                         VolunteerAssignmentCard(
                             volunteer = volunteer,
@@ -291,7 +289,7 @@ fun ShiftDetailScreen(
  */
 @Composable
 private fun VolunteerAssignmentCard(
-    volunteer: User,
+    volunteer: Member,
     isAssigned: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
@@ -300,7 +298,7 @@ private fun VolunteerAssignmentCard(
         onClick = onToggle,
         modifier = modifier
             .fillMaxWidth()
-            .testTag("volunteer-assign-${volunteer.id}"),
+            .testTag("volunteer-assign-${volunteer.pubkey}"),
         colors = CardDefaults.cardColors(
             containerColor = if (isAssigned) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -346,7 +344,7 @@ private fun VolunteerAssignmentCard(
 
             // Role badge
             Text(
-                text = volunteer.role.removePrefix("role-").replaceFirstChar { it.uppercase() },
+                text = stringResource(volunteer.role.labelRes),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

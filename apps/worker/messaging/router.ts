@@ -75,7 +75,10 @@ messaging.get('/rcs/webhook', async (c) => {
 messaging.post('/:channel/webhook',
   webhookAuth({
     provider: 'messaging',
-    allowedContentTypes: ['application/json'],
+    // Twilio, SignalWire and Plivo deliver SMS form-encoded (their adapters
+    // read `formData()`); JSON alone 415'd every one of those messages at a
+    // URL the provider had accepted, so inbound SMS was lost silently (#2068).
+    allowedContentTypes: ['application/json', 'application/x-www-form-urlencoded'],
   }),
   async (c) => {
   const channel = c.req.param('channel') as MessagingChannelType

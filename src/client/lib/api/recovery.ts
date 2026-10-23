@@ -1,6 +1,6 @@
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import { request } from './client'
+import { request, ApiError } from './client'
 import type { RecoveryGroupInfo } from '@protocol/schemas'
 
 // ── Recovery Group ─────────────────────────────────────────────────────
@@ -46,11 +46,17 @@ export interface RecoveryGroupEnrollBody {
   rotate?: boolean
 }
 
+/**
+ * The hub's recovery group, or `null` when none is enrolled (the server's 404).
+ * Every other failure — wrong path, 403, 5xx, offline — propagates: collapsing
+ * them into `null` is what made a mis-pathed request look like "not configured".
+ */
 export async function getRecoveryGroup(hubId: string): Promise<RecoveryGroupInfo | null> {
   try {
-    return await request<RecoveryGroupInfo>(`/hubs/${hubId}/recovery-group`)
-  } catch {
-    return null
+    return await request<RecoveryGroupInfo>(`/recovery-group/${hubId}`)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null
+    throw err
   }
 }
 
@@ -125,14 +131,19 @@ export interface RecoveryGroupCandidate {
   lastSeen: string | null
 }
 
+/**
+ * Share-holder candidates for a hub's recovery group: members with a verified
+ * device and the X25519 key each share is HPKE-sealed to.
+ *
+ * The server does not mount this route yet (#2002) — no route exposes another
+ * member's device encryption key. The call is left failing loudly on purpose:
+ * it used to swallow the 404 and return [], which rendered as "no eligible
+ * holders" and hid that enrollment cannot work at all.
+ */
 export async function getRecoveryGroupCandidates(
   hubId: string,
 ): Promise<RecoveryGroupCandidate[]> {
-  try {
-    return await request<RecoveryGroupCandidate[]>(
-      `/hubs/${hubId}/recovery-group/candidates`,
-    )
-  } catch {
-    return []
-  }
+  return request<RecoveryGroupCandidate[]>(
+    `/hubs/${hubId}/recovery-group/candidates`,
+  )
 }
