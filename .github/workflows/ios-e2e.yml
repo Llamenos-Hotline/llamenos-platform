@@ -614,7 +614,7 @@ jobs:
       # covers the other case — a FULL re-run, where this job runs again and
       # would otherwise collide with attempt-1's artifact under this name.
       - name: Upload test build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}
           path: |
@@ -625,7 +625,7 @@ jobs:
           overwrite: true
 
       - name: Upload server crypto library
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}
           path: packages/crypto/dist/server/libllamenos_core.dylib
@@ -1196,7 +1196,7 @@ jobs:
 
       - name: Upload screenshots
         if: always() && inputs.take-screenshots == true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-screenshots-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/screenshots-shard-${{ matrix.shard }}
@@ -1204,7 +1204,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload test results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: ios-e2e-results-shard-${{ matrix.shard }}
@@ -1221,7 +1221,7 @@ jobs:
       # those. Scheduled runs only: nothing else reads it.
       - name: Upload per-test results for the nightly report
         if: always() && github.event_name == 'schedule'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-e2e-results-json-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json

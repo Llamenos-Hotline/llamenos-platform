@@ -2043,7 +2043,7 @@ jobs:
       # would otherwise collide with attempt-1's artifact under this name.
       - name: Upload the review report for publishing
         if: always() && github.event_name != 'merge_group'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fleet-review-report-${{ github.run_id }}
           path: ${{ runner.temp }}/review-report
@@ -2064,7 +2064,7 @@ jobs:
       # write.
       - name: Cache the verdict, if this run produced a fresh substantive one
         if: always() && steps.review.outputs.cache_artifact_name != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.review.outputs.cache_artifact_name }}
           path: ${{ runner.temp }}/review-cache
@@ -2083,7 +2083,7 @@ jobs:
       # Each namespace has its own output and its own upload step now.
       - name: Cache the verdict under its exact review set, if it has a profile
         if: always() && steps.review.outputs.cache_artifact_name_scoped != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.review.outputs.cache_artifact_name_scoped }}
           path: ${{ runner.temp }}/review-cache
