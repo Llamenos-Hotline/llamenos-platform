@@ -1991,6 +1991,7 @@ jobs:
           OUTCOME: ${{ steps.gate.outputs.outcome }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           RESULT_FILE: ${{ runner.temp }}/fleet-review-result
+          REPORT_DIR: ${{ runner.temp }}/review-report
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
@@ -2029,7 +2030,36 @@ jobs:
             echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME, result=$result — the review reached a result; the Review step's own failure is this job's red"
             exit 0
           fi
-          echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME"
+          # #2082: a green that CLAIMS a reviewer's verdict must have that
+          # verdict on its way to the PR. Two outcomes conclude green by
+          # having read the diff — `run-engine` (the Review step succeeded)
+          # and `cache-hit` (a prior PASS for this exact tree, re-published)
+          # — and both hand their text to `writeReviewReport`, which is
+          # deliberately non-fatal (a report that cannot be written must not
+          # cost the PR its verdict). Upload then runs with
+          # `if-no-files-found: ignore` and publish treats a missing artifact
+          # as "nothing to post" and succeeds, so a report that was never
+          # written left a green `PASS:reviewed` / `PASS:cached` with no
+          # comment anywhere: a verdict nothing on the PR can show. Every
+          # link in that chain was written to tolerate absence because
+          # absence is LEGITIMATE for the outcomes that never review
+          # (`bot-authored`, `low-tier` — they claim no verdict, and name
+          # themselves `PASS:bot-authored` / `PASS:low-tier` on the check) —
+          # so this is the one place that knows which absences are not.
+          # The marker file is how the naming step below tells this refusal
+          # from a generic unnamed green.
+          if [ "$OUTCOME" = "cache-hit" ] || [ "$OUTCOME" = "run-engine" ]; then
+            shopt -s nullglob
+            reports=("$REPORT_DIR"/*.json)
+            if [ "${#reports[@]}" -eq 0 ]; then
+              printf 'report-missing\n' > "$RUNNER_TEMP/fleet-review-report-missing"
+              echo "::error::fleet/review FAILED: report-missing — gate outcome=$OUTCOME concluded green having read the diff, but no review report exists in $REPORT_DIR, so fleet-review/publish has no verdict to put on the PR; refusing to conclude green on a verdict nothing can show"
+              exit 1
+            fi
+            echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME, ${#reports[@]} review report(s) to publish"
+            exit 0
+          fi
+          echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME — no verdict claimed, none to publish; the naming step below states which outcome this is"
 
       # Every reviewer's FULL text, for `fleet-review/publish` to post on
       # the PR. `if: always()` because a FAIL is exactly the case that most
@@ -2216,6 +2246,12 @@ jobs:
             else
               token="NO-VERDICT:setup-failed"
             fi
+          elif [ -f "$RUNNER_TEMP/fleet-review-report-missing" ]; then
+            # #2082: the gate (or the Review step) concluded it had read the
+            # diff, and the assert step above found no report to publish.
+            # Named on its own — folded into `unclassified` it would read as
+            # "the vocabulary needs an entry", which is the wrong action.
+            token="NO-VERDICT:report-missing"
           else
             case "$OUTCOME" in
               '') token="NO-VERDICT:gate-error" ;;
@@ -2308,6 +2344,7 @@ jobs:
             NO-VERDICT:budget-exhausted) detail="a reviewer used its whole turn budget without reaching a verdict, and nothing could be salvaged from the session either; raise DEFAULT_MAX_TURNS/HIGH_IMPACT_MAX_TURNS in orchestrator/src/review.ts, or cut what the reviewer has to explore to answer the diff — re-requesting will exhaust again, and splitting the PR usually will not help (#1485 exhausted on 10 files / +137-63)" ;;
             REJECTED:partial) detail="a reviewer rejected what it had read and then ran out of turns; fix what it names, then request a review — the rest of the diff was never read" ;;
             NO-VERDICT:partial-pass) detail="a reviewer ran out of turns having found nothing wrong in the part it did read; its comment lists what it never reviewed — read that, then request a review of the whole diff" ;;
+            NO-VERDICT:report-missing) detail="the review reached a verdict but wrote no report, so nothing could be published to the PR; re-request the review (#2082)" ;;
             NO-VERDICT:did-not-run) detail="the gate chose to review but no review result was produced" ;;
             NO-VERDICT:engine-quota) detail="the review engine hit a usage limit before reviewing anything" ;;
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
@@ -2509,8 +2546,11 @@ jobs:
           mkdir -p "$dir"
           # No report is a legitimate state (a `not-requested` or
           # `review-set-unresolved` run reviews nothing), so a missing
-          # artifact is not an error — but a report that EXISTS and cannot be
+          # artifact is not an error here — but a report that EXISTS and cannot be
           # read is, because that is a review silently not reaching the PR.
+          # (A verdict that SHOULD have a report and has none never gets this
+          # far: the fleet-review job's assert step fails it as report-missing,
+          # #2082. This job tolerates absence only because that one cannot.)
           if gh run download "$RUN_ID" -R "$REPO" -n "$ARTIFACT" -D "$dir" 2>/dev/null; then
             echo "downloaded $ARTIFACT"
           else

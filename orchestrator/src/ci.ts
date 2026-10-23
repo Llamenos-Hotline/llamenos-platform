@@ -633,7 +633,7 @@ export const REVIEW_OUTCOME_TOKENS = [
   'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed', 'NO-VERDICT:tree-changed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
   'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:partial-pass',
-  'NO-VERDICT:did-not-run',
+  'NO-VERDICT:did-not-run', 'NO-VERDICT:report-missing',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
   'NO-VERDICT:engine-unavailable', 'NO-VERDICT:base-stale',
   'NO-VERDICT:unknown-lane', 'NO-VERDICT:review-disabled', 'NO-VERDICT:export-unsafe',
