@@ -24,6 +24,11 @@ on:
       - ".github/workflows/helm-validate.yml"
   workflow_dispatch:
 
+concurrency:
+  # A superseded push cancels its own PR run (#2094); every other event gets a per-SHA group that nothing can cancel.
+  group: ${{ github.event_name == 'pull_request' && format('helm-validate-pr-{0}', github.ref) || format('helm-validate-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions: {}  # deny-all; per-job permissions below
 
 jobs:
