@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  loadWorkflow, getJob, getStep, resolveEnv, resolveExpressions, runShellStep,
+  WORKFLOWS_DIR, loadWorkflow, getJob, getStep, resolveEnv, resolveExpressions, runShellStep,
 } from './helpers/workflow-shell'
 
 /**
@@ -190,6 +190,45 @@ describe('ci.yml — release_only feeds only the ungated guards, never ci-status
       const cond = jobs[name]!.if ?? ''
       expect(cond).toContain("needs.changes.outputs.release_only != 'true'")
       expect(cond).toContain('!cancelled()')
+    },
+  )
+})
+
+describe('every workflow — superseded PR runs cancel, merge_group runs never do (#2094)', () => {
+  const files = readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.yml'))
+  const loaded = files.map((file) => {
+    const doc = loadWorkflow(file) as unknown as {
+      on?: Record<string, unknown> | string | string[]
+      true?: Record<string, unknown>
+      concurrency?: { group?: string; 'cancel-in-progress'?: boolean | string }
+    }
+    // YAML 1.1 parses a bare `on:` key as boolean true.
+    const on = doc.on ?? doc.true ?? {}
+    const triggers = typeof on === 'string' ? [on] : Array.isArray(on) ? on : Object.keys(on)
+    return { file, triggers, concurrency: doc.concurrency }
+  })
+
+  it('finds the workflows — a vacuous directory scan must not pass', () => {
+    expect(loaded.length).toBeGreaterThan(20)
+    expect(loaded.filter((w) => w.triggers.includes('merge_group')).length).toBeGreaterThan(3)
+  })
+
+  it.each(loaded.filter((w) => w.triggers.includes('pull_request')))(
+    '$file groups its pull_request runs so a re-push can supersede them',
+    ({ concurrency }) => {
+      expect(concurrency?.group, 'a PR-triggered workflow without a workflow-level concurrency group never cancels').toBeTruthy()
+    },
+  )
+
+  it.each(loaded.filter((w) => w.triggers.includes('merge_group') && w.concurrency))(
+    '$file cannot cancel a merge_group run',
+    ({ concurrency }) => {
+      const cancel = concurrency?.['cancel-in-progress']
+      const safe =
+        cancel === false ||
+        cancel === 'false' ||
+        (typeof cancel === 'string' && /^\$\{\{\s*github\.event_name == 'pull_request'\s*\}\}$/.test(cancel))
+      expect(safe, `cancel-in-progress is ${String(cancel)} — a cancelled queue check ejects the entry`).toBe(true)
     },
   )
 })
