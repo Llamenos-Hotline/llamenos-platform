@@ -6,7 +6,7 @@ import SwiftUI
 /// and the interaction timeline.
 struct ContactDetailView: View {
     @Environment(AppState.self) private var appState
-    let summary: ContactSummary
+    let summary: SharedContactTimelineListResponseContact
     @State private var viewModelBox = ViewModelBox<ContactDetailViewModel>()
 
     private var contactHash: String { summary.contactHash }

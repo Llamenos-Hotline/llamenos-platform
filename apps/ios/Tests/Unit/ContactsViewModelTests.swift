@@ -82,9 +82,9 @@ final class ContactsViewModelTests: XCTestCase {
         """#
     }
 
-    private func summary(_ hash: String, last4: String?, notes: Int = 0, conversations: Int = 0) throws -> ContactSummary {
+    private func summary(_ hash: String, last4: String?, notes: Int = 0, conversations: Int = 0) throws -> SharedContactTimelineListResponseContact {
         try JSONDecoder().decode(
-            ContactSummary.self,
+            SharedContactTimelineListResponseContact.self,
             from: Data(summaryJSON(hash, last4: last4, notes: notes, conversations: conversations).utf8)
         )
     }

@@ -9,7 +9,7 @@ struct ReportsView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
     @State private var viewModelBox = ViewModelBox<ReportsViewModel>()
-    @State private var selectedReportType: ClientReportTypeDefinition?
+    @State private var selectedReportType: CMSReportTypeListResponseReportType?
 
     var body: some View {
         let vm = resolvedViewModel
@@ -309,7 +309,7 @@ struct ReportsView: View {
 
 /// A single report row in the list, showing title, status badge, category or type label, and date.
 struct ReportRowView: View {
-    let report: ClientReportResponse
+    let report: SharedConversation
     var reportTypeLabel: String?
 
     var body: some View {

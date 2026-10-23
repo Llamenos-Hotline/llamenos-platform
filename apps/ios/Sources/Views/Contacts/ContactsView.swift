@@ -216,13 +216,13 @@ enum ContactNavDestination: Hashable {
     case timeline(contactHash: String, displayIdentifier: String)
     /// Carries the whole summary row: the profile is that row plus the activity
     /// the server returns for the contact, so it needs no second lookup of it.
-    case detail(ContactSummary)
+    case detail(SharedContactTimelineListResponseContact)
 }
 
 // MARK: - ContactRowView
 
 struct ContactRowView: View {
-    let contact: ContactSummary
+    let contact: SharedContactTimelineListResponseContact
 
     var body: some View {
         HStack(spacing: 12) {
@@ -265,11 +265,11 @@ struct ContactRowView: View {
     }
 
     @ViewBuilder
-    private func interactionBadge(icon: String, count: Int, color: Color) -> some View {
+    private func interactionBadge(icon: String, count: Double, color: Color) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
                 .font(.brand(.caption))
-            Text("\(count)")
+            Text("\(Int(count))")
                 .font(.brand(.caption))
                 .fontWeight(.medium)
         }

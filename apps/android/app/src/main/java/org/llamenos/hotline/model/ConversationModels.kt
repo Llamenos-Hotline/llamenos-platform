@@ -8,7 +8,7 @@ typealias CreateMessageEnvelope = org.llamenos.protocol.SharedAdminEnvelope
 
 // ── Wire types ──────────────────────────────────────────────────────────────
 // Conversations and messages are decoded straight into the generated protocol
-// types — `ConversationListResponse` / `ConversationListResponseConversation`
+// types — `ConversationListResponse` / `SharedConversation`
 // and `MessageListResponse` / `Message`. They used to be hand-written here under
 // UI-friendly names (`contactHash`, `assignedVolunteerPubkey`, `recipientEnvelopes`,
 // `unreadCount`), none of which the server sends: the list failed to decode on

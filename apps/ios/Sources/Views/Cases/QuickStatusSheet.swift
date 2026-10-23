@@ -6,7 +6,7 @@ import SwiftUI
 /// Shows template-defined status options with color indicators.
 struct QuickStatusSheet: View {
     let currentStatus: String
-    let statuses: [CaseEnumOption]
+    let statuses: [SharedStatus]
     let onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -14,7 +14,7 @@ struct QuickStatusSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(statuses.sorted { ($0.order ?? 0) < ($1.order ?? 0) }) { status in
+                ForEach(statuses.sorted { $0.order < $1.order }) { status in
                     Button {
                         onSelect(status.value)
                     } label: {

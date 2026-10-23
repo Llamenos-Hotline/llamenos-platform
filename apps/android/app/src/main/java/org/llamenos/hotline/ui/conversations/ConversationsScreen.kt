@@ -42,7 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 import org.llamenos.hotline.util.DateFormatUtils
-import org.llamenos.protocol.ConversationListResponseConversation
+import org.llamenos.protocol.SharedConversation
 import org.llamenos.protocol.SharedReportResponseStatus
 
 /**
@@ -189,7 +189,7 @@ fun ConversationsScreen(
  */
 @Composable
 private fun ConversationCard(
-    conversation: ConversationListResponseConversation,
+    conversation: SharedConversation,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {

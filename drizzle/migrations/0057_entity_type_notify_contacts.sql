@@ -1,0 +1,1 @@
+ALTER TABLE "entity_type_definitions" ADD COLUMN "notify_contacts_on_status_change" boolean DEFAULT false NOT NULL;

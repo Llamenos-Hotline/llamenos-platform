@@ -31,23 +31,23 @@ final class CaseManagementViewModel {
     var loadState: CaseListLoadState = .loading
 
     /// Entity type definitions from the template.
-    var entityTypes: [CaseEntityTypeDefinition] = []
+    var entityTypes: [EntityType] = []
 
     /// Why the last records fetch failed, while there are no records to show instead.
     /// Cleared by the next successful fetch.
     var recordsLoadError: String?
 
     /// Case records from the current query.
-    var records: [CaseRecord] = []
+    var records: [SharedRecordListResponseRecord] = []
 
     /// Total record count for pagination.
     var totalRecords: Int = 0
 
     /// Currently selected record for the detail panel.
-    var selectedRecord: CaseRecord?
+    var selectedRecord: SharedRecordListResponseRecord?
 
     /// Currently selected entity type for the detail panel.
-    var selectedEntityType: CaseEntityTypeDefinition?
+    var selectedEntityType: EntityType?
 
     /// Active detail tab.
     var activeTab: DetailTab = .details
@@ -160,9 +160,9 @@ final class CaseManagementViewModel {
     }
 
     /// All unique statuses across entity types (for filter dropdown).
-    var allStatuses: [CaseEnumOption] {
+    var allStatuses: [SharedStatus] {
         var seen = Set<String>()
-        var result: [CaseEnumOption] = []
+        var result: [SharedStatus] = []
         for et in entityTypes {
             for s in et.statuses where !seen.contains(s.value) {
                 seen.insert(s.value)
@@ -183,13 +183,13 @@ final class CaseManagementViewModel {
     }
 
     /// Entity type for a given ID.
-    func entityType(for id: String) -> CaseEntityTypeDefinition? {
+    func entityType(for id: String) -> EntityType? {
         entityTypes.first { $0.id == id }
     }
 
     /// Status definition for a record.
-    func statusDef(for record: CaseRecord) -> CaseEnumOption? {
-        entityType(for: record.entityTypeId)?.statuses.first { $0.value == record.statusHash }
+    func statusDef(for record: SharedRecordListResponseRecord) -> SharedStatus? {
+        entityType(for: record.entityTypeID)?.statuses.first { $0.value == record.statusHash }
     }
 
     /// Decrypted title for a record, if available.
@@ -235,7 +235,7 @@ final class CaseManagementViewModel {
         async let enabledRequest: CaseManagementEnabledResponse = apiService.request(
             method: "GET", path: apiService.hp("/api/settings/cms/case-management")
         )
-        async let typesRequest: EntityTypesResponse = apiService.request(
+        async let typesRequest: EntityTypeListResponse = apiService.request(
             method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
         )
 
@@ -260,7 +260,7 @@ final class CaseManagementViewModel {
         do {
             let response = try await typesRequest
             guard isCurrentInitialLoad(epoch) else { return }
-            entityTypes = response.entityTypes.filter { $0.isArchived != true }
+            entityTypes = response.entityTypes.filter { !$0.isArchived }
         } catch {
             guard isCurrentInitialLoad(epoch) else { return }
             loadState = .failed(error.localizedDescription)
@@ -297,12 +297,12 @@ final class CaseManagementViewModel {
         }
 
         do {
-            let response: RecordsListResponse = try await apiService.request(
+            let response: RecordListResponse = try await apiService.request(
                 method: "GET", path: path
             )
             guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
             records = response.records
-            totalRecords = response.total
+            totalRecords = Int(response.total)
             recordsLoadError = nil
 
             // Decrypt summaries for all loaded records
@@ -315,9 +315,9 @@ final class CaseManagementViewModel {
     }
 
     /// Select a record and load its detail data.
-    func selectRecord(_ record: CaseRecord) async {
+    func selectRecord(_ record: SharedRecordListResponseRecord) async {
         selectedRecord = record
-        selectedEntityType = entityType(for: record.entityTypeId)
+        selectedEntityType = entityType(for: record.entityTypeID)
         activeTab = .details
 
         // Decrypt fields for the selected record
@@ -344,16 +344,16 @@ final class CaseManagementViewModel {
 
     /// Decrypt the encrypted summary of each record to extract title/description.
     /// This runs on the list view to show titles in case cards.
-    private func decryptRecordSummaries(_ records: [CaseRecord]) async {
+    private func decryptRecordSummaries(_ records: [SharedRecordListResponseRecord]) async {
         guard cryptoService.isUnlocked, let ourPubkey = cryptoService.pubkey else { return }
 
         for record in records {
             // Skip if already decrypted
             if decryptedSummaries[record.id] != nil { continue }
 
-            guard let encryptedSummary = record.encryptedSummary,
-                  let envelopes = record.summaryEnvelopes,
-                  !envelopes.isEmpty else { continue }
+            let encryptedSummary = record.encryptedSummary
+            let envelopes = record.summaryEnvelopes
+            guard !envelopes.isEmpty else { continue }
 
             // Find our envelope
             guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { continue }
@@ -382,7 +382,7 @@ final class CaseManagementViewModel {
     // MARK: - Field Decryption
 
     /// Decrypt encrypted fields for the selected record to display in the detail view.
-    private func decryptRecordFields(_ record: CaseRecord) async {
+    private func decryptRecordFields(_ record: SharedRecordListResponseRecord) async {
         isDecryptingFields = true
         defer { isDecryptingFields = false }
         decryptedFieldValues = [:]
@@ -480,7 +480,7 @@ final class CaseManagementViewModel {
         defer { isActionInProgress = false }
 
         do {
-            let _: CaseRecord = try await apiService.request(
+            let _: SharedRecordListResponseRecord = try await apiService.request(
                 method: "PATCH", path: apiService.hp("/api/records/\(recordId)"),
                 body: UpdateRecordRequest(statusHash: newStatus, severityHash: nil)
             )
@@ -488,7 +488,7 @@ final class CaseManagementViewModel {
             if selectedRecord?.id == recordId {
                 // Refresh selected record
                 do {
-                    let fresh: CaseRecord = try await apiService.request(
+                    let fresh: SharedRecordListResponseRecord = try await apiService.request(
                         method: "GET", path: apiService.hp("/api/records/\(recordId)")
                     )
                     selectedRecord = fresh
@@ -504,35 +504,51 @@ final class CaseManagementViewModel {
     }
 
     /// Add a comment interaction to a record.
-    func addComment(recordId: String, text: String) async {
+    ///
+    /// - Parameters:
+    ///   - recordId: The record the comment belongs to.
+    ///   - text: Comment plaintext. Never leaves the device unencrypted.
+    ///   - adminPubkeys: X25519 admin decryption pubkeys that must also be able
+    ///     to read the comment. The server stores `contentEnvelopes` verbatim
+    ///     (`CasesService.createInteraction`) and never adds readers of its own,
+    ///     so every reader has to be wrapped for here or admin accountability
+    ///     access is lost — see `docs/security/CRYPTO_ARCHITECTURE.md`.
+    func addComment(recordId: String, text: String, adminPubkeys: [String]) async {
         isActionInProgress = true
         defer { isActionInProgress = false }
 
         do {
-            // Encrypt the comment content
+            // Encrypt the comment content for the author and every admin reader.
             let encrypted = try cryptoService.encryptMessage(
                 plaintext: text,
-                readerPubkeys: [] // Server adds admin pubkeys
+                readerPubkeys: adminPubkeys
             )
 
             let envelopes = encrypted.envelopes.map { env in
-                CaseEnvelope(
+                SharedAdminEnvelope(
                     ct: env.ct,
                     enc: env.enc,
                     pubkey: env.pubkey
                 )
             }
 
-            let body = CreateInteractionRequest(
-                interactionType: "comment",
-                encryptedContent: encrypted.encryptedContent,
+            let body = CreateInteractionBody(
                 contentEnvelopes: envelopes,
-                interactionTypeHash: "comment_hash"
+                encryptedContent: encrypted.encryptedContent,
+                interactionType: .comment,
+                interactionTypeHash: "comment_hash",
+                newStatusHash: nil,
+                previousStatusHash: nil,
+                sourceID: nil
             )
 
+            // `wireBody:` and not `body:` — `createInteractionBodySchema` requires
+            // camelCase `interactionType`/`interactionTypeHash`, and the default
+            // encoder's `.convertToSnakeCase` would rewrite them (and
+            // `contentEnvelopes`) into keys the route validator rejects.
             let _: CaseInteraction = try await apiService.request(
                 method: "POST", path: apiService.hp("/api/records/\(recordId)/interactions"),
-                body: body
+                wireBody: body
             )
 
             // Reload timeline
@@ -559,7 +575,7 @@ final class CaseManagementViewModel {
             // Refresh selected record if it's the one we assigned
             if selectedRecord?.id == recordId {
                 do {
-                    let fresh: CaseRecord = try await apiService.request(
+                    let fresh: SharedRecordListResponseRecord = try await apiService.request(
                         method: "GET", path: apiService.hp("/api/records/\(recordId)")
                     )
                     selectedRecord = fresh
@@ -586,7 +602,7 @@ final class CaseManagementViewModel {
             // Refresh selected record
             if selectedRecord?.id == recordId {
                 do {
-                    let fresh: CaseRecord = try await apiService.request(
+                    let fresh: SharedRecordListResponseRecord = try await apiService.request(
                         method: "GET", path: apiService.hp("/api/records/\(recordId)")
                     )
                     selectedRecord = fresh

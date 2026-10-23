@@ -4,10 +4,10 @@ import SwiftUI
 
 /// Groups entity records by month and displays them in a calendar-like list.
 struct EntityCalendarView: View {
-    let records: [CaseRecord]
-    let onSelectRecord: (CaseRecord) -> Void
+    let records: [SharedRecordListResponseRecord]
+    let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
-    private var grouped: [(String, [CaseRecord])] {
+    private var grouped: [(String, [SharedRecordListResponseRecord])] {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM"
 
@@ -53,7 +53,7 @@ struct EntityCalendarView: View {
 }
 
 private struct CalendarRecordRow: View {
-    let record: CaseRecord
+    let record: SharedRecordListResponseRecord
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -78,10 +78,10 @@ private struct CalendarRecordRow: View {
 
 /// Displays entity records in newest-first vertical timeline order.
 struct EntityTimelineView: View {
-    let records: [CaseRecord]
-    let onSelectRecord: (CaseRecord) -> Void
+    let records: [SharedRecordListResponseRecord]
+    let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
-    private var sorted: [CaseRecord] {
+    private var sorted: [SharedRecordListResponseRecord] {
         records.sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -108,7 +108,7 @@ struct EntityTimelineView: View {
 }
 
 private struct TimelineRecordRow: View {
-    let record: CaseRecord
+    let record: SharedRecordListResponseRecord
     let onTap: () -> Void
 
     var body: some View {

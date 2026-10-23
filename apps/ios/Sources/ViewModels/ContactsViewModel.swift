@@ -12,7 +12,7 @@ import Foundation
 final class ContactsViewModel {
     private let apiService: APIService
 
-    var contacts: [ContactSummary] = []
+    var contacts: [SharedContactTimelineListResponseContact] = []
     var total: Int = 0
     var currentPage: Int = 1
     var searchQuery: String = ""
@@ -28,7 +28,7 @@ final class ContactsViewModel {
     var hasMore: Bool { contacts.count < total }
 
     /// Filtered contacts based on selected contact type.
-    var filteredContacts: [ContactSummary] {
+    var filteredContacts: [SharedContactTimelineListResponseContact] {
         contacts
     }
 
@@ -49,12 +49,12 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactsListResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             contacts = response.contacts
-            total = response.total
+            total = Int(response.total)
             currentPage = 1
         } catch {
             if contacts.isEmpty {
@@ -78,12 +78,12 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactsListResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             contacts.append(contentsOf: response.contacts)
-            total = response.total
+            total = Int(response.total)
             currentPage = nextPage
         } catch {
             // Silently fail for pagination
@@ -125,9 +125,9 @@ final class ContactsViewModel {
     ///
     /// Each contact once: the server appends the contacts known only from
     /// conversations to every page of the list, so pages overlap.
-    private func fetchAllContacts() async throws -> [ContactSummary] {
+    private func fetchAllContacts() async throws -> [SharedContactTimelineListResponseContact] {
         let pageSize = 200
-        var all: [ContactSummary] = []
+        var all: [SharedContactTimelineListResponseContact] = []
         var seen = Set<String>()
         var page = 1
         while true {
@@ -136,13 +136,13 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactsListResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             let fresh = response.contacts.filter { seen.insert($0.contactHash).inserted }
             all.append(contentsOf: fresh)
-            if fresh.isEmpty || all.count >= response.total { return all }
+            if fresh.isEmpty || Double(all.count) >= response.total { return all }
             page += 1
         }
     }
@@ -183,7 +183,7 @@ final class ContactsViewModel {
 @Observable
 final class ContactDetailViewModel {
     private let apiService: APIService
-    let summary: ContactSummary
+    let summary: SharedContactTimelineListResponseContact
     var contactHash: String { summary.contactHash }
 
     var contact: ContactDetail?
@@ -192,7 +192,7 @@ final class ContactDetailViewModel {
     var isLoadingRelationships = false
     var errorMessage: String?
 
-    init(apiService: APIService, summary: ContactSummary) {
+    init(apiService: APIService, summary: SharedContactTimelineListResponseContact) {
         self.apiService = apiService
         self.summary = summary
     }
@@ -287,7 +287,7 @@ final class ContactTimelineViewModel {
                 path: apiService.hp("/api/contacts/\(contactHash)")
             )
             events = response.events
-            total = response.total
+            total = Int(response.total)
         } catch {
             if events.isEmpty {
                 errorMessage = error.localizedDescription

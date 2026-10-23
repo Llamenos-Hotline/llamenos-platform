@@ -3,9 +3,9 @@ import SwiftUI
 struct EntityTypeAdminView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var entityTypes: [CaseEntityTypeDefinition] = []
+    @State private var entityTypes: [EntityType] = []
     @State private var loading = true
-    @State private var editingType: CaseEntityTypeDefinition?
+    @State private var editingType: EntityType?
     @State private var loadError: String?
 
     var body: some View {
@@ -47,7 +47,7 @@ struct EntityTypeAdminView: View {
         loading = true
         loadError = nil
         do {
-            let response: EntityTypesResponse = try await appState.apiService.request(
+            let response: EntityTypeListResponse = try await appState.apiService.request(
                 method: "GET", path: appState.apiService.hp("/api/settings/cms/entity-types")
             )
             entityTypes = response.entityTypes.filter { $0.isArchived != true }

@@ -200,7 +200,7 @@ struct CaseListView: View {
                     ForEach(vm.records) { record in
                         CaseCardRow(
                             record: record,
-                            entityType: vm.entityType(for: record.entityTypeId),
+                            entityType: vm.entityType(for: record.entityTypeID),
                             statusDef: vm.statusDef(for: record),
                             decryptedTitle: vm.decryptedTitle(for: record.id)
                         )
@@ -389,9 +389,9 @@ struct CaseListView: View {
 /// A single case card in the list showing case number, decrypted title, status,
 /// entity type, assigned count, and relative timestamp.
 private struct CaseCardRow: View {
-    let record: CaseRecord
-    let entityType: CaseEntityTypeDefinition?
-    let statusDef: CaseEnumOption?
+    let record: SharedRecordListResponseRecord
+    let entityType: EntityType?
+    let statusDef: SharedStatus?
     let decryptedTitle: String?
 
     var body: some View {
@@ -501,7 +501,7 @@ private struct CaseCardRow: View {
 /// Form for creating a new case record. Encrypts summary data (title, description,
 /// default status/severity) and POSTs to `/api/records`.
 private struct CreateCaseSheet: View {
-    let entityTypes: [CaseEntityTypeDefinition]
+    let entityTypes: [EntityType]
     let appState: AppState
     let onCreated: (String) -> Void
 
@@ -513,7 +513,7 @@ private struct CreateCaseSheet: View {
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String?
 
-    private var selectedType: CaseEntityTypeDefinition? {
+    private var selectedType: EntityType? {
         entityTypes.first(where: { $0.id == selectedTypeId })
     }
 
@@ -715,7 +715,7 @@ private struct CreateCaseSheet: View {
             ]
 
             let jsonData = try JSONSerialization.data(withJSONObject: body)
-            let response: CaseRecord = try await appState.apiService.request(
+            let response: SharedRecordListResponseRecord = try await appState.apiService.request(
                 method: "POST",
                 path: appState.apiService.hp("/api/records"),
                 rawBody: jsonData

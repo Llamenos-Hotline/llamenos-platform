@@ -99,7 +99,7 @@
       "path": "/api/reports",
       "module": "@protocol/schemas/reports",
       "schema": "createReportBodySchema",
-      "swiftType": "CreateTypedReportRequest",
+      "swiftType": "CreateReportBody",
       "callSite": "apps/ios/Sources/ViewModels/ReportsViewModel.swift",
       "optionalKeys": [
         "category",
