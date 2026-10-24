@@ -74,7 +74,6 @@ Không bao giờ chạy `wrangler pages deploy` hoặc `wrangler deploy` trực 
 
 ```bash
 bun run deploy          # Triển khai tất cả
-bun run deploy:demo     # Chỉ Worker ứng dụng
 bun run deploy:site     # Chỉ trang marketing
 ```
 

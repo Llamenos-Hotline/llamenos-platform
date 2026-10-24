@@ -189,10 +189,6 @@ When('I click the {string} link', async ({ page }, name: string) => {
   }
 })
 
-When('I click the {string} demo account', async ({ page }, name: string) => {
-  await page.getByText(name, { exact: true }).first().click()
-})
-
 // --- Text entry patterns ---
 
 When('I enter {string} in the {string} field', async ({ page }, value: string, field: string) => {
@@ -584,15 +580,6 @@ Then('they should arrive at the profile setup or dashboard', async ({ page }) =>
 })
 
 // --- Dismiss patterns ---
-
-When('I dismiss the demo banner', async ({ page }) => {
-  const dismissBtn = page.getByTestId('dismiss-demo-banner')
-    .or(page.locator('button[aria-label="Dismiss"]'))
-    .first()
-  if (await dismissBtn.waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false)) {
-    await dismissBtn.click()
-  }
-})
 
 When('I dismiss the invite link card', async ({ page }) => {
   await page.getByTestId(TestIds.DISMISS_INVITE).click()

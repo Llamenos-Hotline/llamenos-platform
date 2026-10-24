@@ -111,11 +111,11 @@ class NoteThreadSteps : BaseSteps() {
     @Then("notes with replies should show a reply count badge")
     fun notesWithRepliesShouldShowAReplyCountBadge() {
         // If any notes have replies, their badge should be visible
-        // This is a best-effort check — in demo mode, notes may or may not have replies
+        // This is a best-effort check — seeded notes may or may not have replies
         try {
             onAllNodes(hasTestTagPrefix("note-reply-badge-")).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
-            // No notes with replies — acceptable in demo mode
+            // No notes with replies — acceptable against seeded data
         }
     }
 }

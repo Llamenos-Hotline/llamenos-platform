@@ -22,7 +22,7 @@ Group `tags` is the tag-scoped half. Every `just deploy-*` recipe runs with
 `--tags X`, and a `tags: always` on a dynamic `include_tasks` tags ONLY the
 include, so a guard behind one is silently skipped exactly on the normal deploy
 path. It (a) statically refuses any include_tasks/include_role that carries
-`tags:` without `apply:`, and (b) re-runs the RAM, disk-tier and demo-mode
+`tags:` without `apply:`, and (b) re-runs the RAM, disk-tier and dev-routes
 guards and the unencrypted-host skip under each recipe's tag selection with the
 violating layout and requires the guard's own failure.
 """
@@ -70,7 +70,6 @@ VALID_VARS = {
     "llamenos_ntfy_enabled": True,
     "ntfy_domain": "push.hotline.example.org",
     "llamenos_dns_validation_enabled": False,
-    "demo_mode": False,
     "dev_routes_enabled": False,
     "dev_reset_secret": "",
 }
@@ -375,13 +374,15 @@ def tag_cases(r: Runner) -> None:
         rc, out = r.run(pf, inventory(hosts=h), {"ansible_facts": warm}, "--tags", tag)
         r.expect(f"tags[{t}]: disk-tier guard refuses a host without llamenos_disk_encrypted", False, out, rc,
                  must=["REQUIRED: set `llamenos_disk_encrypted: true` or `false`"])
-        rc, out = r.run(pf, inventory(), {"ansible_facts": warm, "demo_mode": True,
-                                          "demo_mode_confirm": "DESTROY_ALL_DATA"}, "--tags", tag)
-        r.expect(f"tags[{t}]: demo-mode guard refuses demo_mode in production", False, out, rc,
-                 must=["REFUSING TO DEPLOY: demo_mode, dev_routes_enabled and dev_reset_secret"])
+        # The demo_mode half of this pair went with tasks/guard-demo-mode.yml in #1604.
+        # tasks/guard-dev-routes.yml, which never referenced demo mode, carries both
+        # remaining directions.
         rc, out = r.run(pf, inventory(), {"ansible_facts": warm, "dev_routes_enabled": True}, "--tags", tag)
-        r.expect(f"tags[{t}]: demo-mode guard refuses dev_routes_enabled in production", False, out, rc,
-                 must=["REFUSING TO DEPLOY: demo_mode, dev_routes_enabled and dev_reset_secret"])
+        r.expect(f"tags[{t}]: dev-routes guard refuses dev_routes_enabled in production", False, out, rc,
+                 must=["REFUSING TO DEPLOY: dev_routes_enabled and dev_reset_secret"])
+        rc, out = r.run(pf, inventory(), {"ansible_facts": warm, "dev_reset_secret": "x" * 64}, "--tags", tag)
+        r.expect(f"tags[{t}]: dev-routes guard refuses dev_reset_secret in production", False, out, rc,
+                 must=["REFUSING TO DEPLOY: dev_routes_enabled and dev_reset_secret"])
         # MemFree looks healthy but MemAvailable is below the floor -> must fail...
         rc, out = r.run(pf, inventory(), {"ansible_facts": fake_facts(300, 8000)}, "--tags", tag, *only_platform)
         r.expect(f"tags[{t}]: RAM floor refuses 300 MiB available (MemFree 8000)", False, out, rc,

@@ -13,7 +13,7 @@
 #      mobile-release.yml — called as reusable workflows, not dispatched)
 #   6. `release`: checksum EVERYTHING now attached, SBOM, provenance, cosign,
 #      GPG; assert the release is complete; only then publish it
-#   7. `docker-stable` / `dispatch`: container image, demo deploy, iOS build
+#   7. `docker-stable` / `dispatch`: container image, iOS build
 #
 # Why the release is held as a draft until step 6: the repo has immutable
 # releases, so assets cannot be added to a PUBLISHED release. Publishing
@@ -35,12 +35,13 @@
 # REQUIRED list below, because aliases carry no version in their names.
 #
 # This workflow calls (not dispatches) the desktop and Android builds so that
-# `release` can wait for them. It still dispatches the iOS build and the demo
-# deploy, which nothing here depends on: GitHub Releases created by
+# `release` can wait for them. It still dispatches the iOS build, which
+# nothing here depends on: GitHub Releases created by
 # GITHUB_TOKEN do NOT fire `release: published` for downstream workflows
 # (anti-recursion rule), so `gh workflow run` is the only way to start them —
 # see #712. Dispatching via `POST /actions/workflows/{id}/dispatches` requires
-# `actions: write` on the job token (#711).
+# `actions: write` on the job token (#711). (A dispatch to deploy-demo.yml went
+# with demo mode in #1604: there is no demo deployment to push a release to.)
 
 name: Release
 
@@ -780,7 +781,7 @@ jobs:
   # are called (`desktop` / `android` above) so the release can wait for the
   # installers it publishes. What remains is the iOS build — its IPA is store-
   # only, not installable, and the macOS runners are scarce, so it must never
-  # hold a release up — and the demo deploy.
+  # hold a release up.
   #
   # No continue-on-error here (#711): a rejected or failed `gh workflow run`
   # must turn this job red, not green. Each step also polls `gh run list`
@@ -828,38 +829,3 @@ jobs:
             exit 1
           fi
           echo "iOS Release run: $RUN_URL"
-
-      - name: Dispatch Demo deploy
-        # #712 decision: option (a), explicit dispatch from this job rather
-        # than relying on `release: [published]` (which never fires for
-        # GITHUB_TOKEN-created releases). Targets deploy-demo.yml, not
-        # auto-deploy-demo.yml — deploy-demo.yml already declares
-        # `workflow_dispatch` and needs no trigger changes; auto-deploy-demo.yml
-        # only has the dead `release: [published]` trigger and is outside this
-        # workflow's file ownership, so it is not wired up here (flagged
-        # separately for retirement/follow-up).
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          set -euo pipefail
-          WORKFLOW="deploy-demo.yml"
-          gh workflow run "$WORKFLOW" \
-            --repo "${{ github.repository }}" \
-            --ref "v${NEW_VERSION}"
-          echo "Dispatched $WORKFLOW for v${NEW_VERSION}"
-
-          RUN_URL=""
-          for _ in $(seq 1 15); do
-            sleep 2
-            RUN_URL=$(gh run list --repo "${{ github.repository }}" \
-              --workflow="$WORKFLOW" --limit 5 \
-              --json url,createdAt,event \
-              --jq '[.[] | select(.event=="workflow_dispatch")] | sort_by(.createdAt) | reverse | .[0].url // empty')
-            [ -n "$RUN_URL" ] && break
-          done
-          if [ -z "$RUN_URL" ]; then
-            echo "::error::$WORKFLOW dispatch did not produce a workflow run within 30s"
-            exit 1
-          fi
-          echo "Demo Deploy run: $RUN_URL"

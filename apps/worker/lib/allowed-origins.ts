@@ -28,7 +28,6 @@ export const TAURI_ORIGINS: readonly string[] = [
  */
 const DEFAULT_ORIGINS: readonly string[] = [
   'https://app.llamenos-hotline.org',
-  'https://demo.llamenos-platform.com',
 ]
 
 export interface OriginEnv {

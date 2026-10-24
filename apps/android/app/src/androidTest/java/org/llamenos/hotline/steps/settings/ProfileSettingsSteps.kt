@@ -309,18 +309,18 @@ class ProfileSettingsSteps : BaseSteps() {
 
     @Then("I should see the dark theme button on the login page")
     fun iShouldSeeTheDarkThemeButtonOnTheLoginPage() {
-        // Theme buttons on login are not implemented on Android — login has demo buttons
-        assertAnyTagDisplayed("app-title", "demo-admin-button")
+        // Theme buttons on login are not implemented on Android
+        assertAnyTagDisplayed("app-title")
     }
 
     @Then("I should see the light theme button on the login page")
     fun iShouldSeeTheLightThemeButtonOnTheLoginPage() {
-        assertAnyTagDisplayed("app-title", "demo-volunteer-button")
+        assertAnyTagDisplayed("app-title")
     }
 
     @Then("I should see the system theme button on the login page")
     fun iShouldSeeTheSystemThemeButtonOnTheLoginPage() {
-        assertAnyTagDisplayed("app-title", "demo-admin-button")
+        assertAnyTagDisplayed("app-title")
     }
 
     private fun ensureProfileExpanded() {

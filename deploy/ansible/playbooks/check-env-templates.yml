@@ -12,11 +12,11 @@
 # scenarios without one run's output clobbering the other's:
 #   - "required vars" scenario (production, no optional features) -> default
 #     destination names (no suffix)
-#   - "optional vars" scenario (demo mode + every push/crash/Signal feature
-#     enabled, via scripts/full-scenario.extra-vars.json) -> "-full" suffix,
-#     proving APNS_*/NTFY_*/GLITCHTIP_DSN/SIGNAL_NOTIFIER_BEARER_TOKEN/
-#     DEMO_RESET_CRON actually reach a rendered .env and aren't dead
-#     plumbing (the "also fix" #2 finding in review round 2).
+#   - "optional vars" scenario (every push/crash/Signal feature enabled, via
+#     scripts/full-scenario.extra-vars.json) -> "-full" suffix, proving
+#     APNS_*/NTFY_*/GLITCHTIP_DSN/SIGNAL_NOTIFIER_BEARER_TOKEN actually reach a
+#     rendered .env and aren't dead plumbing (the "also fix" #2 finding in
+#     review round 2).
 #
 # It also renders the two COMPOSE templates. The PostgreSQL service publishes
 # its port on 127.0.0.1 only when `dev_routes_enabled` is set on a

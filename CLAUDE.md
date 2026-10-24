@@ -299,7 +299,7 @@ bun run test:backend:bdd                 # Backend BDD against local backend (AP
 # Publish the marketing site (run LOCALLY — CI never publishes; see "Publishing vs deploying" below)
 # These touch ONLY the marketing site (Cloudflare Pages). `deploy` is an alias for `deploy:site`.
 # The server is deployed by the Ansible playbooks in `deploy/ansible/`, dispatched from the
-# `deploy-prod.yml` / `deploy-demo.yml` GitHub Actions workflows — there is no `bun run` script for it.
+# `deploy-prod.yml` GitHub Actions workflow — there is no `bun run` script for it.
 bun run deploy                           # Marketing site (alias for deploy:site)
 bun run deploy:site                      # Marketing site
 
@@ -317,7 +317,7 @@ bun run bootstrap-admin                  # Generate admin keypair
 **Publishing vs deploying — read this before adding a workflow.** Two different things, two different homes:
 
 - **Publishing is LOCAL, never CI.** The marketing site (Cloudflare Pages), the Android/iOS/desktop apps (including store submission), the ISOs and the Docker images are all published from the operator's own machine. **CI builds and gates; it never ships.** Do not add a workflow, job or step that uploads to Cloudflare Pages, an app store, a container registry or any other distribution channel, and do not wire Cloudflare/Docker Hub/store credentials into Actions secrets for one. (`deploy-site.yml` and `docker.yml` were removed for this reason, #2095.)
-- **Deploying the server is CI.** `deploy-prod.yml` and `deploy-demo.yml` dispatch the Ansible playbooks in `deploy/ansible/` against our own VPSes. That is intended and stays.
+- **Deploying the server is CI.** `deploy-prod.yml` dispatches the Ansible playbooks in `deploy/ansible/` against our own VPSes. That is intended and stays.
 - **Known exceptions that predate this rule — do not extend them:** `release.yml` (the tag and the draft GitHub Release it attaches build outputs to, and the `docker-stable` GHCR image) and `tauri-release.yml` (desktop updater channel). They are tracked for an operator decision, not a precedent for new publish steps.
 - The marketing site is the only thing that may sit on a CDN (Cloudflare Pages, published locally). That is separate from the app-host rule in Gotchas: the app host terminates TLS on the origin and must never be behind a CDN or proxy.
 

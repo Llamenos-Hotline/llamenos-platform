@@ -81,8 +81,6 @@ Soo celiyaa public hub configuration, enabled channels, iyo server identity.
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "..." }],
   "defaultHubId": "...",
@@ -1377,7 +1375,7 @@ POST /api/setup/complete
 **Body:**
 
 ```json
-{ "demoMode": false }
+{}
 ```
 
 Sidoo kale creates a default hub haddii aan jirin.

@@ -34,6 +34,7 @@ import {
 import { conversations } from '../db/schema/conversations'
 import type { ConvertFromReportResponse } from '@protocol/schemas/records'
 import { ServiceError } from './settings'
+import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import type { CreateRecordBody } from '@protocol/schemas/records'
 import type { MergeRecordsResponse } from '@protocol/schemas/entity-merge'
 import type { CreateEventBody } from '@protocol/schemas/events'
@@ -1357,7 +1358,7 @@ export class CasesService {
     caseId: string,
     authorPubkey: string,
     input: CreateInteractionBody,
-    /** Explicit creation time — only for seeding historical demo data. */
+    /** Explicit creation time — only for seeding the historical sample dataset. */
     opts?: { createdAt?: Date },
   ): Promise<InteractionRow> {
     const record = await this.db
@@ -1886,18 +1887,17 @@ export class CasesService {
   }
 
   // =========================================================================
-  // Reset (demo/development only)
+  // Reset (the secret-gated dev surface only)
   // =========================================================================
 
-  async reset(env: { DEMO_MODE?: string; DEMO_MODE_CONFIRM?: string; ENVIRONMENT?: string }): Promise<void> {
-    const isDemoMode = env.DEMO_MODE === 'true'
-    const isDev = env.ENVIRONMENT === 'development'
-    if (!isDemoMode && !isDev) {
-      throw new ServiceError(403, 'Reset not allowed outside demo/development mode')
-    }
-    if (isDemoMode && !isDev && env.DEMO_MODE_CONFIRM !== 'DESTROY_ALL_DATA') {
-      throw new ServiceError(403, 'DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
-    }
+  /**
+   * Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts) — see
+   * `IdentityService.reset` for why that predicate and not the demo flags this
+   * used to read.
+   */
+  async reset(env: DevSurfacesEnv, presentedSecret?: string): Promise<void> {
+    const refusal = destructiveResetRefusal(env, presentedSecret)
+    if (refusal) throw new ServiceError(403, refusal)
 
     await this.db.delete(custodyEntries)
     await this.db.delete(evidence)

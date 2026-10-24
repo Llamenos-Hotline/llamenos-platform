@@ -1,9 +1,11 @@
 /**
- * Backend step definitions for the demo mock telephony provider (#723).
+ * Backend step definitions for the simulated (mock) telephony provider.
  *
- * Drives /hubs/:hubId/demo/telephony/* as the admin, then answers / hangs up as a volunteer
+ * Drives /hubs/:hubId/simulated-telephony/* as the admin, then answers / hangs up as a volunteer
  * through the ordinary calls endpoints — the same calls a tester's client makes.
- * Requires a server started with DEMO_MODE=true + DEMO_MODE_CONFIRM (project backend-bdd-demo-mode).
+ * Requires a server where the /api/test-* surface is enabled, which is what makes the mock
+ * provider selectable (apps/worker/lib/dev-surfaces.ts). Runs in the serial
+ * backend-bdd-simulated-telephony project.
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, After, getState, setState } from './fixtures'
@@ -32,7 +34,7 @@ interface SimulatedCallResponse {
   volunteersNotified?: number
 }
 
-const SECOND_HUB_KEY = 'demoTelephonySecondHub'
+const SECOND_HUB_KEY = 'simulatedTelephonySecondHub'
 
 function secondHubId(world: Record<string, unknown>): string {
   const id = getState<string | undefined>(world, SECOND_HUB_KEY)
@@ -40,20 +42,20 @@ function secondHubId(world: Record<string, unknown>): string {
   return id
 }
 
-After({ tags: '@demo-mode' }, async ({ request, world }) => {
+After({ tags: '@simulated-telephony' }, async ({ request, world }) => {
   const id = getState<string | undefined>(world, SECOND_HUB_KEY)
   if (id) await deleteHubViaApiIfPresent(request, id)
 })
 
-function demoPath(hubId: string, suffix: string): string {
-  return `/hubs/${hubId}/demo/telephony${suffix}`
+function simPath(hubId: string, suffix: string): string {
+  return `/hubs/${hubId}/simulated-telephony${suffix}`
 }
 
 Given('the hub uses the mock telephony provider', async ({ request, world }) => {
   const { hubId } = getScenarioState(world)
-  const res = await apiPut(request, demoPath(hubId, '/mock'), { enabled: true })
-  // Fail loudly when the server is not in demo mode — never pass vacuously.
-  expect(res.status, `enabling the mock failed (is the server running with DEMO_MODE=true?): ${JSON.stringify(res.data)}`).toBe(200)
+  const res = await apiPut(request, simPath(hubId, '/mock'), { enabled: true })
+  // Fail loudly when the mock is not selectable here — never pass vacuously.
+  expect(res.status, `enabling the mock failed (is DEV_ROUTES_ENABLED set, with a DEV_RESET_SECRET?): ${JSON.stringify(res.data)}`).toBe(200)
 })
 
 Given(
@@ -61,7 +63,7 @@ Given(
   async ({ request, world }, count: number) => {
     const { volunteers } = getScenarioState(world)
     expect(volunteers.length).toBe(count)
-    const hubId = await createHubViaApi(request, `bdd-demo-b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const hubId = await createHubViaApi(request, `bdd-sim-b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     setState(world, SECOND_HUB_KEY, hubId)
     for (const vol of volunteers) await addHubMemberViaApi(request, hubId, vol.pubkey)
     await createShiftViaApi(request, {
@@ -73,7 +75,7 @@ Given(
     // Clock-in is per hub, and ringing requires it alongside the shift, so being
     // clocked into the first hub does not put them on shift in this one.
     for (const vol of volunteers) await clockInViaApi(request, hubId, vol.deviceKey)
-    const res = await apiPut(request, demoPath(hubId, '/mock'), { enabled: true })
+    const res = await apiPut(request, simPath(hubId, '/mock'), { enabled: true })
     expect(res.status, `enabling the mock on the second hub failed: ${JSON.stringify(res.data)}`).toBe(200)
   },
 )
@@ -107,7 +109,7 @@ Given('a volunteer who is not on shift is in the hub fallback group', async ({ r
 let instanceFallbackDirty = false
 const extraHubIds: string[] = []
 
-After({ tags: '@demo-mode' }, async ({ request }) => {
+After({ tags: '@simulated-telephony' }, async ({ request }) => {
   if (instanceFallbackDirty) {
     instanceFallbackDirty = false
     await setFallbackGroupViaApi(request, [])
@@ -152,7 +154,7 @@ async function simulate(
   hubId?: string,
 ) {
   const state = getScenarioState(world)
-  const res = await apiPost<SimulatedCallResponse>(request, demoPath(hubId ?? state.hubId, '/simulate/incoming-call'), body, seedHex)
+  const res = await apiPost<SimulatedCallResponse>(request, simPath(hubId ?? state.hubId, '/simulate/incoming-call'), body, seedHex)
   state.lastApiResponse = res
   setLastResponse(world, res)
   if (res.status === 200 && res.data.callId) state.callId = res.data.callId
@@ -197,7 +199,7 @@ When('volunteer {int} hangs up the simulated call', async ({ request, world }, i
 When('the simulated caller hangs up', async ({ request, world }) => {
   const state = getScenarioState(world)
   expect(state.callId).toBeTruthy()
-  const res = await apiPost(request, demoPath(state.hubId, '/simulate/caller-hangup'), { callId: state.callId! })
+  const res = await apiPost(request, simPath(state.hubId, '/simulate/caller-hangup'), { callId: state.callId! })
   state.lastApiResponse = res
   setLastResponse(world, res)
 })
@@ -220,8 +222,8 @@ Then('the audit log should record the simulated call', async ({ request, world }
   const state = getScenarioState(world)
   expect(state.callId).toBeTruthy()
   const { entries } = await listAuditLogViaApi(request, { hubId: state.hubId, limit: 100 })
-  const entry = entries.find(e => e.action === 'demoCallSimulated')
-  expect(entry, 'expected a demoCallSimulated audit entry').toBeDefined()
+  const entry = entries.find(e => e.action === 'callSimulated')
+  expect(entry, 'expected a callSimulated audit entry').toBeDefined()
   expect(entry!.details.callId).toBe(state.callId)
 })
 

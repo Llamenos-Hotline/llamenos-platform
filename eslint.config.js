@@ -324,7 +324,6 @@ export default tseslint.config(
   //     into ring_groups.encrypted_name / shifts.encrypted_name. Fixed when the
   //     desktop lane routes these through encryptHubField (hub-key path, same
   //     as tags/teams).
-  //   demo.ts — demo seed data; demo mode removal is in flight (#1651).
   //   dev.ts — dev-surface BDD seeds (`btoa('BDD Test Shift')`); the backend
   //     lane owns this file and re-seeds through envelopes when the wire fix
   //     lands.
@@ -336,7 +335,6 @@ export default tseslint.config(
     files: [
       'src/client/components/shifts/ring-groups-panel.tsx',
       'src/client/routes/shifts.tsx',
-      'src/client/lib/api/demo.ts',
       'apps/worker/routes/dev.ts',
       'apps/worker/routes/firehose.ts',
       'apps/worker/services/hub-shred-targets.ts',

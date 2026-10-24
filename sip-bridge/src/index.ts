@@ -2,10 +2,9 @@ import type { BridgeConfig } from './types'
 import { createBridgeClient, parsePbxType } from './client-factory'
 import { WebhookSender } from './webhook-sender'
 import {
-  AllRingLegsFailedError,
   CommandHandler,
-  RING_ALL_DIALS_FAILED,
   callRecordingName,
+  ringResponse,
   voicemailRecordingName,
   type RingRequest,
 } from './command-handler'
@@ -190,21 +189,7 @@ async function main(): Promise<void> {
         } catch {
           return Response.json({ ok: false, error: 'Invalid request' }, { status: 400 })
         }
-        try {
-          const channelIds = await handler.ringVolunteers(data)
-          return Response.json({ ok: true, channelIds })
-        } catch (err) {
-          logger.error('[bridge]', 'Ring error', err)
-          // A total outage gets its own machine-readable answer so the worker can tell
-          // "the PBX/trunk is down" from any other /ring failure (#1136).
-          if (err instanceof AllRingLegsFailedError) {
-            return Response.json(
-              { ok: false, error: RING_ALL_DIALS_FAILED, attempted: err.attempted },
-              { status: 502 }
-            )
-          }
-          return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
-        }
+        return ringResponse(handler, data)
       }
 
       // Cancel ringing endpoint

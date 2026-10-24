@@ -4,7 +4,6 @@ import { z } from 'zod'
 
 export const setupStateResponseSchema = z.object({
   setupCompleted: z.boolean(),
-  demoMode: z.boolean().optional(),
 })
 
 export const connectionTestResponseSchema = z.object({

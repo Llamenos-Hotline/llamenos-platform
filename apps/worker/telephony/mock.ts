@@ -1,24 +1,38 @@
 /**
  * MockTelephonyAdapter — a TelephonyAdapter that talks to no provider.
  *
- * Exists so a demo/staging instance with no PSTN number can still exercise the
+ * Exists so a test instance with no PSTN number can still exercise the
  * product's core loop (ring → answer → note) end to end. It is selected per hub
  * exactly like the real providers (a `provider_configs` row with type `mock`),
  * and it is driven through the REAL routing path — the same ban check, shift /
  * ring-group resolution and `call:ring` event the webhook flow uses.
  *
- * SAFETY: constructing it is refused unless ALL of these hold:
- *   - ENVIRONMENT is one of development | staging | demo (fail closed: an
- *     unset or unrecognised environment is refused, and `production` is never
- *     allowed no matter what other flags are set)
- *   - DEMO_MODE === 'true'
- *   - DEMO_MODE_CONFIRM === 'DESTROY_ALL_DATA' (the same two-factor value
- *     `validateConfig` demands for DEMO_MODE)
+ * SAFETY: constructing it is refused unless this host may serve the
+ * `/api/test-*` surface at all — `devSurfacesEnabled` (lib/dev-surfaces.ts):
+ * `ENVIRONMENT` on the `development`/`staging` allowlist with `production`
+ * refused first and unconditionally, `DEV_ROUTES_ENABLED=true`, and a
+ * 32-character `DEV_RESET_SECRET` on anything but `development`.
+ *
+ * Until #1604 the gate was `DEMO_MODE=true` plus
+ * `DEMO_MODE_CONFIRM=DESTROY_ALL_DATA` on a `development|staging|demo`
+ * environment. Demo mode is gone — there is no demo product, only the secure
+ * hosted shape and the self-hosted one — and the mock is a TEST affordance, not
+ * part of either. `devSurfacesEnabled` is where a test affordance belongs: it is
+ * the same declaration ("this host is a test target") that already opens the
+ * destructive reset, it refuses `production` ahead of any flag, and unlike
+ * `DEMO_MODE` it is not satisfiable by one environment variable alone.
+ *
+ * This is a HOST-level predicate with no per-request secret: these are ordinary
+ * admin-authenticated hub routes (`routes/simulated-telephony.ts`), not
+ * `/api/test-*`, so the authority they grant is already bounded by
+ * `settings:manage-telephony` on the caller. What `devSurfacesEnabled` decides
+ * is only whether the mock provider is selectable here at all.
  *
  * The mock never accepts inbound webhooks (`validateWebhook` is always false):
- * simulated calls are injected server-side by the admin-only demo routes, so
- * there is no unauthenticated surface that can conjure a call.
+ * simulated calls are injected server-side by the admin-only simulated-telephony
+ * routes, so there is no unauthenticated surface that can conjure a call.
  */
+import { devSurfacesRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import type {
   TelephonyAdapter,
   TelephonyResponse,
@@ -43,14 +57,7 @@ export const MOCK_PROVIDER_TYPE = 'mock'
 /** Prefix of every call SID minted by the mock — lets routes refuse to touch real calls. */
 export const MOCK_CALL_SID_PREFIX = 'mock-call-'
 
-const ALLOWED_ENVIRONMENTS: readonly string[] = ['development', 'staging', 'demo']
-const DEMO_CONFIRM_VALUE = 'DESTROY_ALL_DATA'
-
-export interface MockTelephonyEnv {
-  ENVIRONMENT?: string
-  DEMO_MODE?: string
-  DEMO_MODE_CONFIRM?: string
-}
+export type MockTelephonyEnv = DevSurfacesEnv
 
 export class MockTelephonyRefusedError extends Error {
   constructor(readonly reason: string) {
@@ -64,14 +71,16 @@ export function isMockProviderConfig(config: { type: string }): boolean {
   return config.type === MOCK_PROVIDER_TYPE
 }
 
-/** Returns why the mock may not be used in this environment, or null when it may. */
+/**
+ * Returns why the mock may not be used on this host, or null when it may.
+ *
+ * One delegation, not a second copy of the rules: `devSurfacesRefusal` already
+ * refuses `production` first and unconditionally, refuses anything not on the
+ * allowlist, demands the explicit flag, and demands a 32-character secret on
+ * every reachable host.
+ */
 export function mockTelephonyRefusalReason(env: MockTelephonyEnv): string | null {
-  const environment = (env.ENVIRONMENT ?? '').trim().toLowerCase()
-  if (environment === 'production') return 'ENVIRONMENT=production'
-  if (!ALLOWED_ENVIRONMENTS.includes(environment)) return 'ENVIRONMENT is not a demo-capable environment'
-  if (env.DEMO_MODE?.trim() !== 'true') return 'DEMO_MODE is not enabled'
-  if (env.DEMO_MODE_CONFIRM?.trim() !== DEMO_CONFIRM_VALUE) return 'DEMO_MODE_CONFIRM is not set'
-  return null
+  return devSurfacesRefusal(env)
 }
 
 export function isMockTelephonyAllowed(env: MockTelephonyEnv): boolean {
@@ -171,7 +180,7 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
     this.record({ type: 'cancel-ringing', callSids, exceptSid })
   }
 
-  /** The mock accepts no inbound webhooks — calls are injected by the authenticated demo routes only. */
+  /** The mock accepts no inbound webhooks — calls are injected by the authenticated simulated-telephony routes only. */
   async validateWebhook(_request: Request): Promise<boolean> {
     return false
   }
