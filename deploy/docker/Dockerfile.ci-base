@@ -1,7 +1,7 @@
 # Nightly CI base image (issue #903).
 #
 # Pre-installs FIXED toolchains and pre-warms package DOWNLOAD caches so the
-# non-compose CI jobs (desktop-e2e.yml's `build` job, ci.yml's `build` and
+# non-compose CI jobs (ci.yml's `build` and
 # `crypto-tests` jobs) skip network-bound setup and hit a warm cache
 # instead. Rebuilt nightly by .github/workflows/ci-base-image-nightly.yml so
 # Debian security updates land automatically; consumers pin the resulting
@@ -22,7 +22,7 @@
 # ── SCOPE FOR THIS ROLLOUT ──────────────────────────────────────────────────
 # Bakes Bun + Rust only. Playwright browsers and the `install-deps` system
 # packages are deliberately NOT included yet — the job that needs them
-# (desktop-e2e.yml's `test` job) drives `docker compose` and reaches the
+# (ci.yml's `desktop-e2e` job) drives `docker compose` and reaches the
 # backend at `localhost`, which breaks under `container:` (sibling
 # containers publish ports on the host, not the job container) without the
 # docker-socket/network work #903 explicitly defers. Baking Playwright's
@@ -46,7 +46,7 @@ RUN apt-get update \
     && rustup component add clippy rustfmt
 
 # Bun binary, pinned to match .mise.toml / workflows' BUN_VERSION (env.BUN_VERSION
-# in ci.yml and desktop-e2e.yml). Bump this ARG in lockstep with those — the nightly
+# in ci.yml). Bump this ARG in lockstep with those — the nightly
 # workflow does not cross-check it, a mismatch just means a colder-than-expected
 # bun install cache until both are bumped together.
 ARG BUN_VERSION=1.3.5
