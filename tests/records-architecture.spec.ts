@@ -8,7 +8,19 @@
  * - Custom field context filtering (call-notes, conversation-notes, reports)
  */
 import { test, expect, type Page } from '@playwright/test'
+import { simulateCallForNote } from './simulation-helpers'
 import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts, fillCallId } from './helpers'
+
+/**
+ * A real call in the hub the page is acting in. The server refuses a note filed
+ * under an id that is not a call of that hub (#2112), so the form is given one
+ * that exists rather than a made-up reference.
+ */
+async function realCallId(page: Page): Promise<string> {
+  const hubId = await page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null)
+  expect(hubId, 'the page has no active hub to place a call in').toBeTruthy()
+  return simulateCallForNote(page.request, hubId!)
+}
 
 /**
  * Create a note from the notes page and return its card. Content is made unique per
@@ -41,7 +53,7 @@ test.describe('Records Architecture', () => {
   test('admin can create a note and see reply button', async ({ page }) => {
     await Navigation.goToNotes(page)
 
-    const card = await createNote(page, 'thread-test-' + Date.now(), 'Note for threading test')
+    const card = await createNote(page, await realCallId(page), 'Note for threading test')
 
     // Reply button should be visible on the new note
     await expect(card.getByTestId(TestIds.NOTE_REPLY_BTN)).toBeVisible()
@@ -50,7 +62,7 @@ test.describe('Records Architecture', () => {
   test('admin can expand reply thread and send a reply', async ({ page }) => {
     await Navigation.goToNotes(page)
 
-    const card = await createNote(page, 'reply-test-' + Date.now(), 'Note with reply')
+    const card = await createNote(page, await realCallId(page), 'Note with reply')
 
     // Click reply button
     await card.getByTestId(TestIds.NOTE_REPLY_BTN).click()
@@ -74,7 +86,7 @@ test.describe('Records Architecture', () => {
   test('reply button shows count after collapse and re-expand', async ({ page }) => {
     await Navigation.goToNotes(page)
 
-    const card = await createNote(page, 'collapse-test-' + Date.now(), 'Note for collapse test')
+    const card = await createNote(page, await realCallId(page), 'Note for collapse test')
     const replyBtn = card.getByTestId(TestIds.NOTE_REPLY_BTN)
 
     // Expand thread and send reply
@@ -198,7 +210,7 @@ test.describe('Records Architecture', () => {
     await Navigation.goToNotes(page)
 
     // Create two notes for the same call
-    const callId = 'group-' + Date.now()
+    const callId = await realCallId(page)
     await createNote(page, callId, 'Grouped note A')
     await createNote(page, callId, 'Grouped note B')
 

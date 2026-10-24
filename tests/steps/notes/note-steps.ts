@@ -14,6 +14,7 @@ import { expect, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts, fillCallId } from '../../helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import { listNotesViaApi, getCustomFieldsViaApi } from '../../api-helpers'
 
 // --- Note navigation ---
@@ -117,7 +118,7 @@ Given('at least one note exists', async ({ page, backendRequest: request, worker
     await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
     await newBtn.click()
     await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-    await fillCallId(page, `CALL-${Date.now()}`)
+    await fillCallId(page, await simulateCallForNote(request, workerHub))
     await page.getByTestId(TestIds.NOTE_CONTENT).fill('Auto-created test note')
     await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
     // Wait for form to close and note to appear in list
@@ -189,7 +190,7 @@ Given('I open a note', async ({ page, backendRequest: request, workerHub }) => {
     await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
     await newBtn.click()
     await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-    await fillCallId(page, `CALL-${Date.now()}`)
+    await fillCallId(page, await simulateCallForNote(request, workerHub))
     await page.getByTestId(TestIds.NOTE_CONTENT).fill('Auto-created note for test')
     await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
     await expect(page.getByTestId(TestIds.NOTE_FORM)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
