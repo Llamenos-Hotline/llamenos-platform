@@ -792,6 +792,25 @@ describe('startParallelRinging — total telephony provider outage (#1136)', () 
     expect(incCounter).not.toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
   })
 
+  it.each([
+    ['a non-outage ring error', () => new Error('bridge request failed: 500'), 'error'],
+    ['a total provider outage', () => new AllDialsFailedError(1), 'telephony-failure'],
+  ] as const)('reports nobody reached on %s for a global call, where no relay event or VoIP push goes out', async (_label, makeErr, reason) => {
+    mockAdapter.ringVolunteers.mockRejectedValue(makeErr())
+    const services = makeServices({
+      onShiftPubkeys: ['pk-both'],
+      // No hub to be a member of — global-scope authority is the global roles.
+      allUsers: [makeUser({ pubkey: 'pk-both', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })],
+    })
+
+    const promise = startParallelRinging('CA-global-fail', '+15551234567', 'http://localhost', makeEnv(), services, '')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    // The browser preference does not count: with no hub there was no relay/push to carry it.
+    expect(result).toEqual({ ringing: false, reason, volunteersNotified: 0 })
+  })
+
   it('reports nobody reached when a non-outage ring error hits a phone-only call', async () => {
     mockAdapter.ringVolunteers.mockRejectedValue(new Error('bridge request failed: 500'))
     const services = makeServices({

@@ -361,6 +361,10 @@ export async function startParallelRinging(
 
     logger.info('Ringing volunteers', { callSid, total: available.length, phone: toRingPhone.length, browserVoip: browserVoip.length, inApp: appTargets.length })
 
+    // Volunteers reached by the relay event and VoIP push below. A call that resolved
+    // to no hub sends neither, so its browser/VoIP volunteers were not notified at all.
+    const notifiedOutOfBand = hubId === '' ? 0 : browserVoip.length
+
     const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
       // Publish the ring to the hub that owns the call. Every member of that hub
@@ -517,9 +521,9 @@ export async function startParallelRinging(
           // push above and may still answer — only report total failure when nobody was
           // reached by any channel.
           return {
-            ringing: browserVoip.length > 0,
+            ringing: notifiedOutOfBand > 0,
             reason: 'telephony-failure',
-            volunteersNotified: browserVoip.length,
+            volunteersNotified: notifiedOutOfBand,
           }
         }
         // Any other ring failure: the phone/in-app legs are unknown, but the relay event
@@ -527,9 +531,9 @@ export async function startParallelRinging(
         // may still answer — do not report nobody was reached.
         logger.error('startParallelRinging failed', err)
         return {
-          ringing: browserVoip.length > 0,
+          ringing: notifiedOutOfBand > 0,
           reason: 'error',
-          volunteersNotified: browserVoip.length,
+          volunteersNotified: notifiedOutOfBand,
         }
       }
     }
