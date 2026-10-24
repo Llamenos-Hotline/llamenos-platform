@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { z } from 'zod'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -9,6 +10,19 @@ import { createLogger } from '../lib/logger'
 import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
 
 const logger = createLogger('routes.notes')
+
+// The three write routes below answer with the note wrapped under a key, not
+// flat — `{ note }` for create/update and `{ reply }` for a reply — and that
+// is the contract every client is written against (src/client/lib/api/
+// notes.ts reads `{ note: EncryptedNote }`). All three nonetheless DECLARED
+// the flat `noteResponseSchema`, so the OpenAPI snapshot and the Swift/Kotlin
+// types generated from it described a response the server has never sent.
+// Nothing caught it because the one test that checks declared-vs-actual —
+// apps/worker/__tests__/integration/response-conformance.test.ts — ran in no
+// workflow (#1641). Composed from noteResponseSchema rather than re-typed, so
+// the note's own fields cannot drift from the protocol schema.
+const noteEnvelopeResponseSchema = z.object({ note: noteResponseSchema })
+const replyEnvelopeResponseSchema = z.object({ reply: noteResponseSchema })
 
 const notes = new Hono<AppEnv>()
 // Require at least notes:read-own to access any notes endpoint
@@ -80,7 +94,7 @@ notes.post('/',
         description: 'Note created',
         content: {
           'application/json': {
-            schema: resolver(noteResponseSchema),
+            schema: resolver(noteEnvelopeResponseSchema),
           },
         },
       },
@@ -134,7 +148,7 @@ notes.patch('/:id',
         description: 'Note updated',
         content: {
           'application/json': {
-            schema: resolver(noteResponseSchema),
+            schema: resolver(noteEnvelopeResponseSchema),
           },
         },
       },
@@ -218,7 +232,7 @@ notes.post('/:id/replies',
         description: 'Reply created',
         content: {
           'application/json': {
-            schema: resolver(noteResponseSchema),
+            schema: resolver(replyEnvelopeResponseSchema),
           },
         },
       },

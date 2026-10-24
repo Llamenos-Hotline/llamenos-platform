@@ -517,30 +517,12 @@ describe('Notes Routes — response conformance', () => {
     expect(typeof result.parsed.limit).toBe('number')
   })
 
-  // The note object inside POST /notes' 201 body. The envelope is `{ note }`,
-  // which is the shape the server has sent since 3f02c3291 (2026-05-04) and the
-  // only shape any client has ever read: src/client/lib/api/notes.ts types
-  // createNote/updateNote as `{ note: EncryptedNote }`.
-  //
-  // This case originally asserted the BARE note ("flat, no wrapper"), because
-  // the commit that introduced it (971c2e13e, #122) also changed the handler to
-  // `c.json(note, 201)` to match the bare `noteResponseSchema` its
-  // `describeRoute` declares. Two days later 3f02c3291 put the wrapper back —
-  // the desktop client was reading `res.note.id` and got `undefined` — and left
-  // the declaration alone. Nothing noticed for five months because this file has
-  // never run anywhere (#1167): no workflow invoked it, and it could not even
-  // load by hand.
-  //
-  // The wrapper is the settled contract, not the regression: PR #1386 adds
-  // `noteDetailResponseSchema` for exactly this `{ note }` body and lists
-  // "routes/notes.ts: POST/PATCH describeRoute should point at
-  // noteDetailResponseSchema" as outstanding work. So the ROUTE'S DECLARATION is
-  // the remaining defect, tracked there — not the handler, and not this test's
-  // validation of the note itself. When that schema lands, replace this inline
-  // envelope with it.
-  const notePostResponseSchema = z.object({ note: noteResponseSchema })
-
-  it('POST /notes — note body conforms to noteResponseSchema inside the { note } envelope', async () => {
+  // The route answers `{ note }`, the shape src/client/lib/api/notes.ts is
+  // written against, and it DECLARED flat `noteResponseSchema` — so the
+  // declaration, not the response, was the thing that was wrong (#1641).
+  // Asserted against the same wrapper the route now declares, composed from
+  // the protocol schema so the note's own fields still come from one source.
+  it('POST /notes — conforms to the declared { note } wrapper', async () => {
     const mockRecords = {
       createNote: vi.fn().mockResolvedValue(mockNote),
     }
@@ -552,7 +534,7 @@ describe('Notes Routes — response conformance', () => {
       services: { records: mockRecords, cases: mockCasesService },
     })
 
-    const result = await assertConformsToSchema(app, 'POST', '/notes', notePostResponseSchema, {
+    const result = await assertConformsToSchema(app, 'POST', '/notes', z.object({ note: noteResponseSchema }), {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',

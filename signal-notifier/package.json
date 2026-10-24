@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "test": "bun --bun vitest run"
+    "test": "bunx vitest run"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
