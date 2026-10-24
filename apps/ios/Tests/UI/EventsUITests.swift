@@ -17,18 +17,23 @@ final class EventsUITests: BaseUITest {
     /// check Cases-tab state instead of Events state (#1245).
     private func navigateToEvents() {
         navigateToAdminPanel()
-        let eventsLink = scrollToFind("admin-events", maxSwipes: 5, timeout: 10)
+        let eventsLink = scrollToVisible("admin-events", maxSwipes: 5)
         guard eventsLink.exists else {
             XCTFail("Events link should exist in the admin panel")
             return
         }
-        eventsLink.tap()
-        _ = anyElementExists([
-            "events-list",
-            "events-loading",
-            "events-cms-disabled",
-            "events-empty",
-        ], timeout: 10)
+        // A tap that lands on a row that is not yet settled is swallowed silently
+        // (#2091), so tap a settled row and then require the push to have happened.
+        tapWhenSettled(eventsLink)
+        XCTAssertTrue(
+            anyElementExists([
+                "events-list",
+                "events-loading",
+                "events-cms-disabled",
+                "events-empty",
+            ], timeout: 10),
+            "Tapping the Events link should open the Events screen"
+        )
     }
 
     /// Put the class hub in the state the event scenarios need — case management on,
@@ -46,30 +51,37 @@ final class EventsUITests: BaseUITest {
     /// client-side, so the app is the only thing that can author one — there is
     /// no API to seed it through.
     private func createEvent(titled title: String) {
-        let createButton = find("events-create-btn")
+        let createButton = createEventToolbarButton
         let emptyCreateButton = find("events-empty-create-btn")
         guard createButton.waitForExistence(timeout: 10) || emptyCreateButton.waitForExistence(timeout: 3) else {
             XCTFail("A create-event button should be offered once case management is on")
             return
         }
-        (createButton.exists ? createButton : emptyCreateButton).tap()
+        tapWhenSettled(createButton.exists ? createButton : emptyCreateButton)
 
         let titleField = find("event-title-field")
         guard titleField.waitForExistence(timeout: 5) else {
             XCTFail("Event title field should appear in the create sheet")
             return
         }
-        titleField.tap()
+        tapWhenSettled(titleField)
         titleField.typeText(title)
 
-        let submit = find("event-create-submit")
-        XCTAssertTrue(submit.isEnabled, "Create should be enabled once a title is entered")
-        submit.tap()
+        // The toolbar's `Button`, not `find()`'s `Other` container: only the button
+        // carries the Disabled trait that `tapWhenSettled` waits out.
+        tapWhenSettled(app.buttons["event-create-submit"].firstMatch)
 
         XCTAssertTrue(
             find("event-title-field").waitForNonExistence(timeout: 20),
             "The create sheet should close once the event is created"
         )
+    }
+
+    /// The Events toolbar "+" button. Queried as a `Button`, not through `find()`, which
+    /// matches the toolbar item's `Other` container — that never reports Disabled, yet the
+    /// button renders disabled until the entity types load and drops taps while it is.
+    private var createEventToolbarButton: XCUIElement {
+        app.buttons["events-create-btn"].firstMatch
     }
 
     /// The list row for the event with this title. Titles are unique per test, so the
@@ -145,7 +157,7 @@ final class EventsUITests: BaseUITest {
             createEvent(titled: title)
             let row = eventRow(titled: title)
             XCTAssertTrue(row.waitForExistence(timeout: 10), "The created event should appear in the list")
-            row.tap()
+            tapWhenSettled(row)
         }
         then("I should see the event detail with all 4 tabs") {
             XCTAssertTrue(
@@ -174,7 +186,7 @@ final class EventsUITests: BaseUITest {
             createEvent(titled: title)
             let row = eventRow(titled: title)
             XCTAssertTrue(row.waitForExistence(timeout: 10), "The created event should appear in the list")
-            row.tap()
+            tapWhenSettled(row)
         }
         then("switching between tabs should render the correct content areas") {
             XCTAssertTrue(
@@ -182,25 +194,25 @@ final class EventsUITests: BaseUITest {
                 "Details tab content should render by default"
             )
 
-            find("event-tab-sub_events").tap()
+            tapWhenSettled(find("event-tab-sub_events"))
             XCTAssertTrue(
                 find("event-sub-events-tab").waitForExistence(timeout: 3),
                 "Sub-events content should render when Sub-Events tab is selected"
             )
 
-            find("event-tab-linked_cases").tap()
+            tapWhenSettled(find("event-tab-linked_cases"))
             XCTAssertTrue(
                 find("event-linked-cases-tab").waitForExistence(timeout: 3),
                 "Linked cases content should render when Cases tab is selected"
             )
 
-            find("event-tab-linked_reports").tap()
+            tapWhenSettled(find("event-tab-linked_reports"))
             XCTAssertTrue(
                 find("event-linked-reports-tab").waitForExistence(timeout: 3),
                 "Linked reports content should render when Reports tab is selected"
             )
 
-            find("event-tab-details").tap()
+            tapWhenSettled(find("event-tab-details"))
             XCTAssertTrue(
                 find("event-details-tab").waitForExistence(timeout: 3),
                 "Details content should render when Details tab is reselected"
@@ -230,7 +242,7 @@ final class EventsUITests: BaseUITest {
 
             let searchField = find("events-search-field")
             XCTAssertTrue(searchField.waitForExistence(timeout: 10), "Events search field should be visible once an event exists")
-            searchField.tap()
+            tapWhenSettled(searchField)
             searchField.typeText(String(token))
         }
         then("only the matching event should remain in the list") {
@@ -257,13 +269,14 @@ final class EventsUITests: BaseUITest {
         }
         when("I navigate to events and tap the create event button") {
             navigateToEvents()
-            let createButton = find("events-create-btn")
+            let createButton = createEventToolbarButton
             XCTAssertTrue(
                 createButton.waitForExistence(timeout: 10),
                 "Create event button should be offered for admins once an event entity type exists"
             )
-            XCTAssertTrue(createButton.isEnabled, "Create event button should be enabled once an event entity type exists")
-            createButton.tap()
+            // `events-create-btn` renders disabled until the entity types load, and a
+            // tap on a disabled button is dropped — so wait for it to be enabled.
+            tapWhenSettled(createButton)
         }
         then("the create-event sheet should open") {
             XCTAssertTrue(
