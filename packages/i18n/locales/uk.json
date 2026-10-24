@@ -191,7 +191,11 @@
     "selectBackupFile": "Оберіть файл резервної копії",
     "passkeyLoginFailed": "Вхід за ключем доступу не вдався",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "У мене є код запрошення",
+    "redeemInviteCodeLabel": "Код запрошення",
+    "redeemInviteCodePlaceholder": "Вставте свій код запрошення",
+    "redeemInviteSubmit": "Продовжити"
   },
   "banList": {
     "add": "Додати блокування",

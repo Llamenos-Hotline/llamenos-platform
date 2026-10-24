@@ -62,6 +62,10 @@ export const TestIds = {
   TOGGLE_PHONE_VISIBILITY: 'toggle-phone-visibility',
   INVITE_BTN: 'invite-btn',
   REVOKE_INVITE_BTN: 'revoke-invite-btn',
+  REDEEM_INVITE_BTN: 'redeem-invite-btn',
+  REDEEM_INVITE_CODE_INPUT: 'redeem-invite-code-input',
+  REDEEM_INVITE_SUBMIT_BTN: 'redeem-invite-submit-btn',
+  REDEEM_INVITE_CANCEL_BTN: 'redeem-invite-cancel-btn',
 
   // ============ Shifts ============
   SHIFT_LIST: 'shift-list',
