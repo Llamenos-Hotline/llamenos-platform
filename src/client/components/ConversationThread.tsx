@@ -115,6 +115,7 @@ export function ConversationThread({ conversationId: _conversationId, messages, 
           return (
             <div
               key={msg.id}
+              data-testid="conversation-message"
               className={`flex ${isInbound ? 'justify-start' : 'justify-end'}`}
             >
               <div

@@ -164,6 +164,13 @@ jobs:
       # report on merge_group" rail in tests/orchestrator/guards.test.ts
       # requires of everything in ci-status's `needs`.
       pr_gate: ${{ github.event_name == 'pull_request' }}
+      # True only for a knope release PR whose ENTIRE diff is version lines and
+      # the changelog (#2094) — see the "Detect changes" step. `pull_request`
+      # only: on `merge_group` it is always false, so the queue still runs the
+      # full matrix over the tree that lands. The platform flags below are
+      # already all false when this is true; it exists for the ungated
+      # guard jobs (lint, build, ...) that no platform flag reaches.
+      release_only: ${{ steps.filter.outputs.release_only }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -190,6 +197,9 @@ jobs:
           # flowing into a git command rather than a SHA, so it is quoted as
           # data and never spliced into the script text.
           TARGET_REF: ${{ github.event.merge_group.base_ref }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
         run: |
           # Diff against the PR's actual base, not HEAD^ — HEAD^ only agrees
           # with the base by coincidence on `pull_request` (today's merge-ref
@@ -295,11 +305,35 @@ jobs:
           echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
+          # A knope release PR is rewritten on every merge to main (16 times in
+          # one day, #2094) and its diff is version lines plus a changelog, so
+          # the platform path map would switch on every suite for it. If, and
+          # only if, the diff really is that — is-release-bump.sh checks the
+          # CONTENT, never the branch name — classify it as an empty change
+          # set: every platform flag false, nothing scheduled. Both the head
+          # branch and the head repo are checked first because a fork can name
+          # its branch `release`. `merge_group` never takes this path: the
+          # queue re-runs everything over the tree that lands.
+          RELEASE_ONLY=false
+          if [[ "${{ github.event_name }}" == "pull_request" \
+                && "$PR_HEAD_REF" == "release" \
+                && "$PR_HEAD_REPO" == "$REPO" ]] \
+             && bash .github/scripts/is-release-bump.sh "$BASE" "$HEAD"; then
+            RELEASE_ONLY=true
+            CHANGED=""
+          fi
+          echo "release_only=$RELEASE_ONLY" >> "$GITHUB_OUTPUT"
+
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
 
   # ─── Guard: No Generated Files In Git ────────────────────
   no-generated-files-in-git:
     name: No generated files in git
+    needs: changes
+    # Skipped for a release-bump-only PR (#2094) — see `changes.outputs.release_only`.
+    # `!cancelled()` rather than a bare expression so a FAILED `changes` job
+    # still lets this guard run instead of silently skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -350,6 +384,9 @@ jobs:
   # ─── Guard: Updater Pubkey Must Be Set ───────────────────
   verify-updater-config:
     name: Updater pubkey is set
+    needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -404,6 +441,8 @@ jobs:
   # ─── Build & Validate ──────────────────────────────────────
   build:
     needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -2318,6 +2357,9 @@ jobs:
   # going live — but any *new* lint error introduced in a touched file fails
   # the build immediately.
   lint:
+    needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -2427,6 +2469,9 @@ jobs:
         run: bun run migration:check --ci
 
   docs-guard:
+    needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
 

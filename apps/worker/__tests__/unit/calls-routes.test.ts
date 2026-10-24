@@ -747,7 +747,7 @@ describe('Calls Routes', () => {
       const pubkey = 'a'.repeat(64)
 
       const hashedPhone = hashPhone('+15551234567', TEST_HMAC_SECRET)
-      callsSvc.getActiveCallByCallId.mockResolvedValue({
+      callsSvc.getActiveCallById.mockResolvedValue({
         callId: 'call-1',
         answeredBy: pubkey,
         callerNumber: hashedPhone, // already HMAC-hashed at call ingestion
@@ -793,7 +793,7 @@ describe('Calls Routes', () => {
       const pubkey = 'a'.repeat(64)
 
       const hashedPhone = hashPhone('+15551234567', TEST_HMAC_SECRET)
-      callsSvc.getActiveCallByCallId.mockResolvedValue({
+      callsSvc.getActiveCallById.mockResolvedValue({
         callId: 'call-1',
         answeredBy: pubkey,
         callerNumber: hashedPhone, // already HMAC-hashed at call ingestion
@@ -822,7 +822,7 @@ describe('Calls Routes', () => {
 
     it('returns 404 when call not found', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.getActiveCallByCallId.mockResolvedValue(null)
+      callsSvc.getActiveCallById.mockResolvedValue(null)
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -842,7 +842,7 @@ describe('Calls Routes', () => {
 
     it('returns 403 when user did not answer the call', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.getActiveCallByCallId.mockResolvedValue({
+      callsSvc.getActiveCallById.mockResolvedValue({
         callId: 'call-1',
         answeredBy: 'b'.repeat(64),
         callerNumber: '+15551234567',

@@ -29,6 +29,7 @@ import {
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
 import {
   mergeContactsBodySchema,
   mergeContactsResponseSchema,
@@ -47,6 +48,22 @@ const contactCaseListResponseSchema = z.object({
 })
 
 const contactsV2 = new Hono<AppEnv>()
+
+// Inside /hubs/:hubId a contact or affinity-group id may only name a row of that
+// hub (#2011); another hub's is a 404, the same as a missing one. The literal
+// segments share the contact id's position and are not resources.
+const contactInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['lookup', 'search', 'groups', 'merge', 'bulk', 'bulk-create']),
+  load: async (services, id, hubId) => assertInHub(await services.contacts.get(id), hubId, 'Contact not found'),
+})
+contactsV2.use('/:id/*', contactInPathHub)
+
+const groupInPathHub = resourceInPathHub({
+  param: 'groupId',
+  load: async (services, id, hubId) => assertInHub(await services.contacts.getGroup(id), hubId, 'Group not found'),
+})
+contactsV2.use('/groups/:groupId/*', groupInPathHub)
 
 // =============================================
 // Contact CRUD (list, lookup, search, create)

@@ -946,7 +946,7 @@ export class CasesService {
    * rows created through `POST /events`. Either kind is scoped to the caller's
    * hub — an id from another hub is indistinguishable from a missing one.
    */
-  private async resolveEventTarget(
+  async resolveEventTarget(
     eventId: string,
     hubId: string,
   ): Promise<'legacy' | 'record'> {

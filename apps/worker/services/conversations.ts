@@ -178,6 +178,26 @@ export class ConversationsService {
     return row
   }
 
+  /**
+   * The conversation `id`, only if it belongs to `hubId`.
+   *
+   * A conversation of another hub is reported exactly as a missing one — one
+   * query, one error — so a hub-scoped route cannot be used to learn whether an
+   * id exists in a hub the caller is not a member of (#2011). Hub-scoped
+   * handlers fetch through here; `getById` is for callers that already hold
+   * authority over every hub (webhooks, the cleanup jobs).
+   */
+  async getByIdForHub(id: string, hubId: string): Promise<ConversationRow> {
+    const [row] = await this.db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.id, id), eq(conversations.hubId, hubId)))
+      .limit(1)
+
+    if (!row) throw new ServiceError(404, 'Conversation not found')
+    return row
+  }
+
   async list(filters: ConversationFilters = {}): Promise<{ conversations: ConversationRow[]; total: number }> {
     const conditions = []
 
@@ -1067,11 +1087,20 @@ export class ConversationsService {
     }))
   }
 
-  async getContactConversations(contactHash: string): Promise<ConversationRow[]> {
+  /**
+   * Every conversation with `contactHash`, within `hubId` — or across all hubs
+   * when `hubId` is undefined (the unscoped mount, which has no hub to bound
+   * to). Required rather than optional so a hub-scoped caller cannot omit it:
+   * the hash is a blind index, equal across hubs for the same caller, and an
+   * unbounded lookup would stitch one caller's contact history together across
+   * hubs that must not know of each other.
+   */
+  async getContactConversations(contactHash: string, hubId: string | undefined): Promise<ConversationRow[]> {
+    const byContact = eq(conversations.contactIdentifierHash, contactHash)
     return this.db
       .select()
       .from(conversations)
-      .where(eq(conversations.contactIdentifierHash, contactHash))
+      .where(hubId ? and(byContact, eq(conversations.hubId, hubId)) : byContact)
       .orderBy(desc(conversations.lastMessageAt))
   }
 

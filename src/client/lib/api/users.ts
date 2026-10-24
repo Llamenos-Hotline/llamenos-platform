@@ -1,4 +1,4 @@
-import { request, hp } from './client'
+import { request, hp, hubPath } from './client'
 import type { User } from '@protocol/schemas'
 
 export type { User }
@@ -10,6 +10,15 @@ export type UserRole = 'volunteer' | 'admin' | 'reporter'
 
 export async function listUsers() {
   return request<{ users: User[] }>(hp('/users'))
+}
+
+/**
+ * Members of one explicit hub, independent of the active hub. Use this for anything
+ * acting on a hub's own item (e.g. reassigning its conversation): the candidates must
+ * come from the item's hub, never from whatever hub the user happens to be browsing.
+ */
+export async function listHubUsers(hubId: string) {
+  return request<{ users: User[] }>(hubPath(hubId, '/users'))
 }
 
 export async function createUser(data: { name: string; phone: string; roleIds: string[]; pubkey: string }) {

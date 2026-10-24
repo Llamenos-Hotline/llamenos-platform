@@ -2,12 +2,13 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { listNotes, createNote, updateNote, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
+import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
 import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
+import { resolveCallHubId } from '@/lib/call-hubs'
 import { useToast } from '@/lib/toast'
 import { useConfig } from '@/lib/config'
 import type { NotePayload } from '@shared/types'
@@ -199,6 +200,8 @@ function NotesPage() {
 
   async function handleCreateNote(callId: string, text: string, fields: Record<string, string | number | boolean>) {
     if (!hasDeviceKey || !publicKey || !text.trim() || !callId.trim()) return
+    // A note about a call belongs to the call's hub, which may not be the active one.
+    const hubId = resolveCallHubId(callId, getActiveHub())
     setSaving(true)
     try {
       const payload: NotePayload = { text }
@@ -211,9 +214,15 @@ function NotesPage() {
         return
       }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
-      const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes })
-      setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
-      setTotal(prev => prev + 1)
+      const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
+      // This list, and the edit/reply actions on it, are scoped to the active hub. A note
+      // filed to another hub's call is stored correctly but does not belong on this page
+      // until that hub is active — listing it here would aim its edits and replies at the
+      // wrong hub.
+      if (hubId === getActiveHub()) {
+        setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
+        setTotal(prev => prev + 1)
+      }
       setShowNewNote(false)
     } catch {
       toast(t('common.error'), 'error')

@@ -26,6 +26,9 @@ function baseEnv(environment: string): Record<string, string> {
     SERVER_SECRET: 'b'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: environment,
+    // Required since #1438: createBlobStorage() runs unconditionally at boot.
+    STORAGE_ACCESS_KEY: 'rustfsadmin',
+    STORAGE_SECRET_KEY: 'rustfsadmin',
     // config.ts requires this in production; irrelevant elsewhere.
     WEBHOOK_BASE_URL: 'https://hotline.example.org',
   }

@@ -40,7 +40,14 @@ function createTestApp(opts: {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('services', {
-      blasts: serviceMock.blasts || {},
+      blasts: {
+        // The hub guard (#2011) fetches the row before any handler runs; by
+        // default every id resolves to a row of the app's own hub. Tests that
+        // care about the handler's own fetch override these.
+        getBlast: async (id: string) => makeBlast({ id, hubId }),
+        getSubscriberById: async (id: string) => ({ id, hubId }),
+        ...(serviceMock.blasts as Record<string, unknown> | undefined),
+      },
     } as unknown as AppEnv['Variables']['services'])
     c.set('allRoles', [])
     c.set('requestId', 'test-req-1')

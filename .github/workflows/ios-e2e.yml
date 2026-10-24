@@ -968,7 +968,27 @@ jobs:
           done
           # Only the main daemon ever runs; the `.service` label is listed with
           # "-" for its PID. A numeric first column is a live process.
-          running=$(sim list 2>&1 | awk '$3 ~ /^com\.apple\.mediaanalysisd/ && $1 ~ /^[0-9]+$/')
+          #
+          # `bootout` only SIGNALS the job and returns; the process is still
+          # listed, with its PID, for a moment afterwards. Run 39982396720
+          # (shard `ui (3)`) read "still running: 76348 0 com.apple.mediaanalysisd"
+          # a few milliseconds after the bootout, with both labels already
+          # marked disabled, and failed a shard that had run no test: 5 of 76
+          # Mac ui shards. So the liveness check waits for the process to exit.
+          # The wait is bounded and the verdict is unchanged: a daemon that is
+          # still alive when the deadline passes fails the step, and so does a
+          # `list` that errors, so a broken simulator is still reported.
+          deadline=$((SECONDS + 30))
+          while :; do
+            listing=$(sim list 2>&1) || {
+              echo "::error::launchctl list failed in $UDID: $listing"
+              exit 1
+            }
+            running=$(awk '$3 ~ /^com\.apple\.mediaanalysisd/ && $1 ~ /^[0-9]+$/' <<<"$listing")
+            [ -z "$running" ] && break
+            [ "$SECONDS" -ge "$deadline" ] && break
+            sleep 1
+          done
           if [ -n "$running" ]; then
             echo "::error::mediaanalysisd is still running in the simulator: $running"
             failed=1

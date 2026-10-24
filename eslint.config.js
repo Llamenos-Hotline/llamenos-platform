@@ -305,7 +305,9 @@ export default tseslint.config(
     ignores: [
       '**/__tests__/**',
       '**/*.test.ts',
+      '**/*.test.tsx',
       '**/*.spec.ts',
+      '**/*.spec.tsx',
       '**/*.wdio.ts',
       'tests/**',
       'packages/test-specs/**',

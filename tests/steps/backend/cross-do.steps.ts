@@ -192,10 +192,13 @@ Then('the call should be ringing', async ({ world }) => {
 // ─── Conversation Lifecycle ─────────────────────────────────────────
 
 When('an SMS arrives from {string} with body {string}', async ({ request, world }, phone: string, body: string) => {
+  // The volunteer claims it through the hub-scoped route, which only admits a
+  // conversation of that hub (#2011) — so it must arrive in the scenario's hub.
   const result = await simulateIncomingMessage(request, {
     senderNumber: phone,
     body,
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
   getCrossDoState(world).conversationId = result.conversationId
   getCrossDoState(world).conversationIds.push(result.conversationId)
@@ -226,9 +229,10 @@ When('the volunteer claims the conversation', async ({ request, world }) => {
     const claimPath = hubId
       ? `/hubs/${hubId}/conversations/${getCrossDoState(world).conversationId}/claim`
       : `/conversations/${getCrossDoState(world).conversationId}/claim`
-    await apiPost(request, claimPath, {
+    const { status } = await apiPost(request, claimPath, {
       pubkey: volPubkey,
     }, volDeviceKey!)
+    expect(status, 'claiming a conversation of the scenario hub').toBe(200)
   }
 })
 
@@ -250,11 +254,12 @@ When('the admin closes the conversation', async ({ request, world }) => {
   }
 })
 
-When('another SMS arrives from {string} with body {string}', async ({request, world: _world}, phone: string, body: string) => {
+When('another SMS arrives from {string} with body {string}', async ({request, world}, phone: string, body: string) => {
   await simulateIncomingMessage(request, {
     senderNumber: phone,
     body,
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
 })
 
