@@ -732,11 +732,12 @@ describe('Shifts Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/shifts', shiftsRoutes, {
-      services: { shifts: mockShifts },
+      services: { shifts: mockShifts, activeShifts: { getActive: vi.fn().mockResolvedValue(null) } },
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/shifts/my-status', myStatusResponseSchema, { env })
     expect(typeof result.parsed.onShift).toBe('boolean')
+    expect(result.parsed.clockedIn).toBe(false)
     expect(result.parsed.nextShift).toBeNull()
   })
 })
