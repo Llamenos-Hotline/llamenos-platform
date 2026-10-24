@@ -5,15 +5,17 @@ import { hashPhone } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
 import type { activeCalls, callRecords } from '@worker/db/schema'
 import { ServiceError } from '@worker/services/settings'
-import { cancelLosingLegs } from '@worker/services/ringing'
+import { cancelLosingLegs, canAnswerInApp } from '@worker/services/ringing'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 
-// Ring-leg cancellation talks to the telephony provider — covered in ringing-service.test.ts.
-// Here we only assert the answer route invokes it (and only after winning).
+// Ring-leg cancellation and the in-app-leg check talk to the telephony provider and the
+// PBX — both covered in ringing-service.test.ts. Here we only assert the answer route
+// invokes them (cancellation only after winning, the claim only when an in-app leg exists).
 vi.mock('@worker/services/ringing', async (orig) => ({
   ...(await orig<typeof import('@worker/services/ringing')>()),
   cancelLosingLegs: vi.fn().mockResolvedValue(undefined),
+  canAnswerInApp: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 
@@ -495,6 +497,7 @@ describe('Calls Routes', () => {
 
     beforeEach(() => {
       vi.mocked(cancelLosingLegs).mockClear()
+      vi.mocked(canAnswerInApp).mockClear().mockResolvedValue(true)
     })
 
     it('answers a call, audits it, and cancels the other ringing legs', async () => {
@@ -516,6 +519,20 @@ describe('Calls Routes', () => {
       expect((services.audit as ReturnType<typeof makeMockAuditService>).log).toHaveBeenCalled()
       // In-app answer: no winning phone leg, so every phone leg is a loser.
       expect(cancelLosingLegs).toHaveBeenCalledWith(expect.anything(), services, 'hub-1', 'call-1')
+    })
+
+    it('refuses with 422 and touches nothing when the volunteer has no in-app leg to be bridged to', async () => {
+      // A database write that connects nobody: answering would hang up every ringing
+      // phone, leave the caller on hold music and put a callAnswered entry in the log.
+      vi.mocked(canAnswerInApp).mockResolvedValue(false)
+      const callsSvc = makeMockCallsService()
+      const { app, services } = answerApp(callsSvc)
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(422)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+      expect(cancelLosingLegs).not.toHaveBeenCalled()
+      expect((services.audit as ReturnType<typeof makeMockAuditService>).log).not.toHaveBeenCalled()
     })
 
     it('returns 404 when the call does not exist', async () => {

@@ -26,6 +26,7 @@ import type { Role } from '@shared/permissions'
 vi.mock('@worker/services/ringing', async (orig) => ({
   ...(await orig<typeof import('@worker/services/ringing')>()),
   cancelLosingLegs: vi.fn().mockResolvedValue(undefined),
+  canAnswerInApp: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 // Dropping the caller's leg at the provider is the hang-up route's other side effect,
