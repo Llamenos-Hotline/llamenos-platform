@@ -57,3 +57,16 @@ turn_relay_max_port: 49200
 # (use-auth-secret) credential scheme the worker mints against, but it is logged
 # and it belongs to this deployment.
 turn_realm: "{{ domain }}"
+
+# The ONE address a relay allocation may send to: the media server. Everything
+# else in private space is denied (#2136), and a relayed call is volunteer ->
+# relay -> Asterisk, so without this a call connects at signalling and carries no
+# audio. It is Asterisk's address on llamenos-internal, which roles/docker and
+# roles/llamenos-asterisk pin so this value cannot drift from the container's.
+# coturn matches by IP alone, so this cannot be narrowed to the RTP ports; it is
+# the least that works.
+#
+# Set it to the host's public address ONLY on a deployment whose Asterisk
+# advertises that address for media (an external-address topology) — and know
+# that this then lets a volunteer's relay reach every host service on it.
+turn_media_peer_ip: "{{ asterisk_internal_ip }}"

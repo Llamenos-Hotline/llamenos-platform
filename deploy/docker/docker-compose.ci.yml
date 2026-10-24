@@ -112,6 +112,9 @@ services:
     # production topology and its healthcheck must pass.
     # --log-file=stdout keeps the startup log where `docker compose logs`
     # reads it (coturn's default is a /var/tmp file the driver never sees).
+    #
+    # The peer ACL (#2136) is repeated here because `command` replaces the base
+    # file's rather than merging with it; keep it identical to docker-compose.yml.
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
@@ -122,6 +125,24 @@ services:
       --max-port=${TURN_RELAY_MAX_PORT:-49200}
       --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
       --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
+      --denied-peer-ip=0.0.0.0-0.255.255.255
+      --denied-peer-ip=10.0.0.0-10.255.255.255
+      --denied-peer-ip=100.64.0.0-100.127.255.255
+      --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=169.254.0.0-169.254.255.255
+      --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=192.0.0.0-192.0.0.255
+      --denied-peer-ip=192.168.0.0-192.168.255.255
+      --denied-peer-ip=198.18.0.0-198.19.255.255
+      --denied-peer-ip=::-::1
+      --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+      --denied-peer-ip=${TURN_RELAY_IP:-127.0.0.1}
+      --denied-peer-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      ${TURN_MEDIA_PEER_IP:+--allowed-peer-ip=${TURN_MEDIA_PEER_IP}}
+      --no-tcp-relay
+      --no-multicast-peers
       --no-tls
       --no-dtls
       --no-cli
