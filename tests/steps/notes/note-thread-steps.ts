@@ -9,8 +9,9 @@ import { expect } from '@playwright/test'
 import { Given, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts, fillCallId } from '../../helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import { Navigation } from '../../pages/index'
-import { listNotesViaApi, apiPost, generateTestKeypair } from '../../api-helpers'
+import { listNotesViaApi, apiPost, encryptForTest, validNoteBody, ADMIN_SEED } from '../../api-helpers'
 
 Given('I am on the note detail screen', async ({ page, backendRequest: request, workerHub }) => {
   // Try API to check for existing notes
@@ -30,7 +31,7 @@ Given('I am on the note detail screen', async ({ page, backendRequest: request, 
     await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
     await newBtn.click()
     // Fill call ID — either Input (no recent calls) or Select (has recent calls)
-    await fillCallId(page, `CALL-${Date.now()}`)
+    await fillCallId(page, await simulateCallForNote(request, workerHub))
     const contentField = page.getByTestId(TestIds.NOTE_CONTENT)
     await expect(contentField).toBeVisible({ timeout: Timeouts.ELEMENT })
     await contentField.fill('Test note for thread')
@@ -91,20 +92,21 @@ Then('I should see the send reply button', async ({ page }) => {
 
 Then('notes with replies should show a reply count badge', async ({ page, backendRequest: request, workerHub }) => {
   // Seed a note with a reply via API so the badge has data to render
-  const callId = `call-badge-${Date.now()}`
-  const noteRes = await apiPost<{ note?: { id: string }; id?: string }>(request, `/hubs/${workerHub}/notes`, {
-    encryptedContent: 'badge-test-note',
-    callId,
-  })
+  const noteRes = await apiPost<{ note?: { id: string }; id?: string }>(
+    request,
+    `/hubs/${workerHub}/notes`,
+    // The app parses a note's plaintext as a NotePayload, so seed a real one.
+    await validNoteBody(request, ADMIN_SEED, { plaintext: JSON.stringify({ text: 'badge-test-note' }), hubId: workerHub }),
+  )
   expect(noteRes.status).toBeLessThan(300)
   const noteId = noteRes.data.note?.id ?? noteRes.data.id
   expect(noteId).toBeTruthy()
 
   // Add a reply to bump replyCount
-  const kp = generateTestKeypair()
+  const reply = await encryptForTest('badge-test-reply', [ADMIN_SEED])
   const replyRes = await apiPost(request, `/hubs/${workerHub}/notes/${noteId}/replies`, {
-    encryptedContent: 'badge-test-reply',
-    readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'fake-ct', enc: kp.pubkey }],
+    encryptedContent: reply.encryptedContent,
+    readerEnvelopes: reply.envelopes,
   })
   expect(replyRes.status).toBeLessThan(300)
 

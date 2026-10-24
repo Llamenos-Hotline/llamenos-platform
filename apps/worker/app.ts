@@ -82,7 +82,7 @@ const app = new Hono<AppEnv>()
 // --- Global error handler ---
 app.onError((err, c) => {
   if (err instanceof ServiceError) {
-    return c.json({ error: err.message }, err.status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500)
+    return c.json({ error: err.message }, err.status as 400 | 401 | 403 | 404 | 409 | 410 | 422 | 429 | 500)
   }
   // Log full error server-side — NEVER expose internals to clients.
   // Route through the logger's Error-unwrapping path so stack inclusion

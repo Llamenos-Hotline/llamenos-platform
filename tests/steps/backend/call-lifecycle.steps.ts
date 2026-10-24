@@ -13,7 +13,7 @@ import { getScenarioState } from './common.steps'
 import {
   apiPost,
   apiGet,
-  generateTestKeypair,
+  sealedNoteFields,
   ADMIN_SEED,
 } from '../../api-helpers'
 import {
@@ -64,16 +64,12 @@ When('the answering volunteer creates a note for the call', async ({ request, wo
   const vol = getScenarioState(world).volunteers[volIndex]
   expect(vol).toBeDefined()
 
-  const kp = generateTestKeypair()
   const { data, status } = await apiPost<{ id?: string; note?: { id: string } }>(
     request,
     '/notes',
     {
-      encryptedContent: 'lifecycle-test-note',
+      ...(await sealedNoteFields(vol.deviceKey, 'lifecycle-test-note')),
       callId: getScenarioState(world).callId,
-      readerEnvelopes: [
-        { pubkey: vol.pubkey, ct: 'key-vol', enc: kp.pubkey },
-      ],
     },
     vol.deviceKey,
   )

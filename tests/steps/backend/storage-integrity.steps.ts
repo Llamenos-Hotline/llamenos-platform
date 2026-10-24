@@ -15,6 +15,7 @@ import {
   uniquePhone,
   ADMIN_SEED,
 } from '../../api-helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import {
   generateContentKey,
   encryptContent,
@@ -100,7 +101,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
         '/notes',
         {
           encryptedContent: ciphertextHex,
-          callId: `storage-note-${Date.now()}`,
+          callId: await simulateCallForNote(request),
           authorEnvelope: volEnv,
           adminEnvelopes: [{ pubkey: admin.pubkeyHex, ...adminEnv }],
         },
@@ -326,7 +327,7 @@ When('the volunteer creates a note with real HPKE envelopes', async ({ request, 
     '/notes',
     {
       encryptedContent: ciphertextHex,
-      callId: `envelope-accuracy-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       authorEnvelope: authorEnv,
       adminEnvelopes: getStorageIntegrityState(world).submittedEnvelopes,
     },
