@@ -36,7 +36,8 @@
  * admin reads a note only if its sealer addressed them. That is a client
  * change, tracked separately from this invariant.
  *
- * Not counted: deactivated or erased users, who cannot act, and users with a
+ * Not counted: deactivated or erased users, who cannot act; users holding a
+ * revoked signing key, whose private half is public; and users with a
  * pending/executing erasure request — they are departing, so a hub whose only
  * other admin is mid-erasure is one step from none.
  *
@@ -65,6 +66,7 @@ import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
 import { DEFAULT_ROLES, permissionGranted, type Role } from '@shared/permissions'
 import { ServiceError } from '../services/settings'
+import { isRevokedSigningKey } from './revoked-signing-keys'
 
 /** The system role of an instance-wide admin. Immutable (`isSystem`), so its authority cannot be edited away. */
 export const INSTANCE_ADMIN_ROLE = 'role-super-admin'
@@ -217,7 +219,10 @@ async function loadCandidateAdmins(
         )`,
       ),
     )
-  return rows.map(row => ({ pubkey: row.pubkey, ...adminStateOf(row) }))
+  // A revoked signing key's private half is public: whoever holds it can sign as
+  // that user, so it carries no authority and must neither satisfy the
+  // invariant nor receive an envelope (lib/revoked-signing-keys.ts).
+  return rows.filter(row => !isRevokedSigningKey(row.pubkey)).map(row => ({ pubkey: row.pubkey, ...adminStateOf(row) }))
 }
 
 /** Admin counts per hub, under `catalog`, for the listed hubs. A hub with no admin is absent from the map. */

@@ -36,6 +36,7 @@ import { IdentityService } from '../../services/identity'
 import { RecordsService } from '../../services/records'
 import { ServiceError, SettingsService } from '../../services/settings'
 import { assertAdminCanRead } from '../../lib/admin-envelopes'
+import { revokedSigningKeys } from '../../lib/revoked-signing-keys'
 import { hubContext } from '../../middleware/hub'
 import notesRoutes from '../../routes/notes'
 import type { AppEnv } from '../../types'
@@ -204,6 +205,22 @@ describe('who the envelope guard accepts is who the invariant counts', () => {
     expect((await refusal(() => identity.removeHubRole({ pubkey: founder.pubkey, hubId }))).status).toBe(409)
     await guard(hubId, sealedTo(founder.deviceKey)) // the founder still is
     expect((await refusal(() => guard(hubId, sealedTo(gone.deviceKey)))).status).toBe(422)
+  })
+
+  it('a super-admin on a revoked signing key is neither a recipient nor counted', async () => {
+    const founder = await makePerson('revoked-founder')
+    const hubId = await makeHub('revoked', founder)
+    const [revokedKey] = [...revokedSigningKeys()]
+    // Its private half is published, so it must carry no authority at all. The
+    // key is fixed, so clear any row a previously aborted run left behind.
+    await db.delete(users).where(eq(users.pubkey, revokedKey))
+    await db.insert(users).values({ pubkey: revokedKey, displayName: 'revoked', roles: ['role-super-admin'] })
+    createdUsers.push(revokedKey)
+    const revokedDevice = hexKey('d1')
+    await db.insert(devices).values({ pubkey: revokedKey, platform: 'desktop', x25519Pubkey: revokedDevice })
+
+    expect(await recipientsOf(hubId)).not.toContain(revokedDevice)
+    expect((await refusal(() => identity.removeHubRole({ pubkey: founder.pubkey, hubId }))).status).toBe(409)
   })
 
   it('an admin with an erasure in flight is neither a recipient nor counted', async () => {

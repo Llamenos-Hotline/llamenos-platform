@@ -1749,8 +1749,8 @@ Hub-scoped: `/api/hubs/:hubId/notes/*`
 **Server-side write guards (#2112, #2113).** The server never holds a note's content key, so a malformed write cannot be repaired afterwards; it is refused at the boundary instead:
 
 - `callId` / `conversationId` must name an existing call (live or finished) / conversation **of the hub in the path**. Under `/api/hubs/:hubId` a record of another hub and one that does not exist are both `404` with the same message; on the unscoped mount the record must sit in a hub the caller holds a role in (a record with no hub is global).
-- `adminEnvelopes` must include at least one envelope addressed to a key an admin holds — `ADMIN_DECRYPTION_PUBKEY` or the registered device key of an active super-admin. An empty or absent set, or one addressed only to non-admin keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
-- A deployment with **no** resolvable admin recipient at all (no `ADMIN_DECRYPTION_PUBKEY`, no super-admin device) is *loud-but-stored*: the write succeeds and the server logs an operator-visible error, matching call-record sealing and inbound messages. Refusing a volunteer's note over a deployment gap would lose more than it protects.
+- `adminEnvelopes` must include at least one envelope addressed to a key an admin holds — `ADMIN_DECRYPTION_PUBKEY` or the registered device key of an admin of the note's hub (a hub admin of it, or a super-admin: the same set the hub last-admin invariant counts). An empty or absent set, or one addressed only to non-admin keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
+- A deployment with **no** resolvable admin recipient at all (no `ADMIN_DECRYPTION_PUBKEY`, no admin of the hub with a registered device) is **refused** with `503` and an operator-visible error log. The hub last-admin invariant guarantees the hub has an admin, so an empty recipient set is a misconfiguration, and storing under it would create a note nobody can ever open. Server-sealed records (inbound messages, call records) are unaffected: the server cannot refuse a caller who has already spoken, so those keep the loud-but-stored contract.
 
 ### 4.8 Calls
 
@@ -2284,26 +2284,26 @@ Response: { "ok": true }
 DELETE /api/hubs/:hubId/members/:pubkey
 Permission: users:manage-roles
 Response: { "ok": true }
-// Hub-admin invariant: a hub always has at least one admin (an active, un-erased member whose
-// roles in the hub grant both settings:manage and notes:read-all). POST /hubs creates the hub and
-// its creator's admin assignment atomically, and every change that would remove the last admin --
-// demoting or removing the member (above), PATCH/DELETE /api/users/:pubkey (deactivate, delete,
-// rewrite hubRoles), editing or deleting the role that confers admin, and account erasure --
-// is refused with 409 and leaves nothing changed. Erasure of a hub's only admin is deferred, not
-// denied: it succeeds once another admin exists.
-// What this does NOT guarantee: that a note is readable by a hub admin. Two different sets are in play
-// and they are not the same set today (tracked in #2190):
-//   - the hub-admin set above (hub-assignment admins; global super-admins are NOT counted) is what the
-//     invariant protects -- "a hub always has at least one hub admin";
-//   - the admin-envelope set, enforced by the POST /notes envelope guard (apps/worker/lib/admin-envelopes.ts),
-//     is ADMIN_DECRYPTION_PUBKEY plus the devices of active super-admins. A hub admin who is not a
-//     super-admin is in the first set and not in the second, and every client currently seals notes only
-//     to ADMIN_DECRYPTION_PUBKEY. No code path seals a note to a hub admin.
-// The guard requires at least one envelope addressed to a member of the envelope set (422 otherwise).
-// If that set is empty (no ADMIN_DECRYPTION_PUBKEY and no super-admin device) there is nothing to check
-// against: the record is STORED, not refused, and an error is logged for the operator. A note with no
-// admin reader is therefore possible in that deployment state, and it is not repairable afterwards (the
-// content key was wrapped for nobody else). The hub-admin invariant does not change this.
+// Admin invariant: a hub always has at least one admin. ONE definition of "an admin of hub H"
+// (apps/worker/lib/hub-admin.ts `administersHub`) serves both this invariant and the POST /notes
+// envelope guard (below): an active, un-erased user, with no erasure request in flight and no revoked
+// signing key, who is EITHER a hub admin of H (roles in H granting both settings:manage and
+// notes:read-all) OR a super-admin (an instance-wide admin: role-super-admin holds `*`, reaches every
+// hub, and its devices are what the server seals call records and audit keys to).
+// POST /hubs creates the hub and its creator's admin assignment atomically, and every change that would
+// leave a hub with none of those -- demoting or removing the member (above), PATCH/DELETE
+// /api/users/:pubkey (deactivate, delete, rewrite roles or hubRoles, including demoting or removing the
+// last super-admin when a hub depends on them), editing or deleting the role that confers admin, and
+// account erasure -- is refused with 409 and leaves nothing changed. Erasure of a hub's only admin is
+// deferred, not denied: it succeeds once another admin exists.
+// Envelope guard, same set: POST /notes (and note edit, note replies, client-sealed outbound messages,
+// reports) require at least one envelope addressed to ADMIN_DECRYPTION_PUBKEY (the instance escrow key
+// every shipped client seals to) or a registered device key of an admin of the RECORD'S hub (422
+// otherwise). If neither exists -- no ADMIN_DECRYPTION_PUBKEY and no admin device -- the write is
+// REFUSED with 503 and an operator-visible error is logged; it is no longer stored.
+// What this still does NOT guarantee: that a hub admin can open a given note. Clients seal only to
+// ADMIN_DECRYPTION_PUBKEY, so a hub admin reads a note only if its sealer addressed one of their devices.
+// Widening what clients seal to is tracked in #2190 (sections 3-4).
 // The check is race-free: guards take advisory locks (the role catalog shared, then each affected hub)
 // BEFORE reading role definitions and counting, and a role-definition edit takes the catalog lock exclusively.
 
