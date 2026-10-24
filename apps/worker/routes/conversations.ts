@@ -22,6 +22,7 @@ import { encryptMessageForStorage } from '../lib/crypto'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
 
 const logger = createLogger('routes.conversations')
 
@@ -394,6 +395,13 @@ conversations.post('/:id/messages',
     // External channels require at least plaintext for dispatch
     if (conv.channelType !== 'web' && !plaintextForSending && !body.encryptedContent) {
       return c.json({ error: 'plaintextForSending or body is required for external channels' }, 400)
+    }
+
+    // A client-sealed message is readable by exactly the envelopes it brought.
+    // Server-sealed ones (the branch above) always include the admin reader, so
+    // only the client-supplied set can leave the admins out (#2113).
+    if (body.encryptedContent) {
+      await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A message', { conversationId: id })
     }
 
     // Build the message with initial pending status

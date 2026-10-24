@@ -403,6 +403,16 @@ export class IdentityService {
   }
 
   /**
+   * Every admin X25519 recipient for an envelope set: `adminDecryptionPubkey`
+   * (`ADMIN_DECRYPTION_PUBKEY`) plus the registered device keys of each active
+   * super-admin. The one definition of "a key an admin holds" — server-sealed
+   * records are wrapped to it, and client-sealed ones are checked against it.
+   */
+  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await this.listActiveSuperAdminPubkeys())
+  }
+
+  /**
    * Pubkeys of all active super-admins — recipients of client-reported
    * security alerts (e.g. certificate pin mismatches).
    */

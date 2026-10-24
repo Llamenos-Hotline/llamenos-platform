@@ -18,6 +18,8 @@ import {
   createUserViaApi,
   generateTestKeypair,
   uniqueName,
+  encryptForTest,
+  ADMIN_SEED,
 } from '../../api-helpers'
 import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
@@ -84,7 +86,8 @@ Given('a CMS report type with allowCaseConversion disabled exists', async ({ req
 // ── Report Creation Steps ────────────────────────────────────────
 
 Given('a report of the conversion-enabled type exists', async ({ request, world }) => {
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('triage-report-content', [ADMIN_SEED])
   const { data } = await apiPost<{ id?: string; report?: { id: string } }>(
     request,
     '/reports',
@@ -92,8 +95,8 @@ Given('a report of the conversion-enabled type exists', async ({ request, world 
       title: uniqueName('Triage Report'),
       category: 'general',
       reportTypeId: getTriageState(world).enabledReportTypeId,
-      encryptedContent: 'triage-report-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent: sealed.encryptedContent,
+      readerEnvelopes: sealed.envelopes,
     },
   )
   const id = (data as Record<string, unknown>)?.id as string
@@ -103,7 +106,8 @@ Given('a report of the conversion-enabled type exists', async ({ request, world 
 })
 
 Given('a report of the conversion-disabled type exists', async ({ request, world }) => {
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('disabled-report-content', [ADMIN_SEED])
   await apiPost(
     request,
     '/reports',
@@ -111,14 +115,15 @@ Given('a report of the conversion-disabled type exists', async ({ request, world
       title: uniqueName('Disabled Report'),
       category: 'general',
       reportTypeId: getTriageState(world).disabledReportTypeId,
-      encryptedContent: 'disabled-report-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent: sealed.encryptedContent,
+      readerEnvelopes: sealed.envelopes,
     },
   )
 })
 
 Given('a report of the conversion-enabled type exists with conversionStatus {string}', async ({ request, world }, conversionStatus: string) => {
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('triage-status-report', [ADMIN_SEED])
   const { data } = await apiPost<{ id?: string; report?: { id: string } }>(
     request,
     '/reports',
@@ -126,9 +131,9 @@ Given('a report of the conversion-enabled type exists with conversionStatus {str
       title: uniqueName('Triage Status Report'),
       category: 'general',
       reportTypeId: getTriageState(world).enabledReportTypeId,
-      encryptedContent: 'triage-status-report',
+      encryptedContent: sealed.encryptedContent,
       conversionStatus,
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      readerEnvelopes: sealed.envelopes,
     },
   )
   const id = (data as Record<string, unknown>)?.id as string

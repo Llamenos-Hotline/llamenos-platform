@@ -68,6 +68,10 @@ const DATABASE_URL =
 const db = createDatabase(DATABASE_URL)
 const audit = new AuditService(db)
 const svc = {
+  // POST /notes refuses a set no admin can open (#2113): the one admin recipient
+  // here is the key ENVELOPE is addressed to. The identity service itself is not
+  // under test in this file.
+  identity: { listAdminEnvelopeRecipients: async () => [ENVELOPE.pubkey] },
   settings: new SettingsService(db),
   audit,
   records: new RecordsService(db, audit),
@@ -440,3 +444,62 @@ describe('the legitimate path still works', () => {
     }
   })
 })
+
+describe('a note is filed only under this hub\'s calls and conversations (#2112)', () => {
+  const noteBody = (target: Record<string, string>) => ({
+    ...target,
+    encryptedContent: 'note-ciphertext',
+    authorEnvelope: { enc: ENVELOPE.enc, ct: ENVELOPE.ct },
+    adminEnvelopes: [ENVELOPE],
+  })
+  const storedFor = async (column: typeof notes.callId | typeof notes.conversationId, id: string) =>
+    (await db.select().from(notes).where(eq(column, id))).filter(n => n.encryptedContent === 'note-ciphertext')
+
+  it('refuses another hub\'s finished or live call, and another hub\'s conversation, and stores nothing', async () => {
+    for (const [hubId, other] of [[HUB_A, data.B], [HUB_B, data.A]] as const) {
+      for (const callId of [other.callId, other.activeCallId]) {
+        const res = await call(BOTH, hubId, 'POST', '/notes', noteBody({ callId }))
+        expect(res.status, `call ${callId} through ${hubId}`).toBe(404)
+        expect(await storedFor(notes.callId, callId)).toHaveLength(0)
+      }
+      const res = await call(BOTH, hubId, 'POST', '/notes', noteBody({ conversationId: other.conversationId }))
+      expect(res.status, `conversation ${other.conversationId} through ${hubId}`).toBe(404)
+      expect(await storedFor(notes.conversationId, other.conversationId)).toHaveLength(0)
+    }
+  })
+
+  it('answers an invented call or conversation exactly as it answers another hub\'s — nothing to probe with', async () => {
+    const invented = await call(BOTH, HUB_A, 'POST', '/notes', noteBody({ callId: 'does-not-exist-123' }))
+    const foreign = await call(BOTH, HUB_A, 'POST', '/notes', noteBody({ callId: data.B.callId }))
+    expect(invented.status).toBe(404)
+    expect(invented.json).toEqual(foreign.json)
+    expect((await call(BOTH, HUB_A, 'POST', '/notes', noteBody({ conversationId: 'does-not-exist-123' }))).status).toBe(404)
+    expect(await storedFor(notes.callId, 'does-not-exist-123')).toHaveLength(0)
+  })
+
+  it('stores a note filed under this hub\'s own finished call, live call and conversation', async () => {
+    for (const [hubId, d] of [[HUB_A, data.A], [HUB_B, data.B]] as const) {
+      for (const callId of [d.callId, d.activeCallId]) {
+        const res = await call(BOTH, hubId, 'POST', '/notes', noteBody({ callId }))
+        expect(res.status, `call ${callId} through ${hubId}`).toBe(201)
+        const rows = await storedFor(notes.callId, callId)
+        expect(rows).toHaveLength(1)
+        expect(rows[0].hubId).toBe(hubId)
+      }
+      const res = await call(BOTH, hubId, 'POST', '/notes', noteBody({ conversationId: d.conversationId }))
+      expect(res.status, `conversation ${d.conversationId} through ${hubId}`).toBe(201)
+      expect(await storedFor(notes.conversationId, d.conversationId)).toHaveLength(1)
+    }
+  })
+
+  it('refuses an envelope set no admin can open before anything is stored (#2113)', async () => {
+    const nobody = { pubkey: hex('f9'), enc: ENVELOPE.enc, ct: ENVELOPE.ct }
+    const before = (await storedFor(notes.callId, data.A.callId)).length
+    for (const adminEnvelopes of [[], [nobody]]) {
+      const res = await call(BOTH, HUB_A, 'POST', '/notes', { ...noteBody({ callId: data.A.callId }), adminEnvelopes })
+      expect(res.status).toBe(422)
+    }
+    expect(await storedFor(notes.callId, data.A.callId)).toHaveLength(before)
+  })
+})
+

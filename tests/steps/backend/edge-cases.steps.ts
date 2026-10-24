@@ -28,7 +28,10 @@ import {
   uniquePhone,
   uniqueName,
   simulatedClientIp,
+  sealedNoteFields,
+  ADMIN_SEED,
 } from '../../api-helpers'
+import { simulateIncomingMessage } from '../../simulation-helpers'
 import { harnessClientHeaders } from '../../dev-surface-secret'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
@@ -84,12 +87,20 @@ Then('the notes list should be empty with total {int}', async ({ world }, total:
 })
 
 Given('{int} notes exist in the system', async ({ request, world }, count: number) => {
-  const conversationId = getEdgeState(world).notesConversationId
+  // A note is filed under a conversation that exists (#2112), so the scenario
+  // gets a real one; every later list step reads it back from state.
+  const { conversationId } = await simulateIncomingMessage(request, {
+    senderNumber: uniquePhone(),
+    body: 'edge-case pagination conversation',
+    channel: 'sms',
+  })
+  getEdgeState(world).notesConversationId = conversationId
   for (let i = 0; i < count; i++) {
-    await apiPost(request, '/notes', {
-      encryptedContent: `edge-note-${i}`,
+    const { status } = await apiPost(request, '/notes', {
+      ...(await sealedNoteFields(ADMIN_SEED, `edge-note-${i}`)),
       conversationId,
     })
+    expect(status, `note ${i} on the conversation`).toBe(201)
   }
   getEdgeState(world).noteCount = count
 })

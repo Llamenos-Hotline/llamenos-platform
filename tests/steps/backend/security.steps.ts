@@ -20,6 +20,7 @@ import {
   testEndpointAccess,
   ADMIN_SEED,
 } from '../../api-helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import {
   generateContentKey,
   encryptContent,
@@ -116,7 +117,11 @@ Given('a hub with {int} admins with known keypairs', async ({request, world}, co
   // shown to the server would only prove that HPKE wraps for several recipients
   // — it would never reach the note storage and admin-read path this scenario
   // is about.
-  for (let i = 0; i < count; i++) {
+  //
+  // The first admin is the deployment's own super-admin: the key every client is
+  // told to wrap for, and the one the server requires an envelope for (#2113).
+  state.adminKeypairs.push({ seedHex: ADMIN_SEED, pubkey: seedHexToPubkey(ADMIN_SEED) })
+  for (let i = 1; i < count; i++) {
     const admin = await createUserViaApi(request, {
       name: `E2EE Admin ${Date.now()}-${i}`,
       roleIds: ['role-hub-admin'],
@@ -156,7 +161,7 @@ When('the volunteer encrypts a note {string}', async ({request, world}, noteText
     '/notes',
     {
       encryptedContent: ciphertextHex,
-      callId: `e2ee-test-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       authorEnvelope,
       adminEnvelopes,
     },
@@ -397,7 +402,7 @@ When('a volunteer encrypts a note {string}', async ({request, world}, noteText: 
   state.contentKey = contentKey
   state.ciphertextHex = ciphertextHex
   state.notePlaintext = noteText
-  state.noteCallId = `multi-admin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  state.noteCallId = await simulateCallForNote(request)
   state.envelopes = new Map()
 
   const volRecipient = hpkeRecipientForSeed(vol.seedHex)

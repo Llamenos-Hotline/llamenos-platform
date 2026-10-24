@@ -316,3 +316,21 @@ export function uniqueCallerNumber(): string {
   const suffix = Date.now().toString().slice(-7)
   return `+1212${suffix}`
 }
+
+/**
+ * A real ringing call in `hubId` (or the unscoped hub), for a note to hang off.
+ *
+ * `POST /notes` refuses a `callId` that is not a call of the hub it is written
+ * to (#2112), so a fixture can no longer invent one — it files the note under a
+ * call the server actually knows. Returns the call id.
+ */
+export async function simulateCallForNote(
+  request: APIRequestContext,
+  hubId?: string,
+): Promise<string> {
+  const { callId } = await simulateIncomingCall(request, {
+    callerNumber: uniqueCallerNumber(),
+    ...(hubId ? { hubId } : {}),
+  })
+  return callId
+}

@@ -6,8 +6,6 @@
  */
 import { hexToBytes } from '@shared/encoding'
 import type { Database } from '../db'
-import { buildReaderPubkeys } from '../lib/encryption-keys'
-
 import { IdentityService } from './identity'
 import { SettingsService } from './settings'
 import { RecordsService } from './records'
@@ -114,8 +112,8 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
 
   // Every admin X25519 recipient for server-sealed envelope sets:
   // ADMIN_DECRYPTION_PUBKEY plus each active super-admin's device keys.
-  const resolveAdminRecipients = async (): Promise<string[]> =>
-    buildReaderPubkeys(db, opts?.env?.ADMIN_DECRYPTION_PUBKEY, await identity.listActiveSuperAdminPubkeys())
+  const resolveAdminRecipients = (): Promise<string[]> =>
+    identity.listAdminEnvelopeRecipients(opts?.env?.ADMIN_DECRYPTION_PUBKEY)
 
   // The per-user audit key path (issue #1684 item 3) requires SERVER_SECRET to
   // store the key server-decryptably. validateConfig refuses to boot without

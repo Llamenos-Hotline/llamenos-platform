@@ -31,13 +31,16 @@ import {
   listAuditLogViaApi,
   listNotesViaApi,
   listReportsViaApi,
-  generateTestKeypair,
   uniquePhone,
   uniqueName,
   createRoleViaApi,
   listRolesViaApi,
   deleteRoleViaApi,
   updateRoleViaApi,
+  encryptForTest,
+  sealedNoteFields,
+  validNoteBody,
+  ADMIN_SEED,
 } from '../../api-helpers'
 
 // ── State ───────────────────────────────────────────────────────────
@@ -251,11 +254,7 @@ Then('the bulk import should report {int} created', async ({ world }, count: num
 // ─── Notes ──────────────────────────────────────────────────────────
 
 When('an admin creates a note with encrypted content', async ({ request, world }) => {
-  const { data, status } = await apiPost<{ id: string; note?: { id: string } }>(request, '/notes', {
-    encryptedContent: 'crud-test-encrypted',
-    callId: `call-crud-${Date.now()}`,
-    readerEnvelopes: [],
-  })
+  const { data, status } = await apiPost<{ id: string; note?: { id: string } }>(request, '/notes', await validNoteBody(request))
   expect(status).toBeLessThan(300)
   getCrudState(world).noteId = (data as Record<string, unknown>)?.id as string
     ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
@@ -268,9 +267,8 @@ Then('the note should appear in the notes list', async ({request}) => {
 
 When('the admin updates the note content', async ({ request, world }) => {
   if (getCrudState(world).noteId) {
-    const { status } = await apiPatch(request, `/notes/${getCrudState(world).noteId}`, {
-      encryptedContent: 'crud-test-updated',
-    })
+    // New content is sealed under a new key, so the edit re-wraps it for the admin (#2113).
+    const { status } = await apiPatch(request, `/notes/${getCrudState(world).noteId}`, await sealedNoteFields(ADMIN_SEED, 'crud-test-updated'))
     setLastResponse(world, { status, data: null })
   }
 })
@@ -283,21 +281,17 @@ Then('the note should have updated content', async ({ world }) => {
 })
 
 Given('a note exists', async ({ request, world }) => {
-  const { data } = await apiPost<{ id: string; note?: { id: string } }>(request, '/notes', {
-    encryptedContent: 'crud-note-for-reply',
-    callId: `call-reply-${Date.now()}`,
-    readerEnvelopes: [],
-  })
+  const { data } = await apiPost<{ id: string; note?: { id: string } }>(request, '/notes', await validNoteBody(request))
   getCrudState(world).noteId = (data as Record<string, unknown>)?.id as string
     ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
 })
 
 When('an admin creates a reply on the note', async ({ request, world }) => {
   if (getCrudState(world).noteId) {
-    const kp = generateTestKeypair()
+    const { encryptedContent, envelopes } = await encryptForTest('crud-reply-content', [ADMIN_SEED])
     await apiPost(request, `/notes/${getCrudState(world).noteId}/replies`, {
-      encryptedContent: 'crud-reply-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent,
+      readerEnvelopes: envelopes,
     })
   }
 })
@@ -314,13 +308,10 @@ Then('the note should have {int} reply', async ({ request, world }, count: numbe
 Given('{int} notes exist for different calls', async ({ request, world }, count: number) => {
   getCrudState(world).noteCallIds = []
   for (let i = 0; i < count; i++) {
-    const callId = `call-filter-${Date.now()}-${i}`
-    getCrudState(world).noteCallIds.push(callId)
-    await apiPost(request, '/notes', {
-      encryptedContent: `crud-filter-note-${i}`,
-      callId,
-      readerEnvelopes: [],
-    })
+    const body = await validNoteBody(request, ADMIN_SEED, { plaintext: `crud-filter-note-${i}` })
+    getCrudState(world).noteCallIds.push(body.callId as string)
+    const { status } = await apiPost(request, '/notes', body)
+    expect(status, `note ${i} for its own call`).toBe(201)
   }
 })
 
@@ -471,15 +462,16 @@ Given('a reporter user exists', async ({ request, world }) => {
 })
 
 When('the reporter creates a report titled {string}', async ({ request, world }, title: string) => {
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('crud-report-content', [ADMIN_SEED])
   const { data, status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
     '/reports',
     {
       title,
       category: 'general',
-      encryptedContent: 'crud-report-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent: sealed.encryptedContent,
+      readerEnvelopes: sealed.envelopes,
     },
     getCrudState(world).reporterDeviceKey!,
   )
