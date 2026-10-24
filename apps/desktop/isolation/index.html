@@ -148,6 +148,17 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
   // event name would let injected script eavesdrop on any native event, so the
   // event name in the payload is inspected. `plugin:event|emit` and `emit_to`
   // stay blocked — the webview has no reason to raise native events.
+  //
+  // `unlisten` is authorized by the SAME event-name check as `listen`. That is
+  // possible because the stock unlisten function `listen()` returns in
+  // `@tauri-apps/api` v2 invokes `plugin:event|unlisten` with
+  // `{ event, eventId }` — and tauri's native command requires both
+  // (`unlisten(webview, event: EventName, event_id: EventId)` in
+  // tauri/src/event/plugin.rs), so a payload without `event` could not
+  // deserialize anyway. `eventId` is the numeric id `listen` resolved with; it
+  // must be an integer, so a call that is not the stock unlisten shape is refused.
+  // src/client/lib/desktop-ipc-boundary.test.ts drives the real `listen()` →
+  // unlisten function through this hook, so a change to that shape fails there.
   const ALLOWED_EVENT_NAME = /^(net-ws:[A-Za-z0-9_-]+|check-for-updates)$/;
   const SCOPED_EVENT_COMMANDS = new Set([
     'plugin:event|listen',
@@ -157,7 +168,9 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
   const cmd = payload?.cmd;
   if (cmd && SCOPED_EVENT_COMMANDS.has(cmd)) {
     const eventName = payload?.payload?.event;
-    if (typeof eventName === 'string' && ALLOWED_EVENT_NAME.test(eventName)) {
+    const eventIdOk =
+      cmd !== 'plugin:event|unlisten' || Number.isInteger(payload?.payload?.eventId);
+    if (typeof eventName === 'string' && ALLOWED_EVENT_NAME.test(eventName) && eventIdOk) {
       return payload;
     }
     return Promise.reject(

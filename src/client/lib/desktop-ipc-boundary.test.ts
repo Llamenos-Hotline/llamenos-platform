@@ -18,7 +18,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8')
@@ -77,6 +77,47 @@ function loadIsolationHook(): (payload: unknown) => unknown {
   return hook
 }
 
+type IpcCall = { cmd: string; args: Record<string, unknown> }
+
+/**
+ * Drive the REAL `@tauri-apps/api` `listen()` → returned unlisten function (via
+ * the app's own `platformListen` / `listenNetWs`) with `window.__TAURI_INTERNALS__`
+ * wired to the REAL isolation hook, exactly as the packaged webview does: each
+ * `invoke(cmd, args)` is offered to the hook as `{cmd, callback, error, payload: args}`
+ * and only resolves when the hook lets it through. Returns every call the app
+ * actually made (so the payload shapes asserted on are the ones production sends)
+ * and the hook's verdict on each.
+ */
+async function driveRealListen(
+  subscribe: (platform: typeof import('./platform')) => Promise<() => void>,
+): Promise<{ calls: IpcCall[]; verdicts: Array<'allowed' | 'refused'> }> {
+  const hook = loadIsolationHook()
+  const calls: IpcCall[] = []
+  const verdicts: Array<'allowed' | 'refused'> = []
+  const w = window as unknown as Record<string, unknown>
+  w.__TAURI_INTERNALS__ = {
+    transformCallback: () => 7,
+    invoke: async (cmd: string, args: Record<string, unknown>) => {
+      calls.push({ cmd, args })
+      try {
+        await hook({ cmd, callback: 1, error: 2, payload: args })
+      } catch (e) {
+        verdicts.push('refused')
+        throw e
+      }
+      verdicts.push('allowed')
+      return 42 // the event id native `listen` resolves with
+    },
+  }
+  w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
+  // `useTauri` in platform.ts is decided at module load from __TAURI_INTERNALS__.
+  vi.resetModules()
+  const platform = await import('./platform')
+  const unlisten = await subscribe(platform)
+  await unlisten()
+  return { calls, verdicts }
+}
+
 /** Event names the frontend subscribes to via `listen(...)` from `@tauri-apps/api/event`. */
 function listenedEventNames(): string[] {
   const src = read('src/client/lib/platform.ts')
@@ -104,6 +145,13 @@ function listSourceFiles(dir: string): string[] {
 }
 
 describe('desktop IPC boundary', () => {
+  afterEach(() => {
+    const w = window as unknown as Record<string, unknown>
+    delete w.__TAURI_INTERNALS__
+    delete w.__TAURI_EVENT_PLUGIN_INTERNALS__
+    vi.resetModules()
+  })
+
   it('isolation ALLOWED_COMMANDS and generate_handler! register exactly the same app commands', () => {
     const allowed = isolationAllowedCommands().app
     const registered = registeredCommands()
@@ -149,10 +197,25 @@ describe('desktop IPC boundary', () => {
   it('the isolation hook lets the relay subscribe to its net-ws channel (#2107)', async () => {
     const hook = loadIsolationHook()
     const channel = `net-ws:${'0b6f3c1e-8a52-4d0e-9f41-0c2d7a9e5b13'}`
-    for (const cmd of ['plugin:event|listen', 'plugin:event|unlisten']) {
-      const msg = { cmd, callback: 1, error: 2, payload: { event: channel } }
-      await expect(Promise.resolve(hook(msg))).resolves.toBe(msg)
-    }
+    const msg = { cmd: 'plugin:event|listen', callback: 1, error: 2, payload: { event: channel } }
+    await expect(Promise.resolve(hook(msg))).resolves.toBe(msg)
+  })
+
+  it('the relay can listen AND unlisten through the real listenNetWs (#2130)', async () => {
+    const id = '0b6f3c1e-8a52-4d0e-9f41-0c2d7a9e5b13'
+    const { calls, verdicts } = await driveRealListen(p => p.listenNetWs(id, () => {}))
+    expect(calls.map(c => c.cmd)).toEqual(['plugin:event|listen', 'plugin:event|unlisten'])
+    // The unlisten payload is whatever the stock @tauri-apps/api sends — pinned here
+    // so a change to its shape fails this test instead of hanging in a packaged build.
+    expect(calls[1].args).toEqual({ event: `net-ws:${id}`, eventId: 42 })
+    expect(verdicts).toEqual(['allowed', 'allowed'])
+  })
+
+  it('the updater can listen AND unlisten through the real platformListen (#2130)', async () => {
+    const { calls, verdicts } = await driveRealListen(p => p.platformListen('check-for-updates', () => {}))
+    expect(calls.map(c => c.cmd)).toEqual(['plugin:event|listen', 'plugin:event|unlisten'])
+    expect(calls[1].args).toEqual({ event: 'check-for-updates', eventId: 42 })
+    expect(verdicts).toEqual(['allowed', 'allowed'])
   })
 
   it('the isolation hook lets every event the frontend listens for through', async () => {
@@ -174,6 +237,9 @@ describe('desktop IPC boundary', () => {
       { cmd: 'plugin:event|listen', payload: { event: 'xnet-ws:abc' } },
       { cmd: 'plugin:event|listen', payload: {} },
       { cmd: 'plugin:event|unlisten', payload: { event: 'anything', eventId: 1 } },
+      { cmd: 'plugin:event|unlisten', payload: { event: 'net-ws:abc' } },
+      { cmd: 'plugin:event|unlisten', payload: { event: 'net-ws:abc', eventId: '1' } },
+      { cmd: 'plugin:event|unlisten', payload: { eventId: 1 } },
       { cmd: 'plugin:event|emit', payload: { event: 'net-ws:abc' } },
       { cmd: 'plugin:event|emit_to', payload: { event: 'net-ws:abc' } },
     ]
