@@ -238,12 +238,12 @@ export class AuditService {
         )
       }
       return {
-        encryptedKey: sealAuditKeyForServer(key, deps.serverSecret),
+        encryptedKey: sealAuditKeyForServer(key, userPubkey, deps.serverSecret),
         adminEnvelopes: recipients.length === 0 ? [] : wrapAuditKeyForAdmins(key, recipients, userPubkey),
       }
     })
     return row
-      ? openServerSealedAuditKey(row.encryptedKey, deps.serverSecret)
+      ? openServerSealedAuditKey(row.encryptedKey, userPubkey, deps.serverSecret)
       : null
   }
 
@@ -267,7 +267,7 @@ export class AuditService {
     if (key === undefined) {
       const row = await deps.keyStore.getAuditUserKey(entry.actorPubkey)
       key = row
-        ? openServerSealedAuditKey(row.encryptedKey, deps.serverSecret)
+        ? openServerSealedAuditKey(row.encryptedKey, entry.actorPubkey, deps.serverSecret)
         : null
       keyCache.set(entry.actorPubkey, key)
     }

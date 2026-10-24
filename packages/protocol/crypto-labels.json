@@ -103,6 +103,7 @@
     "LABEL_DEVICE_AUTH_NO_NONCE": "llamenos:device-auth-no-nonce:v1",
     "HMAC_SIP_VOLUNTEER_SECRET": "llamenos:sip-volunteer-secret:v1",
     "LABEL_DEVICE_PROVISION_BUNDLE": "llamenos:device-provision-bundle:v1",
-    "LABEL_DEVICE_PROVISION_CLAIM": "llamenos:device-provision-claim:v1"
+    "LABEL_DEVICE_PROVISION_CLAIM": "llamenos:device-provision-claim:v1",
+    "LABEL_AUDIT_USER_KEY_SERVER_SEAL": "llamenos:audit-user-key-server-seal:v1"
   }
 }

@@ -8,7 +8,7 @@ import {
   randomBytes,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
 // getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
@@ -50,20 +50,31 @@ export function hashIP(ip: string, secret: string): string {
 // --- Server-Side Symmetric Encryption (Tier 1) ---
 
 /**
- * Encrypt data with a server-derived key (HKDF + AES-256-GCM via FFI).
- * Used for data the server must read at runtime (credentials, push endpoints).
+ * AAD for the server-side seal: the label alone, or `label:context` when the
+ * ciphertext must also be bound to one record (e.g. a user), so a row copied
+ * onto another record's slot fails to open.
  */
-export function serverEncrypt(plaintext: Uint8Array, label: string, serverSecret: Uint8Array): Uint8Array {
-  const key = hkdfSha256(serverSecret, new Uint8Array(0), utf8ToBytes(label), 32)
-  return symmetricEncrypt(key, plaintext, utf8ToBytes(label))
+function serverSealAad(label: string, context?: string): Uint8Array {
+  return utf8ToBytes(context === undefined ? label : `${label}:${context}`)
 }
 
 /**
- * Decrypt server-encrypted data (HKDF + AES-256-GCM via FFI).
+ * Encrypt data with a server-derived key (HKDF + AES-256-GCM via FFI).
+ * Used for data the server must read at runtime (credentials, push endpoints).
+ * `context` is optional extra AAD binding the ciphertext to one record.
  */
-export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecret: Uint8Array): Uint8Array {
+export function serverEncrypt(plaintext: Uint8Array, label: string, serverSecret: Uint8Array, context?: string): Uint8Array {
   const key = hkdfSha256(serverSecret, new Uint8Array(0), utf8ToBytes(label), 32)
-  return symmetricDecrypt(key, ciphertext, utf8ToBytes(label))
+  return symmetricEncrypt(key, plaintext, serverSealAad(label, context))
+}
+
+/**
+ * Decrypt server-encrypted data (HKDF + AES-256-GCM via FFI). `context` must
+ * match the one given to serverEncrypt.
+ */
+export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecret: Uint8Array, context?: string): Uint8Array {
+  const key = hkdfSha256(serverSecret, new Uint8Array(0), utf8ToBytes(label), 32)
+  return symmetricDecrypt(key, ciphertext, serverSealAad(label, context))
 }
 
 // --- Envelope-Pattern Encryption (Tier 3: E2EE) ---
@@ -220,16 +231,18 @@ export function decryptAuditDetails(
 /**
  * Seal a per-user audit key for the server-held copy
  * (audit_user_keys.encrypted_key), which lets the server decrypt details for
- * admin reads. Hex-encoded. The label is shared with the admin HPKE wrap over
- * independent key material; a dedicated label is tracked in #2054.
+ * admin reads. Hex-encoded. Sealed under LABEL_AUDIT_USER_KEY_SERVER_SEAL — not
+ * the admin HPKE wrap's LABEL_AUDIT_USER_KEY_WRAP, which names a different
+ * construction — with the user's pubkey bound as AAD (`label:userPubkey`), so a
+ * row copied onto another user's slot fails to open.
  */
-export function sealAuditKeyForServer(auditKey: Uint8Array, serverSecret: Uint8Array): string {
-  return bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_WRAP, serverSecret))
+export function sealAuditKeyForServer(auditKey: Uint8Array, userPubkey: string, serverSecret: Uint8Array): string {
+  return bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_SERVER_SEAL, serverSecret, userPubkey))
 }
 
-/** Open a key sealed by sealAuditKeyForServer. Throws on a wrong secret or tampered row. */
-export function openServerSealedAuditKey(encryptedKey: string, serverSecret: Uint8Array): Uint8Array {
-  return serverDecrypt(hexToBytes(encryptedKey), LABEL_AUDIT_USER_KEY_WRAP, serverSecret)
+/** Open a key sealed by sealAuditKeyForServer. Throws on a wrong secret, wrong user, or tampered row. */
+export function openServerSealedAuditKey(encryptedKey: string, userPubkey: string, serverSecret: Uint8Array): Uint8Array {
+  return serverDecrypt(hexToBytes(encryptedKey), LABEL_AUDIT_USER_KEY_SERVER_SEAL, serverSecret, userPubkey)
 }
 
 

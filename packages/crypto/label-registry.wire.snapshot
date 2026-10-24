@@ -116,3 +116,4 @@
 98	llamenos:sip-volunteer-secret:v1
 99	llamenos:device-provision-bundle:v1
 100	llamenos:device-provision-claim:v1
+101	llamenos:audit-user-key-server-seal:v1

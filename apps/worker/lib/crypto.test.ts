@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP } from '@shared/crypto-labels'
+import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import {
   hashPhone,
@@ -28,6 +28,7 @@ import {
   decryptAuditDetails,
   sealAuditKeyForServer,
   openServerSealedAuditKey,
+  serverEncrypt,
 } from './crypto'
 
 const SECRET = 'a'.repeat(64) // 32 hex bytes = valid HMAC secret
@@ -487,16 +488,29 @@ describe('encryptAuditDetails / decryptAuditDetails', () => {
 describe('sealAuditKeyForServer / openServerSealedAuditKey', () => {
   const auditKey = new Uint8Array(32).fill(7)
   const serverSecret = new Uint8Array(32).fill(3)
+  const userPubkey = 'a'.repeat(64)
 
   it('round-trips the key and never stores it legibly', () => {
-    const sealed = sealAuditKeyForServer(auditKey, serverSecret)
+    const sealed = sealAuditKeyForServer(auditKey, userPubkey, serverSecret)
     expect(sealed).toMatch(/^[0-9a-f]+$/)
     expect(sealed).not.toContain(bytesToHex(auditKey))
-    expect(openServerSealedAuditKey(sealed, serverSecret)).toEqual(auditKey)
+    expect(openServerSealedAuditKey(sealed, userPubkey, serverSecret)).toEqual(auditKey)
   })
 
   it('refuses a different server secret', () => {
-    const sealed = sealAuditKeyForServer(auditKey, serverSecret)
-    expect(() => openServerSealedAuditKey(sealed, new Uint8Array(32).fill(4))).toThrow()
+    const sealed = sealAuditKeyForServer(auditKey, userPubkey, serverSecret)
+    expect(() => openServerSealedAuditKey(sealed, userPubkey, new Uint8Array(32).fill(4))).toThrow()
+  })
+
+  it("refuses another user's pubkey — a row copied onto a different user's slot does not open", () => {
+    const sealed = sealAuditKeyForServer(auditKey, userPubkey, serverSecret)
+    expect(() => openServerSealedAuditKey(sealed, 'b'.repeat(64), serverSecret)).toThrow()
+  })
+
+  it('is sealed under its own label, not the admin HPKE wrap label (domain separation)', () => {
+    expect(LABEL_AUDIT_USER_KEY_SERVER_SEAL).not.toBe(LABEL_AUDIT_USER_KEY_WRAP)
+    // A blob sealed under the wrap label with the same context must not open as the server seal.
+    const underWrapLabel = bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_WRAP, serverSecret, userPubkey))
+    expect(() => openServerSealedAuditKey(underWrapLabel, userPubkey, serverSecret)).toThrow()
   })
 })
