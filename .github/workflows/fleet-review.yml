@@ -961,7 +961,7 @@ jobs:
 
       - name: Setup Bun
         if: github.event_name != 'merge_group'
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
