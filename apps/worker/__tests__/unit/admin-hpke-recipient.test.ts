@@ -44,6 +44,9 @@ function envWithoutAdmin(): Record<string, string> {
     SERVER_SECRET: 'b'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
+    // Required since #1438: createBlobStorage() runs unconditionally at boot.
+    STORAGE_ACCESS_KEY: 'rustfsadmin',
+    STORAGE_SECRET_KEY: 'rustfsadmin',
   }
 }
 

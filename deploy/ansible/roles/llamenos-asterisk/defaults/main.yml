@@ -32,13 +32,13 @@ asterisk_rtp_max_port: 10199
 #     user/llamenos:1.2.3-sip-bridge
 #
 # i.e. a tag named `1.2.3-sip-bridge` on the APP repository. Nothing publishes
-# that, on any path. What .github/workflows/docker.yml actually pushes is a
+# that, on any path. What the Docker Hub release path actually pushes is a
 # separate REPOSITORY, `user/llamenos-sip-bridge`, tagged `1.2.3`. So the
 # derived ref matched no image anywhere — not even on the Docker Hub release
 # path it was presumably written for — and `docker compose up` answered
 # `manifest unknown` while the deploy reported success.
 #
-# The default below derives the ref the way docker.yml publishes it: the
+# The default below derives the ref the way the image is published: the
 # `-sip-bridge` goes on the repository, before the tag. Set this variable
 # explicitly to override — you MUST set it when `llamenos_app_image` is
 # digest-pinned (`repo@sha256:...`), because a sibling image's digest cannot

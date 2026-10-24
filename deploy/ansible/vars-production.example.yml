@@ -93,8 +93,9 @@ llamenos_app_image: ""           # REQUIRED e.g. llamenos:0.19.16 (docker load) 
 # The sip-bridge sidecar's image. The bridge is obtained by WHICHEVER ROUTE
 # this deployment uses for the app image — never a different one (issue #1697):
 #   * Docker Hub release path: leave empty. Derived from llamenos_app_image by
-#     putting `-sip-bridge` on the REPOSITORY, which is how
-#     .github/workflows/docker.yml publishes it.
+#     putting `-sip-bridge` on the REPOSITORY, which is how the image is named
+#     when it is published (images are published from a local machine, never
+#     by CI).
 #   * docker save | docker load: build and side-load it next to the app image —
 #         docker build -t llamenos-sip-bridge:<version> ./sip-bridge
 #         docker save llamenos-sip-bridge:<version> | ssh <host> sudo docker load
