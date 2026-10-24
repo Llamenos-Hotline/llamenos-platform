@@ -85,7 +85,10 @@ describe('shifts routes', () => {
       const { app } = createTestApp({
         permissions: ['shifts:read-own'],
         hubId: 'hub-1',
-        serviceMock: { shifts: { getMyStatus: getMyStatusSpy } },
+        serviceMock: {
+          shifts: { getMyStatus: getMyStatusSpy },
+          activeShifts: { getActive: vi.fn().mockResolvedValue(null) },
+        },
       })
 
       const res = await app.request('/shifts/my-status')
@@ -93,6 +96,33 @@ describe('shifts routes', () => {
       const json = await res.json()
       expect(json.onShift).toBe(true)
       expect(getMyStatusSpy).toHaveBeenCalledWith('hub-1', 'a'.repeat(64))
+    })
+
+    // #2108: scheduled is not the same as being a ring target. The dashboard
+    // derives "Ready for calls" from onShift AND clockedIn, so the route must
+    // report the volunteer's own clock-in, read from the active_shifts row.
+    it.each([
+      ['has an active_shifts row', { pubkey: 'a'.repeat(64), hubId: 'hub-1' }, true],
+      ['has no active_shifts row', null, false],
+    ])('reports clockedIn from the active_shifts row (%s)', async (_label, row, expected) => {
+      const getActiveSpy = vi.fn().mockResolvedValue(row)
+      const { app } = createTestApp({
+        permissions: ['shifts:read-own'],
+        hubId: 'hub-1',
+        serviceMock: {
+          shifts: {
+            getMyStatus: vi.fn().mockResolvedValue({ onShift: true, currentShift: null, nextShift: null }),
+          },
+          activeShifts: { getActive: getActiveSpy },
+        },
+      })
+
+      const res = await app.request('/shifts/my-status')
+      expect(res.status).toBe(200)
+      const json = await res.json()
+      expect(json.onShift).toBe(true)
+      expect(json.clockedIn).toBe(expected)
+      expect(getActiveSpy).toHaveBeenCalledWith('a'.repeat(64), 'hub-1')
     })
 
     it('uses empty string hubId when not set', async () => {
@@ -103,7 +133,10 @@ describe('shifts routes', () => {
       })
       const { app } = createTestApp({
         permissions: ['shifts:read-own'],
-        serviceMock: { shifts: { getMyStatus: getMyStatusSpy } },
+        serviceMock: {
+          shifts: { getMyStatus: getMyStatusSpy },
+          activeShifts: { getActive: vi.fn().mockResolvedValue(null) },
+        },
       })
 
       const res = await app.request('/shifts/my-status')
