@@ -1,34 +1,38 @@
 /**
- * Demo dataset seeder and reset.
+ * Sample dataset seeder.
  *
- * `seedDemoDataset` writes the fixed fictional dataset from `lib/demo-dataset.ts`
- * into one hub. It is idempotent: it first deletes the demo hub (a cascade over
- * every hub-scoped table), then rebuilds it, so row counts are the same after
- * one run or two. All E2EE content is sealed to the demo accounts' keys through
- * `lib/demo-crypto.ts` using labels from crypto-labels.
+ * `seedSampleDataset` writes the fixed fictional dataset from
+ * `lib/sample-dataset.ts` into one hub. It is idempotent: it first deletes the
+ * sample hub (a cascade over every hub-scoped table), then rebuilds it, so row
+ * counts are the same after one run or two. All E2EE content is sealed to the
+ * sample accounts' keys through `lib/sample-crypto.ts` using labels from
+ * crypto-labels.
  *
- * `resetDemoData` is the full wipe used by the demo-reset endpoint: it clears
- * every table the old dev-only reset cleared, restores the default settings and
- * demo accounts, then seeds.
+ * It needs the sample identities, which only a server with the `/api/test-*`
+ * surface enabled can produce (`lib/sample-identities.ts`), so it refuses
+ * everywhere else before writing.
  *
- * Both need the demo identities, which only a development server can produce
- * (`lib/demo-identities.ts`), so both refuse everywhere else before writing.
+ * A second entry point, `resetDemoData`, used to wipe EVERY table and re-seed
+ * for the demo product's `POST /api/demo/reset`. That endpoint went with demo
+ * mode (#1604); the same effect is `POST /api/test-reset` followed by
+ * `POST /api/test-seed-sample`, both on the one secret-gated dev surface, so
+ * there is no second reset path to keep in step with the first.
  */
 import type { Services } from './index'
 import { ServiceError } from './settings'
 import {
-  DEMO_ADMIN_AUDIT_ACTIONS,
-  DEMO_CALLS,
-  DEMO_CASES,
-  DEMO_CAST,
-  DEMO_CONTACTS,
-  DEMO_CONVERSATIONS,
-  DEMO_ENTITY_TYPE,
-  DEMO_HUB,
-  DEMO_SHIFTS,
-} from '../lib/demo-dataset'
-import { demoReader, sealForReaders, type DemoReader } from '../lib/demo-crypto'
-import { demoIdentities, type DemoIdentity } from '../lib/demo-identities'
+  SAMPLE_ADMIN_AUDIT_ACTIONS,
+  SAMPLE_CALLS,
+  SAMPLE_CASES,
+  SAMPLE_CAST,
+  SAMPLE_CONTACTS,
+  SAMPLE_CONVERSATIONS,
+  SAMPLE_ENTITY_TYPE,
+  SAMPLE_HUB,
+  SAMPLE_SHIFTS,
+} from '../lib/sample-dataset'
+import { sampleReader, sealForReaders, type SampleReader } from '../lib/sample-crypto'
+import { sampleIdentities, type SampleIdentity } from '../lib/sample-identities'
 import type { DevSurfacesEnv } from '../lib/dev-surfaces'
 import { encryptContactIdentifier, hashPhone } from '../lib/crypto'
 import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
@@ -37,7 +41,7 @@ import type { MessagingChannelType } from '@protocol/schemas/settings'
 
 const HOUR_MS = 3_600_000
 
-export interface DemoSeedEnv extends DevSurfacesEnv {
+export interface SampleSeedEnv extends DevSurfacesEnv {
   ENVIRONMENT: string
   HMAC_SECRET: string
   TWILIO_ACCOUNT_SID?: string
@@ -45,7 +49,7 @@ export interface DemoSeedEnv extends DevSurfacesEnv {
   TWILIO_PHONE_NUMBER?: string
 }
 
-export interface DemoSeedSummary {
+export interface SampleSeedSummary {
   hubId: string
   shifts: number
   calls: number
@@ -58,15 +62,15 @@ export interface DemoSeedSummary {
   auditEntries: number
 }
 
-type Cast = { admin: DemoReader; maria: DemoReader; james: DemoReader }
+type Cast = { admin: SampleReader; maria: SampleReader; james: SampleReader }
 
-function loadCast(accounts: readonly DemoIdentity[]): Cast {
-  const byName = (name: string): DemoReader => {
+function loadCast(accounts: readonly SampleIdentity[]): Cast {
+  const byName = (name: string): SampleReader => {
     const identity = accounts.find(a => a.name === name)
-    if (!identity) throw new Error(`Demo account "${name}" missing from DEMO_ACCOUNTS`)
-    return demoReader(identity)
+    if (!identity) throw new Error(`Sample account "${name}" missing from SAMPLE_ACCOUNTS`)
+    return sampleReader(identity)
   }
-  return { admin: byName(DEMO_CAST.admin), maria: byName(DEMO_CAST.maria), james: byName(DEMO_CAST.james) }
+  return { admin: byName(SAMPLE_CAST.admin), maria: byName(SAMPLE_CAST.maria), james: byName(SAMPLE_CAST.james) }
 }
 
 function contactLookupKey(phone: string): string {
@@ -81,26 +85,26 @@ function trigrams(name: string): string[] {
 }
 
 /**
- * Seed the fixed demo dataset into the demo hub, replacing any previous copy.
- * The five demo accounts must already exist (`identity.ensureDemoAccounts`).
+ * Seed the fixed sample dataset into the sample hub, replacing any previous copy.
+ * The five sample accounts must already exist (`identity.ensureSampleAccounts`).
  */
-export async function seedDemoDataset(
+export async function seedSampleDataset(
   services: Services,
-  env: DemoSeedEnv,
+  env: SampleSeedEnv,
   now: Date = new Date(),
-): Promise<DemoSeedSummary> {
-  const accounts = demoIdentities(env)
+): Promise<SampleSeedSummary> {
+  const accounts = sampleIdentities(env)
   for (const account of accounts) {
     const user = await services.identity.getUserInternal(account.pubkey)
     if (!user) {
-      throw new ServiceError(409, `Demo account ${account.name} does not exist — initialise demo accounts before seeding`)
+      throw new ServiceError(409, `Sample account ${account.name} does not exist — initialise sample accounts before seeding`)
     }
   }
   const cast = loadCast(accounts)
-  const hubId = DEMO_HUB.id
+  const hubId = SAMPLE_HUB.id
   const ago = (hours: number): Date => new Date(now.getTime() - hours * HOUR_MS)
-  const reader = (who: 'maria' | 'james'): DemoReader => cast[who]
-  const summary: DemoSeedSummary = {
+  const reader = (who: 'maria' | 'james'): SampleReader => cast[who]
+  const summary: SampleSeedSummary = {
     hubId, shifts: 0, calls: 0, notes: 0, contacts: 0, cases: 0,
     interactions: 0, conversations: 0, messages: 0, auditEntries: 0,
   }
@@ -108,15 +112,15 @@ export async function seedDemoDataset(
   // ── Replace: dropping the hub cascades through every hub-scoped table ─────
   await services.settings.ensureInit({ ENVIRONMENT: env.ENVIRONMENT })
   await services.settings.purgeHub(hubId)
-  // purgeHub also removes users that belonged only to that hub — put the demo accounts back
-  await services.identity.ensureDemoAccounts(accounts)
+  // purgeHub also removes users that belonged only to that hub — put the sample accounts back
+  await services.identity.ensureSampleAccounts(accounts)
 
   // ── Hub + membership ──────────────────────────────────────────────────────
   const hub: Hub = {
     id: hubId,
-    name: DEMO_HUB.name,
-    slug: DEMO_HUB.slug,
-    description: DEMO_HUB.description,
+    name: SAMPLE_HUB.name,
+    slug: SAMPLE_HUB.slug,
+    description: SAMPLE_HUB.description,
     status: 'active',
     createdBy: cast.admin.pubkey,
     createdAt: ago(24 * 14).toISOString(),
@@ -130,7 +134,7 @@ export async function seedDemoDataset(
   await services.settings.setCaseManagementEnabled({ enabled: true }, hubId)
 
   // ── Shifts: a recurring 7-day schedule ────────────────────────────────────
-  for (const shift of DEMO_SHIFTS) {
+  for (const shift of SAMPLE_SHIFTS) {
     await services.shifts.create(hubId, {
       encryptedName: shift.name,
       startTime: shift.startTime,
@@ -145,9 +149,9 @@ export async function seedDemoDataset(
   const noteIdByCall = new Map<string, { id: string; author: 'maria' | 'james' }>()
   const callEvents: Array<{ at: Date; action: string; actor: string; details: Record<string, unknown> }> = []
 
-  for (const call of DEMO_CALLS) {
+  for (const call of SAMPLE_CALLS) {
     const startedAt = ago(call.hoursAgo)
-    const callId = `demo-${call.key}`
+    const callId = `sample-${call.key}`
     const answerer = call.answeredBy ? reader(call.answeredBy) : null
     const meta = sealForReaders(
       JSON.stringify({ answeredBy: answerer?.pubkey ?? null, callerNumber: `+1555555${call.callerLast4}` }),
@@ -195,7 +199,7 @@ export async function seedDemoDataset(
   // ── Contacts ──────────────────────────────────────────────────────────────
   const contactReaders = [cast.admin, cast.maria, cast.james]
   const contactIds = new Map<string, string>()
-  for (const contact of DEMO_CONTACTS) {
+  for (const contact of SAMPLE_CONTACTS) {
     const sealed = sealForReaders(
       JSON.stringify({ displayName: contact.displayName, contactType: contact.contactType, tags: contact.tags }),
       contactReaders,
@@ -218,23 +222,23 @@ export async function seedDemoDataset(
 
   // ── Cases with a timeline ─────────────────────────────────────────────────
   const entityType = await services.settings.createEntityType({
-    ...DEMO_ENTITY_TYPE,
-    statuses: [...DEMO_ENTITY_TYPE.statuses],
-    closedStatuses: [...DEMO_ENTITY_TYPE.closedStatuses],
+    ...SAMPLE_ENTITY_TYPE,
+    statuses: [...SAMPLE_ENTITY_TYPE.statuses],
+    closedStatuses: [...SAMPLE_ENTITY_TYPE.closedStatuses],
     fields: [],
     hubId,
   })
-  const statusLabel = (value: string) => DEMO_ENTITY_TYPE.statuses.find(s => s.value === value)?.label ?? value
+  const statusLabel = (value: string) => SAMPLE_ENTITY_TYPE.statuses.find(s => s.value === value)?.label ?? value
 
-  for (const demoCase of DEMO_CASES) {
-    const assignee = reader(demoCase.assignedTo)
+  for (const sampleCase of SAMPLE_CASES) {
+    const assignee = reader(sampleCase.assignedTo)
     const sealed = sealForReaders(
-      JSON.stringify({ title: demoCase.title, description: demoCase.description, status: statusLabel(demoCase.status) }),
+      JSON.stringify({ title: sampleCase.title, description: sampleCase.description, status: statusLabel(sampleCase.status) }),
       [cast.admin, cast.maria, cast.james],
       LABEL_MESSAGE,
     )
     const { number: caseNumber } = await services.settings.generateCaseNumber({
-      prefix: DEMO_ENTITY_TYPE.numberPrefix,
+      prefix: SAMPLE_ENTITY_TYPE.numberPrefix,
       hubId,
     })
     const record = await services.cases.create({
@@ -242,21 +246,21 @@ export async function seedDemoDataset(
       createdBy: assignee.pubkey,
       caseNumber,
       entityTypeId: entityType.id,
-      statusHash: demoCase.status,
+      statusHash: sampleCase.status,
       assignedTo: [assignee.pubkey],
       blindIndexes: {},
       encryptedSummary: sealed.encryptedContent,
       summaryEnvelopes: sealed.envelopes,
-      contactLinks: demoCase.contacts.map(key => {
+      contactLinks: sampleCase.contacts.map(key => {
         const contactId = contactIds.get(key)
-        const contact = DEMO_CONTACTS.find(c => c.key === key)
-        if (!contactId || !contact) throw new Error(`Demo case "${demoCase.key}" links unknown contact "${key}"`)
+        const contact = SAMPLE_CONTACTS.find(c => c.key === key)
+        if (!contactId || !contact) throw new Error(`Sample case "${sampleCase.key}" links unknown contact "${key}"`)
         return { contactId, role: contact.contactType === 'individual' ? 'client' : 'referral' }
       }),
     })
     summary.cases++
 
-    for (const step of demoCase.timeline) {
+    for (const step of sampleCase.timeline) {
       const author = reader(step.author)
       const createdAt = ago(step.hoursAgo)
       if (step.kind === 'comment') {
@@ -276,7 +280,7 @@ export async function seedDemoDataset(
         }, { createdAt })
       } else {
         const linked = noteIdByCall.get(step.noteOfCall)
-        if (!linked) throw new Error(`Demo case "${demoCase.key}" links note of call "${step.noteOfCall}" which has no note`)
+        if (!linked) throw new Error(`Sample case "${sampleCase.key}" links note of call "${step.noteOfCall}" which has no note`)
         await services.cases.createInteraction(record.id, author.pubkey, {
           interactionType: 'note',
           sourceId: linked.id,
@@ -285,31 +289,31 @@ export async function seedDemoDataset(
       }
       summary.interactions++
     }
-    if (demoCase.status === 'resolved') {
-      await services.cases.update(record.id, { closedAt: ago(demoCase.timeline.at(-1)?.hoursAgo ?? 0).toISOString() })
+    if (sampleCase.status === 'resolved') {
+      await services.cases.update(record.id, { closedAt: ago(sampleCase.timeline.at(-1)?.hoursAgo ?? 0).toISOString() })
     }
   }
 
   // ── One conversation per configured messaging channel ────────────────────
   const enabled = await services.settings.getEnabledChannels(env)
-  const channels = (Object.keys(DEMO_CONVERSATIONS) as MessagingChannelType[]).filter(c => enabled[c])
+  const channels = (Object.keys(SAMPLE_CONVERSATIONS) as MessagingChannelType[]).filter(c => enabled[c])
   for (const channel of channels) {
-    const demo = DEMO_CONVERSATIONS[channel]
-    const assignee = reader(demo.assignedTo)
+    const sample = SAMPLE_CONVERSATIONS[channel]
+    const assignee = reader(sample.assignedTo)
     const conversation = await services.conversations.create({
       hubId,
       channelType: channel,
-      contactIdentifierHash: hashPhone(demo.sender, env.HMAC_SECRET),
-      contactLast4: demo.last4,
+      contactIdentifierHash: hashPhone(sample.sender, env.HMAC_SECRET),
+      contactLast4: sample.last4,
       assignedTo: assignee.pubkey,
       status: 'active',
     })
     await services.conversations.setContactIdentifier(
       conversation.id,
-      encryptContactIdentifier(demo.sender, env.HMAC_SECRET),
+      encryptContactIdentifier(sample.sender, env.HMAC_SECRET),
     )
     summary.conversations++
-    for (const message of demo.messages) {
+    for (const message of sample.messages) {
       const sealed = sealForReaders(message.text, [cast.admin, assignee], LABEL_MESSAGE)
       await services.conversations.addMessage({
         conversationId: conversation.id,
@@ -325,7 +329,7 @@ export async function seedDemoDataset(
 
   // ── Audit trail (hash-chained, appended oldest → newest) ─────────────────
   const auditEvents = [
-    ...DEMO_ADMIN_AUDIT_ACTIONS.map(e => ({ at: ago(e.hoursAgo), action: e.action, actor: cast.admin.pubkey, details: e.details })),
+    ...SAMPLE_ADMIN_AUDIT_ACTIONS.map(e => ({ at: ago(e.hoursAgo), action: e.action, actor: cast.admin.pubkey, details: e.details })),
     ...callEvents,
   ].sort((a, b) => a.at.getTime() - b.at.getTime())
   let previousMs = 0
@@ -338,50 +342,4 @@ export async function seedDemoDataset(
   }
 
   return summary
-}
-
-export interface DemoResetEnv extends DemoSeedEnv {
-  DEMO_MODE?: string
-  DEMO_MODE_CONFIRM?: string
-  ADMIN_PUBKEY?: string
-}
-
-/**
- * Wipe every table the demo instance writes to, restore defaults and the demo
- * accounts, then seed the fixed dataset. Callers must have passed
- * `demoResetRefusal` first; the per-service resets re-check the demo flags, and
- * the demo identities are resolved before anything is wiped.
- */
-export async function resetDemoData(
-  services: Services,
-  env: DemoResetEnv,
-  now: Date = new Date(),
-): Promise<DemoSeedSummary> {
-  const accounts = demoIdentities(env)
-  const resetEnv = {
-    DEMO_MODE: env.DEMO_MODE,
-    DEMO_MODE_CONFIRM: env.DEMO_MODE_CONFIRM,
-    ENVIRONMENT: env.ENVIRONMENT,
-  }
-
-  // Hub-scoped rows are not reachable through the global resets below — drop each hub first.
-  const { hubs } = await services.settings.getHubs()
-  for (const hub of hubs) await services.settings.purgeHub(hub.id)
-
-  await services.audit.reset()
-  await services.identity.reset(env.DEMO_MODE === 'true', env.ENVIRONMENT, env.DEMO_MODE_CONFIRM)
-  // Settings before identity re-init: the roles table must exist before any user resolves permissions.
-  await services.settings.reset(resetEnv)
-  await services.settings.ensureInit(resetEnv)
-  await services.identity.ensureInit(env.ADMIN_PUBKEY)
-  await services.identity.ensureDemoAccounts(accounts)
-  await services.records.reset()
-  await services.shifts.reset('')
-  await services.calls.reset('')
-  await services.conversations.reset()
-  await services.blasts.reset()
-  await services.contacts.reset(resetEnv)
-  await services.cases.reset(resetEnv)
-
-  return seedDemoDataset(services, env, now)
 }

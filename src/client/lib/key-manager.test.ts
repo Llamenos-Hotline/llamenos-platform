@@ -11,7 +11,6 @@ import {
   getLockDelayMs,
   lock,
   wipeKey,
-  disableAutoLock,
 } from './key-manager'
 
 describe('isValidPin', () => {
@@ -188,21 +187,5 @@ describe('lock delay', () => {
   it('setLockDelay clamps to min', () => {
     setLockDelay(-1)
     expect(localStorage.setItem).toHaveBeenCalledWith('llamenos-lock-delay', '0')
-  })
-})
-
-describe('disableAutoLock', () => {
-  beforeEach(() => {
-    lock()
-  })
-
-  it('prevents lock callbacks from firing', () => {
-    const lockCb = vi.fn()
-    onLock(lockCb)
-
-    disableAutoLock()
-    markUnlocked('pk1')
-    lock()
-    expect(lockCb).toHaveBeenCalledTimes(1)
   })
 })

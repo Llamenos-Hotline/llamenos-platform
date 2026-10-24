@@ -81,12 +81,12 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
   calls: [
     'callAnswered', 'callEnded', 'callMissed',
     'spamReported', 'voicemailReceived',
-    'demoCallSimulated', 'demoCallerHungUp',
+    'callSimulated', 'simulatedCallerHungUp',
   ],
   settings: [
     'settingsUpdated', 'telephonyConfigured', 'transcriptionToggled',
     'ivrUpdated', 'customFieldsUpdated', 'spamSettingsUpdated',
-    'callSettingsUpdated', 'demoMockTelephonyToggled',
+    'callSettingsUpdated', 'mockTelephonyToggled',
   ],
   shifts: [
     'shiftCreated', 'shiftUpdated', 'shiftDeleted',
@@ -338,7 +338,7 @@ export class AuditService {
     actorPubkey: string,
     details: Record<string, unknown> = {},
     hubId?: string | null,
-    /** Explicit timestamp — only for seeding historical demo data. Entries must be appended in chronological order. */
+    /** Explicit timestamp — only for seeding the historical sample dataset. Entries must be appended in chronological order. */
     at?: Date,
   ): Promise<AuditEntry> {
     // Validate actorPubkey format: 'system' or 64-char hex
@@ -792,7 +792,7 @@ export class AuditService {
     }
   }
 
-  /** Clear all audit log entries and per-user audit keys (test/demo reset only). */
+  /** Clear all audit log entries and per-user audit keys (the secret-gated test reset only). */
   async reset(): Promise<void> {
     await this.db.delete(auditLog)
     await this.db.delete(auditUserKeys)

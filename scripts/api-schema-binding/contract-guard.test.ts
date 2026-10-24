@@ -46,8 +46,7 @@ const only = (f: Finding[]) => {
 describe('route table', () => {
   test('is read from the router, not the OpenAPI spec', () => {
     const paths = new Set(routes.map(r => `${r.method.toUpperCase()} ${r.path}`))
-    // Three of the 82 operations the generated spec lacks.
-    expect(paths.has('GET /api/config/demo/credentials')).toBe(true)
+    // Two of the 82 operations the generated spec lacks.
     expect(routes.some(r => r.path.startsWith('/api/firehose'))).toBe(true)
     expect(routes.some(r => r.path.startsWith('/api/hubs/:hubId/firehose'))).toBe(true)
     // `telephony.all('/wait-music')` registers as ALL.

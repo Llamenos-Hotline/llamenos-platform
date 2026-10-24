@@ -23,7 +23,7 @@ class DashboardErrorSteps : BaseSteps() {
 
     @Given("a dashboard error is displayed")
     fun aDashboardErrorIsDisplayed() {
-        // Trigger a refresh that will fail in demo mode (no real API)
+        // Trigger a refresh that will fail without a reachable API
         // The error card visibility is what we test
         onNodeWithTag("dashboard-clock-button").performClick()
         composeRule.waitForIdle()

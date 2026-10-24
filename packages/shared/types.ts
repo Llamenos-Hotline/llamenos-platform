@@ -380,7 +380,6 @@ export interface SetupState {
   completedSteps: string[]
   pendingChannels: ChannelType[]
   selectedChannels: ChannelType[]
-  demoMode?: boolean
 }
 
 export const DEFAULT_SETUP_STATE: SetupState = {
@@ -388,7 +387,6 @@ export const DEFAULT_SETUP_STATE: SetupState = {
   completedSteps: [],
   pendingChannels: [],
   selectedChannels: [],
-  demoMode: false,
 }
 
 // --- Enabled Channels (computed from settings) ---

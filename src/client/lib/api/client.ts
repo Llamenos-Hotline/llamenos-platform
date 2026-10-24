@@ -295,8 +295,6 @@ export async function getConfig() {
       channels?: import('@shared/types').EnabledChannels
       setupCompleted?: boolean
       adminPubkey?: string
-      demoMode?: boolean
-      demoResetSchedule?: string | null
       needsBootstrap?: boolean
       serverPubkey?: string
       wsRelayUrl?: string

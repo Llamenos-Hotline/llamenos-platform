@@ -18,7 +18,6 @@ import { NoteSheet } from '@/components/note-sheet'
 import { useKeyboardShortcuts } from '@/lib/use-keyboard-shortcuts'
 import { LanguageSelect } from '@/components/language-select'
 import { LogoMark } from '@/components/logo-mark'
-import { DemoBanner } from '@/components/demo-banner'
 import { NotificationPromptBanner } from '@/components/notification-prompt-banner'
 import { UpdateChecker } from '@/components/UpdateChecker'
 import { PanicWipeIndicator } from '@/components/panic-wipe-indicator'
@@ -94,7 +93,7 @@ function DeviceWipeOverlay() {
 function RootLayout() {
   const { t } = useTranslation()
   const { isAuthenticated, isLoading, profileCompleted, webauthnEnrollmentRequired, hasPermission } = useAuth()
-  const { needsBootstrap, demoMode, isLoading: configLoading, currentHubId, hubsResolved, hubsError } = useConfig()
+  const { needsBootstrap, isLoading: configLoading, currentHubId, hubsResolved, hubsError } = useConfig()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -189,10 +188,7 @@ function RootLayout() {
       )
     } else {
       content = (
-        <>
-          {demoMode && <DemoBanner />}
-          <Outlet />
-        </>
+        <Outlet />
       )
     }
   } else if (HUB_GATE_EXEMPT_PATHS.includes(location.pathname)) {
@@ -281,7 +277,7 @@ function RelayWrappedLayout() {
 function AuthenticatedLayout() {
   const { t } = useTranslation()
   const { isAdmin, signOut, name, sessionExpiring, sessionExpired, renewSession, hasPermission, primaryRoleName } = useAuth()
-  const { hotlineName, hotlineNumber, channels, demoMode, currentHubId } = useConfig()
+  const { hotlineName, hotlineNumber, channels, currentHubId } = useConfig()
   const hasMessaging = useHasMessaging()
   const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
@@ -508,7 +504,6 @@ function AuthenticatedLayout() {
 
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {demoMode && <DemoBanner />}
         <UpdateChecker />
         <NotificationPromptBanner />
 

@@ -27,7 +27,7 @@ function mockAdapter(): MockTelephonyAdapter {
 
 function makeMock() {
   return new MockTelephonyAdapter(
-    { ENVIRONMENT: 'development', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' },
+    { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: 'a'.repeat(32) },
     '+15555550100',
   )
 }

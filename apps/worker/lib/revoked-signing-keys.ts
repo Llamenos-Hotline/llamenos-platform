@@ -1,7 +1,7 @@
 /**
  * Ed25519 signing keys whose private halves are publicly known: the keys the
- * demo accounts used before demo identities became per-process
- * (lib/demo-identities.ts).
+ * sample accounts used before sample identities became per-process
+ * (lib/sample-identities.ts).
  *
  * They are refused wherever a key is authenticated (lib/auth.ts, the WebSocket
  * relay) and resolve to no user in IdentityService, so no request, session or

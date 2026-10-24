@@ -8,7 +8,7 @@
     },
     "staging-backend": {
       "required": true,
-      "description": "Staging backend health, demoMode and ntfy push relay"
+      "description": "Staging backend health, setup state and ntfy push relay"
     },
     "play-track": {
       "required": true,

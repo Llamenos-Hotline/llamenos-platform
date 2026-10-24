@@ -119,13 +119,13 @@ describe('SettingsService.ensureInit', () => {
     expect(insertCalls).toBe(0)
   })
 
-  it('marks setup complete in demo mode when not already completed', async () => {
+  it('marks setup complete in development mode when not already completed', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow({ setupState: null, messagingConfig: null })],
       [makeRole()],
     ])
-    await service.ensureInit({ DEMO_MODE: 'true' })
+    await service.ensureInit({ ENVIRONMENT: 'development' })
     expect(db.update).toHaveBeenCalled()
   })
 
@@ -142,7 +142,7 @@ describe('SettingsService.ensureInit', () => {
     expect(secondInsertCount).toBe(firstInsertCount) // no additional calls
   })
 
-  it('still applies demo seeding after a default-mode init (server boot, then demo seeder)', async () => {
+  it('still applies development seeding after a default-mode init (server boot, then a dev-mode call)', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow()],
@@ -152,7 +152,7 @@ describe('SettingsService.ensureInit', () => {
     ])
     await service.ensureInit() // boot
     const updatesAfterBoot = (db.update as ReturnType<typeof vi.fn>).mock.calls.length
-    await service.ensureInit({ DEMO_MODE: 'true' })
+    await service.ensureInit({ ENVIRONMENT: 'development' })
     expect((db.update as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(updatesAfterBoot)
   })
 })

@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # نشر كل شيء (التطبيق + موقع التسويق)
-bun run deploy:demo     # نشر Worker التطبيق فقط
 bun run deploy:site     # نشر موقع التسويق فقط
 ```
 

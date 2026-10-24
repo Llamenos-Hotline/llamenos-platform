@@ -6,7 +6,6 @@ import { useToast } from '@/lib/toast'
 import {
   updateSetupState,
   completeSetup,
-  seedDemoData,
   listHubs,
   setActiveHub,
 } from '@/lib/api'
@@ -185,28 +184,19 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
     if (step < TOTAL_STEPS - 1) setStep(s => s + 1)
   }
 
-  async function handleComplete({ demoMode }: { demoMode: boolean }) {
+  async function handleComplete() {
     setSaving(true)
     try {
-      await completeSetup(demoMode)
+      await completeSetup()
       sessionStorage.removeItem('bootstrapComplete')
-      if (demoMode) {
-        // Activate the hub `POST /api/setup/complete` just created, so the demo
-        // seed below writes into it. Read from the AUTHENTICATED hub list, which
-        // the server filters to this admin's memberships — `/api/config` no
-        // longer publishes a hub roster (#1710), and choosing from an
-        // instance-wide list is the defect in #1708. Non-fatal.
-        try {
-          const { hubs } = await listHubs()
-          if (hubs.length > 0) setActiveHub(hubs[0].id)
-        } catch { /* ignore — hub switching is best-effort */ }
-        // Seed demo volunteers — always attempt, regardless of config fetch
-        try {
-          await seedDemoData()
-        } catch {
-          toast(t('setup.demoSeedFailed', { defaultValue: 'Sample data partially created' }), 'error')
-        }
-      }
+      // Activate the hub `POST /api/setup/complete` just created. Read from the
+      // AUTHENTICATED hub list, which the server filters to this admin's
+      // memberships — `/api/config` no longer publishes a hub roster (#1710),
+      // and choosing from an instance-wide list is the defect in #1708. Non-fatal.
+      try {
+        const { hubs } = await listHubs()
+        if (hubs.length > 0) setActiveHub(hubs[0].id)
+      } catch { /* ignore — hub switching is best-effort */ }
       toast(t('setup.complete'), 'success')
       navigate({ to: '/' })
     } catch {

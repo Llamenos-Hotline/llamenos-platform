@@ -35,14 +35,6 @@ This generates all required secrets, builds the application, and starts the serv
 4. **Configure providers** — enter credentials for each enabled channel
 5. **Review and finish**
 
-### Try demo mode
-
-To explore with pre-seeded sample data:
-
-```bash
-./scripts/docker-setup.sh --demo
-```
-
 ## Production deployment
 
 For a server with a real domain and automatic TLS:

@@ -35,14 +35,6 @@ Tani waxay soo saartaa dhammaan secrets-ka loo baahan yahay, waxay dhisa app-ka,
 4. **Configure providers** — enter credentials for each enabled channel
 5. **Review and finish**
 
-### Try demo mode
-
-Si aad u baadho data sample ah oo horey u jirta:
-
-```bash
-./scripts/docker-setup.sh --demo
-```
-
 ## Production deployment
 
 For a server leh domain dhab ah oo automatic TLS:

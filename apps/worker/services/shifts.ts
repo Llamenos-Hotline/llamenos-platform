@@ -279,7 +279,7 @@ export class ShiftsService {
   }
 
   // =========================================================================
-  // Reset (demo/dev only)
+  // Reset (the secret-gated dev surface only)
   // =========================================================================
 
   /** Truncate all shifts and reminder tracking for a hub */
