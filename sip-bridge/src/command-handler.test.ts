@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CommandHandler, legStatusFromCause } from './command-handler'
+import { AllRingLegsFailedError, CommandHandler, legStatusFromCause } from './command-handler'
 import type { BridgeClient, BridgeEvent } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
 import type { BridgeCommand, BridgeConfig, WebhookPayload } from './types'
@@ -428,6 +428,47 @@ describe('CommandHandler', () => {
     it('rings nobody for a caller who already hung up', async () => {
       expect(await handler.ringVolunteers({ parentCallSid: 'gone', callerNumber: '+1', volunteers: [{ pubkey: 't', phone: '+2' }] })).toEqual([])
       expect(pbx.of('originate')).toEqual([])
+    })
+
+    it('rejects when every volunteer leg fails to originate (total trunk outage, #1136)', async () => {
+      await queuedCaller()
+      pbx.client.originate = async () => { throw new Error('trunk unreachable') }
+
+      const err = await handler
+        .ringVolunteers({
+          parentCallSid: CALLER,
+          callerNumber: '+15557770001',
+          volunteers: [
+            { pubkey: 'tok-a', phone: '+15550200' },
+            { pubkey: 'tok-b', phone: '+15550201' },
+          ],
+        })
+        .catch((e: unknown) => e)
+
+      // The typed error is what index.ts's /ring maps to the machine-readable 502.
+      expect(err).toBeInstanceOf(AllRingLegsFailedError)
+      expect((err as AllRingLegsFailedError).attempted).toBe(2)
+    })
+
+    it('does not reject when only some volunteer legs fail (partial outage, #1136)', async () => {
+      await queuedCaller()
+      let calls = 0
+      pbx.client.originate = (async () => {
+        calls++
+        if (calls === 1) throw new Error('trunk unreachable')
+        return { id: 'leg-ok' }
+      }) as BridgeClient['originate']
+
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+
+      expect(legs).toEqual(['leg-ok'])
     })
 
     it('reports an unanswered leg with the status its hangup cause means', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { startParallelRinging, cancelLosingLegs, recordRingLegs } from '../../services/ringing'
 import { hashPhone } from '../../lib/crypto'
 import type { Env } from '../../types'
@@ -12,6 +12,9 @@ import { publishEvent } from '../../lib/ws-events'
 import { dispatchVoipPushFromService } from '../../lib/voip-push'
 import { listReachableVolunteerEndpoints, volunteerSipUsername } from '../../telephony/registrar'
 import { KIND_CALL_RING } from '@shared/event-kinds'
+import { getCircuitBreaker, resetAllCircuitBreakers } from '../../lib/circuit-breaker'
+import { AllDialsFailedError } from '../../telephony/adapter'
+import { AsteriskAdapter } from '../../telephony/asterisk'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
 
@@ -45,6 +48,7 @@ vi.mock('../../lib/logger', () => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    debug: vi.fn(),
   }),
 }))
 
@@ -672,6 +676,134 @@ describe('startParallelRinging', () => {
 
     // Volunteers with falsy pubkeys are filtered out before token creation
     expect(services.calls.createCallToken).not.toHaveBeenCalled()
+  })
+})
+
+// #1136: a total telephony provider outage (every dial attempt fails) must be reported
+// as a failed ring — not the pre-existing lie where ringVolunteers resolving to an
+// empty array still returned `{ ringing: true }`. These tests exercise the real
+// AllDialsFailedError/CircuitOpenError contract by having the mocked adapter REJECT
+// (what the real REST adapters do on a total outage — see telephony/adapter.ts),
+// rather than resolve to `[]`.
+describe('startParallelRinging — total telephony provider outage (#1136)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetAllCircuitBreakers()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports ringing:false with a distinct reason, counts it, and opens the breaker after repeated total failures', async () => {
+    mockAdapter.ringVolunteers.mockRejectedValue(new AllDialsFailedError(1))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({ pubkey: 'pk-1' })],
+    })
+
+    let lastResult: Awaited<ReturnType<typeof startParallelRinging>> | undefined
+    // failureThreshold for 'telephony:ringVolunteers' is 5 — drive it to open.
+    for (let i = 0; i < 5; i++) {
+      const promise = startParallelRinging(`CA-outage-${i}`, '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+      await vi.runAllTimersAsync()
+      lastResult = await promise
+    }
+
+    expect(lastResult).toEqual({ ringing: false, reason: 'telephony-failure', volunteersNotified: 0 })
+    expect(incCounter).toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
+
+    const breaker = getCircuitBreaker({ name: 'telephony:ringVolunteers' })
+    expect(breaker.getState()).toBe('open')
+  })
+
+  it('still reports ringing:true for a partial failure — some legs succeeding is not a provider outage', async () => {
+    mockAdapter.ringVolunteers.mockResolvedValueOnce(['LEG-1'])
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1', 'pk-2'],
+      allUsers: [makeUser({ pubkey: 'pk-1' }), makeUser({ pubkey: 'pk-2' })],
+    })
+
+    const result = await startParallelRinging('CA-partial', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    expect(result).toEqual({ ringing: true, volunteersNotified: 2 })
+    expect(incCounter).not.toHaveBeenCalledWith('llamenos_calls_unroutable_total', expect.objectContaining({ reason: 'telephony-failure' }))
+  })
+
+  it('reports ringing:true (reduced count) when phone legs totally fail but browser/VoIP volunteers were already notified', async () => {
+    mockAdapter.ringVolunteers.mockRejectedValue(new AllDialsFailedError(1))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-phone', 'pk-browser'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-phone', callPreference: 'phone' }),
+        makeUser({ pubkey: 'pk-browser', callPreference: 'browser', phone: null }),
+      ],
+    })
+
+    const promise = startParallelRinging('CA-mixed', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    // Only the browser volunteer was actually reached — the phone volunteer was not.
+    expect(result).toEqual({ ringing: true, reason: 'telephony-failure', volunteersNotified: 1 })
+  })
+})
+
+// The block above rejects the mocked adapter directly. This one runs the REAL
+// SipBridgeAdapter against the bridge's actual total-outage answer (a 502 with the
+// machine-readable `all-dials-failed` code), so the worker-side classification and the
+// bridge-side protocol cannot drift apart unnoticed (#1136).
+describe('startParallelRinging — total PBX outage through the real sip-bridge adapter (#1136)', () => {
+  const realFetch = globalThis.fetch
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetAllCircuitBreakers()
+    // Real timers: the adapter signs the request with WebCrypto and the retry backoff
+    // (~2s) must elapse for real, which fake timers do not advance reliably.
+    const adapter = new AsteriskAdapter('http://ari', 'u', 'p', '+15550000000', 'https://bridge.example.com', 'secret')
+    mockAdapter.ringVolunteers.mockImplementation((params) => adapter.ringVolunteers(params))
+    // A fresh Response per call: a body can be read once and the ring is retried.
+    globalThis.fetch = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: false, error: 'all-dials-failed', attempted: 1 }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ) as unknown as typeof fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = realFetch
+    mockAdapter.ringVolunteers.mockReset().mockResolvedValue([])
+  })
+
+  it('reports telephony-failure (not a generic error) and counts the outage', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({ pubkey: 'pk-1' })],
+    })
+
+    const promise = startParallelRinging('CA-pbx-outage', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    const result = await promise
+
+    expect(result).toEqual({ ringing: false, reason: 'telephony-failure', volunteersNotified: 0 })
+    expect(incCounter).toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
+  })
+
+  it('keeps counting browser volunteers that were already notified', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-phone', 'pk-browser'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-phone', callPreference: 'phone' }),
+        makeUser({ pubkey: 'pk-browser', callPreference: 'browser', phone: null }),
+      ],
+    })
+
+    const promise = startParallelRinging('CA-pbx-mixed', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    const result = await promise
+
+    expect(result).toEqual({ ringing: true, reason: 'telephony-failure', volunteersNotified: 1 })
   })
 })
 

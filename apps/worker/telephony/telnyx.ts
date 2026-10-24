@@ -1,4 +1,5 @@
 import { safeFetch } from '../lib/safe-fetch'
+import { createLogger } from '../lib/logger'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -16,6 +17,7 @@ import type {
   WebhookQueueWait,
   WebhookRecordingStatus,
 } from './adapter'
+import { collectRingResults } from './adapter'
 import { DEFAULT_LANGUAGE } from '@shared/languages'
 import { getPrompt } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
@@ -197,6 +199,8 @@ function mapHangupCauseToStatus(cause: string): WebhookCallStatus['status'] {
 function hubQP(hubId?: string): string {
   return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
 }
+
+const logger = createLogger('telephony.telnyx')
 
 /**
  * TelnyxAdapter — Telnyx Call Control API implementation.
@@ -466,7 +470,6 @@ export class TelnyxAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callControlIds: string[] = []
     const hubParam = hubQP(params.hubId)
 
     const calls = await Promise.allSettled(
@@ -491,13 +494,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
       }),
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callControlIds.push(result.value)
-      }
-    }
-
-    return callControlIds
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Telnyx', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

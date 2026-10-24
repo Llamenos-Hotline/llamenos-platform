@@ -41,6 +41,33 @@ export class CallsService {
       .from(activeCalls)
       .where(eq(activeCalls.hubId, hubId))
 
+    return this.archiveStaleCalls(rows)
+  }
+
+  /**
+   * Reap stale call rows across EVERY hub, not only the one a dashboard happens to be
+   * polling right now. `getActiveCalls(hubId)` above only expires rows for the hub it
+   * is called with — a hub nobody has an open dashboard for (or whose provider stopped
+   * sending status callbacks) would otherwise accumulate `active_calls` /
+   * `call_tokens` rows indefinitely. Intended to be called from a scheduled worker
+   * (lib/stale-call-reaper-worker.ts), not from a request path (#1136).
+   *
+   * Returns the number of rows reaped.
+   */
+  async reapStaleCalls(): Promise<number> {
+    const rows = await this.db.select().from(activeCalls)
+    if (rows.length === 0) return 0
+    const active = await this.archiveStaleCalls(rows)
+    return rows.length - active.length
+  }
+
+  /**
+   * Split call rows into still-live and past-TTL ("stale"), archiving the stale ones
+   * into call_records in a single transaction. Shared by the hub-scoped lazy reap
+   * (getActiveCalls) and the instance-wide scheduled reap (reapStaleCalls) so the two
+   * can never apply different staleness rules to the same row (#1136).
+   */
+  private async archiveStaleCalls(rows: ActiveCallRow[]): Promise<ActiveCallRow[]> {
     const now = Date.now()
     const active: ActiveCallRow[] = []
     const stale: ActiveCallRow[] = []

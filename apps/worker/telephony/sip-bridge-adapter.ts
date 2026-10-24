@@ -1,6 +1,7 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { getPrompt } from '@shared/voice-prompts'
 import { speechLanguageFor } from '../services/ivr-speech/voices'
+import { AllDialsFailedError } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -43,6 +44,33 @@ export interface BridgeWebhookPayload {
   recordingStatus?: string
   recordingName?: string
   recordingSid?: string
+}
+
+/**
+ * `error` code the bridge's /ring answers a total outage with (every leg refused by the
+ * PBX/trunk). Mirrors RING_ALL_DIALS_FAILED in sip-bridge/src/command-handler.ts — the
+ * two sides are separate packages, so keep them in step.
+ */
+const BRIDGE_ALL_DIALS_FAILED = 'all-dials-failed'
+
+/**
+ * A non-2xx answer from the bridge. Carries the bridge's machine-readable `error` code
+ * (and, for a total ring outage, how many legs it tried) so callers can classify the
+ * failure instead of pattern-matching the message.
+ */
+class BridgeRequestError extends Error {
+  readonly code?: string
+  readonly attempted?: number
+
+  constructor(message: string, body: unknown) {
+    super(message)
+    this.name = 'BridgeRequestError'
+    if (body && typeof body === 'object') {
+      const { error, attempted } = body as { error?: unknown; attempted?: unknown }
+      if (typeof error === 'string') this.code = error
+      if (typeof attempted === 'number') this.attempted = attempted
+    }
+  }
 }
 
 /**
@@ -101,20 +129,35 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
     const { callSid, callerNumber, volunteers, appTargets, callbackUrl, hubId } = params
-    const result = await this.bridgeRequest('POST', '/ring', {
-      parentCallSid: callSid,
-      callerNumber,
-      volunteers: volunteers.map((v) => ({ pubkey: v.callToken, phone: v.phone })),
-      // In-app legs are INVITEs to a registered AOR on this PBX, not calls out
-      // through the trunk, so the bridge needs them as their own list. Omitted
-      // entirely when there are none, so the bridge's payload is unchanged for
-      // a phone-only call.
-      ...(appTargets && appTargets.length > 0
-        ? { appTargets: appTargets.map((t) => ({ callToken: t.callToken, sipAor: t.sipAor })) }
-        : {}),
-      callbackUrl,
-      hubId,
-    })
+    let result: unknown
+    try {
+      result = await this.bridgeRequest('POST', '/ring', {
+        parentCallSid: callSid,
+        callerNumber,
+        volunteers: volunteers.map((v) => ({ pubkey: v.callToken, phone: v.phone })),
+        // In-app legs are INVITEs to a registered AOR on this PBX, not calls out
+        // through the trunk, so the bridge needs them as their own list. Omitted
+        // entirely when there are none, so the bridge's payload is unchanged for
+        // a phone-only call.
+        ...(appTargets && appTargets.length > 0
+          ? { appTargets: appTargets.map((t) => ({ callToken: t.callToken, sipAor: t.sipAor })) }
+          : {}),
+        callbackUrl,
+        hubId,
+      })
+    } catch (err) {
+      // The bridge dials each volunteer leg independently and answers a total outage
+      // (every leg refused by the PBX/trunk) with a machine-readable 502, distinct from
+      // any other /ring failure. Surface that the same way the REST adapters do — see
+      // AllDialsFailedError — so services/ringing.ts retries, the breaker sees it, and
+      // the call is reported as a telephony failure rather than a generic error (#1136).
+      // A caller who hung up before ringing comes back as a plain empty 200, which is
+      // not an outage and must not be counted as one.
+      if (err instanceof BridgeRequestError && err.code === BRIDGE_ALL_DIALS_FAILED) {
+        throw new AllDialsFailedError(err.attempted ?? volunteers.length + (appTargets?.length ?? 0))
+      }
+      throw err
+    }
     return (result as { channelIds?: string[] })?.channelIds ?? []
   }
 
@@ -341,8 +384,16 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     })
 
     if (!response.ok) {
-      throw new Error(
-        `${this.getPbxType()} bridge request failed: ${response.status} ${response.statusText}`
+      // Best effort: a proxy's HTML error page or a bare 500 simply carries no code.
+      let failure: unknown = null
+      try {
+        failure = await response.json()
+      } catch {
+        // no JSON body — leave the error uncoded
+      }
+      throw new BridgeRequestError(
+        `${this.getPbxType()} bridge request failed: ${response.status} ${response.statusText}`,
+        failure
       )
     }
 
