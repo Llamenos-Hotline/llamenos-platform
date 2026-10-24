@@ -80,6 +80,40 @@
 # which pins the fixed libcrux-kem 0.0.10. Re-check with:
 #   cargo update -p libcrux-kem --precise 0.0.10
 #
+# ── crypto-bigint 0.5.5 (RUSTSEC-2026-0387): `mls` feature only, no build enables it ──
+#
+# Timing variability in constant-time bignum operations (subtraction, CTZ,
+# div_rem, Montgomery mul, UintRef equality); patched only in crypto-bigint
+# >= 0.7.6 (published 2026-10-23). Verified 2026-10-24.
+#
+# NO UPGRADE PATH EXISTS: crypto-bigint 0.5.5 is required by elliptic-curve
+# 0.13.8, which is required by p256/p384 `^0.13` in openmls_rust_crypto 0.6.0
+# and openmls_basic_credential 0.6.0 (both latest on crates.io, openmls 0.9.2
+# is latest). `cargo update -p crypto-bigint --precise 0.7.6` is rejected:
+# "candidate versions found which didn't match: 0.7.6 ... required by package
+# elliptic-curve v0.13.8". The RustCrypto 0.14 line (p256/p384/k256 0.14.0,
+# elliptic-curve 0.14.1) IS published, and openmls main already moves to it
+# (hpke-rs 0.8), but that is unreleased: no published openmls_rust_crypto can
+# reach it. Same upstream blocker as the libcrux-kem ignores below (#1713).
+#
+# NOT REACHABLE in any shipped build:
+#   * Only compiled under `--features mls` (default = []); build-mobile.sh uses
+#     `mobile`, `mobile,test-kdf`, `uniffi-bindgen`, and apps/desktop takes
+#     llamenos-core with default features:
+#       cargo tree -e normal,build -i crypto-bigint            -> not in graph
+#       cargo tree -e normal,build --features mobile -i ...    -> not in graph
+#       cargo tree -e normal,build --features server -i ...    -> not in graph
+#     (`--features mls` is the only configuration that resolves it.)
+#   * Even under `mls`, the path is P-256/P-384 only. Our MLS ciphersuite is the
+#     single const MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+#     (`CIPHERSUITE` in src/mls.rs): X25519, ChaCha20-Poly1305, Ed25519. No
+#     secret-dependent P-curve arithmetic is performed.
+#
+# REVISIT (expires 2026-12-01, enforced by "Enforce advisory ignore expiry" in
+# security-audit.yml, tracked with #1713): remove as soon as openmls_rust_crypto
+# publishes a release on RustCrypto 0.14. Re-check with:
+#   cargo update -p crypto-bigint --precise 0.7.6
+#
 # HOW TO CHECK THESE IGNORES ARE STILL NEEDED: empty the list below and run
 # `cargo audit`. Anything that no longer fires is dead config and must be
 # deleted — six stale ignores (RUSTSEC-2026-0124, -0207, -0208, -0209, -0211,
@@ -88,6 +122,10 @@
 # entirely and advanced libcrux-sha3 to 0.0.10 and libcrux-secrets to 0.0.6.
 
 ignore = [
+  # Multiple timing variability issues in constant-time operations (crypto-bigint
+  # <0.7.6). `mls` feature only; P-curve path unused by our ciphersuite. See above.
+  "RUSTSEC-2026-0387", # crypto-bigint 0.5.5 timing variability; no release reaches >=0.7.6 (elliptic-curve 0.13 pin), mls-feature-only, not used by our X25519/Ed25519 ciphersuite, tracked with #1713 [expires 2026-12-01]
+
   # Panic on Decoding Short Hybrid Keys (libcrux-kem <=0.0.9, fixed 0.0.10).
   # Hybrid PQ key decode only; not compiled in any build. See above.
   "RUSTSEC-2026-0331", # libcrux-kem <=0.0.9 hybrid key decode panic; lockfile-only, never compiled, tracked in #1713 [expires 2026-12-01]
