@@ -14,6 +14,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.model.AuthMeEventKeysResponse
 import org.llamenos.hotline.model.ClearPushTokenRequest
 import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.hotline.model.MemberDirectory
@@ -374,11 +375,13 @@ class ApiService @Inject constructor(
     // ---- Device registration API ----
 
     /**
-     * Register or update this device's UnifiedPush endpoint on the backend.
-     * The [RegisterDeviceRequest.pushToken] is the full ntfy endpoint URL.
-     * Idempotent — safe to call on every new endpoint assignment.
+     * Register or update this device on the backend: its identity keys
+     * (the server seals records to [RegisterDeviceRequest.x25519Pubkey]), its
+     * UnifiedPush endpoint ([RegisterDeviceRequest.pushToken], the full ntfy
+     * endpoint URL), or both. The server merges by `ed25519Pubkey`, so the two
+     * halves can arrive in separate calls. Idempotent.
      */
-    suspend fun registerPushEndpoint(body: RegisterDeviceRequest): Unit =
+    suspend fun registerDevice(body: RegisterDeviceRequest): Unit =
         requestNoContent("POST", "/api/devices/register", body)
 
     /**
@@ -394,7 +397,7 @@ class ApiService @Inject constructor(
      * On Android the token is the same UnifiedPush endpoint URL sent as
      * [RegisterDeviceRequest.pushToken] — the incoming-call ring path reads
      * only `voipToken`, so an endpoint registered solely via
-     * [registerPushEndpoint] can never ring the phone (#955).
+     * [registerDevice] can never ring the phone (#955).
      */
     suspend fun registerVoipToken(body: VoipTokenRequest): Unit =
         requestNoContent("POST", "/api/devices/voip-token", body)
@@ -413,6 +416,12 @@ class ApiService @Inject constructor(
      * every active hub). This is the member-hub list for multi-hub routing.
      */
     suspend fun getHubs(): HubsListResponse = request("GET", "/api/hubs")
+
+    /**
+     * The account-wide relay event keys (current and previous UTC-day epoch) from
+     * `GET /api/auth/me`, plus the admin decryption pubkey.
+     */
+    suspend fun getAuthMe(): AuthMeEventKeysResponse = request("GET", "/api/auth/me")
 
     /**
      * The member directory of the hub being browsed (GET /api/hubs/{hubId}/identity/members).

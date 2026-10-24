@@ -2479,3 +2479,109 @@ mod stored_record_vector_tests {
         ));
     }
 }
+
+/// The server's relay events, opened through the mobile FFI surface.
+///
+/// `tests/fixtures/server-event-vectors.json` holds frames the **server**
+/// published (`packages/crypto/scripts/gen-server-event-vectors.ts` runs
+/// `encryptEventContent` from `apps/worker/lib/ws-events.ts`), and the event keys
+/// `GET /api/auth/me` returns. The older `mobile_decrypt_server_event` test seals
+/// its own fixture under the epoch-less AAD, so it confirms that function against
+/// itself — and Android called it for every real frame, none of which it can open
+/// (#2117).
+#[cfg(test)]
+mod server_event_vector_tests {
+    use super::*;
+    use crate::labels::{LABEL_HUB_EVENT, LABEL_HUB_EVENT_EPOCH};
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/server-event-vectors.json");
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Fixture {
+        server_event_key_hex: String,
+        server_event_key_prev_hex: String,
+        frames: Vec<Frame>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Frame {
+        name: String,
+        epoch: u64,
+        plaintext: String,
+        payload: String,
+    }
+
+    fn fixture_with_keys_stored() -> Fixture {
+        let f: Fixture =
+            serde_json::from_str(FIXTURE).expect("server-event-vectors.json does not parse");
+        mobile_set_server_event_keys(
+            f.server_event_key_hex.clone(),
+            Some(f.server_event_key_prev_hex.clone()),
+        )
+        .unwrap();
+        f
+    }
+
+    #[test]
+    fn the_fixture_pins_the_labels_the_server_used() {
+        let v: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        assert_eq!(v["aad"]["epochLabel"], LABEL_HUB_EVENT_EPOCH);
+        assert_eq!(v["aad"]["epochless"], LABEL_HUB_EVENT);
+    }
+
+    #[test]
+    fn every_server_frame_opens_given_its_own_epoch() {
+        let f = fixture_with_keys_stored();
+        assert!(f.frames.len() >= 3, "the fixture lost frames");
+        for frame in &f.frames {
+            assert_eq!(
+                mobile_decrypt_server_event_with_epoch(frame.payload.clone(), frame.epoch)
+                    .unwrap_or_else(|e| panic!("{} did not open: {e:?}", frame.name)),
+                frame.plaintext,
+                "{}",
+                frame.name,
+            );
+        }
+    }
+
+    /// The bucket padding must be gone: the reader hands back exactly the JSON.
+    #[test]
+    fn a_frame_over_the_minimum_bucket_is_unpadded() {
+        let f = fixture_with_keys_stored();
+        let big = f
+            .frames
+            .iter()
+            .find(|fr| fr.name == "padded-to-next-bucket")
+            .expect("the fixture has no multi-bucket frame");
+        // nonce(12) + 1024-byte bucket + tag(16), hex-encoded.
+        assert_eq!(big.payload.len(), (12 + 1024 + 16) * 2);
+        let opened =
+            mobile_decrypt_server_event_with_epoch(big.payload.clone(), big.epoch).unwrap();
+        assert_eq!(opened, big.plaintext);
+        assert!(serde_json::from_str::<serde_json::Value>(&opened).is_ok());
+    }
+
+    #[test]
+    fn the_wrong_epoch_does_not_open_a_frame() {
+        let f = fixture_with_keys_stored();
+        let frame = &f.frames[0];
+        assert!(
+            mobile_decrypt_server_event_with_epoch(frame.payload.clone(), frame.epoch + 1).is_err()
+        );
+    }
+
+    /// The pre-#2117 Android path: no epoch in the AAD, no unpadding. It cannot
+    /// open a single frame the server really sends.
+    #[test]
+    fn the_epochless_reader_opens_no_server_frame() {
+        let f = fixture_with_keys_stored();
+        for frame in &f.frames {
+            assert!(
+                mobile_decrypt_server_event(frame.payload.clone()).is_err(),
+                "{} opened without its epoch",
+                frame.name,
+            );
+        }
+    }
+}

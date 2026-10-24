@@ -25,6 +25,7 @@ import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.service.DeviceRegistrationManager
 import org.llamenos.hotline.service.PushRegistrationManager
 import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
@@ -59,6 +60,7 @@ class AuthViewModelTest {
     private lateinit var keyValueStore: InMemoryKeyValueStore
     private lateinit var biometricKeyStore: FakeBiometricKeyStore
     private lateinit var inviteRepository: InviteRepository
+    private lateinit var deviceRegistrationManager: DeviceRegistrationManager
     private lateinit var pushRegistrationManager: PushRegistrationManager
 
     @Before
@@ -69,6 +71,7 @@ class AuthViewModelTest {
         keyValueStore = InMemoryKeyValueStore()
         biometricKeyStore = FakeBiometricKeyStore()
         inviteRepository = mockk()
+        deviceRegistrationManager = mockk(relaxed = true)
         pushRegistrationManager = mockPushRegistrationManager()
     }
 
@@ -83,6 +86,7 @@ class AuthViewModelTest {
             keyValueStore,
             biometricKeyStore,
             inviteRepository,
+            deviceRegistrationManager,
             pushRegistrationManager,
         )
     }
@@ -482,6 +486,29 @@ class AuthViewModelTest {
         verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
     }
 
+    // ---- Device identity registration on authentication (#2119) ----
+
+    @Test
+    fun `successful invite redemption registers the device keys with the server`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns Result.success(Unit)
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        verify(exactly = 1) { deviceRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `failed invite redemption does not register the device keys`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(404, "Invite not found"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        verify(exactly = 0) { deviceRegistrationManager.ensureRegistered() }
+    }
+
     @Test
     fun `failed invite redemption does not trigger UnifiedPush registration`() = runTest {
         coEvery { inviteRepository.redeemInvite(inviteCode) } returns
@@ -534,6 +561,7 @@ class AuthViewModelTest {
             keyValueStore,
             biometricKeyStore,
             inviteRepository,
+            deviceRegistrationManager,
             pushRegistrationManager,
         )
 
@@ -541,6 +569,9 @@ class AuthViewModelTest {
 
         assertTrue(vm.uiState.value.isAuthenticated)
         verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+        // The unlock path re-registers the keys too: a registration that failed
+        // at enrolment (network, server down) heals on the next unlock.
+        verify(exactly = 1) { deviceRegistrationManager.ensureRegistered() }
     }
 
     @Test
@@ -565,6 +596,7 @@ class AuthViewModelTest {
             keyValueStore,
             biometricKeyStore,
             inviteRepository,
+            deviceRegistrationManager,
             pushRegistrationManager,
         )
 

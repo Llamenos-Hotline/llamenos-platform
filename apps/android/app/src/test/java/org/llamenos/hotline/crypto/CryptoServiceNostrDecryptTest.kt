@@ -45,7 +45,7 @@ class CryptoServiceNostrDecryptTest {
 
     @Test
     fun `decryptServerEventWithStoredKeys returns null without native lib`() {
-        assertNull(cryptoService.decryptServerEventWithStoredKeys("deadbeef"))
+        assertNull(cryptoService.decryptServerEventWithStoredKeys("deadbeef", 1L))
     }
 
     @Test

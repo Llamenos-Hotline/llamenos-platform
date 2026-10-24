@@ -5,15 +5,19 @@ import kotlinx.serialization.Serializable
 /**
  * Request body for POST /api/devices/register.
  *
- * Registers or updates a device push endpoint on the backend.
+ * Registers or updates a device on the backend. Identity and push are
+ * independent halves (`registerDeviceBodySchema`): a request carries the
+ * device keys ([x25519Pubkey] makes the device an HPKE recipient), a push
+ * endpoint ([pushToken] + [wakeKeyPublic]), or both. A phone with no
+ * UnifiedPush distributor still has an identity to register.
  * The [pushToken] is the full UnifiedPush endpoint URL that the
  * backend will POST encrypted payloads to.
  */
 @Serializable
 data class RegisterDeviceRequest(
     val platform: String = "android",
-    val pushToken: String,
-    val wakeKeyPublic: String,
+    val pushToken: String? = null,
+    val wakeKeyPublic: String? = null,
     val ed25519Pubkey: String? = null,
     val x25519Pubkey: String? = null,
     val deviceName: String? = null,

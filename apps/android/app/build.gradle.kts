@@ -183,13 +183,15 @@ val copyTestVectors by tasks.registering(Copy::class) {
     into("src/androidTest/assets")
 }
 
-// The stored-record conformance vector (#1927/#1928): bytes the server's own
-// encryptMessageForStorage / encryptCallRecordForStorage wrote, read by
-// EnvelopeAadInteropTest. Served as a generated androidTest asset (a build
-// directory, never the source tree) through the Variant API.
-abstract class CopyStoredRecordVectors : DefaultTask() {
-    @get:InputFile
-    abstract val vectors: RegularFileProperty
+// Conformance vectors: bytes the server's own writers produced, read by the instrumented
+// interop tests through Android's production readers. `stored-record-vectors.json` is
+// encryptMessageForStorage / encryptCallRecordForStorage output (#1927/#1928, read by
+// EnvelopeAadInteropTest); `server-event-vectors.json` is ws-events.ts encryptEventContent
+// output (#2117, read by ServerEventInteropTest). Served as a generated androidTest asset
+// (a build directory, never the source tree) through the Variant API.
+abstract class CopyCryptoVectors : DefaultTask() {
+    @get:InputFiles
+    abstract val vectors: ConfigurableFileCollection
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -199,19 +201,20 @@ abstract class CopyStoredRecordVectors : DefaultTask() {
         val out = outputDir.get().asFile
         out.deleteRecursively()
         out.mkdirs()
-        vectors.get().asFile.copyTo(out.resolve("stored-record-vectors.json"))
+        vectors.files.forEach { it.copyTo(out.resolve(it.name)) }
     }
 }
 
-val copyStoredRecordVectors by tasks.registering(CopyStoredRecordVectors::class) {
-    vectors.set(file("${rootProject.projectDir}/../../packages/crypto/tests/fixtures/stored-record-vectors.json"))
+val copyCryptoVectors by tasks.registering(CopyCryptoVectors::class) {
+    val fixtures = "${rootProject.projectDir}/../../packages/crypto/tests/fixtures"
+    vectors.from(file("$fixtures/stored-record-vectors.json"), file("$fixtures/server-event-vectors.json"))
 }
 
 androidComponents {
     onVariants { variant ->
         variant.androidTest?.sources?.assets?.addGeneratedSourceDirectory(
-            copyStoredRecordVectors,
-            CopyStoredRecordVectors::outputDir,
+            copyCryptoVectors,
+            CopyCryptoVectors::outputDir,
         )
     }
 }

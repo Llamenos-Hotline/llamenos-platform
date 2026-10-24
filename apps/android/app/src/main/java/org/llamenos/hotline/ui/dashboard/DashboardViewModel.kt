@@ -24,7 +24,6 @@ import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.ActiveCall
 import org.llamenos.hotline.model.ActiveCallsResponse
-import org.llamenos.hotline.model.AuthMeEventKeysResponse
 import org.llamenos.hotline.model.BanRequest
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.MeResponse
@@ -218,7 +217,7 @@ class DashboardViewModel @Inject constructor(
      */
     private suspend fun fetchServerEventKey() {
         try {
-            val me = apiService.request<AuthMeEventKeysResponse>("GET", "/api/auth/me")
+            val me = apiService.getAuthMe()
             // Always persist admin decryption pubkey regardless of event keys
             sessionState.adminDecryptionPubkey = me.adminDecryptionPubkey
             val currentKey = me.serverEventKeyHex ?: return
