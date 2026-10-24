@@ -4,6 +4,7 @@ import type { AppEnv } from '@worker/types'
 import conversationsRoute from '@worker/routes/conversations'
 import * as wsEvents from '@worker/lib/ws-events'
 import * as serviceFactories from '@worker/lib/service-factories'
+import { ServiceError } from '@worker/services/settings'
 
 vi.mock('@worker/lib/ws-events', () => ({
   publishEvent: vi.fn(),
@@ -65,6 +66,8 @@ function createTestApp(opts: {
       getContactIdentifier: vi.fn().mockResolvedValue('+15551234567'),
     },
     identity: {
+      // The admin key the fixtures' envelopes are addressed to (#2113).
+      listAdminEnvelopeRecipients: vi.fn().mockResolvedValue(['a'.repeat(64)]),
       hasAdmin: vi.fn().mockResolvedValue({ hasAdmin: true }),
       getDevices: vi.fn().mockResolvedValue({ devices: [] }),
       cleanupDevices: vi.fn().mockResolvedValue(undefined),
@@ -95,6 +98,12 @@ function createTestApp(opts: {
   conversationsMock.getByIdForHub ??= (id: string) => conversationsMock.getById(id)
 
   const app = new Hono<AppEnv>()
+  // Same mapping as the app's global handler: a ServiceError carries its own status.
+  app.onError((err, c) => (
+    err instanceof ServiceError
+      ? c.json({ error: err.message }, err.status as 400 | 403 | 404 | 422)
+      : c.json({ error: 'Internal server error' }, 500)
+  ))
 
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
@@ -448,6 +457,41 @@ describe('conversations route', () => {
         conversationId: 'conv-1',
         direction: 'outbound',
       }))
+    })
+
+    it('refuses (422) a client-sealed message whose envelopes name no admin key', async () => {
+      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      const app = createTestApp({
+        permissions: ['conversations:read-assigned'],
+        services: { conversations: { addMessage: addSpy } },
+      })
+
+      const res = await app.request('/conv-1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          encryptedContent: 'encrypted123',
+          readerEnvelopes: [{ pubkey: 'c'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+        }),
+      })
+      expect(res.status).toBe(422)
+      expect(addSpy).not.toHaveBeenCalled()
+    })
+
+    it('refuses (422) a client-sealed message with no envelopes on an external channel', async () => {
+      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      const app = createTestApp({
+        permissions: ['conversations:read-assigned'],
+        services: { conversations: { addMessage: addSpy } },
+      })
+
+      const res = await app.request('/conv-1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ encryptedContent: 'encrypted123', readerEnvelopes: [] }),
+      })
+      expect(res.status).toBe(422)
+      expect(addSpy).not.toHaveBeenCalled()
     })
 
     it('allows admin with send-any to message any conversation', async () => {

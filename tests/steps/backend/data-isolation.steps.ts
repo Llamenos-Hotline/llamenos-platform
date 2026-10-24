@@ -27,6 +27,7 @@ import {
   type CreateVolunteerResult,
   uniqueName,
 } from '../../api-helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 
 // ── Local State ────────────────────────────────────────────────────
 
@@ -138,7 +139,7 @@ Given(
         '/notes',
         {
           encryptedContent: noteContent,
-          callId: `iso-${Date.now()}-${name}`,
+          callId: await simulateCallForNote(request),
           adminEnvelopes: noteEnvelopes,
         },
         vol.deviceKey,
@@ -293,7 +294,7 @@ When(
       '/notes',
       {
         encryptedContent: hubNoteContent,
-        callId: `hub-iso-${Date.now()}-${volName}`,
+        callId: await simulateCallForNote(request),
         adminEnvelopes: hubNoteEnvelopes,
       },
       user!.deviceKey,
@@ -405,7 +406,7 @@ Given('an active volunteer with notes and shift access', async ({ request, world
     '/notes',
     {
       encryptedContent: deactContent,
-      callId: `deact-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       adminEnvelopes: deactEnvelopes,
     },
     vol.deviceKey,
@@ -558,7 +559,7 @@ When(
       `/hubs/${hubEntry!.hubId}/notes`,
       {
         encryptedContent,
-        callId: `hub-iso-${Date.now()}-${volName}`,
+        callId: await simulateCallForNote(request, hubEntry!.hubId),
         adminEnvelopes: envelopes,
       },
       user!.deviceKey,

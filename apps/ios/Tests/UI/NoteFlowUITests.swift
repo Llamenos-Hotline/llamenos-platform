@@ -203,9 +203,11 @@ final class NoteFlowUITests: BaseUITest {
     }
 
     /// Create a note through the Notes tab's create sheet (client-side E2EE included)
-    /// and wait for the sheet to close. The server stores it against a call ID; it
-    /// does not require that call to exist.
+    /// and wait for the sheet to close. The server stores a note only against a call
+    /// of this hub (#2112), so the sheet is given a call the server actually holds.
     private func createNote(text: String) {
+        let callId = simulateIncomingCall(callerNumber: "+1555\(Int.random(in: 1_000_000...9_999_999))").callId
+        XCTAssertFalse(callId.isEmpty, "Simulation should return a callId to file the note under")
         navigateToNotes()
         let createButton = find("create-note-button")
         XCTAssertTrue(createButton.waitForExistence(timeout: 10), "Create note button should exist in the Notes toolbar")
@@ -219,7 +221,7 @@ final class NoteFlowUITests: BaseUITest {
         let callIdField = scrollToVisible("note-call-id-input")
         XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
         callIdField.tap()
-        callIdField.typeText("call-\(UUID().uuidString.prefix(8))")
+        callIdField.typeText(callId)
 
         find("save-note").tap()
         XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")

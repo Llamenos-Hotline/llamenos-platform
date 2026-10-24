@@ -14,6 +14,7 @@
 
 import { type APIRequestContext } from '@playwright/test'
 import { devSurfaceSecret, devSurfaceHeaders, harnessClientHeaders } from './dev-surface-secret'
+import { simulateCallForNote } from './simulation-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
@@ -1060,9 +1061,11 @@ export async function createReportViaApi(
   const seedHex = options?.seedHex ?? ADMIN_SEED
 
   const title = options?.title ?? `Test Report ${Date.now()}`
+  // The reporter AND the admin, as the real ReportForm seals it: the server
+  // refuses a report no admin can open (#2113).
   const { encryptedContent, envelopes } = await encryptForTest(
     `report content: ${title}`,
-    [seedHex],
+    [...new Set([seedHex, ADMIN_SEED])],
   )
 
   const body: Record<string, unknown> = {
@@ -1610,6 +1613,48 @@ export async function encryptForTest(
     recipientSeedHexes.map(seed => realEnvelope(contentKey, seed, label)),
   )
   return { encryptedContent, envelopes }
+}
+
+/**
+ * The sealed half of a note the server accepts: real AES-256-GCM content, an
+ * author envelope for `authorSeedHex`, and an admin envelope for the admin key.
+ *
+ * The admin envelope is not optional. The server cannot re-wrap a client-sealed
+ * content key, so it refuses (422) a note no admin can open (#2113) — a fixture
+ * that "doesn't care about the envelopes" is exactly what that guard rejects.
+ */
+export async function sealedNoteFields(
+  authorSeedHex: string = ADMIN_SEED,
+  plaintext = 'test note',
+): Promise<{
+  encryptedContent: string
+  authorEnvelope: { ct: string; enc: string }
+  adminEnvelopes: Array<{ pubkey: string; ct: string; enc: string }>
+}> {
+  const contentKey = generateContentKey()
+  const author = await realEnvelope(contentKey, authorSeedHex)
+  const admin = await realEnvelope(contentKey, ADMIN_SEED)
+  return {
+    encryptedContent: encryptContent(plaintext, contentKey, LABEL_NOTE_KEY),
+    authorEnvelope: { ct: author.ct, enc: author.enc },
+    adminEnvelopes: [admin],
+  }
+}
+
+/**
+ * A complete `POST /notes` body the server accepts: {@link sealedNoteFields}
+ * filed under a REAL call (#2112 refuses an id that is not one), in `hubId` when
+ * the note is posted through `/hubs/:hubId/notes`.
+ */
+export async function validNoteBody(
+  request: APIRequestContext,
+  authorSeedHex: string = ADMIN_SEED,
+  options?: { plaintext?: string; hubId?: string },
+): Promise<Record<string, unknown>> {
+  return {
+    callId: await simulateCallForNote(request, options?.hubId),
+    ...(await sealedNoteFields(authorSeedHex, options?.plaintext)),
+  }
 }
 
 export async function createContactViaApi(
