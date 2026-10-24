@@ -2284,8 +2284,20 @@ Response: { "ok": true }
 // demoting or removing the member (above), PATCH/DELETE /api/users/:pubkey (deactivate, delete,
 // rewrite hubRoles), editing or deleting the role that confers admin, and account erasure --
 // is refused with 409 and leaves nothing changed. Erasure of a hub's only admin is deferred, not
-// denied: it succeeds once another admin exists. Makes the note-without-admin-recipient state
-// (a note no admin can ever read) unreachable; the POST /notes boundary check stays as defence in depth.
+// denied: it succeeds once another admin exists.
+// What this does NOT guarantee: that a note is readable by a hub admin. Two different sets are in play
+// and they are not the same set today (tracked in #2190):
+//   - the hub-admin set above (hub-assignment admins; global super-admins are NOT counted) is what the
+//     invariant protects -- "a hub always has at least one hub admin";
+//   - the admin-envelope set, enforced by the POST /notes envelope guard (apps/worker/lib/admin-envelopes.ts),
+//     is ADMIN_DECRYPTION_PUBKEY plus the devices of active super-admins. A hub admin who is not a
+//     super-admin is in the first set and not in the second, and every client currently seals notes only
+//     to ADMIN_DECRYPTION_PUBKEY. No code path seals a note to a hub admin.
+// The guard requires at least one envelope addressed to a member of the envelope set (422 otherwise).
+// If that set is empty (no ADMIN_DECRYPTION_PUBKEY and no super-admin device) there is nothing to check
+// against: the record is STORED, not refused, and an error is logged for the operator. A note with no
+// admin reader is therefore possible in that deployment state, and it is not repairable afterwards (the
+// content key was wrapped for nobody else). The hub-admin invariant does not change this.
 // The check is race-free: guards take advisory locks (the role catalog shared, then each affected hub)
 // BEFORE reading role definitions and counting, and a role-definition edit takes the catalog lock exclusively.
 
