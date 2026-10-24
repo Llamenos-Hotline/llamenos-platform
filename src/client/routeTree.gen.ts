@@ -9,157 +9,52 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as UsersRouteImport } from './routes/users'
-import { Route as TriageRouteImport } from './routes/triage'
-import { Route as ShiftsRouteImport } from './routes/shifts'
-import { Route as SetupRouteImport } from './routes/setup'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as ReportsRouteImport } from './routes/reports'
-import { Route as ProfileSetupRouteImport } from './routes/profile-setup'
-import { Route as PreferencesRouteImport } from './routes/preferences'
-import { Route as OnboardingRouteImport } from './routes/onboarding'
-import { Route as NotesRouteImport } from './routes/notes'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as HelpRouteImport } from './routes/help'
-import { Route as EventsRouteImport } from './routes/events'
-import { Route as ConversationsRouteImport } from './routes/conversations'
-import { Route as ContactsDirectoryRouteImport } from './routes/contacts-directory'
-import { Route as ContactsRouteImport } from './routes/contacts'
-import { Route as CasesRouteImport } from './routes/cases'
-import { Route as CallsRouteImport } from './routes/calls'
-import { Route as BlastsRouteImport } from './routes/blasts'
-import { Route as BansRouteImport } from './routes/bans'
-import { Route as AuditRouteImport } from './routes/audit'
-import { Route as SecurityRouteRouteImport } from './routes/security/route'
-import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SecurityIndexRouteImport } from './routes/security/index'
+import { Route as AdminRouteRouteImport } from './routes/admin/route'
+import { Route as AuditRouteImport } from './routes/audit'
+import { Route as BansRouteImport } from './routes/bans'
+import { Route as BlastsRouteImport } from './routes/blasts'
+import { Route as CallsRouteImport } from './routes/calls'
+import { Route as CasesRouteImport } from './routes/cases'
+import { Route as ContactsRouteImport } from './routes/contacts'
+import { Route as ContactsDirectoryRouteImport } from './routes/contacts-directory'
+import { Route as ConversationsRouteImport } from './routes/conversations'
+import { Route as EventsRouteImport } from './routes/events'
+import { Route as HelpRouteImport } from './routes/help'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as NotesRouteImport } from './routes/notes'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as PreferencesRouteImport } from './routes/preferences'
+import { Route as ProfileSetupRouteImport } from './routes/profile-setup'
+import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as SecurityRouteRouteImport } from './routes/security/route'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SetupRouteImport } from './routes/setup'
+import { Route as ShiftsRouteImport } from './routes/shifts'
+import { Route as TriageRouteImport } from './routes/triage'
+import { Route as UsersRouteImport } from './routes/users'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
-import { Route as UsersPubkeyRouteImport } from './routes/users_.$pubkey'
-import { Route as SecuritySessionsRouteImport } from './routes/security/sessions'
-import { Route as SecurityPasskeysRouteImport } from './routes/security/passkeys'
-import { Route as SecurityHistoryRouteImport } from './routes/security/history'
-import { Route as AdminSystemRouteImport } from './routes/admin/system'
-import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
-import { Route as AdminPlatformAnalyticsRouteImport } from './routes/admin/platform-analytics'
-import { Route as AdminHubsRedirectRouteImport } from './routes/admin/hubs-redirect'
-import { Route as AdminHubsRouteImport } from './routes/admin/hubs'
-import { Route as AdminHubCommunicationsRouteImport } from './routes/admin/hub-communications'
-import { Route as AdminFirehoseRedirectRouteImport } from './routes/admin/firehose-redirect'
-import { Route as AdminFirehoseRouteImport } from './routes/admin/firehose'
-import { Route as AdminCaseManagementRedirectRouteImport } from './routes/admin/case-management-redirect'
-import { Route as AdminCaseManagementRouteImport } from './routes/admin/case-management'
-import { Route as AdminAnalyticsRouteImport } from './routes/admin/analytics'
 import { Route as AdminSectionRouteImport } from './routes/admin/$section'
+import { Route as AdminAnalyticsRouteImport } from './routes/admin/analytics'
+import { Route as AdminCaseManagementRouteImport } from './routes/admin/case-management'
+import { Route as AdminCaseManagementRedirectRouteImport } from './routes/admin/case-management-redirect'
+import { Route as AdminFirehoseRouteImport } from './routes/admin/firehose'
+import { Route as AdminFirehoseRedirectRouteImport } from './routes/admin/firehose-redirect'
+import { Route as AdminHubCommunicationsRouteImport } from './routes/admin/hub-communications'
+import { Route as AdminHubsRouteImport } from './routes/admin/hubs'
+import { Route as AdminHubsRedirectRouteImport } from './routes/admin/hubs-redirect'
+import { Route as AdminPlatformAnalyticsRouteImport } from './routes/admin/platform-analytics'
+import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
+import { Route as AdminSystemRouteImport } from './routes/admin/system'
+import { Route as SecurityIndexRouteImport } from './routes/security/index'
+import { Route as SecurityHistoryRouteImport } from './routes/security/history'
+import { Route as SecurityPasskeysRouteImport } from './routes/security/passkeys'
+import { Route as SecuritySessionsRouteImport } from './routes/security/sessions'
+import { Route as UsersPubkeyRouteImport } from './routes/users_.$pubkey'
 
-const UsersRoute = UsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const TriageRoute = TriageRouteImport.update({
-  id: '/triage',
-  path: '/triage',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ShiftsRoute = ShiftsRouteImport.update({
-  id: '/shifts',
-  path: '/shifts',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SetupRoute = SetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ReportsRoute = ReportsRouteImport.update({
-  id: '/reports',
-  path: '/reports',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProfileSetupRoute = ProfileSetupRouteImport.update({
-  id: '/profile-setup',
-  path: '/profile-setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PreferencesRoute = PreferencesRouteImport.update({
-  id: '/preferences',
-  path: '/preferences',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OnboardingRoute = OnboardingRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NotesRoute = NotesRouteImport.update({
-  id: '/notes',
-  path: '/notes',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const HelpRoute = HelpRouteImport.update({
-  id: '/help',
-  path: '/help',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EventsRoute = EventsRouteImport.update({
-  id: '/events',
-  path: '/events',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConversationsRoute = ConversationsRouteImport.update({
-  id: '/conversations',
-  path: '/conversations',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ContactsDirectoryRoute = ContactsDirectoryRouteImport.update({
-  id: '/contacts-directory',
-  path: '/contacts-directory',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ContactsRoute = ContactsRouteImport.update({
-  id: '/contacts',
-  path: '/contacts',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CasesRoute = CasesRouteImport.update({
-  id: '/cases',
-  path: '/cases',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CallsRoute = CallsRouteImport.update({
-  id: '/calls',
-  path: '/calls',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BlastsRoute = BlastsRouteImport.update({
-  id: '/blasts',
-  path: '/blasts',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BansRoute = BansRouteImport.update({
-  id: '/bans',
-  path: '/bans',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuditRoute = AuditRouteImport.update({
-  id: '/audit',
-  path: '/audit',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecurityRouteRoute = SecurityRouteRouteImport.update({
-  id: '/security',
-  path: '/security',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRouteRoute = AdminRouteRouteImport.update({
@@ -167,79 +62,134 @@ const AdminRouteRoute = AdminRouteRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AuditRoute = AuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SecurityIndexRoute = SecurityIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => SecurityRouteRoute,
+const BansRoute = BansRouteImport.update({
+  id: '/bans',
+  path: '/bans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlastsRoute = BlastsRouteImport.update({
+  id: '/blasts',
+  path: '/blasts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CallsRoute = CallsRouteImport.update({
+  id: '/calls',
+  path: '/calls',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CasesRoute = CasesRouteImport.update({
+  id: '/cases',
+  path: '/cases',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactsRoute = ContactsRouteImport.update({
+  id: '/contacts',
+  path: '/contacts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactsDirectoryRoute = ContactsDirectoryRouteImport.update({
+  id: '/contacts-directory',
+  path: '/contacts-directory',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConversationsRoute = ConversationsRouteImport.update({
+  id: '/conversations',
+  path: '/conversations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EventsRoute = EventsRouteImport.update({
+  id: '/events',
+  path: '/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HelpRoute = HelpRouteImport.update({
+  id: '/help',
+  path: '/help',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotesRoute = NotesRouteImport.update({
+  id: '/notes',
+  path: '/notes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PreferencesRoute = PreferencesRouteImport.update({
+  id: '/preferences',
+  path: '/preferences',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileSetupRoute = ProfileSetupRouteImport.update({
+  id: '/profile-setup',
+  path: '/profile-setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityRouteRoute = SecurityRouteRouteImport.update({
+  id: '/security',
+  path: '/security',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ShiftsRoute = ShiftsRouteImport.update({
+  id: '/shifts',
+  path: '/shifts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TriageRoute = TriageRouteImport.update({
+  id: '/triage',
+  path: '/triage',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UsersRoute = UsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const UsersPubkeyRoute = UsersPubkeyRouteImport.update({
-  id: '/users_/$pubkey',
-  path: '/users/$pubkey',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecuritySessionsRoute = SecuritySessionsRouteImport.update({
-  id: '/sessions',
-  path: '/sessions',
-  getParentRoute: () => SecurityRouteRoute,
-} as any)
-const SecurityPasskeysRoute = SecurityPasskeysRouteImport.update({
-  id: '/passkeys',
-  path: '/passkeys',
-  getParentRoute: () => SecurityRouteRoute,
-} as any)
-const SecurityHistoryRoute = SecurityHistoryRouteImport.update({
-  id: '/history',
-  path: '/history',
-  getParentRoute: () => SecurityRouteRoute,
-} as any)
-const AdminSystemRoute = AdminSystemRouteImport.update({
-  id: '/system',
-  path: '/system',
+const AdminSectionRoute = AdminSectionRouteImport.update({
+  id: '/$section',
+  path: '/$section',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminSettingsRoute = AdminSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminPlatformAnalyticsRoute = AdminPlatformAnalyticsRouteImport.update({
-  id: '/platform-analytics',
-  path: '/platform-analytics',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminHubsRedirectRoute = AdminHubsRedirectRouteImport.update({
-  id: '/hubs-redirect',
-  path: '/hubs-redirect',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminHubsRoute = AdminHubsRouteImport.update({
-  id: '/hubs',
-  path: '/hubs',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminHubCommunicationsRoute = AdminHubCommunicationsRouteImport.update({
-  id: '/hub-communications',
-  path: '/hub-communications',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminFirehoseRedirectRoute = AdminFirehoseRedirectRouteImport.update({
-  id: '/firehose-redirect',
-  path: '/firehose-redirect',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminFirehoseRoute = AdminFirehoseRouteImport.update({
-  id: '/firehose',
-  path: '/firehose',
+const AdminCaseManagementRoute = AdminCaseManagementRouteImport.update({
+  id: '/case-management',
+  path: '/case-management',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminCaseManagementRedirectRoute =
@@ -248,20 +198,70 @@ const AdminCaseManagementRedirectRoute =
     path: '/case-management-redirect',
     getParentRoute: () => AdminRouteRoute,
   } as any)
-const AdminCaseManagementRoute = AdminCaseManagementRouteImport.update({
-  id: '/case-management',
-  path: '/case-management',
+const AdminFirehoseRoute = AdminFirehoseRouteImport.update({
+  id: '/firehose',
+  path: '/firehose',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
-  id: '/analytics',
-  path: '/analytics',
+const AdminFirehoseRedirectRoute = AdminFirehoseRedirectRouteImport.update({
+  id: '/firehose-redirect',
+  path: '/firehose-redirect',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminSectionRoute = AdminSectionRouteImport.update({
-  id: '/$section',
-  path: '/$section',
+const AdminHubCommunicationsRoute = AdminHubCommunicationsRouteImport.update({
+  id: '/hub-communications',
+  path: '/hub-communications',
   getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminHubsRoute = AdminHubsRouteImport.update({
+  id: '/hubs',
+  path: '/hubs',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminHubsRedirectRoute = AdminHubsRedirectRouteImport.update({
+  id: '/hubs-redirect',
+  path: '/hubs-redirect',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminPlatformAnalyticsRoute = AdminPlatformAnalyticsRouteImport.update({
+  id: '/platform-analytics',
+  path: '/platform-analytics',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminSettingsRoute = AdminSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminSystemRoute = AdminSystemRouteImport.update({
+  id: '/system',
+  path: '/system',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const SecurityIndexRoute = SecurityIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SecurityRouteRoute,
+} as any)
+const SecurityHistoryRoute = SecurityHistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => SecurityRouteRoute,
+} as any)
+const SecurityPasskeysRoute = SecurityPasskeysRouteImport.update({
+  id: '/passkeys',
+  path: '/passkeys',
+  getParentRoute: () => SecurityRouteRoute,
+} as any)
+const SecuritySessionsRoute = SecuritySessionsRouteImport.update({
+  id: '/sessions',
+  path: '/sessions',
+  getParentRoute: () => SecurityRouteRoute,
+} as any)
+const UsersPubkeyRoute = UsersPubkeyRouteImport.update({
+  id: '/users_/$pubkey',
+  path: '/users/$pubkey',
+  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -558,158 +558,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/users': {
-      id: '/users'
-      path: '/users'
-      fullPath: '/users'
-      preLoaderRoute: typeof UsersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/triage': {
-      id: '/triage'
-      path: '/triage'
-      fullPath: '/triage'
-      preLoaderRoute: typeof TriageRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/shifts': {
-      id: '/shifts'
-      path: '/shifts'
-      fullPath: '/shifts'
-      preLoaderRoute: typeof ShiftsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/setup': {
-      id: '/setup'
-      path: '/setup'
-      fullPath: '/setup'
-      preLoaderRoute: typeof SetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reports': {
-      id: '/reports'
-      path: '/reports'
-      fullPath: '/reports'
-      preLoaderRoute: typeof ReportsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/profile-setup': {
-      id: '/profile-setup'
-      path: '/profile-setup'
-      fullPath: '/profile-setup'
-      preLoaderRoute: typeof ProfileSetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/preferences': {
-      id: '/preferences'
-      path: '/preferences'
-      fullPath: '/preferences'
-      preLoaderRoute: typeof PreferencesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/onboarding': {
-      id: '/onboarding'
-      path: '/onboarding'
-      fullPath: '/onboarding'
-      preLoaderRoute: typeof OnboardingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/notes': {
-      id: '/notes'
-      path: '/notes'
-      fullPath: '/notes'
-      preLoaderRoute: typeof NotesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/help': {
-      id: '/help'
-      path: '/help'
-      fullPath: '/help'
-      preLoaderRoute: typeof HelpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/events': {
-      id: '/events'
-      path: '/events'
-      fullPath: '/events'
-      preLoaderRoute: typeof EventsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/conversations': {
-      id: '/conversations'
-      path: '/conversations'
-      fullPath: '/conversations'
-      preLoaderRoute: typeof ConversationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/contacts-directory': {
-      id: '/contacts-directory'
-      path: '/contacts-directory'
-      fullPath: '/contacts-directory'
-      preLoaderRoute: typeof ContactsDirectoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/contacts': {
-      id: '/contacts'
-      path: '/contacts'
-      fullPath: '/contacts'
-      preLoaderRoute: typeof ContactsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/cases': {
-      id: '/cases'
-      path: '/cases'
-      fullPath: '/cases'
-      preLoaderRoute: typeof CasesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/calls': {
-      id: '/calls'
-      path: '/calls'
-      fullPath: '/calls'
-      preLoaderRoute: typeof CallsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/blasts': {
-      id: '/blasts'
-      path: '/blasts'
-      fullPath: '/blasts'
-      preLoaderRoute: typeof BlastsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/bans': {
-      id: '/bans'
-      path: '/bans'
-      fullPath: '/bans'
-      preLoaderRoute: typeof BansRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/audit': {
-      id: '/audit'
-      path: '/audit'
-      fullPath: '/audit'
-      preLoaderRoute: typeof AuditRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security': {
-      id: '/security'
-      path: '/security'
-      fullPath: '/security'
-      preLoaderRoute: typeof SecurityRouteRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -719,19 +572,159 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/audit': {
+      id: '/audit'
+      path: '/audit'
+      fullPath: '/audit'
+      preLoaderRoute: typeof AuditRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/security/': {
-      id: '/security/'
-      path: '/'
-      fullPath: '/security/'
-      preLoaderRoute: typeof SecurityIndexRouteImport
-      parentRoute: typeof SecurityRouteRoute
+    '/bans': {
+      id: '/bans'
+      path: '/bans'
+      fullPath: '/bans'
+      preLoaderRoute: typeof BansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blasts': {
+      id: '/blasts'
+      path: '/blasts'
+      fullPath: '/blasts'
+      preLoaderRoute: typeof BlastsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calls': {
+      id: '/calls'
+      path: '/calls'
+      fullPath: '/calls'
+      preLoaderRoute: typeof CallsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cases': {
+      id: '/cases'
+      path: '/cases'
+      fullPath: '/cases'
+      preLoaderRoute: typeof CasesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contacts': {
+      id: '/contacts'
+      path: '/contacts'
+      fullPath: '/contacts'
+      preLoaderRoute: typeof ContactsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contacts-directory': {
+      id: '/contacts-directory'
+      path: '/contacts-directory'
+      fullPath: '/contacts-directory'
+      preLoaderRoute: typeof ContactsDirectoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/conversations': {
+      id: '/conversations'
+      path: '/conversations'
+      fullPath: '/conversations'
+      preLoaderRoute: typeof ConversationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/events': {
+      id: '/events'
+      path: '/events'
+      fullPath: '/events'
+      preLoaderRoute: typeof EventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/help': {
+      id: '/help'
+      path: '/help'
+      fullPath: '/help'
+      preLoaderRoute: typeof HelpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notes': {
+      id: '/notes'
+      path: '/notes'
+      fullPath: '/notes'
+      preLoaderRoute: typeof NotesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/preferences': {
+      id: '/preferences'
+      path: '/preferences'
+      fullPath: '/preferences'
+      preLoaderRoute: typeof PreferencesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile-setup': {
+      id: '/profile-setup'
+      path: '/profile-setup'
+      fullPath: '/profile-setup'
+      preLoaderRoute: typeof ProfileSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security': {
+      id: '/security'
+      path: '/security'
+      fullPath: '/security'
+      preLoaderRoute: typeof SecurityRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/shifts': {
+      id: '/shifts'
+      path: '/shifts'
+      fullPath: '/shifts'
+      preLoaderRoute: typeof ShiftsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/triage': {
+      id: '/triage'
+      path: '/triage'
+      fullPath: '/triage'
+      preLoaderRoute: typeof TriageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/users': {
+      id: '/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof UsersRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/admin/': {
       id: '/admin/'
@@ -740,102 +733,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/users_/$pubkey': {
-      id: '/users_/$pubkey'
-      path: '/users/$pubkey'
-      fullPath: '/users/$pubkey'
-      preLoaderRoute: typeof UsersPubkeyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/sessions': {
-      id: '/security/sessions'
-      path: '/sessions'
-      fullPath: '/security/sessions'
-      preLoaderRoute: typeof SecuritySessionsRouteImport
-      parentRoute: typeof SecurityRouteRoute
-    }
-    '/security/passkeys': {
-      id: '/security/passkeys'
-      path: '/passkeys'
-      fullPath: '/security/passkeys'
-      preLoaderRoute: typeof SecurityPasskeysRouteImport
-      parentRoute: typeof SecurityRouteRoute
-    }
-    '/security/history': {
-      id: '/security/history'
-      path: '/history'
-      fullPath: '/security/history'
-      preLoaderRoute: typeof SecurityHistoryRouteImport
-      parentRoute: typeof SecurityRouteRoute
-    }
-    '/admin/system': {
-      id: '/admin/system'
-      path: '/system'
-      fullPath: '/admin/system'
-      preLoaderRoute: typeof AdminSystemRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/settings': {
-      id: '/admin/settings'
-      path: '/settings'
-      fullPath: '/admin/settings'
-      preLoaderRoute: typeof AdminSettingsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/platform-analytics': {
-      id: '/admin/platform-analytics'
-      path: '/platform-analytics'
-      fullPath: '/admin/platform-analytics'
-      preLoaderRoute: typeof AdminPlatformAnalyticsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/hubs-redirect': {
-      id: '/admin/hubs-redirect'
-      path: '/hubs-redirect'
-      fullPath: '/admin/hubs-redirect'
-      preLoaderRoute: typeof AdminHubsRedirectRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/hubs': {
-      id: '/admin/hubs'
-      path: '/hubs'
-      fullPath: '/admin/hubs'
-      preLoaderRoute: typeof AdminHubsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/hub-communications': {
-      id: '/admin/hub-communications'
-      path: '/hub-communications'
-      fullPath: '/admin/hub-communications'
-      preLoaderRoute: typeof AdminHubCommunicationsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/firehose-redirect': {
-      id: '/admin/firehose-redirect'
-      path: '/firehose-redirect'
-      fullPath: '/admin/firehose-redirect'
-      preLoaderRoute: typeof AdminFirehoseRedirectRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/firehose': {
-      id: '/admin/firehose'
-      path: '/firehose'
-      fullPath: '/admin/firehose'
-      preLoaderRoute: typeof AdminFirehoseRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/case-management-redirect': {
-      id: '/admin/case-management-redirect'
-      path: '/case-management-redirect'
-      fullPath: '/admin/case-management-redirect'
-      preLoaderRoute: typeof AdminCaseManagementRedirectRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/case-management': {
-      id: '/admin/case-management'
-      path: '/case-management'
-      fullPath: '/admin/case-management'
-      preLoaderRoute: typeof AdminCaseManagementRouteImport
+    '/admin/$section': {
+      id: '/admin/$section'
+      path: '/$section'
+      fullPath: '/admin/$section'
+      preLoaderRoute: typeof AdminSectionRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/analytics': {
@@ -845,12 +747,110 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAnalyticsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/admin/$section': {
-      id: '/admin/$section'
-      path: '/$section'
-      fullPath: '/admin/$section'
-      preLoaderRoute: typeof AdminSectionRouteImport
+    '/admin/case-management': {
+      id: '/admin/case-management'
+      path: '/case-management'
+      fullPath: '/admin/case-management'
+      preLoaderRoute: typeof AdminCaseManagementRouteImport
       parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/case-management-redirect': {
+      id: '/admin/case-management-redirect'
+      path: '/case-management-redirect'
+      fullPath: '/admin/case-management-redirect'
+      preLoaderRoute: typeof AdminCaseManagementRedirectRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/firehose': {
+      id: '/admin/firehose'
+      path: '/firehose'
+      fullPath: '/admin/firehose'
+      preLoaderRoute: typeof AdminFirehoseRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/firehose-redirect': {
+      id: '/admin/firehose-redirect'
+      path: '/firehose-redirect'
+      fullPath: '/admin/firehose-redirect'
+      preLoaderRoute: typeof AdminFirehoseRedirectRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/hub-communications': {
+      id: '/admin/hub-communications'
+      path: '/hub-communications'
+      fullPath: '/admin/hub-communications'
+      preLoaderRoute: typeof AdminHubCommunicationsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/hubs': {
+      id: '/admin/hubs'
+      path: '/hubs'
+      fullPath: '/admin/hubs'
+      preLoaderRoute: typeof AdminHubsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/hubs-redirect': {
+      id: '/admin/hubs-redirect'
+      path: '/hubs-redirect'
+      fullPath: '/admin/hubs-redirect'
+      preLoaderRoute: typeof AdminHubsRedirectRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/platform-analytics': {
+      id: '/admin/platform-analytics'
+      path: '/platform-analytics'
+      fullPath: '/admin/platform-analytics'
+      preLoaderRoute: typeof AdminPlatformAnalyticsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/settings': {
+      id: '/admin/settings'
+      path: '/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AdminSettingsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/system': {
+      id: '/admin/system'
+      path: '/system'
+      fullPath: '/admin/system'
+      preLoaderRoute: typeof AdminSystemRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/security/': {
+      id: '/security/'
+      path: '/'
+      fullPath: '/security/'
+      preLoaderRoute: typeof SecurityIndexRouteImport
+      parentRoute: typeof SecurityRouteRoute
+    }
+    '/security/history': {
+      id: '/security/history'
+      path: '/history'
+      fullPath: '/security/history'
+      preLoaderRoute: typeof SecurityHistoryRouteImport
+      parentRoute: typeof SecurityRouteRoute
+    }
+    '/security/passkeys': {
+      id: '/security/passkeys'
+      path: '/passkeys'
+      fullPath: '/security/passkeys'
+      preLoaderRoute: typeof SecurityPasskeysRouteImport
+      parentRoute: typeof SecurityRouteRoute
+    }
+    '/security/sessions': {
+      id: '/security/sessions'
+      path: '/sessions'
+      fullPath: '/security/sessions'
+      preLoaderRoute: typeof SecuritySessionsRouteImport
+      parentRoute: typeof SecurityRouteRoute
+    }
+    '/users_/$pubkey': {
+      id: '/users_/$pubkey'
+      path: '/users/$pubkey'
+      fullPath: '/users/$pubkey'
+      preLoaderRoute: typeof UsersPubkeyRouteImport
+      parentRoute: typeof rootRouteImport
     }
   }
 }
