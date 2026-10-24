@@ -73,7 +73,7 @@ const CASES = [
   {
     name: 'events',
     router: eventsRouter,
-    services: { cases: tripwire({ getEvent: async () => OTHER_HUB_ROW }) },
+    services: { cases: tripwire({ resolveEventTarget: notFound('Event') }) },
   },
   {
     name: 'firehose',

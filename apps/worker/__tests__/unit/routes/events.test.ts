@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import eventsRouter from '@worker/routes/events'
+import { ServiceError } from '@worker/services/settings'
 
 // Mock event publish — it's fire-and-forget and shouldn't affect route behavior
 vi.mock('@worker/lib/ws-events', () => ({
@@ -35,9 +36,10 @@ function makeApp(opts: {
 
   const mockCases = {
     listEvents: vi.fn().mockResolvedValue({ events: [], total: 0 }),
-    // The hub guard (#2011) fetches the event before any handler; by default it is
-    // an event of the app's own hub. Tests of the handlers override this.
-    getEvent: vi.fn().mockResolvedValue({ id: 'ev-1', hubId }),
+    getEvent: vi.fn(),
+    // The hub guard (#2011) resolves the event before any handler — legacy row or
+    // event-category record alike; by default it is an event of the app's own hub.
+    resolveEventTarget: vi.fn().mockResolvedValue('record'),
     createEvent: vi.fn(),
     updateEvent: vi.fn(),
     deleteEvent: vi.fn().mockResolvedValue(undefined),
@@ -327,6 +329,45 @@ describe('GET /events/:id/subevents', () => {
     const { app } = makeApp({ permissions: ['events:create'] })
     const res = await app.request('/ev-1/subevents')
     expect(res.status).toBe(403)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hub guard — registered on the router, runs before every /:id/* handler (#2011)
+// ---------------------------------------------------------------------------
+
+describe('hub guard on /events/:id/*', () => {
+  it('resolves the event against the path hub before the handler runs', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:read'], hubId: 'hub-1' })
+
+    const res = await app.request('/ev-1/records')
+
+    expect(res.status).toBe(200)
+    expect(mockCases.resolveEventTarget).toHaveBeenCalledWith('ev-1', 'hub-1')
+  })
+
+  it('answers 404 and never reaches the handler for an event outside the hub', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:link'] })
+    mockCases.resolveEventTarget.mockRejectedValue(new ServiceError(404, 'Event not found'))
+
+    const res = await app.request('/ev-other/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recordId: '550e8400-e29b-41d4-a716-446655440001' }),
+    })
+
+    expect(res.status).toBe(404)
+    expect(mockCases.linkEvent).not.toHaveBeenCalled()
+  })
+
+  it('admits an event-category record, which has no row in the legacy events table', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:read'] })
+    mockCases.resolveEventTarget.mockResolvedValue('record')
+
+    const res = await app.request('/rec-event-1/records')
+
+    expect(res.status).toBe(200)
+    expect(mockCases.getEvent).not.toHaveBeenCalled()
   })
 })
 
