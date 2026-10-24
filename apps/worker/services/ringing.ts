@@ -430,8 +430,12 @@ export async function startParallelRinging(
         return { ringing: true, volunteersNotified: available.length }
       }
 
+      // One breaker per hub: each hub has its own provider account, so one hub's broken
+      // credentials or outage (which now count as failures — #1136) must not open the
+      // circuit for every other hub's calls.
+      const breakerName = `telephony:ringVolunteers:${hubId}`
       const breaker = getCircuitBreaker({
-        name: 'telephony:ringVolunteers',
+        name: breakerName,
         failureThreshold: 5,
         resetTimeoutMs: 30_000,
         // getCircuitBreaker is a singleton keyed by name, so this only takes effect the
@@ -440,10 +444,11 @@ export async function startParallelRinging(
           if (to === 'open') {
             logger.error(
               'CRITICAL: Telephony ringVolunteers circuit opened — volunteers are not being phoned',
-              new Error('Circuit opened: telephony:ringVolunteers'),
+              new Error(`Circuit opened: ${breakerName}`),
+              { hubId },
             )
           } else if (to === 'closed') {
-            logger.info('Telephony ringVolunteers circuit recovered')
+            logger.info('Telephony ringVolunteers circuit recovered', { hubId })
           }
         },
       })
