@@ -72,6 +72,21 @@ export interface BlobMirrorDeleter {
   deleteEnvelopeMirrors(fileIds: string[]): Promise<void>
 }
 
+/** Advisory-lock key text guarding one user's audit key (creation, appends, shred). */
+function auditKeyLockKey(userPubkey: string): string {
+  return `auditkey:${userPubkey}`
+}
+
+/** True when the user row exists and is erased. Actors with no user row (e.g. an env-configured admin) are not erased. */
+async function isErasedUser(tx: Pick<Database, 'select'>, userPubkey: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ status: users.status })
+    .from(users)
+    .where(eq(users.pubkey, userPubkey))
+    .limit(1)
+  return row?.status === 'erased'
+}
+
 export class ErasureService {
   constructor(
     protected db: Database,
@@ -503,6 +518,16 @@ export class ErasureService {
     const reEncryptionJobIds: string[] = []
 
     await this.db.transaction(async (tx) => {
+      // Exclusive per-user audit-key lock, held to commit. Key creation
+      // (ensureAuditUserKey) and every audit append for this user
+      // (lockAuditActor) take the same lock, so neither can interleave with
+      // the shred below: a write that wins the lock commits first and is
+      // rewritten by the Phase 3 UPDATE; one that loses it sees the committed
+      // `status = 'erased'` and never mints a new key. Without this, an
+      // in-flight write could re-create the key after the shred and make the
+      // erased user's new entries decryptable again.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${auditKeyLockKey(userId)}))`)
+
       // Phase 2: Server-side cleanup
 
       // Delete WebAuthn credentials
@@ -547,7 +572,7 @@ export class ErasureService {
       // Phase 3: Crypto-shredding
 
       // Destroy per-user audit envelope key
-      await tx.delete(auditUserKeys).where(eq(auditUserKeys.userPubkey, userId))
+      await this.destroyAuditUserKey(userId, tx)
 
       // Replace actorPubkey with [erased] on audit entries and mark erasedAt
       await tx
@@ -597,12 +622,17 @@ export class ErasureService {
             eq(erasureRequests.status, 'executing'),
           ),
         )
+    })
 
-      // CRIT-1: Audit log recorded INSIDE transaction — only committed if erasure succeeds
-      await auditService.log('userErasureExecuted', executedBy, {
-        targetUserId: userId,
-        justification,
-      })
+    // CRIT-1: recorded only once the erasure has committed. AuditService.log
+    // writes on its own connection, so calling it inside the callback above
+    // never made it part of the erasure transaction — and it would deadlock
+    // an admin erasing their own account: the append waits for the audit-key
+    // lock this transaction holds until the callback returns. After commit,
+    // that self-erasure entry is written with the actor anonymised.
+    await auditService.log('userErasureExecuted', executedBy, {
+      targetUserId: userId,
+      justification,
     })
 
     return { reEncryptionJobIds }
@@ -877,5 +907,108 @@ export class ErasureService {
           adminEnvelopes,
         },
       })
+  }
+
+  /**
+   * Get-or-create the user's audit key row, serialised per user.
+   *
+   * Two first-entry writers racing on different hub chains must not each
+   * generate a key and overwrite each other — entries sealed with the losing
+   * key would be undecryptable by everyone. A per-user advisory lock makes
+   * creation single-file; the row actually stored is always the one returned,
+   * so every caller encrypts with the key the database holds.
+   *
+   * `create` produces the key material (caller owns the crypto); it runs at
+   * most once per call, inside the lock.
+   */
+  async ensureAuditUserKey(
+    userPubkey: string,
+    create: () => Promise<{ encryptedKey: string; adminEnvelopes: unknown[] }>,
+  ): Promise<typeof auditUserKeys.$inferSelect | null> {
+    const existing = await this.getAuditUserKey(userPubkey)
+    if (existing) return existing
+
+    return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${auditKeyLockKey(userPubkey)}))`)
+      const [raced] = await tx
+        .select()
+        .from(auditUserKeys)
+        .where(eq(auditUserKeys.userPubkey, userPubkey))
+        .limit(1)
+      if (raced) return raced
+
+      // Never re-mint a shredded key. executeErasure holds this lock while it
+      // marks the user erased and deletes the row, so under the lock a
+      // missing row for an erased user means "destroyed", not "not yet made".
+      if (await isErasedUser(tx, userPubkey)) return null
+
+      const value = await create()
+      const [row] = await tx
+        .insert(auditUserKeys)
+        .values({
+          userPubkey,
+          encryptedKey: value.encryptedKey,
+          adminEnvelopes: value.adminEnvelopes,
+          createdAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: auditUserKeys.userPubkey,
+          set: { encryptedKey: value.encryptedKey, adminEnvelopes: value.adminEnvelopes },
+        })
+        .returning()
+      if (!row) {
+        throw new ServiceError(500, 'audit user key upsert returned no row')
+      }
+      return row
+    })
+  }
+
+  /**
+   * Attach admin envelopes to a key row that was stored without any (no admin
+   * recipient was resolvable at first use). Compare-and-set on the empty set:
+   * the row is never rewritten once it has envelopes, and a row destroyed by
+   * erasure in the meantime is simply not found. Returns whether it applied.
+   */
+  async backfillAuditUserKeyEnvelopes(
+    userPubkey: string,
+    adminEnvelopes: unknown[],
+  ): Promise<boolean> {
+    const updated = await this.db
+      .update(auditUserKeys)
+      .set({ adminEnvelopes })
+      .where(and(
+        eq(auditUserKeys.userPubkey, userPubkey),
+        sql`jsonb_array_length(${auditUserKeys.adminEnvelopes}) = 0`,
+      ))
+      .returning({ userPubkey: auditUserKeys.userPubkey })
+    return updated.length > 0
+  }
+
+  /**
+   * Hold the user's audit-key lock (shared) for the rest of `tx` and report
+   * whether the user is erased. AuditService.log calls this inside its append
+   * transaction: shared holders run concurrently, but executeErasure's
+   * exclusive hold cannot interleave — an append either commits before the
+   * erasure (and is anonymised by it) or observes the erased status after.
+   */
+  async lockAuditActor(
+    userPubkey: string,
+    tx: Pick<Database, 'execute' | 'select'>,
+  ): Promise<{ erased: boolean }> {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock_shared(hashtext(${auditKeyLockKey(userPubkey)}))`)
+    return { erased: await isErasedUser(tx, userPubkey) }
+  }
+
+  /**
+   * Destroy a user's audit key — the crypto-shredding half of account erasure.
+   * Once the row is gone the key is unrecoverable and every audit entry whose
+   * details were encrypted with it is permanently unreadable, including in
+   * backups and replicas taken before the erasure.
+   */
+  async destroyAuditUserKey(
+    userPubkey: string,
+    tx?: Pick<Database, 'delete'>,
+  ): Promise<void> {
+    await (tx ?? this.db).delete(auditUserKeys).where(eq(auditUserKeys.userPubkey, userPubkey))
   }
 }

@@ -11,8 +11,11 @@
  * to. See assertSharedDatabase() below, and the rail in
  * tests/db-helpers-identity-rail.spec.ts.
  */
+import { createDecipheriv, hkdfSync } from 'node:crypto'
 import postgres from 'postgres'
 import { assertSameDatabase } from './db-identity'
+import { hexToBytes } from '@shared/encoding'
+import { LABEL_AUDIT_DETAILS, LABEL_AUDIT_USER_KEY_SERVER_SEAL } from '@shared/crypto-labels'
 
 /**
  * Resolve the test database URL.
@@ -89,6 +92,47 @@ function validateIdentifier(name: string): void {
   }
 }
 
+/**
+ * AES-256-GCM open for the worker's `symmetricEncrypt` layout
+ * (iv(12) || ciphertext || tag(16)). Deliberately NOT the worker's own
+ * `lib/crypto.ts`: that is `bun:ffi` and cannot load under Playwright's Node,
+ * and re-deriving it from node:crypto makes this verifier an independent
+ * reader of the on-disk format rather than a call back into the code under test.
+ */
+function aesGcmOpen(key: Uint8Array, sealed: Uint8Array, aad: string): Buffer {
+  const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12))
+  decipher.setAAD(Buffer.from(aad, 'utf8'))
+  decipher.setAuthTag(sealed.subarray(sealed.length - 16))
+  return Buffer.concat([decipher.update(sealed.subarray(12, sealed.length - 16)), decipher.final()])
+}
+
+/** SERVER_SECRET as the worker reads it (hex bytes). Must equal the server under test's value. */
+function requireServerSecret(): Uint8Array {
+  const secret = process.env.SERVER_SECRET
+  if (!secret) {
+    throw new Error(
+      '[db-helpers] SERVER_SECRET is required to verify an audit chain whose details are sealed\n' +
+        'at rest. Export the same value the server under test runs with.',
+    )
+  }
+  return hexToBytes(secret)
+}
+
+/**
+ * Open the per-user audit key (audit_user_keys.encrypted_key): sealed under
+ * LABEL_AUDIT_USER_KEY_SERVER_SEAL, key = HKDF(SERVER_SECRET, info = label),
+ * AAD = `label:userPubkey`.
+ */
+function openStoredAuditKey(encryptedKey: string, userPubkey: string, serverSecret: Uint8Array): Uint8Array {
+  const sealKey = new Uint8Array(
+    hkdfSync('sha256', serverSecret, new Uint8Array(0), LABEL_AUDIT_USER_KEY_SERVER_SEAL, 32),
+  )
+  return aesGcmOpen(sealKey, hexToBytes(encryptedKey), `${LABEL_AUDIT_USER_KEY_SERVER_SEAL}:${userPubkey}`)
+}
+
+/** Marker key of server-sealed details — ENCRYPTED_DETAILS_KEY in apps/worker/services/audit.ts. */
+const SEALED_DETAILS_KEY = '$encrypted'
+
 export class TestDB {
   /**
    * Get a raw row by id from any table.
@@ -163,7 +207,17 @@ export class TestDB {
   }
 
   /**
-   * Verify the SHA-256 hash chain in the audit_log table.
+   * Verify the SHA-256 hash chain in the audit_log table, reading the database
+   * directly rather than through the API.
+   *
+   * User-actor details are sealed at rest under a per-user audit key, and the
+   * chain commits to the PLAINTEXT details. So an entry whose stored details
+   * are `{ "$encrypted": "nonce:ciphertext" }` is opened with the key in
+   * audit_user_keys (itself sealed to SERVER_SECRET) before it is re-hashed.
+   * A sealed entry that cannot be opened is a broken chain, never a skipped one.
+   *
+   * `sealed` counts the entries that were opened this way, so a caller can
+   * assert that details really are encrypted at rest.
    *
    * NOTE: The server computes `createdAt` via `new Date().toISOString()` but the
    * DB column uses `defaultNow()`, so there may be timestamp drift. This helper
@@ -173,6 +227,7 @@ export class TestDB {
   static async verifyAuditChain(hubId?: string, limit?: number): Promise<{
     valid: boolean
     entries: number
+    sealed: number
     brokenAt?: number
   }> {
     // Filter by hub_id to verify a single chain in isolation.
@@ -202,12 +257,25 @@ export class TestDB {
     }
 
     if (rows.length === 0) {
-      return { valid: true, entries: 0 }
+      return { valid: true, entries: 0, sealed: 0 }
     }
 
     const { computeAuditEntryHash } = await import('./integrity-helpers')
 
     let previousHash: string | null = null
+    let sealed = 0
+    const auditKeys = new Map<string, Uint8Array | null>()
+    const auditKeyFor = async (userPubkey: string): Promise<Uint8Array | null> => {
+      if (!auditKeys.has(userPubkey)) {
+        const [keyRow] = await (await sql())`
+          SELECT encrypted_key FROM audit_user_keys WHERE user_pubkey = ${userPubkey}`
+        auditKeys.set(
+          userPubkey,
+          keyRow ? openStoredAuditKey(keyRow.encrypted_key as string, userPubkey, requireServerSecret()) : null,
+        )
+      }
+      return auditKeys.get(userPubkey) ?? null
+    }
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i] as {
@@ -222,7 +290,27 @@ export class TestDB {
 
       // Check chain link
       if (row.previous_entry_hash !== previousHash) {
-        return { valid: false, entries: rows.length, brokenAt: i }
+        return { valid: false, entries: rows.length, sealed, brokenAt: i }
+      }
+
+      let details: Record<string, unknown> | null = row.details
+      const sealedValue = details?.[SEALED_DETAILS_KEY]
+      if (typeof sealedValue === 'string') {
+        const auditKey = await auditKeyFor(row.actor_pubkey)
+        if (!auditKey) return { valid: false, entries: rows.length, sealed, brokenAt: i }
+        const [nonceHex, ctHex] = sealedValue.split(':')
+        try {
+          details = JSON.parse(
+            aesGcmOpen(
+              auditKey,
+              hexToBytes(nonceHex + ctHex),
+              `${LABEL_AUDIT_DETAILS}:${row.actor_pubkey}:${row.id}`,
+            ).toString('utf8'),
+          )
+        } catch {
+          return { valid: false, entries: rows.length, sealed, brokenAt: i }
+        }
+        sealed++
       }
 
       // Recompute hash and verify
@@ -231,18 +319,18 @@ export class TestDB {
         action: row.action,
         actorPubkey: row.actor_pubkey,
         createdAt: row.created_at,
-        details: row.details ?? {},
+        details: details ?? {},
         previousEntryHash: row.previous_entry_hash,
       })
 
       if (computed !== row.entry_hash) {
-        return { valid: false, entries: rows.length, brokenAt: i }
+        return { valid: false, entries: rows.length, sealed, brokenAt: i }
       }
 
       previousHash = row.entry_hash
     }
 
-    return { valid: true, entries: rows.length }
+    return { valid: true, entries: rows.length, sealed }
   }
 
   /**

@@ -302,6 +302,13 @@ pub const LABEL_WS_CHALLENGE: &str = "llamenos:ws-auth:v1";
 /// Audit user key wrapping — per-user symmetric key HPKE-wrapped to admin pubkeys
 pub const LABEL_AUDIT_USER_KEY_WRAP: &str = "llamenos:audit-user-key-wrap:v1";
 
+/// Server-held copy of a per-user audit key — AES-256-GCM under a key HKDF-derived
+/// from SERVER_SECRET (HKDF info = this label, AAD = `label:userPubkey`). Distinct
+/// from `LABEL_AUDIT_USER_KEY_WRAP`, which is the HPKE wrap to admin pubkeys: one
+/// label must never name two constructions. TS-only today (`audit_user_keys.
+/// encrypted_key`); registered so the label set stays closed across platforms.
+pub const LABEL_AUDIT_USER_KEY_SERVER_SEAL: &str = "llamenos:audit-user-key-server-seal:v1";
+
 /// Erasure override co-approver signature — Ed25519 sig over (targetUserId || timestamp || justification)
 pub const LABEL_ERASURE_OVERRIDE_SIG: &str = "llamenos:erasure-override-sig:v1";
 
@@ -434,6 +441,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Index 98: Per-volunteer SIP registrar (#1556)
 // Index 99: Device provisioning key bundle
 // Index 100: Device provisioning claim signature (#1865)
+// Index 101: Server seal of the per-user audit key (#2054)
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -574,6 +582,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_DEVICE_PROVISION_BUNDLE, // 99
     // 100: Device provisioning claim signature (#1865)
     LABEL_DEVICE_PROVISION_CLAIM, // 100
+    // 101: Server seal of the per-user audit key (#2054)
+    LABEL_AUDIT_USER_KEY_SERVER_SEAL, // 101
 ];
 
 /// Look up a label string by its numeric ID.
@@ -763,12 +773,16 @@ mod tests {
             LABEL_DEVICE_PROVISION_CLAIM,
             "llamenos:device-provision-claim:v1"
         );
+        assert_eq!(
+            LABEL_AUDIT_USER_KEY_SERVER_SEAL,
+            "llamenos:audit-user-key-server-seal:v1"
+        );
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 60 of the 101 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 61 of the 102 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -833,6 +847,7 @@ mod tests {
         assert_eq!(id_to_label(98), Some(HMAC_SIP_VOLUNTEER_SECRET));
         assert_eq!(id_to_label(99), Some(LABEL_DEVICE_PROVISION_BUNDLE));
         assert_eq!(id_to_label(100), Some(LABEL_DEVICE_PROVISION_CLAIM));
+        assert_eq!(id_to_label(101), Some(LABEL_AUDIT_USER_KEY_SERVER_SEAL));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

@@ -12,7 +12,11 @@
 import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
+import { encryptCallRecordForStorage } from '../lib/crypto'
+import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
+
+const logger = createLogger('services.calls')
 
 /** Ringing calls older than 3 minutes are stale */
 const RINGING_TTL_MS = 3 * 60 * 1000
@@ -23,8 +27,62 @@ const IN_PROGRESS_TTL_MS = 2 * 60 * 60 * 1000
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
 
+export interface CallsServiceDeps {
+  /**
+   * Resolve every admin X25519 recipient for §2.5 call-metadata envelopes
+   * (ADMIN_DECRYPTION_PUBKEY plus each super-admin's device keys). Supplied by
+   * createServices; when absent the service cannot seal and stores records
+   * without envelopes (unit-test construction only).
+   */
+  getAdminRecipients?: () => Promise<string[]>
+}
+
 export class CallsService {
-  constructor(protected db: Database) {}
+  constructor(
+    protected db: Database,
+    private readonly deps?: CallsServiceDeps,
+  ) {}
+
+  /**
+   * Resolve the §2.5 envelope recipients once per write batch, or null when
+   * the service was constructed without the sealing dep (unit-test only).
+   */
+  private async resolveAdminRecipients(): Promise<string[] | null> {
+    if (!this.deps?.getAdminRecipients) return null
+    return this.deps.getAdminRecipients()
+  }
+
+  /**
+   * Seal a finished call's §2.5 metadata for the admin envelope set.
+   *
+   * `callerNumber` on the active row is already the HMAC hash (ringing.ts
+   * hashes at ingestion), so the envelope never carries raw digits; §2.5 keeps
+   * callerLast4, timestamps, duration and flags in plaintext columns.
+   *
+   * Loud-but-stored, matching the inbound-message contract in
+   * conversations.ts: with no resolvable admin recipient the record is still
+   * written (a dropped call record is the worse outcome), with empty content
+   * and an operator-visible error.
+   */
+  private sealCallMetadata(
+    call: Pick<ActiveCallRow, 'callId' | 'answeredBy' | 'callerNumber'>,
+    recipients: string[] | null,
+  ): { encryptedContent: string; adminEnvelopes: unknown[] } {
+    if (!recipients) return { encryptedContent: '', adminEnvelopes: [] }
+    if (recipients.length === 0) {
+      logger.error(
+        'call record stored WITHOUT §2.5 metadata envelopes: no admin HPKE recipient ' +
+        'resolvable (configure ADMIN_DECRYPTION_PUBKEY and/or register an admin device). ' +
+        'Admins cannot decrypt this record\'s metadata.',
+        { callId: call.callId },
+      )
+      return { encryptedContent: '', adminEnvelopes: [] }
+    }
+    return encryptCallRecordForStorage(
+      { answeredBy: call.answeredBy ?? null, callerNumber: call.callerNumber },
+      recipients,
+    )
+  }
 
   // =========================================================================
   // Active Calls
@@ -86,6 +144,7 @@ export class CallsService {
 
     // Move stale calls to call_records atomically
     if (stale.length > 0) {
+      const recipients = await this.resolveAdminRecipients()
       await this.db.transaction(async (tx) => {
         for (const call of stale) {
           const endedAt = call.endedAt ?? new Date()
@@ -93,6 +152,7 @@ export class CallsService {
             (new Date(endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000,
           )
           const finalStatus = call.status === 'ringing' ? 'unanswered' : 'completed'
+          const sealed = this.sealCallMetadata(call, recipients)
 
           await tx.insert(callRecords).values({
             callId: call.callId,
@@ -106,8 +166,8 @@ export class CallsService {
             hasVoicemail: call.hasVoicemail ?? false,
             hasRecording: call.hasRecording ?? false,
             recordingSid: call.recordingSid,
-            encryptedContent: '',
-            adminEnvelopes: [],
+            encryptedContent: sealed.encryptedContent,
+            adminEnvelopes: sealed.adminEnvelopes,
           }).onConflictDoNothing()
 
           await tx
@@ -233,16 +293,10 @@ export class CallsService {
 
   /**
    * End an active call: remove from active_calls and insert into call_records.
-   * Accepts optional encrypted content and admin envelopes for the history record.
+   * The history record's §2.5 metadata ({ answeredBy, callerNumber }) is sealed
+   * for the admin envelope set here — callers cannot supply their own.
    */
-  async endCall(
-    hubId: string,
-    callId: string,
-    data?: {
-      encryptedContent?: string
-      adminEnvelopes?: unknown[]
-    },
-  ): Promise<CallRecordRow> {
+  async endCall(hubId: string, callId: string): Promise<CallRecordRow> {
     const record = await this.db.transaction(async (tx) => {
       // Fetch and delete the active call
       const [call] = await tx
@@ -264,6 +318,7 @@ export class CallsService {
         (endedAt.getTime() - new Date(call.startedAt).getTime()) / 1000,
       )
       const finalStatus = call.answeredBy ? 'completed' : 'unanswered'
+      const sealed = this.sealCallMetadata(call, await this.resolveAdminRecipients())
 
       const [row] = await tx
         .insert(callRecords)
@@ -280,8 +335,8 @@ export class CallsService {
           hasVoicemail: call.hasVoicemail ?? false,
           hasRecording: call.hasRecording ?? false,
           recordingSid: call.recordingSid,
-          encryptedContent: data?.encryptedContent ?? '',
-          adminEnvelopes: data?.adminEnvelopes ?? [],
+          encryptedContent: sealed.encryptedContent,
+          adminEnvelopes: sealed.adminEnvelopes,
         })
         .returning()
 
