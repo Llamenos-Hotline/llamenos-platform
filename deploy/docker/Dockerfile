@@ -228,7 +228,17 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # this bump — they come from the Caddy 2.11.4 release's resolved dependency set,
 # not the Alpine base, and need a Caddy version bump to clear (follow-up, needs
 # Caddyfile.production + caddy-ratelimit plugin compat validation first).
-FROM caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f AS static
+#
+# Digest bump (2026-10-24): same 2.11.7 tag, Alpine 3.23.6 -> 3.23.7 layer.
+# CVE-2026-111497 (brotli-libs <1.2.1-r0, HIGH, out-of-bounds write in the
+# decoder) is fixed in Alpine's 3.23 repo as brotli-libs 1.2.1-r0, but even the
+# newest published caddy:2.11.7-alpine image (3.23.7) still ships 1.2.0-r0 —
+# there is no newer base to bump to. So the fixed package is installed
+# explicitly. The `>=` constraint makes the build fail loudly if the repo ever
+# stops offering a fixed version, rather than silently shipping the old one.
+# Drop the RUN below once a caddy base image ships brotli-libs >= 1.2.1-r0.
+FROM caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f AS static
+RUN apk add --no-cache 'brotli-libs>=1.2.1-r0'
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
 # NOTE: /srv/crypto (the Tier-4 sandboxed-crypto-iframe origin referenced by
