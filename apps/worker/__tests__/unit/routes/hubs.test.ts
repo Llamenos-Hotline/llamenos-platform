@@ -294,6 +294,45 @@ describe('hubs routes', () => {
       expect(res.status).toBe(403)
     })
 
+    it('founds the hub with its creator as admin, in the one createHub call (#2126)', async () => {
+      const createHubSpy = vi.fn().mockResolvedValue(undefined)
+      const setHubRoleSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: { settings: { createHub: createHubSpy }, identity: { setHubRole: setHubRoleSpy } },
+      })
+
+      await app.request('/hubs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Hub' }),
+      })
+
+      expect(createHubSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'New Hub' }),
+        { pubkey: 'a'.repeat(64), roleIds: ['role-hub-admin'] },
+      )
+      // No second, separately-failable step that could leave the hub adminless
+      expect(setHubRoleSpy).not.toHaveBeenCalled()
+    })
+
+    it('does not report a hub as created when its founder cannot be made admin', async () => {
+      const createHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Hub founder not found'))
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: { settings: { createHub: createHubSpy } },
+      })
+
+      const res = await app.request('/hubs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Hub' }),
+      })
+
+      expect(res.status).toBe(404)
+      expect((await res.json()).error).toBe('Hub founder not found')
+    })
+
     it('handles ServiceError from createHub', async () => {
       const createHubSpy = vi.fn().mockRejectedValue(
         Object.assign(new Error('Hub already exists'), { status: 409 }),
@@ -444,6 +483,25 @@ describe('hubs routes', () => {
       expect(auditLogSpy).toHaveBeenCalledOnce()
     })
 
+    it('answers 409 when the change would demote the last admin of the hub (#2126)', async () => {
+      const setHubRoleSpy = vi.fn().mockRejectedValue(new ServiceError(409, 'Cannot change this member\'s role: this would leave hub hub-1 with no admin.'))
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['hubs:manage-members', ...VOLUNTEER_PERMISSIONS],
+        hubId: 'hub-1',
+        serviceMock: { identity: { setHubRole: setHubRoleSpy }, settings: {} },
+      })
+
+      const res = await app.request('/hubs/hub-1/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), roleIds: ['role-volunteer'] }),
+      })
+
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toContain('no admin')
+      expect(auditLogSpy).not.toHaveBeenCalled()
+    })
+
     it('returns 403 without hubs:manage-members permission', async () => {
       const { app } = createTestApp({ permissions: ['hubs:read'] })
       const res = await app.request('/hubs/hub-1/members', {
@@ -511,6 +569,20 @@ describe('hubs routes', () => {
       expect(res.status).toBe(200)
       expect(removeHubRoleSpy).toHaveBeenCalledWith({ pubkey: 'member-pubkey', hubId: 'hub-1' })
       expect(auditLogSpy).toHaveBeenCalledOnce()
+    })
+
+    it('answers 409 and does nothing else when the member is the last admin of the hub (#2126)', async () => {
+      const removeHubRoleSpy = vi.fn().mockRejectedValue(new ServiceError(409, 'Cannot remove this member from the hub: this would leave hub hub-1 with no admin.'))
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['hubs:manage-members'],
+        serviceMock: { identity: { removeHubRole: removeHubRoleSpy }, settings: {} },
+      })
+
+      const res = await app.request('/hubs/hub-1/members/member-pubkey', { method: 'DELETE' })
+
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toContain('no admin')
+      expect(auditLogSpy).not.toHaveBeenCalled()
     })
 
     // Removal must revoke, not merely stop renewing: the role-loss hook runs

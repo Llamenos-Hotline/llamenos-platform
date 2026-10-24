@@ -10,6 +10,7 @@
  */
 import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import { LABEL_CALL_META } from '@shared/crypto-labels'
 import * as schema from '../../db/schema'
 import { encryptCallRecordForStorage, encryptMessageForStorage } from '../../lib/crypto'
@@ -47,7 +48,7 @@ async function createHub(): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(fresh.db))
   return id
 }
 

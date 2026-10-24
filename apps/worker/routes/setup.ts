@@ -119,9 +119,8 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
-      await services.settings.createHub(defaultHub)
-      // Assign admin to the default hub with all roles
-      await services.identity.setHubRole({ pubkey, hubId: defaultHub.id, roleIds: ['role-super-admin'] })
+      // The setup admin founds the default hub with all roles, atomically (#2126)
+      await services.settings.createHub(defaultHub, { pubkey, roleIds: ['role-super-admin'] })
     }
 
     const result = await services.settings.updateSetupState({ setupCompleted: true })

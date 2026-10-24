@@ -109,6 +109,13 @@ import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import {
+  assertRoleChangeKeepsAdmins,
+  loadRoleCatalog,
+  mergeHubRole,
+  rolesConferHubAdmin,
+  type HubRoleAssignment,
+} from '../lib/hub-admin'
 
 const log = createLogger('services.settings')
 
@@ -1718,10 +1725,15 @@ export class SettingsService {
     if (data.description) updates.description = data.description
     if (data.permissions) updates.permissions = data.permissions as string[]
 
-    await this.db
-      .update(rolesTable)
-      .set(updates)
-      .where(eq(rolesTable.id, id))
+    await this.db.transaction(async (tx) => {
+      // Roles are shared: an edit can strip admin authority from every hub that
+      // assigns this role, so it runs under the hub-admin invariant (#2126).
+      if (data.permissions) await assertRoleChangeKeepsAdmins(tx, id, data.permissions)
+      await tx
+        .update(rolesTable)
+        .set(updates)
+        .where(eq(rolesTable.id, id))
+    })
 
     // Invalidate the roles cache so subsequent requests pick up the updated
     // permissions immediately. Without this, the 30-second cache TTL causes
@@ -1759,7 +1771,11 @@ export class SettingsService {
       throw new ServiceError(403, 'Cannot delete default roles')
     }
 
-    await this.db.delete(rolesTable).where(eq(rolesTable.id, id))
+    await this.db.transaction(async (tx) => {
+      await assertRoleChangeKeepsAdmins(tx, id, null)
+      await tx.delete(rolesTable).where(eq(rolesTable.id, id))
+    })
+    invalidateRolesCache()
     return { ok: true }
   }
 
@@ -1939,34 +1955,70 @@ export class SettingsService {
     return { hubs: hubList }
   }
 
-  async createHub(hub: Hub): Promise<{ hub: Hub }> {
-    // Check slug uniqueness
-    const [existing] = await this.db
-      .select()
-      .from(hubsTable)
-      .where(eq(hubsTable.slug, hub.slug))
-    if (existing) {
-      throw new ServiceError(409, 'Hub slug already exists')
-    }
+  /**
+   * Create a hub together with its first admin, atomically (#2126).
+   *
+   * A hub is never observable without an admin: the founder's admin assignment
+   * is written in the same transaction as the hub row, and the transaction
+   * fails — leaving no hub behind — if the founder does not exist, cannot act,
+   * or the roles named would not make them an admin. The previous shape created
+   * the hub and then granted the creator's role in a separate step whose
+   * failure was only logged, which left a hub nobody could administer.
+   */
+  async createHub(
+    hub: Hub,
+    founder: { pubkey: string; roleIds: readonly string[] },
+  ): Promise<{ hub: Hub }> {
+    await this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: hubsTable.id })
+        .from(hubsTable)
+        .where(eq(hubsTable.slug, hub.slug))
+      if (existing) {
+        throw new ServiceError(409, 'Hub slug already exists')
+      }
 
-    const now = new Date()
-    await this.db.insert(hubsTable).values({
-      id: hub.id,
-      name: hub.name,
-      slug: hub.slug,
-      description: hub.description,
-      status: hub.status ?? 'active',
-      phoneNumber: hub.phoneNumber,
-      createdBy: hub.createdBy,
-      createdAt: now,
-      updatedAt: now,
+      const [founderRow] = await tx
+        .select({ active: users.active, status: users.status, hubRoles: users.hubRoles })
+        .from(users)
+        .where(eq(users.pubkey, founder.pubkey))
+        .for('update')
+        .limit(1)
+      if (!founderRow) throw new ServiceError(404, 'Hub founder not found')
+      if (!founderRow.active || founderRow.status !== 'active') {
+        throw new ServiceError(409, 'Hub founder is not an active user')
+      }
+      if (!rolesConferHubAdmin(founder.roleIds, await loadRoleCatalog(tx))) {
+        throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
+      }
+
+      const now = new Date()
+      await tx.insert(hubsTable).values({
+        id: hub.id,
+        name: hub.name,
+        slug: hub.slug,
+        description: hub.description,
+        status: hub.status ?? 'active',
+        phoneNumber: hub.phoneNumber,
+        createdBy: hub.createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      // Create hub_settings row
+      await tx
+        .insert(hubSettingsTable)
+        .values({ hubId: hub.id, settings: {} })
+        .onConflictDoNothing()
+
+      await tx
+        .update(users)
+        .set({
+          hubRoles: mergeHubRole((founderRow.hubRoles as HubRoleAssignment[] | null) ?? [], hub.id, founder.roleIds),
+          updatedAt: now,
+        })
+        .where(eq(users.pubkey, founder.pubkey))
     })
-
-    // Create hub_settings row
-    await this.db
-      .insert(hubSettingsTable)
-      .values({ hubId: hub.id, settings: {} })
-      .onConflictDoNothing()
 
     return { hub }
   }

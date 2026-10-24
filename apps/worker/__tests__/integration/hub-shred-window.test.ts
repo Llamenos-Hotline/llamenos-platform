@@ -9,6 +9,7 @@
  */
 import { eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
@@ -42,7 +43,7 @@ async function createHub(): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(fresh.db))
   return id
 }
 

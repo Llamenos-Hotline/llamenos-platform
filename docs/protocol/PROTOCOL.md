@@ -2278,6 +2278,14 @@ Response: { "ok": true }
 DELETE /api/hubs/:hubId/members/:pubkey
 Permission: users:manage-roles
 Response: { "ok": true }
+// Hub-admin invariant: a hub always has at least one admin (an active, un-erased member whose
+// roles in the hub grant both settings:manage and notes:read-all). POST /hubs creates the hub and
+// its creator's admin assignment atomically, and every change that would remove the last admin --
+// demoting or removing the member (above), PATCH/DELETE /api/users/:pubkey (deactivate, delete,
+// rewrite hubRoles), editing or deleting the role that confers admin, and account erasure --
+// is refused with 409 and leaves nothing changed. Erasure of a hub's only admin is deferred, not
+// denied: it succeeds once another admin exists. Makes the note-without-admin-recipient state
+// (a note no admin can ever read) unreachable; the POST /notes boundary check stays as defence in depth.
 
 GET /api/hubs/:hubId/key
 Auth: Required (hub member)
