@@ -154,6 +154,10 @@ const DEFAULT_SPAM_SETTINGS: SpamSettings = {
 const DEFAULT_CALL_SETTINGS: CallSettings = {
   queueTimeoutSeconds: 90,
   voicemailMaxSeconds: 120,
+  // Provider-side call recording is OFF unless a hub deliberately turns it on
+  // (#1505). Do not flip this: every answered call would be written to a third
+  // party's disk, and the caller-facing recording notice is driven off it.
+  recordCalls: false,
 }
 
 /**
@@ -170,6 +174,10 @@ function generatedSpeechGap(provider: string, unspeakable: string[]): string {
 
 const VALID_PROMPT_TYPES = [
   'greeting',
+  // #1505: the caller-facing "this call will be recorded" disclosure. Uploadable
+  // like any other prompt so a hub can record the legal notice in a human voice
+  // rather than relying on generated speech; falls back to TTS when not uploaded.
+  'recordingNotice',
   'pleaseHold',
   'waitMessage',
   'rateLimited',
@@ -494,6 +502,7 @@ export class SettingsService {
       clamped.queueTimeoutSeconds = clamp(data.queueTimeoutSeconds)
     if (data.voicemailMaxSeconds !== undefined)
       clamped.voicemailMaxSeconds = clamp(data.voicemailMaxSeconds)
+    if (data.recordCalls !== undefined) clamped.recordCalls = data.recordCalls
 
     if (hubId) {
       const existing =

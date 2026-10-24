@@ -373,6 +373,37 @@ describe('Telephony routes', () => {
       )
     })
 
+    // ---- #1505: the caller is told, in the greeting, before being connected ----
+
+    const selectLanguage = async () => {
+      const app = await createTestApp(adapter, services)
+      return app.request('/api/telephony/language-selected?hub=hub-1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallSid=CA-lang&From=%2B15551111111&Digits=2',
+      })
+    }
+
+    /** The callRecordingEnabled flag the greeting was built with */
+    const noticeArg = () =>
+      (adapter.handleIncomingCall as ReturnType<typeof vi.fn>).mock.calls[0][0].callRecordingEnabled
+
+    it('builds the greeting with no recording notice when the hub does not record', async () => {
+      const res = await selectLanguage()
+      expect(res.status).toBe(200)
+      expect(noticeArg()).toBe(false)
+    })
+
+    it('builds the greeting with the recording notice when the hub records', async () => {
+      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+        queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: true,
+      })
+      const res = await selectLanguage()
+      expect(res.status).toBe(200)
+      expect(noticeArg()).toBe(true)
+      expect(services.settings.getCallSettings).toHaveBeenCalledWith('hub-1')
+    })
+
     it('uses forceLang query param when provided', async () => {
       const app = await createTestApp(adapter, services)
       await app.request('/api/telephony/language-selected?hub=hub-1&forceLang=es', {
@@ -584,6 +615,46 @@ describe('Telephony routes', () => {
         hubId: 'hub-1',
       })
     }
+
+    // ---- #1505: provider-side recording is opt-in per hub, OFF by default ----
+
+    /** The recordCall flag the route actually handed the adapter */
+    const recordCallArg = () =>
+      (adapter.handleCallAnswered as ReturnType<typeof vi.fn>).mock.calls[0][0].recordCall
+
+    it('does not record when the hub has no recording setting (the default)', async () => {
+      validToken()
+      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
+      // makeServices()'s getCallSettings returns no recordCalls at all — the
+      // shape a hub that never touched the setting has.
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(recordCallArg()).toBe(false)
+    })
+
+    it('does not record when the hub has recording explicitly disabled', async () => {
+      validToken()
+      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
+      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+        queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: false,
+      })
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(recordCallArg()).toBe(false)
+    })
+
+    it('records only when the hub has turned recording on', async () => {
+      validToken()
+      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
+      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+        queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: true,
+      })
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(recordCallArg()).toBe(true)
+      // Read for this hub, not globally: hub A's choice must not record hub B.
+      expect(services.settings.getCallSettings).toHaveBeenCalledWith('hub-1')
+    })
     const answer = async () => {
       const app = await createTestApp(adapter, services)
       return app.request('/api/telephony/user-answer?callToken=valid-token', {

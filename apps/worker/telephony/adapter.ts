@@ -172,6 +172,16 @@ export interface IncomingCallParams {
   rateLimited: boolean
   callerLanguage: string
   hotlineName: string
+  /**
+   * Whether this hub records answered calls (`callSettings.recordCalls`).
+   * When true the greeting MUST disclose it to the caller before they can be
+   * connected — see #1505. Required, not optional: a legal notice that a call
+   * site can forget to pass is a notice that will eventually go missing.
+   *
+   * This is the same value the route passes as `CallAnsweredParams.recordCall`,
+   * read once per call, so the notice and the recording cannot disagree.
+   */
+  callRecordingEnabled: boolean
   audioUrls?: AudioUrlMap
   /** Pre-generated CAPTCHA digits (generated server-side with CSPRNG) */
   captchaDigits?: string
@@ -193,6 +203,18 @@ export interface CaptchaResponseParams {
 export interface CallAnsweredParams {
   /** The incoming call SID, used as the queue name to bridge caller → volunteer */
   parentCallSid: string
+  /**
+   * Whether to record this call at the telephony provider
+   * (`callSettings.recordCalls`, default false — #1505).
+   *
+   * Required, not optional: provider-side recording writes crisis-call audio to
+   * a third party's disk, so no adapter and no call site may fall into it by
+   * omission. When false, the adapter MUST emit no recording directive at all.
+   *
+   * Does not apply to voicemail: `handleVoicemail`'s record step is
+   * caller-initiated and stays unconditional.
+   */
+  recordCall: boolean
   /** Origin URL for recording status callbacks */
   callbackUrl: string
   /**
