@@ -404,6 +404,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.20.0 (2026-10-24)
+
+### Breaking Changes
+
+- remove demo mode, and move the destructive reset onto the dev-surface predicate (#1651)
+
+### Fixes
+
+- upgrade ctutils and tokio to clear RUSTSEC-2026-0385/0386 (unblocks cargo-deny + rust-audit) (#2089)
+- require the storage credentials the server cannot boot without (#1450)
+- bind hub-scoped resources to their hub at fetch time (#2011) (#2024)
+- file notes to the item's own hub, not the active hub (#1162)
+- mount GET /shares/my so a holder can read their own share envelope (#2002) (#2010)
+- a telephony outage, a relay rate-limit drop, and a stuck-call leak all report success (#1515)
+- wire call-metadata sealing and per-user audit keys (#1684) (#1974)
+- clear cargo-deny, rust-audit and image-scan (static) gates on main (#2103)
+- a telephony outage, a relay rate-limit drop, and a stuck-call leak all report success (supersedes #1515) (#2100)
+
 ## 0.19.21 (2026-10-23)
 
 ### Features
