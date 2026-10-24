@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { AllDialsFailedError } from '@worker/telephony/adapter'
 import { SipBridgeAdapter } from '@worker/telephony/sip-bridge-adapter'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
@@ -375,23 +376,64 @@ describe('SipBridgeAdapter', () => {
       expect(body.hubId).toBe('hub-1')
     })
 
-    // #1136: a 200 OK with an empty channelIds array means every leg the bridge tried
-    // to dial failed (see sip-bridge/src/command-handler.ts) — that is a total outage,
-    // not a successful empty ring, and must reject so the caller (services/ringing.ts)
-    // retries and the circuit breaker can see the failure.
-    it('rejects when the bridge returns no channelIds for a non-empty volunteer list (total outage, #1136)', async () => {
+    // #1136: the bridge answers a total outage (every leg refused by the PBX/trunk) with a
+    // machine-readable 502, which must surface as AllDialsFailedError so services/ringing.ts
+    // retries, the circuit breaker sees it, and the call reports a telephony failure.
+    it('rejects with AllDialsFailedError when the bridge reports every dial failed (total outage, #1136)', async () => {
       fetchMock.mockResolvedValue({
-        ok: true,
-        headers: { get: () => 'application/json' },
-        json: async () => ({}),
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        json: async () => ({ ok: false, error: 'all-dials-failed', attempted: 2 }),
       } as unknown as Response)
 
-      await expect(adapter.ringVolunteers({
+      const err = await adapter.ringVolunteers({
         callSid: 'cs-parent',
         callerNumber: '+15551111111',
         volunteers: [{ phone: '+15552222222', callToken: 'token-a' }],
         callbackUrl: 'https://example.com/callback',
-      })).rejects.toThrow('All 1 dial attempt(s) failed')
+      }).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(AllDialsFailedError)
+      expect((err as AllDialsFailedError).attempted).toBe(2)
+    })
+
+    // A caller who hung up before the bridge rang anyone comes back as an empty 200. That
+    // is not an outage: it must not be counted as one or trip the breaker (#1136).
+    it('returns an empty list when the bridge placed no legs because the caller already left', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ ok: true, channelIds: [] }),
+      } as unknown as Response)
+
+      const sids = await adapter.ringVolunteers({
+        callSid: 'cs-parent',
+        callerNumber: '+15551111111',
+        volunteers: [{ phone: '+15552222222', callToken: 'token-a' }],
+        callbackUrl: 'https://example.com/callback',
+      })
+
+      expect(sids).toEqual([])
+    })
+
+    it('does not mistake any other bridge failure for a total outage', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({ ok: false, error: 'Command failed' }),
+      } as unknown as Response)
+
+      const err = await adapter.ringVolunteers({
+        callSid: 'cs-parent',
+        callerNumber: '+15551111111',
+        volunteers: [{ phone: '+15552222222', callToken: 'token-a' }],
+        callbackUrl: 'https://example.com/callback',
+      }).catch((e: unknown) => e)
+
+      expect(err).not.toBeInstanceOf(AllDialsFailedError)
+      expect((err as Error).message).toBe('test bridge request failed: 500 Internal Server Error')
     })
 
     it('throws when bridge request fails', async () => {

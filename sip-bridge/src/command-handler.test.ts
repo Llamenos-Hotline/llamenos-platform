@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CommandHandler, legStatusFromCause } from './command-handler'
+import { AllRingLegsFailedError, CommandHandler, legStatusFromCause } from './command-handler'
 import type { BridgeClient, BridgeEvent } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
 import type { BridgeCommand, BridgeConfig, WebhookPayload } from './types'
@@ -434,16 +434,20 @@ describe('CommandHandler', () => {
       await queuedCaller()
       pbx.client.originate = async () => { throw new Error('trunk unreachable') }
 
-      await expect(
-        handler.ringVolunteers({
+      const err = await handler
+        .ringVolunteers({
           parentCallSid: CALLER,
           callerNumber: '+15557770001',
           volunteers: [
             { pubkey: 'tok-a', phone: '+15550200' },
             { pubkey: 'tok-b', phone: '+15550201' },
           ],
-        }),
-      ).rejects.toThrow('All 2 dial attempt(s) failed')
+        })
+        .catch((e: unknown) => e)
+
+      // The typed error is what index.ts's /ring maps to the machine-readable 502.
+      expect(err).toBeInstanceOf(AllRingLegsFailedError)
+      expect((err as AllRingLegsFailedError).attempted).toBe(2)
     })
 
     it('does not reject when only some volunteer legs fail (partial outage, #1136)', async () => {

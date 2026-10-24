@@ -28,6 +28,25 @@ const QUEUE_WAIT_INTERVAL_MS = 10_000
 /** How long a volunteer's phone rings before the leg gives up */
 const RING_TIMEOUT_SECONDS = 30
 
+/**
+ * Machine-readable `error` the /ring endpoint answers a total outage with. The worker's
+ * SipBridgeAdapter keys off this exact value to raise AllDialsFailedError — keep the two
+ * in step (apps/worker/telephony/sip-bridge-adapter.ts, BRIDGE_ALL_DIALS_FAILED).
+ */
+export const RING_ALL_DIALS_FAILED = 'all-dials-failed'
+
+/**
+ * Thrown by `ringVolunteers` when every leg it tried to place was refused — a total
+ * PBX/trunk outage. Distinct from "the caller already hung up" (no legs attempted,
+ * returns `[]`) and from a partial failure (some legs placed, returns those).
+ */
+export class AllRingLegsFailedError extends Error {
+  constructor(public readonly attempted: number) {
+    super(`All ${attempted} dial attempt(s) failed`)
+    this.name = 'AllRingLegsFailedError'
+  }
+}
+
 /** A volunteer phone to ring for a waiting caller (POST /ring from the worker) */
 export interface RingRequest {
   parentCallSid: string
@@ -465,13 +484,13 @@ export class CommandHandler {
       `Ringing ${channelIds.length - appChannels}/${request.volunteers.length} volunteer phone(s)` +
         ` and ${appChannels}/${appTargets.length} in-app endpoint(s)`
     )
-    // Every leg failed (a total PBX/trunk outage) — the HTTP layer (index.ts's /ring
-    // handler) only returns a 500 when this throws, so a total outage must not look
-    // like `{ ok: true, channelIds: [] }` to the worker (#1136). A partial failure
-    // (some legs placed) is normal and still returns what succeeded.
+    // Every leg failed (a total PBX/trunk outage): a total outage must not look like
+    // `{ ok: true, channelIds: [] }` to the worker (#1136). index.ts's /ring handler turns
+    // this into a machine-readable 502 the worker classifies. A partial failure (some
+    // legs placed) is normal and still returns what succeeded.
     const attempted = request.volunteers.length + appTargets.length
     if (channelIds.length === 0 && attempted > 0) {
-      throw new Error(`All ${attempted} dial attempt(s) failed`)
+      throw new AllRingLegsFailedError(attempted)
     }
     return channelIds
   }
