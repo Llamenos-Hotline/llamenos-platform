@@ -284,7 +284,7 @@ function AuthenticatedLayout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { currentCall } = useCalls()
-  const { onShift, currentShift, nextShift } = useShiftStatus()
+  const { onShift, clockedIn, currentShift, nextShift } = useShiftStatus()
   // Admin clients re-wrap pre-claim messages for a conversation's new assignee
   // (#2046). Lives here, not on the conversations page: an assignment must be
   // served whatever screen the admin is on.
@@ -345,7 +345,8 @@ function AuthenticatedLayout() {
               {/* Shift status indicator */}
               {!currentCall && (
                 <div className="flex items-center gap-1.5 px-2">
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${onShift ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  {/* Green only when the server would actually ring this user: scheduled AND clocked in. */}
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${onShift && clockedIn ? 'bg-green-500' : onShift ? 'bg-orange-400' : 'bg-gray-400'}`} />
                   <span className="text-xs text-muted-foreground">
                     {onShift && currentShift
                       ? `${currentShift.encryptedName} — ${t('shifts.until')} ${currentShift.endTime}`

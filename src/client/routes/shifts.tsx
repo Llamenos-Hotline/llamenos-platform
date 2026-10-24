@@ -1,10 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRelaySubscription } from '@/lib/relay/hooks'
 import { useConfig } from '@/lib/config'
+import { useShiftStatus } from '@/lib/hooks'
 import {
   KIND_SHIFT_CLOCK_IN,
   KIND_SHIFT_CLOCK_OUT,
@@ -74,8 +75,9 @@ function ShiftsPage() {
   const { currentHubId } = useConfig()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<Tab>('schedule')
-  const [clockedIn, setClockedIn] = useState(false)
-  const [clockedInAt, setClockedInAt] = useState<Date | null>(null)
+  // Server-derived: the clock-in row outlives this component, a local flag did not.
+  const { clockedIn, clockedInAt: clockedInAtIso } = useShiftStatus()
+  const clockedInAt = useMemo(() => (clockedInAtIso ? new Date(clockedInAtIso) : null), [clockedInAtIso])
 
   const clockInMutation = useClockIn()
   const clockOutMutation = useClockOut()
@@ -115,15 +117,11 @@ function ShiftsPage() {
     try {
       if (clockedIn) {
         await clockOutMutation.mutateAsync()
-        setClockedIn(false)
-        setClockedInAt(null)
       } else {
         await clockInMutation.mutateAsync()
-        setClockedIn(true)
-        setClockedInAt(new Date())
       }
     } catch {
-      toast(t('common.error'), 'error')
+      toast(clockedIn ? t('dashboard.errorClockOut') : t('dashboard.errorClockIn'), 'error')
     }
   }
 
@@ -141,12 +139,12 @@ function ShiftsPage() {
           <Button
             variant={clockedIn ? 'default' : 'outline'}
             size="sm"
-            data-testid="break-toggle-btn"
+            data-testid="clock-toggle-btn"
             onClick={handleClockToggle}
             className={clockedIn ? 'bg-green-600 hover:bg-green-700' : ''}
           >
             {clockedIn ? <LogOut className="h-3.5 w-3.5" /> : <LogIn className="h-3.5 w-3.5" />}
-            {clockedIn ? t('dashboard.clockOut', { defaultValue: 'Clock Out' }) : t('dashboard.clockIn', { defaultValue: 'Clock In' })}
+            {clockedIn ? t('dashboard.clockOut') : t('dashboard.clockIn')}
           </Button>
         </div>
       </div>

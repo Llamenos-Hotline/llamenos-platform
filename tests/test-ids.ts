@@ -259,6 +259,8 @@ export const TestIds = {
   DASHBOARD_CALLS_TODAY: 'dashboard-calls-today',
   DASHBOARD_QUICK_ACTIONS: 'dashboard-quick-actions',
   BREAK_TOGGLE_BTN: 'break-toggle-btn',
+  CLOCK_TOGGLE_BTN: 'clock-toggle-btn',
+  DASHBOARD_CLOCK_IN_PROMPT: 'dashboard-clock-in-prompt',
 
   // ============ Settings ============
   SETTINGS_SECTION: 'settings-section',

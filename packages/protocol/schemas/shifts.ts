@@ -17,7 +17,15 @@ export const shiftResponseSchema = z.object({
 export type Shift = z.infer<typeof shiftResponseSchema>
 
 export const myStatusResponseSchema = z.object({
+  /** On the schedule NOW (an admin put them on a shift covering this moment). Not the same as being a ring target. */
   onShift: z.boolean(),
+  /**
+   * Has an `active_shifts` row for this hub — the volunteer's own consent to receive calls.
+   * Ringing requires `onShift` AND `clockedIn`; neither alone makes the volunteer a ring target.
+   */
+  clockedIn: z.boolean().optional().default(false),
+  /** When they clocked in (ISO 8601); null when not clocked in. */
+  clockedInAt: z.string().nullable().optional().default(null),
   currentShift: z.object({ id: z.string(), encryptedName: z.string(), startTime: z.string(), endTime: z.string() }).nullable(),
   nextShift: z.object({ id: z.string(), encryptedName: z.string(), startTime: z.string(), endTime: z.string(), day: z.number() }).nullable(),
 })

@@ -30,6 +30,7 @@ import {
   type Shift,
 } from '@/lib/api'
 import { z } from 'zod'
+import { useConfig } from '@/lib/config'
 import { createShiftBodySchema } from '@protocol/schemas/shifts'
 
 // ---------------------------------------------------------------------------
@@ -40,7 +41,10 @@ export const shiftKeys = {
   all: ['shifts'] as const,
   list: () => [...shiftKeys.all, 'list'] as const,
   fallback: () => [...shiftKeys.all, 'fallback'] as const,
+  /** Prefix of every hub's my-status entry — what clock-in/out invalidate. */
   myStatus: () => [...shiftKeys.all, 'my-status'] as const,
+  /** my-status is hub-scoped (`/hubs/<id>/shifts/my-status`), so it is cached per hub. */
+  myStatusFor: (hubId: string) => [...shiftKeys.myStatus(), hubId] as const,
   active: () => [...shiftKeys.all, 'active'] as const,
   ringGroups: {
     all: ['ring-groups'] as const,
@@ -78,10 +82,18 @@ export function useFallbackGroup() {
   })
 }
 
+/**
+ * The current user's shift state in the ACTIVE hub: scheduled now, clocked in,
+ * next shift. Keyed on the hub so a hub switch never shows another hub's state, and
+ * disabled until a hub has resolved (the first poll used to win the race against hub
+ * resolution and report an on-shift volunteer as "Off Shift" — #1708).
+ */
 export function useMyShiftStatus() {
+  const { currentHubId } = useConfig()
   return useQuery({
-    queryKey: shiftKeys.myStatus(),
+    queryKey: shiftKeys.myStatusFor(currentHubId ?? ''),
     queryFn: getMyShiftStatus,
+    enabled: !!currentHubId,
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
   })

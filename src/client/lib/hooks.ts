@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRelaySubscriptions } from './relay/hooks'
 import { useMemberHubIds } from './member-hubs'
-import { useConfig } from './config'
+import { useMyShiftStatus } from './queries/shifts'
 import { startRinging, stopRinging } from './notifications'
 import { rememberCallHub } from './call-hubs'
 import {
-  getMyShiftStatus,
   listActiveCalls,
   listConversations,
   answerCall as apiAnswerCall,
@@ -208,41 +207,25 @@ export function useCalls() {
 }
 
 /**
- * Hook to fetch and periodically refresh the current user's shift status.
+ * The current user's shift status in the active hub, kept fresh by react-query.
  *
- * Keyed on the active hub: shift status is hub-scoped (`/hubs/<id>/shifts/my-status`),
- * so it has to be re-read when the active hub resolves or the user switches
- * hubs. Without that dependency the first poll won the race against hub
- * resolution and the result stood for a minute — the mechanism that reported an
- * on-shift volunteer as "Off Shift" in #1708.
+ * Shared (not per-component state) so the dashboard card, the sidebar indicator and
+ * the clock-in control all read one answer — and so a clock-in/out, which invalidates
+ * the `my-status` entries, updates every one of them at once. `onShift` means
+ * *scheduled now*; whether the user is actually a ring target also needs `clockedIn`
+ * (see `callReadiness`).
  */
 export function useShiftStatus() {
-  const { currentHubId } = useConfig()
-  const [status, setStatus] = useState<ShiftStatus>({ onShift: false, currentShift: null, nextShift: null })
-  const [loading, setLoading] = useState(true)
+  const { data, isLoading } = useMyShiftStatus()
+  return { ...(data ?? NO_SHIFT_STATUS), loading: isLoading }
+}
 
-  useEffect(() => {
-    if (!currentHubId) {
-      // No hub, no shift. Reporting "loading" forever would be a spinner that
-      // never resolves; reporting off-shift is the truth here.
-      setStatus({ onShift: false, currentShift: null, nextShift: null })
-      setLoading(false)
-      return
-    }
-    let mounted = true
-
-    function fetch() {
-      getMyShiftStatus()
-        .then(s => { if (mounted) { setStatus(s); setLoading(false) } })
-        .catch(() => { if (mounted) setLoading(false) })
-    }
-
-    fetch()
-    const interval = setInterval(fetch, 60_000) // Refresh every 60s
-    return () => { mounted = false; clearInterval(interval) }
-  }, [currentHubId])
-
-  return { ...status, loading }
+const NO_SHIFT_STATUS: ShiftStatus = {
+  onShift: false,
+  clockedIn: false,
+  clockedInAt: null,
+  currentShift: null,
+  nextShift: null,
 }
 
 /**
