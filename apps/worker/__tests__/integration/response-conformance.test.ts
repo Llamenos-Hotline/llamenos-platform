@@ -548,14 +548,28 @@ describe('Notes Routes — response conformance', () => {
       createInteraction: vi.fn().mockResolvedValue(undefined),
     }
 
+    // The note is filed under a call of THIS hub (#2112) and carries an envelope
+    // an admin can open (#2113); the route refuses it otherwise, so the fixtures
+    // supply both rather than the case quietly testing a 404/422 instead.
+    const adminKey = 'a'.repeat(64)
+    const mockCalls = {
+      getActiveCallById: vi.fn().mockResolvedValue({ callId: 'call-1', hubId: DEFAULT_HUB_ID }),
+      getCallRecord: vi.fn().mockResolvedValue(null),
+    }
     const { app, env } = buildApp('/notes', notesRoutes, {
-      services: { records: mockRecords, cases: mockCasesService },
+      services: {
+        records: mockRecords,
+        cases: mockCasesService,
+        calls: mockCalls,
+        identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([adminKey]) },
+      },
     })
 
     const result = await assertConformsToSchema(app, 'POST', '/notes', notePostResponseSchema, {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',
+        adminEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
       },
       expectedStatus: 201,
       env,
