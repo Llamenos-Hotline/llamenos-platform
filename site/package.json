@@ -16,7 +16,7 @@
     "@astrojs/sitemap": "^3.7.4",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.1.18",
-    "astro": "^7.4.2",
+    "astro": "^7.3.2",
     "astro-pagefind": "^2.0.1",
     "marked": "^18.0.2",
     "react": "^19.0.0",
