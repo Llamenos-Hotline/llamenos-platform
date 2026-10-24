@@ -163,6 +163,17 @@
 # address as a relay peer (roles/llamenos-coturn, #2136). A network on the
 # daemon's default pool would hand Asterisk whatever address was free, and the
 # relay's allowance would then name a container that is not the media server.
+- name: Assert the llamenos-internal addressing variables are set
+  ansible.builtin.assert:
+    that:
+      - llamenos_internal_subnet is defined
+      - llamenos_internal_ip_range is defined
+      - asterisk_internal_ip is defined
+    fail_msg: >-
+      llamenos_internal_subnet, llamenos_internal_ip_range and asterisk_internal_ip
+      are required (#2136). They are in vars.example.yml; copy them into vars.yml.
+  tags: [docker, deploy]
+
 - name: Create the llamenos-internal Docker network with its declared subnet
   community.docker.docker_network:
     name: llamenos-internal
@@ -170,12 +181,20 @@
     driver: bridge
     ipam_config:
       - subnet: "{{ llamenos_internal_subnet }}"
+        # Dynamic allocations come from here ONLY. Docker otherwise hands out the
+        # lowest free address, so the ninth container on this network would be
+        # given Asterisk's pinned address if it started first — and inherit the
+        # relay's allowance. Measured: with an iprange, unpinned containers get
+        # .129, .130, ... and a pinned .10 outside it works.
+        iprange: "{{ llamenos_internal_ip_range }}"
   tags: [docker, deploy]
 
-# docker_network never recreates an existing network (its default), so a host
-# that has the network from before the subnet was declared would keep it, and
-# the first `docker compose up` of Asterisk would fail on its pinned address with
-# a message about address pools. Say what is wrong and how to fix it here.
+# community.docker reconciles an existing network with the declared addressing
+# (measured: a network created with another subnet, containers attached, comes
+# back with this one and the containers re-attached on new addresses). This reads
+# it back anyway, because the alternative if that ever stops holding is the first
+# `docker compose up` of Asterisk failing on its pinned address with a message
+# about address pools; say what is wrong, and how to fix it, here instead.
 - name: Read back the llamenos-internal network
   community.docker.docker_network_info:
     name: llamenos-internal
@@ -186,12 +205,13 @@
   ansible.builtin.assert:
     that:
       - llamenos_internal_subnet in (llamenos_internal_network.network.IPAM.Config | map(attribute='Subnet') | list)
+      - llamenos_internal_ip_range in (llamenos_internal_network.network.IPAM.Config | map(attribute='IPRange') | list)
     fail_msg: |
-      llamenos-internal exists with a different subnet than llamenos_internal_subnet
-      ({{ llamenos_internal_subnet }}). Asterisk is pinned to an address in it and
-      CoTURN allows exactly that address as a relay peer (#2136), so the subnet
-      cannot be left to the daemon.
-      Seen: {{ llamenos_internal_network.network.IPAM.Config | map(attribute='Subnet') | list }}
+      llamenos-internal exists with different addressing than llamenos_internal_subnet
+      ({{ llamenos_internal_subnet }}) / llamenos_internal_ip_range ({{ llamenos_internal_ip_range }}).
+      Asterisk is pinned to an address in it and CoTURN allows exactly that address
+      as a relay peer (#2136), so the addressing cannot be left to the daemon.
+      Seen: {{ llamenos_internal_network.network.IPAM.Config }}
       To fix, on this host: stop the stacks attached to the network
       (`docker compose down` in each app_dir/services/* directory), run
       `docker network rm llamenos-internal`, and re-run this playbook.

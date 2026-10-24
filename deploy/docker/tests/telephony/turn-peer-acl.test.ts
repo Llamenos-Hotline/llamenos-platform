@@ -150,4 +150,26 @@ describe('TURN relay peer ACL (#2136)', () => {
       /^turn_media_peer_ip:\s*"\{\{ asterisk_internal_ip \}\}"/m,
     )
   })
+
+  it("keeps Asterisk's pinned address inside the subnet and OUTSIDE the dynamic range", () => {
+    // Unpinned containers are handed addresses from the range only. If the
+    // pinned address were inside it, a container that started first could be
+    // given Asterisk's address and inherit the relay's allowance.
+    const toInt = (ip: string) => ip.split('.').reduce((n, o) => n * 256 + Number(o), 0)
+    const inside = (ip: string, cidr: string) => {
+      const [base, bits] = cidr.split('/')
+      const size = 2 ** (32 - Number(bits))
+      return toInt(ip) >= toInt(base) && toInt(ip) < toInt(base) + size
+    }
+    for (const vars of ['ansible/vars.yml', 'ansible/vars.example.yml']) {
+      const text = read(vars)
+      const get = (key: string) => text.match(new RegExp(`^${key}:\\s*"([^"]+)"`, 'm'))?.[1] ?? ''
+      const subnet = get('llamenos_internal_subnet')
+      const range = get('llamenos_internal_ip_range')
+      const asterisk = get('asterisk_internal_ip')
+      expect(inside(asterisk, subnet)).toBe(true)
+      expect(inside(asterisk, range)).toBe(false)
+      expect(inside(range.split('/')[0], subnet)).toBe(true)
+    }
+  })
 })
