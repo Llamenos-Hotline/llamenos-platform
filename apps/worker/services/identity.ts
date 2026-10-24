@@ -49,7 +49,7 @@ import {
   type Role,
 } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
-import { adminStateOf, assertHubsKeepAnAdmin, mergeHubRole } from '../lib/hub-admin'
+import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, mergeHubRole } from '../lib/hub-admin'
 
 const log = createLogger('services.identity')
 
@@ -384,12 +384,17 @@ export class IdentityService {
 
   /**
    * Every admin X25519 recipient for an envelope set: `adminDecryptionPubkey`
-   * (`ADMIN_DECRYPTION_PUBKEY`) plus the registered device keys of each active
-   * super-admin. The one definition of "a key an admin holds" — server-sealed
-   * records are wrapped to it, and client-sealed ones are checked against it.
+   * (`ADMIN_DECRYPTION_PUBKEY`, the instance escrow key) plus the registered
+   * device keys of every admin of `hubId` — a hub admin of it or an
+   * instance-wide admin, the same predicate the last-admin invariant counts
+   * with (`lib/hub-admin.ts`). Without a `hubId` (a record with no hub, or a
+   * server-sealed record with no hub of its own) only instance-wide admins.
+   *
+   * The one definition of "a key an admin holds": server-sealed records are
+   * wrapped to it, and client-sealed ones are checked against it.
    */
-  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined): Promise<string[]> {
-    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await this.listActiveSuperAdminPubkeys())
+  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined, hubId?: string): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await listAdminPubkeys(this.db, hubId))
   }
 
   /**
@@ -694,9 +699,10 @@ export class IdentityService {
     }
     updates.updatedAt = new Date()
 
-    // Rewriting hubRoles or deactivating can take away admin authority in a
-    // hub; those updates run under the hub-admin invariant (#2126).
-    const touchesAdminAuthority = updates.hubRoles !== undefined || updates.active === false
+    // Rewriting roles or hubRoles, or deactivating, can take away admin
+    // authority; those updates run under the admin invariant (#2126, #2190).
+    const touchesAdminAuthority =
+      updates.hubRoles !== undefined || updates.roles !== undefined || updates.active === false
     const [row] = touchesAdminAuthority
       ? await this.db.transaction(async (tx) => {
           const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
@@ -708,9 +714,10 @@ export class IdentityService {
             adminStateOf({
               active: updates.active ?? current.active,
               status: current.status,
+              roles: updates.roles ?? current.roles,
               hubRoles: updates.hubRoles ?? current.hubRoles,
             }),
-            updates.active === false ? 'deactivate this user' : 'change this user\'s hub roles',
+            updates.active === false ? 'deactivate this user' : 'change this user\'s roles',
           )
           return tx.update(users).set(updates).where(eq(users.pubkey, pubkey)).returning()
         })

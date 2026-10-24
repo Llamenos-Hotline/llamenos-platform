@@ -137,7 +137,7 @@ notes.post('/',
     const hubId = c.get('hubId') as string | undefined
 
     await assertNoteTargetVisible(c, services, body, hubId)
-    await assertAdminCanRead(services, c.env, body.adminEnvelopes, 'A note', { hubId, authorPubkey: pubkey })
+    await assertAdminCanRead(services, c.env, hubId, body.adminEnvelopes, 'A note', { authorPubkey: pubkey })
 
     const note = await services.records.createNote({
       hubId,
@@ -216,8 +216,8 @@ notes.patch('/:id',
     // orphan the note exactly as an empty create does; a bare envelope swap is
     // checked too, since it can drop the admin.
     if (body.encryptedContent !== undefined || body.adminEnvelopes !== undefined) {
-      await services.records.getNoteAuthoredBy(id, pubkey)
-      await assertAdminCanRead(services, c.env, body.adminEnvelopes, 'A note', { noteId: id, authorPubkey: pubkey })
+      const existing = await services.records.getNoteAuthoredBy(id, pubkey)
+      await assertAdminCanRead(services, c.env, existing.hubId ?? undefined, body.adminEnvelopes, 'A note', { noteId: id, authorPubkey: pubkey })
     }
 
     const updated = await services.records.updateNote(id, {
@@ -285,14 +285,14 @@ notes.post('/:id/replies',
     const id = c.req.param('id')
     const body = c.req.valid('json')
 
-    await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A note reply', { noteId: id, authorPubkey: pubkey })
+    const parentNote = await services.records.getNote(id)
+    await assertAdminCanRead(services, c.env, parentNote.hubId ?? undefined, body.readerEnvelopes, 'A note reply', { noteId: id, authorPubkey: pubkey })
 
     const reply = await services.records.createReply(id, {
       ...body,
       authorPubkey: pubkey,
     })
 
-    const parentNote = await services.records.getNote(id)
     await audit(services.audit, 'noteReplyCreated', pubkey, { noteId: id }, undefined, parentNote.hubId ?? null)
     return c.json({ reply }, 201)
   },

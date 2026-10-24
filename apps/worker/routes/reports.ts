@@ -145,7 +145,7 @@ reports.post('/',
 
     // Checked before the conversation exists, so a refused report leaves no
     // empty shell behind.
-    await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A report', { hubId, authorPubkey: pubkey })
+    await assertAdminCanRead(services, c.env, hubId, body.readerEnvelopes, 'A report', { authorPubkey: pubkey })
 
     // Create the conversation with report metadata
     const conversation = await services.conversations.create({
@@ -387,7 +387,7 @@ reports.post('/:id/messages',
     }
 
     const body = c.req.valid('json')
-    await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A report message', { reportId: id, authorPubkey: pubkey })
+    await assertAdminCanRead(services, c.env, report.hubId ?? undefined, body.readerEnvelopes, 'A report message', { reportId: id, authorPubkey: pubkey })
 
     const isReporter = report.contactIdentifierHash === pubkey
     const direction = isReporter ? 'inbound' as const : 'outbound' as const

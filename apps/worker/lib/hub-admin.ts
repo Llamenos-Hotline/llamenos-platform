@@ -1,32 +1,50 @@
 /**
- * The hub-admin invariant (#2126): every hub always has at least one admin.
+ * The admin invariant (#2126, #2190): every hub always has at least one admin
+ * who can read its records, and a client-sealed record is only accepted if one
+ * of those admins (or the instance escrow key) can open it.
  *
- * Why it is an invariant and not a validation. A note is HPKE-wrapped for its
- * author and for the hub's admins, and the content key is wrapped for nobody
- * else, so a note written while the hub has no admin can never be read by one —
- * and no later repair can open it. The `POST /notes` boundary guard (#2125)
- * refuses such a note, but a crisis-line volunteer who cannot file a note is a
- * failure, not a safe state. The way out is to make "this hub has no admin"
- * unreachable, so that rejection path is never taken.
+ * ONE DEFINITION, TWO ENFORCEMENT POINTS. {@link administersHub} is the single
+ * predicate for "an admin of hub H". The last-admin guards below use it to count
+ * who is left; `IdentityService.listAdminEnvelopeRecipients` uses the same
+ * function to decide whose device keys the envelope guard
+ * (`lib/admin-envelopes.ts`) accepts. They cannot drift apart because there is
+ * no second definition. Before #2190 there were two, disjoint: this file counted
+ * hub admins and excluded super-admins, the envelope guard accepted super-admin
+ * devices and ignored hub admins, so a note could satisfy one and orphan under
+ * the other.
  *
- * "Admin of a hub" is a property of the hub ASSIGNMENT, resolved against the
- * live role definitions: the user is active, not erased, holds a role in the hub
- * (`users.hub_roles`) whose permissions include both `settings:manage` (the
- * predicate the auth middleware and the member directory already use for
- * "admin") and `notes:read-all` (the reason the invariant exists). Deliberately
- * NOT counted:
+ * An admin of hub H is a user who is active, not erased, has no erasure request
+ * in flight, and either
  *
- *  - global super-admins. They reach every hub through hubContext, but a hub
- *    that depends on an instance-wide account for its only admin has not
- *    guaranteed anything about itself;
- *  - deactivated or erased users, who cannot act;
- *  - users with a pending/executing erasure request — they are departing, so a
- *    hub whose only other admin is mid-erasure is one step from none.
+ *  - is a HUB ADMIN of H: holds a role in H (`users.hub_roles`) whose
+ *    permissions, resolved against the live role definitions, include both
+ *    `settings:manage` (the predicate the auth middleware and the member
+ *    directory use for "admin") and `notes:read-all` (the reason the invariant
+ *    exists); or
+ *  - is a SUPER-ADMIN (`role-super-admin`, a system role that cannot be edited):
+ *    an instance-wide admin who holds `*` and so reads every hub's notes.
+ *
+ * Why super-admins are IN. The instance key every shipped client seals to
+ * (`ADMIN_DECRYPTION_PUBKEY`) belongs to the bootstrap super-admin, and the
+ * server seals its own records (call records, audit keys) to super-admin
+ * devices. Records are readable today because of that set; a definition that
+ * left it out would either reject every note the shipped clients write or
+ * guarantee a hub admin who cannot open anything. Counting them in both places
+ * means erasing, deactivating or demoting the last admin of EITHER kind is
+ * refused whenever it would strand a hub. What the definition does not do is
+ * make a hub admin a recipient: clients still seal to the escrow key, so a hub
+ * admin reads a note only if its sealer addressed them. That is a client
+ * change, tracked separately from this invariant.
+ *
+ * Not counted: deactivated or erased users, who cannot act, and users with a
+ * pending/executing erasure request — they are departing, so a hub whose only
+ * other admin is mid-erasure is one step from none.
  *
  * Every path that can take an admin away funnels through
  * {@link assertHubsKeepAnAdmin}, which serialises concurrent changes to a hub's
  * admin set with a per-hub advisory lock: two admins demoting each other at
- * once cannot both pass.
+ * once cannot both pass. A change to a super-admin affects every hub, so it
+ * takes every hub's lock.
  *
  * The count is a function of TWO inputs — the users' hub assignments and the
  * role definitions that say which roles are admin — so both must be held still
@@ -48,6 +66,9 @@ import { users, roles as roleDefinitions, hubs } from '../db/schema'
 import { DEFAULT_ROLES, permissionGranted, type Role } from '@shared/permissions'
 import { ServiceError } from '../services/settings'
 
+/** The system role of an instance-wide admin. Immutable (`isSystem`), so its authority cannot be edited away. */
+export const INSTANCE_ADMIN_ROLE = 'role-super-admin'
+
 /** What a role must grant, in union with the user's other roles in the hub, to make them a hub admin. */
 export const HUB_ADMIN_PERMISSIONS = ['settings:manage', 'notes:read-all'] as const
 
@@ -63,6 +84,8 @@ export type RoleCatalog = ReadonlyArray<Pick<Role, 'id' | 'permissions'>>
 export interface AdminState {
   active: boolean
   status: string
+  /** Global roles (`users.roles`); `role-super-admin` makes the user an admin of every hub. */
+  roles: readonly string[]
   hubRoles: readonly HubRoleAssignment[]
 }
 
@@ -70,8 +93,13 @@ export interface AdminState {
  * The invariant's view of a stored user row. Takes the raw row because `status`
  * is not part of the `User` interface.
  */
-export function adminStateOf(row: Pick<typeof users.$inferSelect, 'active' | 'status' | 'hubRoles'>): AdminState {
-  return { active: row.active, status: row.status, hubRoles: (row.hubRoles as HubRoleAssignment[] | null) ?? [] }
+export function adminStateOf(row: Pick<typeof users.$inferSelect, 'active' | 'status' | 'roles' | 'hubRoles'>): AdminState {
+  return {
+    active: row.active,
+    status: row.status,
+    roles: row.roles ?? [],
+    hubRoles: (row.hubRoles as HubRoleAssignment[] | null) ?? [],
+  }
 }
 
 /** A query surface that is either the database or a transaction on it. */
@@ -112,14 +140,39 @@ export function rolesConferHubAdmin(roleIds: readonly string[], catalog: RoleCat
   return HUB_ADMIN_PERMISSIONS.every(permission => permissionGranted(granted, permission))
 }
 
-/** The hubs `state` administers. Empty for a user who is inactive or erased. */
-export function hubsAdministered(state: AdminState, catalog: RoleCatalog): string[] {
-  if (!state.active || state.status !== 'active') return []
+function canAct(state: AdminState): boolean {
+  return state.active && state.status === 'active'
+}
+
+/** True when `state` is an instance-wide admin, an admin of every hub. */
+export function isInstanceAdmin(state: AdminState): boolean {
+  return canAct(state) && state.roles.includes(INSTANCE_ADMIN_ROLE)
+}
+
+/** The hubs `state` holds hub-admin authority in. Empty for a user who is inactive or erased. */
+function hubsWhereHubAdmin(state: AdminState, catalog: RoleCatalog): string[] {
+  if (!canAct(state)) return []
   const roleIdsByHub = new Map<string, string[]>()
   for (const { hubId, roleIds } of state.hubRoles) {
     roleIdsByHub.set(hubId, [...(roleIdsByHub.get(hubId) ?? []), ...roleIds])
   }
   return [...roleIdsByHub].filter(([, roleIds]) => rolesConferHubAdmin(roleIds, catalog)).map(([hubId]) => hubId)
+}
+
+/**
+ * THE definition of "an admin of hub `hubId`": a hub admin of it, or an
+ * instance-wide admin. Both the last-admin guards and the envelope guard's
+ * recipient list are built from this.
+ */
+export function administersHub(state: AdminState, hubId: string, catalog: RoleCatalog): boolean {
+  return isInstanceAdmin(state) || hubsWhereHubAdmin(state, catalog).includes(hubId)
+}
+
+/** Which of `hubIds` `state` administers. */
+export function hubsAdministered(state: AdminState, catalog: RoleCatalog, hubIds: readonly string[]): string[] {
+  if (isInstanceAdmin(state)) return [...hubIds]
+  const administered = new Set(hubsWhereHubAdmin(state, catalog))
+  return hubIds.filter(hubId => administered.has(hubId))
 }
 
 // ---------------------------------------------------------------------------
@@ -131,20 +184,27 @@ export async function loadRoleCatalog(db: Executor): Promise<RoleCatalog> {
   return db.select({ id: roleDefinitions.id, permissions: roleDefinitions.permissions }).from(roleDefinitions)
 }
 
+/** Every hub id. The scope of an instance-wide admin. */
+async function listHubIds(db: Executor): Promise<string[]> {
+  return (await db.select({ id: hubs.id }).from(hubs)).map(h => h.id)
+}
+
 /**
- * Every user who could count toward a hub's admin set, with their assignments.
- * Narrowed in SQL to active, un-erased users with no erasure in flight; whether
- * their roles confer admin is decided by {@link hubsAdministered}.
+ * Every user who could count toward the admin set of `hubIds`, with their
+ * assignments: instance-wide admins, plus members holding any role in one of
+ * the hubs. Narrowed in SQL to active, un-erased users with no erasure in
+ * flight; whether their roles confer admin is decided by {@link administersHub}.
  */
 async function loadCandidateAdmins(
   db: Executor,
-  hubIds?: readonly string[],
+  hubIds: readonly string[],
 ): Promise<Array<{ pubkey: string } & AdminState>> {
-  const inScope = hubIds
-    ? sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${users.hubRoles}) AS a WHERE a->>'hubId' IN (${sql.join(hubIds.map(id => sql`${id}`), sql`, `)}))`
-    : sql`jsonb_array_length(${users.hubRoles}) > 0`
+  const instanceAdmin = sql`${users.roles} @> ARRAY[${INSTANCE_ADMIN_ROLE}]::text[]`
+  const inScope = hubIds.length === 0
+    ? instanceAdmin
+    : sql`(${instanceAdmin} OR EXISTS (SELECT 1 FROM jsonb_array_elements(${users.hubRoles}) AS a WHERE a->>'hubId' IN (${sql.join(hubIds.map(id => sql`${id}`), sql`, `)})))`
   const rows = await db
-    .select({ pubkey: users.pubkey, active: users.active, status: users.status, hubRoles: users.hubRoles })
+    .select({ pubkey: users.pubkey, active: users.active, status: users.status, roles: users.roles, hubRoles: users.hubRoles })
     .from(users)
     .where(
       and(
@@ -157,25 +217,20 @@ async function loadCandidateAdmins(
         )`,
       ),
     )
-  return rows.map(row => ({
-    pubkey: row.pubkey,
-    active: row.active,
-    status: row.status,
-    hubRoles: (row.hubRoles as HubRoleAssignment[] | null) ?? [],
-  }))
+  return rows.map(row => ({ pubkey: row.pubkey, ...adminStateOf(row) }))
 }
 
-/** Admin counts per hub, under `catalog`, for the listed hubs (or all hubs that have any admin-capable member). */
+/** Admin counts per hub, under `catalog`, for the listed hubs. A hub with no admin is absent from the map. */
 async function countAdminsByHub(
   db: Executor,
   catalog: RoleCatalog,
-  hubIds?: readonly string[],
+  hubIds: readonly string[],
   excluding?: string,
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   for (const candidate of await loadCandidateAdmins(db, hubIds)) {
     if (candidate.pubkey === excluding) continue
-    for (const hubId of hubsAdministered(candidate, catalog)) {
+    for (const hubId of hubsAdministered(candidate, catalog, hubIds)) {
       counts.set(hubId, (counts.get(hubId) ?? 0) + 1)
     }
   }
@@ -183,11 +238,30 @@ async function countAdminsByHub(
 }
 
 /**
+ * The pubkeys (Ed25519 auth keys) of every admin of `hubId`, or of the
+ * instance-wide admins alone when `hubId` is undefined (a record with no hub).
+ *
+ * This is the envelope guard's source of recipients, so it is the same
+ * predicate the last-admin guards count with. It takes no locks: it answers
+ * "who is an admin right now" for a write that has nothing to serialise against
+ * — a note sealed to an admin who departs a moment later is exactly as readable
+ * as it was, and the departure is what the guards police.
+ */
+export async function listAdminPubkeys(db: Executor, hubId: string | undefined): Promise<string[]> {
+  const catalog = await loadRoleCatalog(db)
+  const scope = hubId === undefined ? [] : [hubId]
+  const candidates = await loadCandidateAdmins(db, scope)
+  return candidates
+    .filter(candidate => (hubId === undefined ? isInstanceAdmin(candidate) : administersHub(candidate, hubId, catalog)))
+    .map(candidate => candidate.pubkey)
+}
+
+/**
  * The hubs, out of `hubIds` (default: every hub), that have no admin.
  * The diagnostic for the invariant; empty on a healthy instance.
  */
 export async function listHubsWithoutAdmin(db: Executor, hubIds?: readonly string[]): Promise<string[]> {
-  const candidates = hubIds ?? (await db.select({ id: hubs.id }).from(hubs)).map(h => h.id)
+  const candidates = hubIds ?? (await listHubIds(db))
   if (candidates.length === 0) return []
   const counts = await countAdminsByHub(db, await loadRoleCatalog(db), candidates)
   return candidates.filter(hubId => !counts.has(hubId))
@@ -237,7 +311,9 @@ async function lockRoleCatalog(tx: Executor): Promise<void> {
  *
  * Takes the admin-set locks first and reads the role catalog second. Which hubs
  * the user administers depends on the catalog, so the locks cover every hub
- * they hold ANY role in — a superset that needs no catalog to compute.
+ * they hold ANY role in — a superset that needs no catalog to compute. An
+ * instance-wide admin administers every hub, so for them the locks cover all
+ * of them.
  *
  * `before` is the user's state as stored (read under a row lock by the caller)
  * and `after` the state the change would produce; `null` means the user ceases
@@ -254,10 +330,14 @@ export async function assertHubsKeepAnAdmin(
   after: AdminState | null,
   reason: string,
 ): Promise<void> {
-  await lockHubAdminSets(tx, before.hubRoles.map(hr => hr.hubId))
+  // A hub created between this read and the locks is founded with its own hub
+  // admin, so it cannot be stranded by this change.
+  const everyHub = isInstanceAdmin(before) ? await listHubIds(tx) : []
+  await lockHubAdminSets(tx, [...before.hubRoles.map(hr => hr.hubId), ...everyHub])
   const catalog = await loadRoleCatalog(tx)
-  const stillAdministered = new Set(after ? hubsAdministered(after, catalog) : [])
-  const lost = hubsAdministered(before, catalog).filter(hubId => !stillAdministered.has(hubId))
+  const scope = [...new Set([...before.hubRoles.map(hr => hr.hubId), ...everyHub])]
+  const stillAdministered = new Set(after ? hubsAdministered(after, catalog, scope) : [])
+  const lost = hubsAdministered(before, catalog, scope).filter(hubId => !stillAdministered.has(hubId))
   if (lost.length === 0) return
 
   const remaining = await countAdminsByHub(tx, catalog, lost, pubkey)
@@ -292,7 +372,10 @@ export async function assertRoleChangeKeepsAdmins(
     ? current.filter(r => r.id !== roleId)
     : current.map(r => (r.id === roleId ? { id: r.id, permissions: [...permissions] } : r))
 
-  const before = await countAdminsByHub(tx, current)
+  // Instance-wide admins hold a system role that cannot be edited, so they are
+  // admins of every hub both before and after; only hub admins can be stranded.
+  const everyHub = await listHubIds(tx)
+  const before = await countAdminsByHub(tx, current, everyHub)
   if (before.size === 0) return
   const after = await countAdminsByHub(tx, next, [...before.keys()])
   const stranded = [...before.keys()].filter(hubId => !after.has(hubId))

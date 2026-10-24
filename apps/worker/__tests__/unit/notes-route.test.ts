@@ -311,14 +311,14 @@ describe('POST /notes', () => {
     expect(res.status).toBe(201)
   })
 
-  it('stores the note LOUDLY when the deployment has no admin recipient at all (documented contract)', async () => {
+  it('REFUSES (503) the note when the deployment has no admin recipient at all, and stores nothing (#2190)', async () => {
     const { app, mockRecords, mockIdentity } = makeApp()
     mockIdentity.listAdminEnvelopeRecipients.mockResolvedValueOnce([])
-    mockRecords.createNote.mockResolvedValueOnce({ id: 'new-note', authorPubkey: 'test-pubkey' })
     const res = await post(app, { ...noteBody, adminEnvelopes: [] })
-    // Not a rejection: refusing a volunteer's note over a deployment gap loses more than it protects.
-    expect(res.status).toBe(201)
-    expect(mockRecords.createNote).toHaveBeenCalled()
+    // Once the hub invariant guarantees an admin, an empty recipient set is a
+    // misconfiguration, and storing under it would mint an unreadable note.
+    expect(res.status).toBe(503)
+    expect(mockRecords.createNote).not.toHaveBeenCalled()
   })
 
   // -- #2112: a note filed under a call or conversation that is not this hub's --

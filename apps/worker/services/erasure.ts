@@ -275,7 +275,7 @@ export class ErasureService {
       tx,
       userId,
       adminStateOf(current),
-      { active: false, status: 'erased', hubRoles: [] },
+      { active: false, status: 'erased', roles: [], hubRoles: [] },
       'erase this account',
     )
   }

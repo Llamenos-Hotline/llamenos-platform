@@ -9,12 +9,15 @@
  * accountability" therefore has to be enforced at the write boundary, not
  * trusted to the client (#2113).
  *
- * What counts as an admin is the same set the server seals its own records to
- * (`ADMIN_DECRYPTION_PUBKEY` plus every active super-admin device), the one set
- * a client can reliably be told about. The check is "at least one envelope is
- * addressed to a key an admin holds" — not "every admin", because clients wrap
- * to the key the server publishes and a device registered a moment later must
- * not turn a correct write into a 422.
+ * What counts as an admin is decided in ONE place, `lib/hub-admin.ts`
+ * (`administersHub`): a hub admin of the record's hub, or an instance-wide
+ * super-admin — the very set the hub last-admin invariant (#2126) refuses to let
+ * shrink to nothing (#2190). The recipient keys are the registered device keys
+ * of those users plus `ADMIN_DECRYPTION_PUBKEY`, the instance escrow key every
+ * shipped client seals to. The check is "at least one envelope is addressed to
+ * one of them" — not "every admin", because clients wrap to the key the server
+ * publishes and a device registered a moment later must not turn a correct write
+ * into a 422.
  */
 import type { Services } from '../services'
 import { ServiceError } from '../services/settings'
@@ -27,34 +30,44 @@ const logger = createLogger('lib.admin-envelopes')
 type AddressedEnvelope = { pubkey: string }
 
 /**
- * Refuse (422) an envelope set no admin can open.
+ * Refuse an envelope set no admin can open.
  *
- * With NO resolvable admin recipient (no `ADMIN_DECRYPTION_PUBKEY`, no
- * super-admin device) there is nothing to check against, and the contract —
- * the same loud-but-stored one `CallsService.sealCallMetadata` and the inbound
- * message path follow — is to log an error an operator must see and persist the
- * record anyway: a hotline that refuses a volunteer's note or a crisis reply
- * because of a deployment gap loses more than it protects. Never silent.
+ * 422 when the set names no admin key. 503 when there is no admin key to
+ * check against at all — no `ADMIN_DECRYPTION_PUBKEY` and no admin of the hub
+ * with a registered device. This used to log and store (#2125), on the theory
+ * that a hotline refusing a note over a deployment gap loses more than it
+ * protects. That no longer holds: the last-admin invariant guarantees the hub
+ * has an admin, so an empty recipient set is a misconfiguration (an admin who
+ * never registered a device, or a wizard-bootstrapped instance with no escrow
+ * key), and storing a note under it creates exactly the record the invariant
+ * exists to prevent. The shipped clients already refuse to seal without an admin
+ * key, so only a modified or stale client reaches this branch; the 503 and the
+ * error log tell the operator to fix the deployment.
  *
- * @param what names the record for the error log and the 422 message.
+ * @param hubId the record's hub; undefined for a record with no hub, which only
+ *   instance-wide admins can be responsible for.
+ * @param what names the record for the error log and the response message.
  */
 export async function assertAdminCanRead(
   services: { identity: Pick<Services['identity'], 'listAdminEnvelopeRecipients'> },
   env: AdminKeyEnv,
+  hubId: string | undefined,
   envelopes: readonly AddressedEnvelope[] | undefined,
   what: string,
   context: Record<string, unknown> = {},
 ): Promise<void> {
-  const adminRecipients = await services.identity.listAdminEnvelopeRecipients(adminHpkeRecipient(env))
+  const adminRecipients = await services.identity.listAdminEnvelopeRecipients(adminHpkeRecipient(env), hubId)
 
   if (adminRecipients.length === 0) {
     logger.error(
-      `${what} stored WITHOUT any admin-readable envelope: no admin HPKE recipient resolvable ` +
-      '(configure ADMIN_DECRYPTION_PUBKEY and/or register an admin device). ' +
-      'No admin can read this record until its key is re-wrapped for one.',
-      { ...context, envelopeCount: envelopes?.length ?? 0 },
+      `${what} REFUSED: no admin HPKE recipient is resolvable, so no admin could ever read it ` +
+      '(configure ADMIN_DECRYPTION_PUBKEY and/or register a device for a hub admin).',
+      { ...context, hubId, envelopeCount: envelopes?.length ?? 0 },
     )
-    return
+    throw new ServiceError(
+      503,
+      `${what} cannot be accepted: this deployment has no admin able to read it. An operator must configure an admin key`,
+    )
   }
 
   if (!envelopes || envelopes.length === 0) {

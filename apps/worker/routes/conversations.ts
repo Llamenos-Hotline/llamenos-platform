@@ -401,7 +401,7 @@ conversations.post('/:id/messages',
     // Server-sealed ones (the branch above) always include the admin reader, so
     // only the client-supplied set can leave the admins out (#2113).
     if (body.encryptedContent) {
-      await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A message', { conversationId: id })
+      await assertAdminCanRead(services, c.env, conv.hubId ?? undefined, body.readerEnvelopes, 'A message', { conversationId: id })
     }
 
     // Build the message with initial pending status
