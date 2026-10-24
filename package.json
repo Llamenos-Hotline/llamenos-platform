@@ -147,7 +147,7 @@
     "reflect-metadata": "^0.2.2",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
-    "zod": "^4.6.7"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@cucumber/cucumber-expressions": "18.0.1",
@@ -155,7 +155,7 @@
     "@evilmartians/lefthook": "^2.1.6",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.4",
-    "@tanstack/router-plugin": "1.168.11",
+    "@tanstack/router-plugin": "^1.167.28",
     "@tauri-apps/cli": "2.11.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -171,7 +171,7 @@
     "@wdio/spec-reporter": "^10.0.1",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.2.1",
-    "happy-dom": "^21.0.4",
+    "happy-dom": "^20.9.0",
     "playwright-bdd": "^8.5.0",
     "postgres": "^3.4.9",
     "quicktype-core": "^23.2.6",
@@ -192,7 +192,7 @@
     "protobufjs": ">=8.4.1 <9",
     "ws": ">=8.21.0",
     "axios": ">=1.20.0 <2",
-    "undici": ">=7.30.1 <8",
+    "undici": ">=7.29.1 <8",
     "postcss": ">=8.5.18 <9",
     "devalue": ">=5.9.3 <6",
     "defu": ">=6.1.7",
@@ -220,9 +220,6 @@
     "form-data": ">=4.0.6 <5",
     "browserslist": ">=4.28.7 <5",
     "sharp": ">=0.35.5 <0.36",
-    "@modelcontextprotocol/sdk": ">=1.31.0 <2",
-    "body-parser": ">=2.4.0 <3",
-    "zod": "^4.6.7",
-    "happy-dom": "^21.0.4"
+    "@modelcontextprotocol/sdk": ">=1.31.0 <2"
   }
 }
