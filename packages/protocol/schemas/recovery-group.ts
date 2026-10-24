@@ -132,6 +132,24 @@ export const shareLivenessProofSchema = z.object({
 })
 export type ShareLivenessProof = z.infer<typeof shareLivenessProofSchema>
 
+/**
+ * `GET /api/recovery-group/shares/my` — the calling holder's own share.
+ *
+ * The holder is NEVER a parameter: the server takes it from the authenticated
+ * pubkey, so the only thing the caller chooses is which hub's share to read.
+ */
+export const myShareEnvelopeQuerySchema = z.object({
+  hubId: z.string().uuid(),
+})
+export type MyShareEnvelopeQuery = z.infer<typeof myShareEnvelopeQuerySchema>
+
+export const myShareEnvelopeResponseSchema = z.object({
+  hubId: z.string(),
+  /** HPKE envelope (label `LABEL_RECOVERY_GROUP_SHARE_WRAP`) sealing this holder's Shamir share to their own key. */
+  shareEnvelope: z.string(),
+})
+export type MyShareEnvelopeResponse = z.infer<typeof myShareEnvelopeResponseSchema>
+
 export const recoveryCancelResponseSchema = z.object({
   ok: z.boolean(),
 })

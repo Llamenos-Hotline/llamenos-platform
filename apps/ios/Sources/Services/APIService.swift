@@ -789,11 +789,11 @@ final class APIService: @unchecked Sendable {
     /// Fetch the current user's share envelope from the recovery group.
     /// Returns the HPKE-encrypted Shamir share and its commitment.
     ///
-    /// The server stores each holder's `shareEnvelope` (`hub_recovery_group_shares`) but mounts no
-    /// route that returns it: `GET /api/recovery-group/:hubId` omits it and there is no `shares/my`.
-    /// This call 404s until the server grows that endpoint (reported on #1997).
+    /// Mounted unscoped (`GET /api/recovery-group/shares/my?hubId=`, #2002), like every other
+    /// recovery-group route — so no `hp()`, and the hub travels as a query parameter. The server
+    /// returns only the caller's own envelope.
     func getMyShareEnvelope(hubId: String) async throws -> ShareEnvelopeResponse {
-        try await request(method: "GET", path: "/api/recovery-group/shares/my")
+        try await request(method: "GET", path: "/api/recovery-group/shares/my?hubId=\(hubId)")
     }
 
     func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatusResponse {

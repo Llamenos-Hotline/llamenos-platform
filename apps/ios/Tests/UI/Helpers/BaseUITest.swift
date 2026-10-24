@@ -681,4 +681,79 @@ class BaseUITest: XCTestCase {
             XCTFail("Element '\(identifier)' not found after \(maxSwipes) swipes")
         }
     }
+
+    /// What `awaitSettled` last saw, so a timeout says which condition was never met.
+    private final class SettleWatch {
+        var frame = CGRect.null
+        var since = Date()
+        var samples = 0
+        var observed = "never resolved"
+    }
+
+    /// Wait until `element` is on screen (hittable), enabled (a tap on a disabled
+    /// control is silently dropped) AND has held the same frame for `settle` seconds.
+    /// `exists` is true for a SwiftUI `List` row that is mid-push-transition or about
+    /// to be reflowed by rows inserted above it, and a tap that lands then is
+    /// swallowed with no error (#2091: hosted `macos-15` lost the tap on
+    /// `admin-events` while the Mac, which settles in time, never did). Waiting on the
+    /// element's state — not a fixed delay — makes the tap land on a stable target.
+    ///
+    /// Judging "still" takes at least two samples `settle` apart, and every sample
+    /// pays for fresh accessibility resolves. On hosted `macos-15` one resolve costs
+    /// 0.7–1.8 s (#2092's merge group: `exists`, `isHittable`, `isEnabled` and
+    /// `frame` as four separate resolves made one sample ~5 s, so a 10 s ceiling fit
+    /// fewer than two and failed on a field that had been stable for the whole wait).
+    /// So a sample takes ONE snapshot (existence, enabled, frame together) plus one
+    /// `isHittable`, and the ceiling is sized for a slow host: it is only ever spent
+    /// when the element really never settles, because a settled element returns at once.
+    private func awaitSettled(
+        _ element: XCUIElement, timeout: TimeInterval, settle: TimeInterval = 0.5
+    ) -> (settled: Bool, lastSeen: String) {
+        let watch = SettleWatch()
+        let settled = NSPredicate { _, _ in
+            guard let snapshot = try? element.snapshot() else {
+                watch.observed = "not in the hierarchy"
+                watch.frame = .null
+                return false
+            }
+            guard snapshot.isEnabled else {
+                watch.observed = "disabled"
+                watch.frame = .null
+                return false
+            }
+            guard element.isHittable else {
+                watch.observed = "not hittable"
+                watch.frame = .null
+                return false
+            }
+            watch.samples += 1
+            if snapshot.frame != watch.frame {
+                watch.frame = snapshot.frame
+                watch.since = Date()
+            }
+            let held = Date().timeIntervalSince(watch.since)
+            watch.observed = "hittable and enabled, frame unchanged for \(String(format: "%.1f", held))s"
+                + " over \(watch.samples) sample(s)"
+            return held >= settle
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: settled, object: app)
+        let settledInTime = XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+        return (settledInTime, watch.observed)
+    }
+
+    /// Tap `element` once it is settled on screen, failing the test if it never is.
+    func tapWhenSettled(
+        _ element: XCUIElement, timeout: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let outcome = awaitSettled(element, timeout: timeout)
+        guard outcome.settled else {
+            XCTFail(
+                "\(element) should be on screen, enabled and still before it is tapped"
+                    + " (last seen: \(outcome.lastSeen))",
+                file: file, line: line
+            )
+            return
+        }
+        element.tap()
+    }
 }
