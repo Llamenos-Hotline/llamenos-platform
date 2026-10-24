@@ -69,7 +69,7 @@ Then('the shift card should show {string} or {string}', async ({ page }, _option
 })
 
 Then('a clock in\\/out button should be visible', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.BREAK_TOGGLE_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('the calls card should display a numeric call count', async ({ page }) => {
@@ -116,7 +116,7 @@ Then('the logout button should be visible in the top bar', async ({ page }) => {
  * control is missing hands the scenario a state it never established.
  */
 async function ensureClockLabel(page: Page, wanted: 'Clock In' | 'Clock Out') {
-  const clockBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
+  const clockBtn = page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)
   await expect(clockBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
   if (!(await clockBtn.textContent())?.includes(wanted)) {
     await clockBtn.click()
@@ -134,13 +134,13 @@ Given('I am on shift', async ({ page }) => {
 })
 
 Then('the dashboard clock button should say {string}', async ({ page }, text: string) => {
-  const clockBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
+  const clockBtn = page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)
   await expect(clockBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
   await expect(clockBtn).toContainText(text)
 })
 
 When('I tap the dashboard clock button', async ({ page }) => {
-  const clockBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
+  const clockBtn = page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)
   await expect(clockBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
   const before = (await clockBtn.textContent())?.trim() ?? ''
   await page.evaluate(label => {
@@ -157,10 +157,10 @@ Then('a clock-in request should be sent', async ({ page }) => {
   )
   expect(before, 'the tap step must record the label it started from').toMatch(/Clock (In|Out)/)
   const expected = before?.includes('Clock In') ? 'Clock Out' : 'Clock In'
-  await expect(page.getByTestId(TestIds.BREAK_TOGGLE_BTN)).toContainText(expected, { timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)).toContainText(expected, { timeout: Timeouts.ELEMENT })
 })
 
 Then('the button should show a loading state briefly', async ({ page }) => {
   // Loading state is transient — just verify the button is still visible after
-  await expect(page.getByTestId(TestIds.BREAK_TOGGLE_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })

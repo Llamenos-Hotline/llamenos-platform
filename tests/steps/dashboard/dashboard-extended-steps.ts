@@ -42,15 +42,15 @@ Given('the volunteer is on shift', async ({ page }) => {
 })
 
 Given('the volunteer is on break', async ({ page }) => {
-  // The dashboard toggle offers "Clock In" while on break. Toggle only when not
-  // already on break: an unconditional click would take a volunteer who was on
-  // break OFF it.
+  // The break toggle offers "End Break" while on break and "Take a Break" otherwise.
+  // Toggle only when not already on break: an unconditional click would take a
+  // volunteer who was on break OFF it.
   const breakBtn = page.getByTestId(TestIds.BREAK_TOGGLE_BTN)
-  await expect(breakBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
-  if ((await breakBtn.textContent())?.includes('Clock Out')) {
+  await expect(breakBtn).toHaveText(/Take a Break|End Break/, { timeout: Timeouts.ELEMENT })
+  if ((await breakBtn.textContent())?.includes('Take a Break')) {
     await breakBtn.click()
   }
-  await expect(breakBtn).toContainText('Clock In', { timeout: Timeouts.ELEMENT })
+  await expect(breakBtn).toContainText('End Break', { timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the break toggle button', async ({ page }) => {
