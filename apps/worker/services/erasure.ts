@@ -964,6 +964,27 @@ export class ErasureService {
   }
 
   /**
+   * Attach admin envelopes to a key row that was stored without any (no admin
+   * recipient was resolvable at first use). Compare-and-set on the empty set:
+   * the row is never rewritten once it has envelopes, and a row destroyed by
+   * erasure in the meantime is simply not found. Returns whether it applied.
+   */
+  async backfillAuditUserKeyEnvelopes(
+    userPubkey: string,
+    adminEnvelopes: unknown[],
+  ): Promise<boolean> {
+    const updated = await this.db
+      .update(auditUserKeys)
+      .set({ adminEnvelopes })
+      .where(and(
+        eq(auditUserKeys.userPubkey, userPubkey),
+        sql`jsonb_array_length(${auditUserKeys.adminEnvelopes}) = 0`,
+      ))
+      .returning({ userPubkey: auditUserKeys.userPubkey })
+    return updated.length > 0
+  }
+
+  /**
    * Hold the user's audit-key lock (shared) for the rest of `tx` and report
    * whether the user is erased. AuditService.log calls this inside its append
    * transaction: shared holders run concurrently, but executeErasure's

@@ -61,7 +61,7 @@ export interface AuditCryptoDeps {
   /** Admin X25519 recipients a freshly created key is wrapped for. */
   resolveAdminRecipients: () => Promise<string[]>
   /** audit_user_keys row access (owned by ErasureService). */
-  keyStore: Pick<ErasureService, 'getAuditUserKey' | 'ensureAuditUserKey' | 'lockAuditActor'>
+  keyStore: Pick<ErasureService, 'getAuditUserKey' | 'ensureAuditUserKey' | 'backfillAuditUserKeyEnvelopes' | 'lockAuditActor'>
 }
 
 // ---------------------------------------------------------------------------
@@ -228,12 +228,14 @@ export class AuditService {
       // registered yet — e.g. the very first bootstrap actions. The key is
       // still server-sealed, so details are encrypted at rest and readable
       // through the admin API; only the offline admin-envelope path is
-      // missing, and the error says so.
+      // missing, and the error says so. backfillAdminEnvelopes restores it
+      // once a recipient exists.
       if (recipients.length === 0) {
         logger.error(
           'audit user key stored WITHOUT admin envelopes: no admin HPKE recipient resolvable ' +
           '(configure ADMIN_DECRYPTION_PUBKEY and/or register an admin device). ' +
-          'Details are encrypted at rest but no admin can unwrap the key offline.',
+          'Details are encrypted at rest but no admin can unwrap the key offline until one ' +
+          'is registered; the next audit write for this user then attaches the envelopes.',
           { userPubkey },
         )
       }
@@ -242,9 +244,40 @@ export class AuditService {
         adminEnvelopes: recipients.length === 0 ? [] : wrapAuditKeyForAdmins(key, recipients, userPubkey),
       }
     })
-    return row
-      ? openServerSealedAuditKey(row.encryptedKey, userPubkey, deps.serverSecret)
-      : null
+    if (!row) return null
+    const key = openServerSealedAuditKey(row.encryptedKey, userPubkey, deps.serverSecret)
+    if (Array.isArray(row.adminEnvelopes) && row.adminEnvelopes.length === 0) {
+      await this.backfillAdminEnvelopes(key, userPubkey, deps)
+    }
+    return key
+  }
+
+  /**
+   * Repair a key row stored before any admin recipient existed. The row is
+   * returned by ensureAuditUserKey forever, so without this its offline
+   * admin-unwrap path would stay empty for the life of the user. Best effort:
+   * the audit write in progress must not fail because the repair did, and with
+   * still no recipient there is nothing to attach (the creation path already
+   * logged that).
+   */
+  private async backfillAdminEnvelopes(
+    key: Uint8Array,
+    userPubkey: string,
+    deps: AuditCryptoDeps,
+  ): Promise<void> {
+    try {
+      const recipients = await deps.resolveAdminRecipients()
+      if (recipients.length === 0) return
+      await deps.keyStore.backfillAuditUserKeyEnvelopes(
+        userPubkey,
+        wrapAuditKeyForAdmins(key, recipients, userPubkey),
+      )
+    } catch (err) {
+      logger.error('audit user key admin-envelope backfill failed', {
+        userPubkey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
 
   /**

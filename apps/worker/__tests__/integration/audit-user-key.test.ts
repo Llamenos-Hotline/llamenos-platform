@@ -22,6 +22,8 @@
  *     (crypto-shredding) — via the raw decrypt path AND the service read path.
  *  7. `system` entries are never encrypted (no user key exists for them).
  *  8. createServices — the production construction path — arms all of it.
+ *  8b. A key stored before any admin recipient existed gets its admin envelopes
+ *     backfilled by the next write once one does.
  *  9. Erasure is final: no write after (or racing) executeErasure re-mints the
  *     shredded key or seals anything under it — the entry is anonymised
  *     instead, and the chain still verifies.
@@ -234,6 +236,42 @@ describe('per-user audit key — wired', () => {
 
     const { entries } = await audit.list('hub-ak-6')
     expect(entries.find((e) => e.id === entry.id)?.details).toEqual({ noteId: 'n-norecip-7' })
+  })
+
+  it('backfills admin envelopes once a recipient exists, so the offline unwrap path is not lost', async () => {
+    const admin = reader()
+    const user = 'b1'.repeat(32)
+    let recipients: string[] = []
+    const audit = new AuditService(fresh.db, {
+      serverSecret: hexToBytes(SERVER_SECRET_HEX),
+      resolveAdminRecipients: async () => recipients,
+      keyStore: new ErasureService(fresh.db),
+    })
+
+    // First entry predates any admin recipient: key stored with no envelopes.
+    const first = await audit.log('noteCreated', user, { noteId: 'n-backfill-1' }, 'hub-ak-10')
+    expect((await keyRow(user))!.adminEnvelopes).toEqual([])
+
+    // Still no recipient: a later write leaves the row alone.
+    await audit.log('login', user, {}, 'hub-ak-10')
+    expect((await keyRow(user))!.adminEnvelopes).toEqual([])
+
+    // An admin registers; the next write repairs the row.
+    recipients = [admin.pubkey]
+    await audit.log('login', user, {}, 'hub-ak-10')
+    const envelopes = (await keyRow(user))!.adminEnvelopes as Array<{ pubkey: string; enc: string; ct: string }>
+    expect(envelopes.map((e) => e.pubkey)).toEqual([admin.pubkey])
+
+    // The admin unwraps offline and reads the entry written BEFORE the backfill.
+    const auditKey = unwrapAuditKey(admin, envelopes[0]!, user)
+    const marker = (await rawEntry(first.id))!.details as Record<string, string>
+    expect(JSON.parse(openDetails(auditKey, marker[MARKER]!, user, first.id))).toEqual({ noteId: 'n-backfill-1' })
+
+    // Compare-and-set: a row that already has envelopes is never rewritten.
+    const other = reader()
+    recipients = [other.pubkey]
+    await audit.log('login', user, {}, 'hub-ak-10')
+    expect(((await keyRow(user))!.adminEnvelopes as Array<{ pubkey: string }>).map((e) => e.pubkey)).toEqual([admin.pubkey])
   })
 
   it('never encrypts system entries and never creates a key row for them', async () => {
