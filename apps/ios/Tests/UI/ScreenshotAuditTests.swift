@@ -11,6 +11,13 @@ import XCTest
 ///     -derivedDataPath /tmp/llamenos-screenshots
 ///
 /// Run both sizes by repeating with "iPhone 17".
+///
+/// This class is an asset generator, not a gate (ci-non-gating.txt), so it asserts
+/// nothing: `ui-tests.py check-non-gating` fails if it contains any assertion call. A screen
+/// that cannot be reached is skipped with `guard … else { return }` — no screenshot is
+/// written, which is visible in the output folder; a pass or fail here is never read.
+/// Reach screens with `scrollToVisible`, not `scrollToFind`: the latter stops at
+/// `exists`, and an off-screen row photographs the wrong screen.
 final class ScreenshotAuditTests: BaseUITest {
 
     /// Do not auto-launch in setUp — each test launches with the appropriate state.
@@ -88,7 +95,6 @@ final class ScreenshotAuditTests: BaseUITest {
 
     /// Dashboard with an active call card (requires backend simulation).
     func testScreenshot_02b_DashboardActiveCall() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 15) else { return }
@@ -103,7 +109,6 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_03_ActiveCall() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 15) else { return }
@@ -128,7 +133,6 @@ final class ScreenshotAuditTests: BaseUITest {
 
     /// Notes list with data — requires backend.
     func testScreenshot_04b_NotesListWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         navigateToNotes()
         _ = anyElementExists(["notes-list", "notes-empty-state"], timeout: 12)
@@ -147,7 +151,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_05b_CasesListWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         navigateToCases()
         _ = anyElementExists(["case-list", "case-empty-state", "cms-not-enabled"], timeout: 12)
@@ -166,7 +169,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_06b_ConversationsWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         simulateIncomingMessage(body: "Hi, I need some help please.")
         navigateToConversations()
@@ -175,7 +177,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_06c_ConversationDetail() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let (convId, _) = simulateIncomingMessage(body: "Hello, I need help.")
         guard !convId.isEmpty else { return }
@@ -221,7 +222,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_08b_ReportsWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 15) else { return }
@@ -340,7 +340,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14e_TranscriptionSettings() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let transcriptionLink = scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 5)
+        let transcriptionLink = scrollToVisible("settings-transcription-link", maxSwipes: 5)
         guard transcriptionLink.exists && transcriptionLink.isHittable else { return }
         transcriptionLink.tap()
         _ = anyElementExists(["transcription-enable-toggle", "transcription-language-picker"], timeout: 5)
@@ -350,7 +350,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14f_Diagnostics() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let diagLink = scrollToFind("settings-diagnostics-link", maxSwipes: 5, timeout: 5)
+        let diagLink = scrollToVisible("settings-diagnostics-link", maxSwipes: 5)
         guard diagLink.exists && diagLink.isHittable else { return }
         diagLink.tap()
         _ = anyElementExists(["crash-reporting-toggle", "send-crash-reports"], timeout: 5)
@@ -360,7 +360,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14g_HubManagement() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let hubsLink = scrollToFind("settings-hubs-link", maxSwipes: 5, timeout: 5)
+        let hubsLink = scrollToVisible("settings-hubs-link", maxSwipes: 5)
         guard hubsLink.exists && hubsLink.isHittable else { return }
         hubsLink.tap()
         _ = anyElementExists(["hubs-list", "hubs-loading"], timeout: 8)
@@ -370,7 +370,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14h_PanicWipe() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let panicLink = scrollToFind("settings-panic-wipe", maxSwipes: 5, timeout: 5)
+        let panicLink = scrollToVisible("settings-panic-wipe", maxSwipes: 5)
         guard panicLink.exists && panicLink.isHittable else { return }
         panicLink.tap()
         // Sheet appears — capture it
@@ -394,7 +394,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15c_AdminVolunteers() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-volunteers", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-volunteers", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
         _ = anyElementExists(["volunteers-list", "volunteers-empty-state"], timeout: 8)
@@ -404,7 +404,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15d_AdminBanList() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-bans", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-bans", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
         sleep(2)
@@ -414,7 +414,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15e_AdminAuditLog() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-audit-log", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-audit-log", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
         sleep(2)
@@ -424,7 +424,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15f_AdminInvites() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-invites", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-invites", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
         sleep(2)
@@ -434,7 +434,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15g_AdminCustomFields() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-custom-fields", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-custom-fields", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
         _ = anyElementExists(["custom-fields-list", "custom-fields-empty-state", "custom-fields-loading"], timeout: 8)
@@ -444,7 +444,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15h_AdminSchemaBrowser() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-schema-browser", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-schema-browser", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
         sleep(2)
@@ -454,7 +454,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15i_AdminTelephony() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-telephony-settings", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-telephony-settings", maxSwipes: 5)
         guard link.exists && link.isHittable else { return }
         link.tap()
         _ = anyElementExists(["telephony-settings-view", "telephony-provider-picker"], timeout: 8)
@@ -464,7 +464,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15j_AdminSpam() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-spam-settings", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-spam-settings", maxSwipes: 5)
         guard link.exists && link.isHittable else { return }
         link.tap()
         _ = find("spam-settings-view").waitForExistence(timeout: 8)
@@ -474,7 +474,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15k_AdminSystemHealth() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-system-health", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-system-health", maxSwipes: 5)
         guard link.exists && link.isHittable else { return }
         link.tap()
         _ = anyElementExists(["system-health-view", "health-loading", "health-error-state"], timeout: 10)
@@ -484,7 +484,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15l_AdminIVR() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-ivr-settings", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-ivr-settings", maxSwipes: 5)
         guard link.exists && link.isHittable else { return }
         link.tap()
         _ = anyElementExists(["ivr-settings-view", "ivr-save-button"], timeout: 8)
@@ -494,7 +494,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15m_AdminReportCategories() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-report-categories", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-report-categories", maxSwipes: 5)
         guard link.exists && link.isHittable else { return }
         link.tap()
         sleep(2)
