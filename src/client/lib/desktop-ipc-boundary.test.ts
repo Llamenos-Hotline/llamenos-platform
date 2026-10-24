@@ -17,6 +17,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = path.resolve(__dirname, '../../..')
@@ -58,6 +59,31 @@ function invokedCommands(): Set<string> {
   const names = [...src.matchAll(/tauriInvoke(?:<[\s\S]*?>)?\(\s*'([a-z0-9_]+)'/g)].map(m => m[1])
   expect(names.length).toBeGreaterThan(0)
   return new Set(names)
+}
+
+/**
+ * Run the REAL isolation script (the `<script>` body of isolation/index.html) in a
+ * VM and return the hook the Tauri isolation iframe would call. The payload shape
+ * mirrors what the webview sends: `{cmd, callback, error, payload: <args>}`.
+ */
+function loadIsolationHook(): (payload: unknown) => unknown {
+  const html = read('apps/desktop/isolation/index.html')
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1]
+  if (!script) throw new Error('no <script> in apps/desktop/isolation/index.html')
+  const sandbox: { window: { __TAURI_ISOLATION_HOOK__?: (p: unknown) => unknown } } = { window: {} }
+  vm.runInNewContext(script, sandbox)
+  const hook = sandbox.window.__TAURI_ISOLATION_HOOK__
+  if (!hook) throw new Error('isolation script did not install __TAURI_ISOLATION_HOOK__')
+  return hook
+}
+
+/** Event names the frontend subscribes to via `listen(...)` from `@tauri-apps/api/event`. */
+function listenedEventNames(): string[] {
+  const src = read('src/client/lib/platform.ts')
+  const fixed = [...src.matchAll(/platformListen\(\s*'([^']+)'/g)].map(m => m[1])
+  const updater = read('src/client/lib/updater.ts')
+  const fromUpdater = [...updater.matchAll(/platformListen\(\s*'([^']+)'/g)].map(m => m[1])
+  return [...new Set([...fixed, ...fromUpdater])]
 }
 
 function sorted(s: Set<string>): string[] {
@@ -118,6 +144,42 @@ describe('desktop IPC boundary', () => {
       .filter(f => /import\(\s*'@tauri-apps\/api\/(core|event)'\s*\)|from\s+'@tauri-apps\/api\/(core|event)'/.test(readFileSync(f, 'utf8')))
       .map(f => path.relative(ROOT, f))
     expect(offenders).toEqual([])
+  })
+
+  it('the isolation hook lets the relay subscribe to its net-ws channel (#2107)', async () => {
+    const hook = loadIsolationHook()
+    const channel = `net-ws:${'0b6f3c1e-8a52-4d0e-9f41-0c2d7a9e5b13'}`
+    for (const cmd of ['plugin:event|listen', 'plugin:event|unlisten']) {
+      const msg = { cmd, callback: 1, error: 2, payload: { event: channel } }
+      await expect(Promise.resolve(hook(msg))).resolves.toBe(msg)
+    }
+  })
+
+  it('the isolation hook lets every event the frontend listens for through', async () => {
+    const hook = loadIsolationHook()
+    const events = listenedEventNames()
+    expect(events.length).toBeGreaterThan(0)
+    for (const event of events) {
+      const msg = { cmd: 'plugin:event|listen', callback: 1, error: 2, payload: { event } }
+      await expect(Promise.resolve(hook(msg)), `listen('${event}') blocked`).resolves.toBe(msg)
+    }
+  })
+
+  it('the isolation hook still refuses arbitrary event subscriptions and any emit', async () => {
+    const hook = loadIsolationHook()
+    const blocked = [
+      { cmd: 'plugin:event|listen', payload: { event: 'tauri://window-created' } },
+      { cmd: 'plugin:event|listen', payload: { event: 'net-ws:' } },
+      { cmd: 'plugin:event|listen', payload: { event: 'net-ws:x y' } },
+      { cmd: 'plugin:event|listen', payload: { event: 'xnet-ws:abc' } },
+      { cmd: 'plugin:event|listen', payload: {} },
+      { cmd: 'plugin:event|unlisten', payload: { event: 'anything', eventId: 1 } },
+      { cmd: 'plugin:event|emit', payload: { event: 'net-ws:abc' } },
+      { cmd: 'plugin:event|emit_to', payload: { event: 'net-ws:abc' } },
+    ]
+    for (const m of blocked) {
+      await expect(Promise.resolve(hook({ callback: 1, error: 2, ...m })), JSON.stringify(m)).rejects.toThrow(/isolation policy/)
+    }
   })
 
   it('backend address persistence needs no store plugin capability', () => {
