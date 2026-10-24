@@ -112,11 +112,14 @@ contacts.get('/:hash',
   async (c) => {
     const services = c.get('services')
     const hash = c.req.param('hash')
+    // The hash is a blind index: the same caller hashes identically in every hub.
+    // Inside /hubs/:hubId the timeline is that hub's alone.
+    const hubId = c.get('hubId')
 
     // Parallel fetch from RecordsService (notes) and ConversationsService (conversations)
     const [notesResult, conversations] = await Promise.all([
-      services.records.listNotes({ contactHash: hash }),
-      services.conversations.getContactConversations(hash),
+      services.records.listNotes({ hubId, contactHash: hash }),
+      services.conversations.getContactConversations(hash, hubId),
     ])
 
     return c.json({ notes: notesResult.notes, conversations })

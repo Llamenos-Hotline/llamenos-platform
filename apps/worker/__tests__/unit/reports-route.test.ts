@@ -64,6 +64,9 @@ function makeApp(opts: {
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
     list: vi.fn().mockResolvedValue({ conversations, total: conversations.length }),
+    // The hub guard (#2011) is its own fetch; the handler's getById stays the
+    // mock these tests override per case.
+    getByIdForHub: vi.fn().mockResolvedValue(conversation),
     getById: vi.fn().mockResolvedValue(conversation),
     create: vi.fn().mockResolvedValue(conversation),
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),

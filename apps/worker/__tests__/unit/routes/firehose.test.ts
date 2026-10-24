@@ -45,7 +45,9 @@ function makeApp(opts: {
 
   const mockFirehose = {
     listConnections: vi.fn().mockResolvedValue([]),
-    getConnection: vi.fn(),
+    // The hub guard (#2011) fetches the connection before any handler; by default
+    // it is a connection of the app's own hub. Tests of the handlers override this.
+    getConnection: vi.fn().mockResolvedValue(baseConn),
     createConnection: vi.fn(),
     setAgentKeypair: vi.fn(),
     updateConnection: vi.fn(),
@@ -549,12 +551,12 @@ describe('DELETE /firehose/:id/optout', () => {
     expect(mockFirehose.removeOptout).toHaveBeenCalledWith('conn-1', 'a'.repeat(64))
   })
 
-  it('still returns 200 when connection not found (no pre-check in route)', async () => {
-    const { app } = makeApp({ permissions: ['firehose:read'] })
+  it('returns 404 when connection not found — the hub guard (#2011) resolves it before the route', async () => {
+    const { app, mockFirehose } = makeApp({ permissions: ['firehose:read'] })
+    mockFirehose.getConnection.mockResolvedValue(null)
 
     const res = await app.request('/conn-missing/optout', { method: 'DELETE' })
-    expect(res.status).toBe(200)
-    const json = await res.json() as Record<string, unknown>
-    expect(json.ok).toBe(true)
+    expect(res.status).toBe(404)
+    expect(mockFirehose.removeOptout).not.toHaveBeenCalled()
   })
 })

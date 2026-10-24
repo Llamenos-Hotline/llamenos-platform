@@ -40,7 +40,13 @@ function makeApp(opts: { permissions?: string[]; callerHubId?: string; convHubId
     getById: vi.fn().mockResolvedValue({ id: 'conv-1', hubId: convHubId, assignedTo: 'vol-pubkey', status: 'active' }),
     listAssigneeEnvelopeGaps: vi.fn().mockResolvedValue({ assignedTo: 'd'.repeat(64), recipients: [RECIPIENT], messages: [] }),
     addAssigneeEnvelopes: vi.fn().mockResolvedValue({ added, assignedTo: 'vol-pubkey' }),
+    getByIdForHub: vi.fn(),
   }
+  // Hub binding (#2011) is pinned against real rows in
+  // integration-bun/hub-resource-binding.test.ts. Here the router-level guard
+  // reads through this test's own `getById`, so these tests stay about who may
+  // reach the endpoint and the handler's own hub check.
+  mockConversations.getByIdForHub.mockImplementation((id: string) => mockConversations.getById(id))
 
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {

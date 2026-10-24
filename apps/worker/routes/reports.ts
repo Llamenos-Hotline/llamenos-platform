@@ -13,6 +13,7 @@ import { KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED } from '@shared/event-kind
 import { publishEvent } from '../lib/ws-events'
 import { verifyReportAccess, isReport } from '../lib/report-access'
 import { linkCaseToReportBodySchema } from '@protocol/schemas/report-links'
+import { resourceInPathHub } from '../lib/hub-scope'
 
 /**
  * Normalize conversation metadata — Drizzle bun-sql may double-serialize JSONB
@@ -29,6 +30,16 @@ function normalizeMetadata(metadata: unknown): Record<string, unknown> | null {
 }
 
 const reports = new Hono<AppEnv>()
+
+// A report is a conversation row. Inside /hubs/:hubId every /:id route may only
+// touch a report of that hub (#2011); another hub's report is a 404, the same as
+// a missing one.
+const reportInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['categories', 'types']),
+  load: (services, id, hubId) => services.conversations.getByIdForHub(id, hubId),
+})
+reports.use('/:id/*', reportInPathHub)
 
 // List reports — reporters see only their own, users with reports:read-all see everything
 reports.get('/',

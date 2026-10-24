@@ -19,6 +19,8 @@ import { generateAgentKeypair } from '../lib/agent-identity'
 import { backgroundTask } from '../lib/hono-compat'
 import { createLogger } from '../lib/logger'
 import { audit } from '../services/audit'
+import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
+import { ServiceError } from '../services/settings'
 
 const log = createLogger('routes.firehose')
 
@@ -48,6 +50,19 @@ function mapConnection(row: FirehoseConnectionRow) {
 }
 
 const firehose = new Hono<AppEnv>()
+
+// Inside /hubs/:hubId every /:id route may only touch a connection of that hub
+// (#2011). Activating, pausing or deleting another hub's connection starts and
+// stops its agent; it is a 404, the same as a missing one.
+firehose.use('/:id/*', resourceInPathHub({
+  param: 'id',
+  skip: new Set(['status']),
+  load: async (services, id, hubId) => {
+    const connection = await services.firehose.getConnection(id)
+    if (!connection) throw new ServiceError(404, 'Firehose connection not found')
+    return assertInHub(connection, hubId, 'Firehose connection not found')
+  },
+}))
 
 // ---------------------------------------------------------------------------
 // GET /status — health status for all connections (BEFORE /:id)
