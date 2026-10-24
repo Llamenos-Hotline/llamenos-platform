@@ -27,6 +27,20 @@
  * {@link assertHubsKeepAnAdmin}, which serialises concurrent changes to a hub's
  * admin set with a per-hub advisory lock: two admins demoting each other at
  * once cannot both pass.
+ *
+ * The count is a function of TWO inputs — the users' hub assignments and the
+ * role definitions that say which roles are admin — so both must be held still
+ * while a guard decides. The lock protocol:
+ *
+ *  1. user-side guards take the shared role-catalog lock, then the per-hub
+ *     locks (sorted), and only THEN read the catalog and count;
+ *  2. a role-definition edit ({@link assertRoleChangeKeepsAdmins}) takes the
+ *     role-catalog lock exclusively, which waits out every in-flight guard and
+ *     holds new ones off until the edit commits.
+ *
+ * Reading the catalog before the locks would let a role edit commit between
+ * the read and the count, so the guard would count an admin whose role no
+ * longer confers admin authority.
  */
 import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
@@ -183,21 +197,47 @@ export async function listHubsWithoutAdmin(db: Executor, hubIds?: readonly strin
 // Guards
 // ---------------------------------------------------------------------------
 
+/** Advisory-lock key for the role catalog; exported so tests can hold the very lock the guards contend on. */
+export const ROLE_CATALOG_LOCK_KEY = 'hubadmin:roles'
+
+/** Advisory-lock key serialising changes to one hub's admin set. */
+export const hubAdminLockKey = (hubId: string): string => `hubadmin:${hubId}`
+
 /**
- * Take the per-hub admin-set lock for each hub, in a fixed order so two
- * transactions touching overlapping hubs cannot deadlock. Held to commit, so
- * the count a guard reads cannot be invalidated before its caller writes.
- * Outside a transaction it releases at once and serialises nothing — callers
- * that need the guarantee must run inside one.
+ * Take the admin-set locks a guard needs BEFORE it reads the role catalog or
+ * counts: the role-catalog lock in shared mode (so a role-definition edit
+ * cannot commit under the guard), then the per-hub lock for each hub, in a
+ * fixed order so two transactions touching overlapping hubs cannot deadlock.
+ * Held to commit, so what a guard reads cannot be invalidated before its caller
+ * writes. Outside a transaction it releases at once and serialises nothing —
+ * callers that need the guarantee must run inside one.
+ *
+ * Shared mode means guards never wait on each other here; only a role edit,
+ * which takes the same lock exclusively, does.
  */
 export async function lockHubAdminSets(tx: Executor, hubIds: Iterable<string>): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock_shared(hashtext(${ROLE_CATALOG_LOCK_KEY}))`)
   for (const hubId of [...new Set(hubIds)].sort()) {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`hubadmin:${hubId}`}))`)
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${hubAdminLockKey(hubId)}))`)
   }
 }
 
 /**
+ * Take the role-catalog lock exclusively, for a transaction about to change a
+ * role definition. It conflicts with {@link lockHubAdminSets}, so it waits for
+ * every in-flight guard and no guard can count against the old definitions once
+ * it is held. Needs no per-hub locks: while it is held no guard runs at all.
+ */
+async function lockRoleCatalog(tx: Executor): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ROLE_CATALOG_LOCK_KEY}))`)
+}
+
+/**
  * Refuse a change to `pubkey` that would leave a hub with no admin.
+ *
+ * Takes the admin-set locks first and reads the role catalog second. Which hubs
+ * the user administers depends on the catalog, so the locks cover every hub
+ * they hold ANY role in — a superset that needs no catalog to compute.
  *
  * `before` is the user's state as stored (read under a row lock by the caller)
  * and `after` the state the change would produce; `null` means the user ceases
@@ -214,12 +254,12 @@ export async function assertHubsKeepAnAdmin(
   after: AdminState | null,
   reason: string,
 ): Promise<void> {
+  await lockHubAdminSets(tx, before.hubRoles.map(hr => hr.hubId))
   const catalog = await loadRoleCatalog(tx)
   const stillAdministered = new Set(after ? hubsAdministered(after, catalog) : [])
   const lost = hubsAdministered(before, catalog).filter(hubId => !stillAdministered.has(hubId))
   if (lost.length === 0) return
 
-  await lockHubAdminSets(tx, lost)
   const remaining = await countAdminsByHub(tx, catalog, lost, pubkey)
   const stranded = lost.filter(hubId => !remaining.has(hubId))
   if (stranded.length === 0) return
@@ -235,12 +275,18 @@ export async function assertHubsKeepAnAdmin(
  * Refuse a role-definition change (`permissions` replaced, or `null` for
  * deletion) that would strip a hub of its last admin. Roles are shared, so one
  * edit can reach every hub that assigns the role.
+ *
+ * Takes the role-catalog lock exclusively before reading anything, so the
+ * catalog it edits and the assignments it counts are the committed state that
+ * no guard can change until this transaction ends. The caller must write the
+ * new definition in the same transaction.
  */
 export async function assertRoleChangeKeepsAdmins(
   tx: Executor,
   roleId: string,
   permissions: readonly string[] | null,
 ): Promise<void> {
+  await lockRoleCatalog(tx)
   const current = await loadRoleCatalog(tx)
   const next: RoleCatalog = permissions === null
     ? current.filter(r => r.id !== roleId)
@@ -248,7 +294,6 @@ export async function assertRoleChangeKeepsAdmins(
 
   const before = await countAdminsByHub(tx, current)
   if (before.size === 0) return
-  await lockHubAdminSets(tx, before.keys())
   const after = await countAdminsByHub(tx, next, [...before.keys()])
   const stranded = [...before.keys()].filter(hubId => !after.has(hubId))
   if (stranded.length === 0) return

@@ -89,8 +89,8 @@ describe('ErasureService.createSelfRequest — co-approver admin check (H01)', (
       cancelledAt: null,
     }
     const stubDb = {
-      // The hub-admin invariant (#2126) looks the requester up first; no row means no hubs to protect
-      select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }) }),
+      // The hub-admin invariant (#2126) looks the requester up first, under a row lock; no row means no hubs to protect
+      select: () => ({ from: () => ({ where: () => ({ for: () => ({ limit: () => Promise.resolve([]) }) }) }) }),
       insert: () => ({
         values: () => ({ returning: () => Promise.resolve([fakeRow]) }),
       }),

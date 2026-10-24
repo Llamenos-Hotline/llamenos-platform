@@ -27,7 +27,12 @@ import { SettingsService, ServiceError } from '../../services/settings'
 import { ErasureService } from '../../services/erasure'
 import { AuditService } from '../../services/audit'
 import { RecordsService } from '../../services/records'
-import { listHubsWithoutAdmin } from '../../lib/hub-admin'
+import {
+  ROLE_CATALOG_LOCK_KEY,
+  hubAdminLockKey,
+  listHubsWithoutAdmin,
+  lockHubAdminSets,
+} from '../../lib/hub-admin'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -328,6 +333,169 @@ describe('changing a role definition cannot strip a hub of its last admin', () =
     await identity.setHubRole({ pubkey: viaCustom, hubId, roleIds: [roleId] })
     await settings.updateRole(roleId, { permissions: ['notes:read-own'] })
     expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
+  })
+})
+
+/**
+ * The lock protocol itself (#2131). The guards count admins from two inputs —
+ * user assignments and role definitions — so a change to EITHER, made while a
+ * guard is between "decide" and "write", can commit through it and leave a hub
+ * with no admin. These tests build exactly that interleaving: one side is held
+ * mid-flight in a real, uncommitted transaction while the other runs, and the
+ * outcome is read from the committed state.
+ */
+describe('concurrent role edits and admin removals cannot strand a hub', () => {
+  const ADMIN_PERMISSIONS = ['settings:manage', 'notes:read-all']
+
+  async function adminRole(label: string): Promise<string> {
+    const id = nextId(`role-${label}`)
+    await db.insert(roles).values({
+      id, slug: id, permissions: ADMIN_PERMISSIONS, isDefault: false, isSystem: false, description: '',
+    })
+    createdRoles.push(id)
+    return id
+  }
+
+  /**
+   * A hub with two admins that are admins through DIFFERENT custom roles: X via
+   * `roleX`, Y via `roleY`. Either alone is removable; both together are not.
+   */
+  async function twoAdminHub(label: string) {
+    const roleX = await adminRole(`${label}-x`)
+    const roleY = await adminRole(`${label}-y`)
+    const x = await makeUser(`${label}-x`)
+    const y = await makeUser(`${label}-y`)
+    const hubId = await makeHub(label, x, [roleX])
+    await identity.setHubRole({ pubkey: y, hubId, roleIds: [roleY] })
+    return { roleX, y, hubId }
+  }
+
+  /** True once some backend is waiting on one of the given advisory-lock keys. */
+  async function someoneWaitsOn(keys: string[]): Promise<boolean> {
+    for (const key of keys) {
+      const rows = await db.execute(sql`
+        SELECT 1 FROM pg_locks
+        WHERE locktype = 'advisory' AND NOT granted
+          AND objid::text::bigint = (hashtext(${key})::bigint & 4294967295)
+        LIMIT 1`)
+      if (rows.length > 0) return true
+    }
+    return false
+  }
+
+  async function waitUntilBlocked(keys: string[]): Promise<void> {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if (await someoneWaitsOn(keys)) return
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    throw new Error(`nothing ever waited on ${keys.join(' / ')}: the guard ran past an in-flight change it needed to be serialised with`)
+  }
+
+  /** Run `held` inside a transaction and keep it open until `release()` is called. */
+  function holdTransaction(held: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<void>) {
+    let release!: () => void
+    let ready!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { ready = resolve })
+    const done = db.transaction(async tx => {
+      await held(tx)
+      ready()
+      await gate
+    })
+    return { entered, release, done }
+  }
+
+  async function assignedRoles(pubkey: string, hubId: string): Promise<string[]> {
+    return (await hubRolesOf(pubkey)).find(hr => hr.hubId === hubId)?.roleIds ?? []
+  }
+
+  it('a demotion waits for an in-flight role edit and then sees its effect', async () => {
+    const { roleX, y, hubId } = await twoAdminHub('race-a')
+    // The role edit that strips X's authority is mid-flight: it holds the
+    // catalog lock and has written, but not committed.
+    const edit = holdTransaction(async tx => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ROLE_CATALOG_LOCK_KEY}))`)
+      await tx.update(roles).set({ permissions: ['notes:read-own'] }).where(eq(roles.id, roleX))
+    })
+    await edit.entered
+
+    // Y's demotion must read the catalog only once it holds its locks. Reading
+    // it first would still show X as an admin, count X, and pass.
+    const outcome = identity
+      .setHubRole({ pubkey: y, hubId, roleIds: ['role-volunteer'] })
+      .then(() => 'committed' as const, (err: unknown) => err)
+    try {
+      await waitUntilBlocked([ROLE_CATALOG_LOCK_KEY])
+    } finally {
+      edit.release()
+      await edit.done
+    }
+
+    const result = await outcome
+    expect(result).toBeInstanceOf(ServiceError)
+    expect((result as ServiceError).status).toBe(409)
+    expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
+    expect(await assignedRoles(y, hubId)).not.toContain('role-volunteer')
+  })
+
+  it('a role edit waits for an in-flight demotion and then counts it', async () => {
+    const { roleX, y, hubId } = await twoAdminHub('race-b')
+    // Y's demotion has passed its guard (it holds the locks) and written, but
+    // not committed. X is then the hub's only admin.
+    const demotion = holdTransaction(async tx => {
+      await lockHubAdminSets(tx, [hubId])
+      await tx
+        .update(users)
+        .set({ hubRoles: [{ hubId, roleIds: ['role-volunteer'] }] })
+        .where(eq(users.pubkey, y))
+    })
+    await demotion.entered
+
+    const outcome = settings
+      .updateRole(roleX, { permissions: ['notes:read-own'] })
+      .then(() => 'committed' as const, (err: unknown) => err)
+    try {
+      await waitUntilBlocked([ROLE_CATALOG_LOCK_KEY, hubAdminLockKey(hubId)])
+    } finally {
+      demotion.release()
+      await demotion.done
+    }
+
+    const result = await outcome
+    expect(result).toBeInstanceOf(ServiceError)
+    expect((result as ServiceError).status).toBe(409)
+    expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
+    const [row] = await db.select({ permissions: roles.permissions }).from(roles).where(eq(roles.id, roleX))
+    expect(row?.permissions).toEqual(ADMIN_PERMISSIONS)
+  })
+
+  it('raced head-on, in both directions, the hub never reaches zero admins and nothing deadlocks', async () => {
+    for (let i = 0; i < 12; i++) {
+      const { roleX, y, hubId } = await twoAdminHub(`race-c${i}`)
+      // Alternate which role edit (update / delete) meets which removal
+      // (demote / remove / deactivate), and which side starts first.
+      const strip = i % 2 === 0
+        ? () => settings.updateRole(roleX, { permissions: ['notes:read-own'] })
+        : () => settings.deleteRole(roleX)
+      const removeY = [
+        () => identity.setHubRole({ pubkey: y, hubId, roleIds: ['role-volunteer'] }),
+        () => identity.removeHubRole({ pubkey: y, hubId }),
+        () => identity.updateUser(y, { active: false }, true),
+      ][i % 3]
+      const ops = i % 4 < 2 ? [strip, removeY] : [removeY, strip]
+      const settled = await Promise.allSettled(ops.map(op => op()))
+
+      for (const r of settled) {
+        if (r.status === 'rejected') {
+          expect(r.reason).toBeInstanceOf(ServiceError)
+          expect((r.reason as ServiceError).status).toBe(409)
+        }
+      }
+      // Exactly one of the two may win; both would strand the hub.
+      expect(settled.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+      expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
+    }
   })
 })
 

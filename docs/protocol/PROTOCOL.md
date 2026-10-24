@@ -2286,6 +2286,8 @@ Response: { "ok": true }
 // is refused with 409 and leaves nothing changed. Erasure of a hub's only admin is deferred, not
 // denied: it succeeds once another admin exists. Makes the note-without-admin-recipient state
 // (a note no admin can ever read) unreachable; the POST /notes boundary check stays as defence in depth.
+// The check is race-free: guards take advisory locks (the role catalog shared, then each affected hub)
+// BEFORE reading role definitions and counting, and a role-definition edit takes the catalog lock exclusively.
 
 GET /api/hubs/:hubId/key
 Auth: Required (hub member)

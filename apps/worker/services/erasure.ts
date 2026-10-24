@@ -267,7 +267,9 @@ export class ErasureService {
    * retries.
    */
   private async assertErasureKeepsHubAdmins(tx: Pick<Database, 'select' | 'execute'>, userId: string): Promise<void> {
-    const [current] = await tx.select().from(users).where(eq(users.pubkey, userId)).limit(1)
+    // Row lock, as on every other guarded path: the guard locks the hubs named in
+    // this row, so it must not be a snapshot a concurrent grant can outdate.
+    const [current] = await tx.select().from(users).where(eq(users.pubkey, userId)).for('update').limit(1)
     if (!current) return
     await assertHubsKeepAnAdmin(
       tx,

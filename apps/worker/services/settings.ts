@@ -112,6 +112,7 @@ import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surface
 import {
   assertRoleChangeKeepsAdmins,
   loadRoleCatalog,
+  lockHubAdminSets,
   mergeHubRole,
   rolesConferHubAdmin,
   type HubRoleAssignment,
@@ -1988,6 +1989,10 @@ export class SettingsService {
       if (!founderRow.active || founderRow.status !== 'active') {
         throw new ServiceError(409, 'Hub founder is not an active user')
       }
+      // Lock before reading the catalog: a role edit that strips the founder's
+      // role must either finish first (and fail this check) or wait until the
+      // hub's admin is committed (and be counted by its own guard).
+      await lockHubAdminSets(tx, [hub.id])
       if (!rolesConferHubAdmin(founder.roleIds, await loadRoleCatalog(tx))) {
         throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
       }
