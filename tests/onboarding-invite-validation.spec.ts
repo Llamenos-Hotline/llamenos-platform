@@ -8,7 +8,9 @@ import { test, expect } from '@playwright/test'
  * assert the retryable outcome is distinguishable from a real verdict.
  */
 
-const CODE = '1712-test-invite-code'
+// Well-formed (UUID): a malformed code is refused locally before any request (#1128),
+// and these scenarios are about what the server's non-answers do.
+const CODE = '17120000-0000-4000-8000-000000001712'
 
 function fulfillJson(route: import('@playwright/test').Route, status: number, body: unknown, headers: Record<string, string> = {}) {
   return route.fulfill({

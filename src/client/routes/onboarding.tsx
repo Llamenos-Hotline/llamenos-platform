@@ -1,9 +1,13 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { validateInvite, redeemInvite } from '@/lib/api'
+import { getApiBase, isAbsoluteUrl, isPackagedTauri } from '@/lib/api-config'
+import { leaveServer } from '@/lib/server-switch'
+import { INVITE_CODE_LENGTH, normalizeInviteCode } from '@/lib/invite-code'
 import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin, markUnlocked } from '@/lib/key-manager'
 import { initializeUserIdentity } from '@/lib/user-identity'
@@ -13,15 +17,75 @@ import { setLanguage } from '@/lib/i18n'
 import { LANGUAGES } from '@shared/languages'
 import { PinInput } from '@/components/pin-input'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Globe, KeyRound, ShieldCheck, ArrowRight, ArrowLeft, Check, Copy, Download, AlertTriangle } from 'lucide-react'
+import { Globe, KeyRound, ShieldCheck, ArrowRight, ArrowLeft, Check, Copy, Download, AlertTriangle, Loader2, Server, Ticket } from 'lucide-react'
 import { LogoMark } from '@/components/logo-mark'
 
 export const Route = createFileRoute('/onboarding')({
-  component: OnboardingPage,
+  component: OnboardingRoute,
 })
 
-type Step = 'loading' | 'error' | 'welcome' | 'pin' | 'keypair' | 'backup' | 'done'
+/**
+ * Onboarding is for a device no one is signed in on (#1166): redeeming an invite
+ * mints a brand-new device key and stores it over whatever key this device
+ * holds, and the code screen can forget the server. __root.tsx sends a signed-in
+ * user on; until that navigation lands nothing here mounts — which matters when
+ * the app loads straight onto /onboarding already signed in (a passkey session
+ * survives a reload), because a child's mount effects run before the root's
+ * redirect does.
+ */
+function OnboardingRoute() {
+  const { isAuthenticated } = useAuth()
+  return isAuthenticated ? null : <OnboardingPage />
+}
+
+type Step = 'code' | 'loading' | 'error' | 'welcome' | 'pin' | 'keypair' | 'backup' | 'done'
+
+/**
+ * Why the server did not accept a code. `retryable`: no verdict about the code
+ * arrived at all — rate limiting, a server or proxy error, a refused connection,
+ * a TLS pin mismatch or allowlist refusal in the Rust proxy, or a timeout
+ * (#1712). The code may be fine, so it is never reported as invalid.
+ */
+type InviteRefusal =
+  | { reason: 'expired' | 'already_used' | 'invalid' }
+  | { reason: 'retryable'; retryAfterSeconds?: number }
+
+type InviteCheck =
+  | { ok: true; name: string; roleIds: string[] }
+  | ({ ok: false } & InviteRefusal)
+
+/** Why the entry screen is not moving on: a refusal, or `malformed` — never sent anywhere. */
+type CodeIssue = InviteRefusal | { reason: 'malformed' }
+
+/** Ask the configured server about an already-normalized code. */
+async function checkInvite(code: string): Promise<InviteCheck> {
+  // validateInvite never throws: every failure to get a verdict is `retryable`.
+  const result = await validateInvite(code)
+  if (result.outcome === 'valid') {
+    return { ok: true, name: result.name, roleIds: result.roleIds || ['role-volunteer'] }
+  }
+  if (result.outcome === 'invalid') {
+    const reason = result.error === 'expired' || result.error === 'already_used' ? result.error : 'invalid'
+    return { ok: false, reason }
+  }
+  return { ok: false, reason: 'retryable', retryAfterSeconds: result.retryAfterSeconds }
+}
+
+function inviteErrorMessage(t: TFunction, issue: CodeIssue): string {
+  switch (issue.reason) {
+    case 'expired': return t('onboarding.expired')
+    case 'already_used': return t('onboarding.alreadyUsed')
+    case 'invalid': return t('onboarding.invalidCode')
+    case 'malformed': return t('onboarding.malformedCode')
+    case 'retryable':
+      return issue.retryAfterSeconds
+        ? t('onboarding.rateLimitedRetry', { seconds: issue.retryAfterSeconds })
+        : t('onboarding.validationUnavailable')
+  }
+}
 
 function OnboardingPage() {
   const { t, i18n } = useTranslation()
@@ -30,11 +94,15 @@ function OnboardingPage() {
   const { toast } = useToast()
   const navigate = useNavigate()
 
-  // Get invite code from URL
-  const params = new URLSearchParams(window.location.search)
-  const inviteCode = params.get('code') || ''
+  // A `?code=` link still works; reached from the login screen there is none,
+  // and the volunteer pastes the code they were sent instead.
+  const [urlCode] = useState(() => new URLSearchParams(window.location.search).get('code'))
+  const [inviteCode, setInviteCode] = useState('')
+  const [codeInput, setCodeInput] = useState('')
+  const [codeIssue, setCodeIssue] = useState<CodeIssue | null>(null)
+  const [checkingCode, setCheckingCode] = useState(false)
 
-  const [step, setStep] = useState<Step>('loading')
+  const [step, setStep] = useState<Step>(() => (urlCode ? 'loading' : 'code'))
   const [inviteData, setInviteData] = useState<{ name: string; roleIds: string[] } | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [uiLang, setUiLang] = useState(i18n.language || 'en')
@@ -75,59 +143,75 @@ function OnboardingPage() {
     }
   }, [])
 
-  // Validate invite on initial mount only (ref survives re-renders but not re-mounts)
+  // Validate a `?code=` link on mount (ref survives re-renders but not re-mounts).
+  // A transient failure (#1712) offers a retry, which re-runs this.
   const [errorRetryable, setErrorRetryable] = useState(false)
   const validatingRef = useRef(false)
 
   const runValidation = useCallback(() => {
-    if (!inviteCode) {
+    const code = urlCode ? normalizeInviteCode(urlCode) : null
+    if (!code) {
       setErrorRetryable(false)
       setStep('error')
-      setErrorMsg(t('onboarding.noCode'))
+      setErrorMsg(t('onboarding.invalidCode'))
       return
     }
-    validateInvite(inviteCode).then(result => {
-      if (result.outcome === 'valid') {
-        setInviteData({ name: result.name, roleIds: result.roleIds || ['role-volunteer'] })
+    void checkInvite(code).then(result => {
+      if (result.ok) {
+        setInviteCode(code)
+        setInviteData({ name: result.name, roleIds: result.roleIds })
         setStep('welcome')
-      } else if (result.outcome === 'invalid') {
-        setErrorRetryable(false)
-        setStep('error')
-        setErrorMsg(
-          result.error === 'expired' ? t('onboarding.expired') :
-          result.error === 'already_used' ? t('onboarding.alreadyUsed') :
-          t('onboarding.invalidCode')
-        )
-      } else {
-        // Rate limit, server error, or network failure (#1712) — transient,
-        // so the screen offers a retry instead of a terminal verdict.
-        setErrorRetryable(true)
-        setStep('error')
-        setErrorMsg(
-          result.retryAfterSeconds
-            ? t('onboarding.rateLimitedRetry', { seconds: result.retryAfterSeconds })
-            : t('onboarding.validationUnavailable')
-        )
+        return
       }
-    }).catch(() => {
-      // validateInvite already converts network failures into `retryable`;
-      // this arm is purely defensive.
-      setErrorRetryable(true)
+      setErrorRetryable(result.reason === 'retryable')
       setStep('error')
-      setErrorMsg(t('onboarding.validationUnavailable'))
+      setErrorMsg(inviteErrorMessage(t, result))
     })
-  }, [inviteCode, t])
+  }, [urlCode, t])
 
   useEffect(() => {
-    // Skip if already validated or currently validating
-    if (validatingRef.current || step !== 'loading') return
+    // Skip if there is no link, or it is already validated / being validated
+    if (!urlCode || validatingRef.current || step !== 'loading') return
     validatingRef.current = true
     runValidation()
-  }, [inviteCode, step, runValidation])
+  }, [urlCode, step, runValidation])
 
   function handleRetryValidation() {
     validatingRef.current = false
     setStep('loading')
+  }
+
+  async function handleCodeSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (checkingCode) return
+    setCodeIssue(null)
+    // Trimmed and lowercased before anything else: a trailing newline from a
+    // Signal copy must never surface as "invalid code".
+    const code = normalizeInviteCode(codeInput)
+    if (!code) {
+      setCodeIssue({ reason: 'malformed' })
+      return
+    }
+    setCheckingCode(true)
+    const result = await checkInvite(code)
+    setCheckingCode(false)
+    if (result.ok) {
+      setInviteCode(code)
+      setInviteData({ name: result.name, roleIds: result.roleIds })
+      setStep('welcome')
+    } else {
+      setCodeIssue(result)
+    }
+  }
+
+  async function handleChangeServer() {
+    try {
+      // The same teardown as Settings → server connection. The volunteer types
+      // the new address on the first-run screen, so none is handed over.
+      await leaveServer(null)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : t('common.error'), 'error')
+    }
   }
 
   function handlePinComplete(enteredPin: string) {
@@ -227,6 +311,101 @@ function OnboardingPage() {
     navigate({ to: '/profile-setup' })
   }
 
+  if (step === 'code') {
+    const apiBase = getApiBase()
+    // Where the code is about to be sent. Shown so the volunteer can check it
+    // against what the person who invited them said — the code is a bearer
+    // token, and nothing in it can choose or override the server.
+    const serverOrigin = isAbsoluteUrl(apiBase) ? apiBase : null
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-background p-4 overflow-hidden">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute left-1/2 top-1/3 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-3xl" />
+        </div>
+        <Card className="relative z-10 w-full max-w-lg">
+          <CardHeader className="text-center">
+            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+              <Ticket className="h-6 w-6 text-primary" />
+            </div>
+            <CardTitle>{t('onboarding.enterCodeTitle')}</CardTitle>
+            <CardDescription>{t('onboarding.enterCodeDescription')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {serverOrigin && (
+              <div className="space-y-2 rounded-lg border bg-muted/50 p-3">
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Server className="h-3.5 w-3.5" />
+                  {t('onboarding.codeSentTo')}
+                </p>
+                <p data-testid="invite-code-server" className="break-all font-mono text-sm">{serverOrigin}</p>
+                {isPackagedTauri() && (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs"
+                    data-testid="invite-code-change-server"
+                    onClick={() => void handleChangeServer()}
+                    disabled={checkingCode}
+                  >
+                    {t('onboarding.useDifferentServer')}
+                  </Button>
+                )}
+              </div>
+            )}
+
+            <form onSubmit={handleCodeSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="invite-code-input">{t('onboarding.codeLabel')}</Label>
+                {/* One field sized for the whole 36-character code: it is pasted,
+                    never retyped. No maxLength — a paste with surrounding
+                    whitespace would be cut off mid-code before it is trimmed. */}
+                <Input
+                  id="invite-code-input"
+                  data-testid="invite-code-input"
+                  value={codeInput}
+                  onChange={e => { setCodeInput(e.target.value); setCodeIssue(null) }}
+                  placeholder={t('onboarding.codePlaceholder')}
+                  size={INVITE_CODE_LENGTH}
+                  className="font-mono"
+                  autoFocus
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  disabled={checkingCode}
+                  aria-invalid={!!codeIssue}
+                  aria-describedby={codeIssue ? 'invite-code-error' : undefined}
+                />
+              </div>
+              {codeIssue && (
+                <p id="invite-code-error" role="alert" data-testid="invite-code-error" data-reason={codeIssue.reason} className="text-sm text-destructive">
+                  {inviteErrorMessage(t, codeIssue)}
+                </p>
+              )}
+              <Button
+                type="submit"
+                data-testid="invite-code-submit"
+                className="w-full"
+                size="lg"
+                disabled={checkingCode || !codeInput.trim()}
+              >
+                {checkingCode
+                  ? <><Loader2 className="h-4 w-4 animate-spin" />{t('common.loading')}</>
+                  : <>{t('onboarding.continue')}<ArrowRight className="h-4 w-4" /></>}
+              </Button>
+            </form>
+
+            <Button variant="ghost" size="sm" className="w-full" onClick={() => navigate({ to: '/login' })}>
+              <ArrowLeft className="h-4 w-4" />
+              {t('common.back')}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   if (step === 'loading') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -241,7 +420,7 @@ function OnboardingPage() {
   if (step === 'error') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <Card className="w-full max-w-md border-amber-500/30">
+        <Card data-testid="onboarding-error" className="w-full max-w-md border-amber-500/30">
           <CardHeader className="text-center">
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10">
               <AlertTriangle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
@@ -279,7 +458,7 @@ function OnboardingPage() {
               <CardTitle className="text-2xl" data-testid="onboarding-welcome-title">
                 {t('onboarding.welcomeTitle', { name: hotlineName })}
               </CardTitle>
-              <CardDescription>
+              <CardDescription data-testid="onboarding-welcome">
                 {t('onboarding.welcomeDescription', { volunteerName: inviteData?.name })}
               </CardDescription>
             </CardHeader>
@@ -332,7 +511,7 @@ function OnboardingPage() {
               <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
                 <KeyRound className="h-6 w-6 text-primary" />
               </div>
-              <CardTitle>
+              <CardTitle data-testid={pinStep === 'create' ? 'onboarding-pin-create' : 'onboarding-pin-confirm'}>
                 {pinStep === 'create' ? t('pin.createTitle') : t('pin.confirmTitle')}
               </CardTitle>
               <CardDescription>
