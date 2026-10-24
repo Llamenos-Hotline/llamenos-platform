@@ -1526,56 +1526,38 @@ dev.post('/test-create-hub', async (c) => {
     updatedAt: new Date().toISOString(),
   }
 
-  try {
-    await services.settings.createHub(hub)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create hub'
-    return c.json({ error: message }, 500)
-  }
-
-  // Add admin as a member of the new hub so WS relay subscribe works in tests.
-  // This is CRITICAL for E2E — without hub membership, all hub-scoped API calls
-  // return 403 and the frontend fails to render hub pages.
+  // The admin founds the hub — it is a member of the new hub so WS relay
+  // subscribe works in tests, and CRITICAL for E2E: without hub membership all
+  // hub-scoped API calls return 403 and the frontend fails to render hub pages.
+  // A hub is never created without an admin (#2126), so one must be nameable.
   // Accept adminPubkey from request body as fallback — local dev may not have
   // ADMIN_PUBKEY set in env, but the test helper knows the admin pubkey.
   const bodyAdminPubkey = typeof rawBody === 'object' && rawBody !== null && 'adminPubkey' in rawBody && typeof rawBody.adminPubkey === 'string'
     ? rawBody.adminPubkey : undefined
   const adminPubkey = (c.env?.ADMIN_PUBKEY as string | undefined) || bodyAdminPubkey
-  if (adminPubkey) {
-    // Ensure the admin user exists before attempting setHubRole. During parallel
-    // test startup, test-create-hub can race with test-reset/ensureInit — the
-    // admin row may not exist yet. ensureInit uses onConflictDoUpdate so it's
-    // safe to call concurrently (idempotent, always sets role-super-admin).
-    await services.identity.ensureInit(adminPubkey)
-
-    // Retry up to 3 times — even after ensureInit, a concurrent reset could
-    // briefly delete the user row between our ensureInit and setHubRole.
-    let hubRoleSet = false
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await services.identity.setHubRole({
-          pubkey: adminPubkey,
-          hubId: hub.id,
-          roleIds: ['role-super-admin'],
-        })
-        hubRoleSet = true
-        break
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[test-create-hub] setHubRole attempt ${attempt + 1}/3 failed: ${msg}`)
-        if (attempt < 2) {
-          await new Promise(r => setTimeout(r, 500))
-          // Re-ensure admin exists before retrying
-          await services.identity.ensureInit(adminPubkey).catch(() => {})
-        }
-      }
-    }
-    if (!hubRoleSet) {
-      console.error(`[test-create-hub] FAILED to set admin hub role for hub ${hub.id} — hub-scoped tests will 403`)
-    }
+  if (!adminPubkey) {
+    return c.json({ error: 'adminPubkey is required: a hub cannot be created without an admin' }, 400)
   }
 
-  return c.json({ id: hub.id, name: hub.name })
+  // Retry up to 3 times — during parallel test startup test-create-hub can race
+  // with test-reset/ensureInit, so the admin row may not exist yet or may
+  // briefly vanish. ensureInit uses onConflictDoUpdate so it is safe to call
+  // concurrently (idempotent, always sets role-super-admin), and createHub is
+  // atomic, so a failed attempt leaves nothing behind to collide with the retry.
+  let lastError = 'Failed to create hub'
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await services.identity.ensureInit(adminPubkey)
+      await services.settings.createHub(hub, { pubkey: adminPubkey, roleIds: ['role-super-admin'] })
+      return c.json({ id: hub.id, name: hub.name })
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err)
+      console.warn(`[test-create-hub] attempt ${attempt + 1}/3 failed: ${lastError}`)
+      if (err instanceof ServiceError && err.status === 409 && lastError.includes('slug')) break
+      if (attempt < 2) await new Promise(r => setTimeout(r, 500))
+    }
+  }
+  return c.json({ error: lastError }, 500)
 })
 
 // ─── Database identity (test-harness cross-check) ─────────────────────────

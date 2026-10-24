@@ -21,6 +21,7 @@ import '../../db/pg-array-patch'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
@@ -57,7 +58,7 @@ async function createHub(status = 'active'): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(db))
   return id
 }
 

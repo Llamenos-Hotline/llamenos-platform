@@ -126,7 +126,7 @@ export async function seedSampleDataset(
     createdAt: ago(24 * 14).toISOString(),
     updatedAt: now.toISOString(),
   }
-  await services.settings.createHub(hub)
+  await services.settings.createHub(hub, { pubkey: cast.admin.pubkey, roleIds: ['role-hub-admin'] })
   for (const account of accounts) {
     const roleIds = account.roleIds.includes('role-super-admin') ? ['role-hub-admin'] : account.roleIds
     await services.identity.setHubRole({ pubkey: account.pubkey, hubId, roleIds })

@@ -120,25 +120,17 @@ routes.post('/',
       updatedAt: new Date().toISOString(),
     }
 
+    // The creator becomes the hub's first admin in the same transaction as the
+    // hub itself (#2126): a hub never exists without one, and if the grant
+    // cannot be made the hub is not created.
     try {
-      await services.settings.createHub(hub)
+      await services.settings.createHub(hub, { pubkey, roleIds: ['role-hub-admin'] })
     } catch (err) {
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 400 | 409 | 500)
+        return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
       }
       const message = err instanceof Error ? err.message : 'Failed to create hub'
       return c.json({ error: message }, 500)
-    }
-
-    // Auto-add the creator as hub admin
-    try {
-      await services.identity.setHubRole({
-        pubkey,
-        hubId: hub.id,
-        roleIds: ['role-hub-admin'],
-      })
-    } catch (hubRoleErr) {
-      console.warn(`[hubs] Failed to add creator as hub admin for ${hub.id}:`, hubRoleErr)
     }
 
     // Provision hub-scoped storage buckets and IAM
@@ -270,7 +262,9 @@ routes.post('/:hubId/members',
       })
       await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: body.roleIds }, undefined, hubId)
       return c.json(result)
-    } catch {
+    } catch (err) {
+      // A refusal (e.g. demoting the hub's last admin) is the caller's answer, not a server fault
+      if (err instanceof ServiceError && err.status === 409) return c.json({ error: err.message }, 409)
       return c.json({ error: 'Failed to add member' }, 500)
     }
   },
@@ -315,7 +309,9 @@ routes.delete('/:hubId/members/:pubkey',
       await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
       await audit(services.audit, 'userRemoved', actorPubkey, { target: targetPubkey }, undefined, hubId)
       return c.json({ ok: true })
-    } catch {
+    } catch (err) {
+      // A refusal (the hub's last admin) is the caller's answer, not a server fault
+      if (err instanceof ServiceError && err.status === 409) return c.json({ error: err.message }, 409)
       return c.json({ error: 'Failed to remove member' }, 500)
     }
   },
