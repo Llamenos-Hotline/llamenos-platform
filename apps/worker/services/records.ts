@@ -168,12 +168,21 @@ export class RecordsService {
     return { notes: rows, total: Number(total) }
   }
 
-  async updateNote(id: string, input: UpdateNoteInput): Promise<NoteRow> {
-    const existing = await this.getNote(id)
-
-    if (existing.authorPubkey !== input.authorPubkey) {
+  /**
+   * The note `id`, only if `authorPubkey` wrote it. Routes call this before
+   * judging an edit's content, so a non-author is told 403 whatever they sent —
+   * never a validation error that says anything about the note.
+   */
+  async getNoteAuthoredBy(id: string, authorPubkey: string): Promise<NoteRow> {
+    const note = await this.getNote(id)
+    if (note.authorPubkey !== authorPubkey) {
       throw new ServiceError(403, 'Only the note author can update this note')
     }
+    return note
+  }
+
+  async updateNote(id: string, input: UpdateNoteInput): Promise<NoteRow> {
+    await this.getNoteAuthoredBy(id, input.authorPubkey)
 
     const updates: Partial<typeof notes.$inferInsert> = {
       encryptedContent: input.encryptedContent,

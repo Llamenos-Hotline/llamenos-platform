@@ -12,7 +12,7 @@ import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
 import type { CallRecord } from '@protocol/schemas/calls'
-import { apiPost, apiGet, listBansViaApi, listNotesViaApi, encryptForTest } from '../../api-helpers'
+import { apiPost, apiGet, listBansViaApi, listNotesViaApi, sealedNoteFields } from '../../api-helpers'
 import {
   simulateIncomingCall,
   simulateAnswerCall,
@@ -139,8 +139,8 @@ When(
       request,
       `/hubs/${state.hubId}/notes`,
       {
+        ...(await sealedNoteFields(state.volunteers[volIndex].deviceKey, 'bdd test note for active call')),
         callId: state.callId,
-        encryptedContent: (await encryptForTest('bdd test note for active call', [state.volunteers[volIndex].deviceKey])).encryptedContent,
       },
       state.volunteers[volIndex].deviceKey,
     )

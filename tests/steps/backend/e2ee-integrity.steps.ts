@@ -13,6 +13,7 @@ import {
   uniquePhone,
   ADMIN_SEED,
 } from '../../api-helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import {
   generateContentKey,
   encryptContent,
@@ -173,7 +174,7 @@ When(
       '/notes',
       {
         encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-        callId: `e2ee-integrity-${Date.now()}`,
+        callId: await simulateCallForNote(request),
         authorEnvelope: volEnvelope ?? {},
         adminEnvelopes,
       },
@@ -223,7 +224,7 @@ When('the encrypted note is submitted via the API by {string}', async ({ request
     '/notes',
     {
       encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-      callId: `e2ee-3rd-party-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       authorEnvelope: volEnvelope ?? {},
       adminEnvelopes,
     },
@@ -277,6 +278,12 @@ When(
         getE2EEIntegrityState(world).envelopes.set(adminKp.x25519Pubkey, adminEnv)
       }
     }
+
+    // ...and for the deployment's own admin key, which every real client is told to
+    // wrap for and which the server requires an envelope for (#2113).
+    const serverAdmin = adminHpkeRecipient()
+    const serverAdminEnv = await wrapKeyForRecipient(contentKey, serverAdmin.pubkeyHex, serverAdmin.skHex, LABEL_NOTE_KEY)
+    getE2EEIntegrityState(world).envelopes.set(serverAdmin.pubkeyHex, serverAdminEnv)
   },
 )
 
@@ -303,7 +310,7 @@ When(
       '/notes',
       {
         encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-        callId: `e2ee-multi-admin-${Date.now()}`,
+        callId: await simulateCallForNote(request),
         authorEnvelope: volEnvelope ?? {},
         adminEnvelopes,
       },
@@ -352,7 +359,7 @@ When('the encrypted note is submitted via the API with real envelopes', async ({
     '/notes',
     {
       encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-      callId: `e2ee-storage-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       authorEnvelope: volEnvelope ?? {},
       adminEnvelopes,
     },
@@ -599,7 +606,7 @@ When(
       '/notes',
       {
         encryptedContent: state.ciphertextHex,
-        callId: `xu-${Date.now()}`,
+        callId: await simulateCallForNote(request),
         authorEnvelope: authorEnv,
         adminEnvelopes: [{ pubkey: state.adminX25519Pubkey, ...adminEnv }],
       },
@@ -635,7 +642,7 @@ When(
       '/notes',
       {
         encryptedContent: state.ciphertextHex,
-        callId: `xu-admin-${Date.now()}`,
+        callId: await simulateCallForNote(request),
         authorEnvelope: adminEnv,
         adminEnvelopes: [{ pubkey: state.adminX25519Pubkey, ...adminEnv }],
       },
