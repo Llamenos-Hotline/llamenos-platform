@@ -332,7 +332,10 @@ async function captureRingRequest() {
   const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     expect(String(input)).toBe(`${BRIDGE_URL}/ring`)
     body = JSON.parse(String(init?.body))
-    return new Response(JSON.stringify({ ok: true, channelIds: [] }), { headers: { 'Content-Type': 'application/json' } })
+    // A healthy bridge returns one channel per leg it placed. An empty list for a
+    // non-empty ring is a total outage, which the adapter rejects (#1136).
+    const placed = (body as { volunteers: unknown[] }).volunteers.map((_, i) => `captured-leg-${i}`)
+    return new Response(JSON.stringify({ ok: true, channelIds: placed }), { headers: { 'Content-Type': 'application/json' } })
   })
   await adapter.ringVolunteers({
     callSid: CALLER,

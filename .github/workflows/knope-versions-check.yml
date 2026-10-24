@@ -33,7 +33,8 @@ permissions: {}  # deny-all; per-job permissions below
 
 concurrency:
   group: knope-versions-check-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  # Only a superseded PR push cancels (#2094); never a merge_group run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   knope-versions-check:

@@ -35,8 +35,7 @@ helm install llamenos deploy/helm/llamenos/ \
 
 `app.image.repository` has no default — the chart refuses to render without it. Point it at
 wherever your own build of [`deploy/docker/Dockerfile`](https://github.com/Llamenos-Hotline/llamenos-platform/blob/main/deploy/docker/Dockerfile)
-actually publishes to; the project's own CI (`.github/workflows/docker.yml`) publishes to
-Docker Hub, not GHCR.
+actually publishes to. The project does not publish images from CI; images are built and pushed from a local machine.
 
 Or create a `values-production.yaml` file for reproducible deploys:
 

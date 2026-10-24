@@ -19,6 +19,11 @@ on:
   schedule:
     - cron: '16 16 * * 3'
 
+concurrency:
+  # A superseded push cancels its own PR run (#2094); every other event gets a per-SHA group that nothing can cancel.
+  group: ${{ github.event_name == 'pull_request' && format('semgrep-pr-{0}', github.ref) || format('semgrep-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

@@ -28,6 +28,8 @@ function makeApp(opts: {
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockRecords = {
+    // The hub guard (#2011) reads the note first; every note here lives in the app's hub.
+    getNote: vi.fn().mockResolvedValue({ id: 'note-1', hubId }),
     listNotes: vi.fn().mockResolvedValue({ notes: [], total: 0 }),
     createNote: vi.fn().mockResolvedValue({ id: 'note-1', authorPubkey: pubkey }),
     updateNote: vi.fn().mockResolvedValue({ id: 'note-1', authorPubkey: pubkey }),

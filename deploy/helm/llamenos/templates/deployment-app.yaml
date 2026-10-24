@@ -46,7 +46,7 @@ spec:
       serviceAccountName: {{ include "llamenos.serviceAccountName" . }}
       containers:
         - name: app
-          image: "{{ required "app.image.repository is required — set it to the registry/repo your own build actually publishes to (docker.io/<your-dockerhub-username>/llamenos by default, see .github/workflows/docker.yml; NOT ghcr.io)" .Values.app.image.repository }}:{{ include "llamenos.appImageTag" . }}"
+          image: "{{ required "app.image.repository is required — set it to the registry/repo your own build actually publishes to (e.g. docker.io/<your-dockerhub-username>/llamenos)" .Values.app.image.repository }}:{{ include "llamenos.appImageTag" . }}"
           imagePullPolicy: {{ .Values.app.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.app.port }}

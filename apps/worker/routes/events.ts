@@ -20,6 +20,7 @@ import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
+import { resourceInPathHub } from '../lib/hub-scope'
 
 const events = new Hono<AppEnv>()
 
@@ -36,6 +37,17 @@ events.use('*', async (c, next) => {
   c.header('Sunset', SUNSET_DATE)
   c.header('Link', '</api/records?category=event>; rel="successor-version"')
 })
+
+// Inside /hubs/:hubId every /:id route may only touch an event of that hub
+// (#2011); another hub's event is a 404, the same as a missing one. An event is
+// either a legacy `events` row or a case record whose entity type has category
+// "event" (#789), so the lookup is the one the link routes themselves use —
+// `getEvent` only knows the legacy table and would refuse every record-backed
+// event.
+events.use('/:id/*', resourceInPathHub({
+  param: 'id',
+  load: (services, id, hubId) => services.cases.resolveEventTarget(id, hubId),
+}))
 
 // Admin events migration endpoints removed — migration is complete.
 // All events are now accessible as records with category:"event" entity types.

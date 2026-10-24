@@ -6,12 +6,23 @@ import { listNotesQuerySchema, createNoteBodySchema, updateNoteBodySchema, creat
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createLogger } from '../lib/logger'
+import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
 
 const logger = createLogger('routes.notes')
 
 const notes = new Hono<AppEnv>()
 // Require at least notes:read-own to access any notes endpoint
 notes.use('*', requirePermission('notes:read-own'))
+
+// Inside /hubs/:hubId every /:id route may only touch a note of that hub (#2011):
+// reading or appending replies to another hub's note through this hub's URL is a
+// 404, the same as a missing note. Registered before the handlers so none can
+// opt out.
+const noteInPathHub = resourceInPathHub({
+  param: 'id',
+  load: async (services, id, hubId) => assertInHub(await services.records.getNote(id), hubId, 'Note not found'),
+})
+notes.use('/:id/*', noteInPathHub)
 
 notes.get('/',
   describeRoute({

@@ -88,6 +88,12 @@ function createTestApp(opts: {
     }
   }
 
+  // Hub binding (#2011) is pinned against real rows in
+  // integration-bun/hub-resource-binding.test.ts. Here the guard reads through
+  // the test's own `getById` so these tests stay about handler behaviour.
+  const conversationsMock = mergedServices.conversations as Record<string, (id: string) => Promise<unknown>>
+  conversationsMock.getByIdForHub ??= (id: string) => conversationsMock.getById(id)
+
   const app = new Hono<AppEnv>()
 
   app.use('*', async (c, next) => {

@@ -127,9 +127,12 @@ function buildRepo(): Repo {
 
   // The `changes` steps shell out to the real platform classifier by a
   // repo-relative path. Untracked, so it never appears in any diff.
-  const detect = '.github/scripts/detect-changed-platforms.sh'
   mkdirSync(join(dir, '.github', 'scripts'), { recursive: true })
-  copyFileSync(join(process.cwd(), detect), join(dir, detect))
+  for (const f of [
+    '.github/scripts/detect-changed-platforms.sh',
+    '.github/scripts/is-release-bump.sh',
+    'knope.toml',
+  ]) copyFileSync(join(process.cwd(), f), join(dir, f))
 
   return { dir, originDir, fork, base, prHead, queueHead, queueHead2 }
 }
@@ -149,6 +152,9 @@ function eventFixtures(r: Repo, event: EventName): Record<string, string> {
     'github.event_name': event.startsWith('merge_group') ? 'merge_group' : event,
     'github.event.pull_request.base.sha': '',
     'github.event.pull_request.head.sha': '',
+    'github.head_ref': 'some-feature',
+    'github.event.pull_request.head.repo.full_name': 'org/repo',
+    'github.repository': 'org/repo',
     'github.event.merge_group.base_sha': '',
     'github.event.merge_group.head_sha': '',
     'github.event.merge_group.base_ref': '',

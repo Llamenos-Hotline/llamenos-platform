@@ -311,11 +311,18 @@ export class CallsService {
   }
 
   /** Get a single encrypted call record by ID */
-  async getCallRecord(callId: string): Promise<CallRecordRow | null> {
+  /**
+   * The finished call `callId`, within `hubId`. A call of another hub reads as
+   * missing (`null`), exactly like an unknown id (#2011). `hubId === ''` is the
+   * unscoped mount, which has no hub to bound to (the convention of
+   * `getActiveCallById`'s callers: `c.get('hubId') ?? ''`).
+   */
+  async getCallRecord(hubId: string, callId: string): Promise<CallRecordRow | null> {
+    const byId = eq(callRecords.callId, callId)
     const [row] = await this.db
       .select()
       .from(callRecords)
-      .where(eq(callRecords.callId, callId))
+      .where(hubId ? and(byId, eq(callRecords.hubId, hubId)) : byId)
       .limit(1)
 
     return row ?? null

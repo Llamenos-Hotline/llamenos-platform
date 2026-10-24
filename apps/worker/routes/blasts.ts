@@ -10,6 +10,8 @@ import { createLogger } from '../lib/logger'
 import { backgroundTask } from '../lib/hono-compat'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_BLAST_PROGRESS } from '@shared/event-kinds'
+import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
+import { ServiceError } from '../services/settings'
 
 const logger = createLogger('routes.blasts')
 
@@ -33,6 +35,28 @@ function toStorageContent(input: any): BlastContent | MultiBlastContent {
 }
 
 const blasts = new Hono<AppEnv>()
+
+// Inside /hubs/:hubId every blast / subscriber id may only name a row of that
+// hub (#2011). Without it a member of one hub could send, edit, cancel or delete
+// another hub's blast, or unsubscribe its people. The literal segments below
+// share the id's position and are not resources.
+const blastInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['settings', 'subscribers']),
+  load: async (services, id, hubId) => assertInHub(await services.blasts.getBlast(id), hubId, 'Blast not found'),
+})
+blasts.use('/:id/*', blastInPathHub)
+
+const subscriberInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['stats', 'import']),
+  load: async (services, id, hubId) => {
+    const subscriber = await services.blasts.getSubscriberById(id)
+    if (!subscriber) throw new ServiceError(404, 'Subscriber not found')
+    return assertInHub(subscriber, hubId, 'Subscriber not found')
+  },
+})
+blasts.use('/subscribers/:id/*', subscriberInPathHub)
 
 // --- Subscribers (static paths BEFORE parameterized) ---
 blasts.get('/subscribers/stats',

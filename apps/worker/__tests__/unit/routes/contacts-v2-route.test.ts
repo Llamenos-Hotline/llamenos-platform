@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import contactsV2Routes from '@worker/routes/contacts-v2'
+import { ServiceError } from '@worker/services/settings'
 
 // Valid test fixtures matching schema requirements
 const VALID_UUID_1 = '550e8400-e29b-41d4-a716-446655440000'
@@ -43,7 +44,9 @@ function makeApp(opts: {
     lookupByIdentifierHash: vi.fn().mockResolvedValue(null),
     searchByTrigramTokens: vi.fn().mockResolvedValue([]),
     create: vi.fn(),
-    get: vi.fn(),
+    // The hub guard (#2011) fetches the contact / group before any handler; by
+    // default they belong to the app's own hub. Tests of the handlers override these.
+    get: vi.fn().mockResolvedValue({ id: 'c-1', hubId }),
     update: vi.fn(),
     delete: vi.fn().mockResolvedValue(undefined),
     createRelationship: vi.fn(),
@@ -52,7 +55,7 @@ function makeApp(opts: {
     listGroupsForContact: vi.fn().mockResolvedValue([]),
     createGroup: vi.fn(),
     listGroups: vi.fn().mockResolvedValue([]),
-    getGroup: vi.fn(),
+    getGroup: vi.fn().mockResolvedValue({ id: 'g-1', hubId }),
     updateGroup: vi.fn(),
     deleteGroup: vi.fn().mockResolvedValue(undefined),
     addMember: vi.fn(),
@@ -339,7 +342,8 @@ describe('GET /contacts/:id', () => {
 
   it('returns 404 when contact not found', async () => {
     const { app, mockContacts } = makeApp({ permissions: ['contacts:view'] })
-    mockContacts.get.mockResolvedValue(null)
+    // The real service throws its 404; the hub guard (#2011) reads through it first.
+    mockContacts.get.mockRejectedValue(new ServiceError(404, 'Contact not found'))
 
     const res = await app.request('/nonexistent-id')
     expect(res.status).toBe(404)
@@ -512,7 +516,7 @@ describe('GET /contacts/groups — list groups', () => {
 describe('GET /contacts/groups/:groupId — get group', () => {
   it('returns group details with members', async () => {
     const { app, mockContacts } = makeApp({ permissions: ['contacts:view'] })
-    mockContacts.getGroup.mockResolvedValue({ id: 'grp-1', encryptedDetails: 'enc' })
+    mockContacts.getGroup.mockResolvedValue({ id: 'grp-1', hubId: 'hub-1', encryptedDetails: 'enc' })
     mockContacts.listMembers.mockResolvedValue([{ contactId: VALID_UUID_1, isPrimary: true }])
 
     const res = await app.request('/groups/grp-1')
@@ -525,7 +529,7 @@ describe('GET /contacts/groups/:groupId — get group', () => {
 
   it('returns 404 when group not found', async () => {
     const { app, mockContacts } = makeApp({ permissions: ['contacts:view'] })
-    mockContacts.getGroup.mockResolvedValue(null)
+    mockContacts.getGroup.mockRejectedValue(new ServiceError(404, 'Group not found'))
 
     const res = await app.request('/groups/nonexistent')
     expect(res.status).toBe(404)

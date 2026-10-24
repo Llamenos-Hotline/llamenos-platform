@@ -81,6 +81,8 @@ vi.mock('@/lib/api', () => ({
   updateNote: mocks.updateNote,
   getCallHistory: mocks.getCallHistory,
   getCustomFields: mocks.getCustomFields,
+  // A call note is filed to the call's own hub, falling back to the active one.
+  getActiveHub: () => null,
 }))
 
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
