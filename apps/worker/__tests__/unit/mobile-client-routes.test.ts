@@ -213,13 +213,7 @@ function distinct(sites: CallSite[]): Map<string, string> {
  * into a blanket exemption.
  */
 const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
-  iOS: {
-    // A route the server owes, not a client mistake: it stores each holder's
-    // share envelope but mounts no route that returns it (#2002). #1701's
-    // client-side gaps — the invite, role and conversation-read paths — are
-    // fixed, and were deleted from this list.
-    'GET /api/recovery-group/shares/my': '#2002',
-  },
+  iOS: {},
   // The blasts composer was rebuilt on createBlastBodySchema against the
   // hub-scoped /blasts routes (#1997), which emptied this list.
   Android: {},
