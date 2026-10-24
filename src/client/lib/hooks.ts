@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRelaySubscriptions } from './relay/hooks'
 import { useMemberHubIds } from './member-hubs'
-import { useConfig } from './config'
 import { useMyShiftStatus } from './queries/shifts'
 import { startRinging, stopRinging } from './notifications'
 import { rememberCallHub } from './call-hubs'
