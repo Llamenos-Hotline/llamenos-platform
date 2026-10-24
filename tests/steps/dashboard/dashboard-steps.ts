@@ -4,10 +4,11 @@
  *   - packages/test-specs/features/dashboard/dashboard-display.feature
  *   - packages/test-specs/features/dashboard/shift-status.feature
  */
-import { expect, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
+import { apiGet } from '../../api-helpers'
 
 Then('I should see the connection status card', async ({ page }) => {
   // Connection status is shown via the WebRtcStatus indicator next to the page title
@@ -163,4 +164,43 @@ Then('a clock-in request should be sent', async ({ page }) => {
 Then('the button should show a loading state briefly', async ({ page }) => {
   // Loading state is transient — just verify the button is still visible after
   await expect(page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
+})
+
+// --- Shift card readiness vs the server's ring decision (#2108) ---
+
+Then('the shift card should say {string}', async ({ page }, text: string) => {
+  await expect(page.getByTestId(TestIds.DASHBOARD_SHIFT_STATUS)).toContainText(text, { timeout: Timeouts.ELEMENT })
+})
+
+Then('the shift card should not say {string}', async ({ page }, text: string) => {
+  const card = page.getByTestId(TestIds.DASHBOARD_SHIFT_STATUS)
+  // Wait for the card to settle on a status first: "does not say X" is vacuously
+  // true while the card is still loading.
+  await expect(card).toContainText(/Not clocked in|Ready for calls|On Break|Off Shift|On Call/, { timeout: Timeouts.ELEMENT })
+  await expect(card).not.toContainText(text)
+})
+
+/**
+ * Whether a call arriving now would ring the logged-in volunteer, per the
+ * server's own ring resolver (`/calls/presence` is derived from it). Asked per
+ * volunteer, not "would the hub ring anybody": the hub is shared by every
+ * scenario of this worker, and another scenario's clocked-in volunteer must not
+ * decide this one's outcome.
+ */
+async function ringTargets(page: Page, request: APIRequestContext, hubId: string): Promise<{ targets: string[]; me: string }> {
+  const me = await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_vol_pubkey as string | undefined)
+  expect(me, 'the volunteer login step must record the logged-in pubkey').toBeTruthy()
+  const res = await apiGet<{ users: Array<{ pubkey: string }> }>(request, `/hubs/${hubId}/calls/presence`)
+  expect(res.status, 'GET /calls/presence as admin').toBe(200)
+  return { targets: res.data.users.map(u => u.pubkey), me: me as string }
+}
+
+Then('the volunteer is a ring target', async ({ page, backendRequest, workerHub }) => {
+  const { targets, me } = await ringTargets(page, backendRequest, workerHub)
+  expect(targets).toContain(me)
+})
+
+Then('the volunteer is not a ring target', async ({ page, backendRequest, workerHub }) => {
+  const { targets, me } = await ringTargets(page, backendRequest, workerHub)
+  expect(targets).not.toContain(me)
 })
