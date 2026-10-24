@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.InviteRepository
+import org.llamenos.hotline.service.DeviceRegistrationManager
 import org.llamenos.protocol.ErrorEnum
 import java.io.IOException
 import java.util.UUID
@@ -39,11 +40,13 @@ data class InviteUiState(
  * keys exist (redemption signs with them). Redemption registers the identity with the
  * server AND writes the hub membership the invite names (#1474), so this request carries
  * no hub of its own — the hub lives on the invite record. The app picks that membership
- * up by itself on its next hub load.
+ * up by itself on its next hub load. The device keys are registered right after, so the
+ * server can seal records to this device from the first message on.
  */
 @HiltViewModel
 class InviteViewModel @Inject constructor(
     private val inviteRepository: InviteRepository,
+    private val deviceRegistrationManager: DeviceRegistrationManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(InviteUiState())
@@ -104,6 +107,11 @@ class InviteViewModel @Inject constructor(
             } catch (e: Exception) {
                 e.inviteErrorRes(R.string.onboarding_redeem_failed)
             }
+            // Redemption is what makes this pubkey known to the server, so it is the first
+            // moment the device keys can be registered (#2119). That registration cannot
+            // undo a redemption (the invite is spent), so a failure does not block entry:
+            // DeviceRegistrationManager logs it and every unlock retries.
+            if (errorRes == null) deviceRegistrationManager.register()
             _uiState.update {
                 if (errorRes == null) it.copy(stage = InviteStage.REDEEMED)
                 else it.copy(stage = InviteStage.VALID, errorRes = errorRes)

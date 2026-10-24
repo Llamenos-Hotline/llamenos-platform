@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Hub
@@ -29,6 +30,7 @@ class HubRepository @Inject constructor(
     private val apiService: ApiService,
     private val cryptoService: CryptoService,
     private val activeHubState: ActiveHubState,
+    private val webSocketService: WebSocketService,
 ) {
 
     /**
@@ -81,6 +83,7 @@ class HubRepository @Inject constructor(
      * list — and evict the key of any held hub that is no longer on it.
      */
     suspend fun loadAllHubKeys(hubs: List<Hub>) {
+        webSocketService.syncMemberHubs(hubs.map { it.id })
         val fetched = coroutineScope {
             hubs.map { hub -> async { hub.id to fetchHubKey(hub.id) } }.awaitAll().toMap()
         }
@@ -171,6 +174,8 @@ class HubRepository @Inject constructor(
      * first hub, or none if they belong to none.
      */
     suspend fun loadInitialHub(hubs: List<Hub>) {
+        // Relay events must arrive from every member hub, not only the one being browsed.
+        webSocketService.syncMemberHubs(hubs.map { it.id })
         activeHubState.awaitHydrated()
         val current = activeHubState.activeHubId.value
         if (current != null && hubs.any { it.id == current }) return

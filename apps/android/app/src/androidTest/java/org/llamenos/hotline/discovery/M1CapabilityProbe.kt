@@ -19,6 +19,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dagger.hilt.android.EntryPointAccessors
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -473,6 +474,42 @@ class M1CapabilityProbe {
         check(sawB) { fail("hubs", "a call ringing in a non-active member hub never reached the app") }
     }
 
+    /**
+     * Enrolment registers the device keys with the server (#2119), push or no push: the
+     * emulator has no UnifiedPush distributor, which is a phone's default state. The
+     * server seals records to `devices.x25519_pubkey`, so a message that arrives
+     * afterwards must carry a reader envelope for exactly the app's key.
+     */
+    @Test
+    fun deviceRegistered() {
+        val (pubkey, hub) = enrollViaInvite("deviceRegistered", "probe-device")
+        val x25519 = checkNotNull(crypto().encryptionPubkeyHex) { fail("deviceRegistered", "no encryption pubkey") }
+
+        val registered = pollFor(15_000) { userDeviceKeys(pubkey).any { it == x25519 } }
+        probe("deviceRegistered", "server device x25519 keys=${userDeviceKeys(pubkey)} app=$x25519 registered=$registered")
+        check(registered) { fail("deviceRegistered", "enrolment left the server with no device key for this app") }
+
+        // The server seals an inbound message to the admin key and to the ASSIGNED user's
+        // registered device keys, so assign the conversation first, then let a second message in.
+        val sender = "+15555550188"
+        fun inbound(text: String) = backdoor(
+            "deviceRegistered", "test-simulate/incoming-message",
+            """{"senderNumber":"$sender","body":"$text","channel":"sms","hubId":"$hub"}""",
+        )
+        val conversationId = json.parseToJsonElement(inbound("probe-device-first")).jsonObject["conversationId"]!!.jsonPrimitive.content
+        adminApi("deviceRegistered", "PATCH", "/api/hubs/$hub/conversations/$conversationId", """{"assignedTo":"$pubkey"}""")
+        inbound("probe-device-second")
+
+        val messages = json.parseToJsonElement(
+            adminApi("deviceRegistered", "GET", "/api/hubs/$hub/conversations/$conversationId/messages"),
+        ).jsonObject["messages"]!!.jsonArray.map { it.jsonObject }
+        val sealedToApp = messages.count { m ->
+            m["readerEnvelopes"]!!.jsonArray.any { it.jsonObject["pubkey"]?.jsonPrimitive?.contentOrNull == x25519 }
+        }
+        probe("deviceRegistered", "RESULT registered=$registered messages=${messages.size} sealed to the app's key=$sealedToApp")
+        check(sealedToApp >= 1) { fail("deviceRegistered", "no inbound message carries a reader envelope for the app's key") }
+    }
+
     /** An inbound SMS creates a conversation; open it, read it, reply. */
     @Test
     fun conversations() {
@@ -823,6 +860,24 @@ class M1CapabilityProbe {
             // the dev-surface secret for exactly this reason; `backdoor` already relies on it.
             setRequestProperty("X-Test-Secret", testSecret)
         }
+    }
+
+    /** The X25519 keys of the devices the server holds for [pubkey], read with a request the app itself signs. */
+    private fun userDeviceKeys(pubkey: String): List<String> {
+        val path = "/api/devices"
+        val token = runBlocking { crypto().createAuthToken("GET", path) }
+        val auth = buildString {
+            append("""{"pubkey":"${token.pubkey}","timestamp":${token.timestamp},"token":"${token.token}"""")
+            token.nonce?.let { append(""","nonce":"$it"""") }
+            append('}')
+        }
+        val body = http("deviceRegistered", "GET", path, null, "USER") {
+            setRequestProperty("Authorization", "Bearer $auth")
+            setRequestProperty("X-Test-Secret", testSecret)
+        }
+        return json.parseToJsonElement(body).jsonObject["devices"]!!.jsonArray
+            .mapNotNull { it.jsonObject["x25519Pubkey"]?.jsonPrimitive?.contentOrNull }
+            .also { probe("deviceRegistered", "devices of ${pubkey.take(8)}: ${it.size}") }
     }
 
     private var adminReady = false

@@ -10,3 +10,6 @@ logout
 shifts role-hub-admin
 auth
 enrollmentRejectsUnknownInvite
+deviceRegistered
+hubs
+calls role-hub-admin

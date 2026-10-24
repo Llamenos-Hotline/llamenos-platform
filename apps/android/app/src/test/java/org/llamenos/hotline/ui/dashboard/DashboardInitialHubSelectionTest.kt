@@ -170,7 +170,7 @@ class DashboardInitialHubSelectionTest {
                 HubsListResponse(listOf(makeHub("hub-first"), makeHub("hub-second")))
             // switchHub always refreshes the hub key; a 404 here only means "no key for you".
             coEvery { repoApi.getHubKey(any()) } throws ApiException(404, "no envelope")
-            val hubRepository = HubRepository(repoApi, mockk<CryptoService>(relaxed = true), state)
+            val hubRepository = HubRepository(repoApi, mockk<CryptoService>(relaxed = true), state, mockk(relaxed = true))
 
             DashboardViewModel(
                 mockk<CryptoService>(relaxed = true),

@@ -158,7 +158,7 @@ class PushRegistrationManager @Inject constructor(
         keystoreService.store(KEY_PUSH_BACKEND_PENDING, VALUE_PENDING)
         try {
             val wakePublicKey = wakeKeyService.getOrCreateWakePublicKey()
-            apiService.registerPushEndpoint(
+            apiService.registerDevice(
                 RegisterDeviceRequest(
                     pushToken = endpointUrl,
                     wakeKeyPublic = wakePublicKey,
