@@ -517,7 +517,15 @@ export async function startParallelRinging(
             volunteersNotified: browserVoip.length,
           }
         }
-        throw err
+        // Any other ring failure: the phone/in-app legs are unknown, but the relay event
+        // and VoIP push above already went out, so those volunteers were notified and
+        // may still answer — do not report nobody was reached.
+        logger.error('startParallelRinging failed', err)
+        return {
+          ringing: browserVoip.length > 0,
+          reason: 'error',
+          volunteersNotified: browserVoip.length,
+        }
       }
     }
     return { ringing: true, volunteersNotified: available.length }

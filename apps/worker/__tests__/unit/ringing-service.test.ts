@@ -748,6 +748,39 @@ describe('startParallelRinging — total telephony provider outage (#1136)', () 
     // Only the browser volunteer was actually reached — the phone volunteer was not.
     expect(result).toEqual({ ringing: true, reason: 'telephony-failure', volunteersNotified: 1 })
   })
+
+  it('does not classify a non-outage ring error as telephony-failure, and still counts browser volunteers already notified', async () => {
+    // A generic Error (not AllDialsFailedError / CircuitOpenError) — e.g. the bridge's 500.
+    mockAdapter.ringVolunteers.mockRejectedValue(new Error('bridge request failed: 500'))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-phone', 'pk-browser'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-phone', callPreference: 'phone' }),
+        makeUser({ pubkey: 'pk-browser', callPreference: 'browser', phone: null }),
+      ],
+    })
+
+    const promise = startParallelRinging('CA-generic', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toEqual({ ringing: true, reason: 'error', volunteersNotified: 1 })
+    expect(incCounter).not.toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
+  })
+
+  it('reports nobody reached when a non-outage ring error hits a phone-only call', async () => {
+    mockAdapter.ringVolunteers.mockRejectedValue(new Error('bridge request failed: 500'))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({ pubkey: 'pk-1' })],
+    })
+
+    const promise = startParallelRinging('CA-generic-phone', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toEqual({ ringing: false, reason: 'error', volunteersNotified: 0 })
+  })
 })
 
 // The block above rejects the mocked adapter directly. This one runs the REAL
