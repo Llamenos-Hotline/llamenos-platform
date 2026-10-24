@@ -101,10 +101,11 @@ describe('shifts routes', () => {
     // #2108: scheduled is not the same as being a ring target. The dashboard
     // derives "Ready for calls" from onShift AND clockedIn, so the route must
     // report the volunteer's own clock-in, read from the active_shifts row.
+    const startedAt = new Date('2026-10-24T17:12:46.783Z')
     it.each([
-      ['has an active_shifts row', { pubkey: 'a'.repeat(64), hubId: 'hub-1' }, true],
-      ['has no active_shifts row', null, false],
-    ])('reports clockedIn from the active_shifts row (%s)', async (_label, row, expected) => {
+      ['has an active_shifts row', { pubkey: 'a'.repeat(64), hubId: 'hub-1', startedAt }, true, startedAt.toISOString()],
+      ['has no active_shifts row', null, false, null],
+    ])('reports clockedIn from the active_shifts row (%s)', async (_label, row, expected, expectedAt) => {
       const getActiveSpy = vi.fn().mockResolvedValue(row)
       const { app } = createTestApp({
         permissions: ['shifts:read-own'],
@@ -122,6 +123,7 @@ describe('shifts routes', () => {
       const json = await res.json()
       expect(json.onShift).toBe(true)
       expect(json.clockedIn).toBe(expected)
+      expect(json.clockedInAt).toBe(expectedAt)
       expect(getActiveSpy).toHaveBeenCalledWith('a'.repeat(64), 'hub-1')
     })
 
