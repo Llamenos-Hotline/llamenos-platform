@@ -219,6 +219,14 @@ Then('the full chain should pass database-level verification', async ({ world })
   expect(result.entries).toBeGreaterThan(0)
 })
 
+Then('the stored details of user-actor entries should be sealed at rest', async ({ world }) => {
+  const hubId = getScenarioState(world).hubId
+  const result = await TestDB.verifyAuditChain(hubId)
+  // Every entry the scenario's admin wrote has a user actor, so a chain with
+  // no sealed entry means details are sitting in the database as plaintext.
+  expect(result.sealed).toBeGreaterThan(0)
+})
+
 // ── Tamper Detection ──────────────────────────────────────────────
 
 Given(

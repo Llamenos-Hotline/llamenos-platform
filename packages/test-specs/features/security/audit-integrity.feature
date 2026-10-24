@@ -28,6 +28,7 @@ Feature: Audit Integrity
     Then each entry should have an "entryHash" field
     And for entries 1 through 4, previousEntryHash should equal the prior entry's entryHash
     And the full chain should pass database-level verification
+    And the stored details of user-actor entries should be sealed at rest
 
   # ── API-Level Chain Verification ─────────────────────────────────
 

@@ -7,13 +7,18 @@
  */
 import '../../db/pg-array-patch'
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { CallsService } from '../../services/calls'
 import { ServiceError } from '../../services/settings'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
+
+// CallsService seals §2.5 metadata via lib/crypto (#1684), which loads the
+// Rust library through bun:ffi — unavailable under Vitest's Node runtime.
+// Same mock the other integration suites use.
+vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
