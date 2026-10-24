@@ -704,7 +704,7 @@ describe('startParallelRinging — total telephony provider outage (#1136)', () 
     })
 
     let lastResult: Awaited<ReturnType<typeof startParallelRinging>> | undefined
-    // failureThreshold for 'telephony:ringVolunteers' is 5 — drive it to open.
+    // failureThreshold for the hub's 'telephony:ringVolunteers' breaker is 5 — drive it to open.
     for (let i = 0; i < 5; i++) {
       const promise = startParallelRinging(`CA-outage-${i}`, '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
       await vi.runAllTimersAsync()
@@ -714,8 +714,32 @@ describe('startParallelRinging — total telephony provider outage (#1136)', () 
     expect(lastResult).toEqual({ ringing: false, reason: 'telephony-failure', volunteersNotified: 0 })
     expect(incCounter).toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
 
-    const breaker = getCircuitBreaker({ name: 'telephony:ringVolunteers' })
+    const breaker = getCircuitBreaker({ name: 'telephony:ringVolunteers:hub-1' })
     expect(breaker.getState()).toBe('open')
+  })
+
+  it("one hub's total outage does not open the circuit for another hub", async () => {
+    mockAdapter.ringVolunteers.mockRejectedValue(new AllDialsFailedError(1))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({
+        pubkey: 'pk-1',
+        hubRoles: ['hub-a', 'hub-b'].map((hubId) => ({ hubId, roleIds: ['role-volunteer'] })),
+      })],
+    })
+
+    for (let i = 0; i < 5; i++) {
+      const promise = startParallelRinging(`CA-hub-a-${i}`, '+15551234567', 'http://localhost', makeEnv(), services, 'hub-a')
+      await vi.runAllTimersAsync()
+      await promise
+    }
+    expect(getCircuitBreaker({ name: 'telephony:ringVolunteers:hub-a' }).getState()).toBe('open')
+
+    mockAdapter.ringVolunteers.mockReset().mockResolvedValue(['LEG-B'])
+    const result = await startParallelRinging('CA-hub-b', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
+
+    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
+    expect(getCircuitBreaker({ name: 'telephony:ringVolunteers:hub-b' }).getState()).toBe('closed')
   })
 
   it('still reports ringing:true for a partial failure — some legs succeeding is not a provider outage', async () => {
@@ -747,6 +771,58 @@ describe('startParallelRinging — total telephony provider outage (#1136)', () 
 
     // Only the browser volunteer was actually reached — the phone volunteer was not.
     expect(result).toEqual({ ringing: true, reason: 'telephony-failure', volunteersNotified: 1 })
+  })
+
+  it('does not classify a non-outage ring error as telephony-failure, and still counts browser volunteers already notified', async () => {
+    // A generic Error (not AllDialsFailedError / CircuitOpenError) — e.g. the bridge's 500.
+    mockAdapter.ringVolunteers.mockRejectedValue(new Error('bridge request failed: 500'))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-phone', 'pk-browser'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-phone', callPreference: 'phone' }),
+        makeUser({ pubkey: 'pk-browser', callPreference: 'browser', phone: null }),
+      ],
+    })
+
+    const promise = startParallelRinging('CA-generic', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toEqual({ ringing: true, reason: 'error', volunteersNotified: 1 })
+    expect(incCounter).not.toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
+  })
+
+  it.each([
+    ['a non-outage ring error', () => new Error('bridge request failed: 500'), 'error'],
+    ['a total provider outage', () => new AllDialsFailedError(1), 'telephony-failure'],
+  ] as const)('reports nobody reached on %s for a global call, where no relay event or VoIP push goes out', async (_label, makeErr, reason) => {
+    mockAdapter.ringVolunteers.mockRejectedValue(makeErr())
+    const services = makeServices({
+      onShiftPubkeys: ['pk-both'],
+      // No hub to be a member of — global-scope authority is the global roles.
+      allUsers: [makeUser({ pubkey: 'pk-both', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })],
+    })
+
+    const promise = startParallelRinging('CA-global-fail', '+15551234567', 'http://localhost', makeEnv(), services, '')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    // The browser preference does not count: with no hub there was no relay/push to carry it.
+    expect(result).toEqual({ ringing: false, reason, volunteersNotified: 0 })
+  })
+
+  it('reports nobody reached when a non-outage ring error hits a phone-only call', async () => {
+    mockAdapter.ringVolunteers.mockRejectedValue(new Error('bridge request failed: 500'))
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({ pubkey: 'pk-1' })],
+    })
+
+    const promise = startParallelRinging('CA-generic-phone', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toEqual({ ringing: false, reason: 'error', volunteersNotified: 0 })
   })
 })
 

@@ -17,9 +17,9 @@ import '@worker/__tests__/mocks/llamenos-crypto-ffi'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
-import type { TelephonyResponse } from '@worker/telephony/adapter'
+import { AllDialsFailedError, type TelephonyResponse } from '@worker/telephony/adapter'
 import { fakeSpeech, spoken } from '@worker/__tests__/helpers/fake-speech'
-import { CommandHandler } from '../../../../sip-bridge/src/command-handler'
+import { CommandHandler, ringResponse } from '../../../../sip-bridge/src/command-handler'
 import type { BridgeClient, BridgeEvent } from '../../../../sip-bridge/src/bridge-client'
 import type { WebhookSender } from '../../../../sip-bridge/src/webhook-sender'
 import { CALLBACK_PATHS, WORKER_PATHS, type BridgeCommand, type BridgeConfig, type WebhookPayload } from '../../../../sip-bridge/src/types'
@@ -36,7 +36,7 @@ const adapter = new AsteriskAdapter('http://asterisk:8088', 'llamenos', 'pw', '+
 
 // ---- a PBX that just records what the bridge asked of it ----
 
-function fakePbx() {
+function fakePbx(overrides: Partial<BridgeClient> = {}) {
   const calls: Array<{ method: string; args: unknown[] }> = []
   let seq = 0
   const record = (method: string, result?: () => unknown) =>
@@ -46,6 +46,7 @@ function fakePbx() {
     }
   const client = new Proxy({} as BridgeClient, {
     get: (_, method: string) => {
+      if (method in overrides) return overrides[method as keyof BridgeClient]
       if (method === 'originate') return record(method, () => ({ id: `leg-${++seq}` }))
       if (method === 'playMedia') return record(method, () => `pb-${++seq}`)
       if (method === 'bridge') return record(method, () => 'bridge-1')
@@ -285,6 +286,68 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
       { status: 'busy', callToken: 'token-a' },
       { status: 'no-answer', callToken: 'token-b' },
     ])
+  })
+
+  // #1136: the adapter and the bridge must agree on what a failed /ring looks like. These
+  // run the adapter's real request through the bridge's real /ring answer (ringResponse)
+  // rather than a hand-written body, so the two cannot drift apart.
+  describe('/ring failure protocol', () => {
+    const ringParams = {
+      callSid: CALLER,
+      callerNumber: '+15557770001',
+      volunteers: [
+        { phone: '+15550200', callToken: 'token-a' },
+        { phone: '+15550201', callToken: 'token-b' },
+      ],
+      callbackUrl: 'http://worker:3000',
+      hubId: HUB,
+    }
+
+    function bridgeAnswersRing(ringing: CommandHandler) {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) =>
+        ringResponse(ringing, JSON.parse(String(init?.body))),
+      )
+    }
+
+    it('a total trunk outage reaches the worker as AllDialsFailedError, not a generic error', async () => {
+      pbx = fakePbx({ originate: async () => { throw new Error('trunk unreachable') } })
+      const worker = fakeWorker({ enabledLanguages: ['en'] })
+      handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+      await handler.handleEvent(incoming)
+      bridgeAnswersRing(handler)
+
+      const err = await adapter.ringVolunteers(ringParams).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(AllDialsFailedError)
+      expect((err as AllDialsFailedError).attempted).toBe(2)
+    })
+
+    it('a caller who hung up before ringing is not an outage', async () => {
+      const worker = fakeWorker({ enabledLanguages: ['en'] })
+      handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+      await handler.handleEvent(incoming)
+      await handler.handleEvent(hangup(CALLER))
+      bridgeAnswersRing(handler)
+
+      await expect(adapter.ringVolunteers(ringParams)).resolves.toEqual([])
+      expect(pbx.of('originate')).toEqual([])
+    })
+
+    it('a partial failure returns the legs that were placed', async () => {
+      let attempts = 0
+      pbx = fakePbx({
+        originate: (async () => {
+          if (++attempts === 1) throw new Error('trunk unreachable')
+          return { id: 'leg-ok' }
+        }) as BridgeClient['originate'],
+      })
+      const worker = fakeWorker({ enabledLanguages: ['en'] })
+      handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+      await handler.handleEvent(incoming)
+      bridgeAnswersRing(handler)
+
+      await expect(adapter.ringVolunteers(ringParams)).resolves.toEqual(['leg-ok'])
+    })
   })
 
   it('nobody answers: the queue times out to voicemail, which is reported and closed', async () => {

@@ -361,6 +361,10 @@ export async function startParallelRinging(
 
     logger.info('Ringing volunteers', { callSid, total: available.length, phone: toRingPhone.length, browserVoip: browserVoip.length, inApp: appTargets.length })
 
+    // Volunteers reached by the relay event and VoIP push below. A call that resolved
+    // to no hub sends neither, so its browser/VoIP volunteers were not notified at all.
+    const notifiedOutOfBand = hubId === '' ? 0 : browserVoip.length
+
     const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
       // Publish the ring to the hub that owns the call. Every member of that hub
@@ -430,8 +434,12 @@ export async function startParallelRinging(
         return { ringing: true, volunteersNotified: available.length }
       }
 
+      // One breaker per hub: each hub has its own provider account, so one hub's broken
+      // credentials or outage (which now count as failures — #1136) must not open the
+      // circuit for every other hub's calls.
+      const breakerName = `telephony:ringVolunteers:${hubId}`
       const breaker = getCircuitBreaker({
-        name: 'telephony:ringVolunteers',
+        name: breakerName,
         failureThreshold: 5,
         resetTimeoutMs: 30_000,
         // getCircuitBreaker is a singleton keyed by name, so this only takes effect the
@@ -440,10 +448,11 @@ export async function startParallelRinging(
           if (to === 'open') {
             logger.error(
               'CRITICAL: Telephony ringVolunteers circuit opened — volunteers are not being phoned',
-              new Error('Circuit opened: telephony:ringVolunteers'),
+              new Error(`Circuit opened: ${breakerName}`),
+              { hubId },
             )
           } else if (to === 'closed') {
-            logger.info('Telephony ringVolunteers circuit recovered')
+            logger.info('Telephony ringVolunteers circuit recovered', { hubId })
           }
         },
       })
@@ -512,12 +521,20 @@ export async function startParallelRinging(
           // push above and may still answer — only report total failure when nobody was
           // reached by any channel.
           return {
-            ringing: browserVoip.length > 0,
+            ringing: notifiedOutOfBand > 0,
             reason: 'telephony-failure',
-            volunteersNotified: browserVoip.length,
+            volunteersNotified: notifiedOutOfBand,
           }
         }
-        throw err
+        // Any other ring failure: the phone/in-app legs are unknown, but the relay event
+        // and VoIP push above already went out, so those volunteers were notified and
+        // may still answer — do not report nobody was reached.
+        logger.error('startParallelRinging failed', err)
+        return {
+          ringing: notifiedOutOfBand > 0,
+          reason: 'error',
+          volunteersNotified: notifiedOutOfBand,
+        }
       }
     }
     return { ringing: true, volunteersNotified: available.length }

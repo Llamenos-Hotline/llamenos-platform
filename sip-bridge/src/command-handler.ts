@@ -932,6 +932,27 @@ export class CommandHandler {
   }
 }
 
+/**
+ * Answer a POST /ring. The protocol the worker's SipBridgeAdapter reads:
+ *   - 200 `{ ok: true, channelIds }` — the legs placed; `[]` when the caller hung up
+ *     before ringing (not an outage) and nothing was attempted;
+ *   - 502 `{ ok: false, error: RING_ALL_DIALS_FAILED, attempted }` — every leg refused,
+ *     a total PBX/trunk outage (#1136);
+ *   - 500 `{ ok: false, error: 'Command failed' }` — anything else.
+ */
+export async function ringResponse(handler: Pick<CommandHandler, 'ringVolunteers'>, request: RingRequest): Promise<Response> {
+  try {
+    const channelIds = await handler.ringVolunteers(request)
+    return Response.json({ ok: true, channelIds })
+  } catch (err) {
+    logger.error('[bridge]', 'Ring error', err)
+    if (err instanceof AllRingLegsFailedError) {
+      return Response.json({ ok: false, error: RING_ALL_DIALS_FAILED, attempted: err.attempted }, { status: 502 })
+    }
+    return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
+  }
+}
+
 /** The dial string that rings a volunteer's phone through the PBX's SIP trunk */
 export function ringEndpoint(pbxType: BridgeConfig['pbxType'], phone: string): string {
   switch (pbxType) {
