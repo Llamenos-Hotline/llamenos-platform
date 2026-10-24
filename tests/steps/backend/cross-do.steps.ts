@@ -16,9 +16,11 @@ import {
   createBanViaApi,
   listAuditLogViaApi,
   listNotesViaApi,
-  generateTestKeypair,
   uniquePhone,
   uniqueName,
+  encryptForTest,
+  sealedNoteFields,
+  ADMIN_SEED,
 } from '../../api-helpers'
 import {
   simulateIncomingCall,
@@ -112,9 +114,8 @@ When('the volunteer writes a note for the call', async ({ request, world }) => {
     request,
     `/hubs/${getScenarioState(world).hubId}/notes`,
     {
-      encryptedContent: 'xdo-test-note',
+      ...(await sealedNoteFields(getCrossDoState(world).volunteerDeviceKey!, 'xdo-test-note')),
       callId: getCrossDoState(world).callId,
-      readerEnvelopes: [],
     },
     getCrossDoState(world).volunteerDeviceKey!,
   )
@@ -354,15 +355,16 @@ Given('a reporter and reviewer exist', async ({ request, world }) => {
 })
 
 When('the reporter creates a report', async ({ request, world }) => {
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('xdo-report-content', [ADMIN_SEED])
   const { data, status: _status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
     '/reports',
     {
       title: uniqueName('XDO Report'),
       category: 'general',
-      encryptedContent: 'xdo-report-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent: sealed.encryptedContent,
+      readerEnvelopes: sealed.envelopes,
     },
     getCrossDoState(world).reporterDeviceKey!,
   )
@@ -443,9 +445,8 @@ When('the volunteer writes a note for the conversation', async ({ request, world
       request,
       '/notes',
       {
-        encryptedContent: 'xdo-conv-note',
+        ...(await sealedNoteFields(volDeviceKey, 'xdo-conv-note')),
         conversationId: getCrossDoState(world).conversationId,
-        readerEnvelopes: [],
       },
       volDeviceKey,
     )

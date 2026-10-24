@@ -14,6 +14,7 @@ import { publishEvent } from '../lib/ws-events'
 import { verifyReportAccess, isReport } from '../lib/report-access'
 import { linkCaseToReportBodySchema } from '@protocol/schemas/report-links'
 import { resourceInPathHub } from '../lib/hub-scope'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
 
 /**
  * Normalize conversation metadata — Drizzle bun-sql may double-serialize JSONB
@@ -141,6 +142,10 @@ reports.post('/',
     const services = c.get('services')
     const hubId = c.get('hubId')
     const body = c.req.valid('json')
+
+    // Checked before the conversation exists, so a refused report leaves no
+    // empty shell behind.
+    await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A report', { hubId, authorPubkey: pubkey })
 
     // Create the conversation with report metadata
     const conversation = await services.conversations.create({
@@ -382,6 +387,7 @@ reports.post('/:id/messages',
     }
 
     const body = c.req.valid('json')
+    await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A report message', { reportId: id, authorPubkey: pubkey })
 
     const isReporter = report.contactIdentifierHash === pubkey
     const direction = isReporter ? 'inbound' as const : 'outbound' as const

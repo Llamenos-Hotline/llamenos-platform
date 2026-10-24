@@ -1746,6 +1746,12 @@ Response: EncryptedNote
 
 Hub-scoped: `/api/hubs/:hubId/notes/*`
 
+**Server-side write guards (#2112, #2113).** The server never holds a note's content key, so a malformed write cannot be repaired afterwards; it is refused at the boundary instead:
+
+- `callId` / `conversationId` must name an existing call (live or finished) / conversation **of the hub in the path**. Under `/api/hubs/:hubId` a record of another hub and one that does not exist are both `404` with the same message; on the unscoped mount the record must sit in a hub the caller holds a role in (a record with no hub is global).
+- `adminEnvelopes` must include at least one envelope addressed to a key an admin holds — `ADMIN_DECRYPTION_PUBKEY` or the registered device key of an active super-admin. An empty or absent set, or one addressed only to non-admin keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
+- A deployment with **no** resolvable admin recipient at all (no `ADMIN_DECRYPTION_PUBKEY`, no super-admin device) is *loud-but-stored*: the write succeeds and the server logs an operator-visible error, matching call-record sealing and inbound messages. Refusing a volunteer's note over a deployment gap would lose more than it protects.
+
 ### 4.8 Calls
 
 ```

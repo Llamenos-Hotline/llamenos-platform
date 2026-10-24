@@ -8,6 +8,7 @@ import {
 } from './api-helpers'
 import { loginAsVolunteer, navigateAfterLogin, Timeouts } from './helpers'
 import { TestIds } from './test-ids'
+import { simulateCallForNote } from './simulation-helpers'
 
 /**
  * The active hub comes from the signed-in user's own memberships (#1708).
@@ -95,7 +96,8 @@ test.describe('Active hub resolution on a multi-hub server', () => {
       ).toBeGreaterThan(0)
 
       expect(baseURL, 'a Vite preview base URL is required').toBeTruthy()
-      callId = `active-hub-${Date.now()}`
+      // A real call of the volunteer's hub: POST /notes refuses any other id (#2112).
+      callId = await simulateCallForNote(request, volunteerHubId)
     } finally {
       await request.dispose()
     }

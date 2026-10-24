@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -6,7 +6,10 @@ import { listNotesQuerySchema, createNoteBodySchema, updateNoteBodySchema, creat
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createLogger } from '../lib/logger'
-import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
+import { assertInHub, callerHasHubAccess, resourceInPathHub } from '../lib/hub-scope'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
+import { ServiceError } from '../services/settings'
+import type { Services } from '../services'
 
 const logger = createLogger('routes.notes')
 
@@ -23,6 +26,41 @@ const noteInPathHub = resourceInPathHub({
   load: async (services, id, hubId) => assertInHub(await services.records.getNote(id), hubId, 'Note not found'),
 })
 notes.use('/:id/*', noteInPathHub)
+
+/**
+ * Refuse (404) a note filed under a call or conversation the caller cannot see
+ * from this request (#2112).
+ *
+ * `callId` / `conversationId` were stored verbatim: a note could hang off an
+ * invented id, or off a call that rang in ANOTHER hub, and the audit log then
+ * recorded `noteCreated {callId}` as if it were real. Inside /hubs/:hubId the
+ * target must live in that hub. On the unscoped mount there is no path hub, so
+ * the target must exist and sit in a hub the caller holds a role in (a target
+ * with no hub is global). A target of another hub and one that does not exist
+ * answer identically, so the route cannot be used to probe which ids are real.
+ */
+async function assertNoteTargetVisible(
+  c: Context<AppEnv>,
+  services: Services,
+  target: { callId?: string; conversationId?: string },
+  hubId: string | undefined,
+): Promise<void> {
+  const visible = (rowHubId: string | null) => !rowHubId || callerHasHubAccess(c, rowHubId)
+
+  if (target.callId) {
+    const call = hubId
+      ? (await services.calls.getActiveCallById(hubId, target.callId)) ?? (await services.calls.getCallRecord(hubId, target.callId))
+      : (await services.calls.getActiveCallByCallId(target.callId)) ?? (await services.calls.getCallRecord('', target.callId))
+    if (!call || !visible(call.hubId)) throw new ServiceError(404, 'Call not found')
+  }
+
+  if (target.conversationId) {
+    const conversation = hubId
+      ? await services.conversations.getByIdForHub(target.conversationId, hubId)
+      : await services.conversations.getById(target.conversationId)
+    if (!visible(conversation.hubId)) throw new ServiceError(404, 'Conversation not found')
+  }
+}
 
 notes.get('/',
   describeRoute({
@@ -98,6 +136,9 @@ notes.post('/',
     // hubId is set by hubContext middleware — scope the note to that hub.
     const hubId = c.get('hubId') as string | undefined
 
+    await assertNoteTargetVisible(c, services, body, hubId)
+    await assertAdminCanRead(services, c.env, body.adminEnvelopes, 'A note', { hubId, authorPubkey: pubkey })
+
     const note = await services.records.createNote({
       hubId,
       authorPubkey: pubkey,
@@ -169,6 +210,16 @@ notes.patch('/:id',
       expectedUpdatedAt = parsed
     }
 
+    // New content is sealed under a new key, so the set that arrives with it is
+    // the ONLY one that can open it: the stored envelopes wrap the OLD key. An
+    // edit that replaces the content without re-wrapping for an admin would
+    // orphan the note exactly as an empty create does; a bare envelope swap is
+    // checked too, since it can drop the admin.
+    if (body.encryptedContent !== undefined || body.adminEnvelopes !== undefined) {
+      await services.records.getNoteAuthoredBy(id, pubkey)
+      await assertAdminCanRead(services, c.env, body.adminEnvelopes, 'A note', { noteId: id, authorPubkey: pubkey })
+    }
+
     const updated = await services.records.updateNote(id, {
       encryptedContent: body.encryptedContent ?? '',
       authorPubkey: pubkey,
@@ -233,6 +284,8 @@ notes.post('/:id/replies',
     const pubkey = c.get('pubkey')
     const id = c.req.param('id')
     const body = c.req.valid('json')
+
+    await assertAdminCanRead(services, c.env, body.readerEnvelopes, 'A note reply', { noteId: id, authorPubkey: pubkey })
 
     const reply = await services.records.createReply(id, {
       ...body,

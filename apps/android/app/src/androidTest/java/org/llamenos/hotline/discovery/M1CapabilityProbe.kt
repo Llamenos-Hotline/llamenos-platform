@@ -20,6 +20,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -29,6 +31,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.llamenos.hotline.LlamenosApp
 import org.llamenos.hotline.MainActivity
+import org.llamenos.hotline.R
 import org.llamenos.hotline.di.ActiveHubEntryPoint
 import org.llamenos.hotline.di.CryptoEntryPoint
 import org.llamenos.hotline.helpers.TestPermissions
@@ -150,7 +153,12 @@ class M1CapabilityProbe {
         compose.onNodeWithTag("invite-code-input").performTextReplacement(java.util.UUID.randomUUID().toString())
         compose.onNodeWithTag("create-identity").performClick()
         waitForTag("invite", "invite-error", 15_000)
-        probe("invite", "unknown invite: error=${textOf("invite-error")} tags=${visibleTags()}")
+        val error = textOf("invite-error")
+        probe("invite", "unknown invite: error=$error tags=${visibleTags()}")
+        // Any error would do for "refused" — an unreachable hub shows one too. Only the server's
+        // verdict on the code (not a transport failure or a rate limit) is a refusal.
+        val invalidCode = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.onboarding_invalid_code)
+        check(error == invalidCode) { fail("invite", "the error was '$error', not the invalid-code verdict '$invalidCode'") }
         check(!has("pin-pad")) { fail("invite", "an unknown invite continued to PIN set") }
         check(crypto().signingPubkeyHex == null) { fail("invite", "a device key was created for an unknown invite") }
         probe("invite", "RESULT unknown invite refused before any key was created")
@@ -174,7 +182,7 @@ class M1CapabilityProbe {
     /** Phase 1: create and save a note. State is kept for [notesAfterRestart]. */
     @Test
     fun notesCreate() {
-        val (_, hub) = enrollViaInvite("notes", "probe-notes")
+        val (pubkey, hub) = enrollViaInvite("notes", "probe-notes")
         ensureActiveHub("notes", hub)
         val marker = "probe-note-${System.currentTimeMillis()}"
         stateFile.parentFile?.mkdirs()
@@ -187,7 +195,10 @@ class M1CapabilityProbe {
         val reread = pollFor(20_000) { hasText(marker) }
         probe("notes", "re-read after leaving and returning to Notes: shown=$reread")
         check(reread) { fail("notes", "note not shown when the list is reloaded") }
-        probe("notes", "RESULT saved note visible in list and on reload: $marker")
+        // What the list shows could be the screen's own state; the server must hold a note by this user.
+        val onServer = serverNotes("notes", hub, pubkey)
+        check(onServer.size == 1) { fail("notes", "the server holds ${onServer.size} notes by this user, expected 1") }
+        probe("notes", "RESULT saved note visible in list and on reload, and held by the server: $marker")
     }
 
     /** Phase 2 — a new process, same app data: unlock with PIN and read the note back. */
@@ -214,9 +225,7 @@ class M1CapabilityProbe {
     fun notesDuringCall() {
         val (pubkey, hub) = enrollViaInvite("quicknote", "probe-quicknote")
         backdoor("quicknote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
-        val ring = backdoor("quicknote", "test-simulate/incoming-call", """{"callerNumber":"+15555550140","hubId":"$hub"}""")
-        val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
-        backdoor("quicknote", "test-simulate/answer-call", """{"callId":"$callId","pubkey":"$pubkey"}""")
+        val callId = simulateAnsweredCall("quicknote", hub, pubkey, "+15555550140")
         ensureActiveHub("quicknote", hub)
         waitForTag("quicknote", "active-call-card", 15_000)
         scrollClick("quicknote", "quick-note-button")
@@ -238,6 +247,8 @@ class M1CapabilityProbe {
         val reread = pollFor(20_000) { hasText(marker) }
         probe("quicknote", "RESULT note saved during a call, listed=$inList, re-listed after reload=$reread")
         check(reread) { fail("quicknote", "note missing when the Notes list reloads") }
+        val forCall = serverNotes("quicknote", hub, pubkey, callId)
+        check(forCall.size == 1) { fail("quicknote", "the server holds ${forCall.size} notes by this user for call $callId, expected 1") }
     }
 
     /**
@@ -250,9 +261,7 @@ class M1CapabilityProbe {
         val (pubkey, hub) = enrollViaInvite("callnote", "probe-callnote")
         backdoor("callnote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("callnote", hub)
-        val ring = backdoor("callnote", "test-simulate/incoming-call", """{"callerNumber":"+15555550130","hubId":"$hub"}""")
-        val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
-        backdoor("callnote", "test-simulate/answer-call", """{"callId":"$callId","pubkey":"$pubkey"}""")
+        val callId = simulateAnsweredCall("callnote", hub, pubkey, "+15555550130")
         backdoor("callnote", "test-simulate/end-call", """{"callId":"$callId"}""")
 
         scrollClick("callnote", "view-call-history")
@@ -273,7 +282,9 @@ class M1CapabilityProbe {
         val inList = pollFor(20_000) { hasText(marker) }
         probe("callnote", "Notes tab shows the call note (decrypted)=$inList tags=${visibleTags()}")
         check(inList) { fail("callnote", "saved call note not shown in Notes") }
-        probe("callnote", "RESULT note attached to a call saved and read back")
+        val forCall = serverNotes("callnote", hub, pubkey, callId)
+        check(forCall.size == 1) { fail("callnote", "the server holds ${forCall.size} notes by this user for call $callId, expected 1") }
+        probe("callnote", "RESULT note attached to a call saved, read back, and held by the server for the call")
     }
 
     /** View the schedule, clock in, clock out. */
@@ -292,59 +303,125 @@ class M1CapabilityProbe {
         if (shiftCards.isEmpty()) probe("shifts", "schedule texts=${screenTexts()}")
 
         // Clock in/out is independent of seeing the schedule — probe it regardless.
+        // The button flipping is the app's own state. What clocking in means is that the server
+        // would ring this user — scheduled (seeded above) AND clocked in — so ask it.
+        check(pubkey !in serverAvailable("shifts", hub)) { fail("shifts", "the server already rings this user before clock-in") }
         waitForTag("shifts", "clock-in-button", 10_000)
         compose.onNodeWithTag("clock-in-button").performClick()
         waitForTag("shifts", "clock-out-button", 15_000)
-        probe("shifts", "clock in → clock-out button shown")
+        val ringableAfterIn = pollFor(15_000) { pubkey in serverAvailable("shifts", hub) }
+        probe("shifts", "clock in → clock-out button shown; server would ring this user=$ringableAfterIn")
+        check(ringableAfterIn) { fail("shifts", "the app shows clocked in but the server would not ring this user") }
         compose.onNodeWithTag("clock-out-button").performClick()
         waitForTag("shifts", "clock-in-button", 15_000)
-        probe("shifts", "clock out → clock-in button shown")
+        val ringableAfterOut = pollFor(15_000) { pubkey !in serverAvailable("shifts", hub) }
+        probe("shifts", "clock out → clock-in button shown; server stopped ringing this user=$ringableAfterOut")
+        check(ringableAfterOut) { fail("shifts", "the app shows clocked out but the server would still ring this user") }
         check(shiftCards.isNotEmpty()) { fail("shifts", "seeded shift is not in the schedule") }
-        probe("shifts", "RESULT schedule, clock in and clock out all work")
+        probe("shifts", "RESULT schedule, clock in and clock out all work, and the server agrees")
     }
 
     /**
      * Calls, in two halves so a dead realtime channel cannot hide a display bug:
      *  1. an answered call that already exists when the dashboard loads its hub data —
      *     can the app show it and hang it up at all?
-     *  2. a live ring after the dashboard is up — does the app learn about it?
+     *  2. a live ring and a live answer after the dashboard is up — does the app learn
+     *     about each?
      * Then Call History. There is no in-app answer control to test (answering happens on
      * the volunteer's phone via the telephony provider), so the probe records its absence.
+     *
+     * Every claim is checked against the server, not against what the probe set up:
+     *  - the answer is real when the server lists the call `in-progress`, answered by this
+     *    user ([serverCall]);
+     *  - half 2 starts from a dashboard with NO call card and no call on the server, so a
+     *    card seen afterwards cannot be left over from half 1 (#2122);
+     *  - a hang-up the server refused is told apart from a card that did not update.
+     * The card carries neither a call id nor a status, so a card that is already up when the
+     * answer is simulated cannot be attributed to the answer — that is reported as not
+     * observed, never as seen.
      */
     @Test
     fun calls() {
         val (pubkey, hub) = enrollViaInvite("calls", "probe-calls")
         backdoor("calls", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
+        // A hub with no telephony provider cannot disconnect a caller, so Hang Up is refused with a
+        // 502 whatever the app does. Give the hub the mock provider, as an admin does from Settings,
+        // so a refusal that remains is about the app or the server rather than a missing provider.
+        adminApi("calls", "PUT", "/api/hubs/$hub/simulated-telephony/mock", """{"enabled":true}""")
 
         // 1. Pre-existing answered call
-        val ring1 = backdoor("calls", "test-simulate/incoming-call", """{"callerNumber":"+15555550123","hubId":"$hub"}""")
-        val call1 = json.parseToJsonElement(ring1).jsonObject["callId"]!!.jsonPrimitive.content
-        backdoor("calls", "test-simulate/answer-call", """{"callId":"$call1","pubkey":"$pubkey"}""")
+        val call1 = simulateAnsweredCall("calls", hub, pubkey, "+15555550123")
+        // The dashboard is already up from enrollment, so it has not seen this call. Reopen the app
+        // (a real cold start: PIN, then the dashboard loads its hub data) so the call genuinely
+        // pre-exists the load rather than depending on a pull gesture registering.
+        scenario?.close()
+        launch()
+        waitForTag("calls", "pin-pad", 20_000)
+        unlockWithPin("calls", "reopened with the call already answered")
         ensureActiveHub("calls", hub)
         val cardOnLoad = pollFor(15_000) { has("active-call-card") }
         probe("calls", "answered call present at dashboard load: active-call-card=$cardOnLoad count=${textOf("active-call-count")} tags=${visibleTags()}")
-        if (cardOnLoad) {
+        val hangup = if (cardOnLoad) {
             compose.onNodeWithTag("hangup-button").performScrollTo().performClick()
-            val gone = pollFor(15_000) { !has("active-call-card") }
-            probe("calls", "hangup tapped: card gone=$gone")
+            val serverEnded = pollFor(15_000) { serverCall("calls", hub, call1) == null }
+            when {
+                !serverEnded -> "refused-by-server"
+                pollFor(15_000) { !has("active-call-card") } -> "ok"
+                else -> "card-stale-after-server-ended-call"
+            }
+        } else {
+            "not-attempted"
         }
+        probe("calls", "hangup tapped: $hangup (server still lists call 1: ${serverCall("calls", hub, call1) != null})")
+
+        // Half 2 must start clean. A refused hang-up leaves call 1 live on the server, so end it
+        // through the simulator, refresh as a user would, and require the card to be gone —
+        // otherwise any card seen below could be call 1's.
+        if (serverCall("calls", hub, call1) != null) {
+            backdoor("calls", "test-simulate/end-call", """{"callId":"$call1"}""")
+        }
+        // An injected pull does not always register (see ensureActiveHub), so pull again as a user would.
+        val cleanStart = serverCalls("calls", hub).isEmpty() &&
+            (1..3).any { pullToRefreshDashboard(); pollFor(5_000) { !has("active-call-card") } }
+        val countBefore = activeCallCount()
+        probe("calls", "half 2 starts clean=$cleanStart count=$countBefore tags=${visibleTags()}")
 
         // 2. Live ring into the active hub
         val ring2 = backdoor("calls", "test-simulate/incoming-call", """{"callerNumber":"+15555550124","hubId":"$hub"}""")
         val call2 = json.parseToJsonElement(ring2).jsonObject["callId"]!!.jsonPrimitive.content
-        val sawRing = pollFor(15_000) { textOf("active-call-count")?.trim()?.let { it != "0" } == true }
-        probe("calls", "live ring: dashboard reacted=$sawRing count=${textOf("active-call-count")} connection=${textOf("connection-status")} answer-control=${visibleTags().filter { "answer" in it }}")
+        // Either the counter moves or a card appears; from a clean start nothing else could do either.
+        val sawRing = cleanStart && countBefore != null &&
+            pollFor(15_000) { activeCallCount()?.let { it > countBefore } == true || has("active-call-card") }
+        probe("calls", "live ring: dashboard reacted=$sawRing count=${activeCallCount()} (was $countBefore) card=${has("active-call-card")} connection=${textOf("connection-status")} answer-control=${visibleTags().filter { "answer" in it }}")
+        // A ring may bring up a card by itself; only a card that was absent until the answer can
+        // be credited to the answer.
+        val cardBeforeAnswer = has("active-call-card")
         backdoor("calls", "test-simulate/answer-call", """{"callId":"$call2","pubkey":"$pubkey"}""")
-        val sawLive = pollFor(15_000) { has("active-call-card") }
-        probe("calls", "live answer: active-call-card=$sawLive")
+        val answeredOnServer = serverCall("calls", hub, call2)?.let { it.status == "in-progress" && it.answeredBy == pubkey } == true
+        val onlyCall2Live = serverCalls("calls", hub).map { it.id } == listOf(call2)
+        val cardAfterAnswer = cleanStart && !cardBeforeAnswer && answeredOnServer && onlyCall2Live &&
+            pollFor(15_000) { has("active-call-card") }
+        probe(
+            "calls",
+            "live answer: server answered=$answeredOnServer only-call-2-live=$onlyCall2Live " +
+                "card before answer=$cardBeforeAnswer after=$cardAfterAnswer",
+        )
         backdoor("calls", "test-simulate/end-call", """{"callId":"$call2"}""")
 
         scrollClick("calls", "view-call-history")
         waitForAnyTag("calls", 15_000, "call-history-list", "call-history-title")
-        val inHistory = pollFor(15_000) { has("call-record-$call1") || has("call-record-$call2") }
-        probe("calls", "history shows the calls=$inHistory texts=${screenTexts().filter { "error" in it.lowercase() || "required" in it }}")
-        probe("calls", "RESULT preloaded=$cardOnLoad liveRing=$sawRing liveAnswer=$sawLive history=$inHistory")
-        check(cardOnLoad && sawRing && sawLive && inHistory) { fail("calls", "call lifecycle incomplete (see RESULT)") }
+        val inHistory = pollFor(15_000) { has("call-record-$call1") && has("call-record-$call2") }
+        probe("calls", "history shows both calls=$inHistory texts=${screenTexts().filter { "error" in it.lowercase() || "required" in it }}")
+        probe(
+            "calls",
+            "RESULT preloaded=$cardOnLoad hangup=$hangup cleanStart=$cleanStart liveRing=$sawRing liveAnswer=$cardAfterAnswer history=$inHistory",
+        )
+        check(cardOnLoad) { fail("calls", "an answered call present at load was not shown") }
+        check(hangup == "ok") { fail("calls", "hang-up: $hangup (refused-by-server is the server or its telephony, not the card)") }
+        check(cleanStart) { fail("calls", "half 2 could not start from a clean dashboard, so a live answer cannot be told from a stale card") }
+        check(sawRing) { fail("calls", "a live ring never reached the dashboard") }
+        check(cardAfterAnswer) { fail("calls", "the answer update was not observed (card already up before the answer: $cardBeforeAnswer; server answered: $answeredOnServer)") }
+        check(inHistory) { fail("calls", "ended calls not both in Call History") }
     }
 
     /** List hubs, switch the active hub, and receive a call ring from the non-active hub. */
@@ -363,23 +440,35 @@ class M1CapabilityProbe {
         probe("hubs", "hub list rows=$rows tags=${visibleTags()}")
         check(rows >= 2) { fail("hubs", "expected both member hubs in the list, saw $rows") }
 
-        compose.onNode(hasTestTag("hub-row") and hasAnyDescendantText("probe-hub-a"), useUnmergedTree = true)
-            .performClick()
+        // The app picked a hub by itself, so tapping that same hub would "switch" to where it
+        // already is. Prove a switch by going to the hub that is NOT active, and then back.
+        val before = activeHubId()
+        check(before == hubA || before == hubB) { fail("hubs", "the app has no active hub among its two: $before") }
+        val other = if (before == hubA) "probe-hub-b" to hubB else "probe-hub-a" to hubA
+        compose.onNode(hasTestTag("hub-row") and hasAnyDescendantText(other.first), useUnmergedTree = true).performClick()
+        val switchedAway = pollFor(10_000) { activeHubId() == other.second }
+        probe("hubs", "tapped ${other.first}: activeHubId=${activeHubId()} (was $before) switched=$switchedAway indicator=${has("hub-active-indicator")}")
+        check(switchedAway) { fail("hubs", "tapping the inactive hub ${other.first} did not switch the active hub (still ${activeHubId()})") }
+        compose.onNode(hasTestTag("hub-row") and hasAnyDescendantText("probe-hub-a"), useUnmergedTree = true).performClick()
         val switched = pollFor(10_000) { activeHubId() == hubA }
-        probe("hubs", "tapped hub A: activeHubId=${activeHubId()} switched=$switched indicator=${has("hub-active-indicator")}")
-        check(switched) { fail("hubs", "tapping hub A did not switch the active hub") }
+        probe("hubs", "tapped hub A: activeHubId=${activeHubId()} switched back=$switched")
+        check(switched) { fail("hubs", "tapping hub A did not switch the active hub back (still ${activeHubId()})") }
 
         compose.onNodeWithTag("hubs-back").performClick()
         tapTab("nav-dashboard")
         waitForTag("hubs", "dashboard-title", 10_000)
         probe("hubs", "dashboard (active=A) before ring: count=${textOf("active-call-count")} connection=${textOf("connection-status")}")
+        // The counter only moves on a live ring, so each ring must move it past what it read just
+        // before — a count of 1 left by the first ring would otherwise satisfy the second check.
+        val countBeforeB = activeCallCount()
         backdoor("hubs", "test-simulate/incoming-call", """{"callerNumber":"+15555550124","hubId":"$hubB"}""")
-        val sawB = pollFor(15_000) { textOf("active-call-count")?.trim()?.let { it != "0" } == true }
-        probe("hubs", "call rang in NON-active hub B: dashboard reacted=$sawB count=${textOf("active-call-count")} tags=${visibleTags()}")
+        val sawB = countBeforeB != null && pollFor(15_000) { activeCallCount()?.let { it > countBeforeB } == true }
+        probe("hubs", "call rang in NON-active hub B: dashboard reacted=$sawB count=${activeCallCount()} (was $countBeforeB) tags=${visibleTags()}")
+        val countBeforeA = activeCallCount()
         backdoor("hubs", "test-simulate/incoming-call", """{"callerNumber":"+15555550125","hubId":"$hubA"}""")
-        val sawA = pollFor(15_000) { textOf("active-call-count")?.trim()?.let { it != "0" } == true }
-        probe("hubs", "control — call rang in ACTIVE hub A: dashboard reacted=$sawA count=${textOf("active-call-count")}")
-        probe("hubs", "RESULT list=$rows switch=$switched nonActiveRing=$sawB activeRing=$sawA")
+        val sawA = countBeforeA != null && pollFor(15_000) { activeCallCount()?.let { it > countBeforeA } == true }
+        probe("hubs", "control — call rang in ACTIVE hub A: dashboard reacted=$sawA count=${activeCallCount()} (was $countBeforeA)")
+        probe("hubs", "RESULT list=$rows switch=${switchedAway && switched} nonActiveRing=$sawB activeRing=$sawA")
         check(sawA) { fail("hubs", "a call ringing in the active hub never reached the app") }
         check(sawB) { fail("hubs", "a call ringing in a non-active member hub never reached the app") }
     }
@@ -387,7 +476,7 @@ class M1CapabilityProbe {
     /** An inbound SMS creates a conversation; open it, read it, reply. */
     @Test
     fun conversations() {
-        val (_, hub) = enrollViaInvite("conversations", "probe-conv")
+        val (pubkey, hub) = enrollViaInvite("conversations", "probe-conv")
         ensureActiveHub("conversations", hub)
         val body = "probe-sms-${System.currentTimeMillis()}"
         backdoor(
@@ -401,7 +490,8 @@ class M1CapabilityProbe {
         if (!cardAppeared) probe("conversations", "list texts=${screenTexts()}")
         check(cardAppeared) { fail("conversations", "inbound conversation never listed") }
 
-        compose.onNodeWithTag(tagsWithPrefix("conversation-card-").first(), useUnmergedTree = true).performClick()
+        val conversationId = tagsWithPrefix("conversation-card-").first().removePrefix("conversation-card-")
+        compose.onNodeWithTag("conversation-card-$conversationId", useUnmergedTree = true).performClick()
         waitForAnyTag("conversations", 15_000, "messages-list", "messages-empty", "messages-error")
         Thread.sleep(2_000)
         val readable = hasText(body)
@@ -411,10 +501,15 @@ class M1CapabilityProbe {
         val reply = "probe-reply-${System.currentTimeMillis()}"
         compose.onNodeWithTag("reply-text-input").performTextReplacement(reply)
         compose.onNodeWithTag("send-button").performClick()
-        val sent = pollFor(15_000) { hasText(reply) }
-        probe("conversations", "reply shown in thread=$sent tags=${visibleTags()}")
+        // `hasText(reply)` alone also matches the reply still sitting in the input box after a send
+        // that failed: text the probe typed. Require it in the thread (not editable), the box
+        // emptied, and the server to hold an outbound message from this user.
+        val sent = pollFor(15_000) { hasReadOnlyText(reply) && !hasInputText(reply) }
+        val outboundOnServer = pollFor(15_000) { serverOutboundMessages("conversations", hub, conversationId, pubkey) >= 1 }
+        probe("conversations", "reply shown in thread=$sent, server holds an outbound message=$outboundOnServer tags=${visibleTags()}")
         check(readable) { fail("conversations", "inbound message text not readable in the thread") }
         check(sent) { fail("conversations", "sent reply never appeared in the thread") }
+        check(outboundOnServer) { fail("conversations", "the server holds no outbound message from this user in the conversation") }
         probe("conversations", "RESULT inbound readable, reply sent")
     }
 
@@ -447,7 +542,9 @@ class M1CapabilityProbe {
      */
     private fun pullToRefreshDashboard() {
         waitForTag("nav", "dashboard-pull-refresh", 10_000)
-        compose.onNodeWithTag("connection-card").performScrollTo()
+        // The first card is the call card when a call is up; scrolling to the card below it
+        // leaves the list off its top, and the pull then never fires.
+        compose.onNodeWithTag(if (has("active-call-card")) "active-call-card" else "connection-card").performScrollTo()
         compose.waitForIdle()
         val node = compose.onNodeWithTag("dashboard-pull-refresh").fetchSemanticsNode()
         val x = (node.positionOnScreen.x + node.size.width / 2).toInt()
@@ -465,7 +562,7 @@ class M1CapabilityProbe {
      * a new hub, and the volunteer redeems it on a fresh install (hub URL + invite code →
      * PIN twice). Redemption is what grants the hub membership (#1474), so the invite
      * names the hub — this server has many, and an unnamed hub is refused as ambiguous.
-     * [addHubMember] afterwards is belt-and-braces on the role, and idempotent.
+     * The server must then list the user as a member with [role]; the probe grants nothing.
      * Returns the signing pubkey and the hub.
      *
      * [asLink]: paste the invite link instead, leaving the hub URL empty — the app must
@@ -495,7 +592,11 @@ class M1CapabilityProbe {
         check(has("dashboard-title")) { fail(flow, "invite redemption failed: ${textOf("invite-redeem-error")}") }
         val pubkey = checkNotNull(crypto().signingPubkeyHex) { fail(flow, "no signing pubkey after enrollment") }
         probe(flow, "invite redeemed in the UI; the app is on the dashboard")
-        addHubMember(flow, pubkey, hub)
+        // Redemption is what grants the hub membership (#1474). The probe used to add the member
+        // itself straight afterwards, which made a redemption that granted nothing look fine.
+        val roles = serverHubRoles(flow, pubkey, hub)
+        probe(flow, "server hub roles after redemption: $roles")
+        check(roles?.contains(role) == true) { fail(flow, "redeeming the invite did not make the user a $role member of the hub; server says $roles") }
         return pubkey to hub
     }
 
@@ -547,6 +648,20 @@ class M1CapabilityProbe {
 
     private fun hasText(text: String): Boolean =
         compose.onAllNodes(hasText(text, substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    /** [text] on screen in a node that is not an input box (the message thread, not the reply field). */
+    private fun hasReadOnlyText(text: String): Boolean =
+        compose.onAllNodes(
+            hasText(text, substring = true) and !androidx.compose.ui.test.hasSetTextAction(),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes().isNotEmpty()
+
+    /** [text] on screen in an input box. */
+    private fun hasInputText(text: String): Boolean =
+        compose.onAllNodes(
+            hasText(text, substring = true) and androidx.compose.ui.test.hasSetTextAction(),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes().isNotEmpty()
 
     private fun hasAnyDescendantText(text: String): SemanticsMatcher =
         androidx.compose.ui.test.hasAnyDescendant(hasText(text, substring = true))
@@ -604,6 +719,70 @@ class M1CapabilityProbe {
 
     // ─── Backend (BACKDOOR: things the app has no UI for) ───────────────────
 
+    /** One call as the SERVER lists it — the evidence the probe trusts over anything on screen. */
+    private data class ServerCall(val id: String, val status: String, val answeredBy: String?)
+
+    /** Calls the server holds as live in [hub] (`GET /api/hubs/:id/calls/active`, as the admin). */
+    private fun serverCalls(flow: String, hub: String): List<ServerCall> =
+        json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/calls/active")).jsonObject["calls"]!!.jsonArray.map {
+            val call = it.jsonObject
+            ServerCall(
+                call["id"]!!.jsonPrimitive.content,
+                call["status"]!!.jsonPrimitive.content,
+                call["answeredBy"]?.jsonPrimitive?.contentOrNull,
+            )
+        }
+
+    private fun serverCall(flow: String, hub: String, callId: String): ServerCall? =
+        serverCalls(flow, hub).firstOrNull { it.id == callId }
+
+    /**
+     * Ring and answer a call through the telephony simulator (BACKDOOR: the volunteer answers on
+     * their phone, not in the app), then require the SERVER to list it `in-progress`, answered by
+     * [pubkey] — a call that never reached that state would make every UI assertion below
+     * vacuous. Returns the call id.
+     */
+    private fun simulateAnsweredCall(flow: String, hub: String, pubkey: String, callerNumber: String): String {
+        val ring = backdoor(flow, "test-simulate/incoming-call", """{"callerNumber":"$callerNumber","hubId":"$hub"}""")
+        val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
+        backdoor(flow, "test-simulate/answer-call", """{"callId":"$callId","pubkey":"$pubkey"}""")
+        val call = serverCall(flow, hub, callId)
+        check(call?.status == "in-progress" && call.answeredBy == pubkey) { fail(flow, "the server does not list $callId as answered by $pubkey: $call") }
+        return callId
+    }
+
+    /** The dashboard's live call counter; it only moves on a live ring or end event, never on a refresh. */
+    private fun activeCallCount(): Int? = textOf("active-call-count")?.trim()?.toIntOrNull()
+
+    /** Hub roles the server holds for [pubkey] in [hub], or null if the server does not know them as a member. */
+    private fun serverHubRoles(flow: String, pubkey: String, hub: String): List<String>? = runCatching {
+        json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/users/$pubkey")).jsonObject["hubRoles"]!!.jsonArray
+            .filter { it.jsonObject["hubId"]!!.jsonPrimitive.content == hub }
+            .flatMap { it.jsonObject["roleIds"]!!.jsonArray.map { r -> r.jsonPrimitive.content } }
+    }.onFailure { probe(flow, "hub membership lookup for $pubkey failed: ${it.message}") }.getOrNull()
+
+    /** Pubkeys the server would ring in [hub] right now (`GET /api/hubs/:id/calls/presence`): scheduled AND clocked in. */
+    private fun serverAvailable(flow: String, hub: String): List<String> =
+        json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/calls/presence")).jsonObject["users"]!!.jsonArray
+            .filter { it.jsonObject["status"]!!.jsonPrimitive.content == "available" }
+            .map { it.jsonObject["pubkey"]!!.jsonPrimitive.content }
+
+    /** Notes the server holds in [hub] written by [pubkey], optionally for one call. Content is ciphertext; only existence is checkable. */
+    private fun serverNotes(flow: String, hub: String, pubkey: String, callId: String? = null): List<String> {
+        val query = callId?.let { "?callId=$it" }.orEmpty()
+        return json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/notes$query")).jsonObject["notes"]!!.jsonArray
+            .filter { it.jsonObject["authorPubkey"]!!.jsonPrimitive.content == pubkey }
+            .map { it.jsonObject["id"]!!.jsonPrimitive.content }
+    }
+
+    /** Outbound messages by [pubkey] the server holds in a conversation. Content is ciphertext; only existence is checkable. */
+    private fun serverOutboundMessages(flow: String, hub: String, conversationId: String, pubkey: String): Int =
+        json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/conversations/$conversationId/messages")).jsonObject["messages"]!!.jsonArray
+            .count {
+                it.jsonObject["direction"]?.jsonPrimitive?.contentOrNull == "outbound" &&
+                    it.jsonObject["authorPubkey"]?.jsonPrimitive?.contentOrNull == pubkey
+            }
+
     private fun createHub(name: String): String {
         val body = backdoor("setup", "test-create-hub", """{"name":"$name-${System.currentTimeMillis()}"}""")
         return json.parseToJsonElement(body).jsonObject["id"]!!.jsonPrimitive.content
@@ -618,7 +797,7 @@ class M1CapabilityProbe {
      * A request signed by the test admin (CI's fixed `ADMIN_SEED`, whose pubkey is the
      * server's `ADMIN_PUBKEY`). Makes sure the admin is registered first.
      */
-    private fun adminApi(flow: String, method: String, path: String, body: String): String {
+    private fun adminApi(flow: String, method: String, path: String, body: String? = null): String {
         if (!adminReady) {
             val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(ADMIN_SEED, 0u, "GET", "/")
             backdoor(flow, "test-promote-admin", """{"pubkey":"${token.pubkey}"}""")
@@ -655,7 +834,7 @@ class M1CapabilityProbe {
         flow: String,
         method: String,
         path: String,
-        body: String,
+        body: String?,
         kind: String,
         headers: HttpURLConnection.() -> Unit,
     ): String {
@@ -666,12 +845,16 @@ class M1CapabilityProbe {
             conn.readTimeout = 30_000
             conn.setRequestProperty("Content-Type", "application/json")
             conn.headers()
-            conn.doOutput = true
-            conn.outputStream.use { it.write(body.toByteArray()) }
+            // A GET must not carry a body: HttpURLConnection silently turns a GET with output into a POST.
+            if (body != null) {
+                conn.doOutput = true
+                conn.outputStream.use { it.write(body.toByteArray()) }
+            }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            probe(flow, "$kind $method $path → $code ${text.take(160)}")
+            // Reads are polled; only a failed one is worth a log line.
+            if (method != "GET" || code !in 200..299) probe(flow, "$kind $method $path → $code ${text.take(160)}")
             check(code in 200..299) { fail(flow, "$kind $method $path failed: $code $text") }
             return text
         } finally {
