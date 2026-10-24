@@ -14,13 +14,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import okhttp3.OkHttpClient
@@ -86,6 +88,8 @@ class WebSocketService @Inject constructor(
          */
         const val GLOBAL_PSEUDO_HUB_ID = "global"
 
+        private const val KEY_REFRESH_MIN_INTERVAL_MS = 30_000L
+
         /**
          * Map the server-advertised relay endpoint (`wsRelayUrl`, e.g. `/ws`) onto a
          * WebSocket URL against the configured hub URL.
@@ -116,6 +120,20 @@ class WebSocketService @Inject constructor(
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
+
+    /** Bumped per socket so a closing socket's late callbacks cannot clobber its successor's state. */
+    @Volatile
+    private var socketGeneration = 0
+
+    /** The hubs the relay listed when this socket authenticated — the ones subscribed. */
+    @Volatile
+    private var subscribedHubs: Set<String> = emptySet()
+
+    /** Hubs a membership re-authentication was already spent on, so one the relay will not list cannot loop. */
+    private var membershipReauthAttempted: Set<String> = emptySet()
+
+    private val keyRefreshMutex = Mutex()
+    private var lastKeyRefreshMs = 0L
 
     @Volatile
     private var authenticated = false
@@ -224,6 +242,7 @@ class WebSocketService @Inject constructor(
         _connectionState.value = ConnectionState.CONNECTING
         authenticated = false
         authenticatedPubkey = null
+        val generation = ++socketGeneration
 
         // Apply the same app-level certificate pinning as ApiService for the relay
         // host, so operator-customised deployments are pinned on the WS leg too.
@@ -252,6 +271,7 @@ class WebSocketService @Inject constructor(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
+                if (generation != socketGeneration) return
                 authenticated = false
                 _connectionState.value = ConnectionState.DISCONNECTED
                 // Server-initiated closes (e.g. 4001 auth timeout) must reconnect —
@@ -260,6 +280,7 @@ class WebSocketService @Inject constructor(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (generation != socketGeneration) return
                 authenticated = false
                 _connectionState.value = ConnectionState.DISCONNECTED
                 scheduleReconnect()
@@ -279,6 +300,8 @@ class WebSocketService @Inject constructor(
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         authenticated = false
+        subscribedHubs = emptySet()
+        membershipReauthAttempted = emptySet()
         _connectionState.value = ConnectionState.DISCONNECTED
         reconnectAttempt = 0
     }
@@ -366,10 +389,43 @@ class WebSocketService @Inject constructor(
     private fun handleAuthenticated(hubs: List<String>) {
         authenticated = true
         _connectionState.value = ConnectionState.CONNECTED
-        for (hubId in hubs) {
-            if (hubId == GLOBAL_PSEUDO_HUB_ID) continue
+        subscribedHubs = hubs.filter { it != GLOBAL_PSEUDO_HUB_ID }.toSet()
+        for (hubId in subscribedHubs) {
             sendSubscribe(hubId, RELAY_EVENT_KINDS)
         }
+    }
+
+    /**
+     * Pick up hub memberships gained since this socket authenticated.
+     *
+     * The relay lists a user's hubs once, in its `authenticated` reply, and never announces
+     * a later membership; a subscription is admitted only for hubs the user belonged to at
+     * authentication (or at the relay's periodic revalidation, which is also silent). A
+     * volunteer added to a second hub while the app is open would otherwise never hear from
+     * it until the socket happened to drop. So when the authoritative member-hub list
+     * ([memberHubIds], from `GET /api/hubs`) names a hub this socket is not subscribed to,
+     * re-authenticate: the new handshake lists the current membership.
+     *
+     * A hub the relay still will not list after one re-authentication (a super admin sees
+     * every hub in the list but is a member of few) does not trigger another.
+     *
+     * @return whether a re-authentication was started.
+     */
+    @Synchronized
+    fun syncMemberHubs(memberHubIds: Collection<String>): Boolean {
+        if (!authenticated) return false // the next authentication lists the current membership
+        val missing = memberHubIds.filter { it != GLOBAL_PSEUDO_HUB_ID && it !in subscribedHubs }.toSet()
+        if (missing.isEmpty() || (missing - membershipReauthAttempted).isEmpty()) return false
+        membershipReauthAttempted = membershipReauthAttempted + missing
+        android.util.Log.i("WebSocketService", "Re-authenticating to subscribe to ${missing.size} newly joined hub(s)")
+        val stale = webSocket
+        webSocket = null
+        socketGeneration++
+        authenticated = false
+        _connectionState.value = ConnectionState.RECONNECTING
+        stale?.close(1000, "Hub membership changed")
+        scheduleReconnect()
+        return true
     }
 
     private fun sendSubscribe(hubId: String, kinds: List<Int>) {
@@ -386,13 +442,34 @@ class WebSocketService @Inject constructor(
      * truth for attribution — the payload is encrypted with the server event
      * key (not a per-hub key), so key-trial attribution cannot work here and
      * the active hub is never used as a fallback.
+     *
+     * The server seals each frame under an epoch-scoped AAD, so the envelope's
+     * `epoch` is part of the key material for opening it.
      */
     private fun handleEventMessage(obj: kotlinx.serialization.json.JsonObject) {
         val hubId = obj["hubId"]?.jsonPrimitive?.content ?: return
         val payload = obj["payload"]?.jsonPrimitive?.content ?: return
-        obj["epoch"]?.jsonPrimitive?.intOrNull ?: return
+        val epoch = obj["epoch"]?.jsonPrimitive?.longOrNull ?: return
 
-        val plaintext = cryptoService.decryptServerEventWithStoredKeys(payload) ?: return
+        val plaintext = cryptoService.decryptServerEventWithStoredKeys(payload, epoch)
+        if (plaintext != null) {
+            dispatchEvent(hubId, plaintext)
+            return
+        }
+        // The stored keys cover the current and previous UTC day as of the last
+        // `/auth/me`; a socket that outlives UTC midnight meets a newer epoch.
+        scope.launch {
+            if (refreshServerEventKeys()) {
+                cryptoService.decryptServerEventWithStoredKeys(payload, epoch)?.let {
+                    dispatchEvent(hubId, it)
+                    return@launch
+                }
+            }
+            android.util.Log.w("WebSocketService", "Dropped an undecryptable relay event: hub=$hubId epoch=$epoch")
+        }
+    }
+
+    private fun dispatchEvent(hubId: String, plaintext: String) {
         val event = parseTypedEvent(plaintext) ?: return
         val attributed = AttributedHubEvent(hubId = hubId, event = event)
 
@@ -401,6 +478,26 @@ class WebSocketService @Inject constructor(
         hubActivityService.handle(attributed)
         scope.launch {
             _typedEvents.emit(attributed)
+        }
+    }
+
+    /**
+     * Re-read the event keys from `/auth/me` and store them in Rust. Returns
+     * whether keys were stored. Rate-limited: a stream of frames that no key
+     * opens must not become a stream of `/auth/me` requests.
+     */
+    private suspend fun refreshServerEventKeys(): Boolean = keyRefreshMutex.withLock {
+        val now = System.currentTimeMillis()
+        if (now - lastKeyRefreshMs < KEY_REFRESH_MIN_INTERVAL_MS) return@withLock false
+        lastKeyRefreshMs = now
+        try {
+            val me = apiService.getAuthMe()
+            val current = me.serverEventKeyHex ?: return@withLock false
+            cryptoService.setServerEventKeys(current, me.serverEventKeyPrevHex ?: "")
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("WebSocketService", "Event key refresh failed: ${e.message}")
+            false
         }
     }
 

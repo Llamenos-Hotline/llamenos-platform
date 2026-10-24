@@ -16,6 +16,7 @@ import org.junit.rules.TemporaryFolder
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Hub
 import org.llamenos.hotline.model.HubsListResponse
@@ -33,7 +34,9 @@ class HubRepositoryTest {
     private val cryptoService = mockk<CryptoService>(relaxed = true)
     private val activeHubState = mockk<ActiveHubState>(relaxed = true)
 
-    private val repo = HubRepository(apiService, cryptoService, activeHubState)
+    private val webSocketService = mockk<WebSocketService>(relaxed = true)
+
+    private val repo = HubRepository(apiService, cryptoService, activeHubState, webSocketService)
 
     private fun makeEnvelope(enc: String = "aabb", ct: String = "ccdd") =
         HubKeyEnvelopeResponse(
@@ -196,6 +199,26 @@ class HubRepositoryTest {
         coVerify(exactly = 1) { apiService.getHubKey("hub-a") }
     }
 
+    // ── Relay membership (a hub joined while the app is open must reach the relay socket) ──
+
+    @Test
+    fun `loadAllHubKeys tells the relay which hubs the user belongs to`() = runTest {
+        coEvery { apiService.getHubKey(any()) } returns makeEnvelope()
+
+        repo.loadAllHubKeys(listOf(makeHub("hub-a"), makeHub("hub-b")))
+
+        coVerify(exactly = 1) { webSocketService.syncMemberHubs(listOf("hub-a", "hub-b")) }
+    }
+
+    @Test
+    fun `loadInitialHub tells the relay which hubs the user belongs to`() = runTest {
+        every { activeHubState.activeHubId } returns kotlinx.coroutines.flow.MutableStateFlow("hub-a")
+
+        repo.loadInitialHub(listOf(makeHub("hub-a"), makeHub("hub-b")))
+
+        coVerify(exactly = 1) { webSocketService.syncMemberHubs(listOf("hub-a", "hub-b")) }
+    }
+
     // ── ensureInitialHub (issue #1340: must fire after login and on session restore) ──
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -208,7 +231,7 @@ class HubRepositoryTest {
                 HubsListResponse(listOf(makeHub("hub-aaa"), makeHub("hub-bbb")))
             coEvery { api.getHubKey(any()) } returns makeEnvelope()
 
-            HubRepository(api, mockk(relaxed = true), state).ensureInitialHub()
+            HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertEquals("hub-aaa", state.activeHubId.value)
         }
@@ -222,7 +245,7 @@ class HubRepositoryTest {
             state.setActiveHub("hub-chosen")
             val api = mockk<ApiService>(relaxed = true)
 
-            HubRepository(api, mockk(relaxed = true), state).ensureInitialHub()
+            HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertEquals("hub-chosen", state.activeHubId.value)
             coVerify(exactly = 0) { api.getHubs() }
@@ -236,7 +259,7 @@ class HubRepositoryTest {
             val api = mockk<ApiService>()
             coEvery { api.getHubs() } returns HubsListResponse(emptyList())
 
-            HubRepository(api, mockk(relaxed = true), state).ensureInitialHub()
+            HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertNull(state.activeHubId.value)
         }
@@ -249,7 +272,7 @@ class HubRepositoryTest {
             val api = mockk<ApiService>()
             coEvery { api.getHubs() } throws java.io.IOException("offline")
 
-            HubRepository(api, mockk(relaxed = true), state).ensureInitialHub()
+            HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertNull(state.activeHubId.value)
         }

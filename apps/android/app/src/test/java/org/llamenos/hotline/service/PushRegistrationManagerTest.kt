@@ -69,7 +69,7 @@ class PushRegistrationManagerTest {
         every { wakeKeyService.getOrCreateWakePublicKey() } returns "wake-public-key"
         cryptoService = CryptoService()
         cryptoService.setTestKeyState("a".repeat(64), "b".repeat(64), "device-1")
-        coEvery { apiService.registerPushEndpoint(any()) } returns Unit
+        coEvery { apiService.registerDevice(any()) } returns Unit
         coEvery { apiService.registerVoipToken(any()) } returns Unit
         coEvery { apiService.clearPushEndpoint(any()) } returns Unit
     }
@@ -158,7 +158,7 @@ class PushRegistrationManagerTest {
             manager.onNewEndpoint(url)
 
             coVerify(exactly = 1) {
-                apiService.registerPushEndpoint(match<RegisterDeviceRequest> { it.pushToken == url })
+                apiService.registerDevice(match<RegisterDeviceRequest> { it.pushToken == url })
             }
             // The incoming-call ring path (getVoipTokens) only reads voipToken —
             // without this call the device can never be rung (#955).
@@ -183,10 +183,10 @@ class PushRegistrationManagerTest {
         manager.onNewEndpoint("https://ntfy.example.com/upNew")
 
         coVerify(exactly = 1) {
-            apiService.registerPushEndpoint(match<RegisterDeviceRequest> { it.pushToken == "https://ntfy.example.com/upOld" })
+            apiService.registerDevice(match<RegisterDeviceRequest> { it.pushToken == "https://ntfy.example.com/upOld" })
         }
         coVerify(exactly = 1) {
-            apiService.registerPushEndpoint(match<RegisterDeviceRequest> { it.pushToken == "https://ntfy.example.com/upNew" })
+            apiService.registerDevice(match<RegisterDeviceRequest> { it.pushToken == "https://ntfy.example.com/upNew" })
         }
         coVerify(exactly = 1) {
             apiService.registerVoipToken(match<VoipTokenRequest> { it.voipToken == "https://ntfy.example.com/upOld" })
@@ -227,7 +227,7 @@ class PushRegistrationManagerTest {
 
         // The /register route is rate-limited (strict: 5/min) — a completed
         // mirror must not be repeated on every unlock.
-        coVerify(exactly = 1) { apiService.registerPushEndpoint(any()) }
+        coVerify(exactly = 1) { apiService.registerDevice(any()) }
         coVerify(exactly = 1) { apiService.registerVoipToken(any()) }
     }
 

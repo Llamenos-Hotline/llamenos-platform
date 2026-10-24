@@ -990,6 +990,25 @@ Step 2: Encrypt event content
 
 All hub members who possess the hub key can derive the same event key and decrypt.
 
+#### Server-Published Relay Events
+
+The frames the server's relay publishes (`apps/worker/lib/ws-events.ts` `publishEvent`) are what clients actually receive: call rings, call updates, new messages. They are **not** sealed under the hub key above, but under an account-wide, epoch-scoped server key:
+
+```
+epoch      = floor(unix_seconds / 86400)                      // UTC day; also the frame's `epoch` field
+event_key  = HKDF(SHA-256, ikm = SERVER_SECRET,
+                  salt = UTF-8(LABEL_SERVER_EVENT_ENCRYPTION_KEY),
+                  info = UTF-8("{LABEL_HUB_EVENT_EPOCH}:{epoch}"), length = 32)
+padded     = [4-byte LE length][UTF-8(json)][random padding]  // total a power of two, minimum 512
+payload    = hex(nonce(12) || AES-256-GCM(event_key, nonce, aad = UTF-8("{LABEL_HUB_EVENT_EPOCH}:{epoch}")).encrypt(padded))
+```
+
+A client reads `serverEventKeyHex` (this epoch) and `serverEventKeyPrevHex` (the previous one) from `GET /api/auth/me`, and MUST open a frame with **the frame's own `epoch`** in the AAD and strip the padding. A frame whose epoch neither stored key covers (a socket that outlives UTC midnight) is retried once after re-reading `/api/auth/me`. The epoch-less `LABEL_HUB_EVENT` AAD above is not what the relay uses; a reader that applies it opens nothing.
+
+`packages/crypto/tests/fixtures/server-event-vectors.json` holds frames **written by the server** (`packages/crypto/scripts/gen-server-event-vectors.ts` runs `encryptEventContent`), with the event keys `/api/auth/me` returns. Every client's production reader MUST open each recorded `payload` to its `plaintext` given the recorded `epoch`, and MUST NOT open it without the epoch.
+
+A relay lists a user's hubs once, in its `authenticated` reply, and never announces a later membership. A client that learns of a new membership (from `GET /api/hubs`) re-authenticates the socket to subscribe to it.
+
 #### Targeted Messages (Single Recipient)
 
 For events intended for a single recipient (e.g., direct provisioning messages), use HPKE encryption targeted to the recipient's X25519 pubkey.
