@@ -158,7 +158,7 @@
     "@evilmartians/lefthook": "^2.1.6",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.4",
-    "@tanstack/router-plugin": "^1.167.28",
+    "@tanstack/router-plugin": "1.168.11",
     "@tauri-apps/cli": "2.11.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
