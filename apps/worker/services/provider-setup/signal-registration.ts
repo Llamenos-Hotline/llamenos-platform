@@ -104,7 +104,7 @@ export class SignalRegistrationService {
 
   constructor(
     private readonly db: Database,
-    private readonly hmacSecret: string,
+    private readonly serverKek: string,
     env?: DevSurfacesEnv,
   ) {
     this.devSurfaceEnv = env ?? {}
@@ -159,7 +159,7 @@ export class SignalRegistrationService {
       throw new SignalRegistrationError(ssrfError, 400)
     }
 
-    const encryptedPhone = encryptCredentials({ phoneNumber: params.phoneNumber }, this.hmacSecret)
+    const encryptedPhone = encryptCredentials({ phoneNumber: params.phoneNumber }, this.serverKek)
     const id = randomBytes(16).toString('hex')
     const expiresAt = new Date(Date.now() + REGISTRATION_TTL_MS)
     const bridgeUrl = params.bridgeUrl.replace(/\/+$/, '')
@@ -545,7 +545,7 @@ export class SignalRegistrationService {
   }
 
   private decryptPhone(encryptedPhone: string): string {
-    const creds = decryptCredentials(encryptedPhone, this.hmacSecret)
+    const creds = decryptCredentials(encryptedPhone, this.serverKek)
     return String(creds.phoneNumber)
   }
 

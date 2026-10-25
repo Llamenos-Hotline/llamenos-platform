@@ -206,6 +206,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     const escrow = reader()
     const services = createServices(fresh.db, {
       hmacSecret: HMAC_SECRET,
+      serverKek: 'c'.repeat(64),
       env: {
         ENVIRONMENT: 'test',
         SERVER_SECRET: 'ab'.repeat(32),

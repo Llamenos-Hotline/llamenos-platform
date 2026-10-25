@@ -244,9 +244,13 @@ describe('encryptContactIdentifier / decryptContactIdentifier', () => {
     expect(enc1).not.toBe(enc2)
   })
 
-  it('decrypting legacy plaintext returns it as-is', () => {
-    const plain = '+15551234567'
-    expect(decryptContactIdentifier(plain, SECRET)).toBe(plain)
+  it('refuses a value that was never sealed (no legacy plaintext path)', () => {
+    expect(() => decryptContactIdentifier('+15551234567', SECRET)).toThrow(/not sealed/)
+  })
+
+  it('cannot be opened under a different key', () => {
+    const enc = encryptContactIdentifier('+15551234567', SECRET)
+    expect(() => decryptContactIdentifier(enc, 'b'.repeat(64))).toThrow()
   })
 
   it('throws on corrupted ciphertext', () => {

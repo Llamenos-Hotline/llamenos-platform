@@ -215,7 +215,7 @@ beforeAll(async () => {
 
   // THE point of this suite: the production service registry, built exactly as
   // src/server/index.ts builds it. No service is constructed by hand below.
-  services = createServices(db, { hmacSecret: HMAC_SECRET, env: { ENVIRONMENT: 'test' } })
+  services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
 
   // Roles must exist before permissions resolve, same as at boot.
   await services.settings.ensureInit()

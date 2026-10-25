@@ -203,9 +203,9 @@ describe('TaskScheduler', () => {
       expect(resolveAdapter).toHaveBeenCalledWith('signal')
     })
 
-    it('passes the encryption secret and configured queue retention to the drain worker', () => {
+    it('passes the hashing key, the KEK and configured queue retention to the drain worker', () => {
       const { db } = createMockDb()
-      const scheduler = new TaskScheduler(db as never, 'a'.repeat(64), 14)
+      const scheduler = new TaskScheduler(db as never, 'a'.repeat(64), 'c'.repeat(64), 14)
 
       scheduler.start(deps())
 
@@ -213,6 +213,7 @@ describe('TaskScheduler', () => {
         db,
         expect.any(Function),
         'a'.repeat(64),
+        'c'.repeat(64),
         14,
       )
     })

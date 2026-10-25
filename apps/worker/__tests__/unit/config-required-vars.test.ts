@@ -17,7 +17,11 @@
  * catch the logic being wrong.
  */
 import { describe, it, expect } from 'vitest'
-import { validateConfig } from '@worker/lib/config'
+import { validateConfig as validateConfigWithFiles } from '@worker/lib/config'
+import { secretFiles, TEST_BAN_HASH_KEY } from '../helpers/secret-files'
+
+const validateConfig = (env: Parameters<typeof validateConfigWithFiles>[0]) =>
+  validateConfigWithFiles(env, secretFiles())
 
 const HEX64 = 'a'.repeat(64)
 
@@ -25,8 +29,10 @@ const HEX64 = 'a'.repeat(64)
 function completeEnv(): Record<string, string> {
   return {
     DATABASE_URL: 'postgresql://user:pw@localhost:5432/llamenos',
+    // Three roles, three values: validateConfig refuses a repeated one.
     HMAC_SECRET: HEX64,
-    SERVER_SECRET: HEX64,
+    SERVER_SECRET: 'b'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'staging',
     STORAGE_ACCESS_KEY: 'rustfsadmin',
@@ -39,6 +45,7 @@ const REQUIRED = [
   'DATABASE_URL',
   'HMAC_SECRET',
   'SERVER_SECRET',
+  'SERVER_KEK',
   'HOTLINE_NAME',
   'ENVIRONMENT',
   'STORAGE_ACCESS_KEY',
@@ -78,5 +85,47 @@ describe('validateConfig: the required-variable list', () => {
     expect(() => validateConfig(ok)).not.toThrow()
     const bad = { ...completeEnv(), ADMIN_PUBKEY: 'not-a-pubkey' }
     expect(() => validateConfig(bad)).toThrow(/ADMIN_PUBKEY/)
+  })
+})
+
+describe('validateConfig: one role per secret (D6, #2171)', () => {
+  it.each([
+    ['HMAC_SECRET', 'SERVER_SECRET'],
+    ['HMAC_SECRET', 'SERVER_KEK'],
+    ['SERVER_SECRET', 'SERVER_KEK'],
+  ] as const)('refuses %s and %s sharing a value', (a, b) => {
+    const env = completeEnv()
+    env[b] = env[a]!
+    expect(() => validateConfig(env)).toThrow(/identical/)
+  })
+
+  it.each(['HMAC_SECRET', 'SERVER_SECRET', 'SERVER_KEK'] as const)(
+    'refuses the ban-hash-key file sharing a value with %s',
+    (key) => {
+      const env = completeEnv()
+      env[key] = TEST_BAN_HASH_KEY
+      expect(() => validateConfig(env)).toThrow(/ban-hash-key.*identical|identical/)
+    },
+  )
+
+  it('refuses SERVER_KEK that is not 64 lowercase hex characters', () => {
+    expect(() => validateConfig({ ...completeEnv(), SERVER_KEK: 'c'.repeat(32) })).toThrow(/SERVER_KEK/)
+    expect(() => validateConfig({ ...completeEnv(), SERVER_KEK: 'Z'.repeat(64) })).toThrow(/SERVER_KEK/)
+  })
+})
+
+describe('validateConfig: BAN_HASH_KEY is a secret file, never an env var', () => {
+  it('refuses to start without the ban-hash-key file, and names it', () => {
+    expect(() => validateConfigWithFiles(completeEnv(), secretFiles({}))).toThrow(/ban-hash-key/)
+  })
+
+  it('refuses an empty or malformed ban-hash-key file', () => {
+    expect(() => validateConfigWithFiles(completeEnv(), secretFiles({ 'ban-hash-key': '' }))).toThrow(/ban-hash-key/)
+    expect(() => validateConfigWithFiles(completeEnv(), secretFiles({ 'ban-hash-key': 'abc' }))).toThrow(/64 lowercase hex/)
+  })
+
+  it('refuses BAN_HASH_KEY supplied as an environment variable, even alongside a valid file', () => {
+    const env = { ...completeEnv(), BAN_HASH_KEY: 'f'.repeat(64) }
+    expect(() => validateConfig(env)).toThrow(/must not be set as an environment variable/)
   })
 })

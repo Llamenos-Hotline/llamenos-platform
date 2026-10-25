@@ -602,17 +602,17 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('SIP_REGISTRAR_SECRET falls back to HMAC_SECRET when unset', async () => {
+  it('refuses to issue a credential when SIP_REGISTRAR_SECRET is unset, deriving from no other secret', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
       services: { settings },
       env: { SIP_REGISTRAR_SECRET: '' },
     })
     const res = await app.request('/sip-token')
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { sip: { password: string } }
-    const username = volunteerSipUsername(PUBKEY_A)
-    expect(body.sip.password).toBe(deriveVolunteerSipSecret('hmac-secret', username))
+    expect(res.status).toBe(503)
+    expect(await res.text()).toContain('registrar is not configured')
+    // nothing was provisioned at the PBX under a derived secret
+    expect(calls).toHaveLength(0)
   })
 
   it('hands the client the SIP edge trust anchor so the TLS chain can be verified', async () => {

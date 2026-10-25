@@ -4,7 +4,7 @@ import type { Env } from '@worker/types/infra'
 
 /**
  * Rail: every path that resolves a telephony provider must hand the settings
- * service the HMAC secret, because that is what decrypts the stored
+ * service the server KEK, because that is what decrypts the stored
  * credentials.
  *
  * What went wrong. `getHubTelephonyProvider` was repaired to actually read a
@@ -25,9 +25,10 @@ import type { Env } from '@worker/types/infra'
  */
 
 const HMAC = 'f'.repeat(64)
+const KEK = '9'.repeat(64)
 
 function env(): Env {
-  return { HMAC_SECRET: HMAC, WEBHOOK_BASE_URL: 'https://api.example.org' } as unknown as Env
+  return { HMAC_SECRET: HMAC, SERVER_KEK: KEK, WEBHOOK_BASE_URL: 'https://api.example.org' } as unknown as Env
 }
 
 /** Records what the factory passed, and returns a config so the happy path continues. */
@@ -49,19 +50,21 @@ function recordingSettings() {
 }
 
 describe('telephony credential threading', () => {
-  it('getTelephonyFromService passes the HMAC secret to the settings service', async () => {
+  it('getTelephonyFromService passes the server KEK (not the hashing key) to the settings service', async () => {
     const r = recordingSettings()
     await getTelephonyFromService(env(), r.service)
     expect(r.seen.global.length, 'the global provider was never resolved').toBeGreaterThan(0)
-    expect(r.seen.global[0]?.[0], 'no HMAC secret was passed — credentials stay encrypted').toBe(HMAC)
+    expect(r.seen.global[0]?.[0], 'no KEK was passed — credentials stay encrypted').toBe(KEK)
+    expect(r.seen.global[0]?.[0]).not.toBe(HMAC)
   })
 
-  it('getHubTelephonyFromService passes hubId AND the HMAC secret (the real call-handling path)', async () => {
+  it('getHubTelephonyFromService passes hubId AND the server KEK (the real call-handling path)', async () => {
     const r = recordingSettings()
     await getHubTelephonyFromService(env(), r.service, 'hub-42')
     expect(r.seen.hub.length, 'the hub provider was never resolved').toBeGreaterThan(0)
     expect(r.seen.hub[0]?.[0]).toBe('hub-42')
-    expect(r.seen.hub[0]?.[1], 'no HMAC secret was passed — per-hub config resolves but stays encrypted').toBe(HMAC)
+    expect(r.seen.hub[0]?.[1], 'no KEK was passed — per-hub config resolves but stays encrypted').toBe(KEK)
+    expect(r.seen.hub[0]?.[1]).not.toBe(HMAC)
   })
 
   it('a hub with its own provider never silently falls through to the global one', async () => {

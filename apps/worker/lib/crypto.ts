@@ -247,44 +247,52 @@ export function openServerSealedAuditKey(encryptedKey: string, userPubkey: strin
 
 
 // --- Contact Identifier Encryption ---
+//
+// Server-readable data (a reply address the server must be able to use later,
+// a storage IAM secret) is sealed under SERVER_KEK, never under HMAC_SECRET:
+// HMAC_SECRET is only a hashing key, so rotating or leaking it must not touch
+// anything the server has to decrypt (#2171, D6).
 
 /**
  * Encrypt a contact identifier for at-rest storage.
- * Uses HKDF(HMAC_SECRET) → AES-256-GCM via FFI.
- * Stored with "enc:" prefix to distinguish from legacy plaintext.
+ * Uses HKDF(SERVER_KEK) → AES-256-GCM via FFI.
+ * Stored with an "enc:" prefix so a value that was never sealed is rejected on
+ * read rather than returned as if it were plaintext.
  */
-export function encryptContactIdentifier(identifier: string, hmacSecret: string): string {
-  const ct = serverEncrypt(utf8ToBytes(identifier), LABEL_CONTACT_ID, hexToBytes(hmacSecret))
+export function encryptContactIdentifier(identifier: string, serverKek: string): string {
+  const ct = serverEncrypt(utf8ToBytes(identifier), LABEL_CONTACT_ID, hexToBytes(serverKek))
   return 'enc:' + bytesToHex(ct)
 }
 
 /**
- * Decrypt a contact identifier from storage.
- * Handles both encrypted ("enc:"-prefixed) and legacy plaintext values.
+ * Decrypt a contact identifier from storage. Throws on a value without the
+ * "enc:" prefix, a wrong key, or a tampered ciphertext.
  */
-export function decryptContactIdentifier(stored: string, hmacSecret: string): string {
-  if (!stored.startsWith('enc:')) return stored
+export function decryptContactIdentifier(stored: string, serverKek: string): string {
+  if (!stored.startsWith('enc:')) {
+    throw new Error('Contact identifier is not sealed (missing "enc:" prefix)')
+  }
   const ct = hexToBytes(stored.slice(4))
-  return new TextDecoder().decode(serverDecrypt(ct, LABEL_CONTACT_ID, hexToBytes(hmacSecret)))
+  return new TextDecoder().decode(serverDecrypt(ct, LABEL_CONTACT_ID, hexToBytes(serverKek)))
 }
 
 // --- Storage Credential Encryption ---
 
 /**
  * Encrypt a storage IAM secret key for at-rest protection.
- * Uses HKDF(HMAC_SECRET) → AES-256-GCM via FFI.
+ * Uses HKDF(SERVER_KEK) → AES-256-GCM via FFI.
  */
-export function encryptStorageCredential(secretKey: string, hmacSecret: string): string {
-  const ct = serverEncrypt(utf8ToBytes(secretKey), LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(hmacSecret))
+export function encryptStorageCredential(secretKey: string, serverKek: string): string {
+  const ct = serverEncrypt(utf8ToBytes(secretKey), LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(serverKek))
   return bytesToHex(ct)
 }
 
 /**
  * Decrypt a storage IAM secret key from at-rest storage.
  */
-export function decryptStorageCredential(encrypted: string, hmacSecret: string): string {
+export function decryptStorageCredential(encrypted: string, serverKek: string): string {
   const ct = hexToBytes(encrypted)
-  return new TextDecoder().decode(serverDecrypt(ct, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(hmacSecret)))
+  return new TextDecoder().decode(serverDecrypt(ct, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(serverKek)))
 }
 
 // --- Audit Entry Hashing ---

@@ -65,7 +65,7 @@ webrtc.get('/webrtc-token',
     }
 
     // Get provider config
-    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
+    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
     if (!config) {
       return c.json({ error: 'No telephony provider configured' }, 404)
     }
@@ -132,7 +132,7 @@ webrtc.get('/sip-token',
     }
 
     // Get provider config
-    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
+    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
     if (!config) {
       return c.json({ error: 'No telephony provider configured' }, 404)
     }
@@ -162,6 +162,13 @@ webrtc.get('/sip-token',
       // per-volunteer identity (never generateSipParams — that path returns
       // the hub's shared credential, which is what the gate exists to refuse).
       if (config.type === 'asterisk') {
+        // Every volunteer's PJSIP secret is derived from this master secret and
+        // it has no stand-in: deriving from another server key would couple SIP
+        // credentials to that key's rotation (D6).
+        if (!c.env.SIP_REGISTRAR_SECRET) {
+          logger.error('SIP token refused: SIP_REGISTRAR_SECRET is not configured')
+          return c.json({ error: 'In-app SIP audio is unavailable: the SIP registrar is not configured on this server.' }, 503)
+        }
         const username = volunteerSipUsername(pubkey)
         const turn = turnCredentialsFor(c.env, username)
         // Re-admission must not hand back a credential that may have leaked
@@ -210,7 +217,7 @@ webrtc.get('/sip-status',
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
+    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
     // Must agree with /sip-token, which refuses while the credential would be
     // shared (#1203) and refuses a caller holding no hub role (#1540).
     // Reporting available:true here and then refusing there would make clients
@@ -243,7 +250,7 @@ webrtc.get('/webrtc-status',
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
+    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
     return c.json({
       available: isWebRtcConfigured(config),
       provider: config?.type ?? null,
@@ -251,7 +258,6 @@ webrtc.get('/webrtc-status',
   })
 
 type RegistrarEnv = {
-  HMAC_SECRET: string
   SIP_REGISTRAR_SECRET?: string
   TURN_HOST?: string
   TURN_SECRET?: string
@@ -283,7 +289,10 @@ async function issueVolunteerSipParams(
   turn: { host: string; credentials: TurnCredentials } | undefined,
   epoch: number,
 ) {
-  const masterSecret = env.SIP_REGISTRAR_SECRET || env.HMAC_SECRET
+  // No fallback to another server secret: SIP_REGISTRAR_SECRET has exactly one
+  // role, and the caller refuses before it gets here when it is unset (D6).
+  const masterSecret = env.SIP_REGISTRAR_SECRET
+  if (!masterSecret) throw new Error('SIP_REGISTRAR_SECRET is not configured')
   const secret = deriveVolunteerSipSecret(masterSecret, username, epoch)
   await provisionVolunteerEndpoint(config, username, secret)
   // Registration is over TLS (registrar.ts), so the client needs something to

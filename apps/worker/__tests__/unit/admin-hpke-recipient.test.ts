@@ -21,7 +21,8 @@ import { hexToBytes, bytesToHex } from '@noble/hashes/utils.js'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { validateConfig } from '@worker/lib/config'
+import { validateConfig as validateConfigWithFiles } from '@worker/lib/config'
+import { secretFiles } from '../helpers/secret-files'
 import {
   adminHpkeRecipient,
   hpkeRecipientPubkey,
@@ -33,6 +34,9 @@ import { LABEL_MESSAGE, LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labe
 import { deriveAdminKeys } from '../../../../scripts/bootstrap-admin'
 
 /** The admin seed every test harness in this repo already uses. */
+const validateConfig = (env: Parameters<typeof validateConfigWithFiles>[0]) =>
+  validateConfigWithFiles(env, secretFiles())
+
 const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
 const ADMIN = deriveAdminKeys(hexToBytes(ADMIN_SEED))
 
@@ -42,6 +46,7 @@ function envWithoutAdmin(): Record<string, string> {
     DATABASE_URL: 'postgresql://llamenos:dev@localhost:5432/llamenos',
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
     // Required since #1438: createBlobStorage() runs unconditionally at boot.

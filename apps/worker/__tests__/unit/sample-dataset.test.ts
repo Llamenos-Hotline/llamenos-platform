@@ -201,7 +201,7 @@ describe('seedSampleDataset', () => {
     }
     return { services: services as unknown as Services, stubs: services, calls }
   }
-  const ENV = { ...DEV_SERVER, HMAC_SECRET: 'a'.repeat(64) } // gitleaks:allow
+  const ENV = { ...DEV_SERVER, HMAC_SECRET: 'a'.repeat(64), SERVER_KEK: 'c'.repeat(64) } // gitleaks:allow
   const NOW = new Date('2026-09-26T12:00:00.000Z')
 
   it('replaces the previous sample hub before rebuilding it', async () => {

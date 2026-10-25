@@ -449,7 +449,7 @@ providerSetup.post('/configure',
       // endpoint; the outcome is logged by removeAllVolunteerEndpoints.
       const previous = hubId
         ? null
-        : await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
+        : await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
       await services.providerSetup.configure(
         body.provider,
         body.credentials ?? {},
