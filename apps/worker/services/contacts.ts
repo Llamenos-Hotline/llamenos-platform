@@ -70,7 +70,7 @@ export class ContactsService {
       .insert(contacts)
       .values({
         hubId: input.hubId,
-        identifierHashes: input.identifierHashes,
+        identifierHashes: input.identifierHashes ?? [],
         nameHash: input.nameHash ?? null,
         trigramTokens: input.trigramTokens ?? [],
         encryptedSummary: input.encryptedSummary,
