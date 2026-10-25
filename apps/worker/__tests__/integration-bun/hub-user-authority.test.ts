@@ -20,7 +20,7 @@
  *     hubs can only have their hub-A assignment touched from hub A;
  *   - `roles` sent to a hub's PATCH changes the assignment in THAT hub and never
  *     the global column;
- *   - a hub admin cannot edit an account that holds a global role (the
+ *   - a hub admin cannot edit an instance super-admin (the
  *     super-admin counts as a member of every hub);
  *   - the legitimate paths still work: in-hub administration by the hub admin,
  *     and the instance view (list / edit / create) for the super-admin.
@@ -281,18 +281,24 @@ describe('through hub A\'s own mount, hub A\'s admin sees and edits only hub A',
     ])
   })
 
-  it('a member of both hubs cannot be deactivated, deleted, renamed or re-numbered from one hub', async () => {
-    // The phone number is where hub B's calls ring: account fields belong to
-    // the account, not to whichever hub's admin reached it first.
+  it('a member of both hubs cannot be deactivated, deleted or re-numbered from one hub', async () => {
+    // The phone number is where hub B's calls ring, and `active` is whether hub B
+    // can reach them at all: account routing belongs to the account, not to
+    // whichever hub's admin reached it first.
     const before = await row(BOTH)
     expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { active: false })).status).toBe(409)
-    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { name: 'hijacked' })).status).toBe(409)
     expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { phone: '+15559999999' })).status).toBe(409)
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { callPreference: 'phone', name: 'x' })).status).toBe(409)
     expect((await call(ADMIN_A, 'DELETE', `/api/hubs/${HUB_A}/users/${BOTH}`)).status).toBe(409)
     const after = await row(BOTH)
     expect(after.active).toBe(true)
     expect(after.displayName).toBe(before.displayName)
     expect(after.phone).toBe(before.phone)
+  })
+
+  it('a member of both hubs can still be renamed from one hub (display only, not routing)', async () => {
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { name: 'renamed from hub a' })).status).toBe(200)
+    expect((await row(BOTH)).displayName).toBe('renamed from hub a')
   })
 
   it('a member of one hub only can have account fields edited by that hub\'s admin', async () => {
@@ -306,7 +312,7 @@ describe('through hub A\'s own mount, hub A\'s admin sees and edits only hub A',
   })
 })
 
-describe('an account holding a global role is not editable from inside a hub', () => {
+describe('an instance super-admin is not editable from inside a hub', () => {
   // The super-admin counts as a member of every hub, so hub A's mount can name
   // them. A hub admin must not rename, re-role or deactivate them from there.
   for (const [name, method, body] of [

@@ -9,7 +9,7 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { callerIsSuperAdmin, checkRoleGrant } from '../lib/hub-scope'
-import { resolveHubRoleIds } from '@shared/permissions'
+import { isSuperAdmin, resolveHubRoleIds } from '@shared/permissions'
 import type { Context } from 'hono'
 import { revokeSipIdentityIfRoleless, revokeVolunteerSipIdentity } from '../telephony/registrar'
 
@@ -140,10 +140,21 @@ async function affectsOtherHubs(c: Context<AppEnv>, targetPubkey: string, hubId:
   return target.roles.length > 0 || (target.hubRoles ?? []).some(hr => hr.hubId !== hubId)
 }
 
-/** True when the target account holds a global (instance-wide) role. */
-async function holdsGlobalRole(c: Context<AppEnv>, targetPubkey: string): Promise<boolean> {
+/**
+ * Account-level fields that decide whether and where a person is reached, in
+ * every hub they belong to. See the PATCH handler.
+ */
+const ACCOUNT_ROUTING_FIELDS: ReadonlySet<string> = new Set([
+  'active', 'phone', 'callPreference', 'onBreak', 'messagingEnabled', 'supportedMessagingChannels',
+])
+
+/**
+ * True when the target account is an instance-level super-admin. Every hub
+ * lists them as a member (they reach every hub), so a hub's mount can name them.
+ */
+async function targetIsSuperAdmin(c: Context<AppEnv>, targetPubkey: string): Promise<boolean> {
   const target = await c.get('services').identity.getUserInternal(targetPubkey)
-  return (target?.roles.length ?? 0) > 0
+  return !!target && isSuperAdmin(target.roles, c.get('allRoles'))
 }
 
 /**
@@ -237,20 +248,22 @@ users.patch('/:targetPubkey',
       const denied = checkRoleGrant(c, body.roles)
       if (denied) return c.json({ error: denied.error }, denied.status)
     }
-    // A global role is authority over every hub: a hub admin cannot edit the
-    // account of someone who holds one, only a super-admin can.
-    if (hubId && !callerIsSuperAdmin(c) && await holdsGlobalRole(c, targetPubkey)) {
-      return c.json({ error: 'This account holds instance-level roles — only a super-admin can change it' }, 403)
+    // A super-admin is a member of every hub, so any hub's mount can name them —
+    // but their account is the instance's, and only a super-admin may change it.
+    if (hubId && !callerIsSuperAdmin(c) && await targetIsSuperAdmin(c, targetPubkey)) {
+      return c.json({ error: 'This account is an instance super-admin — only a super-admin can change it' }, 403)
     }
-    // Every field but `roles` (hub-scoped, see updateUser) belongs to the ACCOUNT:
-    // a rename, a new phone number or a deactivation reaches the person's other
-    // hubs too — a hub A admin must not re-point where hub B's calls ring. For
-    // someone who belongs elsewhere, a hub admin changes their role here or
-    // removes them from the hub, and a super-admin does the rest.
-    const touchesAccount = Object.entries(body).some(([key, value]) => key !== 'roles' && value !== undefined)
-    if (hubId && touchesAccount && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
+    // `roles` is hub-scoped (see updateUser). The fields in ACCOUNT_ROUTING_FIELDS
+    // are the account's own and decide whether and where the person is reached in
+    // EVERY hub: a hub A admin must not re-point where hub B's calls ring or
+    // switch the person off for hub B. For someone who belongs elsewhere, a hub
+    // admin changes their role here or removes them from the hub; a super-admin
+    // does the rest. (A display name or a language is not routing, and stays
+    // editable.)
+    const touchesRouting = Object.entries(body).some(([key, value]) => value !== undefined && ACCOUNT_ROUTING_FIELDS.has(key))
+    if (hubId && touchesRouting && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
       return c.json({
-        error: 'This user belongs to other hubs — only their role here can be changed from this hub; remove them from it (DELETE /api/hubs/:hubId/members/:pubkey) or ask a super-admin to edit the account',
+        error: 'This user belongs to other hubs — their phone, availability and channels can only be changed by a super-admin; remove them from this hub (DELETE /api/hubs/:hubId/members/:pubkey) instead of deactivating the account',
       }, 409)
     }
 

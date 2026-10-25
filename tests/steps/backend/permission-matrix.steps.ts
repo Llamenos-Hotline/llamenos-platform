@@ -17,6 +17,7 @@ import {
   apiPut,
   apiDelete,
   createVolunteerViaApi,
+  updateUserViaApi,
   createShiftViaApi,
   createBanViaApi,
   generateTestKeypair,
@@ -81,12 +82,13 @@ function roleIdFromName(roleName: string): string {
 
 Given('test users exist for all default roles', async ({ request, world }) => {
   const roles = ['super-admin', 'hub-admin', 'reviewer', 'volunteer', 'reporter']
-  // Create each role user as a MEMBER of the scenario's hub. Since #1540 made hub
-  // membership the sole authority boundary inside a hub, a global-only role grants
-  // nothing on a `/hubs/:hubId/*` route — `hubContext` 403s before
-  // `requirePermission` ever runs. Passing `hubId` writes the roles to both the
-  // global and the hub-scoped set (apps/worker/services/identity.ts), so the
-  // unscoped expectations in this matrix are unchanged.
+  // Each role user is a MEMBER of the scenario's hub, which is what makes a role
+  // count inside `/hubs/:hubId/*` (`hubContext` 403s before `requirePermission`
+  // runs for a non-member). Adding a member writes the grant to `hubRoles` ONLY —
+  // the account-wide `roles` column is authority over every hub (#2153) — so the
+  // unscoped rows of this matrix, which assert what a GLOBAL role carries, give
+  // the same role globally the way an instance operator would: an explicit
+  // super-admin edit of the account.
   const hubId = getScenarioState(world).hubId
   for (const role of roles) {
     const vol = await createVolunteerViaApi(request, {
@@ -94,6 +96,7 @@ Given('test users exist for all default roles', async ({ request, world }) => {
       roleIds: [roleIdFromName(role)],
       hubId,
     })
+    await updateUserViaApi(request, vol.pubkey, { roles: [roleIdFromName(role)] })
     getPermMatrixState(world).roleUsers[role] = { deviceKey: vol.deviceKey, pubkey: vol.pubkey, name: vol.name }
   }
 })
@@ -205,7 +208,9 @@ When('the {string} user sends {string} to {string}', async ({ request, world }, 
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  getSharedState(world).lastResponse = await sendRequest(request, method, path, user.deviceKey)
+  // `:hubId` stands for the scenario's own hub, the way a client addresses it.
+  const hubPath = path.replace(':hubId', getScenarioState(world).hubId ?? ':hubId')
+  getSharedState(world).lastResponse = await sendRequest(request, method, hubPath, user.deviceKey)
 })
 
 When('the {string} user sends {string} to {string} with valid volunteer body', async ({ request, world }, role: string, _method: string, _path: string) => {

@@ -592,7 +592,7 @@ describe('users routes', () => {
       expect((await res.json()).roles).toEqual(['role-volunteer'])
     })
 
-    it('refuses to edit an account that holds a global role', async () => {
+    it('refuses to edit an instance super-admin', async () => {
       const updateUserSpy = vi.fn()
       const { app } = createTestApp({
         permissions: hubAdminPerms,
