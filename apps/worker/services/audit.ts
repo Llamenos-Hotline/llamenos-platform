@@ -42,6 +42,12 @@ const logger = createLogger('services.audit')
  */
 const ENCRYPTED_DETAILS_KEY = '$encrypted'
 
+/** `actor_pubkey` on an entry rewritten by a user's account erasure (services/erasure.ts). */
+export const ERASED_ACTOR = '[erased]'
+
+/** `actor_pubkey` on an entry rewritten by a hub crypto-shred (services/hub-shred.ts). */
+export const SHREDDED_ACTOR = '[shredded]'
+
 function isEncryptedDetails(details: unknown): details is { [ENCRYPTED_DETAILS_KEY]: string } {
   return (
     typeof details === 'object' &&
@@ -183,6 +189,22 @@ export function computeEntryHash(entry: {
 }
 
 const VERIFY_PAGE_SIZE = 2000
+
+/**
+ * Why an entry stamped `erasedAt` is not in the form erasure leaves behind, or
+ * null when it is. Both writers (account erasure, hub shred) and the append
+ * path for an already-erased actor produce the same shape: a tombstone actor
+ * and NULL details.
+ */
+function erasedEntryViolation(entry: Pick<AuditEntry, 'actorPubkey' | 'details'>): string | null {
+  if (entry.actorPubkey !== ERASED_ACTOR && entry.actorPubkey !== SHREDDED_ACTOR) {
+    return 'erasedAt set on an entry that still names its actor'
+  }
+  if (entry.details !== null && entry.details !== undefined) {
+    return 'erasedAt set on an entry that still carries details'
+  }
+  return null
+}
 
 /** Rows of one chain: a hub's, or the platform chain when `hubId` is undefined. */
 function chainCondition(hubId: string | null | undefined) {
@@ -374,7 +396,7 @@ export class AuditService {
       if (keyedActor) {
         const { erased } = await keyedActor.keyStore.lockAuditActor(actorPubkey, tx)
         if (erased) {
-          entryActor = '[erased]'
+          entryActor = ERASED_ACTOR
           hashedDetails = null
           storedDetails = null
           erasedAt = new Date()
@@ -691,10 +713,30 @@ export class AuditService {
         }
       }
 
-      // GDPR erasure rewrites actorPubkey/details in place and stamps
-      // erasedAt (services/erasure.ts), so an erased entry can no longer be
-      // re-hashed. Its chain linkage is still checked above.
+      // GDPR erasure and hub shred rewrite an entry in place — actor to a
+      // tombstone, details removed — and stamp erasedAt, so it can no longer be
+      // re-hashed. Its chain linkage is still checked above. But `erasedAt` is
+      // an ordinary column: honouring it blindly would let anyone with write
+      // access stamp it on a live entry and then rewrite that entry unseen. So
+      // an erased entry must LOOK erased — a tombstone actor and no details —
+      // which leaves the stamp able to destroy evidence (as erasure does) but
+      // not to substitute different evidence under an intact hash.
       if (entry.erasedAt) {
+        const violation = erasedEntryViolation(entry)
+        if (violation) {
+          return {
+            valid: false,
+            totalEntries,
+            checkedEntries: i,
+            firstBrokenEntry: {
+              id: entry.id,
+              seqIndex: offset + i,
+              expected: null,
+              actual: entry.actorPubkey,
+              reason: violation,
+            },
+          }
+        }
         previousHash = entry.entryHash
         continue
       }

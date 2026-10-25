@@ -256,6 +256,9 @@ describe('GDPR erasure of the only admin', () => {
     const hubId = await makeHub('erase-request', admin)
     const message = await expectRefused(() => erasure.createSelfRequest(admin, hubId, 'please erase me'))
     expect(message).toContain(hubId)
+    // Erasure is a legal obligation: the refusal must say how to get to it.
+    expect(message).toContain('Make another active member an admin')
+    expect(message).toContain('request it again')
     expect(await erasure.getMyRequest(admin)).toBeNull()
   })
 
