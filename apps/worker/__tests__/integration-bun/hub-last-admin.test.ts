@@ -539,6 +539,52 @@ describe('migration 0059 repairs hubs that already have no admin', () => {
     expect(await hubRolesOf(bystander)).toEqual([{ hubId: orphan, roleIds: ['role-volunteer'] }])
   })
 
+  it('counts an admin whose authority is split across several roles, as the application does', async () => {
+    const settingsRole = nextId('role-legacy-settings')
+    const notesRole = nextId('role-legacy-notes')
+    for (const [id, permissions] of [[settingsRole, ['settings:manage']], [notesRole, ['notes:read-all']]] as const) {
+      await db.insert(roles).values({ id, slug: id, permissions: [...permissions], isDefault: false, isSystem: false, description: '' })
+      createdRoles.push(id)
+    }
+    const creator = await makeUser('legacy-creator-bystander')
+    const split = await makeUser('legacy-split-admin')
+    const hubOneAssignment = await legacyHub('union-one-assignment', creator)
+    const hubTwoAssignments = await legacyHub('union-two-assignments', creator)
+    await db.update(users).set({
+      hubRoles: [
+        { hubId: hubOneAssignment, roleIds: [settingsRole, notesRole] },
+        { hubId: hubTwoAssignments, roleIds: [settingsRole] },
+        { hubId: hubTwoAssignments, roleIds: [notesRole] },
+      ],
+    }).where(eq(users.pubkey, split))
+    // The application already considers both hubs healthy; the migration must agree.
+    expect(await listHubsWithoutAdmin(db, [hubOneAssignment, hubTwoAssignments])).toEqual([])
+
+    await db.execute(sql.raw(migration))
+
+    expect(await hubRolesOf(creator)).toEqual([])
+    expect(await hubRolesOf(split)).toEqual([
+      { hubId: hubOneAssignment, roleIds: [settingsRole, notesRole] },
+      { hubId: hubTwoAssignments, roleIds: [settingsRole] },
+      { hubId: hubTwoAssignments, roleIds: [notesRole] },
+    ])
+  })
+
+  it('still repairs a hub whose members hold only one half of the admin authority', async () => {
+    const settingsRole = nextId('role-legacy-half')
+    await db.insert(roles).values({ id: settingsRole, slug: settingsRole, permissions: ['settings:manage'], isDefault: false, isSystem: false, description: '' })
+    createdRoles.push(settingsRole)
+    const creator = await makeUser('legacy-half-creator')
+    const hubId = await legacyHub('half', creator)
+    await db.update(users).set({ hubRoles: [{ hubId, roleIds: [settingsRole] }] }).where(eq(users.pubkey, creator))
+    expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([hubId])
+
+    await db.execute(sql.raw(migration))
+
+    expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
+    expect((await hubRolesOf(creator)).find(hr => hr.hubId === hubId)?.roleIds).toEqual([settingsRole, 'role-hub-admin'])
+  })
+
   it('does not touch a hub that already has an admin', async () => {
     const founder = await makeUser('legacy-fine')
     await makeHub('legacy-fine', founder)

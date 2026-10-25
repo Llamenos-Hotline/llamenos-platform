@@ -16,10 +16,17 @@
 --     member would be a silent privilege grant. It is reported below and has to
 --     be fixed by an operator (grant a member an admin role, or delete the hub).
 --
--- "Admin" here is the SQL form of lib/hub-admin.ts: an active, un-erased user
--- whose assignment in the hub holds role-hub-admin, role-super-admin, or a role
--- whose permissions grant settings:manage and notes:read-all (directly,
--- through settings:* / notes:*, or through *). An erasure request in flight is
+-- "Admin" here is the SQL form of lib/hub-admin.ts `administersHub`: an active,
+-- un-erased user who holds, IN THE HUB, roles that TOGETHER grant settings:manage
+-- and notes:read-all (directly, through settings:* / notes:*, or through *). The
+-- permissions are the union over every role the user holds in that hub -- across
+-- all of their assignments for it -- exactly as the application resolves them, so
+-- a hub whose last admin holds two complementary roles is healthy here too and is
+-- not handed a redundant role-hub-admin. A role missing from the roles table
+-- resolves like the application's DEFAULT_ROLES fallback: role-hub-admin and
+-- role-super-admin grant everything. Only hub_roles is consulted, never the
+-- global users.roles: a super-admin is zero-knowledge and administers a hub only
+-- when it also holds an admin role there (#2190). An erasure request in flight is
 -- not considered here; the application counts such an admin as departing.
 --
 -- Counts are emitted as NOTICE/WARNING so the migration log states how many
@@ -37,25 +44,27 @@ BEGIN
     FROM hubs h
     WHERE NOT EXISTS (
       SELECT 1
-      FROM users u, jsonb_array_elements(u.hub_roles) AS a
+      FROM users u
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(array_agg(perm), ARRAY[]::text[]) AS perms
+        FROM jsonb_array_elements(u.hub_roles) AS a
+        CROSS JOIN LATERAL jsonb_array_elements_text(a->'roleIds') AS rid
+        CROSS JOIN LATERAL unnest(
+          COALESCE(
+            (SELECT r.permissions FROM roles r WHERE r.id = rid),
+            CASE WHEN rid IN ('role-hub-admin', 'role-super-admin') THEN ARRAY['*'] ELSE ARRAY[]::text[] END
+          )
+        ) AS perm
+        WHERE a->>'hubId' = h.id
+      ) granted
       WHERE u.active
         AND u.status = 'active'
-        AND a->>'hubId' = h.id
-        AND EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements_text(a->'roleIds') AS rid
-          WHERE rid IN ('role-hub-admin', 'role-super-admin')
-             OR EXISTS (
-               SELECT 1 FROM roles r
-               WHERE r.id = rid
-                 AND (
-                   r.permissions @> ARRAY['*']
-                   OR (
-                     r.permissions && ARRAY['settings:manage', 'settings:*']
-                     AND r.permissions && ARRAY['notes:read-all', 'notes:*']
-                   )
-                 )
-             )
+        AND (
+          granted.perms @> ARRAY['*']
+          OR (
+            granted.perms && ARRAY['settings:manage', 'settings:*']
+            AND granted.perms && ARRAY['notes:read-all', 'notes:*']
+          )
         )
     )
   LOOP
