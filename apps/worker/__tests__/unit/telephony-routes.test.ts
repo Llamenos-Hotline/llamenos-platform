@@ -118,6 +118,8 @@ function makeEnv(overrides?: Record<string, unknown>): AppEnv['Bindings'] {
     ENVIRONMENT: 'test',
     HOTLINE_NAME: 'Test Hotline',
     HMAC_SECRET: 'a'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
+    BAN_HASH_KEY: 'b'.repeat(64),
     TWILIO_ACCOUNT_SID: 'AC123',
     TWILIO_AUTH_TOKEN: 'token',
     TWILIO_PHONE_NUMBER: '+15551234567',

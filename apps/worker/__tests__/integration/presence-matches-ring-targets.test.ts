@@ -273,7 +273,7 @@ describe('GET /calls/presence against the production service registry', () => {
     await clockIn(hubId, [onCall, free])
 
     const callId = `call-${nextId()}`
-    await services.calls.addCall(hubId, { callId, callerNumber: 'hashed-number', callerLast4: '1234' })
+    await services.calls.addCall(hubId, { callId, callerNumberSealed: null, callerLast4: '1234' })
     await services.calls.answerCall(hubId, callId, onCall)
 
     const presence = await getHubPresence(services, hubId)

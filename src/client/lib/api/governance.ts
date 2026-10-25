@@ -121,10 +121,11 @@ export async function searchPlatformBans(phoneHash: string) {
   )
 }
 
-export async function promoteHubBan(hubBanId: string) {
-  return request<{ ban: PlatformBan }>('/bans/platform', {
+/** Promote a hub ban to platform scope. The number is re-entered: a hub's ban hash cannot be re-keyed without it. */
+export async function promoteHubBan(banId: string, phone: string) {
+  return request<{ ok: true }>('/bans/platform/promote', {
     method: 'POST',
-    body: JSON.stringify({ promoteFromHubBanId: hubBanId }),
+    body: JSON.stringify({ banId, phone }),
   })
 }
 

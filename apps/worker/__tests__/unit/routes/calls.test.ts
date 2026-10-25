@@ -41,7 +41,7 @@ type CallRecordRow = typeof callRecords.$inferSelect
 
 const VOLUNTEER = 'a'.repeat(64)
 const REPORTER = 'b'.repeat(64)
-// Stand-in for the HMAC-SHA256 of the caller's number the row stores as `callerNumber`.
+// Stand-in for the sealed caller number the row stores as `callerNumberSealed`.
 const CALLER_HASH = 'c0ffee'.repeat(10) + 'beef'
 const RECORDING_SID = 'RE-provider-handle-1'
 
@@ -54,7 +54,7 @@ function activeRow(overrides: Partial<ActiveCallRow> = {}): ActiveCallRow {
   return {
     callId: 'CA-active-1',
     hubId: 'hub-1',
-    callerNumber: CALLER_HASH,
+    callerNumberSealed: CALLER_HASH,
     callerLast4: '4567',
     answeredBy: VOLUNTEER,
     status: 'in-progress',

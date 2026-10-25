@@ -236,27 +236,18 @@ private fun BanCard(
             Column(
                 modifier = Modifier.weight(1f),
             ) {
-                Text(
-                    text = ban.phone,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("ban-hash-${ban.id}"),
-                )
-
+                // The server keeps no number for a ban, so the list shows only why and when.
                 if (ban.reason.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = ban.reason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.testTag("ban-reason-${ban.id}"),
                     )
+                    Spacer(Modifier.height(2.dp))
                 }
 
-                Spacer(Modifier.height(2.dp))
                 Text(
                     text = formatBanDate(ban.createdAt),
                     style = MaterialTheme.typography.labelSmall,

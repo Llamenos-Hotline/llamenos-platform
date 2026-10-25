@@ -48,7 +48,7 @@ interface PermMatrixState {
   sharedRosterShiftId?: string
   sharedRosterOtherPubkey?: string
   deletableShiftId?: string
-  testBanPhone?: string
+  testBanHash?: string
   testInviteCode?: string
   testNoteId?: string
 }
@@ -176,7 +176,7 @@ Given('a test ban exists', async ({ request, world }) => {
   // Create a fresh ban each time (will be deleted by the test)
   const hubId = getScenarioState(world).hubId
   const ban = await createBanViaApi(request, { phone: uniquePhone(), reason: 'PM test', hubId })
-  getPermMatrixState(world).testBanPhone = ban.phone
+  getPermMatrixState(world).testBanHash = ban.phoneHash
 })
 
 Given('a test invite exists', async ({ request, world, workerHub }) => {
@@ -310,7 +310,7 @@ When('the {string} user sends {string} to the test ban endpoint', async ({ reque
 
   getSharedState(world).lastResponse = await apiDelete(
     request,
-    `/bans/${encodeURIComponent(getPermMatrixState(world).testBanPhone!)}`,
+    `/bans/${getPermMatrixState(world).testBanHash!}`,
     user.deviceKey,
   )
 })

@@ -346,7 +346,7 @@ describe('Calls Routes — response conformance', () => {
     {
       callId: 'call-1',
       hubId: 'hub-1',
-      callerNumber: 'f'.repeat(64),
+      callerNumberSealed: 'f'.repeat(64),
       callerLast4: '4567',
       answeredBy: null,
       status: 'ringing',
@@ -587,7 +587,6 @@ describe('Bans Routes — response conformance', () => {
   it('GET /bans — conforms to banListResponseSchema', async () => {
     const mockBans = [
       {
-        phone: '***4567',
         phoneHash: 'a'.repeat(64),
         reason: 'Harassment',
         bannedBy: MOCK_PUBKEY,
@@ -605,7 +604,7 @@ describe('Bans Routes — response conformance', () => {
 
     const result = await assertConformsToSchema(app, 'GET', '/bans', banListResponseSchema, { env })
     expect(Array.isArray(result.parsed.bans)).toBe(true)
-    expect(result.parsed.bans[0].phone).toBe('***4567')
+    expect(result.parsed.bans[0]).not.toHaveProperty('phone')
   })
 })
 

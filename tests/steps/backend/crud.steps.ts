@@ -222,7 +222,10 @@ Then('the ban list should not contain {string}', async ({request, world}, phone:
 
 When('the admin removes the ban for {string}', async ({request, world}, phone: string) => {
   const hubId = getScenarioState(world).hubId
-  await removeBanViaApi(request, phone, hubId)
+  // The unban handle is the ban list's opaque hash; the server takes no number.
+  const phoneHash = getScenarioState(world).phoneHashMap[phone]
+  expect(phoneHash).toBeDefined()
+  await removeBanViaApi(request, phoneHash, hubId)
 })
 
 When('an admin bulk imports bans for {int} phone numbers', async ({ request, world }, count: number) => {

@@ -737,7 +737,7 @@ When('I call GET \\/api\\/test-push-log with correct X-Test-Secret', async ({ re
   setLastResponse(world, await devGet(request, '/test-push-log'))
 })
 
-// ── HIGH-W3: Ban list phone masking ────────────────────────────────────
+// ── HIGH-W3 / D2: a ban keeps a keyed hash and no digits of the number ──
 
 Given('I am authenticated as an admin with {string} permission', async ({ request, world }, permission: string) => {
   const s = getS(world)
@@ -754,15 +754,16 @@ When('I ban the phone number {string} with reason {string}', async ({ request, w
   setLastResponse(world, await apiPost(request, `/hubs/${s.currentHubId}/bans`, { phone, reason }, s.currentActorSeed!))
 })
 
-Then('the ban response contains phone {string}', ({ world }, expectedDisplay: string) => {
-  const res = getSharedState(world).lastResponse!
-  expect((res.data as { ban?: { phone?: string } }).ban?.phone).toBe(expectedDisplay)
-})
+/** Digits that appear in the numbers these scenarios ban (last four of each, and the national number). */
+const BANNED_DIGITS = ['1234', '5678', '2125551234']
 
-Then('the stored phoneDisplay field does not contain the full phone number', ({ world }) => {
+Then('the ban response carries no phone number', ({ world }) => {
   const res = getSharedState(world).lastResponse!
-  const phone = (res.data as { ban?: { phone?: string } }).ban?.phone ?? ''
-  expect(phone).not.toContain('2125551234')
+  const ban = (res.data as { ban?: Record<string, unknown> }).ban
+  expect(ban).toBeDefined()
+  expect(ban).not.toHaveProperty('phone')
+  expect(Object.keys(ban!).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
+  for (const digits of BANNED_DIGITS) expect(JSON.stringify(res.data)).not.toContain(digits)
 })
 
 When('I bulk ban phones [{string}, {string}]', async ({ request, world }, phone1: string, phone2: string) => {
@@ -773,12 +774,15 @@ When('I bulk ban phones [{string}, {string}]', async ({ request, world }, phone1
   }, s.currentActorSeed!))
 })
 
-Then('the stored phoneDisplay values are {string} and {string}', async ({ request, world }, display1: string, display2: string) => {
+Then('the ban list carries no phone number', async ({ request, world }) => {
   const s = getS(world)
   const bans = await listBansViaApi(request, s.currentHubId)
-  const displays = bans.map((b) => b.phone)
-  expect(displays).toContain(display1)
-  expect(displays).toContain(display2)
+  expect(bans.length).toBeGreaterThan(0)
+  for (const ban of bans) {
+    expect(ban).not.toHaveProperty('phone')
+    expect(Object.keys(ban).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
+  }
+  for (const digits of BANNED_DIGITS) expect(JSON.stringify(bans)).not.toContain(digits)
 })
 
 // ── HIGH-W6: Recovery-group emergency override approver match ─────────

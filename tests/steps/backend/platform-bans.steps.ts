@@ -241,13 +241,26 @@ When('the admin POSTs to {string} with banId {string}', async ({ request, world 
   const actor = getActingAdmin(world)
   const s = getS(world)
   const banId = s.banLabels[label] ?? label
-  const res = await apiPost(request, path, { banId }, actor?.deviceKey)
+  // Promotion needs the banned number again: a hub's ban hash is keyed to that hub.
+  const res = await apiPost(request, path, { banId, phone: s.lastPhone }, actor?.deviceKey)
   setLastResponse(world, res)
   // A successful promote inserts a NEW platform-scoped row for the source ban's
   // phone — track it so the After hook cleans it up too.
   if (res.status === 200 && s.lastPhone) {
     s.platformPhones.add(s.lastPhone)
   }
+})
+
+When('the admin POSTs to {string} with banId {string} and no phone number', async ({ request, world }, path: string, label: string) => {
+  const actor = getActingAdmin(world)
+  const banId = getS(world).banLabels[label] ?? label
+  setLastResponse(world, await apiPost(request, path, { banId }, actor?.deviceKey))
+})
+
+When('the admin POSTs to {string} with banId {string} and a different phone number', async ({ request, world }, path: string, label: string) => {
+  const actor = getActingAdmin(world)
+  const banId = getS(world).banLabels[label] ?? label
+  setLastResponse(world, await apiPost(request, path, { banId, phone: uniquePhone() }, actor?.deviceKey))
 })
 
 When('the admin DELETEs {string}', async ({ request, world }, pathTemplate: string) => {

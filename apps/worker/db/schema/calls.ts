@@ -21,7 +21,10 @@ export const activeCalls = pgTable(
   {
     callId: text('call_id').primaryKey(),
     hubId: text('hub_id'),
-    callerNumber: text('caller_number_hash').notNull(),  // HMAC-SHA256 of raw number
+    // The caller's number, sealed with SERVER_KEK and bound to `call_id`, held only so
+    // the answering volunteer can ban a live caller without ever seeing the digits.
+    // No hash of the number is kept. NULL once the call has ended or been archived.
+    callerNumberSealed: text('caller_number_sealed'),
     callerLast4: text('caller_last4'),
     answeredBy: text('answered_by'),
     status: text('status').notNull().default('ringing'),
