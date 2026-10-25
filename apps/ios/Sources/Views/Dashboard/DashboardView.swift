@@ -108,7 +108,9 @@ struct DashboardView: View {
                     CallHistoryView()
                 }
             }
-            .task(id: hubContext.activeHubId) {
+            // Keyed on the hubs the dashboard reads, not only the active one: shift state and
+            // calls come from every member hub, and the member list arrives after launch.
+            .task(id: vm.callHubIds) {
                 await vm.loadDashboard()
                 vm.startEventListener()
             }
@@ -127,16 +129,21 @@ struct DashboardView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
-                            StatusDot(status: vm.isOnShift ? .active : .inactive, animated: vm.isOnShift)
-                            Text(vm.isOnShift
-                                ? NSLocalizedString("dashboard_on_shift", comment: "On Shift")
-                                : NSLocalizedString("dashboard_off_shift", comment: "Off Shift"))
+                            StatusDot(status: vm.readiness?.isRingTarget == true ? .active : .inactive, animated: vm.readiness?.isRingTarget == true)
+                            Text(vm.readiness?.title ?? NSLocalizedString("dashboard_off_shift", comment: "Off Shift"))
                                 .font(.brand(.headline))
                                 .foregroundStyle(Color.brandForeground)
                         }
                         .accessibilityIdentifier("shift-status-text")
 
-                        if vm.isOnShift {
+                        if let explanation = vm.readiness?.explanation {
+                            Text(explanation)
+                                .font(.brand(.footnote))
+                                .foregroundStyle(Color.brandMutedForeground)
+                                .accessibilityIdentifier("shift-readiness-explanation")
+                        }
+
+                        if vm.readiness?.isRingTarget == true {
                             Text(vm.elapsedTimeDisplay)
                                 .font(.brandMono(.title2))
                                 .foregroundStyle(Color.statusActive)
@@ -147,7 +154,7 @@ struct DashboardView: View {
 
                     Spacer()
 
-                    shiftStatusBadge(vm.shiftStatus)
+                    shiftStatusBadge(vm)
                 }
             }
             .padding(16)
@@ -438,36 +445,38 @@ struct DashboardView: View {
     // MARK: - Shift Status Badge
 
     @ViewBuilder
-    private func shiftStatusBadge(_ status: ShiftStatus) -> some View {
-        switch status {
-        case .onShift:
-            Text(NSLocalizedString("badge_on_shift", comment: "On Shift"))
-                .font(.brand(.caption))
-                .fontWeight(.semibold)
-                .foregroundStyle(.green)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color.green.opacity(0.15)))
-        case .onCall:
-            Text(NSLocalizedString("badge_on_call", comment: "On Call"))
-                .font(.brand(.caption))
-                .fontWeight(.semibold)
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color.blue.opacity(0.15)))
-        case .offShift:
-            Text(NSLocalizedString("badge_off_shift", comment: "Off Shift"))
-                .font(.brand(.caption))
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color(.systemGray5)))
-        case .loading:
+    private func shiftStatusBadge(_ vm: DashboardViewModel) -> some View {
+        if let readiness = vm.readiness {
+            if readiness.isRingTarget, vm.currentCall != nil {
+                Text(NSLocalizedString("badge_on_call", comment: "On Call"))
+                    .font(.brand(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.blue.opacity(0.15)))
+            } else if readiness.isRingTarget {
+                Text(NSLocalizedString("badge_on_shift", comment: "On Shift"))
+                    .font(.brand(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.green.opacity(0.15)))
+            } else {
+                // Not a ring target: say so, whatever else is true (scheduled, clocked in).
+                Text(NSLocalizedString("badge_off_shift", comment: "Off Shift"))
+                    .font(.brand(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color(.systemGray5)))
+            }
+        } else if vm.isLoading {
             ProgressView()
                 .scaleEffect(0.7)
-        case .error:
+        } else {
             Image(systemName: "exclamationmark.circle.fill")
                 .foregroundStyle(.red)
         }
@@ -483,7 +492,8 @@ struct DashboardView: View {
             apiService: appState.apiService,
             cryptoService: appState.cryptoService,
             webSocketService: appState.webSocketService,
-            hubContext: hubContext
+            hubContext: hubContext,
+            shiftClockService: appState.shiftClockService
         )
         viewModelBox.value = vm
         return vm

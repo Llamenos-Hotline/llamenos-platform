@@ -82,34 +82,40 @@ struct ShiftsView: View {
             Section {
                 VStack(spacing: 16) {
                     HStack(spacing: 10) {
-                        if vm.isOnShift {
+                        if vm.readiness?.isRingTarget == true {
                             StatusDot(status: .active, animated: true)
                         } else {
                             StatusDot(status: .inactive)
                         }
 
-                        Text(vm.isOnShift
-                            ? NSLocalizedString("shifts_on_shift", comment: "On Shift")
-                            : NSLocalizedString("shifts_off_shift", comment: "Off Shift")
-                        )
-                        .font(.brand(.headline))
-                        .foregroundStyle(vm.isOnShift ? Color.statusActive : Color.brandMutedForeground)
-                        .accessibilityIdentifier("shift-status-label")
+                        Text(vm.readiness?.title ?? NSLocalizedString("dashboard_off_shift", comment: "Off Shift"))
+                            .font(.brand(.headline))
+                            .foregroundStyle(vm.readiness?.isRingTarget == true ? Color.statusActive : Color.brandMutedForeground)
+                            .accessibilityIdentifier("shift-status-label")
 
                         Spacer()
 
-                        if vm.isOnShift {
+                        if vm.isClockedIn {
                             Text(vm.elapsedTimeDisplay)
                                 .font(.brandMono(.title2))
                                 .fontWeight(.medium)
-                                .foregroundStyle(Color.statusActive)
+                                .foregroundStyle(vm.readiness?.isRingTarget == true ? Color.statusActive : Color.brandMutedForeground)
                                 .contentTransition(.numericText())
                                 .accessibilityIdentifier("shift-elapsed-time")
                         }
                     }
 
-                    // Active call count when on shift
-                    if vm.isOnShift, let hubId = hubContext.activeHubId {
+                    // Why the server will not ring this volunteer, when it will not.
+                    if let explanation = vm.readiness?.explanation {
+                        Text(explanation)
+                            .font(.brand(.footnote))
+                            .foregroundStyle(Color.brandMutedForeground)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("shift-readiness-explanation")
+                    }
+
+                    // Active call count when the server is ringing this volunteer
+                    if vm.readiness?.isRingTarget == true, let hubId = hubContext.activeHubId {
                         let callCount = appState.hubActivityService.state(for: hubId).activeCallCount
                         if callCount > 0 {
                             HStack(spacing: 8) {
@@ -126,7 +132,7 @@ struct ShiftsView: View {
                     // Circular clock in/out button
                     Button {
                         Haptics.impact(.medium)
-                        if vm.isOnShift {
+                        if vm.isClockedIn {
                             vm.showClockOutConfirmation = true
                         } else {
                             Task { await vm.clockIn() }
@@ -134,15 +140,15 @@ struct ShiftsView: View {
                     } label: {
                         ZStack {
                             Circle()
-                                .fill(vm.isOnShift ? Color.brandDestructive : Color.statusActive)
+                                .fill(vm.isClockedIn ? Color.brandDestructive : Color.statusActive)
                                 .frame(width: 80, height: 80)
-                                .shadow(color: (vm.isOnShift ? Color.brandDestructive : Color.statusActive).opacity(0.35), radius: 8, y: 4)
+                                .shadow(color: (vm.isClockedIn ? Color.brandDestructive : Color.statusActive).opacity(0.35), radius: 8, y: 4)
 
                             if vm.isTogglingShift {
                                 ProgressView()
                                     .tint(.white)
                             } else {
-                                Image(systemName: vm.isOnShift ? "stop.fill" : "play.fill")
+                                Image(systemName: vm.isClockedIn ? "stop.fill" : "play.fill")
                                     .font(.title2)
                                     .fontWeight(.bold)
                                     .foregroundStyle(.white)
@@ -151,15 +157,15 @@ struct ShiftsView: View {
                     }
                     .buttonStyle(CircularClockButtonStyle())
                     .disabled(vm.isTogglingShift)
-                    .accessibilityIdentifier(vm.isOnShift ? "clock-out-button" : "clock-in-button")
+                    .accessibilityIdentifier(vm.isClockedIn ? "clock-out-button" : "clock-in-button")
 
-                    Text(vm.isOnShift
+                    Text(vm.isClockedIn
                         ? NSLocalizedString("shifts_clock_out", comment: "Clock Out")
                         : NSLocalizedString("shifts_clock_in", comment: "Clock In")
                     )
                     .font(.brand(.caption))
                     .fontWeight(.semibold)
-                    .foregroundStyle(vm.isOnShift ? Color.brandDestructive : Color.statusActive)
+                    .foregroundStyle(vm.isClockedIn ? Color.brandDestructive : Color.statusActive)
                 }
                 .frame(maxWidth: .infinity)
             }

@@ -111,6 +111,24 @@
       "absentFromServer": [
         "languages"
       ]
+    },
+    {
+      "id": "myStatus",
+      "endpoint": "GET /api/hubs/:hubId/shifts/my-status (#2204)",
+      "module": "@protocol/schemas/shifts",
+      "schema": "myStatusResponseSchema",
+      "swiftType": "MyStatusResponse",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "onShift",
+        "clockedIn"
+      ],
+      "absentFromServer": [
+        "startedAt",
+        "shiftId",
+        "activeCallCount",
+        "recentNoteCount"
+      ]
     }
   ],
   "responses": {
@@ -170,6 +188,24 @@
         "en",
         "zh"
       ]
+    },
+    "myStatus": {
+      "onShift": true,
+      "clockedIn": true,
+      "clockedInAt": "2026-10-20T09:30:00.000Z",
+      "currentShift": {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "encryptedName": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "startTime": "00:00",
+        "endTime": "23:59"
+      },
+      "nextShift": {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "encryptedName": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "startTime": "00:00",
+        "endTime": "23:59",
+        "day": 2
+      }
     }
   }
 }
