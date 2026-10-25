@@ -2,8 +2,8 @@ import SwiftUI
 
 // MARK: - BanListView
 
-/// Admin view for managing the ban list. Shows banned identifier hashes
-/// with reasons and allows adding/removing bans.
+/// Admin view for managing the ban list. Shows each ban's reason and date
+/// and allows adding/removing bans.
 struct BanListView: View {
     @Bindable var viewModel: AdminViewModel
     @Environment(HubContext.self) private var hubContext
@@ -191,23 +191,24 @@ struct BanListView: View {
 
 // MARK: - BanRowView
 
-/// A single ban entry row showing the identifier hash, reason, creator, and date.
+/// A single ban entry row showing the reason, creator, and date. The server keeps no
+/// number for a ban, so there is none to show, masked or otherwise.
 struct BanRowView<Row: BanRowDisplay>: View {
     let ban: Row
     let onDelete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Hash
             HStack {
-                Image(systemName: "number")
+                Image(systemName: "nosign")
                     .font(.caption)
                     .foregroundStyle(Color.brandDestructive)
 
-                Text(ban.truncatedHash)
-                    .font(.brandMono(.body))
+                // Reason
+                Text(ban.reasonText ?? "")
+                    .font(.brand(.subheadline))
                     .foregroundStyle(Color.brandForeground)
-                    .lineLimit(1)
+                    .lineLimit(2)
 
                 Spacer()
 
@@ -221,14 +222,6 @@ struct BanRowView<Row: BanRowDisplay>: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("delete-ban-\(ban.id)")
                 .accessibilityLabel(NSLocalizedString("admin_remove_ban", comment: "Remove ban"))
-            }
-
-            // Reason
-            if let reason = ban.reasonText, !reason.isEmpty {
-                Text(reason)
-                    .font(.brand(.subheadline))
-                    .foregroundStyle(Color.brandMutedForeground)
-                    .lineLimit(2)
             }
 
             // Metadata

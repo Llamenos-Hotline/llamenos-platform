@@ -8,7 +8,7 @@ import {
   randomBytes,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, HMAC_BAN_PREFIX, LABEL_BAN_KEY_DERIVE, LABEL_CALLER_NUMBER_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
 // getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
@@ -35,6 +35,58 @@ export function hashPhone(phone: string, secret: string): string {
   const key = secretToKey(secret)
   const input = utf8ToBytes(`${HMAC_PHONE_PREFIX}${phone}`)
   return bytesToHex(hmacSha256(key, input))
+}
+
+/** Ban scope of the platform-wide list; a hub's scope is its hub id. */
+export const PLATFORM_BAN_SCOPE = 'platform'
+
+/**
+ * Hash of a BANNED number under one scope's key: HMAC(HKDF(BAN_HASH_KEY, scope), number).
+ *
+ * Only numbers an admin banned are ever hashed this way and stored. A caller who
+ * has not been banned is hashed here transiently to be compared against the ban
+ * list and the digest is dropped, so the server keeps no deterministic
+ * identifier for an ordinary caller. The per-scope key means a hub's ban hashes
+ * cannot be compared with another hub's, with the platform list, or with any
+ * other hash of the same number. BAN_HASH_KEY is a file-only secret (never in
+ * the DB, `.env` or a config backup), so a database dump alone confirms nothing.
+ */
+export function banHash(phone: string, scope: string, banHashKey: string): string {
+  const scopeKey = hkdfSha256(hexToBytes(banHashKey), new Uint8Array(0), utf8ToBytes(`${LABEL_BAN_KEY_DERIVE}:${scope}`), 32)
+  return bytesToHex(hmacSha256(scopeKey, utf8ToBytes(`${HMAC_BAN_PREFIX}${phone}`)))
+}
+
+/** The hashes a call must be compared against: its hub's list (when it has a hub) and the platform's. */
+export interface BanHashes {
+  hub?: string
+  platform: string
+}
+
+export function banHashes(phone: string, hubId: string | undefined, banHashKey: string): BanHashes {
+  return {
+    hub: hubId ? banHash(phone, hubId, banHashKey) : undefined,
+    platform: banHash(phone, PLATFORM_BAN_SCOPE, banHashKey),
+  }
+}
+
+const CALLER_RATE_KEY_EPOCH_MS = 60_000
+let callerRateKey: { epoch: number; key: Uint8Array } | null = null
+
+/**
+ * Digest that tells the per-caller rate limiter two calls came from one number,
+ * and only within one rate-limit window. The key is random, lives in this
+ * process's memory only and is replaced every window, so the digests left in
+ * `rate_limits` cannot be linked to a number, to each other past the window, or
+ * to a later call, even by someone holding every server secret. The cost is that
+ * the limit is counted per process and restarts at each window boundary.
+ */
+export function callerRateLimitDigest(phone: string, now: number = Date.now()): string {
+  const epoch = Math.floor(now / CALLER_RATE_KEY_EPOCH_MS)
+  if (callerRateKey?.epoch !== epoch) {
+    callerRateKey?.key.fill(0)
+    callerRateKey = { epoch, key: randomBytes(32) }
+  }
+  return bytesToHex(hmacSha256(callerRateKey.key, utf8ToBytes(`${HMAC_PHONE_PREFIX}${phone}`))).slice(0, 32)
 }
 
 /**
@@ -274,6 +326,22 @@ export function decryptContactIdentifier(stored: string, serverKek: string): str
   }
   const ct = hexToBytes(stored.slice(4))
   return new TextDecoder().decode(serverDecrypt(ct, LABEL_CONTACT_ID, hexToBytes(serverKek)))
+}
+
+// --- Live-Call Caller Number ---
+
+/**
+ * Seal a live caller's number for the life of one call. SERVER_KEK, under its own
+ * label and bound to the call id: a value copied onto another call's row fails to
+ * open, and the key is not the one that opens contact identifiers.
+ */
+export function sealCallerNumber(phone: string, callId: string, serverKek: string): string {
+  return bytesToHex(serverEncrypt(utf8ToBytes(phone), LABEL_CALLER_NUMBER_SEAL, hexToBytes(serverKek), callId))
+}
+
+/** Open a number sealed by sealCallerNumber. Throws on a wrong key, wrong call, or tampered value. */
+export function openCallerNumber(sealed: string, callId: string, serverKek: string): string {
+  return new TextDecoder().decode(serverDecrypt(hexToBytes(sealed), LABEL_CALLER_NUMBER_SEAL, hexToBytes(serverKek), callId))
 }
 
 // --- Storage Credential Encryption ---

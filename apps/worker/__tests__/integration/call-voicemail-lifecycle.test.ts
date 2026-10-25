@@ -30,7 +30,7 @@ const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.active_calls (
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
-    caller_number_hash TEXT NOT NULL,
+    caller_number_sealed TEXT,
     caller_last4 TEXT,
     answered_by TEXT,
     status TEXT NOT NULL DEFAULT 'ringing',
@@ -123,7 +123,7 @@ const HUB = 'hub-vm'
 
 describe('voicemail on a call nobody could be rung for', () => {
   it('flags the active call, and ending it lands in history as unanswered with hasVoicemail', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-1', callerNumber: 'hash', callerLast4: '4567' })
+    await calls.addCall(HUB, { callId: 'CA-vm-1', callerNumberSealed: null, callerLast4: '4567' })
 
     await calls.markVoicemail(HUB, 'CA-vm-1')
     const active = await calls.getActiveCallById(HUB, 'CA-vm-1')
@@ -142,7 +142,7 @@ describe('voicemail on a call nobody could be rung for', () => {
   })
 
   it('sets the flag on the history record when the call already ended', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-2', callerNumber: 'hash' })
+    await calls.addCall(HUB, { callId: 'CA-vm-2', callerNumberSealed: null })
     await calls.endCall(HUB, 'CA-vm-2')
 
     await calls.markVoicemail(HUB, 'CA-vm-2')
@@ -158,7 +158,7 @@ describe('voicemail on a call nobody could be rung for', () => {
   })
 
   it('does not touch a call in another hub', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-3', callerNumber: 'hash' })
+    await calls.addCall(HUB, { callId: 'CA-vm-3', callerNumberSealed: null })
 
     await expect(calls.markVoicemail('other-hub', 'CA-vm-3')).rejects.toBeInstanceOf(ServiceError)
     expect((await calls.getActiveCallById(HUB, 'CA-vm-3'))?.hasVoicemail).toBe(false)

@@ -37,7 +37,7 @@ vi.mock('../../routes/metrics', () => ({
 const HUB_A = 'hub-A'
 const HUB_B = 'hub-B'
 
-const env = { SERVER_SECRET: 'b'.repeat(64), HMAC_SECRET: 'a'.repeat(64) } as Env
+const env = { SERVER_SECRET: 'b'.repeat(64), HMAC_SECRET: 'a'.repeat(64), SERVER_KEK: 'c'.repeat(64) } as Env
 
 /** A relay socket that records every event frame the server sends it. */
 function connect(

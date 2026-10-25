@@ -84,8 +84,9 @@ export const bans = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     hubId: text('hub_id'),
-    phone: text('phone_hash').notNull(),  // HMAC-SHA256 of raw phone number (used for matching)
-    phoneDisplay: text('phone_display'),  // Original E.164 phone for admin display
+    // HMAC(HKDF(BAN_HASH_KEY, hubId | 'platform'), number) — see `banHash`. Rows exist
+    // only for banned numbers; no digits of the number are stored beside it.
+    phone: text('phone_hash').notNull(),
     reason: text('reason'),
     bannedBy: text('banned_by'),
     bannedAt: timestamp('banned_at', { withTimezone: true })

@@ -51,7 +51,7 @@ const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.active_calls (
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
-    caller_number_hash TEXT NOT NULL,
+    caller_number_sealed TEXT,
     caller_last4 TEXT,
     answered_by TEXT,
     status TEXT NOT NULL DEFAULT 'ringing',
@@ -193,7 +193,7 @@ async function seedRingingCall(callSid: string, volunteers: string[]): Promise<s
   await db.insert(schema.activeCalls).values({
     callId: callSid,
     hubId: HUB,
-    callerNumber: 'hash',
+    callerNumberSealed: null,
     callerLast4: '1111',
     status: 'ringing',
   })

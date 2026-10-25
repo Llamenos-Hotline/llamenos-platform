@@ -117,3 +117,6 @@
 99	llamenos:device-provision-bundle:v1
 100	llamenos:device-provision-claim:v1
 101	llamenos:audit-user-key-server-seal:v1
+102	llamenos:ban:
+103	llamenos:ban-key-derive:v1
+104	llamenos:caller-number-seal:v1

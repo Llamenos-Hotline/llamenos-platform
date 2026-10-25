@@ -18,7 +18,7 @@ import java.util.Calendar
  *
  * Uses BanListTab UI testTags: add-ban-fab, ban-identifier-input, ban-reason-input,
  * confirm-ban-button, cancel-ban-button, bans-list, bans-empty, ban-card-{id},
- * ban-hash-{id}, ban-reason-{id}, remove-ban-{id}.
+ * ban-reason-{id}, remove-ban-{id}.
  */
 class BanSteps : BaseSteps() {
 

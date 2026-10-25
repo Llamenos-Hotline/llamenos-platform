@@ -196,7 +196,7 @@ async function seedHub(hubId: string, owner: Actor): Promise<HubData> {
   })
   const activeCallId = `call-live-${hubId}`
   await db.insert(activeCalls).values({
-    callId: activeCallId, hubId, callerNumber: hex('d1'), callerLast4: '4242', status: 'in-progress',
+    callId: activeCallId, hubId, callerNumberSealed: hex('d1'), callerLast4: '4242', status: 'in-progress',
     answeredBy: ADMIN_A.pubkey,
   })
   const [blast] = await db.insert(blasts).values({

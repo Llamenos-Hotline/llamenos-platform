@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { startParallelRinging, cancelLosingLegs, recordRingLegs, canAnswerInApp } from '../../services/ringing'
-import { hashPhone } from '../../lib/crypto'
+import { openCallerNumber } from '../../lib/crypto'
 import type { Env } from '../../types'
 import type { Services } from '../../services'
 import * as serviceFactories from '../../lib/service-factories'
@@ -17,6 +17,7 @@ import { AllDialsFailedError } from '../../telephony/adapter'
 import { AsteriskAdapter } from '../../telephony/asterisk'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
+const TEST_KEK = 'c'.repeat(64)
 
 const mockAdapter = (serviceFactories as unknown as { __mockAdapter: { ringVolunteers: ReturnType<typeof vi.fn>; cancelRinging: ReturnType<typeof vi.fn> } }).__mockAdapter
 
@@ -76,6 +77,7 @@ function makeEnv(overrides?: Partial<Env>): Env {
   return {
     SERVER_SECRET: 'a'.repeat(64),
     HMAC_SECRET: TEST_HMAC_SECRET,
+    SERVER_KEK: TEST_KEK,
     ...overrides,
   } as Env
 }
@@ -168,7 +170,7 @@ describe('startParallelRinging', () => {
     // The caller is queued and will leave a voicemail — a record must exist to attach it to
     expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', {
       callId: 'CA-1',
-      callerNumber: hashPhone('+15551234567', TEST_HMAC_SECRET),
+      callerNumberSealed: expect.any(String),
       callerLast4: '4567',
       status: 'ringing',
     })
@@ -559,7 +561,7 @@ describe('startParallelRinging', () => {
     expect(ringArgs.volunteers).toHaveLength(2)
   })
 
-  it('registers the incoming call with hashed callerNumber (not plaintext)', async () => {
+  it('registers the incoming call with the caller number sealed, never hashed or in plaintext', async () => {
     const services = makeServices({
       onShiftPubkeys: ['pk-1'],
       allUsers: [makeUser({ pubkey: 'pk-1' })],
@@ -568,15 +570,17 @@ describe('startParallelRinging', () => {
     const rawPhone = '+15559876543'
     await startParallelRinging('CA-6', rawPhone, 'http://localhost', makeEnv(), services, 'hub-1')
 
-    const expectedHash = hashPhone(rawPhone, TEST_HMAC_SECRET)
     expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', {
       callId: 'CA-6',
-      callerNumber: expectedHash,
+      callerNumberSealed: expect.any(String),
       callerLast4: '6543',
       status: 'ringing',
     })
-    // Verify the hash does not leak the raw number
-    expect(expectedHash).not.toContain(rawPhone)
+    const { callerNumberSealed } = (services.calls.addCall as ReturnType<typeof vi.fn>).mock.calls[0][1]
+    // Sealed under SERVER_KEK and bound to this call: it opens only for 'CA-6', and shows no digits.
+    expect(callerNumberSealed).not.toContain('9876543')
+    expect(openCallerNumber(callerNumberSealed, 'CA-6', TEST_KEK)).toBe(rawPhone)
+    expect(() => openCallerNumber(callerNumberSealed, 'CA-other', TEST_KEK)).toThrow()
   })
 
   it('extracts last 4 digits of caller number', async () => {

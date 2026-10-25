@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType } from '@shared/types'
-import { hashPhone } from '../lib/crypto'
+import { banHashes, hashPhone, sealCallerNumber } from '../lib/crypto'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
@@ -867,8 +867,7 @@ dev.post('/test-simulate/incoming-call', async (c) => {
   const hubId = body.hubId ?? ''
 
   // Check if the caller is banned (hash before lookup — mirrors real telephony flow)
-  const callerNumberHash = hashPhone(body.callerNumber, c.env.HMAC_SECRET)
-  const banned = await services.records.checkBan(callerNumberHash, hubId || undefined)
+  const banned = await services.records.checkBan(banHashes(body.callerNumber, hubId || undefined, c.env.BAN_HASH_KEY), hubId || undefined)
   if (banned) {
     return c.json({ error: 'Caller is banned', banned: true }, 403)
   }
@@ -888,7 +887,7 @@ dev.post('/test-simulate/incoming-call', async (c) => {
 
   await services.calls.addCall(hubId, {
     callId,
-    callerNumber: callerNumberHash,
+    callerNumberSealed: sealCallerNumber(body.callerNumber, callId, c.env.SERVER_KEK),
     callerLast4: body.callerNumber?.slice(-4),
   })
 

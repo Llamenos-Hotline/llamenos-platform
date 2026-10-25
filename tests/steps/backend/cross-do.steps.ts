@@ -159,7 +159,8 @@ Then('the audit log should have entries for each step', async ({request, world})
 
 When('an admin bans {string}', async ({request, world}, phone: string) => {
   const hubId = getScenarioState(world).hubId
-  await createBanViaApi(request, { phone, reason: 'XDO ban test', hubId })
+  const ban = await createBanViaApi(request, { phone, reason: 'XDO ban test', hubId })
+  getScenarioState(world).phoneHashMap[phone] = ban.phoneHash
 })
 
 When('an incoming call arrives from {string}', async ({ request, world }, phone: string) => {

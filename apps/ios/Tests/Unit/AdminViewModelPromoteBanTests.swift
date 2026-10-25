@@ -12,7 +12,7 @@ import XCTest
 /// an earlier implementation posted `{identifierHash, reason}` to
 /// `POST /api/bans/platform`, whose validator is `createPlatformBanBodySchema`
 /// (`{phone: <E.164>, reason?}`) — every call would have 400'd. The real route
-/// is `POST /api/bans/platform/promote` with `promoteBanBodySchema` (`{banId}`).
+/// is `POST /api/bans/platform/promote` with `promoteBanBodySchema` (`{banId, phone}`).
 @MainActor
 final class AdminViewModelPromoteBanTests: XCTestCase {
 
@@ -20,8 +20,8 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
 
     /// Compile-time existence check: deleting or renaming the capability, or
     /// changing its signature, stops this file from building.
-    func testPromoteBanToPlatformExistsWithBanIdSignature() {
-        let promote: (AdminViewModel) -> (String) async -> Void = AdminViewModel.promoteBanToPlatform
+    func testPromoteBanToPlatformExistsWithBanIdAndPhoneSignature() {
+        let promote: (AdminViewModel) -> (String, String) async -> Void = AdminViewModel.promoteBanToPlatform
         XCTAssertNotNil(promote)
     }
 
@@ -38,7 +38,7 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
         }
 
         let viewModel = makeViewModel()
-        await viewModel.promoteBanToPlatform(banId: "ban-42")
+        await viewModel.promoteBanToPlatform(banId: "ban-42", phone: "+15550100042")
 
         let promoteRequests = MockURLProtocol.capturedRequests.filter {
             $0.url?.path == "/api/bans/platform/promote"
@@ -46,17 +46,18 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
         XCTAssertEqual(promoteRequests.count, 1, "expected exactly one promote call")
         XCTAssertEqual(promoteRequests.first?.httpMethod, "POST")
 
-        // Pin the wire body. The ban id is the only thing the server needs: it
-        // resolves the source row itself and copies the already-hashed phone,
-        // so no plaintext number ever leaves the device.
+        // Pin the wire body. The server resolves the source row by id and needs the
+        // number again: the hub's ban hash is keyed to that hub and cannot be re-keyed
+        // to the platform without it.
         let body = try XCTUnwrap(MockURLProtocol.capturedBodies.first)
         let json = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: body) as? [String: Any]
         )
-        XCTAssertEqual(json.count, 1, "promote body carries only the ban id, got \(json)")
+        XCTAssertEqual(json.count, 2, "promote body carries the ban id and the re-entered number, got \(json)")
+        XCTAssertEqual(json["phone"] as? String, "+15550100042")
         XCTAssertEqual(
             json["banId"] as? String, "ban-42",
-            "server validator is promoteBanBodySchema({banId}); got \(json)"
+            "server validator is promoteBanBodySchema({banId, phone}); got \(json)"
         )
 
         XCTAssertNil(viewModel.errorMessage)
@@ -73,7 +74,7 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
         }
 
         let viewModel = makeViewModel()
-        await viewModel.promoteBanToPlatform(banId: "ban-already-platform")
+        await viewModel.promoteBanToPlatform(banId: "ban-already-platform", phone: "+15550100042")
 
         XCTAssertNotNil(viewModel.errorMessage, "a rejected promote must not look successful")
         XCTAssertNil(viewModel.successMessage)

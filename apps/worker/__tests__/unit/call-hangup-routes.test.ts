@@ -8,6 +8,7 @@ import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
 import { MockTelephonyAdapter } from '@worker/telephony/mock'
 import { ServiceError } from '@worker/services/settings'
+import { sealCallerNumber } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
 
 const PUBKEY = 'a'.repeat(64)
@@ -32,13 +33,15 @@ function makeMock() {
   )
 }
 
+const TEST_KEK = 'c'.repeat(64) // gitleaks:allow
+
 const STARTED_AT = new Date('2026-10-03T12:00:00.000Z')
 
 const activeCall = {
   callId: 'CA-caller-1',
   hubId: HUB,
   answeredBy: PUBKEY,
-  callerNumber: 'hashed-caller',
+  callerNumberSealed: sealCallerNumber('+15554567890', 'CA-caller-1', TEST_KEK),
   callerLast4: '4567',
   status: 'in-progress',
   startedAt: STARTED_AT,
@@ -86,7 +89,7 @@ function setup() {
     c.set('allRoles', [])
     c.set('requestId', 'req-1')
     c.set('hubId', HUB)
-    c.env = {} as AppEnv['Bindings']
+    c.env = { SERVER_KEK: TEST_KEK, BAN_HASH_KEY: 'b'.repeat(64) } as AppEnv['Bindings']
     await next()
   })
   app.route('/', calls)

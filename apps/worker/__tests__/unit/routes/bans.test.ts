@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import banRoutes from '@worker/routes/bans'
-import { hashPhone } from '@worker/lib/crypto'
+import { banHash } from '@worker/lib/crypto'
 
-const TEST_HMAC_SECRET = 'a'.repeat(64)
+const TEST_BAN_HASH_KEY = 'b'.repeat(64)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +60,7 @@ function createTestApp(opts: {
     }
     c.env = {
       HMAC_SECRET: 'a'.repeat(64),
+      BAN_HASH_KEY: TEST_BAN_HASH_KEY,
     } as unknown as AppEnv['Bindings']
     await next()
   })
@@ -85,7 +86,7 @@ describe('bans routes', () => {
   describe('GET /bans', () => {
     it('lists bans', async () => {
       const listBansSpy = vi.fn().mockResolvedValue({
-        bans: [{ phone: '+12125551234', reason: 'Spam', bannedBy: 'admin', bannedAt: new Date().toISOString() }],
+        bans: [{ phoneHash: 'f'.repeat(64), reason: 'Spam', bannedBy: 'admin', bannedAt: new Date().toISOString() }],
       })
       const { app } = createTestApp({
         permissions: ['bans:read'],
@@ -114,8 +115,7 @@ describe('bans routes', () => {
   describe('POST /bans', () => {
     it('bans a valid phone number', async () => {
       const addBanSpy = vi.fn().mockResolvedValue({
-        phone: hashPhone('+12125551234', TEST_HMAC_SECRET),
-        phoneDisplay: '***1234',
+        phone: banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY),
         reason: 'Spam',
         bannedBy: 'a'.repeat(64),
         bannedAt: new Date().toISOString(),
@@ -134,15 +134,32 @@ describe('bans routes', () => {
 
       expect(res.status).toBe(200)
       const json = await res.json()
-      expect(json.ban.phone).toBe('***1234')
+      // The response carries an opaque handle, a reason and a date: no number, masked or not.
+      expect(Object.keys(json.ban).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
+      expect(JSON.stringify(json)).not.toContain('1234')
+      expect(json.ban.phoneHash).toBe(banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY))
       expect(addBanSpy).toHaveBeenCalledWith({
         hubId: 'hub-1',
-        phone: hashPhone('+12125551234', TEST_HMAC_SECRET),
-        phoneDisplay: '***1234',
+        phoneHash: banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY),
         reason: 'Spam',
         bannedBy: 'a'.repeat(64),
       })
       expect(auditLogSpy).toHaveBeenCalledOnce()
+    })
+
+    it('keys the hash to the hub it is made in, so another hub gets a different hash for the same number', async () => {
+      const hashesByHub = new Map<string, string>()
+      for (const hubId of ['hub-1', 'hub-2']) {
+        const addBanSpy = vi.fn().mockResolvedValue({ phone: 'x', reason: '', bannedBy: 'a', bannedAt: new Date().toISOString() })
+        const { app } = createTestApp({ permissions: ['bans:create'], hubId, serviceMock: { records: { addBan: addBanSpy } } })
+        await app.request('/bans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: '+12125551234' }),
+        })
+        hashesByHub.set(hubId, addBanSpy.mock.calls[0]![0].phoneHash)
+      }
+      expect(hashesByHub.get('hub-1')).not.toBe(hashesByHub.get('hub-2'))
     })
 
     it('rejects invalid phone number', async () => {
@@ -195,8 +212,8 @@ describe('bans routes', () => {
       expect(json.count).toBe(2)
       expect(bulkAddBansSpy).toHaveBeenCalledWith(
         [
-          { phoneHash: hashPhone('+12125551234', TEST_HMAC_SECRET), phoneDisplay: '***1234' },
-          { phoneHash: hashPhone('+12125555678', TEST_HMAC_SECRET), phoneDisplay: '***5678' },
+          banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY),
+          banHash('+12125555678', 'hub-1', TEST_BAN_HASH_KEY),
         ],
         'Spam', 'a'.repeat(64), 'hub-1',
       )
@@ -234,7 +251,7 @@ describe('bans routes', () => {
   // -------------------------------------------------------------------------
 
   describe('DELETE /bans/:phoneHash', () => {
-    it('unbans via raw E.164 phone (hashes it server-side)', async () => {
+    it('refuses a raw E.164 number in the path: it would land in access logs', async () => {
       const removeBanSpy = vi.fn().mockResolvedValue(undefined)
       const { app, auditLogSpy } = createTestApp({
         permissions: ['bans:delete'],
@@ -243,24 +260,24 @@ describe('bans routes', () => {
       })
 
       const res = await app.request('/bans/%2B12125551234', { method: 'DELETE' })
-      expect(res.status).toBe(200)
-      expect(removeBanSpy).toHaveBeenCalledWith(hashPhone('+12125551234', TEST_HMAC_SECRET), 'hub-1')
-      expect(auditLogSpy).toHaveBeenCalledOnce()
+      expect(res.status).toBe(400)
+      expect(removeBanSpy).not.toHaveBeenCalled()
+      expect(auditLogSpy).not.toHaveBeenCalled()
     })
 
-    it('unbans via pre-computed phoneHash (passes through without re-hashing)', async () => {
+    it('unbans by the handle from the ban list', async () => {
       const removeBanSpy = vi.fn().mockResolvedValue(undefined)
-      const preComputedHash = hashPhone('+12125551234', TEST_HMAC_SECRET)
-      const { app } = createTestApp({
+      const handle = banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY)
+      const { app, auditLogSpy } = createTestApp({
         permissions: ['bans:delete'],
         hubId: 'hub-1',
         serviceMock: { records: { removeBan: removeBanSpy } },
       })
 
-      const res = await app.request(`/bans/${preComputedHash}`, { method: 'DELETE' })
+      const res = await app.request(`/bans/${handle}`, { method: 'DELETE' })
       expect(res.status).toBe(200)
-      // Hash is already 64-char hex, should be passed through directly
-      expect(removeBanSpy).toHaveBeenCalledWith(preComputedHash, 'hub-1')
+      expect(removeBanSpy).toHaveBeenCalledWith(handle, 'hub-1')
+      expect(auditLogSpy).toHaveBeenCalledOnce()
     })
 
     it('returns 403 without bans:delete permission', async () => {

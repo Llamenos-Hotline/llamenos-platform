@@ -8,7 +8,7 @@ import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableError } from '../lib/retry'
 import { getCircuitBreaker, CircuitOpenError } from '../lib/circuit-breaker'
 import { incCounter } from '../routes/metrics'
-import { hashPhone } from '../lib/crypto'
+import { sealCallerNumber } from '../lib/crypto'
 import { resolveHubPermissions } from '@shared/permissions'
 import { listReachableVolunteerEndpoints, volunteerSipUsername } from '../telephony/registrar'
 import { AllDialsFailedError } from '../telephony/adapter'
@@ -358,11 +358,12 @@ export async function startParallelRinging(
     // reaches the queue has a call record whether or not a volunteer can be found: if
     // nobody is reachable they hear hold music, time out into voicemail, and the
     // voicemail/hangup handlers need a record to attach to (#1043).
-    // Store the HMAC hash, not the raw number.
-    const callerNumberHash = hashPhone(callerNumber, env.HMAC_SECRET)
+    // The number is held sealed (SERVER_KEK, bound to this call) for the call's life only,
+    // so the answering volunteer can ban the caller without seeing it. It is never hashed
+    // here: a hash of an ordinary caller would be a stable identifier the server keeps.
     await services.calls.addCall(hubId, {
       callId: callSid,
-      callerNumber: callerNumberHash,
+      callerNumberSealed: sealCallerNumber(callerNumber, callSid, env.SERVER_KEK),
       callerLast4: callerNumber.slice(-4),
       status: 'ringing',
     })

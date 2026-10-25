@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { RecordsService } from '@worker/services/records'
 import { createMockDb } from './mock-db'
 
+// Stand-ins for ban hashes (64 hex chars): the service only stores and compares them.
+const HASH_A = 'a'.repeat(64)
+const HASH_B = 'b'.repeat(64)
+
 describe('RecordsService', () => {
   function setup() {
     const { db } = createMockDb(['notes', 'noteReplies', 'bans', 'contactMetadata'])
@@ -194,29 +198,29 @@ describe('RecordsService', () => {
   describe('addBan', () => {
     it('creates new ban when not existing', async () => {
       const { db, service } = setup()
-      const ban = { id: 'ban-1', phone: '+15551234567', reason: 'spam' }
+      const ban = { id: 'ban-1', phone: HASH_A, reason: 'spam' }
       db.$setSelectResult([])
       db.$setInsertResult([ban])
 
-      const result = await service.addBan({ phone: '+15551234567', phoneDisplay: '+15551234567', reason: 'spam', bannedBy: 'pk1' })
-      expect(result.phone).toBe('+15551234567')
+      const result = await service.addBan({ phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
+      expect(result.phone).toBe(HASH_A)
     })
 
     it('returns existing ban when already banned', async () => {
       const { db, service } = setup()
-      const existing = { id: 'ban-1', phone: '+15551234567', reason: 'spam' }
+      const existing = { id: 'ban-1', phone: HASH_A, reason: 'spam' }
       db.$setSelectResult([existing])
 
-      const result = await service.addBan({ phone: '+15551234567', phoneDisplay: '+15551234567', reason: 'spam', bannedBy: 'pk1' })
+      const result = await service.addBan({ phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
       expect(result.id).toBe('ban-1')
     })
 
     it('scopes ban to hubId when provided', async () => {
       const { db, service } = setup()
       db.$setSelectResult([])
-      db.$setInsertResult([{ id: 'ban-1', hubId: 'hub-1', phone: '+15551234567' }])
+      db.$setInsertResult([{ id: 'ban-1', hubId: 'hub-1', phone: HASH_A }])
 
-      const result = await service.addBan({ hubId: 'hub-1', phone: '+15551234567', phoneDisplay: '+15551234567', reason: 'spam', bannedBy: 'pk1' })
+      const result = await service.addBan({ hubId: 'hub-1', phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
       expect(result.hubId).toBe('hub-1')
     })
   })
@@ -230,12 +234,21 @@ describe('RecordsService', () => {
       expect(result.bans).toHaveLength(2)
     })
 
-    it('lists all bans when no hubId', async () => {
+    it('lists the platform bans when no hubId', async () => {
       const { db, service } = setup()
       db.$setSelectResult([{ id: 'ban-1' }])
 
       const result = await service.listBans()
       expect(result.bans).toHaveLength(1)
+    })
+
+    it('returns an opaque handle, reason and date for each ban, and no number of any kind', async () => {
+      const { db, service } = setup()
+      const bannedAt = new Date('2026-10-01T00:00:00Z')
+      db.$setSelectResult([{ id: 'ban-1', hubId: 'hub-1', phone: HASH_A, reason: 'abuse', bannedBy: 'pk1', bannedAt }])
+
+      const { bans } = await service.listBans('hub-1')
+      expect(bans).toEqual([{ phoneHash: HASH_A, reason: 'abuse', bannedBy: 'pk1', bannedAt }])
     })
   })
 
@@ -246,11 +259,7 @@ describe('RecordsService', () => {
       db.$setInsertResult([{ id: 'ban-1' }, { id: 'ban-2' }])
 
       const count = await service.bulkAddBans(
-        [
-          { phoneHash: '+1111', phoneDisplay: '+1111' },
-          { phoneHash: '+2222', phoneDisplay: '+2222' },
-          { phoneHash: '+1111', phoneDisplay: '+1111' },
-        ],
+        [HASH_A, HASH_B, HASH_A],
         'spam',
         'pk1',
         'hub-1'
@@ -266,10 +275,7 @@ describe('RecordsService', () => {
       db.$setInsertResult([{ id: 'ban-1' }])
 
       const count = await service.bulkAddBans(
-        [
-          { phoneHash: '+1111', phoneDisplay: '+1111' },
-          { phoneHash: '+2222', phoneDisplay: '+2222' },
-        ],
+        [HASH_A, HASH_B],
         'spam',
         'pk1',
       )
@@ -281,7 +287,7 @@ describe('RecordsService', () => {
   describe('removeBan', () => {
     it('removes ban by phone', async () => {
       const { service } = setup()
-      await expect(service.removeBan('+15551234567')).resolves.toBeUndefined()
+      await expect(service.removeBan(HASH_A)).resolves.toBeUndefined()
     })
   })
 
@@ -290,7 +296,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([{ id: 'ban-1' }])
 
-      const result = await service.checkBan('+15551234567')
+      const result = await service.checkBan({ hub: HASH_A, platform: HASH_B }, 'hub-1')
       expect(result).toBe(true)
     })
 
@@ -298,7 +304,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([])
 
-      const result = await service.checkBan('+15551234567')
+      const result = await service.checkBan({ hub: HASH_A, platform: HASH_B }, 'hub-1')
       expect(result).toBe(false)
     })
   })

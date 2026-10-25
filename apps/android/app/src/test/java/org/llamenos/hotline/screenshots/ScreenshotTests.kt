@@ -416,14 +416,12 @@ class ScreenshotTests {
         BanEntry(
             bannedAt = "2026-04-15T10:00:00Z",
             bannedBy = samplePubkey,
-            phone = "ban-hash-abc",
             phoneHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
             reason = "Repeated abusive calls targeting volunteers",
         ),
         BanEntry(
             bannedAt = "2026-04-10T14:30:00Z",
             bannedBy = samplePubkey2,
-            phone = "ban-hash-def",
             phoneHash = "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
             reason = "Spam calls",
         ),

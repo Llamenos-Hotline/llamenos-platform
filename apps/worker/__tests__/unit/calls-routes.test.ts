@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
-import { hashPhone } from '@worker/lib/crypto'
+import { banHash, sealCallerNumber } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
 import type { activeCalls, callRecords } from '@worker/db/schema'
 import { ServiceError } from '@worker/services/settings'
@@ -19,14 +19,15 @@ vi.mock('@worker/services/ringing', async (orig) => ({
 }))
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 
-const TEST_HMAC_SECRET = 'a'.repeat(64) // gitleaks:allow
+const TEST_KEK = 'a'.repeat(64) // gitleaks:allow
+const TEST_BAN_HASH_KEY = 'b'.repeat(64) // gitleaks:allow
 
-/** An `active_calls` row as the service returns it — `callerNumber` is the HMAC of the caller's number. */
+/** An `active_calls` row as the service returns it — `callerNumberSealed` is the caller's number sealed under SERVER_KEK. */
 function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {}): typeof activeCalls.$inferSelect {
   return {
     callId: 'call-1',
     hubId: 'hub-1',
-    callerNumber: hashPhone('+15551234567', TEST_HMAC_SECRET),
+    callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
     callerLast4: '4567',
     answeredBy: null,
     status: 'ringing',
@@ -221,7 +222,7 @@ describe('Calls Routes', () => {
       const res = await app.request('/active')
       expect(res.status).toBe(200)
       const raw = await res.text()
-      expect(raw).not.toContain(row.callerNumber)
+      expect(raw).not.toContain(row.callerNumberSealed!)
       const body = JSON.parse(raw)
       expect(body.calls).toHaveLength(1)
       expect(body.calls[0].id).toBe('call-1')
@@ -231,7 +232,7 @@ describe('Calls Routes', () => {
       expect(callsSvc.getActiveCalls).toHaveBeenCalledWith('hub-1')
     })
 
-    it('never sends the caller-number HMAC, or a redaction placeholder, without calls:read-active-full', async () => {
+    it('never sends the sealed caller number, or a redaction placeholder, without calls:read-active-full', async () => {
       const callsSvc = makeMockCallsService()
       const row = activeCallRow()
       callsSvc.getActiveCalls.mockResolvedValue([row])
@@ -245,7 +246,7 @@ describe('Calls Routes', () => {
       const res = await app.request('/active')
       expect(res.status).toBe(200)
       const raw = await res.text()
-      expect(raw).not.toContain(row.callerNumber)
+      expect(raw).not.toContain(row.callerNumberSealed!)
       const body = JSON.parse(raw)
       expect(body.calls[0].id).toBe('call-1')
       expect(body.calls[0]).not.toHaveProperty('callerNumber')
@@ -509,9 +510,9 @@ describe('Calls Routes', () => {
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(200)
       // The response is the projected protocol shape, never the raw row: the
-      // caller-number HMAC must not appear anywhere in the body.
+      // sealed caller number must not appear anywhere in the body.
       const raw = await res.text()
-      expect(raw).not.toContain(row.callerNumber)
+      expect(raw).not.toContain(row.callerNumberSealed!)
       const body = JSON.parse(raw)
       expect(body.call).toMatchObject({ id: 'call-1', status: 'in-progress' })
       expect(body.call).not.toHaveProperty('callerNumber')
@@ -763,11 +764,10 @@ describe('Calls Routes', () => {
       const auditSvc = makeMockAuditService()
       const pubkey = 'a'.repeat(64)
 
-      const hashedPhone = hashPhone('+15551234567', TEST_HMAC_SECRET)
       callsSvc.getActiveCallById.mockResolvedValue({
         callId: 'call-1',
         answeredBy: pubkey,
-        callerNumber: hashedPhone, // already HMAC-hashed at call ingestion
+        callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
         callerLast4: '4567',
         hubId: 'hub-1',
       })
@@ -782,7 +782,7 @@ describe('Calls Routes', () => {
         permissions: ['bans:report'],
         pubkey,
         services,
-        env: { HMAC_SECRET: TEST_HMAC_SECRET } as AppEnv['Bindings'],
+        env: { SERVER_KEK: TEST_KEK, BAN_HASH_KEY: TEST_BAN_HASH_KEY } as AppEnv['Bindings'],
       })
 
       const res = await app.request('/call-1/ban', {
@@ -794,9 +794,10 @@ describe('Calls Routes', () => {
       const body = await res.json()
       expect(body.banned).toBe(true)
       expect(body.hungUp).toBe(true)
+      // The ban is stored as the hub-keyed hash of the number opened from the call's
+      // sealed copy, with no digits of it beside the hash.
       expect(recordsSvc.addBan).toHaveBeenCalledWith({
-        phone: hashedPhone,
-        phoneDisplay: '***4567',
+        phoneHash: banHash('+15551234567', 'hub-1', TEST_BAN_HASH_KEY),
         reason: 'Harassment',
         bannedBy: pubkey,
         hubId: 'hub-1',
@@ -809,13 +810,11 @@ describe('Calls Routes', () => {
       const recordsSvc = makeMockRecordsService()
       const pubkey = 'a'.repeat(64)
 
-      const hashedPhone = hashPhone('+15551234567', TEST_HMAC_SECRET)
       callsSvc.getActiveCallById.mockResolvedValue({
         callId: 'call-1',
         answeredBy: pubkey,
-        callerNumber: hashedPhone, // already HMAC-hashed at call ingestion
+        callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
         hubId: 'hub-1',
-        // no callerLast4 — phoneDisplay should be undefined
       })
 
       const services = makeServices({ calls: callsSvc, records: recordsSvc })
@@ -823,7 +822,7 @@ describe('Calls Routes', () => {
         permissions: ['bans:report'],
         pubkey,
         services,
-        env: { HMAC_SECRET: TEST_HMAC_SECRET } as AppEnv['Bindings'],
+        env: { SERVER_KEK: TEST_KEK, BAN_HASH_KEY: TEST_BAN_HASH_KEY } as AppEnv['Bindings'],
       })
 
       const res = await app.request('/call-1/ban', {
@@ -833,7 +832,7 @@ describe('Calls Routes', () => {
       })
       expect(res.status).toBe(200)
       expect(recordsSvc.addBan).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: 'Banned during active call', phoneDisplay: undefined }),
+        expect.objectContaining({ reason: 'Banned during active call' }),
       )
     })
 
