@@ -26,11 +26,10 @@ import {
   userSignalContacts,
 } from '../db/schema'
 import { ServiceError } from './settings'
-import { adminStateOf, assertHubsKeepAnAdmin } from '../lib/hub-admin'
+import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, type HubRoleAssignment } from '../lib/hub-admin'
 import { createLogger } from '../lib/logger'
 import { ERASED_ACTOR, type AuditService } from './audit'
 import { SIP_REVOCATION_EVENT } from '../telephony/registrar'
-import type { IdentityService } from './identity'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
@@ -64,8 +63,6 @@ function hasEnvelopeFor(column: SQL, pubkey: string): SQL {
   return sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${column}) AS envelope WHERE envelope->>'pubkey' = ${pubkey})`
 }
 
-const ADMIN_ROLES = ['role-super-admin', 'role-admin', 'role-hub-admin'] as const
-
 /**
  * Blob-envelope-mirror deletion, injected by the service registry. The hub
  * shred leaves queued scope='hub' marker jobs in re_encryption_jobs when a
@@ -94,7 +91,6 @@ async function isErasedUser(tx: Pick<Database, 'select'>, userPubkey: string): P
 export class ErasureService {
   constructor(
     protected db: Database,
-    private readonly identity?: Pick<IdentityService, 'getUserInternal'>,
     private readonly blobMirrors?: BlobMirrorDeleter,
   ) {}
 
@@ -227,7 +223,7 @@ export class ErasureService {
     let isEmergency = false
 
     if (emergency) {
-      await this.verifyCoApproval(userId, userId, emergency, config)
+      await this.verifyCoApproval(userId, userId, await this.hubsInScopeOfSelfErasure(userId, hubId), emergency, config)
       effectiveDelayHours = EMERGENCY_MIN_HOURS
       isEmergency = true
     }
@@ -298,6 +294,17 @@ export class ErasureService {
     }
   }
 
+  /**
+   * The hubs whose admin may co-approve a person's erasure: the hub the request
+   * was made in, or — on the hub-less route — every hub the person belongs to,
+   * since their data lives in each of them.
+   */
+  private async hubsInScopeOfSelfErasure(userId: string, hubId: string): Promise<string[]> {
+    if (hubId) return [hubId]
+    const [row] = await this.db.select({ hubRoles: users.hubRoles }).from(users).where(eq(users.pubkey, userId)).limit(1)
+    return [...new Set(((row?.hubRoles as HubRoleAssignment[] | null) ?? []).map(hr => hr.hubId))]
+  }
+
   async cancelSelfRequest(userId: string): Promise<void> {
     const existing = await this.getMyRequest(userId)
     if (!existing) {
@@ -319,10 +326,18 @@ export class ErasureService {
    * the second pair of eyes (spec §14.1). `signSubject` is what the signature
    * covers (the user id, or the hub id for a shred); `requester` is who asked
    * — the co-approver must never be the same party.
+   *
+   * The second pair of eyes must be an admin of a hub whose data is being
+   * erased — `hubIds`, the hubs in scope — by the one admin predicate in
+   * `lib/hub-admin.ts` (roles held IN that hub that confer `HUB_ADMIN_PERMISSIONS`,
+   * resolved against the live role definitions). No role id or name is matched
+   * and global roles are not consulted: a hub that renames or splits its admin
+   * role keeps working, and authority in one hub is none in another (D1, #2232).
    */
   private async verifyCoApproval(
     signSubject: string,
     requester: string,
+    hubIds: readonly string[],
     emergency: {
       coApproverPubkey: string
       coApproverSignature: string
@@ -356,12 +371,11 @@ export class ErasureService {
       throw new ServiceError(400, 'Co-approver signature verification failed')
     }
 
-    // H01: Verify co-approver is a registered admin device
-    const coApproverUser = await this.identity?.getUserInternal(emergency.coApproverPubkey) ?? null
-    const isAdmin = coApproverUser?.roles.some(r => (ADMIN_ROLES as readonly string[]).includes(r)) ?? false
-    if (!isAdmin) {
-      throw new ServiceError(403, 'Co-approver must be a registered admin device')
+    // H01: the co-approver must be an admin of the hub being erased
+    for (const hubId of hubIds) {
+      if ((await listAdminPubkeys(this.db, hubId)).includes(emergency.coApproverPubkey)) return
     }
+    throw new ServiceError(403, 'Co-approver must be a registered admin device')
   }
 
   // ---------------------------------------------------------------------------
@@ -413,7 +427,7 @@ export class ErasureService {
     const config = await this.getConfig(hubId)
     let isEmergency = false
     if (emergency) {
-      await this.verifyCoApproval(hubId, requestedBy, emergency, config)
+      await this.verifyCoApproval(hubId, requestedBy, [hubId], emergency, config)
       isEmergency = true
     }
 

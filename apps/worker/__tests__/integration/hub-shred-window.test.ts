@@ -52,24 +52,32 @@ async function getHub(hubId: string) {
   return hub!
 }
 
-/** A registered user with Ed25519 signing material and the given global roles. */
+/** A user with Ed25519 signing material and the given GLOBAL roles (none by default). */
 function adminDevice(opts: { roles?: string[] } = {}) {
   const secret = new Uint8Array(32)
   crypto.getRandomValues(secret)
   const pubkey = bytesToHex(ed25519.getPublicKey(secret))
   return {
     pubkey,
-    roles: opts.roles ?? ['role-admin'],
+    roles: opts.roles ?? [],
     sign(message: string) {
       return bytesToHex(ed25519.sign(utf8ToBytes(message), secret))
     },
   }
 }
 
-async function registerDevice(device: ReturnType<typeof adminDevice>): Promise<void> {
+/**
+ * Register the user. `hubRoles` is what they hold IN a hub — the only place
+ * co-approval authority comes from (#2232); the global `roles` never count.
+ */
+async function registerDevice(
+  device: ReturnType<typeof adminDevice>,
+  hubRoles: Array<{ hubId: string; roleIds: string[] }> = [],
+): Promise<void> {
   await fresh.db.insert(schema.users).values({
     pubkey: device.pubkey,
     roles: device.roles,
+    hubRoles,
     displayName: 'Approver',
   })
 }
@@ -176,7 +184,7 @@ describe('the co-approved force override', () => {
     const hubId = await createHub()
     await seedReadableNote(fresh.db, hubId)
     const approver = adminDevice()
-    await registerDevice(approver)
+    await registerDevice(approver, [{ hubId, roleIds: ['role-hub-admin'] }])
     const ts = new Date().toISOString()
 
     await fresh.erasure.createHubShredRequest(hubId, EXECUTOR, 'closing the hub', {
@@ -200,7 +208,7 @@ describe('the co-approved force override', () => {
   it('refuses a force with no co-approval', async () => {
     const hubId = await createHub()
     const approver = adminDevice()
-    await registerDevice(approver)
+    await registerDevice(approver, [{ hubId, roleIds: ['role-hub-admin'] }])
     const ts = new Date().toISOString()
     await expect(
       fresh.erasure.createHubShredRequest(hubId, EXECUTOR, undefined, {
@@ -213,18 +221,58 @@ describe('the co-approved force override', () => {
 
   it('refuses a co-approver who is not an admin device', async () => {
     const hubId = await createHub()
-    const volunteer = adminDevice({ roles: ['role-volunteer'] })
-    await registerDevice(volunteer)
+    const volunteer = adminDevice()
+    await registerDevice(volunteer, [{ hubId, roleIds: ['role-volunteer'] }])
     await expect(
       fresh.erasure.createHubShredRequest(hubId, EXECUTOR, undefined,
         overrideFor(hubId, volunteer, new Date().toISOString())),
     ).rejects.toMatchObject({ status: 403, message: /registered admin device/ })
   })
 
+  it('accepts a co-approver whose admin role is custom — the permissions decide, never the id', async () => {
+    const hubId = await createHub()
+    const roleId = `role-renamed-${Math.random().toString(36).slice(2, 8)}`
+    await fresh.db.insert(schema.roles).values({
+      id: roleId,
+      slug: roleId,
+      permissions: ['settings:manage', 'notes:read-all'],
+    })
+    const approver = adminDevice()
+    await registerDevice(approver, [{ hubId, roleIds: [roleId] }])
+
+    await fresh.erasure.createHubShredRequest(hubId, EXECUTOR, undefined,
+      overrideFor(hubId, approver, new Date().toISOString()))
+
+    const [req] = await fresh.db.select().from(schema.erasureRequests).where(eq(schema.erasureRequests.hubId, hubId))
+    expect(req!.emergencyOverride).toBe(true)
+    expect(req!.coApproverPubkey).toBe(approver.pubkey)
+  })
+
+  it('refuses a holder of a global admin role id who has no role in the hub', async () => {
+    const hubId = await createHub()
+    const globalOnly = adminDevice({ roles: ['role-super-admin', 'role-hub-admin', 'role-admin'] })
+    await registerDevice(globalOnly)
+    await expect(
+      fresh.erasure.createHubShredRequest(hubId, EXECUTOR, undefined,
+        overrideFor(hubId, globalOnly, new Date().toISOString())),
+    ).rejects.toMatchObject({ status: 403, message: /registered admin device/ })
+  })
+
+  it('refuses an admin of a different hub', async () => {
+    const hubId = await createHub()
+    const otherHubId = await createHub()
+    const elsewhere = adminDevice()
+    await registerDevice(elsewhere, [{ hubId: otherHubId, roleIds: ['role-hub-admin'] }])
+    await expect(
+      fresh.erasure.createHubShredRequest(hubId, EXECUTOR, undefined,
+        overrideFor(hubId, elsewhere, new Date().toISOString())),
+    ).rejects.toMatchObject({ status: 403, message: /registered admin device/ })
+  })
+
   it('refuses a co-approver who is the requester', async () => {
     const hubId = await createHub()
     const requester = adminDevice()
-    await registerDevice(requester)
+    await registerDevice(requester, [{ hubId, roleIds: ['role-hub-admin'] }])
     await expect(
       fresh.erasure.createHubShredRequest(hubId, requester.pubkey, undefined,
         overrideFor(hubId, requester, new Date().toISOString())),
@@ -234,7 +282,7 @@ describe('the co-approved force override', () => {
   it('refuses a force when the hub disabled emergency override', async () => {
     const hubId = await createHub()
     const approver = adminDevice()
-    await registerDevice(approver)
+    await registerDevice(approver, [{ hubId, roleIds: ['role-hub-admin'] }])
     await fresh.erasure.upsertConfig(
       hubId,
       { emergencyOverrideEnabled: false },
@@ -303,7 +351,7 @@ describe('platform retention floors', () => {
       adminEnvelopes: sealed.adminEnvelopes,
     })
     const approver = adminDevice()
-    await registerDevice(approver)
+    await registerDevice(approver, [{ hubId, roleIds: ['role-hub-admin'] }])
     await fresh.erasure.createHubShredRequest(
       hubId,
       EXECUTOR,

@@ -196,7 +196,7 @@ export function freshHubDb(name: string): FreshHubDb {
       const settings = new SettingsService(db)
       const identity = new IdentityService(db)
       const audit = new AuditService(db)
-      const erasure = new ErasureService(db, identity, {
+      const erasure = new ErasureService(db, {
         deleteEnvelopeMirrors: (fileIds) =>
           new HubShredService(db, blobStorage).deleteBlobEnvelopeMirrors(fileIds),
       })

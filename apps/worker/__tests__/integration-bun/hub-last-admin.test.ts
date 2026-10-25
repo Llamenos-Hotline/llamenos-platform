@@ -41,7 +41,7 @@ const DATABASE_URL =
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
 const settings = new SettingsService(db)
-const erasure = new ErasureService(db, identity)
+const erasure = new ErasureService(db)
 const audit = new AuditService(db)
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
