@@ -79,35 +79,40 @@ export function ivrAudioFormatError(bytes: Uint8Array): string | null {
   return 'Malformed WAV: no audio data'
 }
 
-type AudioUrlMapSource =
-  | { fetch(req: Request): Promise<Response> }
-  | { getIvrAudioList(): Promise<{ recordings: Array<{ promptType: string; language: string }> }> }
+/** An IVR prompt's hub segment in `/ivr-audio/:hubId/:promptType/:language` */
+export const IVR_HUB_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
- * The operator-uploaded prompts, as `promptType:language` → the URL a provider
- * fetches during this call: signed, and expiring within two days (#1325), so a
- * URL leaked from a provider's logs is not a lasting way to probe the hotline
+ * The path a provider fetches a prompt from. A call in a hub is handed the
+ * hub-keyed path for every prompt, including one the hub inherits from the
+ * platform default: the route resolves hub-then-default when it is fetched,
+ * so a hub that deletes its own recording falls back instead of going silent.
+ */
+export function ivrAudioMediaPath(hubId: string | undefined, promptType: string, language: string): string {
+  return hubId
+    ? `/api/ivr-audio/${hubId}/${promptType}/${language}`
+    : `/api/ivr-audio/${promptType}/${language}`
+}
+
+/**
+ * The operator-uploaded prompts a call in `hubId` plays (its own, else the
+ * platform default), as `promptType:language` → the URL a provider fetches
+ * during this call: signed, and expiring within two days (#1325), so a URL
+ * leaked from a provider's logs is not a lasting way to probe the hotline
  * (IVR_AUDIO_URL_BUCKET_SECONDS says why not sooner).
  */
 export async function buildAudioUrlMap(
-  settings: AudioUrlMapSource,
+  settings: { resolveIvrAudioList(hubId: string | undefined): Promise<{ recordings: Array<{ promptType: string; language: string }> }> },
   origin: string,
   hmacSecret: string,
+  hubId: string | undefined,
   nowMs: number = Date.now(),
 ): Promise<Record<string, string>> {
-  let recordings: Array<{ promptType: string; language: string }>
-  if ('getIvrAudioList' in settings) {
-    const result = await settings.getIvrAudioList()
-    recordings = result.recordings
-  } else {
-    const audioRes = await settings.fetch(new Request('http://do/settings/ivr-audio'))
-    const data = await audioRes.json() as { recordings: Array<{ promptType: string; language: string }> }
-    recordings = data.recordings
-  }
+  const { recordings } = await settings.resolveIvrAudioList(hubId)
   const expiresAt = ivrAudioUrlExpiry(nowMs)
   const map: Record<string, string> = {}
   for (const rec of recordings) {
-    const path = `/api/ivr-audio/${rec.promptType}/${rec.language}`
+    const path = ivrAudioMediaPath(hubId, rec.promptType, rec.language)
     map[`${rec.promptType}:${rec.language}`] = `${origin}${signIvrMediaPath(hmacSecret, path, expiresAt)}`
   }
   return map
