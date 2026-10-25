@@ -147,8 +147,14 @@ export const callSettingsSchema = z.object({
    *
    * This does NOT gate voicemail. A caller who leaves a message has chosen to
    * leave one; that recording is caller-initiated and always permitted.
+   *
+   * Deliberately NOT `.optional().default(false)`: this schema is also the PATCH
+   * body, and a default would materialise `recordCalls: false` for every client
+   * that only changed a timeout — silently turning recording off, or writing a
+   * hub override that shadows the platform value (#1643). The default (off) lives
+   * in SettingsService's DEFAULT_CALL_SETTINGS, so every read still returns it.
    */
-  recordCalls: z.boolean().optional().default(false),
+  recordCalls: z.boolean().optional(),
 })
 
 export type CallSettings = z.infer<typeof callSettingsSchema>

@@ -184,3 +184,18 @@ describe('forPatch', () => {
     expect(forPatch(z.object({ a: z.string() }).strict()).safeParse({ b: 1 }).success).toBe(false)
   })
 })
+
+describe('callSettingsSchema as the PATCH /settings/call body (#1505)', () => {
+  it('does not materialise recordCalls for a client that only changed a timeout', () => {
+    // A default here would turn recording off — or write a hub override that
+    // shadows the platform value — for every client unaware of the field.
+    expect(schemaExports.callSettingsSchema.parse({ queueTimeoutSeconds: 60 })).toEqual({
+      queueTimeoutSeconds: 60,
+    })
+    expect(schemaExports.callSettingsSchema.parse({})).toEqual({})
+  })
+
+  it('still accepts an explicit opt-in', () => {
+    expect(schemaExports.callSettingsSchema.parse({ recordCalls: true })).toEqual({ recordCalls: true })
+  })
+})
