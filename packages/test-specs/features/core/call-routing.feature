@@ -157,21 +157,21 @@ Feature: Call Routing & History
     And volunteer 2 no longer receives a ring
 
   @backend
-  Scenario: Concurrent in-app answers - exactly one volunteer wins
+  Scenario: Concurrent phone pickups - exactly one volunteer wins
     And 2 volunteers are on shift
     When a call arrives from "+15554446666"
-    And volunteers 1 and 2 answer the call in the app at the same time
-    Then exactly 1 in-app answer succeeds
-    And every other in-app answer is rejected with status 409
+    And volunteers 1 and 2 answer the call on their phones at the same time
+    Then exactly 1 answer succeeds
+    And every other answer is rejected with status 409
     And the winning volunteer owns the call
 
   @backend
   Scenario: A volunteer cannot take over a call another volunteer is on
     And 2 volunteers are on shift
     When a call arrives from "+15554447777"
-    And volunteer 1 answers the call in the app
-    And volunteer 2 answers the call in the app
-    Then the last in-app answer is rejected with status 409
+    And volunteer 1 answers the call on their phone
+    And volunteer 2 answers the call on their phone
+    Then the last answer is rejected with status 409
     And volunteer 1 can still hang up the call
 
   @backend
@@ -180,8 +180,22 @@ Feature: Call Routing & History
     And a hub member who is not on shift
     When a call arrives from "+15554448888"
     And the off-shift member answers the call in the app
-    Then the last in-app answer is rejected with status 403
+    Then the last answer is rejected with status 403
     And the call status is "ringing"
+
+  # POST /calls/:id/answer is a database write that bridges nobody. On a hub with no
+  # in-app leg for the volunteer (every cloud provider) it used to mark the call
+  # answered, hang up every phone still ringing and leave the caller on hold music
+  # until voicemail, with a callAnswered entry in the audit log asserting a pickup
+  # that never happened (#2168).
+  @backend
+  Scenario: A volunteer with no in-app leg cannot answer through the hub API
+    And 2 volunteers are on shift
+    When a call arrives from "+15554449999"
+    And volunteer 1 answers the call in the app
+    Then the last answer is rejected with status 422
+    And the call is still ringing and unanswered
+    And the hub audit log should not contain a "callAnswered" entry
 
   # ── Backend: Voicemail ────────────────────────────────────────────
 

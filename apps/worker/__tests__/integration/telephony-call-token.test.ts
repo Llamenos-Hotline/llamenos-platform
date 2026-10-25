@@ -129,8 +129,15 @@ function makeAdapter(): TelephonyAdapter {
     // /user-answer reads the winning leg's SID to cancel the other ringing legs (#1039).
     parseIncomingWebhook: vi.fn().mockImplementation(async (req: Request) => {
       const form = new URLSearchParams(await req.clone().text())
-      return { callSid: form.get('CallSid') ?? undefined, callerNumber: '', calledNumber: '' }
+      const answeredBy = form.get('AnsweredBy')
+      return {
+        callSid: form.get('CallSid') ?? undefined,
+        callerNumber: '',
+        calledNumber: '',
+        answeredByMachine: !!answeredBy && answeredBy !== 'human' && answeredBy !== 'unknown',
+      }
     }),
+    hangupResponse: vi.fn().mockReturnValue(xml('<Response><Hangup/></Response>')),
     cancelRinging: vi.fn().mockResolvedValue(undefined),
   } as unknown as TelephonyAdapter
 }
@@ -170,6 +177,15 @@ function post(app: App, path: string, token: string, callStatus?: string) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: callStatus ? `CallStatus=${callStatus}` : '',
   })
+}
+
+/** What /user-answer told the provider to do with this leg: bridge it, or end it. */
+async function legOutcome(res: Response): Promise<'bridged' | 'hung-up'> {
+  expect(res.status, 'a leg is always answered with TwiML, never a JSON error').toBe(200)
+  const body = await res.text()
+  if (body.includes('<Dial')) return 'bridged'
+  expect(body).toContain('<Hangup')
+  return 'hung-up'
 }
 
 async function seedRingingCall(callSid: string, volunteers: string[]): Promise<string[]> {
@@ -283,8 +299,7 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     const [token] = await seedRingingCall('CA-3', [V1])
 
     expect((await post(app, 'user-answer', token)).status).toBe(200)
-    const replay = await post(app, 'user-answer', token)
-    expect(replay.status).toBe(403)
+    expect(await legOutcome(await post(app, 'user-answer', token))).toBe('hung-up')
     expect(await activeRow('CA-3')).toMatchObject({ status: 'in-progress', answered_by: V1 })
   })
 
@@ -293,8 +308,9 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     const [t1, t2] = await seedRingingCall('CA-4', [V1, V2])
 
     const results = await Promise.all([post(app, 'user-answer', t1), post(app, 'user-answer', t2)])
-    expect(results.map(r => r.status).sort()).toEqual([200, 403])
-    const winner = results[0].status === 200 ? V1 : V2
+    const outcomes = await Promise.all(results.map(legOutcome))
+    expect([...outcomes].sort()).toEqual(['bridged', 'hung-up'])
+    const winner = outcomes[0] === 'bridged' ? V1 : V2
     expect(await activeRow('CA-4')).toMatchObject({ status: 'in-progress', answered_by: winner })
   })
 
@@ -311,9 +327,10 @@ describe('volunteer call token across the provider callback order (#1038)', () =
         body: `CallSid=${legSid}`,
       })
     const results = await Promise.all([answerLeg(t1, 'LEG-1'), answerLeg(t2, 'LEG-2')])
-    expect(results.map(r => r.status).sort()).toEqual([200, 403])
+    const outcomes = await Promise.all(results.map(legOutcome))
+    expect([...outcomes].sort()).toEqual(['bridged', 'hung-up'])
 
-    const winnerLeg = results[0].status === 200 ? 'LEG-1' : 'LEG-2'
+    const winnerLeg = outcomes[0] === 'bridged' ? 'LEG-1' : 'LEG-2'
     expect(adapter.cancelRinging).toHaveBeenCalledTimes(1)
     expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2'], winnerLeg)
   })
@@ -337,13 +354,37 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     const [token] = await seedRingingCall('CA-6', [V1])
     await testSql`UPDATE call_tokens SET created_at = NOW() - INTERVAL '6 minutes' WHERE token = ${token}`
 
-    expect((await post(app, 'user-answer', token)).status).toBe(403)
+    expect(await legOutcome(await post(app, 'user-answer', token))).toBe('hung-up')
     expect(await activeRow('CA-6')).toMatchObject({ status: 'ringing', answered_by: null })
   })
 
   it('rejects an unknown token', async () => {
     const app = await makeApp(makeAdapter())
     await seedRingingCall('CA-7', [V1])
-    expect((await post(app, 'user-answer', 'no-such-token')).status).toBe(403)
+    expect(await legOutcome(await post(app, 'user-answer', 'no-such-token'))).toBe('hung-up')
+    expect(await activeRow('CA-7')).toMatchObject({ status: 'ringing', answered_by: null })
+  })
+
+  it('a carrier voicemail answering first does not take the call; the volunteer who really picks up does', async () => {
+    const adapter = makeAdapter()
+    const app = await makeApp(adapter)
+    const [machineToken, humanToken] = await seedRingingCall('CA-8', [V1, V2])
+    recordRingLegs('CA-8', ['LEG-1', 'LEG-2'])
+    const answerLeg = (token: string, legSid: string, answeredBy: string) =>
+      app.request(`/api/telephony/user-answer?callToken=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `CallSid=${legSid}&AnsweredBy=${answeredBy}`,
+      })
+
+    // V1's phone is off; the carrier's voicemail picks up first.
+    expect(await legOutcome(await answerLeg(machineToken, 'LEG-1', 'machine_start'))).toBe('hung-up')
+    expect(await activeRow('CA-8')).toMatchObject({ status: 'ringing', answered_by: null })
+    expect(adapter.cancelRinging).not.toHaveBeenCalled()
+
+    // V2 is a person: they get the call, not a 403.
+    expect(await legOutcome(await answerLeg(humanToken, 'LEG-2', 'human'))).toBe('bridged')
+    expect(await activeRow('CA-8')).toMatchObject({ status: 'in-progress', answered_by: V2 })
+    expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2'], 'LEG-2')
   })
 })

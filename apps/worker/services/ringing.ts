@@ -12,6 +12,7 @@ import { hashPhone } from '../lib/crypto'
 import { resolveHubPermissions } from '@shared/permissions'
 import { listReachableVolunteerEndpoints, volunteerSipUsername } from '../telephony/registrar'
 import { AllDialsFailedError } from '../telephony/adapter'
+import { isMockProviderConfig } from '../telephony/mock'
 
 const logger = createLogger('ringing')
 
@@ -162,6 +163,16 @@ export async function resolveRingableVolunteers(
 // In-app ring targets
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether this volunteer asked to be reached in the app (`browser` or `both`).
+ * The one definition used both to pick who is rung in-app and to decide who may
+ * answer in-app, so the two can never disagree about a `phone`-only volunteer.
+ */
+export function wantsInApp(volunteer: RingableUser): boolean {
+  const pref = volunteer.callPreference ?? 'phone'
+  return pref === 'browser' || pref === 'both'
+}
+
 /** One in-app leg to ring: the volunteer, and the AOR their app registered. */
 interface InAppRingTarget {
   pubkey: string
@@ -201,7 +212,7 @@ interface InAppRingTarget {
  * per-hub row read as null, so this concluded "not our PBX" while the call
  * itself went out through the instance-wide Asterisk.
  */
-async function resolveInAppRingTargets(
+export async function resolveInAppRingTargets(
   env: Env,
   services: Services,
   hubId: string,
@@ -236,6 +247,38 @@ async function resolveInAppRingTargets(
     incCounter('llamenos_inapp_ring_errors_total', { reason: 'reachability' })
     return []
   }
+}
+
+/**
+ * Whether `POST /calls/:callId/answer` may claim a call for this volunteer.
+ *
+ * That route is a database write: it connects nobody. It is honest in exactly
+ * two situations —
+ *
+ *  - the volunteer has an in-app leg of their own ringing (their app registered
+ *    on our PBX, they asked to be reached in the app), because that leg is what
+ *    the caller is bridged to; or
+ *  - the hub is on the mock provider, whose whole purpose is a simulated call
+ *    with no PSTN leg for a tester to pick up from the app.
+ *
+ * On any other hub (every cloud provider today) it would mark the call
+ * answered, hang up the phones that are ringing and leave the caller on hold
+ * until voicemail. A volunteer there answers on their phone, and
+ * `/api/telephony/user-answer` bridges that leg.
+ *
+ * Total like `resolveInAppRingTargets`: false, never a throw, whenever the
+ * answer cannot be established.
+ */
+export async function canAnswerInApp(
+  env: Env,
+  services: Services,
+  hubId: string,
+  volunteer: RingableUser,
+): Promise<boolean> {
+  const config = await resolveHubTelephonyConfig(env, services.settings, hubId)
+  if (config && isMockProviderConfig(config)) return true
+  if (!wantsInApp(volunteer)) return false
+  return (await resolveInAppRingTargets(env, services, hubId, [volunteer])).length > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -342,10 +385,7 @@ export async function startParallelRinging(
       .map(v => ({ pubkey: v.pubkey, phone: v.phone }))
 
     // Browser/VoIP volunteers get notified via Nostr relay and VoIP push
-    const browserVoip = available.filter(v => {
-      const pref = v.callPreference ?? 'phone'
-      return pref === 'browser' || pref === 'both'
-    })
+    const browserVoip = available.filter(wantsInApp)
 
     if (available.length === 0) {
       reportUnroutableCall(callSid, hubId, 'no-available-volunteers', 'Every volunteer on shift or in the fallback group is inactive, on break, or not a member of the hub')

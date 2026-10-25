@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { TwilioAdapter } from '../../telephony/twilio'
+import { TwilioAdapter, isMachineAnsweredBy } from '../../telephony/twilio'
 import { SignalWireAdapter } from '../../telephony/signalwire'
 
 describe('TwilioAdapter', () => {
@@ -541,6 +541,38 @@ describe('TwilioAdapter', () => {
       expect(result.callSid).toBe('CA123')
       expect(result.callerNumber).toBe('+15551234567')
       expect(result.calledNumber).toBe('+15559876543')
+    })
+
+    // Legs are dialled with MachineDetection, so Twilio sends AnsweredBy on the answer URL.
+    // A carrier voicemail greeting must not read as a pickup (#2169).
+    const legAnsweredBy = async (answeredBy?: string) => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `CallSid=CA123&From=%2B15551234567${answeredBy ? `&AnsweredBy=${answeredBy}` : ''}`,
+      })
+      return (await adapter.parseIncomingWebhook(request)).answeredByMachine
+    }
+
+    it.each(['machine_start', 'machine_end_beep', 'machine_end_silence', 'machine_end_other', 'fax'])(
+      'flags AnsweredBy=%s as a machine',
+      async (answeredBy) => {
+        expect(await legAnsweredBy(answeredBy)).toBe(true)
+      },
+    )
+
+    it.each(['human', 'unknown'])('does not flag AnsweredBy=%s', async (answeredBy) => {
+      expect(await legAnsweredBy(answeredBy)).toBe(false)
+    })
+
+    it('does not flag a webhook that carries no AnsweredBy', async () => {
+      expect(await legAnsweredBy()).toBe(false)
+    })
+
+    it('treats a missing or empty AnsweredBy as not a machine', () => {
+      expect(isMachineAnsweredBy('machine_start')).toBe(true)
+      expect(isMachineAnsweredBy(null)).toBe(false)
+      expect(isMachineAnsweredBy('')).toBe(false)
     })
   })
 

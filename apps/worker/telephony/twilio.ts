@@ -23,6 +23,18 @@ import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
 /**
+ * Whether Twilio's `AnsweredBy` (sent on the answer URL because legs are
+ * dialled with `MachineDetection`) says an automated answerer picked up.
+ * `human` and `unknown` are answers: `unknown` is Twilio's "could not decide
+ * in time", and refusing it would drop a real pickup. Everything else —
+ * `machine_start`, `machine_end_beep`, `machine_end_silence`,
+ * `machine_end_other`, `fax` — is a machine. A missing value is not a machine.
+ */
+export function isMachineAnsweredBy(answeredBy: string | null | undefined): boolean {
+  return !!answeredBy && answeredBy !== 'human' && answeredBy !== 'unknown'
+}
+
+/**
  * Twilio TwiML `<Say language>` codes — the explicit, ordered list of locales
  * Twilio has a voice for. A locale absent here is not speakable on Twilio and is
  * never offered in the IVR menu (no "closest language" substitution).
@@ -367,6 +379,7 @@ export class TwilioAdapter implements TelephonyAdapter {
       callSid: form.get('CallSid') as string,
       callerNumber: form.get('From') as string,
       calledNumber: (form.get('To') as string) || undefined,
+      answeredByMachine: isMachineAnsweredBy(form.get('AnsweredBy') as string | null),
     }
   }
 

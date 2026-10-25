@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { startParallelRinging, cancelLosingLegs, recordRingLegs } from '../../services/ringing'
+import { startParallelRinging, cancelLosingLegs, recordRingLegs, canAnswerInApp } from '../../services/ringing'
 import { hashPhone } from '../../lib/crypto'
 import type { Env } from '../../types'
 import type { Services } from '../../services'
@@ -1154,5 +1154,61 @@ describe('startParallelRinging — in-app legs', () => {
     expect(reachable).not.toHaveBeenCalled()
     expect(ringArgs().appTargets).toEqual([])
     expect(incCounter).not.toHaveBeenCalledWith('llamenos_ring_legs_refused_total', expect.anything())
+  })
+})
+
+/**
+ * `POST /calls/:id/answer` is a database write that connects nobody, so it may claim a
+ * call only for a volunteer the caller can actually be bridged to in the app (#2168).
+ */
+describe('canAnswerInApp', () => {
+  const PK = 'pk-answer'
+  const AOR = volunteerSipUsername(PK)
+  const reachable = listReachableVolunteerEndpoints as unknown as ReturnType<typeof vi.fn>
+  const provider = resolveHubTelephonyConfig as unknown as ReturnType<typeof vi.fn>
+  const ask = (callPreference: string) =>
+    canAnswerInApp(makeEnv(), makeServices({ onShiftPubkeys: [PK], allUsers: [] }), 'hub-1', makeUser({ pubkey: PK, callPreference }) as never)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reachable.mockResolvedValue(new Set<string>())
+    provider.mockResolvedValue({ type: 'asterisk' })
+  })
+
+  it('is true for a volunteer whose app is registered on our PBX and who asked to be reached there', async () => {
+    reachable.mockResolvedValue(new Set([AOR]))
+    expect(await ask('both')).toBe(true)
+    expect(await ask('browser')).toBe(true)
+  })
+
+  it('is false for a phone-only volunteer, however reachable their app is', async () => {
+    reachable.mockResolvedValue(new Set([AOR]))
+    expect(await ask('phone')).toBe(false)
+  })
+
+  it('is false when the app is not registered on the PBX', async () => {
+    expect(await ask('both')).toBe(false)
+  })
+
+  it('is false on a hub whose provider is a cloud vendor — nobody there has an in-app leg', async () => {
+    provider.mockResolvedValue({ type: 'twilio' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    expect(await ask('both')).toBe(false)
+    expect(reachable).not.toHaveBeenCalled()
+  })
+
+  it('is false when the hub has no telephony provider at all', async () => {
+    provider.mockResolvedValue(null)
+    expect(await ask('both')).toBe(false)
+  })
+
+  it('is false, not a throw, when the PBX cannot be asked', async () => {
+    reachable.mockRejectedValue(new Error('PBX down'))
+    expect(await ask('both')).toBe(false)
+  })
+
+  it('is true on the mock provider for any volunteer: a simulated call has no phone leg to answer instead', async () => {
+    provider.mockResolvedValue({ type: 'mock' })
+    expect(await ask('phone')).toBe(true)
   })
 })

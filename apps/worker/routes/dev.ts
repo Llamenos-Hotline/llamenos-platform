@@ -9,6 +9,7 @@ import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
 import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
 import { seedSampleDataset } from '../services/sample-seeder'
 import { ServiceError } from '../services/settings'
+import { audit } from '../services/audit'
 import { resolveRingableVolunteers } from '../services/ringing'
 import { SAMPLE_HUB } from '../lib/sample-dataset'
 import { sampleIdentities } from '../lib/sample-identities'
@@ -914,14 +915,22 @@ dev.post('/test-simulate/answer-call', async (c) => {
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
   if (!call) return c.json({ error: 'Call not found' }, 404)
+  let answered
   try {
-    await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+    answered = await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
   } catch (err) {
     if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
       return c.json({ error: err.message }, err.status)
     }
     throw err
   }
+
+  // The simulated pickup stands in for a volunteer's phone leg being bridged
+  // (/api/telephony/user-answer), which is where the real flow writes this entry.
+  // The REST answer route no longer does for a leg it cannot bridge.
+  await audit(services.audit, 'callAnswered', body.pubkey, {
+    callerLast4: answered.callerLast4 || '',
+  }, undefined, answered.hubId || null)
 
   // Publish call update event (mirrors real telephony flow)
   // Await to ensure event is in relay before returning — prevents race conditions in E2E tests

@@ -862,6 +862,23 @@ export async function setFallbackGroupViaApi(
   if (status !== 200) throw new Error(`Failed to set fallback group: ${status}`)
 }
 
+/**
+ * Select the mock telephony provider for a hub (admin, `settings:manage-telephony`).
+ *
+ * `POST /calls/:id/answer` only claims a call on a hub that can actually connect the
+ * volunteer — an in-app leg on our PBX, or the mock provider (#2168). A test hub has no
+ * telephony provider at all, so a scenario that answers a call from the app must put the
+ * hub on the mock, exactly as a tester does. Throws if the mock is not selectable here
+ * (the host is not a test target) rather than letting the answer 422 later.
+ */
+export async function enableMockTelephonyViaApi(
+  request: APIRequestContext,
+  hubId: string,
+): Promise<void> {
+  const { status, data } = await apiPut(request, hubPath('/simulated-telephony/mock', hubId), { enabled: true })
+  if (status !== 200) throw new Error(`Failed to enable mock telephony on hub ${hubId}: ${status} ${JSON.stringify(data)}`)
+}
+
 // ── Roles CRUD ────────────────────────────────────────────────────
 
 export interface RoleDefinition {

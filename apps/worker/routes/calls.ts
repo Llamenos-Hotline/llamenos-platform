@@ -8,7 +8,7 @@ import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
-import { resolveRingableVolunteers, cancelLosingLegs } from '../services/ringing'
+import { resolveRingableVolunteers, canAnswerInApp, cancelLosingLegs } from '../services/ringing'
 import { getHubPresence } from '../services/presence'
 import { currentRingDecision } from '../services/routing-readiness'
 import { publishEvent } from '../lib/ws-events'
@@ -398,6 +398,7 @@ calls.post('/:callId/answer',
           },
         },
       },
+      422: { description: 'The hub has no in-app leg for this volunteer — answer on the phone' },
       ...authErrors,
     },
   }),
@@ -416,8 +417,18 @@ calls.post('/:callId/answer',
 
     // Only a volunteer who was actually rung for this call may answer it.
     const ringable = await resolveRingableVolunteers(services, hubId)
-    if (!ringable?.available.some(v => v.pubkey === pubkey)) {
+    const volunteer = ringable?.available.find(v => v.pubkey === pubkey)
+    if (!volunteer) {
       return c.json({ error: 'Not rung for this call' }, 403)
+    }
+
+    // This route is a database write that bridges nobody. Without an in-app leg
+    // for this volunteer it would mark the call answered, hang up every phone
+    // still ringing and leave the caller on hold music until voicemail. Refuse
+    // it; the volunteer answers on their phone, whose leg
+    // /api/telephony/user-answer bridges.
+    if (!await canAnswerInApp(c.env, services, hubId, volunteer)) {
+      return c.json({ error: 'This hub cannot connect you to the call in the app — answer on your phone' }, 422)
     }
 
     let result

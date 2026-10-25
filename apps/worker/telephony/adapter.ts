@@ -5,6 +5,14 @@ export interface WebhookCallInfo {
   callerNumber: string
   /** The called number (To / hotline number) — used for multi-hub routing */
   calledNumber?: string
+  /**
+   * True when the provider reports that an automated answerer — a carrier
+   * voicemail greeting, an answering machine, a fax — picked up an outbound
+   * volunteer leg rather than a person. Set only by providers that deliver
+   * machine detection on the answer webhook; absent means "not reported", never
+   * "human". A leg flagged here must not claim the call.
+   */
+  answeredByMachine?: boolean
 }
 
 export interface WebhookDigits {

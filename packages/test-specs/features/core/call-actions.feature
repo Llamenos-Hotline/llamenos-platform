@@ -39,7 +39,7 @@ Feature: In-Call Quick Actions
   Scenario: Answering, noting and banning a call is recorded in the hub's audit log
     And 1 volunteers are on shift
     And an incoming call is ringing for the hub
-    When volunteer 0 answers the call through the hub API
+    When volunteer 0 answers the ringing call on their phone
     And volunteer 0 creates a note for the active call
     And volunteer 0 bans and hangs up the call
     Then the hub audit log should contain a "callAnswered" entry

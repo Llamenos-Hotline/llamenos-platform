@@ -59,22 +59,15 @@ Given('an incoming call is ringing for the hub', async ({ request, world }) => {
   state.callId = callId
 })
 
-// Answers through the real hub-scoped REST endpoint (the in-app answer path),
-// not the simulation shortcut — so the route's own audit entry is exercised.
+// The phone pickup: the simulation endpoint claims the call through the same atomic
+// update as the provider's answer webhook, and records the audit entry the webhook
+// writes once the leg is bridged. The hub-scoped REST answer is not this path.
 When(
-  'volunteer {int} answers the call through the hub API',
+  'volunteer {int} answers the ringing call on their phone',
   async ({ request, world }, volIndex: number) => {
     const state = getScenarioState(world)
     expect(state.callId).toBeTruthy()
-    const res = await apiPost(
-      request,
-      `/hubs/${state.hubId}/calls/${state.callId}/answer`,
-      {},
-      state.volunteers[volIndex].deviceKey,
-    )
-    state.lastApiResponse = res
-    setLastResponse(world, res)
-    expect(res.status).toBe(200)
+    await simulateAnswerCall(request, state.callId!, state.volunteers[volIndex].pubkey)
   },
 )
 

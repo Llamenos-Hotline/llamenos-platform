@@ -218,6 +218,15 @@ Then('the hub audit log should contain a {string} entry', async ({ request, worl
   ).toBe(true)
 })
 
+Then('the hub audit log should not contain a {string} entry', async ({ request, world }, action: string) => {
+  const { hubId } = getScenarioState(world)
+  const { entries } = await listAuditLogViaApi(request, { hubId, limit: 100 })
+  expect(
+    entries.some(e => e.action === action),
+    `expected no ${action} entry in the hub audit log, got: ${entries.map(e => e.action).join(', ')}`,
+  ).toBe(false)
+})
+
 Then('the audit log should record the simulated call', async ({ request, world }) => {
   const state = getScenarioState(world)
   expect(state.callId).toBeTruthy()
