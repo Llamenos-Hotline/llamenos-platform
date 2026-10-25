@@ -16,7 +16,13 @@ ensure_ban_hash_key_file() {
   if [ -s "$file" ]; then
     return 0
   fi
-  mkdir -p "$(dirname "$file")"
+  # A directory this creates is 0700, so a file made world-readable (0444, for a
+  # container uid that is not the owner) is still unreachable to other host users;
+  # the Docker daemon (root) bind-mounts it regardless. An existing directory keeps
+  # whatever mode its owner gave it.
+  if [ ! -d "$(dirname "$file")" ]; then
+    (umask 077; mkdir -p "$(dirname "$file")")
+  fi
   tmp="$(umask 077; mktemp "$file.XXXXXX")"
   openssl rand -hex 32 > "$tmp"
   chmod "$mode" "$tmp"
