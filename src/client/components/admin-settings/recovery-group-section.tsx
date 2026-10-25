@@ -1,14 +1,12 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { LABEL_RECOVERY_GROUP_SHARE_WRAP } from '@shared/crypto-labels'
 import {
   enrollRecoveryGroup,
   type RecoveryGroupEnrollBody,
 } from '@/lib/api'
 import type { RecoveryGroupInfo } from '@protocol/schemas/recovery-group'
 import {
-  hpkeSeal,
   recoveryGroupCreate,
   sigchainCreateLinkFromState,
   getDevicePubkeys,
@@ -101,28 +99,26 @@ export function RecoveryGroupSettingsSection({
     if (hasErrors) return
     setSaving(true)
     try {
-      // 1. Generate recovery group keypair and split in Rust — private key NEVER enters JS
-      const { publicKeyHex, shares, commitments } = await recoveryGroupCreate(totalShares, threshold)
+      // 1. Resolve each selected holder's encryption pubkey
+      const holderEncryptionPubkeys = selectedHolders.map((holderPubkey) => {
+        const candidate = shareHolderCandidates.find((c) => c.pubkey === holderPubkey)
+        if (!candidate) throw new Error(`Holder ${holderPubkey} not found`)
+        return candidate.encryptionPubkey
+      })
 
-      // 2. HPKE-seal each share to the corresponding holder's encryption pubkey
-      const shareEnvelopes = await Promise.all(
-        shares.map(async (share, idx) => {
-          const holderPubkey = selectedHolders[idx]
-          const candidate = shareHolderCandidates.find((c) => c.pubkey === holderPubkey)
-          if (!candidate) throw new Error(`Holder ${holderPubkey} not found`)
-
-          const shareHex = share.x.toString(16).padStart(2, '0') + share.y
-          const envelope = await hpkeSeal(
-            shareHex,
-            candidate.encryptionPubkey,
-            LABEL_RECOVERY_GROUP_SHARE_WRAP,
-            '',
-          )
-          return { holderPubkey, envelope: JSON.stringify(envelope) }
-        }),
+      // 2. Generate the recovery group keypair, split it and seal every share to its
+      //    holder in Rust — neither the private key nor a plaintext share enters JS
+      const { publicKeyHex, shareEnvelopes: sealedShares, commitments } = await recoveryGroupCreate(
+        totalShares,
+        threshold,
+        holderEncryptionPubkeys,
       )
+      const shareEnvelopes = selectedHolders.map((holderPubkey, idx) => ({
+        holderPubkey,
+        envelope: JSON.stringify(sealedShares[idx]),
+      }))
 
-      // 4. Create sigchain link for the recovery group enrollment
+      // 3. Create sigchain link for the recovery group enrollment
       const deviceState = await getDevicePubkeys()
       if (!deviceState) throw new Error('Device not unlocked')
 
@@ -142,7 +138,7 @@ export function RecoveryGroupSettingsSection({
         sigchainPayload,
       )
 
-      // 5. Submit to server
+      // 4. Submit to server
       const body: RecoveryGroupEnrollBody = {
         hubId,
         threshold,

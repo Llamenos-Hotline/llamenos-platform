@@ -169,6 +169,65 @@ describe('desktop IPC boundary', () => {
     expect(missing).toEqual([])
   })
 
+  it('exposes no generic signer, no label-free unwrap, no plaintext-share return and no seed export (#2146, #2158)', () => {
+    // These were each the device key (or a long-lived secret) exported to the
+    // webview: sign arbitrary bytes, open any envelope, hand back every Shamir
+    // share, encrypt the seeds to a webview-chosen key. They are gone from all
+    // four places a command must exist in to work — the Rust registration, the
+    // isolation allowlist, the TS command union, and the Playwright mock.
+    const removed = ['ed25519_sign_from_state', 'provision_encrypt_for_device']
+    const platform = read('src/client/lib/platform.ts')
+    const mock = read('tests/mocks/tauri-core.ts')
+    for (const cmd of removed) {
+      expect(registeredCommands().has(cmd), `${cmd} still registered in lib.rs`).toBe(false)
+      expect(isolationAllowedCommands().app.has(cmd), `${cmd} still allowlisted`).toBe(false)
+      expect(platform, `${cmd} still in platform.ts`).not.toContain(`'${cmd}'`)
+      expect(mock, `${cmd} still in the mock`).not.toContain(cmd)
+    }
+    // No wrapper that signs a caller-supplied message.
+    expect(platform).not.toMatch(/export async function (ed25519Sign|signMessage|signBytes)\b/)
+    expect(platform).not.toMatch(/export async function provisionEncryptForDevice\b/)
+
+    // The Rust-side allow-lists are what refuse the hub key and the PUK seed; the
+    // mock must carry the same ones so the suite cannot pass against a looser surface.
+    const rust = read('apps/desktop/src/crypto.rs')
+    const rustList = (name: string) =>
+      [...(rust.match(new RegExp(`const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\];`))?.[1] ?? '').matchAll(/LABEL_[A-Z_]+/g)].map(m => m[0]).sort()
+    const mockList = (name: string) =>
+      [...(mock.match(new RegExp(`const ${name}: readonly string\\[\\] = \\[([\\s\\S]*?)\\]`))?.[1] ?? '').matchAll(/LABEL_[A-Z_]+/g)].map(m => m[0]).sort()
+    for (const name of ['OPEN_ALLOWED_LABELS', 'OPEN_KEY_ALLOWED_LABELS']) {
+      expect(rustList(name).length, `${name} not found in crypto.rs`).toBeGreaterThan(0)
+      expect(mockList(name), `${name} differs between crypto.rs and the mock`).toEqual(rustList(name))
+    }
+    for (const denied of ['LABEL_HUB_KEY_WRAP', 'LABEL_PUK_WRAP_TO_DEVICE']) {
+      expect(rustList('OPEN_ALLOWED_LABELS')).not.toContain(denied)
+      expect(rustList('OPEN_KEY_ALLOWED_LABELS')).not.toContain(denied)
+    }
+  })
+
+  it('recovery_share_contribute_from_state takes no recipient key from the webview (#2227)', () => {
+    // The command reseals an opened share, so whoever picks the recipient key picks
+    // who can read it. Rust reads it from the server's session record instead; the
+    // webview names only the session. Pinned in all three places the argument
+    // list lives so a recipient parameter cannot creep back in.
+    const rust = read('apps/desktop/src/crypto.rs')
+    const sig = rust.match(/pub async fn recovery_share_contribute_from_state\(([\s\S]*?)\) -> /)?.[1]
+    expect(sig, 'recovery_share_contribute_from_state not found in crypto.rs').toBeDefined()
+    const params = [...(sig ?? '').matchAll(/^\s*(\w+):/gm)].map(m => m[1])
+    expect(params).toEqual(['app', 'state', 'pinned', 'envelope', 'commitment_hex', 'session_id'])
+
+    const platform = read('src/client/lib/platform.ts')
+    const wrapper = platform.match(/export async function recoveryShareContribute\(([\s\S]*?)\): Promise/)?.[1] ?? ''
+    expect(wrapper).not.toMatch(/pubkey/i)
+    const invoke = platform.match(/'recovery_share_contribute_from_state', \{([\s\S]*?)\}\)/)?.[1] ?? ''
+    expect(invoke).not.toMatch(/pubkey/i)
+
+    const mock = read('tests/mocks/tauri-core.ts')
+    const handler = mock.match(/recovery_share_contribute_from_state: async \(a\) => \{([\s\S]*?)\n  \},/)?.[1] ?? ''
+    expect(handler).not.toMatch(/a\.(newDevicePubkey|recipient)/)
+    expect(handler).toContain('/api/recovery-group/session/')
+  })
+
   it('the net proxy and backend-address commands are allowlisted for packaged builds', () => {
     const allowed = isolationAllowedCommands().app
     for (const cmd of [

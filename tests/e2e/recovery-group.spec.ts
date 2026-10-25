@@ -37,6 +37,37 @@ async function mockRecoveryGroupApis(page: import('@playwright/test').Page) {
   })
 }
 
+type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
+
+interface CreatedGroup {
+  publicKeyHex: string
+  shareEnvelopes: unknown[]
+  commitments: string[]
+}
+
+/**
+ * Load a device, then create a 3-of-2 recovery group whose three shares are all
+ * sealed to that device's own encryption key — enough to exercise the
+ * create → contribute path. `recovery_group_create` needs the holders' pubkeys, and
+ * the device has to be loaded for `recovery_share_contribute_from_state` to open one.
+ */
+async function createGroup(page: import('@playwright/test').Page): Promise<{ me: string; group: CreatedGroup }> {
+  return page.evaluate(async () => {
+    const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+    const device = (await invoke('device_generate_and_load', {
+      pin: '12345678',
+      deviceId: crypto.randomUUID(),
+    })) as { state: { encryptionPubkeyHex: string } }
+    const me = device.state.encryptionPubkeyHex
+    const group = (await invoke('recovery_group_create', {
+      total: 3,
+      threshold: 2,
+      holderEncryptionPubkeys: [me, me, me],
+    })) as CreatedGroup
+    return { me, group }
+  })
+}
+
 test.describe('Recovery Group - Admin Configuration', () => {
   test.beforeEach(async ({ page }) => {
     await mockConfigWithHub(page)
@@ -165,98 +196,165 @@ test.describe('Recovery Group - IPC Mock Verification', () => {
     )
   }
 
-  test('recovery_group_create produces valid shares with verifiable commitments', async ({ page }) => {
-    await waitForInvoke(page)
-
-    const result = await page.evaluate(async () => {
-      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as
-        (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
-
-      // Use recovery_group_create instead of standalone shamir_split
-      // (shamir_split/shamir_combine are no longer exposed as IPC — secrets must not pass through JS)
-      const group = (await invoke('recovery_group_create', {
-        total: 3,
-        threshold: 2,
-      })) as { publicKeyHex: string; shares: Array<{ x: number; y: string }>; commitments: string[] }
-
-      const commitment0 = (await invoke('shamir_commit', {
-        x: group.shares[0].x,
-        yHex: group.shares[0].y,
-      })) as string
-
-      const verified = (await invoke('shamir_verify', {
-        x: group.shares[0].x,
-        yHex: group.shares[0].y,
-        commitmentHex: commitment0,
-      })) as boolean
-
-      return {
-        hasPublicKey: group.publicKeyHex.length === 64,
-        commitmentMatches: commitment0 === group.commitments[0],
-        commitmentVerified: verified,
-        shareCount: group.shares.length,
-        commitmentCount: group.commitments.length,
-      }
+  /**
+   * Serve a recovery session record from the backend route Rust reads it from.
+   * `requests` collects the auth header of every fetch, so a test can see that
+   * Rust (not the page) made an authenticated request.
+   */
+  async function serveSession(
+    page: import('@playwright/test').Page,
+    session: { sessionId: string; status: string; newDevicePubkey: string },
+  ): Promise<string[]> {
+    const authHeaders: string[] = []
+    await page.route(`**/api/recovery-group/session/${session.sessionId}`, async (route) => {
+      authHeaders.push(route.request().headers()['authorization'] ?? '')
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(session),
+      })
     })
+    return authHeaders
+  }
 
-    expect(result.hasPublicKey).toBe(true)
-    expect(result.commitmentMatches).toBe(true)
-    expect(result.commitmentVerified).toBe(true)
-    expect(result.shareCount).toBe(3)
-    expect(result.commitmentCount).toBe(3)
+  test('recovery_group_create seals every share and each opens only against its own commitment', async ({ page }) => {
+    await waitForInvoke(page)
+    const { me, group } = await createGroup(page)
+    const authHeaders = await serveSession(page, { sessionId: 'sess-1', status: 'verified', newDevicePubkey: me })
+
+    const result = await page.evaluate(async ({ group }) => {
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      const attempt = async (commitmentHex: string) => {
+        try {
+          return {
+            ok: (await invoke('recovery_share_contribute_from_state', {
+              envelope: group.shareEnvelopes[0],
+              commitmentHex,
+              sessionId: 'sess-1',
+            })) as { encryptedShare: string; signature: string },
+          }
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : String(e) }
+        }
+      }
+      return {
+        own: await attempt(group.commitments[0]),
+        otherShare: await attempt(group.commitments[1]),
+        zeros: await attempt('0'.repeat(64)),
+      }
+    }, { group })
+
+    expect(group.publicKeyHex).toHaveLength(64)
+    expect(group.shareEnvelopes).toHaveLength(3)
+    expect(group.commitments).toHaveLength(3)
+    // The share verifies against ITS commitment and yields a sealed contribution + signature.
+    expect(result.own.ok?.signature).toMatch(/^[0-9a-f]{128}$/)
+    expect(typeof result.own.ok?.encryptedShare).toBe('string')
+    // A different share's commitment, or a made-up one, is refused.
+    expect(result.otherShare.error).toMatch(/commitment/)
+    expect(result.zeros.error).toMatch(/commitment/)
+    // The session was read by the command itself, authenticated with the device key.
+    expect(authHeaders.length).toBeGreaterThan(0)
+    expect(authHeaders.every((h) => h.startsWith('Bearer '))).toBe(true)
   })
 
-  test('recovery_group_create generates keypair and splits without leaking private key', async ({ page }) => {
+  test('recovery_share_contribute_from_state takes the recipient from the server session — an injected one is ignored', async ({ page }) => {
     await waitForInvoke(page)
+    const { me, group } = await createGroup(page)
+    // The server's record names a recipient that cannot be sealed to. If the command
+    // used any key the caller passed instead, the call would succeed with `me`.
+    await serveSession(page, { sessionId: 'sess-1', status: 'verified', newDevicePubkey: 'not-an-x25519-key' })
 
-    const result = await page.evaluate(async () => {
-      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as
-        (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
-
-      const group = (await invoke('recovery_group_create', { total: 3, threshold: 2 })) as {
-        publicKeyHex: string
-        shares: Array<{ x: number; y: string }>
-        commitments: string[]
+    const error = await page.evaluate(async ({ group, me }) => {
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      try {
+        await invoke('recovery_share_contribute_from_state', {
+          envelope: group.shareEnvelopes[0],
+          commitmentHex: group.commitments[0],
+          sessionId: 'sess-1',
+          // A hostile webview offers a perfectly valid recipient, under every plausible name.
+          newDevicePubkeyHex: me,
+          newDevicePubkey: me,
+          recipientPubkeyHex: me,
+        })
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
       }
+    }, { group, me })
 
-      return {
-        hasPublicKey: group.publicKeyHex.length === 64,
-        noPrivateKey: !('privateKeyHex' in group),
-        shareCount: group.shares.length,
-        commitmentCount: group.commitments.length,
-      }
-    })
-
-    expect(result.hasPublicKey).toBe(true)
-    expect(result.noPrivateKey).toBe(true)
-    expect(result.shareCount).toBe(3)
-    expect(result.commitmentCount).toBe(3)
+    expect(error).not.toBeNull()
   })
 
-  test('shamir verify rejects invalid commitment', async ({ page }) => {
+  test('recovery_share_contribute_from_state refuses sessions the server would not accept', async ({ page }) => {
+    await waitForInvoke(page)
+    const { me, group } = await createGroup(page)
+    await serveSession(page, { sessionId: 'sess-pending', status: 'pending', newDevicePubkey: me })
+
+    const errors = await page.evaluate(async ({ group }) => {
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      const attempt = async (sessionId: string) => {
+        try {
+          await invoke('recovery_share_contribute_from_state', {
+            envelope: group.shareEnvelopes[0],
+            commitmentHex: group.commitments[0],
+            sessionId,
+          })
+          return null
+        } catch (e) {
+          return e instanceof Error ? e.message : String(e)
+        }
+      }
+      return { pending: await attempt('sess-pending'), traversal: await attempt('../hubs') }
+    }, { group })
+
+    expect(errors.pending).toMatch(/pending/)
+    expect(errors.traversal).toMatch(/Invalid recovery session id/)
+  })
+
+  test('recovery_group_create returns no private key and no plaintext shares', async ({ page }) => {
+    await waitForInvoke(page)
+    const { group } = await createGroup(page)
+
+    expect(Object.keys(group).sort()).toEqual(['commitments', 'publicKeyHex', 'shareEnvelopes'])
+    expect(JSON.stringify(group)).not.toContain('privateKeyHex')
+  })
+
+  test('recovery_group_create refuses a holder list that does not match the share count', async ({ page }) => {
+    await waitForInvoke(page)
+
+    const error = await page.evaluate(async () => {
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      try {
+        await invoke('recovery_group_create', { total: 3, threshold: 2, holderEncryptionPubkeys: [] })
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    })
+
+    expect(error).toMatch(/one holder pubkey is required per share/)
+  })
+
+  test('shamir verify accepts a share against its commitment and rejects any other', async ({ page }) => {
     await waitForInvoke(page)
 
     const result = await page.evaluate(async () => {
-      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as
-        (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
-
-      // Use recovery_group_create to get shares (shamir_split no longer exposed as IPC)
-      const group = (await invoke('recovery_group_create', {
-        total: 3,
-        threshold: 2,
-      })) as { publicKeyHex: string; shares: Array<{ x: number; y: string }>; commitments: string[] }
-
-      const badCommitment = '0'.repeat(64)
-      const rejected = (await invoke('shamir_verify', {
-        x: group.shares[0].x,
-        yHex: group.shares[0].y,
-        commitmentHex: badCommitment,
-      })) as boolean
-
-      return { rejected }
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      // `shamir_commit`/`shamir_verify` are the only Shamir IPC left: public-value
+      // checks over a share the caller already holds (an approver's own).
+      const yHex = '11'.repeat(32)
+      const commitment = (await invoke('shamir_commit', { x: 1, yHex })) as string
+      return {
+        accepts: (await invoke('shamir_verify', { x: 1, yHex, commitmentHex: commitment })) as boolean,
+        wrongCommitment: (await invoke('shamir_verify', { x: 1, yHex, commitmentHex: '0'.repeat(64) })) as boolean,
+        wrongShare: (await invoke('shamir_verify', { x: 2, yHex, commitmentHex: commitment })) as boolean,
+      }
     })
 
-    expect(result.rejected).toBe(false)
+    expect(result.accepts).toBe(true)
+    expect(result.wrongCommitment).toBe(false)
+    expect(result.wrongShare).toBe(false)
   })
 })
 
@@ -269,34 +367,16 @@ test.describe('Epic C - Key Isolation & Wipe Completeness', () => {
     )
   }
 
-  test('recovery group create does not expose private key to webview', async ({ page }) => {
+  test('recovery group create does not expose the private key or a plaintext share to the webview', async ({ page }) => {
     await waitForInvoke(page)
+    const { group } = await createGroup(page)
 
-    const result = await page.evaluate(async () => {
-      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as
-        (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
-
-      const createResult = (await invoke('recovery_group_create', {
-        total: 3,
-        threshold: 2,
-      })) as { publicKeyHex: string; shares: Array<{ x: number; y: string }>; commitments: string[] }
-
-      // The result should contain publicKeyHex, shares, and commitments but NO privateKeyHex
-      const resultJson = JSON.stringify(createResult)
-      return {
-        hasPublicKey: createResult.publicKeyHex.length === 64,
-        hasShares: createResult.shares.length === 3,
-        hasCommitments: createResult.commitments.length === 3,
-        noPrivateKeyField: !('privateKeyHex' in createResult),
-        noPrivateKeyInJson: !resultJson.includes('privateKeyHex'),
-      }
-    })
-
-    expect(result.hasPublicKey).toBe(true)
-    expect(result.hasShares).toBe(true)
-    expect(result.hasCommitments).toBe(true)
-    expect(result.noPrivateKeyField).toBe(true)
-    expect(result.noPrivateKeyInJson).toBe(true)
+    expect(group.publicKeyHex).toHaveLength(64)
+    expect(group.shareEnvelopes).toHaveLength(3)
+    expect(group.commitments).toHaveLength(3)
+    expect('privateKeyHex' in group).toBe(false)
+    expect(JSON.stringify(group)).not.toContain('privateKeyHex')
+    expect('shares' in group).toBe(false)
   })
 
   test('device wipe clears mock vault state', async ({ page }) => {

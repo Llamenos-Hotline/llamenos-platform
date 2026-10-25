@@ -51,7 +51,7 @@ export type TauriIpcCommand =
   | 'get_device_pubkeys'
   | 'create_auth_token_from_state'
   | 'create_nonceless_auth_token_from_state'
-  | 'ed25519_sign_from_state'
+  | 'sign_ws_challenge_from_state'
   | 'ed25519_verify'
   | 'hpke_seal'
   | 'hpke_open_from_state'
@@ -76,6 +76,7 @@ export type TauriIpcCommand =
   | 'shamir_commit'
   | 'shamir_verify'
   | 'recovery_group_create'
+  | 'recovery_share_contribute_from_state'
   | 'recovery_group_reconstruct_from_shares'
   | 'recovery_group_decrypt'
   | 'device_import_and_load'
@@ -85,7 +86,6 @@ export type TauriIpcCommand =
   | 'backup_verify_credential'
   | 'restore_backup_and_load'
   | 'wipe_keys'
-  | 'provision_encrypt_for_device'
   | 'provision_create_session'
   | 'provision_compute_sas'
   | 'provision_decrypt_and_import'
@@ -324,12 +324,18 @@ export async function createNoncelessAuthToken(
 
 // ── Ed25519 signing/verification ────────────────────────────────────
 
-/** Sign a hex-encoded message using the device's Ed25519 key. */
-export async function ed25519Sign(messageHex: string): Promise<string> {
+/**
+ * Sign the relay WebSocket auth challenge with the device's Ed25519 key.
+ *
+ * Purpose-bound: Rust builds the signed message (`LABEL_WS_CHALLENGE:pubkey:nonce:ts`)
+ * itself, so the webview cannot get the device key to sign anything else. There is
+ * deliberately no generic "sign these bytes" wrapper — it would be the key, exported.
+ */
+export async function signWsChallenge(nonce: string, ts: number): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('ed25519_sign_from_state', { messageHex })
+    return tauriInvoke<string>('sign_ws_challenge_from_state', { nonce, ts })
   }
-  throw new Error('WASM ed25519 sign not yet implemented')
+  throw new Error('WASM ws challenge sign not yet implemented')
 }
 
 /** Verify an Ed25519 signature (stateless — no secrets needed). */
@@ -376,6 +382,9 @@ export async function hpkeSeal(
 
 /**
  * HPKE open: decrypt an envelope using the device's X25519 key from CryptoState.
+ *
+ * Rust refuses every label except the platform-role name/description labels, so
+ * this cannot be used to open the hub-key, PUK or recovery-share envelopes.
  */
 export async function hpkeOpenFromState(
   envelope: HpkeEnvelope,
@@ -413,7 +422,10 @@ export async function hpkeSealKey(
 }
 
 /**
- * HPKE open a 32-byte key from an envelope using CryptoState.
+ * HPKE open a 32-byte PER-ITEM content key (note, message or call record).
+ *
+ * Rust refuses every other label, so this cannot be used to open the hub-key or
+ * PUK seed envelopes.
  */
 export async function hpkeOpenKeyFromState(
   envelope: HpkeEnvelope,
@@ -1392,28 +1404,6 @@ export async function generateEphemeralKeypair(): Promise<EphemeralKeyPair> {
 
 // ── Device provisioning (device key NEVER enters the webview) ────────────
 
-/** Result of primary device encrypting its signing seed for a new device. */
-export interface ProvisioningEncryptResult {
-  encryptedHex: string
-  sasCode: string
-  primaryEncPubkeyHex: string
-}
-
-/**
- * Primary device: encrypt signing seed for a new device's ephemeral pubkey.
- * Uses CryptoState's X25519 encryption seed for ECDH — device key NEVER enters JS.
- */
-export async function provisionEncryptForDevice(
-  ephemeralPubkeyHex: string,
-): Promise<ProvisioningEncryptResult> {
-  if (useTauri) {
-    return tauriInvoke<ProvisioningEncryptResult>('provision_encrypt_for_device', {
-      ephemeralPubkeyHex,
-    })
-  }
-  throw new Error('WASM provision_encrypt_for_device not yet implemented')
-}
-
 /**
  * New device: generate an ephemeral X25519 keypair for provisioning.
  * The secret is stored in Rust CryptoState — only the pubkey is returned.
@@ -1467,17 +1457,6 @@ export async function provisionDecryptAndImport(
 // ── Recovery group crypto ─────────────────────────────────────────────
 
 /** A Shamir secret share: x-index and y-value as hex. */
-export interface ShamirShare {
-  x: number
-  y: string // hex
-}
-
-/** Result of Shamir splitting a secret. */
-export interface ShamirSplitResult {
-  shares: ShamirShare[]
-  commitments: string[] // SHA-256 hex commitments
-}
-
 // shamirSplit and shamirCombine removed — secret material must not pass through the JS bridge.
 // Use recoveryGroupCreate (split) and recoveryGroupReconstructFromShares (combine) instead,
 // which keep all secret material in Rust CryptoState.
@@ -1500,25 +1479,66 @@ export async function shamirVerify(x: number, yHex: string, commitmentHex: strin
 
 // ── H16: Recovery group key isolation (combine+decrypt stays in Rust) ──
 
-/** Result of recovery_group_create — private key NEVER leaves Rust. */
+/** Result of recovery_group_create — neither the private key nor a plaintext share leaves Rust. */
 export interface RecoveryGroupCreateResult {
   publicKeyHex: string
-  shares: ShamirShare[]
+  /** One HPKE envelope per holder, in `holderEncryptionPubkeys` order. */
+  shareEnvelopes: HpkeEnvelope[]
   commitments: string[]
 }
 
 /**
- * Generate an X25519 recovery group keypair and immediately Shamir-split it.
- * The private key is split inside Rust and NEVER enters JavaScript.
+ * Generate an X25519 recovery group keypair, Shamir-split it, and seal each share
+ * to its holder's encryption pubkey — all inside Rust. Neither the private key nor
+ * any plaintext share enters JavaScript.
  */
 export async function recoveryGroupCreate(
   total: number,
   threshold: number,
+  holderEncryptionPubkeys: string[],
 ): Promise<RecoveryGroupCreateResult> {
   if (useTauri) {
-    return tauriInvoke<RecoveryGroupCreateResult>('recovery_group_create', { total, threshold })
+    return tauriInvoke<RecoveryGroupCreateResult>('recovery_group_create', {
+      total,
+      threshold,
+      holderEncryptionPubkeys,
+    })
   }
   throw new Error('WASM recovery group create not yet implemented')
+}
+
+/** The error `recovery_share_contribute_from_state` raises when the share fails its commitment (mirrors crypto.rs). */
+export const RECOVERY_SHARE_COMMITMENT_MISMATCH = 'Share does not match its commitment'
+
+/** A share contribution ready to submit: the sealed share and the contributor's signature. */
+export interface RecoveryShareContribution {
+  /** Serialized HPKE envelope — submit verbatim; the signature covers these exact bytes. */
+  encryptedShare: string
+  signature: string
+}
+
+/**
+ * Approve a recovery session: Rust opens this device's share, checks it against its
+ * commitment, seals it to the recovering user's new device and signs the result.
+ * The plaintext share never enters JavaScript.
+ *
+ * The recipient is deliberately NOT a parameter: Rust fetches the session from the
+ * backend itself and seals to the `newDevicePubkey` the server holds for it, so a
+ * compromised webview cannot choose the key a share is sealed to.
+ */
+export async function recoveryShareContribute(
+  envelope: HpkeEnvelope,
+  commitmentHex: string,
+  sessionId: string,
+): Promise<RecoveryShareContribution> {
+  if (useTauri) {
+    return tauriInvoke<RecoveryShareContribution>('recovery_share_contribute_from_state', {
+      envelope,
+      commitmentHex,
+      sessionId,
+    })
+  }
+  throw new Error('WASM recovery share contribute not yet implemented')
 }
 
 /** Encrypted share envelope for recovery group reconstruction. */

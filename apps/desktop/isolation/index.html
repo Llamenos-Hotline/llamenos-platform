@@ -44,8 +44,8 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'hpke_seal_key',
     'hpke_open_from_state',
     'hpke_open_key_from_state',
-    // Ed25519 signing/verification
-    'ed25519_sign_from_state',
+    // Ed25519 signing is purpose-bound (no generic signer); verification is public-key-only
+    'sign_ws_challenge_from_state',
     'ed25519_verify',
     // PUK (Per-User Key)
     'puk_create_from_state',
@@ -71,7 +71,6 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // SAS emoji verification
     'derive_sas',
     // Device provisioning (signing seed never enters the webview)
-    'provision_encrypt_for_device',
     'provision_create_session',
     'provision_compute_sas',
     'provision_decrypt_and_import',
@@ -89,8 +88,9 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // Shamir verification (split/combine are internal-only — secrets never enter JS)
     'shamir_commit',
     'shamir_verify',
-    // H16: Recovery group key isolation — private key never enters JS
+    // H16: Recovery group key isolation — private key AND plaintext shares never enter JS
     'recovery_group_create',
+    'recovery_share_contribute_from_state',
     'recovery_group_reconstruct_from_shares',
     'recovery_group_decrypt',
     // Window plugin commands (window management + tray toggle)
