@@ -182,12 +182,13 @@ function setup() {
 describe('IdentityService.deleteUser', () => {
   it('calls db.delete for the given pubkey', async () => {
     const { db, service } = setup()
+    db.$setSelectResults([[makeUserRow()], []]) // the user, then the role catalog
 
     await service.deleteUser('pk-1')
     expect(db.delete).toHaveBeenCalled()
   })
 
-  it('resolves without error (no existence check)', async () => {
+  it('resolves without error when the user does not exist', async () => {
     const { service } = setup()
     await expect(service.deleteUser('nonexistent')).resolves.toBeUndefined()
   })
@@ -305,7 +306,7 @@ describe('IdentityService.removeHubRole', () => {
   it('does not enqueue a duplicate when a job is already queued for that hub', async () => {
     const { db, service } = setup()
     const user = makeUserRow({ hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] })
-    db.$setSelectResults([[user], [{ id: 'job-already-queued' }]])
+    db.$setSelectResults([[user], [], [{ id: 'job-already-queued' }]]) // user, role catalog (hub-admin guard), pending job
     db.$setUpdateResult([{ ...user, hubRoles: [] }])
 
     await service.removeHubRole({ pubkey: 'pk-1', hubId: 'hub-1' })

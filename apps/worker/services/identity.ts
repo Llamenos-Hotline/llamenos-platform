@@ -49,6 +49,7 @@ import {
   type Role,
 } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, mergeHubRole } from '../lib/hub-admin'
 
 const log = createLogger('services.identity')
 
@@ -253,27 +254,6 @@ function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
   }
 }
 
-/**
- * Add a hub grant to a user's hubRoles, preserving every other hub.
- *
- * A second invite into a hub the user already belongs to unions the roles
- * rather than replacing them, so redeeming one can never take a role away.
- */
-function mergeHubRole(
-  hubRoles: NonNullable<User['hubRoles']>,
-  hubId: string,
-  roleIds: string[],
-): NonNullable<User['hubRoles']> {
-  const merged = hubRoles.map(hr => ({ ...hr, roleIds: [...hr.roleIds] }))
-  const existing = merged.find(hr => hr.hubId === hubId)
-  if (existing) {
-    existing.roleIds = [...new Set([...existing.roleIds, ...roleIds])]
-  } else {
-    merged.push({ hubId, roleIds: [...roleIds] })
-  }
-  return merged
-}
-
 /** Map a DB session row to ServerSession interface */
 function rowToSession(row: typeof sessions.$inferSelect): ServerSession {
   return {
@@ -404,12 +384,18 @@ export class IdentityService {
 
   /**
    * Every admin X25519 recipient for an envelope set: `adminDecryptionPubkey`
-   * (`ADMIN_DECRYPTION_PUBKEY`) plus the registered device keys of each active
-   * super-admin. The one definition of "a key an admin holds" — server-sealed
-   * records are wrapped to it, and client-sealed ones are checked against it.
+   * (`ADMIN_DECRYPTION_PUBKEY`, the escrow key) plus the registered device keys
+   * of every admin of `hubId` — the members holding an admin role in it, the
+   * same predicate the last-admin invariant counts with (`lib/hub-admin.ts`).
+   * Super-admins are never recipients (D1, #2190): they are zero-knowledge. A
+   * record with no hub, or a server-sealed one with no hub of its own, has no hub
+   * admins, so only the escrow key.
+   *
+   * The one definition of "a key an admin holds": server-sealed records are
+   * wrapped to it, and client-sealed ones are checked against it.
    */
-  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined): Promise<string[]> {
-    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await this.listActiveSuperAdminPubkeys())
+  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined, hubId?: string): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await listAdminPubkeys(this.db, hubId))
   }
 
   /**
@@ -714,11 +700,28 @@ export class IdentityService {
     }
     updates.updatedAt = new Date()
 
-    const [row] = await this.db
-      .update(users)
-      .set(updates)
-      .where(eq(users.pubkey, pubkey))
-      .returning()
+    // Rewriting hubRoles, or deactivating, can take away admin authority; those
+    // updates run under the admin invariant (#2126, #2190). Global `roles` carry
+    // none: only a role held in a hub makes a user an admin of it.
+    const touchesAdminAuthority = updates.hubRoles !== undefined || updates.active === false
+    const [row] = touchesAdminAuthority
+      ? await this.db.transaction(async (tx) => {
+          const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
+          if (!current) throw new ServiceError(404, 'Not found')
+          await assertHubsKeepAnAdmin(
+            tx,
+            pubkey,
+            adminStateOf(current),
+            adminStateOf({
+              active: updates.active ?? current.active,
+              status: current.status,
+              hubRoles: updates.hubRoles ?? current.hubRoles,
+            }),
+            updates.active === false ? 'deactivate this user' : 'change this user\'s roles',
+          )
+          return tx.update(users).set(updates).where(eq(users.pubkey, pubkey)).returning()
+        })
+      : await this.db.update(users).set(updates).where(eq(users.pubkey, pubkey)).returning()
 
     if (!row) throw new ServiceError(404, 'Not found')
     return { volunteer: sanitizeUser(scopeToHub(rowToUser(row), hubId)) }
@@ -728,7 +731,12 @@ export class IdentityService {
    * Delete (hard-remove) a volunteer. Cascading FKs clean up sessions, creds, devices.
    */
   async deleteUser(pubkey: string): Promise<void> {
-    await this.db.delete(users).where(eq(users.pubkey, pubkey))
+    await this.db.transaction(async (tx) => {
+      const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
+      if (!current) return
+      await assertHubsKeepAnAdmin(tx, pubkey, adminStateOf(current), null, 'delete this user')
+      await tx.delete(users).where(eq(users.pubkey, pubkey))
+    })
   }
 
   // =========================================================================
@@ -749,13 +757,22 @@ export class IdentityService {
       if (rows.length === 0) throw new ServiceError(404, 'User not found')
 
       const vol = rowToUser(rows[0])
-      const hubRoles = vol.hubRoles ?? []
-      const idx = hubRoles.findIndex(hr => hr.hubId === data.hubId)
-      if (idx >= 0) {
-        hubRoles[idx].roleIds = data.roleIds
-      } else {
-        hubRoles.push({ hubId: data.hubId, roleIds: data.roleIds })
-      }
+      const priorRoles = vol.hubRoles ?? []
+      // Built without mutating `priorRoles`: the guard below compares against
+      // what is stored, and the row's array is the same object.
+      const hubRoles = priorRoles.some(hr => hr.hubId === data.hubId)
+        ? priorRoles.map(hr => (hr.hubId === data.hubId ? { ...hr, roleIds: data.roleIds } : hr))
+        : [...priorRoles, { hubId: data.hubId, roleIds: data.roleIds }]
+
+      // Replacing the roles is how an admin is demoted: refuse if this
+      // user is the hub's last admin (#2126).
+      await assertHubsKeepAnAdmin(
+        tx,
+        data.pubkey,
+        adminStateOf(rows[0]),
+        adminStateOf({ ...rows[0], hubRoles }),
+        'change this member\'s role',
+      )
 
       const [row] = await tx
         .update(users)
@@ -814,6 +831,16 @@ export class IdentityService {
       const vol = rowToUser(rows[0])
       const priorRoles = vol.hubRoles ?? []
       const hubRoles = priorRoles.filter(hr => hr.hubId !== data.hubId)
+
+      // Refuse before any write, including the revocation job below: a refused
+      // removal must leave no trace (#2126).
+      await assertHubsKeepAnAdmin(
+        tx,
+        data.pubkey,
+        adminStateOf(rows[0]),
+        adminStateOf({ ...rows[0], hubRoles }),
+        'remove this member from the hub',
+      )
 
       const [row] = await tx
         .update(users)

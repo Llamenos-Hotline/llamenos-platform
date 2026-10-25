@@ -88,11 +88,15 @@ describe('ErasureService.createSelfRequest — co-approver admin check (H01)', (
       coApproverSignature: 'sig',
       cancelledAt: null,
     }
-    ;(service as any).db = {
+    const stubDb = {
+      // The hub-admin invariant (#2126) looks the requester up first, under a row lock; no row means no hubs to protect
+      select: () => ({ from: () => ({ where: () => ({ for: () => ({ limit: () => Promise.resolve([]) }) }) }) }),
       insert: () => ({
         values: () => ({ returning: () => Promise.resolve([fakeRow]) }),
       }),
+      transaction: <T>(cb: (tx: unknown) => Promise<T>) => cb(stubDb),
     }
+    ;(service as any).db = stubDb
     const ts = new Date().toISOString()
     const emergency = makeSignedEmergency(pubKey, ts)
 

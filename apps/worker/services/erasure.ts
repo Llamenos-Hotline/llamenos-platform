@@ -24,6 +24,7 @@ import {
   retentionPlatformFloors,
 } from '../db/schema'
 import { ServiceError } from './settings'
+import { adminStateOf, assertHubsKeepAnAdmin } from '../lib/hub-admin'
 import { createLogger } from '../lib/logger'
 import type { AuditService } from './audit'
 import type { IdentityService } from './identity'
@@ -230,22 +231,53 @@ export class ErasureService {
 
     const executeAt = new Date(Date.now() + effectiveDelayHours * 60 * 60 * 1000)
 
-    const [row] = await this.db
-      .insert(erasureRequests)
-      .values({
-        userId,
-        status: 'pending',
-        requestedBy: userId,
-        requestedAt: new Date(),
-        executeAt,
-        justification: justification ?? null,
-        emergencyOverride: isEmergency,
-        coApproverPubkey: emergency?.coApproverPubkey ?? null,
-        coApproverSignature: emergency?.coApproverSignature ?? null,
-      })
-      .returning()
+    // Erasure of a hub's only admin is refused until a handover (#2126). Checked
+    // here so the person is told when they ask rather than 72 hours later, and
+    // under the hub's admin-set lock so a peer cannot be removed between the
+    // check and the insert — once the request exists, the requester no longer
+    // counts as an admin, which is what protects the hub from then on.
+    return this.db.transaction(async (tx) => {
+      await this.assertErasureKeepsHubAdmins(tx, userId)
 
-    return row
+      const [row] = await tx
+        .insert(erasureRequests)
+        .values({
+          userId,
+          status: 'pending',
+          requestedBy: userId,
+          requestedAt: new Date(),
+          executeAt,
+          justification: justification ?? null,
+          emergencyOverride: isEmergency,
+          coApproverPubkey: emergency?.coApproverPubkey ?? null,
+          coApproverSignature: emergency?.coApproverSignature ?? null,
+        })
+        .returning()
+
+      return row
+    })
+  }
+
+  /**
+   * Erasing an account removes it from every hub it administers, so the hub-admin
+   * invariant (#2126) applies: if the user is the only admin of any hub the
+   * erasure is refused with a 409 naming the hub, and succeeds once another
+   * active admin exists there. Erasure is deferred, not denied — the subject
+   * (or an operator) makes someone else an admin, or deletes the hub, and
+   * retries.
+   */
+  private async assertErasureKeepsHubAdmins(tx: Pick<Database, 'select' | 'execute'>, userId: string): Promise<void> {
+    // Row lock, as on every other guarded path: the guard locks the hubs named in
+    // this row, so it must not be a snapshot a concurrent grant can outdate.
+    const [current] = await tx.select().from(users).where(eq(users.pubkey, userId)).for('update').limit(1)
+    if (!current) return
+    await assertHubsKeepAnAdmin(
+      tx,
+      userId,
+      adminStateOf(current),
+      { active: false, status: 'erased', hubRoles: [] },
+      'erase this account',
+    )
   }
 
   async cancelSelfRequest(userId: string): Promise<void> {
@@ -518,6 +550,10 @@ export class ErasureService {
     const reEncryptionJobIds: string[] = []
 
     await this.db.transaction(async (tx) => {
+      // First: if this account is the only admin of a hub, nothing below runs
+      // and nothing is half-erased (#2126).
+      await this.assertErasureKeepsHubAdmins(tx, userId)
+
       // Exclusive per-user audit-key lock, held to commit. Key creation
       // (ensureAuditUserKey) and every audit append for this user
       // (lockAuditActor) take the same lock, so neither can interleave with
