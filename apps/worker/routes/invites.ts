@@ -5,14 +5,13 @@ import { checkRateLimit } from '../lib/helpers'
 import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { verifyAuthToken, consumeAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
-import { requirePermission } from '../middleware/permission-guard'
 import { redeemInviteBodySchema, createInviteBodySchema, inviteResponseSchema, inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
-import { createEntityRouter } from '../lib/entity-router'
+import { hubsWithPermission } from '../lib/hub-scope'
 import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
 import { ServiceError } from '../services/settings'
 
@@ -137,23 +136,37 @@ invites.post('/redeem',
 )
 
 // --- Authenticated routes (require invites permissions) ---
-invites.use('/', authMiddleware, requirePermission('invites:read'))
-invites.use('/:code', authMiddleware, requirePermission('invites:read'))
+//
+// Authority over invites is per hub: an invite belongs to the hub it admits into,
+// and a hub admin's grant lives in `hubRoles` only (#2153), so the global
+// permission set of the request says nothing about it. Each handler checks the
+// caller's permission in the invite's hub; a super-admin holds it in every hub.
+invites.use('/', authMiddleware)
+invites.use('/:code', authMiddleware)
 
-// GET / via factory
-const inviteListRouter = createEntityRouter({
-  tag: 'Invites',
-  domain: 'invites',
-  service: 'identity',
-  listResponseSchema: inviteListResponseSchema,
-  itemResponseSchema: inviteResponseSchema,
-  disableGet: true,
-  disableDelete: true,
-  methods: {
-    list: 'getInvites',
+invites.get('/',
+  describeRoute({
+    tags: ['Invites'],
+    summary: 'List invites',
+    responses: {
+      200: {
+        description: 'Unused invites in the hubs the caller may read invites in',
+        content: { 'application/json': { schema: resolver(inviteListResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  async (c) => {
+    const identity = c.get('services').identity
+    // A super-admin sees every invite, including one that names no hub yet;
+    // anyone else sees the invites of the hubs they may read them in.
+    const hubIds = hubsWithPermission(c, 'invites:read')
+    if (hubIds === null) return c.json(await identity.getInvites())
+    if (hubIds.length === 0) return c.json({ error: 'Forbidden', required: 'invites:read' }, 403)
+    const perHub = await Promise.all(hubIds.map(hubId => identity.getInvites(hubId)))
+    return c.json({ invites: perHub.flatMap(r => r.invites) })
   },
-})
-invites.route('/', inviteListRouter)
+)
 
 invites.post('/',
   describeRoute({
@@ -171,7 +184,6 @@ invites.post('/',
       ...authErrors,
     },
   }),
-  requirePermission('invites:create'),
   validator('json', createInviteBodySchema),
   async (c) => {
     const services = c.get('services')
@@ -193,6 +205,13 @@ invites.post('/',
     }
     const hubId: string | null = resolved
 
+    // The authority the creator invites with: their permissions IN the invite's
+    // hub — a hub admin's grant lives in `hubRoles` only, and a super-admin holds
+    // everything in every hub. An invite that predates any hub (the setup
+    // wizard) has no hub to resolve in, so only an instance-level caller —
+    // global permissions, i.e. a super-admin — may mint one.
+    let creatorPermissions = c.get('permissions') as string[]
+
     // The hub must exist, and the creator must be able to invite within it.
     if (hubId) {
       try {
@@ -207,6 +226,9 @@ invites.post('/',
       if (!permissionGranted(hubPermissions, 'invites:create')) {
         return c.json({ error: 'Access denied' }, 403)
       }
+      creatorPermissions = hubPermissions
+    } else if (!permissionGranted(creatorPermissions, 'invites:create')) {
+      return c.json({ error: 'Forbidden', required: 'invites:create' }, 403)
     }
 
     // Roles the redeemer gets. The inviter's explicit choice wins; otherwise
@@ -218,7 +240,6 @@ invites.post('/',
 
     // Validate that the creator can grant all requested roles (prevent privilege escalation)
     if (roleIds.length > 0) {
-      const creatorPermissions = c.get('permissions') as string[]
       if (!permissionGranted(creatorPermissions, '*')) {
         for (const roleId of roleIds) {
           const role = allRoles.find(r => r.id === roleId)
@@ -263,12 +284,30 @@ invites.delete('/:code',
       ...authErrors,
     },
   }),
-  requirePermission('invites:revoke'),
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const code = c.req.param('code')
-    await services.identity.revokeInvite(code)
+    // A super-admin may revoke any invite. Anyone else may revoke an invite of a
+    // hub they hold invites:revoke in — and an invite of another hub is a 404,
+    // exactly as if it did not exist.
+    const hubIds = hubsWithPermission(c, 'invites:revoke')
+    if (hubIds === null) {
+      await services.identity.revokeInvite(code)
+    } else {
+      if (hubIds.length === 0) return c.json({ error: 'Forbidden', required: 'invites:revoke' }, 403)
+      let revoked = false
+      for (const hubId of hubIds) {
+        try {
+          await services.identity.revokeInvite(code, hubId)
+          revoked = true
+          break
+        } catch (err) {
+          if (!(err instanceof ServiceError && err.status === 404)) throw err
+        }
+      }
+      if (!revoked) throw new ServiceError(404, 'Invite not found')
+    }
     await audit(services.audit, 'inviteRevoked', pubkey, { code }, undefined, null)
     return c.json({ ok: true })
   },

@@ -11,7 +11,7 @@ import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import type { Services } from '../services'
 import { ServiceError } from '../services/settings'
-import { findRole, hasAnyHubAccess, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
+import { findRole, hasAnyHubAccess, hasHubPermission, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
 
 export type TargetHub =
   | { ok: true; hubId: string | undefined }
@@ -113,6 +113,23 @@ export function callerHasHubAccess(c: Context<AppEnv>, hubId: string): boolean {
 export function callerHasAnyHubAccess(c: Context<AppEnv>): boolean {
   const user = c.get('user')
   return hasAnyHubAccess(user.roles, user.hubRoles ?? [], c.get('allRoles'))
+}
+
+/**
+ * The hubs in which the caller holds `permission`, for a route mounted outside
+ * `/hubs/:hubId` whose rows each belong to a hub: `null` means every hub (a
+ * super-admin), otherwise exactly the hubs their own `hubRoles` grant it in —
+ * possibly none. Global roles other than super-admin contribute nothing, as
+ * they do inside a hub, so an unscoped list or write is bounded to the caller's
+ * hubs instead of defaulting to all of them (#1099).
+ */
+export function hubsWithPermission(c: Context<AppEnv>, permission: string): string[] | null {
+  const user = c.get('user')
+  const allRoles = c.get('allRoles')
+  if (isSuperAdmin(user.roles, allRoles)) return null
+  const hubRoles = user.hubRoles ?? []
+  return [...new Set(hubRoles.map(hr => hr.hubId))]
+    .filter(hubId => hasHubPermission(user.roles, hubRoles, allRoles, hubId, permission))
 }
 
 /**
