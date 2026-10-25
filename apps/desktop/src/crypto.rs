@@ -176,7 +176,11 @@ impl CryptoState {
         expected_label: &str,
         aad_hex: &str,
     ) -> Result<String, String> {
-        require_allowed_label("hpke_open_key_from_state", expected_label, OPEN_KEY_ALLOWED_LABELS)?;
+        require_allowed_label(
+            "hpke_open_key_from_state",
+            expected_label,
+            OPEN_KEY_ALLOWED_LABELS,
+        )?;
         let aad = hex::decode(aad_hex).map_err(err_str)?;
         let secret_hex = self.encryption_secret_hex()?;
         let key = hpke_envelope::hpke_open_key(envelope, &secret_hex, expected_label, &aad)
@@ -204,7 +208,10 @@ impl CryptoState {
     /// the purpose-bound commands below, which build the message themselves.
     fn sign_hex(&self, message: &str) -> Result<String, String> {
         self.with_secrets(|secrets| {
-            Ok(hex::encode(device_keys::sign_bytes(secrets, message.as_bytes())))
+            Ok(hex::encode(device_keys::sign_bytes(
+                secrets,
+                message.as_bytes(),
+            )))
         })
     }
 
@@ -247,8 +254,9 @@ impl CryptoState {
         )
         .map_err(err_str)?;
         let encrypted_share = serde_json::to_string(&sealed).map_err(err_str)?;
-        let signature =
-            self.sign_hex(&format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:{session_id}:{encrypted_share}"))?;
+        let signature = self.sign_hex(&format!(
+            "{LABEL_RECOVERY_SHARE_CONTRIBUTE}:{session_id}:{encrypted_share}"
+        ))?;
 
         Ok(serde_json::json!({
             "encryptedShare": encrypted_share,
@@ -1118,7 +1126,12 @@ pub fn recovery_share_contribute_from_state(
     session_id: String,
     new_device_pubkey_hex: String,
 ) -> Result<serde_json::Value, String> {
-    state.recovery_share_contribution(&envelope, commitment_hex, &session_id, &new_device_pubkey_hex)
+    state.recovery_share_contribution(
+        &envelope,
+        commitment_hex,
+        &session_id,
+        &new_device_pubkey_hex,
+    )
 }
 
 /// HPKE-encrypted share envelope for recovery group reconstruction.
@@ -1957,8 +1970,10 @@ mod ipc_surface_tests {
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
         };
         let state = CryptoState::new();
-        let (encryption_pubkey_hex, signing_pubkey_hex) =
-            (ds.encryption_pubkey_hex.clone(), ds.signing_pubkey_hex.clone());
+        let (encryption_pubkey_hex, signing_pubkey_hex) = (
+            ds.encryption_pubkey_hex.clone(),
+            ds.signing_pubkey_hex.clone(),
+        );
         state.load_secrets_for_test(secrets, ds);
         TestDevice {
             state,
@@ -2002,7 +2017,10 @@ mod ipc_surface_tests {
                     .is_ok()
             );
             let err = dev.state.hpke_open_hex(&env, label, "").unwrap_err();
-            assert!(err.contains("not openable from the webview"), "{label}: {err}");
+            assert!(
+                err.contains("not openable from the webview"),
+                "{label}: {err}"
+            );
         }
     }
 
@@ -2032,14 +2050,20 @@ mod ipc_surface_tests {
         ] {
             let env = seal(&dev, &[7u8; 32], label);
             let err = dev.state.hpke_open_key_hex(&env, label, "").unwrap_err();
-            assert!(err.contains("not openable from the webview"), "{label}: {err}");
+            assert!(
+                err.contains("not openable from the webview"),
+                "{label}: {err}"
+            );
         }
     }
 
     #[test]
     fn ws_challenge_signature_is_bound_to_the_label_pubkey_nonce_and_timestamp() {
         let dev = device();
-        let sig = dev.state.ws_challenge_signature("n-1", 1_700_000_000).unwrap();
+        let sig = dev
+            .state
+            .ws_challenge_signature("n-1", 1_700_000_000)
+            .unwrap();
         let sig_bytes = hex::decode(&sig).unwrap();
         let verify = |message: String| {
             device_keys::verify_signature(message.as_bytes(), &sig_bytes, &dev.signing_pubkey_hex)
@@ -2068,7 +2092,10 @@ mod ipc_surface_tests {
     #[test]
     fn recovery_group_create_seals_every_share_and_returns_no_plaintext() {
         let holders: Vec<TestDevice> = (0..3).map(|_| device()).collect();
-        let pubkeys: Vec<String> = holders.iter().map(|h| h.encryption_pubkey_hex.clone()).collect();
+        let pubkeys: Vec<String> = holders
+            .iter()
+            .map(|h| h.encryption_pubkey_hex.clone())
+            .collect();
         let out = recovery_group_create(3, 2, pubkeys).unwrap();
 
         let keys: Vec<&String> = out.as_object().unwrap().keys().collect();
@@ -2099,25 +2126,33 @@ mod ipc_surface_tests {
         let group_secret = shamir_combine(serde_json::to_string(&shares).unwrap()).unwrap();
         let secret: [u8; 32] = hex::decode(group_secret).unwrap().try_into().unwrap();
         let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
-        assert_eq!(out["publicKeyHex"].as_str().unwrap(), hex::encode(public.as_bytes()));
+        assert_eq!(
+            out["publicKeyHex"].as_str().unwrap(),
+            hex::encode(public.as_bytes())
+        );
         assert_eq!(out["commitments"].as_array().unwrap().len(), 3);
 
         // Holder 0 cannot open holder 1's envelope.
         let other: hpke_envelope::HpkeEnvelope =
             serde_json::from_value(envelopes[1].clone()).unwrap();
-        assert!(hpke_envelope::hpke_open(
-            &other,
-            &hex::encode(holders[0].encryption_seed),
-            LABEL_RECOVERY_GROUP_SHARE_WRAP,
-            &[]
-        )
-        .is_err());
+        assert!(
+            hpke_envelope::hpke_open(
+                &other,
+                &hex::encode(holders[0].encryption_seed),
+                LABEL_RECOVERY_GROUP_SHARE_WRAP,
+                &[]
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn recovery_group_create_needs_one_holder_pubkey_per_share() {
         let holders: Vec<TestDevice> = (0..2).map(|_| device()).collect();
-        let pubkeys: Vec<String> = holders.iter().map(|h| h.encryption_pubkey_hex.clone()).collect();
+        let pubkeys: Vec<String> = holders
+            .iter()
+            .map(|h| h.encryption_pubkey_hex.clone())
+            .collect();
         assert!(recovery_group_create(3, 2, pubkeys).is_err());
     }
 
@@ -2141,10 +2176,19 @@ mod ipc_surface_tests {
 
         let out = holder
             .state
-            .recovery_share_contribution(&held, commitment.clone(), "sess-1", &recovering.encryption_pubkey_hex)
+            .recovery_share_contribution(
+                &held,
+                commitment.clone(),
+                "sess-1",
+                &recovering.encryption_pubkey_hex,
+            )
             .unwrap();
         let keys: Vec<&String> = out.as_object().unwrap().keys().collect();
-        assert_eq!(keys.len(), 2, "only the sealed share and its signature: {keys:?}");
+        assert_eq!(
+            keys.len(),
+            2,
+            "only the sealed share and its signature: {keys:?}"
+        );
 
         // The recovering device opens the contribution under the contribution
         // label with the session-bound AAD, and gets back the holder's own share.
@@ -2162,22 +2206,26 @@ mod ipc_surface_tests {
             shamir_commit(opened[0], hex::encode(&opened[1..])).unwrap(),
             commitment
         );
-        assert!(hpke_envelope::hpke_open(
-            &contribution,
-            &hex::encode(recovering.encryption_seed),
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            b"sess-2:wrong"
-        )
-        .is_err());
+        assert!(
+            hpke_envelope::hpke_open(
+                &contribution,
+                &hex::encode(recovering.encryption_seed),
+                LABEL_RECOVERY_SHARE_CONTRIBUTE,
+                b"sess-2:wrong"
+            )
+            .is_err()
+        );
 
         let signature = hex::decode(out["signature"].as_str().unwrap()).unwrap();
         let signed = format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:sess-1:{encrypted}");
-        assert!(device_keys::verify_signature(
-            signed.as_bytes(),
-            &signature,
-            &holder.signing_pubkey_hex
-        )
-        .unwrap());
+        assert!(
+            device_keys::verify_signature(
+                signed.as_bytes(),
+                &signature,
+                &holder.signing_pubkey_hex
+            )
+            .unwrap()
+        );
     }
 
     #[test]
