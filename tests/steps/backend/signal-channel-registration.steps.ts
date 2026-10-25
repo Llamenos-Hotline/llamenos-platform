@@ -54,7 +54,10 @@ function getLocalState(world: Record<string, unknown>): RegistrationLocalState {
 }
 
 /**
- * The identity that drives this scenario's /provider-setup/signal/* calls.
+ * The identity that drives this scenario's /provider-setup/signal/* calls,
+ * addressed through its own hub (`/hubs/:hubId/provider-setup/...`): a hub
+ * admin's grant lives in `hubRoles` only, which authorizes inside their hub and
+ * nowhere else (#2153).
  *
  * `POST /provider-setup/signal/verify` is rate limited per caller pubkey
  * (`signal-verify:<pubkey>`, 5/min). The suite-wide ADMIN_SEED is shared by every
@@ -101,7 +104,7 @@ Given('registration is pending for {string}', async ({ request, world, workerHub
   const local = getLocalState(world)
   const { status, data } = await apiPost<{ id: string; status: string }>(
     request,
-    '/provider-setup/signal/register',
+    `/hubs/${workerHub}/provider-setup/signal/register`,
     { bridgeUrl: local.bridgeUrl, phoneNumber, method: 'sms', hubId: workerHub },
     await actingAdminSeed(request, world, workerHub),
   )
@@ -123,7 +126,7 @@ Given('Signal is configured with a registered number', async ({ request, world, 
   const local = getLocalState(world)
   const { status, data } = await apiPost<{ id: string; status: string }>(
     request,
-    '/provider-setup/signal/register',
+    `/hubs/${workerHub}/provider-setup/signal/register`,
     { bridgeUrl: local.bridgeUrl, phoneNumber: MOCK_PHONE, method: 'sms', hubId: workerHub },
     await actingAdminSeed(request, world, workerHub),
   )
@@ -136,7 +139,7 @@ Given('Signal is configured with a registered number', async ({ request, world, 
   // "configured with a registered number" state to report on.
   const verify = await apiPost<{ status: string }>(
     request,
-    '/provider-setup/signal/verify',
+    `/hubs/${workerHub}/provider-setup/signal/verify`,
     { registrationId: local.registrationId, code: '123456' },
     local.adminSeed,
   )
@@ -150,7 +153,7 @@ When('the admin submits a phone number for registration', async ({ request, worl
   const local = getLocalState(world)
   const { status, data } = await apiPost<{ id: string; status: string }>(
     request,
-    '/provider-setup/signal/register',
+    `/hubs/${workerHub}/provider-setup/signal/register`,
     { bridgeUrl: local.bridgeUrl, phoneNumber: MOCK_PHONE, method: 'sms', hubId: workerHub },
     await actingAdminSeed(request, world, workerHub),
   )
@@ -159,12 +162,12 @@ When('the admin submits a phone number for registration', async ({ request, worl
   setSharedRegistrationState(world, data.status)
 })
 
-When('the admin submits verification code {string}', async ({ request, world }, code: string) => {
+When('the admin submits verification code {string}', async ({ request, world, workerHub }, code: string) => {
   const local = getLocalState(world)
   expect(local.registrationId).toBeDefined()
   const { status, data } = await apiPost<{ status: string }>(
     request,
-    '/provider-setup/signal/verify',
+    `/hubs/${workerHub}/provider-setup/signal/verify`,
     { registrationId: local.registrationId, code },
     local.adminSeed,
   )
@@ -176,7 +179,7 @@ When('the admin attempts to register without a captcha', async ({ request, world
   const local = getLocalState(world)
   const { status, data } = await apiPost<{ id: string; status: string; error?: string | null }>(
     request,
-    '/provider-setup/signal/register',
+    `/hubs/${workerHub}/provider-setup/signal/register`,
     {
       bridgeUrl: local.bridgeUrl,
       // Dev-mode-only sentinel that deterministically simulates a bridge
@@ -193,12 +196,12 @@ When('the admin attempts to register without a captcha', async ({ request, world
   setSharedRegistrationState(world, data.status)
 })
 
-When('the admin requests account info', async ({ request, world }) => {
+When('the admin requests account info', async ({ request, world, workerHub }) => {
   const local = getLocalState(world)
   expect(local.registrationId).toBeDefined()
   const { status, data } = await apiGet<{ registered?: boolean; uuid?: string; error?: string }>(
     request,
-    `/provider-setup/signal/account?registrationId=${local.registrationId}`,
+    `/hubs/${workerHub}/provider-setup/signal/account?registrationId=${local.registrationId}`,
     local.adminSeed,
   )
   expect(status).toBe(200)

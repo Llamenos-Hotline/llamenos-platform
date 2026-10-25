@@ -40,11 +40,6 @@ vi.mock('@worker/middleware/auth', () => ({
   auth: vi.fn().mockImplementation(async (_c: unknown, next: () => Promise<void>) => next()),
 }))
 
-vi.mock('@worker/middleware/permission-guard', () => ({
-  requirePermission: (..._perms: string[]) =>
-    async (_c: unknown, next: () => Promise<void>) => next(),
-}))
-
 vi.mock('hono-openapi', () => ({
   describeRoute: () => async (_c: unknown, next: () => Promise<void>) => next(),
   resolver: (s: unknown) => s,
@@ -54,10 +49,6 @@ vi.mock('hono-openapi', () => ({
       await next()
     }
   },
-}))
-
-vi.mock('@worker/lib/entity-router', () => ({
-  createEntityRouter: () => new Hono(),
 }))
 
 import invitesRoutes from '@worker/routes/invites'
@@ -70,15 +61,29 @@ import { ServiceError } from '@worker/services/settings'
 const allRoles = [
   { id: 'role-volunteer', name: 'Volunteer', slug: 'volunteer', permissions: ['calls:answer', 'notes:create'] },
   { id: 'role-super-admin', name: 'Super Admin', slug: 'super-admin', permissions: ['*'] },
-  { id: 'role-hub-admin', name: 'Hub Admin', slug: 'hub-admin', permissions: ['users:*', 'settings:*', 'invites:*'] },
+  { id: 'role-hub-admin', name: 'Hub Admin', slug: 'hub-admin', permissions: ['users:*', 'settings:*', 'invites:*', 'calls:answer', 'notes:create'] },
 ]
 
+const HUB_ADMIN_OF_HUB_1 = { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-hub-admin'] }] }
+const SUPER_ADMIN = { pubkey: 'creator-pk', roles: ['role-super-admin'], hubRoles: [] }
+
+/**
+ * `permissions` is the request's GLOBAL permission set (what the auth middleware
+ * resolves from `user.roles`); a hub admin's grant lives in `hubRoles` only, so
+ * authority over invites comes from the user's hub assignment, not from it.
+ * A wildcard `permissions` therefore defaults the caller to a super-admin.
+ */
 function createApp(
-  permissions: string[] = ['invites:read', 'invites:create', 'invites:revoke'],
+  permissions: string[] = [],
   user: { pubkey: string; roles: string[]; hubRoles?: Array<{ hubId: string; roleIds: string[] }> } =
-    { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-hub-admin'] }] },
+    permissions.includes('*') ? SUPER_ADMIN : HUB_ADMIN_OF_HUB_1,
 ) {
   const app = new Hono<AppEnv>()
+  // Same mapping as the global handler in apps/worker/app.ts.
+  app.onError((err, c) => {
+    if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 400 | 403 | 404 | 409)
+    throw err
+  })
   const services = {
     identity: {
       validateInvite: vi.fn().mockResolvedValue({ valid: true, name: 'Test Invite' }),
@@ -428,13 +433,102 @@ describe('invites routes', () => {
     })
   })
 
+  describe('GET /invites', () => {
+    it('lists only the invites of the hubs the caller may read them in', async () => {
+      const { app, services } = createApp()
+      services.identity.getInvites.mockImplementation(async (hubId?: string) => ({ invites: [{ code: `inv-${hubId}` }] }))
+
+      const res = await app.request('/invites', {}, defaultEnv)
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).invites).toEqual([{ code: 'inv-hub-1' }])
+      expect(services.identity.getInvites).toHaveBeenCalledTimes(1)
+      expect(services.identity.getInvites).toHaveBeenCalledWith('hub-1')
+    })
+
+    it('a super-admin lists every invite, including one that names no hub', async () => {
+      const { app, services } = createApp(['*'])
+
+      expect((await app.request('/invites', {}, defaultEnv)).status).toBe(200)
+      expect(services.identity.getInvites).toHaveBeenCalledWith()
+    })
+
+    it('refuses a caller who may read invites in no hub', async () => {
+      const { app, services } = createApp(['invites:read'], { pubkey: 'vol-pk', roles: ['role-volunteer'], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] })
+
+      expect((await app.request('/invites', {}, defaultEnv)).status).toBe(403)
+      expect(services.identity.getInvites).not.toHaveBeenCalled()
+    })
+
+    it('a global permission without a hub assignment reads nothing', async () => {
+      // A global role other than super-admin reaches no hub: having
+      // `invites:read` globally must not list every hub's invites.
+      const { app, services } = createApp(['invites:read'], { pubkey: 'x', roles: ['role-hub-admin'], hubRoles: [] })
+
+      expect((await app.request('/invites', {}, defaultEnv)).status).toBe(403)
+      expect(services.identity.getInvites).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('POST /invites authority', () => {
+    it('a hub admin whose grant is in hubRoles only can invite into their hub', async () => {
+      const { app, services } = createApp([], HUB_ADMIN_OF_HUB_1)
+
+      const res = await app.request('/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New', roleIds: ['role-volunteer'] }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(201)
+      expect(services.identity.createInvite).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
+    })
+
+    it('refuses a hub-less invite from anyone without instance-level authority', async () => {
+      const { app, services } = createApp([], HUB_ADMIN_OF_HUB_1)
+      services.settings.getHubs.mockResolvedValue({ hubs: [] })
+
+      const res = await app.request('/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New', roleIds: ['role-volunteer'] }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(403)
+      expect(services.identity.createInvite).not.toHaveBeenCalled()
+    })
+  })
+
   describe('DELETE /invites/:code', () => {
-    it('revokes an invite', async () => {
+    it('revokes an invite of the caller\'s hub', async () => {
       const { app, services } = createApp()
 
       const res = await app.request('/invites/INV-123', { method: 'DELETE' }, defaultEnv)
       expect(res.status).toBe(200)
+      expect(services.identity.revokeInvite).toHaveBeenCalledWith('INV-123', 'hub-1')
+    })
+
+    it('an invite of another hub is a 404, like one that does not exist', async () => {
+      const { app, services } = createApp()
+      services.identity.revokeInvite.mockRejectedValue(new ServiceError(404, 'Invite not found'))
+
+      const res = await app.request('/invites/INV-OTHER', { method: 'DELETE' }, defaultEnv)
+      expect(res.status).toBe(404)
+      expect(mockAudit).not.toHaveBeenCalled()
+    })
+
+    it('a super-admin revokes any invite', async () => {
+      const { app, services } = createApp(['*'])
+
+      expect((await app.request('/invites/INV-123', { method: 'DELETE' }, defaultEnv)).status).toBe(200)
       expect(services.identity.revokeInvite).toHaveBeenCalledWith('INV-123')
+    })
+
+    it('refuses a caller who may revoke invites in no hub', async () => {
+      const { app, services } = createApp([], { pubkey: 'vol-pk', roles: ['role-volunteer'], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] })
+
+      expect((await app.request('/invites/INV-123', { method: 'DELETE' }, defaultEnv)).status).toBe(403)
+      expect(services.identity.revokeInvite).not.toHaveBeenCalled()
     })
 
     it('audits revocation', async () => {

@@ -483,9 +483,11 @@ describe('IdentityService.redeemInvite', () => {
 
     const result = await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
     expect(result.volunteer.pubkey).toBe('pk-new')
+    // The hub grant is hubRoles only: a role in the account-wide column is
+    // authority over every hub on unscoped routes (#2153).
     expect(tx.$inserted[0]).toMatchObject({
       pubkey: 'pk-new',
-      roles: ['role-volunteer'],
+      roles: [],
       hubRoles: [{ hubId: 'hub-7', roleIds: ['role-volunteer'] }],
     })
   })
@@ -521,7 +523,7 @@ describe('IdentityService.redeemInvite', () => {
     expect(tx.$inserted[0]).toMatchObject({ hubRoles: [{ hubId: 'hub-only', roleIds: ['role-volunteer'] }] })
   })
 
-  it('creates no hub membership when the hub is ambiguous', async () => {
+  it('refuses a hub-less invite when the hub is ambiguous rather than granting a global role', async () => {
     const { db, service } = setup()
     const tx = makeRedeemTx({
       invite: makeInviteRow({ hubId: null }),
@@ -530,8 +532,9 @@ describe('IdentityService.redeemInvite', () => {
     })
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
-    await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
-    expect(tx.$inserted[0]).not.toHaveProperty('hubRoles')
+    await expect(service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' }))
+      .rejects.toMatchObject({ status: 409 })
+    expect(tx.$inserted, 'a refused redemption still inserted a user').toHaveLength(0)
   })
 
   it('merges the grant into an existing user\'s hubRoles instead of rejecting them', async () => {
