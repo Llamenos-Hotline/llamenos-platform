@@ -141,11 +141,17 @@ async function affectsOtherHubs(c: Context<AppEnv>, targetPubkey: string, hubId:
 }
 
 /**
- * Account-level fields that decide whether and where a person is reached, in
- * every hub they belong to. See the PATCH handler.
+ * The only fields a hub admin may change on an account that reaches beyond their
+ * hub (a member of other hubs, or one holding a global role). `roles` is the
+ * member's assignment in THIS hub; the rest are display, profile and workload
+ * fields. Everything else on the account — phone, availability (`active`,
+ * `onBreak`), `callPreference`, messaging channels, and any field added later —
+ * decides whether and where the person is reached in EVERY hub, so it is
+ * refused unless listed here (deny by default). See the PATCH handler.
  */
-const ACCOUNT_ROUTING_FIELDS: ReadonlySet<string> = new Set([
-  'active', 'phone', 'callPreference', 'onBreak', 'messagingEnabled', 'supportedMessagingChannels',
+const HUB_EDITABLE_FIELDS: ReadonlySet<string> = new Set([
+  'roles', 'name', 'spokenLanguages', 'uiLanguage', 'profileCompleted', 'transcriptionEnabled',
+  'specializations', 'maxCaseAssignments', 'teamId', 'supervisorPubkey',
 ])
 
 /**
@@ -253,17 +259,16 @@ users.patch('/:targetPubkey',
     if (hubId && !callerIsSuperAdmin(c) && await targetIsSuperAdmin(c, targetPubkey)) {
       return c.json({ error: 'This account is an instance super-admin — only a super-admin can change it' }, 403)
     }
-    // `roles` is hub-scoped (see updateUser). The fields in ACCOUNT_ROUTING_FIELDS
-    // are the account's own and decide whether and where the person is reached in
-    // EVERY hub: a hub A admin must not re-point where hub B's calls ring or
-    // switch the person off for hub B. For someone who belongs elsewhere, a hub
-    // admin changes their role here or removes them from the hub; a super-admin
-    // does the rest. (A display name or a language is not routing, and stays
-    // editable.)
-    const touchesRouting = Object.entries(body).some(([key, value]) => value !== undefined && ACCOUNT_ROUTING_FIELDS.has(key))
-    if (hubId && touchesRouting && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
+    // A hub admin may not re-point where hub B's calls ring or switch a shared
+    // member off for hub B: for an account that reaches beyond this hub only the
+    // HUB_EDITABLE_FIELDS may change from here. A super-admin edits the rest, or
+    // the hub admin removes the person from the hub. (A non-super-admin global
+    // role carries no authority inside a hub, so such an account is held to the
+    // same list rather than refused outright.)
+    const touchesAccount = Object.entries(body).some(([key, value]) => value !== undefined && !HUB_EDITABLE_FIELDS.has(key))
+    if (hubId && touchesAccount && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
       return c.json({
-        error: 'This user belongs to other hubs — their phone, availability and channels can only be changed by a super-admin; remove them from this hub (DELETE /api/hubs/:hubId/members/:pubkey) instead of deactivating the account',
+        error: 'This user belongs to other hubs — their phone, availability and channels can only be changed by a super-admin; remove them from this hub (DELETE /api/hubs/:hubId/members/:pubkey) instead',
       }, 409)
     }
 

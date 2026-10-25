@@ -81,7 +81,8 @@ const VOL_A = hex('a2')
 const VOL_B = hex('b2')
 const BOTH = hex('c2')
 const NEW_ADMIN_A = hex('a3')
-const ALL_PUBKEYS = [SUPER, ADMIN_A, ADMIN_B, VOL_A, VOL_B, BOTH, NEW_ADMIN_A]
+const GLOBAL_VOL = hex('d4')
+const ALL_PUBKEYS = [SUPER, ADMIN_A, ADMIN_B, VOL_A, VOL_B, BOTH, NEW_ADMIN_A, GLOBAL_VOL]
 
 /**
  * The app as app.ts mounts the users router: unscoped at /api/users and
@@ -299,6 +300,20 @@ describe('through hub A\'s own mount, hub A\'s admin sees and edits only hub A',
   it('a member of both hubs can still be renamed from one hub (display only, not routing)', async () => {
     expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { name: 'renamed from hub a' })).status).toBe(200)
     expect((await row(BOTH)).displayName).toBe('renamed from hub a')
+  })
+
+  it('an account with a non-super-admin global role is held to the same list', async () => {
+    // A global role other than super-admin carries no authority inside a hub, but
+    // the account still reaches beyond it — its routing fields are not hub A's.
+    expect((await call(SUPER, 'POST', '/api/users', createBody(GLOBAL_VOL, 'global vol', ['role-volunteer']))).status).toBe(201)
+    await identity.setHubRole({ pubkey: GLOBAL_VOL, hubId: HUB_A, roleIds: ['role-volunteer'] })
+
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${GLOBAL_VOL}`, { phone: '+15559999999' })).status).toBe(409)
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${GLOBAL_VOL}`, { name: 'renamed' })).status).toBe(200)
+    const r = await row(GLOBAL_VOL)
+    expect(r.phone).toBe('+15550000000')
+    expect(r.displayName).toBe('renamed')
+    expect(r.roles, 'a hub PATCH changed the global roles').toEqual(['role-volunteer'])
   })
 
   it('a member of one hub only can have account fields edited by that hub\'s admin', async () => {
