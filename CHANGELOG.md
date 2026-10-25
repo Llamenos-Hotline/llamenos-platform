@@ -404,6 +404,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.20.0 (2026-10-25)
+
+### Breaking Changes
+
+- remove demo mode, and move the destructive reset onto the dev-surface predicate (#1651)
+
+### Fixes
+
+- upgrade ctutils and tokio to clear RUSTSEC-2026-0385/0386 (unblocks cargo-deny + rust-audit) (#2089)
+- require the storage credentials the server cannot boot without (#1450)
+- bind hub-scoped resources to their hub at fetch time (#2011) (#2024)
+- file notes to the item's own hub, not the active hub (#1162)
+- mount GET /shares/my so a holder can read their own share envelope (#2002) (#2010)
+- a telephony outage, a relay rate-limit drop, and a stuck-call leak all report success (#1515)
+- wire call-metadata sealing and per-user audit keys (#1684) (#1974)
+- clear cargo-deny, rust-audit and image-scan (static) gates on main (#2103)
+- a telephony outage, a relay rate-limit drop, and a stuck-call leak all report success (supersedes #1515) (#2100)
+- POST /notes refuses a note no admin can read and a callId that is not this hub's (#2125)
+- a volunteer can clock in and receive a live call (#2108, #2107) (#2130)
+- coturn refuses relay peers in private space; only the media server is allowed (#2136) (#2209)
+- stop sending reversible contact search indexes (#2139) (#2224)
+- TLS pin requires a WebPKI-validated chain; pin ISRG Root X1/X2 (#2157) (#2225)
+- RCS and Telegram webhooks fail closed without a secret (#2154) (#2226)
+- every hub always has at least one admin — lock before reading the role catalog (#2126, supersedes #2131) (#2132)
+- a call counts as answered only when a human is bridged (#2168, #2169) (#2200)
+- patched zod, happy-dom, undici, body-parser; TanStack router-plugin + react-router pinned together (supersedes #2124) (#2230)
+- hub authority never reaches past its hub (#2153, #1099) (#2228)
+
 ## 0.19.21 (2026-10-23)
 
 ### Features
