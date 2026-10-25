@@ -68,13 +68,6 @@ interface WireCase {
   callSite: string
   /** Keys that are `.optional()` in the schema — the ones a drop cannot be seen through. */
   optionalKeys: string[]
-  /**
-   * Keys iOS sends that the schema does not declare at all, so they are stripped
-   * even in their correct camelCase form. Not an exclusion for convenience: the
-   * suite asserts separately that each of these really is absent from the schema
-   * shape AND really is sent, so it cannot be used to wave away a genuine drop.
-   */
-  unmodelledKeys?: string[]
 }
 
 interface Fixture {
@@ -155,8 +148,7 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
       // Validating is not enough — a non-strict schema validates while discarding.
       // Assert the keys SURVIVED into the parsed output, which is what the route reads.
       const parsed = (result as { data: Record<string, unknown> }).data
-      const unmodelled = c.unmodelledKeys ?? []
-      for (const key of Object.keys(body).filter(k => !unmodelled.includes(k))) {
+      for (const key of Object.keys(body)) {
         expect(parsed, `${c.schema} dropped ${key} from ${c.swiftType}`).toHaveProperty(key)
       }
     })
@@ -196,52 +188,23 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
     })
   })
 
-  describe('a key declared unmodelled really is absent from the contract, and really is sent', () => {
-    // The escape hatch above is only sound if both halves hold. If a key were merely
-    // misspelled in the fixture, or had since been added to the schema, this fails
-    // rather than letting the survival sweep quietly skip a real drop.
-    const withUnmodelled = fixture.cases.filter(c => (c.unmodelledKeys ?? []).length > 0)
-
-    it('at least one case exercises the hatch', () => {
-      expect(withUnmodelled.length).toBeGreaterThan(0)
-    })
-
-    it.each(withUnmodelled.map(c => [c.id, c] as const))('%s', (_id, c) => {
-      const declared = shapeKeys(schemaFor(c))
-      const sent = Object.keys(fixture.bodies[c.id].wire)
-      for (const key of c.unmodelledKeys ?? []) {
-        expect(sent, `${c.id} declares ${key} unmodelled but does not send it`).toContain(key)
-        expect(
-          declared,
-          `${c.schema} now declares ${key} — drop it from unmodelledKeys so the sweep covers it`,
-        ).not.toContain(key)
-      }
-    })
-  })
-
-  it('POST /api/devices/register discards the device id iOS generates and stores', () => {
-    // Found by adding this endpoint to the suite, not by reading the schema.
-    //
-    // `WakeKeyService.registerDevice` mints a UUID, persists it to the Keychain under
-    // `KeychainKey.deviceID` and sends it as `deviceId`. `registerDeviceBodySchema`
-    // does not declare the field, so it is stripped — in the correct camelCase form,
-    // not only in the historic snake_case one. The server therefore never learns the
-    // identifier the device believes identifies it, and nothing on the client observes
-    // that, because the route answers 204.
-    //
-    // Separate from #1633: fixing the key casing does NOT fix this. Filed as #1716
-    // rather than changed here — whether the contract should carry `deviceId` or the
-    // client should stop sending it is a protocol decision, and packages/protocol is
-    // shared-owned.
+  it('POST /api/devices/register carries both device keys, so the server has a key to seal to (#2201)', () => {
+    // The body used to be a hand-written struct of `pushToken, wakeKeyPublic, platform,
+    // deviceId`. It had no `x25519Pubkey`/`ed25519Pubkey`, so the one registration that
+    // ever succeeded stored `x25519_pubkey: ''` and every envelope addressed to an iOS
+    // user was undeliverable. The body is now the generated `RegisterDeviceBody`.
     const { wire } = fixture.bodies.registerDevice
-    expect(wire).toHaveProperty('deviceId')
+    expect(wire).toHaveProperty('x25519Pubkey')
+    expect(wire).toHaveProperty('ed25519Pubkey')
 
     const declared = shapeKeys(devices.registerDeviceBodySchema as unknown as ZodType)
-    expect(declared).not.toContain('deviceId')
+    for (const key of Object.keys(wire)) {
+      expect(declared, `registerDeviceBodySchema does not declare ${key}, so it is discarded`).toContain(key)
+    }
 
     const parsed = devices.registerDeviceBodySchema.safeParse(wire)
     expect(parsed.success).toBe(true)
-    expect(parsed.success && parsed.data).not.toHaveProperty('deviceId')
+    expect(parsed.success && Object.keys(parsed.data).sort()).toEqual(Object.keys(wire).sort())
   })
 
   it('POST /api/devices/register 400s on the historic bytes because its refines read the dropped keys', () => {

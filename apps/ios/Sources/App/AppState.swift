@@ -356,6 +356,7 @@ final class AppState {
 
     /// Lock the app: clear device key from memory, set locked state.
     func lockApp() {
+        wakeKeyService.cancelRegistration()
         authService.lock()
         isLocked = true
         authStatus = .locked
@@ -369,6 +370,8 @@ final class AppState {
         fetchUserRole()
         loadMemberHubs()
         offlineQueue.startMonitoring()
+        // Registration is signed, so it can only happen now (#2201).
+        wakeKeyService.registerDeviceIfUnlocked()
         // Replay any queued operations now that we're authenticated
         Task { await offlineQueue.replay() }
         // Retry any queued security events (e.g. a cert pin mismatch seen while
@@ -411,6 +414,7 @@ final class AppState {
         fetchUserRole()
         loadMemberHubs()
         offlineQueue.startMonitoring()
+        wakeKeyService.registerDeviceIfUnlocked()
         Task { await SecurityEventService.shared.flush() }
     }
 
