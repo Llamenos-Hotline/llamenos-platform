@@ -13,9 +13,9 @@ describe('buildAudioUrlMap', () => {
   // 2026-09-29T12:00:00Z
   const now = Date.UTC(2026, 8, 29, 12, 0, 0)
 
-  it('builds URL map from getIvrAudioList service', async () => {
+  it('builds URL map from resolveIvrAudioList service', async () => {
     const settings = {
-      getIvrAudioList: vi.fn().mockResolvedValue({
+      resolveIvrAudioList: vi.fn().mockResolvedValue({
         recordings: [
           { promptType: 'welcome', language: 'en' },
           { promptType: 'welcome', language: 'es' },
@@ -24,9 +24,9 @@ describe('buildAudioUrlMap', () => {
       }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin, secret, now)
+    const map = await buildAudioUrlMap(settings, origin, secret, undefined, now)
 
-    expect(settings.getIvrAudioList).toHaveBeenCalledOnce()
+    expect(settings.resolveIvrAudioList).toHaveBeenCalledOnce()
     expect(map['welcome:en']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/welcome\/en\?exp=\d+&sig=[0-9a-f]{64}$/)
     expect(map['welcome:es']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/welcome\/es\?/)
     expect(map['goodbye:en']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/goodbye\/en\?/)
@@ -34,11 +34,11 @@ describe('buildAudioUrlMap', () => {
 
   it('signs each URL for its own path, expiring 1–2 days out on a day boundary', async () => {
     const settings = {
-      getIvrAudioList: vi.fn().mockResolvedValue({
+      resolveIvrAudioList: vi.fn().mockResolvedValue({
         recordings: [{ promptType: 'greeting', language: 'fr' }, { promptType: 'greeting', language: 'es' }],
       }),
     }
-    const map = await buildAudioUrlMap(settings, origin, secret, now)
+    const map = await buildAudioUrlMap(settings, origin, secret, undefined, now)
     const fr = new URL(map['greeting:fr'])
     const exp = Number(fr.searchParams.get('exp'))
     expect(exp % 86_400).toBe(0)
@@ -56,58 +56,58 @@ describe('buildAudioUrlMap', () => {
 
   it('hands every call on the same day the same URL, so the PBX cache gains one entry a day, not one a call', async () => {
     const settings = {
-      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [{ promptType: 'greeting', language: 'fr' }] }),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [{ promptType: 'greeting', language: 'fr' }] }),
     }
     const dayStart = Math.floor(now / 86_400_000) * 86_400_000
-    const first = await buildAudioUrlMap(settings, origin, secret, dayStart + 1_000)
-    const later = await buildAudioUrlMap(settings, origin, secret, dayStart + 86_399_000)
-    const tomorrow = await buildAudioUrlMap(settings, origin, secret, dayStart + 86_401_000)
+    const first = await buildAudioUrlMap(settings, origin, secret, undefined, dayStart + 1_000)
+    const later = await buildAudioUrlMap(settings, origin, secret, undefined, dayStart + 86_399_000)
+    const tomorrow = await buildAudioUrlMap(settings, origin, secret, undefined, dayStart + 86_401_000)
     expect(later['greeting:fr']).toBe(first['greeting:fr'])
     expect(tomorrow['greeting:fr']).not.toBe(first['greeting:fr'])
   })
 
-  it('builds URL map from fetch-based settings', async () => {
+  it('resolves the recordings for the hub the call is in, and signs the hub into the path', async () => {
     const settings = {
-      fetch: vi.fn().mockResolvedValue(
-        Response.json({
-          recordings: [
-            { promptType: 'hold', language: 'fr' },
-          ],
-        })
-      ),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [{ promptType: 'greeting', language: 'fr' }] }),
     }
+    const map = await buildAudioUrlMap(settings, origin, secret, 'hub-a', now)
+    expect(settings.resolveIvrAudioList).toHaveBeenCalledWith('hub-a')
+    const url = new URL(map['greeting:fr'])
+    expect(url.pathname).toBe('/api/ivr-audio/hub-a/greeting/fr')
 
-    const map = await buildAudioUrlMap(settings, origin, secret, now)
-
-    expect(settings.fetch).toHaveBeenCalledOnce()
-    expect(map['hold:fr']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/hold\/fr\?exp=/)
+    const opts = { requireExpiry: true, nowMs: now }
+    expect(verifyIvrMediaPath(secret, url.pathname, url.searchParams, opts)).toBe(true)
+    // The hub is under the MAC: the URL minted for hub A cannot be repointed at hub B,
+    // nor at the platform default.
+    expect(verifyIvrMediaPath(secret, '/api/ivr-audio/hub-b/greeting/fr', url.searchParams, opts)).toBe(false)
+    expect(verifyIvrMediaPath(secret, '/api/ivr-audio/greeting/fr', url.searchParams, opts)).toBe(false)
   })
 
   it('returns empty map when no recordings', async () => {
     const settings = {
-      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin, secret, now)
+    const map = await buildAudioUrlMap(settings, origin, secret, undefined, now)
     expect(Object.keys(map)).toHaveLength(0)
   })
 
   it('uses correct key format: promptType:language', async () => {
     const settings = {
-      getIvrAudioList: vi.fn().mockResolvedValue({
+      resolveIvrAudioList: vi.fn().mockResolvedValue({
         recordings: [
           { promptType: 'captcha_digits', language: 'zh-CN' },
         ],
       }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin, secret, now)
+    const map = await buildAudioUrlMap(settings, origin, secret, undefined, now)
     expect(map).toHaveProperty('captcha_digits:zh-CN')
   })
 
   it('overwrites duplicate promptType:language combos (last wins)', async () => {
     const settings = {
-      getIvrAudioList: vi.fn().mockResolvedValue({
+      resolveIvrAudioList: vi.fn().mockResolvedValue({
         recordings: [
           { promptType: 'welcome', language: 'en' },
           { promptType: 'welcome', language: 'en' }, // duplicate
@@ -115,7 +115,7 @@ describe('buildAudioUrlMap', () => {
       }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin, secret, now)
+    const map = await buildAudioUrlMap(settings, origin, secret, undefined, now)
     // Should have one entry (last write wins)
     expect(Object.keys(map).filter(k => k === 'welcome:en')).toHaveLength(1)
   })

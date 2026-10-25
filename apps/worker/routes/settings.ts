@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { Hono, type Context } from 'hono'
+import { createMiddleware } from 'hono/factory'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
@@ -59,6 +60,22 @@ const settings = new Hono<AppEnv>()
 function targetHubId(c: Context<AppEnv>): string | undefined {
   return (c.get('hubId') as string | undefined) || c.req.query('hubId') || undefined
 }
+
+/**
+ * IVR recordings are per hub. Under `/hubs/:hubId/settings/ivr-audio` a request
+ * reaches only that hub's recordings. The global mount manages the PLATFORM
+ * DEFAULTS that every hub falls back to until it records its own, so it needs
+ * the instance-level permission on top of `settings:manage-ivr` — and it ignores
+ * `?hubId=`, so there is exactly one way to name a hub. `undefined` = platform default.
+ */
+const ivrAudioHub = (c: Context<AppEnv>): string | undefined => (c.get('hubId') as string | undefined) || undefined
+
+const requireIvrAudioScope = createMiddleware<AppEnv>(async (c, next) => {
+  if (!ivrAudioHub(c) && !checkPermission(c.get('permissions'), 'system:manage-instance')) {
+    return c.json({ error: 'Forbidden', required: 'system:manage-instance' }, 403)
+  }
+  await next()
+})
 
 // --- Transcription settings: readable + writable by settings:manage-transcription ---
 settings.get('/transcription',
@@ -745,9 +762,10 @@ settings.get('/ivr-audio',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const services = c.get('services')
-    const result = await services.settings.getIvrAudioList()
+    const result = await services.settings.getIvrAudioList(ivrAudioHub(c))
     return c.json(result)
   },
 )
@@ -763,6 +781,7 @@ settings.get('/ivr-audio/:promptType/:language',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const promptType = c.req.param('promptType')
     const language = c.req.param('language')
@@ -770,7 +789,7 @@ settings.get('/ivr-audio/:promptType/:language',
       return c.json({ error: 'Invalid parameters' }, 400)
     }
     const services = c.get('services')
-    const result = await services.settings.getIvrAudio(promptType, language)
+    const result = await services.settings.getIvrAudio(ivrAudioHub(c), promptType, language)
     if (!result) return c.json({ error: 'Not found' }, 404)
     return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
   },
@@ -793,6 +812,7 @@ settings.put('/ivr-audio/:promptType/:language',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const pubkey = c.get('pubkey')
     const promptType = c.req.param('promptType')
@@ -807,8 +827,8 @@ settings.put('/ivr-audio/:promptType/:language',
     if (formatError) return c.json({ error: formatError }, 400)
     const services = c.get('services')
     const audioBase64 = Buffer.from(bytes).toString('base64')
-    const result = await services.settings.uploadIvrAudio(promptType, language, audioBase64, bytes.byteLength)
-    await audit(services.audit, 'ivrAudioUploaded', pubkey, { promptType, language }, undefined, targetHubId(c) ?? null)
+    const result = await services.settings.uploadIvrAudio(ivrAudioHub(c), promptType, language, audioBase64, bytes.byteLength)
+    await audit(services.audit, 'ivrAudioUploaded', pubkey, { promptType, language }, undefined, ivrAudioHub(c) ?? null)
     return c.json(result)
   },
 )
@@ -830,13 +850,14 @@ settings.delete('/ivr-audio/:promptType/:language',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const pubkey = c.get('pubkey')
     const promptType = c.req.param('promptType')
     const language = c.req.param('language')
     const services = c.get('services')
-    const result = await services.settings.deleteIvrAudio(promptType, language)
-    await audit(services.audit, 'ivrAudioDeleted', pubkey, { promptType, language }, undefined, targetHubId(c) ?? null)
+    const result = await services.settings.deleteIvrAudio(ivrAudioHub(c), promptType, language)
+    await audit(services.audit, 'ivrAudioDeleted', pubkey, { promptType, language }, undefined, ivrAudioHub(c) ?? null)
     return c.json(result)
   },
 )

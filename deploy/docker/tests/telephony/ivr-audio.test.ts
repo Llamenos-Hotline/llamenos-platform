@@ -101,9 +101,13 @@ describe('IVR prompt path segments', () => {
 })
 
 describe('/settings/ivr-audio/:promptType/:language', () => {
+  // Mounted as under /hubs/:hubId, where an operator manages their own hub's prompts;
+  // the global mount's refusals are in routes/settings.test.ts and the integration-bun suite.
+  const HUB = 'hub-1'
   function app(settings: Record<string, unknown>, permissions = ['settings:manage-ivr']) {
     const app = new Hono<AppEnv>()
     app.use('*', async (c, next) => {
+      c.set('hubId', HUB)
       c.set('pubkey', 'a'.repeat(64))
       c.set('permissions', permissions)
       c.set('services', { settings, audit: { log: vi.fn() } } as unknown as AppEnv['Variables']['services'])
@@ -119,7 +123,7 @@ describe('/settings/ivr-audio/:promptType/:language', () => {
     const body = encodePcm16Wav(new Float32Array(400), IVR_WAV_SAMPLE_RATE)
     const res = await app({ uploadIvrAudio }).request('/ivr-audio/rateLimited/es', { method: 'PUT', body })
     expect(res.status).toBe(200)
-    expect(uploadIvrAudio).toHaveBeenCalledWith('rateLimited', 'es', Buffer.from(body).toString('base64'), body.byteLength)
+    expect(uploadIvrAudio).toHaveBeenCalledWith(HUB, 'rateLimited', 'es', Buffer.from(body).toString('base64'), body.byteLength)
   })
 
   it('refuses WebM labelled audio/wav, and stores nothing', async () => {
@@ -149,7 +153,7 @@ describe('/settings/ivr-audio/:promptType/:language', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('audio/wav')
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(stored)
-    expect(getIvrAudio).toHaveBeenCalledWith('pleaseHold', 'fr')
+    expect(getIvrAudio).toHaveBeenCalledWith(HUB, 'pleaseHold', 'fr')
 
     const denied = await app({ getIvrAudio }, ['settings:read']).request('/ivr-audio/pleaseHold/fr')
     expect(denied.status).toBe(403)
@@ -176,22 +180,22 @@ describe('public IVR media — what a provider fetches during a call (#1325, #13
   }
 
   async function mintedUrl(promptType: string, language: string, nowMs = Date.now()): Promise<string> {
-    const map = await buildAudioUrlMap({ getIvrAudioList: async () => ({ recordings: [{ promptType, language }] }) }, 'http://app:3000', SECRET, nowMs)
+    const map = await buildAudioUrlMap({ resolveIvrAudioList: async () => ({ recordings: [{ promptType, language }] }) }, 'http://app:3000', SECRET, undefined, nowMs)
     return map[`${promptType}:${language}`]
   }
 
   it('plays an upload through the URL minted for the call', async () => {
-    const getIvrAudio = vi.fn().mockResolvedValue({ audio: Buffer.from(stored).toString('base64'), size: stored.byteLength })
-    const res = await app({ settings: { getIvrAudio } }).request(await mintedUrl('greeting', 'fr'))
+    const getEffectiveIvrAudio = vi.fn().mockResolvedValue({ audio: Buffer.from(stored).toString('base64'), size: stored.byteLength })
+    const res = await app({ settings: { getEffectiveIvrAudio } }).request(await mintedUrl('greeting', 'fr'))
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('audio/wav')
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(stored)
-    expect(getIvrAudio).toHaveBeenCalledWith('greeting', 'fr')
+    expect(getEffectiveIvrAudio).toHaveBeenCalledWith(undefined, 'greeting', 'fr')
   })
 
   it('answers every refusal with the same 404, and touches storage only for a valid signature', async () => {
-    const getIvrAudio = vi.fn().mockResolvedValue(null)
-    const media = app({ settings: { getIvrAudio } })
+    const getEffectiveIvrAudio = vi.fn().mockResolvedValue(null)
+    const media = app({ settings: { getEffectiveIvrAudio } })
     const valid = new URL(await mintedUrl('greeting', 'fr'))
     const expired = await mintedUrl('greeting', 'fr', Date.now() - 3 * 86_400_000)
     const noExpiry = `http://app:3000${signIvrMediaPath(SECRET, '/api/ivr-audio/greeting/fr')}`
@@ -205,7 +209,7 @@ describe('public IVR media — what a provider fetches during a call (#1325, #13
       expect(res.status, url).toBe(404)
       bodies.add(await res.text())
     }
-    expect(getIvrAudio).not.toHaveBeenCalled()
+    expect(getEffectiveIvrAudio).not.toHaveBeenCalled()
 
     // A valid signature for a prompt that does not exist is the same answer.
     const missing = await media.request(valid.toString())

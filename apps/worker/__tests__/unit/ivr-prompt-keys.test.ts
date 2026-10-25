@@ -109,7 +109,7 @@ const NOT_YET_UPLOADABLE = new Set(['voicemailPrompt'])
 async function uploadable(promptType: string): Promise<boolean> {
   const { db } = createMockDb()
   const settings = new SettingsService(db as never)
-  const error = await settings.uploadIvrAudio(promptType, LANG, '', 0).then(() => null, (e: Error) => e.message)
+  const error = await settings.uploadIvrAudio(undefined, promptType, LANG, '', 0).then(() => null, (e: Error) => e.message)
   if (error === 'Invalid prompt type') return false
   expect(error).toBe('Empty file')
   return true

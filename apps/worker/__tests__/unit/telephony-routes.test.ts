@@ -72,7 +72,7 @@ function makeServices(): Services {
       verifyCaptcha: vi.fn().mockResolvedValue({ match: true, expected: '1234' }),
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 }),
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
-      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
       getTranscriptionSettings: vi.fn().mockResolvedValue({ globalEnabled: false }),
     },
     records: {

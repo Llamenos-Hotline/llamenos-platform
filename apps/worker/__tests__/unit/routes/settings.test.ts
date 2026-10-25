@@ -38,7 +38,7 @@ function createTestApp(opts: {
       updateMessagingConfig: vi.fn().mockResolvedValue({ channels: ['sms'] }),
       getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
       updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
-      getIvrAudioList: vi.fn().mockResolvedValue({ prompts: [] }),
+      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
       uploadIvrAudio: vi.fn().mockResolvedValue({ ok: true }),
       deleteIvrAudio: vi.fn().mockResolvedValue({ ok: true }),
       getReportTypes: vi.fn().mockResolvedValue([{ id: 'rt-1', name: 'Type 1' }]),
@@ -558,32 +558,65 @@ describe('settings route', () => {
       expect(res.status).toBe(403)
     })
 
-    it('PUT /ivr-audio/:promptType/:language uploads audio with permission', async () => {
+    // 10 ms of 8 kHz mono PCM: the only format the route accepts (see
+    // deploy/docker/tests/telephony/ivr-audio.test.ts for the rejections)
+    const audioData = encodePcm16Wav(new Float32Array(80), 8000)
+    const put = (app: ReturnType<typeof createTestApp>, query = '') =>
+      app.request(`/ivr-audio/greeting/en${query}`, { method: 'PUT', body: audioData })
+
+    it('a hub-scoped PUT writes that hub\'s recording', async () => {
       const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
       const app = createTestApp({
+        hubId: 'hub-a',
         permissions: ['settings:manage-ivr'],
         services: { settings: { uploadIvrAudio: uploadSpy } },
       })
-      // 10 ms of 8 kHz mono PCM: the only format the route accepts (see
-      // deploy/docker/tests/telephony/ivr-audio.test.ts for the rejections)
-      const audioData = encodePcm16Wav(new Float32Array(80), 8000)
-      const res = await app.request('/ivr-audio/greeting/en', {
-        method: 'PUT',
-        body: audioData,
-      })
+      const res = await put(app)
       expect(res.status).toBe(200)
-      expect(uploadSpy).toHaveBeenCalledWith('greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
+      expect(uploadSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
     })
 
-    it('DELETE /ivr-audio/:promptType/:language removes audio with permission', async () => {
+    it('a hub-scoped DELETE, GET and listing reach only that hub\'s recordings', async () => {
       const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
+      const getSpy = vi.fn().mockResolvedValue({ audio: Buffer.from(audioData).toString('base64'), size: audioData.byteLength })
+      const listSpy = vi.fn().mockResolvedValue({ recordings: [] })
       const app = createTestApp({
+        hubId: 'hub-a',
         permissions: ['settings:manage-ivr'],
-        services: { settings: { deleteIvrAudio: deleteSpy } },
+        services: { settings: { deleteIvrAudio: deleteSpy, getIvrAudio: getSpy, getIvrAudioList: listSpy } },
       })
-      const res = await app.request('/ivr-audio/greeting/en', { method: 'DELETE' })
-      expect(res.status).toBe(200)
-      expect(deleteSpy).toHaveBeenCalledWith('greeting', 'en')
+      expect((await app.request('/ivr-audio/greeting/en', { method: 'DELETE' })).status).toBe(200)
+      expect(deleteSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en')
+      expect((await app.request('/ivr-audio/greeting/en')).status).toBe(200)
+      expect(getSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en')
+      expect((await app.request('/ivr-audio')).status).toBe(200)
+      expect(listSpy).toHaveBeenCalledWith('hub-a')
+    })
+
+    it('the global mount manages the platform defaults, and only with the instance permission', async () => {
+      const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
+      const services = { settings: { uploadIvrAudio: uploadSpy, deleteIvrAudio: vi.fn(), getIvrAudio: vi.fn(), getIvrAudioList: vi.fn() } }
+
+      const hubAdmin = createTestApp({ permissions: ['settings:manage-ivr'], services })
+      expect((await put(hubAdmin)).status).toBe(403)
+      expect((await hubAdmin.request('/ivr-audio/greeting/en', { method: 'DELETE' })).status).toBe(403)
+      expect((await hubAdmin.request('/ivr-audio/greeting/en')).status).toBe(403)
+      expect((await hubAdmin.request('/ivr-audio')).status).toBe(403)
+      expect(uploadSpy).not.toHaveBeenCalled()
+
+      const instance = createTestApp({ permissions: ['settings:manage-ivr', 'system:manage-instance'], services })
+      expect((await put(instance)).status).toBe(200)
+      expect(uploadSpy).toHaveBeenCalledWith(undefined, 'greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
+    })
+
+    it('?hubId= does not redirect the global mount at a hub', async () => {
+      const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
+      const app = createTestApp({
+        permissions: ['settings:manage-ivr', 'system:manage-instance'],
+        services: { settings: { uploadIvrAudio: uploadSpy } },
+      })
+      expect((await put(app, '?hubId=hub-b')).status).toBe(200)
+      expect(uploadSpy.mock.calls[0][0]).toBeUndefined()
     })
   })
 

@@ -196,6 +196,10 @@ const VALID_PROMPT_TYPES = [
 
 const MAX_AUDIO_SIZE = 1_048_576 // 1 MB
 
+/** `ivr_audio.hub_id` of a platform default recording (db/schema/settings.ts) */
+const PLATFORM_IVR_SCOPE = ''
+const ivrAudioScope = (hubId: string | undefined): string => hubId || PLATFORM_IVR_SCOPE
+
 const ALLOWED_HUB_SETTINGS = new Set([
   'hubName',
   'timezone',
@@ -1493,7 +1497,13 @@ export class SettingsService {
   // IVR Audio
   // =========================================================================
 
-  async getIvrAudioList(): Promise<{
+  /**
+   * The recordings held in ONE scope: a hub's own, or (hubId undefined) the
+   * platform defaults. This is what that scope's admin manages, so it never
+   * lists another scope's rows. What a call actually plays is
+   * {@link resolveIvrAudioList}.
+   */
+  async getIvrAudioList(hubId: string | undefined): Promise<{
     recordings: Array<{
       promptType: string
       language: string
@@ -1501,7 +1511,10 @@ export class SettingsService {
       uploadedAt: string
     }>
   }> {
-    const rows = await this.db.select().from(ivrAudio)
+    const rows = await this.db
+      .select()
+      .from(ivrAudio)
+      .where(eq(ivrAudio.hubId, ivrAudioScope(hubId)))
     return {
       recordings: rows.map((r) => ({
         promptType: r.promptType,
@@ -1512,7 +1525,26 @@ export class SettingsService {
     }
   }
 
+  /**
+   * The recordings a call in `hubId` plays: the hub's own, and for every prompt
+   * it has not recorded the platform default. A hub's recording always wins.
+   * With no hub, the platform defaults alone.
+   */
+  async resolveIvrAudioList(hubId: string | undefined): Promise<{
+    recordings: Array<{ promptType: string; language: string }>
+  }> {
+    const scopes = hubId ? [PLATFORM_IVR_SCOPE, hubId] : [PLATFORM_IVR_SCOPE]
+    const rows = await this.db
+      .select({ promptType: ivrAudio.promptType, language: ivrAudio.language })
+      .from(ivrAudio)
+      .where(inArray(ivrAudio.hubId, scopes))
+    const unique = new Map<string, { promptType: string; language: string }>()
+    for (const r of rows) unique.set(`${r.promptType}:${r.language}`, r)
+    return { recordings: [...unique.values()] }
+  }
+
   async uploadIvrAudio(
+    hubId: string | undefined,
     promptType: string,
     language: string,
     audioBase64: string,
@@ -1539,6 +1571,7 @@ export class SettingsService {
     await this.db
       .insert(ivrAudio)
       .values({
+        hubId: ivrAudioScope(hubId),
         promptType,
         language,
         audio: audioBase64,
@@ -1546,7 +1579,7 @@ export class SettingsService {
         uploadedAt: now,
       })
       .onConflictDoUpdate({
-        target: [ivrAudio.promptType, ivrAudio.language],
+        target: [ivrAudio.hubId, ivrAudio.promptType, ivrAudio.language],
         set: {
           audio: audioBase64,
           size,
@@ -1563,7 +1596,12 @@ export class SettingsService {
     }
   }
 
+  /**
+   * One scope's own recording, exactly: the operator listening back to what
+   * they uploaded must never be handed another scope's audio.
+   */
   async getIvrAudio(
+    hubId: string | undefined,
     promptType: string,
     language: string,
   ): Promise<{ audio: string; size: number } | null> {
@@ -1572,6 +1610,7 @@ export class SettingsService {
       .from(ivrAudio)
       .where(
         and(
+          eq(ivrAudio.hubId, ivrAudioScope(hubId)),
           eq(ivrAudio.promptType, promptType),
           eq(ivrAudio.language, language),
         ),
@@ -1580,7 +1619,23 @@ export class SettingsService {
     return { audio: row.audio, size: row.size }
   }
 
+  /**
+   * The recording a caller in `hubId` hears: the hub's own, else the platform
+   * default. Resolved when the provider fetches, not only when the URL was
+   * minted, so a hub that deletes its recording mid-day falls back to the
+   * default rather than to a 404 and silence on the line.
+   */
+  async getEffectiveIvrAudio(
+    hubId: string | undefined,
+    promptType: string,
+    language: string,
+  ): Promise<{ audio: string; size: number } | null> {
+    const own = hubId ? await this.getIvrAudio(hubId, promptType, language) : null
+    return own ?? this.getIvrAudio(undefined, promptType, language)
+  }
+
   async deleteIvrAudio(
+    hubId: string | undefined,
     promptType: string,
     language: string,
   ): Promise<{ ok: true }> {
@@ -1588,6 +1643,7 @@ export class SettingsService {
       .delete(ivrAudio)
       .where(
         and(
+          eq(ivrAudio.hubId, ivrAudioScope(hubId)),
           eq(ivrAudio.promptType, promptType),
           eq(ivrAudio.language, language),
         ),
@@ -2254,7 +2310,10 @@ export class SettingsService {
       await tx.delete(subscribers).where(eq(subscribers.hubId, id))
       await tx.delete(blastSettings).where(eq(blastSettings.hubId, id))
 
-      // 11. CMS definitions
+      // 11. IVR recordings the hub uploaded (the platform defaults stay)
+      await tx.delete(ivrAudio).where(eq(ivrAudio.hubId, id))
+
+      // 11b. CMS definitions
       await tx.delete(entityTypeDefinitions).where(eq(entityTypeDefinitions.hubId, id))
       await tx.delete(relationshipTypeDefinitions).where(eq(relationshipTypeDefinitions.hubId, id))
       await tx.delete(reportTypeDefinitions).where(eq(reportTypeDefinitions.hubId, id))

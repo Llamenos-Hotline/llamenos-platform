@@ -1170,7 +1170,7 @@ describe('SettingsService.getIvrAudioList', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getIvrAudioList()
+    const result = await service.getIvrAudioList(undefined)
     expect(result.recordings).toEqual([])
   })
 
@@ -1181,7 +1181,7 @@ describe('SettingsService.getIvrAudioList', () => {
       { promptType: 'greeting', language: 'en', size: 4096, uploadedAt: now },
     ])
 
-    const result = await service.getIvrAudioList()
+    const result = await service.getIvrAudioList(undefined)
     expect(result.recordings).toHaveLength(1)
     expect(result.recordings[0].promptType).toBe('greeting')
     expect(typeof result.recordings[0].uploadedAt).toBe('string')
@@ -1192,28 +1192,28 @@ describe('SettingsService.uploadIvrAudio', () => {
   it('throws 400 for invalid prompt type', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio('invalid_type', 'en', 'base64data', 100),
+      service.uploadIvrAudio(undefined, 'invalid_type', 'en', 'base64data', 100),
     ).rejects.toMatchObject({ status: 400, message: 'Invalid prompt type' })
   })
 
   it('throws 400 for empty file (size = 0)', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio('greeting', 'en', 'base64data', 0),
+      service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 0),
     ).rejects.toMatchObject({ status: 400, message: 'Empty file' })
   })
 
   it('throws 400 for file exceeding 1MB', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio('greeting', 'en', 'base64data', 2_000_000),
+      service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 2_000_000),
     ).rejects.toMatchObject({ status: 400, message: 'File too large (max 1MB)' })
   })
 
   it('upserts valid audio and returns metadata', async () => {
     const { db, service } = setup()
 
-    const result = await service.uploadIvrAudio('greeting', 'en', 'base64data', 1024)
+    const result = await service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 1024)
     expect(result.ok).toBe(true)
     expect(result.promptType).toBe('greeting')
     expect(result.language).toBe('en')
@@ -1227,7 +1227,7 @@ describe('SettingsService.getIvrAudio', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getIvrAudio('greeting', 'en')
+    const result = await service.getIvrAudio(undefined, 'greeting', 'en')
     expect(result).toBeNull()
   })
 
@@ -1235,7 +1235,7 @@ describe('SettingsService.getIvrAudio', () => {
     const { db, service } = setup()
     db.$setSelectResult([{ promptType: 'greeting', language: 'en', audio: 'base64data', size: 1024, uploadedAt: new Date() }])
 
-    const result = await service.getIvrAudio('greeting', 'en')
+    const result = await service.getIvrAudio(undefined, 'greeting', 'en')
     expect(result?.audio).toBe('base64data')
     expect(result?.size).toBe(1024)
   })
@@ -1245,7 +1245,7 @@ describe('SettingsService.deleteIvrAudio', () => {
   it('deletes and returns ok', async () => {
     const { db, service } = setup()
 
-    const result = await service.deleteIvrAudio('greeting', 'en')
+    const result = await service.deleteIvrAudio(undefined, 'greeting', 'en')
     expect(result).toEqual({ ok: true })
     expect(db.delete).toHaveBeenCalled()
   })

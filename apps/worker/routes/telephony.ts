@@ -26,8 +26,8 @@ import { webhookAuth } from '../middleware/webhook-auth'
 const logger = createLogger('telephony')
 
 /** Operator-uploaded prompts, as signed URLs the provider fetches from the origin it reached us on */
-function audioUrlsFor(c: Context<AppEnv>) {
-  return buildAudioUrlMap(c.get('services').settings, new URL(c.req.url).origin, c.env.HMAC_SECRET)
+function audioUrlsFor(c: Context<AppEnv>, hubId: string | undefined) {
+  return buildAudioUrlMap(c.get('services').settings, new URL(c.req.url).origin, c.env.HMAC_SECRET, hubId)
 }
 
 /**
@@ -240,7 +240,7 @@ telephony.post('/language-selected',
   // never be recorded on a call where they were not told.
   const { recordCalls } = await services.settings.getCallSettings(hubId)
 
-  const audioUrls = await audioUrlsFor(c)
+  const audioUrls = await audioUrlsFor(c, hubId)
   const response = await adapter.handleIncomingCall({
     callSid,
     callerNumber,
@@ -502,7 +502,7 @@ telephony.all('/wait-music', validateWebhook, async (c) => {
   const queueTime = c.req.method === 'POST'
     ? (await adapter.parseQueueWaitWebhook(c.req.raw)).queueTime
     : 0
-  const audioUrls = await audioUrlsFor(c)
+  const audioUrls = await audioUrlsFor(c, hubId)
   const callSettings = await services.settings.getCallSettings(hubId)
   const response = await adapter.handleWaitMusic(
     lang,
@@ -541,7 +541,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   }
 
   if (queueResult === 'leave' || queueResult === 'queue-full' || queueResult === 'error') {
-    const audioUrls = await audioUrlsFor(c)
+    const audioUrls = await audioUrlsFor(c, hubId)
     const origin = new URL(c.req.url).origin
     const callSettings = await services.settings.getCallSettings(hubId)
     const response = await adapter.handleVoicemail({
