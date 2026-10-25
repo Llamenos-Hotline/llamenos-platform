@@ -407,7 +407,7 @@ jobs:
       # shell-expanded, and the `runner` context is only available at STEP
       # level — a job-level `env:` cannot read it.
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         env:
           TMPDIR: ${{ runner.temp }}
         with:
@@ -830,7 +830,7 @@ jobs:
       # TMPDIR pinned on every bun/node step for node's and bun's JS temp
       # files — see `build` for why it is not what `bun install` uses.
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         env:
           TMPDIR: ${{ runner.temp }}
         with:
