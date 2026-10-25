@@ -287,14 +287,17 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          archive="$(ls -1t "{{ backup_config_dir }}"/daily/llamenos-config-*.tar.gz.age | head -1)"
+          archive="$(find "{{ app_dir }}/backups" -type f -path '*/daily/llamenos-config-*.tar.gz.age' | sort | tail -1)"
+          test -n "${archive}"
           work="$(mktemp -d)"
           trap 'rm -rf "${work}"' EXIT
           age -d -i "{{ backup_age_private_key_path }}" -o "${work}/config.tar.gz" "${archive}"
           mkdir "${work}/x"
           tar -xzf "${work}/config.tar.gz" -C "${work}/x"
-          canary_files="$(grep -rlaF '{{ roundtrip_canary_secret }}' "${work}/x" | wc -l)"
-          ban_key_files="$(grep -rlaF '{{ roundtrip_ban_hash_key }}' "${work}/x" | wc -l)"
+          # grep exits 1 on "no match", which is the answer we want for the ban
+          # key; under pipefail that would abort the task, so absorb it.
+          canary_files="$( { grep -rlaF '{{ roundtrip_canary_secret }}' "${work}/x" || true; } | wc -l)"
+          ban_key_files="$( { grep -rlaF '{{ roundtrip_ban_hash_key }}' "${work}/x" || true; } | wc -l)"
           ban_key_named="$(find "${work}/x" -name 'ban-hash-key*' | wc -l)"
           echo "canary_files=${canary_files} ban_key_files=${ban_key_files} ban_key_named=${ban_key_named}"
       register: rt_config_inspect

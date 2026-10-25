@@ -2951,6 +2951,7 @@ jobs:
           TURN_SECRET=$(openssl rand -hex 32)
           GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)
           NOTIFIER_API_KEY=$(openssl rand -hex 16)
+          NOTIFIER_TOKEN_SECRET=$(openssl rand -hex 32)
           TOKEN_MAX_AGE_MS=3600000
           PG_POOL_SIZE=10
           ENVEOF
