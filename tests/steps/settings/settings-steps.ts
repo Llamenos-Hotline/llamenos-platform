@@ -304,9 +304,19 @@ Then('the {string} section header should report itself collapsed', async ({ page
   await expectSectionHeaderExpanded(page, headerText, false)
 })
 
-Then('the toggled language option should report itself pressed', async ({ page }) => {
-  const chip = page.getByTestId(TestIds.SETTINGS_PROFILE).getByRole('button', { name: /Français/ })
-  await expect(chip).toHaveAttribute('aria-pressed', 'true', { timeout: Timeouts.ELEMENT })
+Then('toggling a spoken language chip should flip its pressed state', async ({ page }) => {
+  const profile = await expandSettingsSection(page, TestIds.SETTINGS_PROFILE)
+  const chip = profile.getByRole('button', { name: /Français/ })
+  await expect(chip).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The seeded account may or may not already speak the language, so assert the
+  // change in state rather than a fixed value.
+  const before = await chip.getAttribute('aria-pressed')
+  expect(['true', 'false']).toContain(before)
+  const flipped = before === 'true' ? 'false' : 'true'
+  await chip.click()
+  await expect(chip).toHaveAttribute('aria-pressed', flipped, { timeout: Timeouts.ELEMENT })
+  await chip.click()
+  await expect(chip).toHaveAttribute('aria-pressed', before!, { timeout: Timeouts.ELEMENT })
 })
 
 Then(
