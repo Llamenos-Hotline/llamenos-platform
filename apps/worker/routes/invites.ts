@@ -11,7 +11,7 @@ import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
-import { hubsWithPermission } from '../lib/hub-scope'
+import { callerIsSuperAdmin, hubsWithPermission } from '../lib/hub-scope'
 import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
 import { ServiceError } from '../services/settings'
 
@@ -208,8 +208,7 @@ invites.post('/',
     // The authority the creator invites with: their permissions IN the invite's
     // hub — a hub admin's grant lives in `hubRoles` only, and a super-admin holds
     // everything in every hub. An invite that predates any hub (the setup
-    // wizard) has no hub to resolve in, so only an instance-level caller —
-    // global permissions, i.e. a super-admin — may mint one.
+    // wizard) has no hub to resolve in, so only a super-admin may mint one.
     let creatorPermissions = c.get('permissions') as string[]
 
     // The hub must exist, and the creator must be able to invite within it.
@@ -227,7 +226,7 @@ invites.post('/',
         return c.json({ error: 'Access denied' }, 403)
       }
       creatorPermissions = hubPermissions
-    } else if (!permissionGranted(creatorPermissions, 'invites:create')) {
+    } else if (!callerIsSuperAdmin(c)) {
       return c.json({ error: 'Forbidden', required: 'invites:create' }, 403)
     }
 
