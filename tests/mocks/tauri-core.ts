@@ -1036,14 +1036,34 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
   },
 
-  // Approve a recovery session: open our share, check its commitment, re-seal it
-  // to the recovering device and sign — the plaintext share stays in the mock's
-  // "Rust" side (mirrors recovery_share_contribute_from_state).
+  // Approve a recovery session (mirrors recovery_share_contribute_from_state). Like
+  // Rust, the mock takes only the session id from the caller: it fetches the session
+  // itself — authenticated with the device key, from the configured origin — and
+  // seals to the `newDevicePubkey` the server holds. There is no recipient argument.
   recovery_share_contribute_from_state: async (a) => {
     const secrets = requireSecrets()
     const { signingPubkeyHex } = requireDeviceState()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
-    const sessionId = a.sessionId as string
+
+    const requestedId = a.sessionId as string
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(requestedId)) throw new Error('Invalid recovery session id')
+    const path = `/api/recovery-group/session/${requestedId}`
+    const configured = await mockConfiguredOrigin()
+    const target = new URL(configured ? `${configured.origin}${path}` : path, window.location.origin)
+    if (configured) mockCheckHttpTarget(configured, target)
+    const res = await fetch(target.toString(), {
+      headers: { Authorization: `Bearer ${signMockAuthToken(Date.now(), 'GET', path, randomAuthNonce())}` },
+      redirect: 'manual',
+    })
+    if (!res.ok) throw new Error(`server returned HTTP ${res.status}`)
+    const session = (await res.json()) as { sessionId: string; status: string; newDevicePubkey: string }
+    if (session.sessionId !== requestedId) throw new Error('Server returned a different recovery session')
+    if (session.status !== 'verified' && session.status !== 'active') {
+      throw new Error(
+        `Recovery session is '${session.status}' — shares are only released for verified or active sessions`,
+      )
+    }
+    const sessionId = session.sessionId
 
     const share = await hpkeOpenMock(
       envelope,
@@ -1058,7 +1078,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     const sealed = await hpkeSealMock(
       share,
-      a.newDevicePubkeyHex as string,
+      session.newDevicePubkey,
       LABEL_RECOVERY_SHARE_CONTRIBUTE,
       utf8ToBytes(`${sessionId}:${signingPubkeyHex}`),
     )

@@ -99,9 +99,10 @@ export function RecoveryRequestsSection({
         return
       }
 
-      // Rust opens our share, checks it against its commitment, re-seals it to the
+      // Rust opens our share, checks it against its commitment, seals it to the
       // recovering user's new device and signs the result: the plaintext share never
-      // reaches the webview.
+      // reaches the webview. Rust reads the recipient key from the server's session
+      // record itself — it is not an argument.
       const envelope = JSON.parse(myShareEnvelope) as HpkeEnvelope
       let contribution
       try {
@@ -109,7 +110,6 @@ export function RecoveryRequestsSection({
           envelope,
           myShareCommitment,
           session.sessionId,
-          session.newDevicePubkey,
         )
       } catch (err) {
         if (err instanceof Error && err.message === RECOVERY_SHARE_COMMITMENT_MISMATCH) {

@@ -225,14 +225,28 @@ impl CryptoState {
         ))
     }
 
+    /// Nonce-bearing auth token (serialized JSON, the `Bearer` payload) signed by
+    /// the device key in state.
+    fn auth_token_json(&self, timestamp: u64, method: &str, path: &str) -> Result<String, String> {
+        self.with_secrets(|secrets| {
+            let token =
+                auth::create_auth_token(secrets, timestamp, method, path).map_err(err_str)?;
+            serde_json::to_string(&token).map_err(err_str)
+        })
+    }
+
     /// Body of `recovery_share_contribute_from_state`, without Tauri state.
+    ///
+    /// `session` is the server's own record of the recovery session, fetched by
+    /// Rust (see `net::fetch_json`) — the recipient key and session id come from
+    /// it, never from the caller.
     fn recovery_share_contribution(
         &self,
         envelope: &hpke_envelope::HpkeEnvelope,
         commitment_hex: String,
-        session_id: &str,
-        new_device_pubkey_hex: &str,
+        session: &RecoverySession,
     ) -> Result<serde_json::Value, String> {
+        session.ensure_contributable()?;
         let ds = self.get_device_state()?;
         let secret_hex = self.encryption_secret_hex()?;
         let share =
@@ -245,10 +259,11 @@ impl CryptoState {
             return Err("Share does not match its commitment".into());
         }
 
+        let session_id = &session.session_id;
         let aad = format!("{session_id}:{}", ds.signing_pubkey_hex);
         let sealed = hpke_envelope::hpke_seal(
             &share,
-            new_device_pubkey_hex,
+            &session.new_device_pubkey,
             LABEL_RECOVERY_SHARE_CONTRIBUTE,
             aad.as_bytes(),
         )
@@ -396,10 +411,7 @@ pub fn create_auth_token_from_state(
     method: String,
     path: String,
 ) -> Result<String, String> {
-    state.with_secrets(|secrets| {
-        let token = auth::create_auth_token(secrets, timestamp, &method, &path).map_err(err_str)?;
-        serde_json::to_string(&token).map_err(err_str)
-    })
+    state.auth_token_json(timestamp, &method, &path)
 }
 
 /// Create an Ed25519 auth token with NO nonce, for routes whose wire schema has
@@ -1110,28 +1122,81 @@ pub fn recovery_group_create(
     }))
 }
 
+/// The server's record of a recovery session — the only fields Rust trusts, read
+/// from `GET /api/recovery-group/session/:id` (`recoverySessionStatusResponseSchema`).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoverySession {
+    session_id: String,
+    status: String,
+    /// X25519 public key of the recovering user's new device — the recipient the
+    /// share is sealed to.
+    new_device_pubkey: String,
+}
+
+impl RecoverySession {
+    /// The server only accepts contributions in `verified`/`active` (see
+    /// `RecoveryGroupService.contributeShare`); sealing a share for any other
+    /// session would hand a recipient key a share the server will refuse anyway.
+    fn ensure_contributable(&self) -> Result<(), String> {
+        match self.status.as_str() {
+            "verified" | "active" => Ok(()),
+            other => Err(format!(
+                "Recovery session is '{other}' — shares are only released for verified or active sessions"
+            )),
+        }
+    }
+}
+
+/// A recovery session id as the server mints them (UUIDs). Anything else is
+/// refused before it can reach a URL path, so a hostile id cannot steer Rust's
+/// authenticated request to another route.
+fn is_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
 /// Approve a recovery session: open this device's share, check it against its
 /// commitment, seal it to the recovering user's new device, and sign the result
 /// — all inside Rust, so the plaintext share never reaches the webview.
+///
+/// **The recipient is not an argument.** The webview names only the session;
+/// Rust fetches that session from the configured, certificate-pinned backend
+/// (authenticated with this device's key) and seals to the `newDevicePubkey` the
+/// server holds for it. A compromised webview therefore cannot choose the key a
+/// share is sealed to: it does not relay the response, cannot change the origin
+/// or pins, and can only point Rust at a session the server itself lists as
+/// `verified`/`active` (which needs the user's out-of-band Signal verification)
+/// and that this device is entitled to read.
 ///
 /// Returns `{ encryptedShare, signature }`. `encryptedShare` is the serialized
 /// sealed envelope; `signature` covers
 /// `{LABEL_RECOVERY_SHARE_CONTRIBUTE}:{session_id}:{encryptedShare}` under the
 /// device signing key, so it binds the contribution to this session.
 #[tauri::command]
-pub fn recovery_share_contribute_from_state(
+pub async fn recovery_share_contribute_from_state(
+    app: tauri::AppHandle,
     state: tauri::State<'_, CryptoState>,
+    pinned: tauri::State<'_, crate::net::PinnedNet>,
     envelope: hpke_envelope::HpkeEnvelope,
     commitment_hex: String,
     session_id: String,
-    new_device_pubkey_hex: String,
 ) -> Result<serde_json::Value, String> {
-    state.recovery_share_contribution(
-        &envelope,
-        commitment_hex,
-        &session_id,
-        &new_device_pubkey_hex,
-    )
+    if !is_session_id(&session_id) {
+        return Err("Invalid recovery session id".into());
+    }
+    let path = format!("/api/recovery-group/session/{session_id}");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(err_str)?
+        .as_millis() as u64;
+    let token = state.auth_token_json(timestamp, "GET", &path)?;
+    let body = crate::net::fetch_json(&app, &pinned, &path, &token).await?;
+    let session: RecoverySession = serde_json::from_value(body)
+        .map_err(|e| format!("Unexpected recovery session response: {e}"))?;
+    if session.session_id != session_id {
+        return Err("Server returned a different recovery session".into());
+    }
+    state.recovery_share_contribution(&envelope, commitment_hex, &session)
 }
 
 /// HPKE-encrypted share envelope for recovery group reconstruction.
@@ -2179,8 +2244,7 @@ mod ipc_surface_tests {
             .recovery_share_contribution(
                 &held,
                 commitment.clone(),
-                "sess-1",
-                &recovering.encryption_pubkey_hex,
+                &session("sess-1", "verified", &recovering.encryption_pubkey_hex),
             )
             .unwrap();
         let keys: Vec<&String> = out.as_object().unwrap().keys().collect();
@@ -2248,8 +2312,124 @@ mod ipc_surface_tests {
         let wrong = created["commitments"][1].as_str().unwrap().to_string();
         let err = holder
             .state
-            .recovery_share_contribution(&held, wrong, "sess-1", &recovering.encryption_pubkey_hex)
+            .recovery_share_contribution(
+                &held,
+                wrong,
+                &session("sess-1", "verified", &recovering.encryption_pubkey_hex),
+            )
             .unwrap_err();
         assert!(err.contains("commitment"), "{err}");
+    }
+
+    /// The server's record of a session, as `fetch_json` would hand it over.
+    fn session(id: &str, status: &str, new_device_pubkey: &str) -> RecoverySession {
+        serde_json::from_value(serde_json::json!({
+            "sessionId": id,
+            "status": status,
+            "newDevicePubkey": new_device_pubkey,
+            // The rest of the response is ignored, not trusted.
+            "userPubkey": "ignored",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn recovery_share_contribution_seals_to_the_session_key_and_no_other() {
+        // The recipient is whatever the server's session says. There is no
+        // parameter through which a caller can substitute a key of its own, so
+        // the attacker's key never opens the contribution.
+        let holder = device();
+        let recovering = device();
+        let attacker = device();
+        let created = recovery_group_create(
+            3,
+            2,
+            vec![
+                holder.encryption_pubkey_hex.clone(),
+                device().encryption_pubkey_hex,
+                device().encryption_pubkey_hex,
+            ],
+        )
+        .unwrap();
+        let held: hpke_envelope::HpkeEnvelope =
+            serde_json::from_value(created["shareEnvelopes"][0].clone()).unwrap();
+        let commitment = created["commitments"][0].as_str().unwrap().to_string();
+
+        let out = holder
+            .state
+            .recovery_share_contribution(
+                &held,
+                commitment,
+                &session("sess-1", "active", &recovering.encryption_pubkey_hex),
+            )
+            .unwrap();
+        let contribution: hpke_envelope::HpkeEnvelope =
+            serde_json::from_str(out["encryptedShare"].as_str().unwrap()).unwrap();
+        let aad = format!("sess-1:{}", holder.signing_pubkey_hex);
+        assert!(
+            hpke_envelope::hpke_open(
+                &contribution,
+                &hex::encode(recovering.encryption_seed),
+                LABEL_RECOVERY_SHARE_CONTRIBUTE,
+                aad.as_bytes()
+            )
+            .is_ok()
+        );
+        assert!(
+            hpke_envelope::hpke_open(
+                &contribution,
+                &hex::encode(attacker.encryption_seed),
+                LABEL_RECOVERY_SHARE_CONTRIBUTE,
+                aad.as_bytes()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recovery_share_contribution_refuses_sessions_the_server_would_not_accept() {
+        let holder = device();
+        let recovering = device();
+        let created = recovery_group_create(
+            3,
+            2,
+            vec![
+                holder.encryption_pubkey_hex.clone(),
+                device().encryption_pubkey_hex,
+                device().encryption_pubkey_hex,
+            ],
+        )
+        .unwrap();
+        let held: hpke_envelope::HpkeEnvelope =
+            serde_json::from_value(created["shareEnvelopes"][0].clone()).unwrap();
+        let commitment = created["commitments"][0].as_str().unwrap().to_string();
+        for status in ["pending", "completed", "expired", "cancelled"] {
+            let err = holder
+                .state
+                .recovery_share_contribution(
+                    &held,
+                    commitment.clone(),
+                    &session("sess-1", status, &recovering.encryption_pubkey_hex),
+                )
+                .unwrap_err();
+            assert!(err.contains(status), "{err}");
+        }
+    }
+
+    #[test]
+    fn recovery_session_ids_cannot_steer_the_request_path() {
+        assert!(is_session_id("0b9f3c52-6d1e-4a77-9a0c-0f2f6a1d9e11"));
+        for bad in [
+            "",
+            "../hubs",
+            "a/b",
+            "a?x=1",
+            "a#b",
+            "a b",
+            "a%2f",
+            &"x".repeat(65),
+        ] {
+            assert!(!is_session_id(bad), "{bad:?} must be refused");
+        }
     }
 }

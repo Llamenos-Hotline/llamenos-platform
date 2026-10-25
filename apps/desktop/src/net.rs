@@ -316,6 +316,41 @@ pub async fn net_fetch(
     .await
 }
 
+/// Authenticated JSON `GET` issued by Rust itself, for commands that must act on
+/// the server's record of something rather than on what the webview says about
+/// it. Same allowlist and certificate pins as `net_fetch`; `path` is the
+/// request pathname (`/api/...`) and `bearer` the device auth token JSON.
+pub(crate) async fn fetch_json(
+    app: &AppHandle,
+    pinned: &PinnedNet,
+    path: &str,
+    bearer: &str,
+) -> Result<serde_json::Value, String> {
+    let configured = allowed_origin(app)?;
+    let ctx = pinned
+        .get()
+        .ok_or_else(|| "backend not fully configured: missing certificate pins".to_string())?;
+    fetch_json_with(&ctx.client, &configured, path, bearer).await
+}
+
+async fn fetch_json_with(
+    client: &reqwest::Client,
+    configured: &Url,
+    path: &str,
+    bearer: &str,
+) -> Result<serde_json::Value, String> {
+    let url = configured
+        .join(path)
+        .map_err(|e| format!("invalid request path: {e}"))?;
+    let headers = HashMap::from([("Authorization".to_string(), format!("Bearer {bearer}"))]);
+    let res = proxy_fetch(client, configured, "GET", url.as_str(), &headers, None).await?;
+    if !(200..300).contains(&res.status) {
+        return Err(format!("server returned HTTP {}", res.status));
+    }
+    let bytes = base64_decode(&res.body_base64)?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("server returned invalid JSON: {e}"))
+}
+
 // ---------------------------------------------------------------------------
 // First-run health probe
 // ---------------------------------------------------------------------------
@@ -703,6 +738,50 @@ mod tests {
 
     fn ok_response() -> String {
         "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string()
+    }
+
+    #[test]
+    fn fetch_json_sends_the_bearer_token_to_the_configured_origin_and_parses_the_body() {
+        let body = r#"{"sessionId":"abc"}"#;
+        let server = spawn_server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ));
+        let configured = u(&server.origin);
+
+        let json = tauri::async_runtime::block_on(fetch_json_with(
+            http_client(),
+            &configured,
+            "/api/recovery-group/session/abc",
+            "tok",
+        ))
+        .unwrap();
+        assert_eq!(json["sessionId"], "abc");
+
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /api/recovery-group/session/abc "));
+        assert!(
+            requests[0]
+                .to_lowercase()
+                .contains("authorization: bearer tok")
+        );
+    }
+
+    #[test]
+    fn fetch_json_reports_non_success_statuses_instead_of_parsing_them() {
+        let server = spawn_server(
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                .to_string(),
+        );
+        let err = tauri::async_runtime::block_on(fetch_json_with(
+            http_client(),
+            &u(&server.origin),
+            "/api/x",
+            "tok",
+        ))
+        .unwrap_err();
+        assert!(err.contains("404"), "{err}");
     }
 
     #[test]

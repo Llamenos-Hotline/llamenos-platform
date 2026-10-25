@@ -196,11 +196,33 @@ test.describe('Recovery Group - IPC Mock Verification', () => {
     )
   }
 
+  /**
+   * Serve a recovery session record from the backend route Rust reads it from.
+   * `requests` collects the auth header of every fetch, so a test can see that
+   * Rust (not the page) made an authenticated request.
+   */
+  async function serveSession(
+    page: import('@playwright/test').Page,
+    session: { sessionId: string; status: string; newDevicePubkey: string },
+  ): Promise<string[]> {
+    const authHeaders: string[] = []
+    await page.route(`**/api/recovery-group/session/${session.sessionId}`, async (route) => {
+      authHeaders.push(route.request().headers()['authorization'] ?? '')
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(session),
+      })
+    })
+    return authHeaders
+  }
+
   test('recovery_group_create seals every share and each opens only against its own commitment', async ({ page }) => {
     await waitForInvoke(page)
     const { me, group } = await createGroup(page)
+    const authHeaders = await serveSession(page, { sessionId: 'sess-1', status: 'verified', newDevicePubkey: me })
 
-    const result = await page.evaluate(async ({ me, group }) => {
+    const result = await page.evaluate(async ({ group }) => {
       const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
       const attempt = async (commitmentHex: string) => {
         try {
@@ -209,7 +231,6 @@ test.describe('Recovery Group - IPC Mock Verification', () => {
               envelope: group.shareEnvelopes[0],
               commitmentHex,
               sessionId: 'sess-1',
-              newDevicePubkeyHex: me,
             })) as { encryptedShare: string; signature: string },
           }
         } catch (e) {
@@ -221,7 +242,7 @@ test.describe('Recovery Group - IPC Mock Verification', () => {
         otherShare: await attempt(group.commitments[1]),
         zeros: await attempt('0'.repeat(64)),
       }
-    }, { me, group })
+    }, { group })
 
     expect(group.publicKeyHex).toHaveLength(64)
     expect(group.shareEnvelopes).toHaveLength(3)
@@ -232,6 +253,63 @@ test.describe('Recovery Group - IPC Mock Verification', () => {
     // A different share's commitment, or a made-up one, is refused.
     expect(result.otherShare.error).toMatch(/commitment/)
     expect(result.zeros.error).toMatch(/commitment/)
+    // The session was read by the command itself, authenticated with the device key.
+    expect(authHeaders.length).toBeGreaterThan(0)
+    expect(authHeaders.every((h) => h.startsWith('Bearer '))).toBe(true)
+  })
+
+  test('recovery_share_contribute_from_state takes the recipient from the server session — an injected one is ignored', async ({ page }) => {
+    await waitForInvoke(page)
+    const { me, group } = await createGroup(page)
+    // The server's record names a recipient that cannot be sealed to. If the command
+    // used any key the caller passed instead, the call would succeed with `me`.
+    await serveSession(page, { sessionId: 'sess-1', status: 'verified', newDevicePubkey: 'not-an-x25519-key' })
+
+    const error = await page.evaluate(async ({ group, me }) => {
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      try {
+        await invoke('recovery_share_contribute_from_state', {
+          envelope: group.shareEnvelopes[0],
+          commitmentHex: group.commitments[0],
+          sessionId: 'sess-1',
+          // A hostile webview offers a perfectly valid recipient, under every plausible name.
+          newDevicePubkeyHex: me,
+          newDevicePubkey: me,
+          recipientPubkeyHex: me,
+        })
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    }, { group, me })
+
+    expect(error).not.toBeNull()
+  })
+
+  test('recovery_share_contribute_from_state refuses sessions the server would not accept', async ({ page }) => {
+    await waitForInvoke(page)
+    const { me, group } = await createGroup(page)
+    await serveSession(page, { sessionId: 'sess-pending', status: 'pending', newDevicePubkey: me })
+
+    const errors = await page.evaluate(async ({ group }) => {
+      const invoke = (window as unknown as Record<symbol, unknown>)[Symbol.for('llamenos_test_invoke')] as Invoke
+      const attempt = async (sessionId: string) => {
+        try {
+          await invoke('recovery_share_contribute_from_state', {
+            envelope: group.shareEnvelopes[0],
+            commitmentHex: group.commitments[0],
+            sessionId,
+          })
+          return null
+        } catch (e) {
+          return e instanceof Error ? e.message : String(e)
+        }
+      }
+      return { pending: await attempt('sess-pending'), traversal: await attempt('../hubs') }
+    }, { group })
+
+    expect(errors.pending).toMatch(/pending/)
+    expect(errors.traversal).toMatch(/Invalid recovery session id/)
   })
 
   test('recovery_group_create returns no private key and no plaintext shares', async ({ page }) => {

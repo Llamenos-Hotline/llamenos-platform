@@ -205,6 +205,29 @@ describe('desktop IPC boundary', () => {
     }
   })
 
+  it('recovery_share_contribute_from_state takes no recipient key from the webview (#2227)', () => {
+    // The command reseals an opened share, so whoever picks the recipient key picks
+    // who can read it. Rust reads it from the server's session record instead; the
+    // webview names only the session. Pinned in all three places the argument
+    // list lives so a recipient parameter cannot creep back in.
+    const rust = read('apps/desktop/src/crypto.rs')
+    const sig = rust.match(/pub async fn recovery_share_contribute_from_state\(([\s\S]*?)\) -> /)?.[1]
+    expect(sig, 'recovery_share_contribute_from_state not found in crypto.rs').toBeDefined()
+    const params = [...(sig ?? '').matchAll(/^\s*(\w+):/gm)].map(m => m[1])
+    expect(params).toEqual(['app', 'state', 'pinned', 'envelope', 'commitment_hex', 'session_id'])
+
+    const platform = read('src/client/lib/platform.ts')
+    const wrapper = platform.match(/export async function recoveryShareContribute\(([\s\S]*?)\): Promise/)?.[1] ?? ''
+    expect(wrapper).not.toMatch(/pubkey/i)
+    const invoke = platform.match(/'recovery_share_contribute_from_state', \{([\s\S]*?)\}\)/)?.[1] ?? ''
+    expect(invoke).not.toMatch(/pubkey/i)
+
+    const mock = read('tests/mocks/tauri-core.ts')
+    const handler = mock.match(/recovery_share_contribute_from_state: async \(a\) => \{([\s\S]*?)\n  \},/)?.[1] ?? ''
+    expect(handler).not.toMatch(/a\.(newDevicePubkey|recipient)/)
+    expect(handler).toContain('/api/recovery-group/session/')
+  })
+
   it('the net proxy and backend-address commands are allowlisted for packaged builds', () => {
     const allowed = isolationAllowedCommands().app
     for (const cmd of [

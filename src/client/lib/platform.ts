@@ -1519,21 +1519,23 @@ export interface RecoveryShareContribution {
 
 /**
  * Approve a recovery session: Rust opens this device's share, checks it against its
- * commitment, re-seals it to the recovering user's new device and signs the result.
+ * commitment, seals it to the recovering user's new device and signs the result.
  * The plaintext share never enters JavaScript.
+ *
+ * The recipient is deliberately NOT a parameter: Rust fetches the session from the
+ * backend itself and seals to the `newDevicePubkey` the server holds for it, so a
+ * compromised webview cannot choose the key a share is sealed to.
  */
 export async function recoveryShareContribute(
   envelope: HpkeEnvelope,
   commitmentHex: string,
   sessionId: string,
-  newDevicePubkeyHex: string,
 ): Promise<RecoveryShareContribution> {
   if (useTauri) {
     return tauriInvoke<RecoveryShareContribution>('recovery_share_contribute_from_state', {
       envelope,
       commitmentHex,
       sessionId,
-      newDevicePubkeyHex,
     })
   }
   throw new Error('WASM recovery share contribute not yet implemented')
