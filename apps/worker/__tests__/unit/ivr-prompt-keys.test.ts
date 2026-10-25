@@ -50,7 +50,7 @@ function recordingAudioMap(): { audioUrls: AudioUrlMap; requested: string[] } {
   return { audioUrls, requested }
 }
 
-const incoming = { callSid: 'CA1', callerNumber: '+15550000000', callerLanguage: LANG, hotlineName: 'Test', speechUrl: fakeSpeech }
+const incoming = { callSid: 'CA1', callerNumber: '+15550000000', callerLanguage: LANG, hotlineName: 'Test', speechUrl: fakeSpeech, callRecordingEnabled: false }
 
 /** Every flow step that takes an audio map, and the uploads its caller hears, in order */
 const FLOWS: Array<{ step: string; hears: string[]; run: (a: TelephonyAdapter, audioUrls: AudioUrlMap) => Promise<{ body: string }> }> = [
@@ -69,6 +69,21 @@ const FLOWS: Array<{ step: string; hears: string[]; run: (a: TelephonyAdapter, a
     hears: ['greeting', 'captchaPrompt'],
     run: (a, audioUrls) =>
       a.handleIncomingCall({ ...incoming, voiceCaptchaEnabled: true, rateLimited: false, captchaDigits: '4821', audioUrls }),
+  },
+  {
+    // #1505 — a hub that records answered calls must disclose it to the caller
+    // before they can be connected, so the notice is played right after the
+    // greeting on every path that leads to a bridge.
+    step: 'a queued caller on a hub that records calls',
+    hears: ['greeting', 'recordingNotice', 'pleaseHold'],
+    run: (a, audioUrls) =>
+      a.handleIncomingCall({ ...incoming, callRecordingEnabled: true, voiceCaptchaEnabled: false, rateLimited: false, audioUrls }),
+  },
+  {
+    step: 'a CAPTCHA caller on a hub that records calls',
+    hears: ['greeting', 'recordingNotice', 'captchaPrompt'],
+    run: (a, audioUrls) =>
+      a.handleIncomingCall({ ...incoming, callRecordingEnabled: true, voiceCaptchaEnabled: true, rateLimited: false, captchaDigits: '4821', audioUrls }),
   },
   {
     step: 'a caller waiting in the queue',

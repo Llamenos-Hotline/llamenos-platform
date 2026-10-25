@@ -92,6 +92,7 @@ async function captchaClips(pbx: (typeof PBXS)[number], speechUrl: SpeechUrlBuil
     rateLimited: false,
     callerLanguage: 'es',
     hotlineName: 'Test Hotline',
+    callRecordingEnabled: false,
     captchaDigits: digits,
     speechUrl,
   })

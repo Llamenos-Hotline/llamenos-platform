@@ -136,6 +136,12 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       getPrompt('greeting', speechLang).replace('{name}', params.hotlineName),
     )
 
+    // #1505: disclose provider-side recording before the caller can be connected.
+    // Omitted on the rate-limited path — that call is hung up and never recorded.
+    const noticeXml = params.callRecordingEnabled
+      ? this.fsPrompt('recordingNotice', lang, audioUrls, speechUrl)
+      : ''
+
     if (rateLimited) {
       const speakXml = greetingXml + this.fsPrompt('rateLimited', lang, audioUrls, speechUrl)
       const hangupXml = '\n    <hangup/>'
@@ -146,6 +152,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       const digits = params.captchaDigits
       const speakXml =
         greetingXml +
+        noticeXml +
         this.fsPrompt('captchaPrompt', lang, audioUrls, speechUrl) +
         this.captchaDigitUrls(digits, lang, speechUrl).map((url) => this.fsPlay(url)).join('')
       const callbackUrl = this.buildCallbackUrl('/api/telephony/captcha', hubId)
@@ -158,7 +165,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       )
     }
 
-    const speakXml = greetingXml + this.fsPrompt('pleaseHold', lang, audioUrls, speechUrl)
+    const speakXml = greetingXml + noticeXml + this.fsPrompt('pleaseHold', lang, audioUrls, speechUrl)
     const parkXml = `\n    <execute application="park"/>`
     return this.xmlResponse(
       this.doc(speakXml + parkXml, {
@@ -189,6 +196,14 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     const { parentCallSid } = params
+    // #1505: this adapter implements no provider-side call recording at all —
+    // `intercept` just bridges the legs — so there is no directive to gate and
+    // `params.recordCall` is deliberately unused here. It is the one adapter
+    // that was never part of the unconditional-recording defect.
+    //
+    // If bridge recording is ever added to this path it MUST sit behind
+    // `params.recordCall`, exactly as every other adapter now does.
+    void params.recordCall
     const bridgeXml = `\n    <execute application="intercept" data="${escapeXml(parentCallSid)}"/>`
     return this.xmlResponse(this.doc(bridgeXml))
   }

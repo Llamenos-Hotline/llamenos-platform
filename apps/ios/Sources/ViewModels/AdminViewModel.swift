@@ -905,6 +905,9 @@ final class AdminViewModel {
                 path: "/api/settings/call",
                 body: CallSettings(
                     queueTimeoutSeconds: queueTimeoutSeconds,
+                    // nil is omitted from the PATCH body: this screen edits the two
+                    // timeouts only and must leave the hub's recording opt-in as it is.
+                    recordCalls: nil,
                     voicemailMaxSeconds: voicemailMaxSeconds
                 )
             )

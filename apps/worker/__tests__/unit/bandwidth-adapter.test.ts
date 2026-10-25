@@ -72,6 +72,7 @@ describe('BandwidthAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited BXML when rateLimited is true', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-1',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -87,6 +88,7 @@ describe('BandwidthAdapter', () => {
 
     it('returns Gather BXML when voice captcha is enabled', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-1',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -105,6 +107,7 @@ describe('BandwidthAdapter', () => {
 
     it('returns Redirect to wait-music for normal calls', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-1',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -120,6 +123,7 @@ describe('BandwidthAdapter', () => {
 
     it('appends hub parameter when hubId is provided', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-1',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -160,9 +164,27 @@ describe('BandwidthAdapter', () => {
     })
   })
 
+  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    it('returns StartRecording + Bridge BXML', async () => {
+    it('emits no StartRecording at all when recording is off', async () => {
       const result = await adapter.handleCallAnswered({
+        recordCall: false,
+        parentCallSid: 'parent-1',
+        callbackUrl: 'https://example.com',
+        userPubkey: 'pubkey-abc',
+      })
+      expect(result.contentType).toBe('application/xml')
+      // Still bridges...
+      expect(result.body).toContain('<Bridge targetCall="parent-1"/>')
+      // ...but never starts a recording.
+      expect(result.body).not.toContain('StartRecording')
+      expect(result.body).not.toContain('recordingAvailableUrl')
+      expect(result.body).not.toContain('/api/telephony/call-recording')
+    })
+
+    it('returns StartRecording + Bridge BXML when recording is on', async () => {
+      const result = await adapter.handleCallAnswered({
+        recordCall: true,
         parentCallSid: 'parent-1',
         callbackUrl: 'https://example.com',
         userPubkey: 'pubkey-abc',
@@ -175,6 +197,7 @@ describe('BandwidthAdapter', () => {
 
     it('escapes XML in callback URL', async () => {
       const result = await adapter.handleCallAnswered({
+        recordCall: true,
         parentCallSid: 'call-1',
         callbackUrl: 'https://example.com?foo=bar&baz=qux',
         userPubkey: 'pk',
@@ -285,6 +308,7 @@ describe('BandwidthAdapter', () => {
     it('escapes special XML characters in prompts', async () => {
       // Use a language with characters that need escaping, or inject via callbackUrl
       const result = await adapter.handleCallAnswered({
+        recordCall: false,
         parentCallSid: 'call-1',
         callbackUrl: 'https://example.com?a=1&b=2',
         userPubkey: 'pk',

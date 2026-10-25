@@ -148,7 +148,8 @@ async function makeApp(adapter: TelephonyAdapter) {
 
   const services = {
     calls,
-    settings: {},
+    // /user-answer reads the hub's recording opt-in (#1505); the default is off.
+    settings: { getCallSettings: vi.fn().mockResolvedValue({ recordCalls: false }) },
     identity: { getUser: vi.fn().mockResolvedValue({ name: 'Volunteer' }) },
     audit: { log: vi.fn().mockResolvedValue(undefined) },
   } as unknown as Services
