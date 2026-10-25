@@ -2749,6 +2749,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "url",
+ "webpki-root-certs",
  "x25519-dalek",
 ]
 

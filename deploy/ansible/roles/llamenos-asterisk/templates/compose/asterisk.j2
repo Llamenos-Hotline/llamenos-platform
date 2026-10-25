@@ -73,7 +73,13 @@ services:
       - source: ari_credentials
         target: /run/llamenos/ari-credentials.conf
     networks:
-      - llamenos-internal
+      llamenos-internal:
+        # Pinned, not left to the daemon: a relayed volunteer's media goes
+        # volunteer -> CoTURN -> THIS address (it is the only address Asterisk
+        # advertises to a client that signalled over the bridge), and CoTURN
+        # denies all private space except exactly this one (#2136). The
+        # subnet it sits in is declared by roles/docker.
+        ipv4_address: "{{ asterisk_internal_ip }}"
     healthcheck:
       test: ["CMD", "asterisk", "-rx", "core show version"]
       interval: 30s

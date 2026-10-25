@@ -88,8 +88,11 @@ shifts.get('/my-status',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const hubId = c.get('hubId') ?? ''
-    const result = await services.shifts.getMyStatus(hubId, pubkey)
-    return c.json(result)
+    const [result, active] = await Promise.all([
+      services.shifts.getMyStatus(hubId, pubkey),
+      services.activeShifts.getActive(pubkey, hubId),
+    ])
+    return c.json({ ...result, clockedIn: active !== null, clockedInAt: active?.startedAt.toISOString() ?? null })
   },
 )
 

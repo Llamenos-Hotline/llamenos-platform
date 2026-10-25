@@ -91,10 +91,9 @@ async function ensureContactVisibleInDirectory(
 /**
  * Click a specific contact's card in the directory list, waiting for it.
  *
- * Deliberately NOT the search box: the client's search sends the raw query as
- * a single blind-index token, which the server never matches against a name,
- * so a name search always returns an empty list (and clears the one that was
- * showing). The default list is sorted newest-first for never-contacted
+ * Deliberately NOT the search box: search is a client-side filter over the one
+ * page the directory loaded, so it adds nothing here but a way to hide the card.
+ * The default list is sorted newest-first for never-contacted
  * contacts, so a contact a Given step just seeded is within the first page;
  * asserting on the named card (a waiting assertion) instead of probing with
  * a non-waiting isVisible() keeps the click from racing the list load. A

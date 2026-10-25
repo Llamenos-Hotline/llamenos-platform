@@ -45,8 +45,24 @@ Feature: Channel Configuration
       | telegram.enabled       | true                        |
       | telegram.botToken      | 123456:ABC-DEF              |
       | telegram.botUsername   | @TestBot                    |
+      | telegram.webhookSecret | tg-webhook-secret           |
     Then the channel config response status is 200
     And the response "telegram.botToken" is "123456:ABC-DEF"
+
+  Scenario: A Telegram bot without a webhook secret is refused at configure time
+    When I PATCH "/settings/messaging" with:
+      | field                  | value                       |
+      | telegram.enabled       | true                        |
+      | telegram.botToken      | 123456:ABC-DEF              |
+    Then the channel config response status is 400
+
+  Scenario: An RCS agent without a webhook secret is refused at configure time
+    When I PATCH "/settings/messaging" with:
+      | field                  | value                       |
+      | rcs.agentId            | agent-1                     |
+      | rcs.serviceAccountKey  | {}                          |
+      | rcs.fallbackToSms      | false                       |
+    Then the channel config response status is 400
 
   Scenario: Test messaging channel connection
     Given the "signal" channel is configured

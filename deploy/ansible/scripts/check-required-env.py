@@ -530,6 +530,61 @@ def check_calling_vars(
                         f"still return 200 (rendered: {path}, {coturn_compose})"
                     )
 
+        failures.extend(_coturn_peer_acl_failures(text, coturn_compose))
+
+    return failures
+
+
+# The ranges a TURN relay must never send to (#2136). A volunteer holds working
+# credentials and coturn runs on the host network, so each of these is a way to
+# reach the docker bridges, the host or the cloud metadata service through a
+# socket the volunteer chose. coturn takes ranges, not CIDR.
+COTURN_DENIED_PEER_RANGES = (
+    "0.0.0.0-0.255.255.255",
+    "10.0.0.0-10.255.255.255",
+    "100.64.0.0-100.127.255.255",
+    "127.0.0.0-127.255.255.255",
+    "169.254.0.0-169.254.255.255",
+    "172.16.0.0-172.31.255.255",
+    "192.168.0.0-192.168.255.255",
+    "fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+    "fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+)
+
+
+def _coturn_peer_acl_failures(text: str, path: Path) -> list[str]:
+    """The rendered relay must deny private space and allow only the media server."""
+    failures: list[str] = []
+    # The command, not the prose around it: the template's comments discuss these
+    # flags and must not be able to satisfy (or trip) the check.
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    denied = set(re.findall(r"--denied-peer-ip=(\S+)", text))
+    for rng in COTURN_DENIED_PEER_RANGES:
+        if rng not in denied:
+            failures.append(
+                f"coturn compose: --denied-peer-ip={rng} is missing from {path}. "
+                "Without it any volunteer's TURN credentials relay into that range "
+                "(the docker bridges, the host, the cloud metadata service)"
+            )
+    for flag, why in (
+        ("--no-tcp-relay", "RFC 6062 TCP allocations reach HTTP services such as ARI"),
+        ("--no-multicast-peers", "a relay should not forward to multicast peers"),
+    ):
+        if flag not in text:
+            failures.append(f"coturn compose: {flag} is missing from {path} ({why})")
+    allowed = re.findall(r"--allowed-peer-ip=(\S+)", text)
+    if len(allowed) != 1:
+        failures.append(
+            f"coturn compose: expected exactly one --allowed-peer-ip (the media "
+            f"server) in {path}, found {allowed!r}. With none, denying 172.16/12 "
+            "drops every relayed call's audio; with a range, the allowance is not "
+            "'only the media server'"
+        )
+    elif not re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", allowed[0]) or allowed[0].startswith(("0.", "127.")):
+        failures.append(
+            f"coturn compose: --allowed-peer-ip={allowed[0]} in {path} is not a "
+            "single non-loopback IPv4 address"
+        )
     return failures
 
 

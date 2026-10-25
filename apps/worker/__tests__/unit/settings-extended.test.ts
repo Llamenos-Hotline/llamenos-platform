@@ -707,6 +707,50 @@ describe('SettingsService.updateMessagingConfig', () => {
     ).rejects.toMatchObject({ status: 400 })
   })
 
+  const savedConfig = { inactivityTimeout: 60, maxConcurrentPerUser: 5, enabledChannels: [], requireAssignment: false }
+
+  it('refuses an enabled Telegram channel without a webhook secret (#2154)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
+
+    await expect(
+      service.updateMessagingConfig({ telegram: { enabled: true, botToken: '1:abc' } as never }),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Telegram webhook secret is required') })
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('refuses an RCS channel without a webhook secret (#2154)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
+
+    await expect(
+      service.updateMessagingConfig({ rcs: { agentId: 'a', serviceAccountKey: '{}', fallbackToSms: false } as never }),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('RCS webhook secret is required') })
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('saves Telegram and RCS once they carry a webhook secret', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
+
+    const result = await service.updateMessagingConfig({
+      telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+      rcs: { agentId: 'a', serviceAccountKey: '{}', webhookSecret: 'rcs-secret', fallbackToSms: false },
+    })
+    expect(result.enabledChannels).toEqual(expect.arrayContaining(['telegram', 'rcs']))
+    expect(db.update).toHaveBeenCalled()
+  })
+
+  it('does not let a stored config without a secret block an unrelated edit', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({
+      messagingConfig: { ...savedConfig, telegram: { enabled: true, botToken: '1:abc' } },
+    })])
+
+    const result = await service.updateMessagingConfig({ inactivityTimeout: 30 })
+    expect(result.inactivityTimeout).toBe(30)
+  })
+
   it('merges partial update and persists', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({

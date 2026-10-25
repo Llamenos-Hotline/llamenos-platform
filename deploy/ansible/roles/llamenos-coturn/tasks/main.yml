@@ -77,6 +77,27 @@
             turn_relay_ip '{{ turn_relay_ip | default('') }}'
     success_msg: "turn_listening_ip: {{ turn_listening_ip }}, turn_relay_ip: {{ turn_relay_ip }}"
 
+# The peer allowance is the only thing standing between "deny every private
+# range" (#2136) and "every relayed call is silent". An empty value renders
+# `--allowed-peer-ip=`, which coturn aborts on at start-up, and a loopback or
+# unspecified value would re-open the very addresses the deny list closes.
+- name: Assert the media-server peer allowance is a single routable-to-Asterisk IPv4 address
+  ansible.builtin.assert:
+    that:
+      - turn_media_peer_ip is defined
+      - turn_media_peer_ip | string is match('^(\\d{1,3}\\.){3}\\d{1,3}$')
+      - not (turn_media_peer_ip | string is match('^(0|127)\\.'))
+    fail_msg: |
+      REQUIRED when llamenos_coturn_enabled is true:
+        turn_media_peer_ip — the ONE address a TURN relay may send to: the media
+                             server (Asterisk). A single IPv4 address, not a range
+                             and not loopback. Defaults to asterisk_internal_ip,
+                             Asterisk's pinned address on llamenos-internal.
+      Without it every private range is denied (#2136) and a relayed call
+      connects at signalling and carries no audio.
+      Seen: turn_media_peer_ip '{{ turn_media_peer_ip | default('') }}'
+    success_msg: "turn_media_peer_ip: {{ turn_media_peer_ip }}"
+
 - name: Create coturn service directory
   ansible.builtin.file:
     path: "{{ app_dir }}/services/coturn"

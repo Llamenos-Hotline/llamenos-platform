@@ -451,6 +451,82 @@ describe('settings route', () => {
       expect(res.status).toBe(200)
       expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ enabledChannels: ['sms', 'whatsapp'] }))
     })
+
+    describe('POST /messaging/telegram/register-webhook (#2154)', () => {
+      const env = { HMAC_SECRET: 'h'.repeat(64), DOMAIN: 'hotline.example' }
+      const register = (app: ReturnType<typeof createTestApp>) =>
+        app.request('/messaging/telegram/register-webhook', { method: 'POST' }, env)
+
+      it('requires manage-messaging permission', async () => {
+        const res = await register(createTestApp({ permissions: ['settings:read'] }))
+        expect(res.status).toBe(403)
+      })
+
+      it('registers our webhook URL with the configured secret_token', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+              }),
+            },
+          },
+        })
+        const res = await register(app)
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({ ok: true })
+        const [url, init] = fetchMock.mock.calls[0]
+        expect(String(url)).toBe('https://api.telegram.org/bot1:abc/setWebhook')
+        expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+          url: 'https://hotline.example/api/messaging/telegram/webhook',
+          secret_token: 'tg-secret',
+        })
+        vi.unstubAllGlobals()
+      })
+
+      it('refuses with 400 when Telegram has no secret, without calling Telegram', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc' },
+              }),
+            },
+          },
+        })
+        const res = await register(app)
+        expect(res.status).toBe(400)
+        expect(fetchMock).not.toHaveBeenCalled()
+        vi.unstubAllGlobals()
+      })
+
+      it('reports a Telegram rejection as 502', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, description: 'Unauthorized' }), { status: 401 })))
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+              }),
+            },
+          },
+        })
+        const res = await register(app)
+        expect(res.status).toBe(502)
+        expect(await res.json()).toEqual({ error: 'Unauthorized' })
+        vi.unstubAllGlobals()
+      })
+    })
   })
 
   describe('setup', () => {

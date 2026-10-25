@@ -32,7 +32,10 @@ export type Contact = z.infer<typeof contactSchema>
 
 export const createContactBodySchema = z.object({
   hubId: z.string(),
-  identifierHashes: z.array(z.string()).min(1),
+  // Optional: the desktop sends none until client-side hub-key blind indexes exist (#1042).
+  // Phone numbers and names are low-entropy, so any index the client can derive without
+  // a key the server lacks is reversible by brute force.
+  identifierHashes: z.array(z.string()).optional().default([]),
   nameHash: z.string().optional(),
   trigramTokens: z.array(z.string()).optional(),
   encryptedSummary: z.string().min(1),
@@ -45,7 +48,7 @@ export const createContactBodySchema = z.object({
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
 })
 
-export type CreateContactBody = z.infer<typeof createContactBodySchema>
+export type CreateContactBody = z.input<typeof createContactBodySchema>
 
 // --- Update contact body (partial) ---
 

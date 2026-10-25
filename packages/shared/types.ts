@@ -202,7 +202,7 @@ export interface SignalConfig {
 export interface RCSConfig {
   agentId: string
   serviceAccountKey: string    // JSON string of Google service account key
-  webhookSecret?: string
+  webhookSecret: string        // required: the inbound webhook fails closed without it (#2154)
   fallbackToSms: boolean
   autoResponse?: string
   afterHoursResponse?: string
@@ -211,7 +211,7 @@ export interface RCSConfig {
 export interface TelegramConfig {
   enabled: boolean
   botToken: string
-  webhookSecret?: string
+  webhookSecret: string        // required: sent as setWebhook secret_token; inbound fails closed without it (#2154)
   botUsername?: string
   autoResponse?: string
   afterHoursResponse?: string
