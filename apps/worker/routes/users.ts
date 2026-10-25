@@ -8,14 +8,37 @@ import { recordListResponseSchema } from '@protocol/schemas/records'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { createEntityRouter } from '../lib/entity-router'
 import { callerIsSuperAdmin, checkRoleGrant } from '../lib/hub-scope'
+import { resolveHubRoleIds } from '@shared/permissions'
 import type { Context } from 'hono'
 import { revokeSipIdentityIfRoleless, revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 // Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
 // Under a hub, every read and write is confined to that hub's members.
+//
+// The unscoped mount is the INSTANCE view — every user on the server, names and
+// phone numbers included — so it is refused to everyone but a super-admin
+// (see `hubOrSuperAdmin`). A hub admin works through their own hub's mount.
 const users = new Hono<AppEnv>()
+
+/**
+ * Outside a hub there is no member list to bound a request to: the unscoped
+ * mount reads and writes users across every hub. Only an instance-level
+ * super-admin may; anyone else is told to use their hub's mount, so a missing
+ * hub never widens a caller's authority (#1099, #2153). Under a hub the path
+ * hub is the boundary and hubContext has already admitted the caller to it.
+ *
+ * Applied per handler rather than with `users.use('*')`: this router is mounted
+ * at `/users`, and a wildcard there would also catch `/users/:pubkey/sigchain`,
+ * the self-service route registered beside it.
+ */
+const hubOrSuperAdmin = createMiddleware<AppEnv>(async (c, next) => {
+  if (!c.get('hubId') && !callerIsSuperAdmin(c)) {
+    return c.json({ error: 'Forbidden — use /api/hubs/:hubId/users to manage the members of a hub you administer' }, 403)
+  }
+  await next()
+})
+users.use('/', hubOrSuperAdmin)
 
 /**
  * Under a hub, 404 for a target user who is not a member of it, before any
@@ -27,21 +50,42 @@ const targetInHub = createMiddleware<AppEnv>(async (c, next) => {
   await next()
 })
 
-// GET / via factory — getUsers(hubId) lists only the hub's members under a hub
-const userListRouter = createEntityRouter({
-  tag: 'Users',
-  domain: 'users',
-  service: 'identity',
-  listResponseSchema: userListResponseSchema,
-  itemResponseSchema: userResponseSchema,
-  hubScoped: true,
-  disableGet: true,
-  disableDelete: true,
-  methods: {
-    list: 'getUsers',
+/**
+ * A user as the caller sees them. Inside a hub `roles` is the set that carries
+ * authority THERE — the hub assignment, plus a super-admin's global roles —
+ * because a hub member's own `roles` column is empty (their grant is a
+ * `hubRoles` entry, #2153) and the clients read `roles` to show who is what.
+ * The service already trimmed `hubRoles` to this hub. Outside a hub, as stored.
+ */
+function asSeenFromHub<T extends { roles: string[]; hubRoles?: { hubId: string; roleIds: string[] }[] }>(
+  c: Context<AppEnv>,
+  user: T,
+): T {
+  const hubId = c.get('hubId')
+  if (!hubId) return user
+  return { ...user, roles: resolveHubRoleIds(user.roles, user.hubRoles ?? [], c.get('allRoles'), hubId) }
+}
+
+// GET / — getUsers(hubId) lists only the hub's members under a hub, and every
+// user on the instance outside one (super-admin only, see `hubOrSuperAdmin`).
+users.get('/',
+  describeRoute({
+    tags: ['Users'],
+    summary: 'List users',
+    responses: {
+      200: {
+        description: 'List of users',
+        content: { 'application/json': { schema: resolver(userListResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('users:read'),
+  async (c) => {
+    const { users: listed } = await c.get('services').identity.getUsers(c.get('hubId'))
+    return c.json({ users: listed.map(u => asSeenFromHub(c, u)) })
   },
-})
-users.route('/', userListRouter)
+)
 
 // Permission first, so the 404 is no membership oracle for a hub user who may
 // not read users at all. Under a hub, getUser both 404s a non-member and shows
@@ -63,10 +107,11 @@ users.get('/:targetPubkey',
       ...notFoundError,
     },
   }),
+  hubOrSuperAdmin,
   requirePermission('users:read'),
   async (c) => {
     const user = await c.get('services').identity.getUser(c.req.param('targetPubkey'), c.get('hubId'))
-    return c.json(user)
+    return c.json(asSeenFromHub(c, user))
   },
 )
 
@@ -93,6 +138,22 @@ async function affectsOtherHubs(c: Context<AppEnv>, targetPubkey: string, hubId:
   const target = await c.get('services').identity.getUserInternal(targetPubkey)
   if (!target) return false
   return target.roles.length > 0 || (target.hubRoles ?? []).some(hr => hr.hubId !== hubId)
+}
+
+/** True when the target account holds a global (instance-wide) role. */
+async function holdsGlobalRole(c: Context<AppEnv>, targetPubkey: string): Promise<boolean> {
+  const target = await c.get('services').identity.getUserInternal(targetPubkey)
+  return (target?.roles.length ?? 0) > 0
+}
+
+/**
+ * The hub a cases/metrics query is about: the path hub when there is one (it
+ * wins over `?hubId=`, which must not reach into another hub), otherwise the
+ * `?hubId=` of a super-admin. Never an empty id — that matches no hub and would
+ * silently return nothing instead of saying what is missing.
+ */
+function hubOfQuery(c: Context<AppEnv>): string | null {
+  return c.get('hubId') ?? c.req.query('hubId') ?? null
 }
 
 users.post('/',
@@ -140,7 +201,7 @@ users.post('/',
 
     await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: roleIds }, undefined, hubId ?? null)
 
-    return c.json(result.volunteer, 201)
+    return c.json(asSeenFromHub(c, result.volunteer), 201)
   },
 )
 
@@ -160,6 +221,7 @@ users.patch('/:targetPubkey',
       ...authErrors,
     },
   }),
+  hubOrSuperAdmin,
   requirePermission('users:update'),
   targetInHub,
   validator('json', adminUpdateUserBodySchema),
@@ -174,6 +236,11 @@ users.patch('/:targetPubkey',
     if (body.roles) {
       const denied = checkRoleGrant(c, body.roles)
       if (denied) return c.json({ error: denied.error }, denied.status)
+    }
+    // A global role is authority over every hub: a hub admin cannot edit the
+    // account of someone who holds one, only a super-admin can.
+    if (hubId && !callerIsSuperAdmin(c) && await holdsGlobalRole(c, targetPubkey)) {
+      return c.json({ error: 'This account holds instance-level roles — only a super-admin can change it' }, 403)
     }
     if (hubId && body.active === false && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
       return c.json({
@@ -200,7 +267,7 @@ users.patch('/:targetPubkey',
       await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
     }
 
-    return c.json(result.volunteer)
+    return c.json(asSeenFromHub(c, result.volunteer))
   },
 )
 
@@ -220,6 +287,7 @@ users.delete('/:targetPubkey',
       ...authErrors,
     },
   }),
+  hubOrSuperAdmin,
   requirePermission('users:delete'),
   targetInHub,
   async (c) => {
@@ -269,6 +337,7 @@ users.get('/:targetPubkey/cases',
       ...notFoundError,
     },
   }),
+  hubOrSuperAdmin,
   requirePermission('users:read-cases'),
   async (c) => {
     const services = c.get('services')
@@ -285,8 +354,8 @@ users.get('/:targetPubkey/cases',
     const limit = parseInt(c.req.query('limit') ?? '20', 10)
     const entityTypeId = c.req.query('entityTypeId')
 
-    // The hub in the path wins: a ?hubId= must not reach into another hub
-    const hubId = c.get('hubId') ?? c.req.query('hubId') ?? ''
+    const hubId = hubOfQuery(c)
+    if (!hubId) return c.json({ error: 'hubId is required outside a hub' }, 400)
 
     const result = await services.cases.list({
       hubId,
@@ -323,6 +392,7 @@ users.get('/:targetPubkey/metrics',
       ...notFoundError,
     },
   }),
+  hubOrSuperAdmin,
   requirePermission('users:read-metrics'),
   async (c) => {
     const services = c.get('services')
@@ -335,8 +405,8 @@ users.get('/:targetPubkey/metrics',
       return c.json({ error: 'User not found' }, 404)
     }
 
-    // The hub in the path wins: a ?hubId= must not reach into another hub
-    const hubId = c.get('hubId') ?? c.req.query('hubId') ?? ''
+    const hubId = hubOfQuery(c)
+    if (!hubId) return c.json({ error: 'hubId is required outside a hub' }, 400)
 
     // Get all records assigned to this user
     const result = await services.cases.list({

@@ -49,7 +49,7 @@ import {
   type Role,
 } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
-import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, mergeHubRole } from '../lib/hub-admin'
+import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, mergeHubRole, type HubRoleAssignment } from '../lib/hub-admin'
 
 const log = createLogger('services.identity')
 
@@ -201,6 +201,13 @@ function hubMember(hubId: string): SQL {
         AND ${roleDefinitions.permissions} @> ARRAY['*']::text[]
     )
   )`
+}
+
+/** `hubRoles` with the assignment in `hubId` replaced by `roleIds` (added if absent); every other hub is untouched */
+function replaceHubRole(hubRoles: readonly HubRoleAssignment[], hubId: string, roleIds: readonly string[]): HubRoleAssignment[] {
+  return hubRoles.some(hr => hr.hubId === hubId)
+    ? hubRoles.map(hr => (hr.hubId === hubId ? { ...hr, roleIds: [...roleIds] } : hr))
+    : [...hubRoles, { hubId, roleIds: [...roleIds] }]
 }
 
 /** A user as seen from inside one hub: their role assignments in other hubs are not its business */
@@ -600,8 +607,14 @@ export class IdentityService {
   }
 
   /**
-   * Create a new volunteer. With a hubId, they are created as a member of that
-   * hub, holding the same roles there.
+   * Create a new volunteer.
+   *
+   * With a hubId they are created as a member of that hub, holding `roleIds`
+   * THERE and nothing globally: the account-wide `roles` column is authority
+   * over the whole instance on every unscoped route, so a hub grant written to
+   * it makes a hub admin an admin of every hub (#2153). Without a hubId the
+   * roles are global, which only an instance-level caller (a super-admin on the
+   * unscoped route) can ask for.
    */
   async createUser(data: {
     pubkey: string
@@ -616,7 +629,8 @@ export class IdentityService {
     hubId?: string
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
-    const roles = this.enforceAdminRoles(data.pubkey, data.roleIds ?? data.roles ?? ['role-volunteer'])
+    const grantedRoleIds = data.roleIds ?? data.roles ?? ['role-volunteer']
+    const roles = this.enforceAdminRoles(data.pubkey, data.hubId ? [] : grantedRoleIds)
     // onConflictDoNothing (not onConflictDoUpdate): a second create for a pubkey
     // that already belongs to a DIFFERENT person must never overwrite their row —
     // unlike bootstrapAdmin/ensureInit above, which intentionally re-assert one
@@ -629,7 +643,7 @@ export class IdentityService {
       displayName: data.name,
       phone: data.phone,
       roles,
-      ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: roles }] }),
+      ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: grantedRoleIds }] }),
       encryptedSecretKey: data.encryptedSecretKey,
       transcriptionEnabled: true,
       spokenLanguages: ['en'],
@@ -651,7 +665,11 @@ export class IdentityService {
 
   /**
    * Update a volunteer's fields. Non-admin callers are restricted to safe fields.
-   * With a hubId, the returned volunteer shows only their role assignment in it.
+   *
+   * With a hubId, the returned volunteer shows only their role assignment in
+   * it, and `roles` replaces their assignment IN THAT HUB — it never touches the
+   * account-wide `roles` column, which is authority over every hub (#2153).
+   * Without a hubId, `roles` is that global column.
    */
   async updateUser(
     pubkey: string,
@@ -666,11 +684,15 @@ export class IdentityService {
     // Build update payload — map User fields to DB columns
     const updates: Partial<typeof users.$inferInsert> = {}
 
+    let hubRoleIds: string[] | undefined
     const applyField = (key: string, value: unknown) => {
       switch (key) {
         case 'name': updates.displayName = value as string; break
         case 'phone': updates.phone = value as string; break
-        case 'roles': updates.roles = this.enforceAdminRoles(pubkey, value as string[]); break
+        case 'roles':
+          if (hubId) hubRoleIds = value as string[]
+          else updates.roles = this.enforceAdminRoles(pubkey, value as string[])
+          break
         case 'active': updates.active = value as boolean; break
         case 'encryptedSecretKey': updates.encryptedSecretKey = value as string; break
         case 'transcriptionEnabled': updates.transcriptionEnabled = value as boolean; break
@@ -703,11 +725,12 @@ export class IdentityService {
     // Rewriting hubRoles, or deactivating, can take away admin authority; those
     // updates run under the admin invariant (#2126, #2190). Global `roles` carry
     // none: only a role held in a hub makes a user an admin of it.
-    const touchesAdminAuthority = updates.hubRoles !== undefined || updates.active === false
+    const touchesAdminAuthority = updates.hubRoles !== undefined || hubRoleIds !== undefined || updates.active === false
     const [row] = touchesAdminAuthority
       ? await this.db.transaction(async (tx) => {
           const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
           if (!current) throw new ServiceError(404, 'Not found')
+          if (hubId && hubRoleIds) updates.hubRoles = replaceHubRole(rowToUser(current).hubRoles ?? [], hubId, hubRoleIds)
           await assertHubsKeepAnAdmin(
             tx,
             pubkey,
@@ -760,9 +783,7 @@ export class IdentityService {
       const priorRoles = vol.hubRoles ?? []
       // Built without mutating `priorRoles`: the guard below compares against
       // what is stored, and the row's array is the same object.
-      const hubRoles = priorRoles.some(hr => hr.hubId === data.hubId)
-        ? priorRoles.map(hr => (hr.hubId === data.hubId ? { ...hr, roleIds: data.roleIds } : hr))
-        : [...priorRoles, { hubId: data.hubId, roleIds: data.roleIds }]
+      const hubRoles = replaceHubRole(priorRoles, data.hubId, data.roleIds)
 
       // Replacing the roles is how an admin is demoted: refuse if this
       // user is the hub's last admin (#2126).
@@ -985,8 +1006,9 @@ export class IdentityService {
    * Invites created before they carried a hub (#1037) have `hub_id` null. On a
    * single-hub deployment — the shape R1 ships — there is exactly one answer,
    * the same one `GET /api/config` reports as `defaultHubId`. With zero or
-   * several active hubs there is no answer, and the redeemer is created
-   * without hub membership rather than guessed into the wrong hub.
+   * several active hubs there is no answer, and the redemption is refused
+   * rather than guessing the redeemer into the wrong hub — or, worse, into a
+   * global role (#2153).
    */
   private async resolveSoleActiveHubId(tx: Database): Promise<string | null> {
     const rows = await tx
@@ -1034,6 +1056,13 @@ export class IdentityService {
       // role, and the member joins with none for the operator to assign.
       const grantedRoleIds = invite.roleIds
       const hubId = invite.hubId ?? await this.resolveSoleActiveHubId(tx)
+      // An invite admits someone to a hub. With no hub to name there is nothing
+      // it can grant, and falling back to a global role would hand the redeemer
+      // authority over every hub (#2153) — so refuse. Throwing rolls back the
+      // claim above, leaving the invite redeemable once a hub exists.
+      if (!hubId) {
+        throw new ServiceError(409, 'This invite is not tied to a hub and the server has no single hub to admit you to — ask for a new invite')
+      }
 
       // An already-registered pubkey is a person being invited into a SECOND
       // hub, not an error. Merge the grant into their existing hubRoles rather
@@ -1048,11 +1077,6 @@ export class IdentityService {
         .limit(1)
 
       if (existing.length > 0) {
-        // With no hub to merge into there is nothing an invite can add, so the
-        // duplicate key is a genuine conflict. Throwing rolls back the claim
-        // above, leaving the invite redeemable.
-        if (!hubId) throw new ServiceError(409, 'A user with this key already exists')
-
         const current = rowToUser(existing[0])
         const [row] = await tx
           .update(users)
@@ -1073,9 +1097,12 @@ export class IdentityService {
         pubkey: data.pubkey,
         displayName: invite.name,
         phone: invite.phone,
-        roles: this.enforceAdminRoles(data.pubkey, grantedRoleIds),
+        // Global roles stay empty: the grant is a membership of `hubId`, held in
+        // `hubRoles` only (#2153). The configured platform admin is the one
+        // exception — enforceAdminRoles keeps their super-admin role.
+        roles: this.enforceAdminRoles(data.pubkey, []),
         // Hub membership — what makes the redeemer visible to the operator.
-        ...(hubId && { hubRoles: [{ hubId, roleIds: grantedRoleIds }] }),
+        hubRoles: [{ hubId, roleIds: grantedRoleIds }],
         encryptedSecretKey: '',
         transcriptionEnabled: true,
         spokenLanguages: ['en'],
