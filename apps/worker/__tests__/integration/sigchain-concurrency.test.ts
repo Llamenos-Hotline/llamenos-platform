@@ -97,6 +97,7 @@ const DDL = `
     wake_key_public  TEXT,
     ed25519_pubkey   TEXT,
     x25519_pubkey    TEXT,
+    x25519_set_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     registered_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at     TIMESTAMPTZ,
     device_name      TEXT,

@@ -1510,6 +1510,7 @@ export class IdentityService {
           lastSeenAt: devices.lastSeenAt,
           pushToken: devices.pushToken,
           ed25519Pubkey: devices.ed25519Pubkey,
+          x25519Pubkey: devices.x25519Pubkey,
         })
         .from(devices)
         .where(eq(devices.pubkey, pubkey))
@@ -1520,6 +1521,15 @@ export class IdentityService {
       })
 
       if (decision.action === 'update_existing') {
+        // The key's age is the time its VALUE last changed. A client re-registers
+        // the same key on every launch; that must not make the key look new.
+        // `registered_at` is no substitute — it never moves when the key is
+        // overwritten (#2143). Stamped by the database clock, the one
+        // `messages.created_at` also uses, so the re-wrap gate compares two
+        // times from the same source and app/database skew cannot reorder them.
+        const current = allDevices.find((d) => d.id === decision.deviceId)
+        const x25519Changed =
+          data.x25519Pubkey !== undefined && data.x25519Pubkey !== current?.x25519Pubkey
         await tx
           .update(devices)
           .set({
@@ -1527,6 +1537,7 @@ export class IdentityService {
             ...(data.wakeKeyPublic !== undefined && { wakeKeyPublic: data.wakeKeyPublic }),
             ...(data.ed25519Pubkey !== undefined && { ed25519Pubkey: data.ed25519Pubkey }),
             ...(data.x25519Pubkey !== undefined && { x25519Pubkey: data.x25519Pubkey }),
+            ...(x25519Changed && { x25519SetAt: sql`clock_timestamp()` }),
             ...(data.deviceName !== undefined && { deviceName: data.deviceName }),
             ...(data.deviceModel !== undefined && { deviceModel: data.deviceModel }),
             ...(data.osVersion !== undefined && { osVersion: data.osVersion }),
@@ -1548,6 +1559,7 @@ export class IdentityService {
         wakeKeyPublic: data.wakeKeyPublic,
         ed25519Pubkey: data.ed25519Pubkey,
         x25519Pubkey: data.x25519Pubkey,
+        x25519SetAt: sql`clock_timestamp()`,
         deviceName: data.deviceName,
         deviceModel: data.deviceModel,
         osVersion: data.osVersion,
