@@ -38,6 +38,7 @@ import * as records from '@protocol/schemas/records'
 import * as recoveryGroup from '@protocol/schemas/recovery-group'
 import * as devices from '@protocol/schemas/devices'
 import * as settings from '@protocol/schemas/settings'
+import * as shifts from '@protocol/schemas/shifts'
 import * as providerSetupApi from '@protocol/schemas/provider-setup/api'
 
 const MODULES: Record<string, Record<string, unknown>> = {
@@ -53,6 +54,8 @@ const MODULES: Record<string, Record<string, unknown>> = {
   // screen reported success.
   '@protocol/schemas/settings': settings,
   '@protocol/schemas/provider-setup/api': providerSetupApi,
+  // #2204 — the shift status both iOS screens read.
+  '@protocol/schemas/shifts': shifts,
 }
 
 const FIXTURE = join(__dirname, '../../../../apps/ios/Tests/Wire/ios-request-bodies.json')

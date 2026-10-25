@@ -179,7 +179,8 @@ final class RelayMultiHubTests: XCTestCase {
         try api.configure(hubURLString: "https://hub.example.org")
 
         RelayStubURLProtocol.reset([
-            "/api/hubs/hub-A/shifts/my-status": #"{"onShift":true,"activeCallCount":1}"#,
+            "/api/hubs/hub-A/shifts/my-status": #"{"onShift":true,"clockedIn":true,"clockedInAt":"2026-10-20T09:30:00.000Z","currentShift":null,"nextShift":null}"#,
+            "/api/auth/me": #"{"pubkey":"abababababababababababababababababababababababababababababababab","roles":[],"onBreak":false}"#,
             "/api/hubs/hub-A/calls/active": #"{"calls":[]}"#,
             "/api/hubs/hub-B/calls/active":
                 #"{"calls":[{"id":"call-b","startedAt":"2026-09-26T10:00:00.000Z","status":"ringing","callerLast4":"4321"}]}"#,
@@ -189,7 +190,13 @@ final class RelayMultiHubTests: XCTestCase {
         let ws = WebSocketService(cryptoService: CryptoService())
         ws.receiveServerMessageForTesting(#"{"type":"authenticated","hubs":["hub-A","hub-B","global"]}"#)
 
-        let vm = DashboardViewModel(apiService: api, cryptoService: CryptoService(), webSocketService: ws, hubContext: ctx)
+        let vm = DashboardViewModel(
+            apiService: api,
+            cryptoService: CryptoService(),
+            webSocketService: ws,
+            hubContext: ctx,
+            shiftClockService: ShiftClockService(apiService: api)
+        )
         XCTAssertEqual(vm.callHubIds, ["hub-A", "hub-B"], "Calls are polled on every member hub, active hub first")
 
         vm.startEventListener()

@@ -15,11 +15,13 @@ struct DashboardNoteDecryptTests {
 
     private func makeViewModel(cryptoService: CryptoService) -> DashboardViewModel {
         let hubContext = HubContext()
+        let apiService = APIService(cryptoService: cryptoService, hubContext: hubContext)
         return DashboardViewModel(
-            apiService: APIService(cryptoService: cryptoService, hubContext: hubContext),
+            apiService: apiService,
             cryptoService: cryptoService,
             webSocketService: WebSocketService(cryptoService: cryptoService),
-            hubContext: hubContext
+            hubContext: hubContext,
+            shiftClockService: ShiftClockService(apiService: apiService)
         )
     }
 

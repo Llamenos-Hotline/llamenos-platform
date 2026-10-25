@@ -417,6 +417,7 @@ final class AppState {
     /// Handle a device wipe command from the server.
     func handleDeviceWipe(reason: String) {
         wipeService.wipeAll()
+        shiftClockService.reset()
         deviceWipeReason = reason
         isDeviceWiped = true
     }
@@ -433,6 +434,7 @@ final class AppState {
         membershipLoadTask?.cancel()
         membershipLoadTask = nil
         hubMembershipService.reset()
+        shiftClockService.reset()
         authService.logout()
         isLocked = false
         authStatus = .unauthenticated

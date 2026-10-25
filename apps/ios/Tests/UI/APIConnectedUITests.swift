@@ -246,16 +246,23 @@ final class APIConnectedUITests: BaseUITest {
         when("I tap clock in") {
             find("clock-in-button").tap()
         }
-        then("the server puts me on shift and the app offers Clock Out") {
+        then("the server records the clock-in and the app offers Clock Out") {
             XCTAssertTrue(
                 find("clock-out-button").waitForExistence(timeout: 20),
                 "Clocking in should put the volunteer on shift"
             )
             XCTAssertFalse(find("clock-in-button").exists, "An on-shift volunteer has nothing to clock in to")
             XCTAssertFalse(find("shifts-error").exists, "The clock-in request should not report an error")
+            // The volunteer is clocked in but no scheduled shift covers them, so the server's
+            // ring set (scheduled ∩ clocked in) does not contain them. "On Shift" here would
+            // tell a volunteer they are taking calls while callers reach voicemail (#2204).
             XCTAssertEqual(
-                find("shift-status-label").label, "On Shift",
-                "The status label should read On Shift once the server accepted the clock-in"
+                find("shift-status-label").label, "Off Shift",
+                "A clocked-in volunteer with no covering shift is not rung, so the label must not read On Shift"
+            )
+            XCTAssertTrue(
+                find("shift-readiness-explanation").waitForExistence(timeout: 5),
+                "The screen should say why calls will not ring this volunteer"
             )
         }
     }

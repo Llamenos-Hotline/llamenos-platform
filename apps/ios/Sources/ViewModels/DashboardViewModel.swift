@@ -1,25 +1,5 @@
 import Foundation
 
-// MARK: - ShiftStatus
-
-/// The volunteer's current shift status.
-enum ShiftStatus: Equatable {
-    /// Not currently on shift.
-    case offShift
-    /// On shift and available to receive calls.
-    case onShift
-    /// On shift but currently on a call.
-    case onCall
-    /// Loading shift status from the API.
-    case loading
-    /// Failed to load shift status.
-    case error(String)
-
-    var isOnShift: Bool {
-        self == .onShift || self == .onCall
-    }
-}
-
 // MARK: - RecentNotePreview
 
 /// Lightweight preview of a recent note for the dashboard.
@@ -53,15 +33,19 @@ final class DashboardViewModel {
     private let cryptoService: CryptoService
     private let webSocketService: WebSocketService
     private let hubContext: HubContext
+    private let shiftClockService: ShiftClockService
 
-    /// Current shift status.
-    var shiftStatus: ShiftStatus = .offShift
+    /// What the server will do with a ring for this volunteer: scheduled ∧ clocked in ∧ not
+    /// on break, on any member hub (rings come from all of them, not just the one being
+    /// browsed). Nil until the server has answered.
+    ///
+    /// Read from `ShiftClockService`, i.e. from `GET /shifts/my-status` per hub — never from
+    /// its scheduled-only `onShift` by itself, which made this card say "On Shift" for a
+    /// volunteer the server was not ringing (#2204, the iOS counterpart of #2108).
+    var readiness: ShiftReadiness? { shiftClockService.readiness(across: callHubIds) }
 
-    /// Convenience: whether the volunteer is currently on shift.
-    var isOnShift: Bool { shiftStatus.isOnShift }
-
-    /// When the current shift started, for the elapsed timer.
-    var shiftStartedAt: Date?
+    /// When the volunteer started being rung, for the elapsed timer.
+    var shiftStartedAt: Date? { shiftClockService.readySince(across: callHubIds) }
 
     /// Number of active calls (loaded from API).
     var activeCallCount: Int = 0
@@ -86,6 +70,8 @@ final class DashboardViewModel {
 
     /// Active shift timer display string.
     var elapsedTimeDisplay: String {
+        // Reading `tick` subscribes the view to the once-a-second timer invalidations.
+        _ = tick
         guard let startedAt = shiftStartedAt else { return "--:--:--" }
         let elapsed = Date().timeIntervalSince(startedAt)
         let hours = Int(elapsed) / 3600
@@ -102,13 +88,23 @@ final class DashboardViewModel {
     @ObservationIgnored nonisolated(unsafe) private var eventTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var timerTask: Task<Void, Never>?
 
+    /// Bumped once a second while ringing so the elapsed-time display re-evaluates.
+    private var tick: Int = 0
+
     /// Nonisolated: it only stores its arguments, so the model can be built anywhere —
     /// every state change after construction still happens on the main actor.
-    nonisolated init(apiService: APIService, cryptoService: CryptoService, webSocketService: WebSocketService, hubContext: HubContext) {
+    nonisolated init(
+        apiService: APIService,
+        cryptoService: CryptoService,
+        webSocketService: WebSocketService,
+        hubContext: HubContext,
+        shiftClockService: ShiftClockService
+    ) {
         self.apiService = apiService
         self.cryptoService = cryptoService
         self.webSocketService = webSocketService
         self.hubContext = hubContext
+        self.shiftClockService = shiftClockService
     }
 
     // MARK: - Data Loading
@@ -168,7 +164,7 @@ final class DashboardViewModel {
         case .callRing, .callAnswered, .callUpdate, .voicemailNew, .presenceSummary, .presenceDetail:
             // Call/presence events on any member hub affect shift status and the active call.
             Task {
-                await fetchShiftStatus()
+                await fetchShiftStatus(hubIds: [attributed.hubId])
                 await fetchActiveCall()
             }
         case .callEnded:
@@ -177,11 +173,11 @@ final class DashboardViewModel {
                 currentCall = nil
             }
             Task {
-                await fetchShiftStatus()
+                await fetchShiftStatus(hubIds: [attributed.hubId])
                 await fetchActiveCall()
             }
         case .shiftStarted, .shiftEnded, .shiftUpdate:
-            Task { await fetchShiftStatus() }
+            Task { await fetchShiftStatus(hubIds: [attributed.hubId]) }
         case .noteCreated:
             // Recent notes are browsing data for the active hub only.
             guard attributed.hubId == hubContext.activeHubId else { return }
@@ -196,12 +192,16 @@ final class DashboardViewModel {
 
     // MARK: - Timer
 
-    func startTimer() {
-        stopTimer()
-        timerTask = Task { [weak self] in
+    /// Run the timer while the server is ringing this volunteer, stop it otherwise.
+    private func syncTimer() {
+        guard readiness?.isRingTarget == true else {
+            stopTimer()
+            return
+        }
+        guard timerTask == nil else { return }
+        timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                // Touch a property to trigger @Observable re-evaluation
-                self?.shiftStartedAt = self?.shiftStartedAt
+                self?.tick &+= 1
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -272,6 +272,7 @@ final class DashboardViewModel {
         let hubIds = callHubIds
         guard !hubIds.isEmpty else {
             currentCall = nil
+            activeCallCount = 0
             return
         }
         var callsByHub: [String: ProtocolActiveCallsResponse] = [:]
@@ -290,6 +291,7 @@ final class DashboardViewModel {
                 if let response { callsByHub[hubId] = response }
             }
         }
+        activeCallCount = callsByHub.values.reduce(0) { $0 + $1.calls.count }
         guard let (hubId, first) = hubIds.lazy
             .compactMap({ id in callsByHub[id]?.calls.first.map { (id, $0) } })
             .first
@@ -320,30 +322,15 @@ final class DashboardViewModel {
         )
     }
 
-    private func fetchShiftStatus() async {
-        do {
-            let status: DashboardShiftStatusResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/shifts/my-status")
-            )
-            shiftStatus = status.onShift ? .onShift : .offShift
-            activeCallCount = status.activeCallCount ?? 0
-            recentNoteCount = status.recentNoteCount ?? 0
-
-            if status.onShift, let startedAtString = status.startedAt {
-                shiftStartedAt = DateFormatting.parseISO(startedAtString)
-                startTimer()
-            } else {
-                shiftStartedAt = nil
-                stopTimer()
-            }
-        } catch {
-            shiftStatus = .offShift
-            activeCallCount = 0
-            if case APIError.noBaseURL = error {
+    /// Ask the server where this volunteer stands on `hubIds` (every member hub by default).
+    private func fetchShiftStatus(hubIds: [String]? = nil) async {
+        let failure = await shiftClockService.refresh(hubIds: hubIds ?? callHubIds)
+        syncTimer()
+        if let failure {
+            if case APIError.noBaseURL = failure {
                 // Expected when hub isn't configured yet
             } else {
-                errorMessage = error.localizedDescription
+                errorMessage = failure.localizedDescription
             }
         }
     }
@@ -414,15 +401,3 @@ final class DashboardViewModel {
         timerTask?.cancel()
     }
 }
-
-// MARK: - API Response Types
-
-/// Response from the shift status endpoint.
-private struct DashboardShiftStatusResponse: Decodable {
-    let onShift: Bool
-    let shiftId: String?
-    let startedAt: String?
-    let activeCallCount: Int?
-    let recentNoteCount: Int?
-}
-
