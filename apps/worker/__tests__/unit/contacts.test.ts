@@ -53,6 +53,22 @@ describe('ContactsService', () => {
       expect(result.hubId).toBe('hub-1')
       expect(result.identifierHashes).toEqual(['hash1'])
     })
+
+    it('stores empty search indexes when the client supplies none', async () => {
+      const { db, service } = setup()
+      db.$setInsertResult([makeContact({ identifierHashes: [], nameHash: null, trigramTokens: [] })])
+
+      await service.create({
+        hubId: 'hub-1',
+        encryptedSummary: 'enc',
+        summaryEnvelopes: [],
+      })
+
+      const values = db.insert.mock.results[0].value.values.mock.calls[0][0]
+      expect(values.identifierHashes).toEqual([])
+      expect(values.nameHash).toBeNull()
+      expect(values.trigramTokens).toEqual([])
+    })
   })
 
   describe('get', () => {

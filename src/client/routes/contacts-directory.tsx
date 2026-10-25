@@ -1,19 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
-  listRawContacts,
-  searchRawContacts,
   getRawContact,
   type RawContact,
   type DirectoryContact,
-  type DirectoryContactType,
-  type DirectoryContactSummary,
-  type ContactPII,
-  type ContactIdentifier,
 } from '@/lib/api'
-import { decryptMessage } from '@/lib/platform'
+import { decryptContact, loadDecryptedContacts, matchesContactQuery } from '@/lib/contact-directory'
 import { ContactCard } from '@/components/contacts/contact-card'
 import { ContactProfile } from '@/components/contacts/contact-profile'
 import { CreateContactDialog } from '@/components/contacts/create-contact-dialog'
@@ -28,94 +22,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useTags } from '@/lib/queries/tags'
 import { useTeams } from '@/lib/queries/teams'
 import {
-  Users, Plus, Search, Loader2, Lock, Upload, Pencil,
+  Users, Plus, Search, Loader2, Upload, Pencil,
 } from 'lucide-react'
 
 export const Route = createFileRoute('/contacts-directory')({
   component: ContactDirectoryPage,
 })
-
-/** Decrypt a RawContact into a DirectoryContact for UI rendering */
-async function decryptContact(raw: RawContact): Promise<DirectoryContact> {
-  let displayName = raw.id.slice(0, 8) + '...'
-  let contactType: DirectoryContactType = 'individual'
-  let tags: string[] = []
-  let canDecrypt = false
-  let demographics: string | undefined
-  let emergencyContacts: string | undefined
-  let communicationPrefs: string | undefined
-  let notes: string | undefined
-  let identifiers: ContactIdentifier[] | undefined
-
-  // Decrypt summary tier
-  if (raw.encryptedSummary && raw.summaryEnvelopes?.length) {
-    const plaintext = await decryptMessage(raw.encryptedSummary, raw.summaryEnvelopes)
-    if (plaintext) {
-      canDecrypt = true
-      try {
-        const summary = JSON.parse(plaintext) as DirectoryContactSummary
-        displayName = summary.displayName || displayName
-        if (summary.contactType) {
-          contactType = summary.contactType as DirectoryContactType
-        }
-        tags = summary.tags ?? []
-      } catch { /* malformed JSON */ }
-    }
-  }
-
-  // Use contactTypeHash as fallback
-  if (!canDecrypt && raw.contactTypeHash) {
-    contactType = raw.contactTypeHash as DirectoryContactType
-  }
-
-  // Decrypt PII tier
-  if (raw.encryptedPII && raw.piiEnvelopes?.length) {
-    const piiPlaintext = await decryptMessage(raw.encryptedPII, raw.piiEnvelopes)
-    if (piiPlaintext) {
-      try {
-        const pii = JSON.parse(piiPlaintext) as ContactPII
-        if (pii.demographics) {
-          demographics = typeof pii.demographics === 'string'
-            ? pii.demographics
-            : JSON.stringify(pii.demographics)
-        }
-        if (pii.emergencyContacts) {
-          emergencyContacts = JSON.stringify(pii.emergencyContacts)
-        }
-        if (pii.communicationPreferences) {
-          communicationPrefs = JSON.stringify(pii.communicationPreferences)
-        }
-        notes = pii.notes
-        if (pii.identifiers?.length) {
-          identifiers = pii.identifiers.map((ident, i) => ({
-            id: `${raw.id}-ident-${i}`,
-            type: ident.type as 'phone' | 'email' | 'signal',
-            value: ident.value,
-            isPrimary: ident.isPrimary,
-          }))
-        }
-      } catch { /* malformed JSON */ }
-    }
-  }
-
-  return {
-    id: raw.id,
-    displayName,
-    contactType,
-    tags,
-    caseCount: raw.caseCount,
-    lastInteractionAt: raw.lastInteractionAt || null,
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt,
-    canDecrypt,
-    demographics,
-    emergencyContacts,
-    communicationPrefs,
-    notes,
-    identifiers,
-    _raw: raw,
-  }
-}
 
 function ContactDirectoryPage() {
   const { t } = useTranslation()
@@ -132,10 +44,9 @@ function ContactDirectoryPage() {
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
 
-  // Search state
+  // Search is a client-side filter over the loaded, decrypted contacts. The query is a
+  // caller's name or number and is never sent to the server (#2224).
   const [searchQuery, setSearchQuery] = useState('')
-  const [isSearching, setIsSearching] = useState(false)
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Filter state
   const [typeFilter, setTypeFilter] = useState<string>('all')
@@ -149,17 +60,10 @@ function ContactDirectoryPage() {
   const loadContacts = useCallback(async () => {
     setLoading(true)
     try {
-      const params: {
-        limit?: number
-        contactTypeHash?: string
-      } = { limit: 50 }
-      if (typeFilter !== 'all') {
-        params.contactTypeHash = typeFilter
-      }
-      const res = await listRawContacts(params)
-      // Client-side decryption of each contact
-      const decrypted = await Promise.all(res.contacts.map(decryptContact))
-      setContacts(decrypted)
+      const res = await loadDecryptedContacts(
+        typeFilter !== 'all' ? { contactTypeHash: typeFilter } : undefined,
+      )
+      setContacts(res.contacts)
       setTotal(res.total)
     } catch {
       toast(t('contactDirectory.loadError', { defaultValue: 'Failed to load contacts' }), 'error')
@@ -169,38 +73,6 @@ function ContactDirectoryPage() {
   }, [typeFilter, t, toast])
 
   useEffect(() => { loadContacts() }, [loadContacts])
-
-  // Debounced search
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchQuery(value)
-
-    if (searchTimerRef.current) {
-      clearTimeout(searchTimerRef.current)
-    }
-
-    if (!value.trim()) {
-      setIsSearching(false)
-      loadContacts()
-      return
-    }
-
-    setIsSearching(true)
-    searchTimerRef.current = setTimeout(async () => {
-      try {
-        const res = await searchRawContacts(value.trim())
-        const decrypted = await Promise.all(res.contacts.map(decryptContact))
-        setContacts(decrypted)
-        setTotal(decrypted.length)
-      } catch {
-        // Clear contacts on search failure so the no-results message is shown
-        setContacts([])
-        setTotal(0)
-        toast(t('contactDirectory.searchError', { defaultValue: 'Search failed' }), 'error')
-      } finally {
-        setIsSearching(false)
-      }
-    }, 300)
-  }, [loadContacts, t, toast])
 
   // Load full contact detail when selected
   useEffect(() => {
@@ -233,11 +105,12 @@ function ContactDirectoryPage() {
     setSelectedId(contact.id)
   }, [])
 
-  // Client-side tag/team filter applied on top of server results
+  // Client-side search + tag/team filter applied on top of the loaded page
   // Tag filter matches against the contact summary's tag slugs.
   // Team filter is UI-only at this stage — full server-side filtering requires
   // fetching contactTeamAssignments per contact which is deferred to a follow-up.
   const filteredContacts = contacts.filter((c) => {
+    if (!matchesContactQuery(c, searchQuery)) return false
     if (tagFilter !== 'all') {
       const tag = availableTags.find((t) => t.id === tagFilter)
       if (tag && !c.tags.includes(tag.name)) return false
@@ -323,18 +196,10 @@ function ContactDirectoryPage() {
                   data-testid="contact-search-input"
                   placeholder={t('contactDirectory.searchPlaceholder', { defaultValue: 'Search contacts...' })}
                   value={searchQuery}
-                  onChange={e => handleSearchChange(e.target.value)}
+                  onChange={e => setSearchQuery(e.target.value)}
                   className="pl-9"
                 />
               </div>
-
-              {/* Search indicator */}
-              {isSearching && (
-                <div data-testid="search-indicator" className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Lock className="h-3 w-3" />
-                  {t('contactDirectory.searchingSecurely', { defaultValue: 'Searching securely...' })}
-                </div>
-              )}
 
               {/* Type filter */}
               <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setSearchQuery('') }}>

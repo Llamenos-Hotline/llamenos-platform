@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import contactsV2Routes from '../../routes/contacts-v2'
+import { updateContactBodySchema } from '@protocol/schemas/contacts-v2'
 import {
   createTestApp,
   sendJSON,
@@ -45,20 +46,23 @@ describe('contacts-v2 route validation', () => {
       expect(res.status).toBe(400)
     })
 
-    it('rejects empty identifierHashes array', async () => {
+    // The desktop sends no search indexes until client-side hub-key blind indexes
+    // exist (#1042): any index it can derive without a key the server lacks is
+    // reversible by brute force. The write must therefore succeed without them.
+    it('accepts empty identifierHashes array', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/directory', {
         ...VALID_CONTACT,
         identifierHashes: [],
       })
-      expect(res.status).toBe(400)
+      expect(res.status).not.toBe(400)
     })
 
-    it('rejects missing identifierHashes', async () => {
+    it('accepts a contact with no identifierHashes, nameHash or trigramTokens', async () => {
       const app = createApp()
       const { identifierHashes: _, ...body } = VALID_CONTACT
       const res = await sendJSON(app, '/directory', body)
-      expect(res.status).toBe(400)
+      expect(res.status).not.toBe(400)
     })
 
     it('rejects empty encryptedSummary', async () => {
@@ -114,6 +118,11 @@ describe('contacts-v2 route validation', () => {
       const app = createApp()
       const res = await sendJSON(app, '/directory/contact-1', {}, 'PATCH')
       expect(res.status).not.toBe(400)
+    })
+
+    it('does not materialise identifierHashes when the client omits it', () => {
+      // A PATCH that omits the key must leave the stored indexes alone, not clear them.
+      expect(updateContactBodySchema.parse({})).toEqual({})
     })
 
     it('accepts valid partial update', async () => {
