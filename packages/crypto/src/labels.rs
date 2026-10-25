@@ -601,8 +601,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     // 101: Server seal of the per-user audit key (#2054)
     LABEL_AUDIT_USER_KEY_SERVER_SEAL, // 101
     // 102-104: Ban-list hashing and the live-call caller number seal (#2182)
-    HMAC_BAN_PREFIX, // 102
-    LABEL_BAN_KEY_DERIVE, // 103
+    HMAC_BAN_PREFIX,          // 102
+    LABEL_BAN_KEY_DERIVE,     // 103
     LABEL_CALLER_NUMBER_SEAL, // 104
 ];
 
