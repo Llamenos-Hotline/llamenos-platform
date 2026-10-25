@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Bloquer et raccrocher",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Bloquer et raccrocher ?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "Appel actif",
-    "addNote": "Add Note",
+    "addNote": "Ajouter une note",
     "answer": "Répondre",
+    "answerFailed": "Impossible de répondre à l'appel. Quelqu'un d'autre a peut-être décroché avant vous.",
+    "answerOnPhone": "Répondre sur votre téléphone",
     "banned": "Ce numéro est bloqué",
     "caller": "Appelant",
     "duration": "Durée",
     "ended": "Appel terminé",
     "hangUp": "Raccrocher",
+    "hangupFailed": "Impossible de terminer l'appel. Réessayez.",
     "hold": "Mettre en attente",
     "incoming": "Appel entrant",
     "mute": "Couper le son",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "Envoyer à la messagerie",
     "unknown": "Numéro inconnu",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "Appelant inconnu",
     "unmute": "Rétablir le son",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "Appels aujourd'hui",
     "cases": "Dossiers",
-    "clockIn": "Clock In",
+    "clockIn": "Prendre son service",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "Terminer son service",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2071,6 +2074,12 @@
     "httpNotAllowed": "Les connexions HTTP non sécurisées ne sont pas autorisées. Utilisez une adresse HTTPS.",
     "pinLockoutDuration": "Trop de tentatives échouées. Réessayez dans {{seconds}} secondes.",
     "pinWiped": "Trop de tentatives de code PIN échouées. Pour votre sécurité, toutes les clés de cet appareil ont été effacées."
+  },
+  "errors": {
+    "deviceNotRegistered": "Cet appareil n'est pas encore enregistré auprès de votre hub. Demandez à une personne qui gère votre hub de l'ajouter.",
+    "forbidden": "Vous n'avez pas l'autorisation de faire cela. Demandez à une personne qui gère votre hub.",
+    "notFound": "Cet élément n'existe plus. Il a peut-être été supprimé.",
+    "serverUnavailable": "Le serveur est injoignable pour le moment. Réessayez dans un instant."
   },
   "eventType": {
     "call": "Appel",
@@ -2491,9 +2500,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Quelqu'un appelle la ligne d'écoute",
+  "incomingCallAnswer": "Répondre",
+  "incomingCallDecline": "Refuser",
   "incomingCallMicrophoneRequired": "L'accès au microphone est nécessaire pour répondre aux appels dans l'application.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2547,8 +2556,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "La clé a été effacée après trop de tentatives échouées",
+    "wrongPin": "Code PIN incorrect"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2752,7 @@
     "pendingCountOne": "{{count}} en attente",
     "pendingSyncMessage": "{{count}} opérations en attente de synchronisation",
     "pendingSyncMessageOne": "{{count}} opération en attente de synchronisation",
+    "rejected": "Non enregistré : le serveur l'a refusé",
     "relayReconnected": "Reconnecté — rattrapage des événements manqués",
     "relayReconnecting": "Reconnexion au serveur temps réel...",
     "syncComplete": "Toutes les opérations ont été synchronisées avec succès",
@@ -2878,6 +2888,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "Les codes PIN ne correspondent pas. Réessayez.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} sur {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2902,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "Code PIN incorrect."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",

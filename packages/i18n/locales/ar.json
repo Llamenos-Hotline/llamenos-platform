@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "حظر وإنهاء المكالمة",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "حظر المتصل وإنهاء المكالمة؟",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "مكالمة نشطة",
-    "addNote": "Add Note",
+    "addNote": "إضافة ملاحظة",
     "answer": "رد",
+    "answerFailed": "تعذّر الرد على المكالمة. ربما رد عليها شخص آخر أولاً.",
+    "answerOnPhone": "رد من هاتفك",
     "banned": "هذا الرقم محظور",
     "caller": "المتصل",
     "duration": "المدة",
     "ended": "انتهت المكالمة",
     "hangUp": "إنهاء",
+    "hangupFailed": "تعذّر إنهاء المكالمة. حاول مرة أخرى.",
     "hold": "انتظار",
     "incoming": "مكالمة واردة",
     "mute": "كتم الصوت",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "تحويل إلى البريد الصوتي",
     "unknown": "رقم مجهول",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "متصل مجهول",
     "unmute": "إلغاء كتم الصوت",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "مكالمات اليوم",
     "cases": "القضايا",
-    "clockIn": "Clock In",
+    "clockIn": "بدء الوردية",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "إنهاء الوردية",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2071,6 +2074,12 @@
     "httpNotAllowed": "اتصالات HTTP غير الآمنة غير مسموح بها. استخدم عنوان HTTPS.",
     "pinLockoutDuration": "محاولات فاشلة كثيرة جدًا. حاول مرة أخرى بعد {{seconds}} ثانية.",
     "pinWiped": "محاولات PIN فاشلة كثيرة جدًا. حفاظًا على أمانك، تم مسح جميع المفاتيح من هذا الجهاز."
+  },
+  "errors": {
+    "deviceNotRegistered": "هذا الجهاز غير مسجّل في مركزك بعد. اطلب من شخص يدير مركزك إضافته.",
+    "forbidden": "ليست لديك صلاحية للقيام بذلك. اطلب ذلك من شخص يدير مركزك.",
+    "notFound": "لم يعد هذا موجودًا. ربما تمت إزالته.",
+    "serverUnavailable": "تعذّر الوصول إلى الخادم حاليًا. حاول مرة أخرى بعد قليل."
   },
   "eventType": {
     "call": "مكالمة",
@@ -2491,9 +2500,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "شخص ما يتصل بالخط الساخن",
+  "incomingCallAnswer": "رد",
+  "incomingCallDecline": "رفض",
   "incomingCallMicrophoneRequired": "يلزم الوصول إلى الميكروفون للرد على المكالمات في التطبيق.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2547,8 +2556,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "تم مسح المفتاح بسبب كثرة المحاولات الفاشلة",
+    "wrongPin": "رمز PIN خاطئ"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2752,7 @@
     "pendingCountOne": "{{count}} قيد الانتظار",
     "pendingSyncMessage": "{{count}} عمليات في انتظار المزامنة",
     "pendingSyncMessageOne": "{{count}} عملية في انتظار المزامنة",
+    "rejected": "لم يُحفظ: رفض الخادم ذلك",
     "relayReconnected": "تمت إعادة الاتصال — جارٍ استرداد الأحداث الفائتة",
     "relayReconnecting": "جارٍ إعادة الاتصال بالخادم...",
     "syncComplete": "تمت مزامنة جميع العمليات بنجاح",
@@ -2878,6 +2888,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "رموز PIN غير متطابقة. حاول مرة أخرى.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} من {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2902,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "رمز PIN غير صحيح."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",

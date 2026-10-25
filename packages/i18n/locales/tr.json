@@ -369,11 +369,14 @@
     "active": "Aktif Arama",
     "addNote": "Not Ekle",
     "answer": "Cevapla",
+    "answerFailed": "Arama cevaplanamadı. Başka biri daha önce cevaplamış olabilir.",
+    "answerOnPhone": "Telefonunuzda cevaplayın",
     "banned": "Bu numara engellenmiş",
     "caller": "Arayan",
     "duration": "Süre",
     "ended": "Arama Sona Erdi",
     "hangUp": "Kapat",
+    "hangupFailed": "Arama sonlandırılamadı. Tekrar deneyin.",
     "hold": "Beklet",
     "incoming": "Gelen Arama",
     "mute": "Sessize Al",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "Bu cihaz henüz merkezinize kayıtlı değil. Merkezinizi yöneten birinden eklemesini isteyin.",
+    "forbidden": "Bunu yapma izniniz yok. Merkezinizi yöneten birine danışın.",
+    "notFound": "Bu artık mevcut değil. Kaldırılmış olabilir.",
+    "serverUnavailable": "Şu anda sunucuya ulaşılamıyor. Birazdan tekrar deneyin."
+  },
   "hubs": {
     "accessDenied": "Erişim reddedildi",
     "createHub": "Merkez Oluştur",
@@ -913,6 +922,7 @@
     "keyLocked": "Anahtar kilitli",
     "lockoutRemaining": "Kilitlendiniz. {{seconds}} saniye sonra tekrar deneyin.",
     "mismatch": "PIN kodları eşleşmiyor. Tekrar deneyin.",
+    "progress": "{{count}} / {{total}}",
     "setEncrypting": "Anahtarınız şifreleniyor...",
     "setSubtitle": "Anahtarınızı korumak için 6-8 haneli bir PIN seçin",
     "setTitle": "PIN Oluşturun",
@@ -930,7 +940,7 @@
     "description": "Bu işleme devam etmek için PIN kodunuzu girin.",
     "maxAttempts": "Maksimum deneme sayısı aşıldı. Anahtar silindi.",
     "title": "Kimliğinizi Doğrulayın",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN yanlış."
   },
   "preferences": {
     "invalidToken": "Geçersiz veya süresi dolmuş tercihler bağlantısı",
@@ -4387,6 +4397,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Kaydedilmedi: sunucu reddetti",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4396,8 +4407,8 @@
   },
   "lock": {
     "app": "Uygulamayı Kilitle",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Çok fazla başarısız deneme nedeniyle anahtar silindi",
+    "wrongPin": "Yanlış PIN"
   },
   "verificationCodeLabel": "Doğrulama Kodu",
   "dismiss": "Kapat",
@@ -4411,7 +4422,7 @@
   "authTokenLabel": "Kimlik Doğrulama Jetonu",
   "callActions": {
     "openNotes": "Notlar",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Engelle ve Kapat",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4560,9 +4571,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Biri yardım hattını arıyor",
+  "incomingCallAnswer": "Cevapla",
+  "incomingCallDecline": "Reddet",
   "incomingCallMicrophoneRequired": "Uygulamada çağrı yanıtlamak için mikrofon erişimi gerekir.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",

@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "I-ban at ibaba",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "I-ban at ibaba?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "Aktibong Tawag",
-    "addNote": "Add Note",
+    "addNote": "Magdagdag ng Tala",
     "answer": "Sagutin",
+    "answerFailed": "Hindi nasagot ang tawag. Maaaring may ibang nakasagot na.",
+    "answerOnPhone": "Sagutin sa iyong telepono",
     "banned": "Naka-ban ang numerong ito",
     "caller": "Tumatawag",
     "duration": "Tagal",
     "ended": "Natapos na Tawag",
     "hangUp": "Ibaba",
+    "hangupFailed": "Hindi natapos ang tawag. Subukan muli.",
     "hold": "I-hold",
     "incoming": "Papasok na Tawag",
     "mute": "I-mute",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "Ipadala sa Voicemail",
     "unknown": "Hindi Kilalang Numero",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "Hindi Kilalang Tumatawag",
     "unmute": "I-unmute",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "Mga Tawag Ngayon",
     "cases": "Mga Kaso",
-    "clockIn": "Clock In",
+    "clockIn": "Simulan ang Shift",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "Tapusin ang Shift",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2071,6 +2074,12 @@
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
+  },
+  "errors": {
+    "deviceNotRegistered": "Hindi pa nakarehistro ang device na ito sa iyong hub. Hilingin sa taong namamahala ng iyong hub na idagdag ito.",
+    "forbidden": "Wala kang pahintulot na gawin ito. Magtanong sa taong namamahala ng iyong hub.",
+    "notFound": "Wala na ito. Maaaring natanggal na.",
+    "serverUnavailable": "Hindi maabot ang server ngayon. Subukan muli sa ilang sandali."
   },
   "eventType": {
     "call": "Tawag",
@@ -2491,9 +2500,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "May tumatawag sa hotline",
+  "incomingCallAnswer": "Sagutin",
+  "incomingCallDecline": "Tanggihan",
   "incomingCallMicrophoneRequired": "Kailangan ng access sa mikropono para sumagot ng tawag sa app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2547,8 +2556,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Binura ang susi dahil sa napakaraming nabigong pagsubok",
+    "wrongPin": "Maling PIN"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2752,7 @@
     "pendingCountOne": "{{count}} naghihintay",
     "pendingSyncMessage": "{{count}} operasyon naghihintay ng sync",
     "pendingSyncMessageOne": "{{count}} operasyon naghihintay ng sync",
+    "rejected": "Hindi na-save: tinanggihan ito ng server",
     "relayReconnected": "Nakakonekta muli — kinukuha ang mga nalalagpasang event",
     "relayReconnecting": "Kumokonekta muli sa real-time server...",
     "syncComplete": "Lahat ng operasyon ay matagumpay na na-sync",
@@ -2878,6 +2888,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "Hindi magkatugma ang mga PIN. Subukan muli.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} sa {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2902,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "Hindi tama ang PIN."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",

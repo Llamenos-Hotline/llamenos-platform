@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "ब्लॉक करें और फ़ोन काटें",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "कॉलर को ब्लॉक करें और फ़ोन काटें?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "सक्रिय कॉल",
-    "addNote": "Add Note",
+    "addNote": "नोट जोड़ें",
     "answer": "उत्तर दें",
+    "answerFailed": "कॉल का उत्तर नहीं दिया जा सका। हो सकता है किसी और ने पहले उठा लिया हो।",
+    "answerOnPhone": "अपने फ़ोन पर उत्तर दें",
     "banned": "यह नंबर प्रतिबंधित है",
     "caller": "कॉलर",
     "duration": "अवधि",
     "ended": "कॉल समाप्त",
     "hangUp": "काटें",
+    "hangupFailed": "कॉल समाप्त नहीं की जा सकी। पुनः प्रयास करें।",
     "hold": "होल्ड करें",
     "incoming": "आने वाली कॉल",
     "mute": "म्यूट करें",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "वॉइसमेल पर भेजें",
     "unknown": "अज्ञात नंबर",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "अज्ञात कॉलर",
     "unmute": "अनम्यूट करें",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "Calls Today",
     "cases": "मामले",
-    "clockIn": "Clock In",
+    "clockIn": "शिफ़्ट शुरू करें",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "शिफ़्ट समाप्त करें",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2071,6 +2074,12 @@
     "httpNotAllowed": "असुरक्षित HTTP कनेक्शन की अनुमति नहीं है। HTTPS पता उपयोग करें।",
     "pinLockoutDuration": "बहुत अधिक असफल प्रयास। {{seconds}} सेकंड बाद पुनः प्रयास करें।",
     "pinWiped": "बहुत अधिक असफल पिन प्रयास। आपकी सुरक्षा के लिए, इस डिवाइस की सभी कुंजियाँ मिटा दी गई हैं।"
+  },
+  "errors": {
+    "deviceNotRegistered": "यह डिवाइस अभी आपके हब में पंजीकृत नहीं है। अपना हब संभालने वाले किसी व्यक्ति से इसे जोड़ने को कहें।",
+    "forbidden": "आपको यह करने की अनुमति नहीं है। अपना हब संभालने वाले किसी व्यक्ति से कहें।",
+    "notFound": "यह अब मौजूद नहीं है। हो सकता है इसे हटा दिया गया हो।",
+    "serverUnavailable": "अभी सर्वर तक नहीं पहुँचा जा सका। थोड़ी देर बाद पुनः प्रयास करें।"
   },
   "eventType": {
     "call": "कॉल",
@@ -2491,9 +2500,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "कोई हॉटलाइन पर कॉल कर रहा है",
+  "incomingCallAnswer": "उत्तर दें",
+  "incomingCallDecline": "अस्वीकार करें",
   "incomingCallMicrophoneRequired": "ऐप में कॉल का उत्तर देने के लिए माइक्रोफ़ोन की अनुमति आवश्यक है।",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2547,8 +2556,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "बहुत अधिक असफल प्रयासों के कारण कुंजी मिटा दी गई है",
+    "wrongPin": "गलत PIN"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2752,7 @@
     "pendingCountOne": "{{count}} लंबित",
     "pendingSyncMessage": "{{count}} ऑपरेशन सिंक होने की प्रतीक्षा में",
     "pendingSyncMessageOne": "{{count}} ऑपरेशन सिंक होने की प्रतीक्षा में",
+    "rejected": "सहेजा नहीं गया: सर्वर ने इसे अस्वीकार कर दिया",
     "relayReconnected": "पुनः कनेक्ट हो गया — छूटे हुए इवेंट प्राप्त कर रहा है",
     "relayReconnecting": "रियल-टाइम सर्वर से पुनः कनेक्ट हो रहा है...",
     "syncComplete": "सभी ऑपरेशन सफलतापूर्वक सिंक हो गए",
@@ -2878,6 +2888,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "PIN मेल नहीं खाते। पुनः प्रयास करें।",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{total}} में से {{count}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2902,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN गलत है।"
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",

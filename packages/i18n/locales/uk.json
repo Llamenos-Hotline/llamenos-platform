@@ -369,11 +369,14 @@
     "active": "Активний дзвінок",
     "addNote": "Додати нотатку",
     "answer": "Відповісти",
+    "answerFailed": "Не вдалося відповісти на дзвінок. Можливо, хтось інший відповів першим.",
+    "answerOnPhone": "Відповісти на вашому телефоні",
     "banned": "Цей номер заблоковано",
     "caller": "Абонент",
     "duration": "Тривалість",
     "ended": "Дзвінок завершено",
     "hangUp": "Завершити",
+    "hangupFailed": "Не вдалося завершити дзвінок. Спробуйте ще раз.",
     "hold": "На утримання",
     "incoming": "Вхідний дзвінок",
     "mute": "Вимкнути мікрофон",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "Цей пристрій ще не зареєстровано у вашому хабі. Попросіть того, хто керує вашим хабом, додати його.",
+    "forbidden": "У вас немає дозволу на цю дію. Зверніться до того, хто керує вашим хабом.",
+    "notFound": "Цього більше немає. Можливо, його видалено.",
+    "serverUnavailable": "Зараз не вдається зв'язатися із сервером. Спробуйте ще раз трохи пізніше."
+  },
   "hubs": {
     "accessDenied": "Доступ заборонено",
     "createHub": "Створити хаб",
@@ -913,6 +922,7 @@
     "keyLocked": "Ключ заблоковано",
     "lockoutRemaining": "Заблоковано. Спробуйте через {{seconds}} секунд.",
     "mismatch": "PIN не збігаються. Спробуйте ще раз.",
+    "progress": "{{count}} з {{total}}",
     "setEncrypting": "Шифрування вашого ключа...",
     "setSubtitle": "Оберіть 6-8 значний PIN для захисту вашого ключа",
     "setTitle": "Створіть PIN",
@@ -930,7 +940,7 @@
     "description": "Введіть ваш PIN, щоб продовжити цю дію.",
     "maxAttempts": "Перевищено максимальну кількість спроб. Ключ видалено.",
     "title": "Підтвердіть вашу особу",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "Неправильний PIN."
   },
   "preferences": {
     "invalidToken": "Недійсне або прострочене посилання на налаштування",
@@ -3317,6 +3327,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Не збережено: сервер відхилив запит",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4384,7 +4395,7 @@
   },
   "callActions": {
     "openNotes": "Нотатки",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Заблокувати й завершити",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4450,8 +4461,8 @@
   "yes": "Так",
   "lock": {
     "app": "Заблокувати застосунок",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Ключ видалено через забагато невдалих спроб",
+    "wrongPin": "Неправильний PIN"
   },
   "notificationChannelShifts": "Зміни",
   "actionSave": "Зберегти",
@@ -4560,9 +4571,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Хтось телефонує на гарячу лінію",
+  "incomingCallAnswer": "Відповісти",
+  "incomingCallDecline": "Відхилити",
   "incomingCallMicrophoneRequired": "Щоб відповідати на дзвінки в застосунку, потрібен доступ до мікрофона.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
