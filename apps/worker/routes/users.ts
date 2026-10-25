@@ -242,9 +242,15 @@ users.patch('/:targetPubkey',
     if (hubId && !callerIsSuperAdmin(c) && await holdsGlobalRole(c, targetPubkey)) {
       return c.json({ error: 'This account holds instance-level roles — only a super-admin can change it' }, 403)
     }
-    if (hubId && body.active === false && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
+    // Every field but `roles` (hub-scoped, see updateUser) belongs to the ACCOUNT:
+    // a rename, a new phone number or a deactivation reaches the person's other
+    // hubs too — a hub A admin must not re-point where hub B's calls ring. For
+    // someone who belongs elsewhere, a hub admin changes their role here or
+    // removes them from the hub, and a super-admin does the rest.
+    const touchesAccount = Object.entries(body).some(([key, value]) => key !== 'roles' && value !== undefined)
+    if (hubId && touchesAccount && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
       return c.json({
-        error: 'This user belongs to other hubs — remove them from this hub (DELETE /api/hubs/:hubId/members/:pubkey) instead of deactivating the account',
+        error: 'This user belongs to other hubs — only their role here can be changed from this hub; remove them from it (DELETE /api/hubs/:hubId/members/:pubkey) or ask a super-admin to edit the account',
       }, 409)
     }
 

@@ -281,10 +281,23 @@ describe('through hub A\'s own mount, hub A\'s admin sees and edits only hub A',
     ])
   })
 
-  it('a member of both hubs cannot be deactivated or deleted from one hub', async () => {
+  it('a member of both hubs cannot be deactivated, deleted, renamed or re-numbered from one hub', async () => {
+    // The phone number is where hub B's calls ring: account fields belong to
+    // the account, not to whichever hub's admin reached it first.
+    const before = await row(BOTH)
     expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { active: false })).status).toBe(409)
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { name: 'hijacked' })).status).toBe(409)
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${BOTH}`, { phone: '+15559999999' })).status).toBe(409)
     expect((await call(ADMIN_A, 'DELETE', `/api/hubs/${HUB_A}/users/${BOTH}`)).status).toBe(409)
-    expect((await row(BOTH)).active).toBe(true)
+    const after = await row(BOTH)
+    expect(after.active).toBe(true)
+    expect(after.displayName).toBe(before.displayName)
+    expect(after.phone).toBe(before.phone)
+  })
+
+  it('a member of one hub only can have account fields edited by that hub\'s admin', async () => {
+    expect((await call(ADMIN_A, 'PATCH', `/api/hubs/${HUB_A}/users/${VOL_A}`, { phone: '+15550001111' })).status).toBe(200)
+    expect((await row(VOL_A)).phone).toBe('+15550001111')
   })
 
   it('unscoped cases/metrics outside a hub need a hub to be about', async () => {
