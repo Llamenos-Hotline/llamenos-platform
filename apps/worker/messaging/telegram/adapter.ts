@@ -1,9 +1,5 @@
-import { timingSafeEqual } from 'node:crypto'
 import type { TelegramConfig } from '@shared/types'
 import { hashPhone } from '../../lib/crypto'
-import { createLogger } from '../../lib/logger'
-
-const logger = createLogger('messaging.telegram')
 import type {
   MessagingAdapter,
   IncomingMessage,
@@ -12,6 +8,7 @@ import type {
   SendResult,
   ChannelStatus,
 } from '../adapter'
+import { constantTimeEqual, hasWebhookSecret, missingWebhookSecretMessage } from '../webhook-secret'
 import { TelegramBotClient } from './client'
 import type { TelegramUpdate } from './types'
 
@@ -26,7 +23,7 @@ export class TelegramAdapter implements MessagingAdapter {
   readonly channelType = 'telegram' as const
 
   private readonly client: TelegramBotClient
-  private readonly webhookSecret: string | undefined
+  private readonly webhookSecret: string
   private readonly hmacSecret: string
 
   constructor(config: TelegramConfig, hmacSecret: string) {
@@ -113,18 +110,35 @@ export class TelegramAdapter implements MessagingAdapter {
    * Validate the webhook request by checking the X-Telegram-Bot-Api-Secret-Token header.
    *
    * When a secret_token is set via setWebhook, Telegram includes it in every
-   * webhook request as this header. Uses constant-time comparison.
+   * webhook request as this header. Uses constant-time comparison. Fails
+   * closed: with no webhookSecret configured nothing can be authenticated,
+   * so nothing is accepted.
    */
   async validateWebhook(request: Request): Promise<boolean> {
-    if (!this.webhookSecret) {
-      logger.warn('Accepting unauthenticated Telegram webhook — no webhookSecret configured')
-      return true
+    if (!hasWebhookSecret(this.webhookSecret)) {
+      return false
     }
 
     const token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
     if (!token) return false
 
     return constantTimeEqual(token, this.webhookSecret)
+  }
+
+  /**
+   * Point Telegram at `url`, with our secret as the `secret_token`. Telegram
+   * only echoes the X-Telegram-Bot-Api-Secret-Token header when one was set
+   * here, so a webhook registered without it could never pass validateWebhook.
+   */
+  async registerWebhook(url: string): Promise<{ ok: boolean; error?: string }> {
+    if (!hasWebhookSecret(this.webhookSecret)) {
+      return { ok: false, error: missingWebhookSecretMessage('telegram') }
+    }
+    try {
+      return await this.client.setWebhook(url, this.webhookSecret)
+    } catch (err) {
+      return { ok: false, error: `Telegram setWebhook failed: ${err instanceof Error ? err.message : String(err)}` }
+    }
   }
 
   /**
@@ -199,6 +213,9 @@ export class TelegramAdapter implements MessagingAdapter {
    * Check if the bot is properly configured by calling getMe.
    */
   async getChannelStatus(): Promise<ChannelStatus> {
+    if (!hasWebhookSecret(this.webhookSecret)) {
+      return { connected: false, error: missingWebhookSecretMessage('telegram') }
+    }
     try {
       const result = await this.client.getMe()
       if (!result.ok || !result.result) {
@@ -223,17 +240,4 @@ export class TelegramAdapter implements MessagingAdapter {
       }
     }
   }
-}
-
-/**
- * Constant-time string comparison to prevent timing attacks on webhook secrets.
- * Delegates to Node's built-in timingSafeEqual after encoding to UTF-8 buffers.
- * Returns false immediately when lengths differ (the length itself is not secret here
- * since HMAC outputs are always the same length for valid tokens).
- */
-function constantTimeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a, 'utf8')
-  const bb = Buffer.from(b, 'utf8')
-  if (ba.length !== bb.length) return false
-  return timingSafeEqual(ba, bb)
 }

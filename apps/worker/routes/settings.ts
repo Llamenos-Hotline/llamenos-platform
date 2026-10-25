@@ -43,6 +43,8 @@ import { audit } from '../services/audit'
 import { invalidateRolesCache } from '../services/settings'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
+import { buildProviderWebhookUrls, webhookOrigin } from '../lib/provider-webhook-urls'
+import { TelegramAdapter } from '../messaging/telegram/adapter'
 import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } from '../lib/helpers'
 
 const settings = new Hono<AppEnv>()
@@ -617,6 +619,59 @@ settings.post('/messaging/test',
     } catch (err) {
       return c.json({ connected: false, error: err instanceof Error ? err.message : String(err) })
     }
+  },
+)
+
+// Telegram only sends the X-Telegram-Bot-Api-Secret-Token header (which the
+// adapter requires on every inbound webhook) if the webhook was registered with
+// a secret_token, so registering it is part of setting the channel up (#2154).
+settings.post('/messaging/telegram/register-webhook',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Register the Telegram webhook with the configured secret_token',
+    responses: {
+      200: {
+        description: 'Telegram accepted the webhook registration',
+        content: {
+          'application/json': {
+            schema: resolver(okResponseSchema),
+          },
+        },
+      },
+      502: {
+        description: 'Telegram refused or could not be reached',
+        content: {
+          'application/json': {
+            schema: resolver(errorResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-messaging'),
+  async (c) => {
+    const services = c.get('services')
+    let adapter: Awaited<ReturnType<typeof getMessagingAdapterFromService>>
+    try {
+      adapter = await getMessagingAdapterFromService(
+        'telegram',
+        services.settings,
+        c.env.HMAC_SECRET,
+        c.env.WEBHOOK_BASE_URL ?? '',
+      )
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
+    }
+    if (!(adapter instanceof TelegramAdapter)) {
+      return c.json({ error: 'Telegram is not configured' }, 400)
+    }
+    const url = buildProviderWebhookUrls(webhookOrigin(c.env), targetHubId(c)).messaging.telegram
+    const result = await adapter.registerWebhook(url)
+    if (!result.ok) {
+      return c.json({ error: result.error ?? 'Telegram setWebhook failed' }, 502)
+    }
+    return c.json({ ok: true })
   },
 )
 

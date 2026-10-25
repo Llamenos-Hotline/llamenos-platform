@@ -1,5 +1,6 @@
 import type { MessagingAdapter } from '../adapter'
 import type { RCSConfig } from '@shared/types'
+import { hasWebhookSecret, missingWebhookSecretMessage } from '../webhook-secret'
 import { RCSAdapter } from './adapter'
 
 /**
@@ -12,6 +13,9 @@ export function createRCSAdapter(config: RCSConfig, hmacSecret: string): Messagi
   }
   if (!config.serviceAccountKey) {
     throw new Error('RCS service account key is required')
+  }
+  if (!hasWebhookSecret(config.webhookSecret)) {
+    throw new Error(missingWebhookSecretMessage('rcs'))
   }
   return new RCSAdapter(config, hmacSecret)
 }

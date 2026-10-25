@@ -223,21 +223,63 @@ describe('TelegramAdapter', () => {
   // --- validateWebhook ---
 
   describe('validateWebhook', () => {
-    it('returns true and logs warning when no webhookSecret is configured', async () => {
+    it.each([undefined, '', '   '])('fails closed when webhookSecret is %j, even with a matching header', async (secret) => {
       const adapterNoSecret = new TelegramAdapter(
-        { enabled: true, botToken: 'tok', webhookSecret: undefined },
+        { enabled: true, botToken: 'tok', webhookSecret: secret as unknown as string },
         HMAC_SECRET,
       )
-      const consoleSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
-      const request = new Request('https://example.com/webhook', {
+      const unsigned = new Request('https://example.com/webhook', {
         method: 'POST',
         body: '{}',
         headers: { 'Content-Type': 'application/json' },
       })
-      expect(await adapterNoSecret.validateWebhook(request)).toBe(true)
-      const output = consoleSpy.mock.calls.map(c => String(c[0])).join('')
-      expect(output).toContain('unauthenticated Telegram webhook')
-      consoleSpy.mockRestore()
+      expect(await adapterNoSecret.validateWebhook(unsigned)).toBe(false)
+      const emptyHeader = new Request('https://example.com/webhook', {
+        method: 'POST',
+        body: '{}',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Telegram-Bot-Api-Secret-Token': secret ?? '',
+        },
+      })
+      expect(await adapterNoSecret.validateWebhook(emptyHeader)).toBe(false)
+    })
+
+    it('reports the missing secret in channel status instead of calling getMe', async () => {
+      const adapterNoSecret = new TelegramAdapter(
+        { enabled: true, botToken: 'tok', webhookSecret: '' },
+        HMAC_SECRET,
+      )
+      const status = await adapterNoSecret.getChannelStatus()
+      expect(status.connected).toBe(false)
+      expect(status.error).toContain('webhook secret is required')
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses to register a webhook without a secret_token', async () => {
+      const adapterNoSecret = new TelegramAdapter(
+        { enabled: true, botToken: 'tok', webhookSecret: '' },
+        HMAC_SECRET,
+      )
+      const result = await adapterNoSecret.registerWebhook('https://hotline.example/api/messaging/telegram/webhook')
+      expect(result.ok).toBe(false)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('registers the webhook with the configured secret_token', async () => {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      const url = 'https://hotline.example/api/messaging/telegram/webhook'
+      const result = await adapter.registerWebhook(url)
+      expect(result).toEqual({ ok: true })
+      const [calledUrl, init] = fetchMock.mock.calls[0]
+      expect(String(calledUrl)).toContain('/setWebhook')
+      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ url, secret_token: 'my-webhook-secret' })
+    })
+
+    it('surfaces a Telegram setWebhook rejection', async () => {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: false, description: 'Unauthorized' }), { status: 401 }))
+      const result = await adapter.registerWebhook('https://hotline.example/api/messaging/telegram/webhook')
+      expect(result).toEqual({ ok: false, error: 'Unauthorized' })
     })
 
     it('rejects missing X-Telegram-Bot-Api-Secret-Token header', async () => {
