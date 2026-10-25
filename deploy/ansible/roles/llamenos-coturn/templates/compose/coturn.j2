@@ -77,6 +77,36 @@ services:
     # tmpfs above), which the json-file driver — and the smoke check that greps
     # `docker compose logs` for the NO EXPLICIT RELAY ADDRESS warning — would
     # never see. stdout is also where an operator looks first.
+    #
+    # PEER ACL (#2136). This container is on the host network and every
+    # volunteer holds working credentials, so a TURN allocation is a socket on
+    # the host that any volunteer can aim: at the app, signal-cli, postgres,
+    # Asterisk's ARI — everything on the docker bridges — and at the host's own
+    # public address, bypassing Caddy and UFW's source-CIDR rules. coturn
+    # refuses loopback peers by default and nothing else, so every other
+    # non-routable range is denied here, plus the relay's own address.
+    #
+    # The one thing that must stay reachable is the MEDIA SERVER: a relayed call
+    # is volunteer -> relay -> Asterisk, and Asterisk advertises its address on
+    # the docker bridge, which sits inside the denied 172.16/12. Measured with a
+    # real WebRTC leg: deny-only breaks the call (ICE failed, 0 RTP packets);
+    # an allowed-peer-ip for Asterisk restores it. coturn lets an allowed peer
+    # override a denied range, and once any allowed peer is set it refuses every
+    # other peer, so the allowance is the single address in turn_media_peer_ip
+    # (Asterisk's pinned address on llamenos-internal, asterisk_internal_ip) —
+    # not a range, and not the host. coturn's ACL is IP-only; it cannot scope the
+    # allowance to the RTP ports, so Asterisk's other UDP ports (SIP 5060) are
+    # reachable through the relay. --no-tcp-relay (RFC 6062) closes the TCP side:
+    # ARI on 8088 is not reachable. WebRTC never uses RFC 6062; clients still
+    # reach THIS server over TCP.
+    #
+    # Ranges, not CIDR: coturn rejects CIDR and aborts at start-up.
+    #
+    # LIMIT: with --external-ip set (a 1:1-NAT host) coturn exempts the host's
+    # own addresses — both halves of the mapping — from this ACL no matter what
+    # is denied or allowed; MEASURED, the relay reached a host-bound service with
+    # the address in --denied-peer-ip. The ranges and the allowance still hold on
+    # such a host; the host-address denial does not.
     command: >
       --realm={{ turn_realm }}
       --fingerprint
@@ -93,6 +123,29 @@ services:
 {% if (turn_external_ip | default('')) | length > 0 %}
       --external-ip={{ turn_external_ip }}
 {% endif %}
+      --denied-peer-ip=0.0.0.0-0.255.255.255
+      --denied-peer-ip=10.0.0.0-10.255.255.255
+      --denied-peer-ip=100.64.0.0-100.127.255.255
+      --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=169.254.0.0-169.254.255.255
+      --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=192.0.0.0-192.0.0.255
+      --denied-peer-ip=192.168.0.0-192.168.255.255
+      --denied-peer-ip=198.18.0.0-198.19.255.255
+      --denied-peer-ip=::-::1
+      --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+      --denied-peer-ip={{ turn_relay_ip }}
+{% if turn_listening_ip != turn_relay_ip %}
+      --denied-peer-ip={{ turn_listening_ip }}
+{% endif %}
+{% if (turn_external_ip | default('')) | length > 0 %}
+      --denied-peer-ip={{ turn_external_ip.split('/')[0] }}
+{% endif %}
+      --allowed-peer-ip={{ turn_media_peer_ip }}
+      --no-tcp-relay
+      --no-multicast-peers
       --no-tls
       --no-dtls
       --no-cli

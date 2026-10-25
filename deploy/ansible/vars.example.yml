@@ -308,6 +308,22 @@ turn_relay_max_port: 49200
 # The realm coturn puts in its challenges — logged, and it belongs to this
 # deployment.
 turn_realm: "{{ domain }}"
+# The docker network the PBX, the app and the SIP bridge share, and the address
+# Asterisk is pinned to on it. Declared, not left to the daemon, because a
+# relayed call's media goes volunteer -> CoTURN -> Asterisk's address on this
+# network, and CoTURN denies every private range except exactly that one
+# address (#2136). Inside the daemon's 172.30.0.0/16 pool (roles/docker), at its
+# far end so it does not collide with the networks the daemon hands out in order.
+# Containers that are NOT pinned are handed addresses only from the upper half
+# (llamenos_internal_ip_range), so none of them can ever land on Asterisk's
+# address and inherit the relay's allowance. Change them TOGETHER: the address
+# must sit inside the subnet and OUTSIDE the range. An existing llamenos-internal
+# keeps its old addressing until recreated — roles/docker says how.
+llamenos_internal_subnet: "172.30.255.0/24"
+llamenos_internal_ip_range: "172.30.255.128/25"
+asterisk_internal_ip: "172.30.255.10"
+# The one address a TURN relay may send to. Leave it at Asterisk's.
+turn_media_peer_ip: "{{ asterisk_internal_ip }}"
 
 # Master secret every volunteer's PJSIP endpoint password is derived from.
 # REQUIRED when llamenos_asterisk_enabled is true. Rotating it rotates every
