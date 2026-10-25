@@ -1,4 +1,4 @@
-//! TLS certificate pinning for the Rust network proxy (#775).
+//! TLS certificate pinning for the Rust network proxy (#775, #2157).
 //!
 //! `net.rs` (#739) already restricts *which origin* the desktop app may reach
 //! to the one the user configured. It says nothing about *who answers* for
@@ -10,60 +10,79 @@
 //! coerced certificate, or a managed machine with a corporate MITM root
 //! installed, could otherwise read and rewrite hotline traffic.
 //!
-//! ## Where the pins come from
+//! ## Validate first, then pin
 //!
-//! Desktop deployments are self-hosted — there is no single CA a build can
-//! pin against ahead of time the way the mobile clients pin Let's Encrypt's
-//! ISRG root hashes (`docs/security/CERTIFICATE_PINS.md`). Instead this is
-//! **trust-on-first-use (TOFU)**: `api_config_set` (`api_config.rs`) makes one
-//! connection to the backend the user just entered, requires a real `2xx`
-//! from `/api/health`, and records the SHA-256 SPKI hash of the leaf
-//! certificate — and its immediate intermediate, if the server sent one — it
-//! was answered with. Those hashes are persisted next to `apiBaseUrl` in the
-//! same store entry and enforced on every `net_fetch`/`net_ws_connect` call
-//! from then on (`net::PinnedNet`). `api_config_clear` deletes both together,
-//! so the app can never end up trusting a stale pin for a address it no
-//! longer shows as configured.
+//! The verifier does what OkHttp's `CertificatePinner` does on Android, in the
+//! same order:
 //!
-//! ## Why SPKI-only, not "chain validation plus a pin"
+//!   1. **Full WebPKI chain validation** of the presented certificates against
+//!      the Mozilla root program (`webpki-root-certs`): signatures up the chain,
+//!      validity dates, basic constraints / name constraints, server-auth EKU.
+//!      A chain that does not lead to a trusted root is refused outright.
+//!   2. **The pin must match a certificate in the validated path** — the leaf,
+//!      an intermediate the path actually used, or the trust anchor the path
+//!      ended in. Presence of a pinned certificate in what the *server sent* is
+//!      not membership: only certificates webpki verified into the path count.
 //!
-//! A verifier could instead wrap the normal WebPKI chain verifier and check
-//! the pin on top of it. This deliberately does not: self-hosted deployments
-//! must be able to run on a certificate that doesn't chain to any public CA
-//! at all (a self-signed cert, or a private/internal CA), and the specific
-//! attack this issue exists to close — a mis-issued or coerced certificate —
-//! passes normal chain validation by construction (that's what makes it
-//! dangerous). Requiring chain validation in addition to the pin would block
-//! the self-signed case while buying nothing against that attacker, since a
-//! forged cert still fails the pin check whether or not it also chains to a
-//! trusted root.
+//! The pin check runs inside webpki's path building (`verify_path`), so a
+//! chain that validates through one anchor but fails the pin is not accepted,
+//! and path building goes on to try any other candidate path.
 //!
-//! What this verifier still always does, capture or enforce:
+//! This replaces a verifier that deliberately skipped chain validation and
+//! accepted a handshake if *any* certificate the server sent matched *any*
+//! stored pin (#2157). Intermediates are public, so an attacker presenting their
+//! own self-signed leaf next to the public intermediate satisfied the
+//! intermediate pin and read and rewrote every `net_fetch`/`net_ws_connect`
+//! response. That is a full MITM from a network position alone, with no CA
+//! cooperation. Two things closed it together: validating the chain (the
+//! attacker's leaf was never signed by the intermediate) and requiring the pin
+//! to match the validated path.
+//!
+//! What the verifier also always does:
 //!   - real TLS handshake signature verification
 //!     (`rustls::crypto::verify_tls{12,13}_signature`), proving the peer holds
-//!     the private key for the certificate it presented. Without this, a
-//!     pinned certificate's public bytes — which are, by definition, public —
-//!     could be replayed by anyone without the private key.
-//!   - a hostname/IP sanity check against the certificate's subject names.
+//!     the private key for the leaf it presented. Without this, a valid chain's
+//!     public bytes could be replayed by anyone without the private key.
+//!   - a hostname/IP check against the leaf's subject names.
 //!
-//! Hard-fail policy (matches iOS/Android — H14): a pin mismatch is refused
-//! outright, no fallback to the OS trust store, ever.
+//! Hard-fail policy (matches iOS/Android — H14): a validation failure or a pin
+//! mismatch is refused outright, no fallback to the OS trust store, ever.
 //!
-//! TOFU's inherent limitation: the very first connection trusts whoever
-//! answers it — the same exposure SSH host-key trust has. Pinning against a
-//! real CA chain would not close this either (see above). Operators who want
-//! stronger bootstrap assurance can compare the pin the app captured against
-//! `scripts/extract-cert-pins.sh <domain>` out of band before relying on it.
+//! ## What is pinned
+//!
+//! **ISRG Root X1 and X2** — the same two SPKI hashes Android pins
+//! (`ApiService.kt`, `network_security_config.xml`, `docs/security/CERTIFICATE_PINS.md`).
+//! Deployments terminate TLS on the origin host with Caddy and a Let's Encrypt
+//! certificate, with no CDN or proxy in front (`deploy/ansible/roles/llamenos-caddy`);
+//! Let's Encrypt chains end in one of those two roots. Roots are pinned rather
+//! than Let's Encrypt's intermediates because the intermediates rotate and are
+//! shared by every Let's Encrypt site, so pinning one authenticates nothing
+//! specific and breaks on a routine rotation. Both roots are always pinned so
+//! Let's Encrypt moving a deployment between its RSA and ECDSA hierarchies does
+//! not lock out an installed client (RFC 7469 §2.5 backup pin).
+//!
+//! A backend whose chain does not end in an ISRG root (a self-signed
+//! certificate, a private CA, another public CA) is refused at configuration
+//! time, exactly as on Android: `api_config_set` calls `capture_pins`, which
+//! applies the same verifier as every later request and fails before anything
+//! is persisted. There is no TOFU: the pins are not whatever the first
+//! connection happened to present, so the first contact is validated like every
+//! other.
+//!
+//! The pins are persisted next to `apiBaseUrl` in the same store entry and
+//! enforced on every `net_fetch`/`net_ws_connect` call from then on
+//! (`net::PinnedNet`). `api_config_clear` deletes both together. Pins persisted
+//! by the earlier TOFU scheme are leaf/intermediate hashes; they are still
+//! enforced as pins on the validated path, so a stored leaf pin keeps working
+//! until the leaf rotates, after which the user reconfigures the backend.
 //!
 //! ## Rotation
 //!
-//! Not implemented here. A deployment that rotates its certificate's key
-//! (not just renews the same key) needs `api_config_clear` + reconfiguration,
-//! which re-runs TOFU capture. Automatic rotation would need a way to
-//! authenticate the *new* pin without trusting the network to deliver it,
-//! which is out of scope for #775 (tracked for a future issue if needed).
+//! Rotating the pinned roots is a client release, the same procedure as the
+//! mobile clients (`docs/security/CERTIFICATE_PINS.md`, "Pin Rotation Procedure").
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::cell::Cell;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use base64::Engine;
@@ -72,76 +91,135 @@ use rustls::crypto::{
     WebPkiSupportedAlgorithms, verify_tls12_signature as webpki_verify_tls12_signature,
     verify_tls13_signature as webpki_verify_tls13_signature,
 };
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, ServerName, TrustAnchor, UnixTime};
 use rustls::server::ParsedCertificate;
-use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme};
+use rustls::{
+    CertificateError, ClientConfig, DigitallySignedStruct, Error as TlsError, OtherError,
+    SignatureScheme,
+};
 use url::Url;
 
 use crate::api_config;
 
-/// Leaf + one intermediate — matches `scripts/extract-cert-pins.sh`'s
-/// LEAF/INTERMEDIATE pair and keeps the persisted pin set small.
-const MAX_PINNED_CHAIN_DEPTH: usize = 2;
+/// Base64 SHA-256 SPKI hashes of ISRG Root X1 (RSA 4096) and ISRG Root X2
+/// (ECDSA P-384). Identical to `ISRG_ROOT_X1_HASH` / `ISRG_ROOT_X2_HASH` in
+/// `ApiService.kt` and the table in `docs/security/CERTIFICATE_PINS.md`.
+const ISRG_ROOT_PINS: [&str; 2] = [
+    "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+    "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+];
 
 fn supported_algorithms() -> WebPkiSupportedAlgorithms {
     static ALGS: OnceLock<WebPkiSupportedAlgorithms> = OnceLock::new();
     *ALGS.get_or_init(|| rustls::crypto::ring::default_provider().signature_verification_algorithms)
 }
 
+/// The Mozilla root program, as webpki trust anchors. Built once.
+fn mozilla_roots() -> Arc<Vec<TrustAnchor<'static>>> {
+    static ROOTS: OnceLock<Arc<Vec<TrustAnchor<'static>>>> = OnceLock::new();
+    ROOTS
+        .get_or_init(|| {
+            Arc::new(
+                webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                    .iter()
+                    .filter_map(|der| webpki::anchor_from_trusted_cert(der).ok())
+                    .map(|anchor| anchor.to_owned())
+                    .collect(),
+            )
+        })
+        .clone()
+}
+
+/// What a connection must satisfy: a chain to one of `roots`, containing a
+/// certificate whose SPKI hash is in `pins`.
+#[derive(Clone)]
+struct TrustPolicy {
+    roots: Arc<Vec<TrustAnchor<'static>>>,
+    pins: Vec<String>,
+}
+
+impl TrustPolicy {
+    /// Mozilla roots, with the given pins required on the validated path.
+    fn with_pins(pins: Vec<String>) -> Self {
+        Self {
+            roots: mozilla_roots(),
+            pins,
+        }
+    }
+
+    /// Mozilla roots, pinned to ISRG Root X1/X2.
+    fn isrg() -> Self {
+        Self::with_pins(ISRG_ROOT_PINS.iter().map(|p| p.to_string()).collect())
+    }
+}
+
+fn sha256_base64(spki: &[u8]) -> String {
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(spki);
+    base64::engine::general_purpose::STANDARD.encode(digest)
+}
+
 /// Base64 (standard) SHA-256 of the certificate's DER-encoded
 /// SubjectPublicKeyInfo — identical to what
 /// `openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64`
-/// (`scripts/extract-cert-pins.sh`) produces, so a pin captured here can be
-/// cross-checked against that script's output.
-fn spki_sha256_base64(cert: &CertificateDer<'_>) -> Result<String, TlsError> {
-    let end_entity = webpki::EndEntityCert::try_from(cert).map_err(|e| {
-        TlsError::General(format!("could not parse certificate for pinning: {e:?}"))
-    })?;
-    let spki = end_entity.subject_public_key_info();
-    let digest = <sha2::Sha256 as sha2::Digest>::digest(spki.as_ref());
-    Ok(base64::engine::general_purpose::STANDARD.encode(digest))
+/// (`scripts/extract-cert-pins.sh`) produces, so a pin can be cross-checked
+/// against that script's output.
+fn cert_pin(cert: &webpki::Cert<'_>) -> String {
+    sha256_base64(cert.subject_public_key_info().as_ref())
 }
 
-#[derive(Debug)]
-enum PinMode {
-    /// TOFU: no pins recorded yet. The SPKI hashes observed on the first
-    /// successful handshake are written here for the caller to read back and
-    /// persist (`capture_pins`).
-    Capture(Mutex<Vec<String>>),
-    /// Every handshake must present a certificate whose SPKI hash is one of
-    /// these, or the connection is refused. No exceptions.
-    Enforce(Vec<String>),
+/// A webpki `TrustAnchor` stores the *content* of the SPKI `SEQUENCE`, without
+/// its tag and length; the pin is over the full encoding, so re-wrap it.
+fn anchor_pin(anchor: &TrustAnchor<'_>) -> String {
+    let content = anchor.subject_public_key_info.as_ref();
+    let mut spki = vec![0x30];
+    let len = content.len();
+    if len < 0x80 {
+        spki.push(len as u8);
+    } else {
+        let bytes = len.to_be_bytes();
+        let significant: Vec<u8> = bytes.iter().copied().skip_while(|b| *b == 0).collect();
+        spki.push(0x80 | significant.len() as u8);
+        spki.extend(significant);
+    }
+    spki.extend_from_slice(content);
+    sha256_base64(&spki)
+}
+
+/// Whether any certificate webpki verified into `path` — leaf, the
+/// intermediates it used, or its trust anchor — is pinned.
+fn path_matches_pin(path: &webpki::VerifiedPath<'_>, pins: &[String]) -> bool {
+    let pinned = |hash: String| pins.contains(&hash);
+    pinned(cert_pin(path.end_entity()))
+        || path
+            .intermediate_certificates()
+            .any(|c| pinned(cert_pin(c)))
+        || pinned(anchor_pin(path.anchor()))
+}
+
+fn chain_error(e: webpki::Error) -> TlsError {
+    match e {
+        webpki::Error::UnknownIssuer => {
+            TlsError::InvalidCertificate(CertificateError::UnknownIssuer)
+        }
+        other => TlsError::InvalidCertificate(CertificateError::Other(OtherError(Arc::new(other)))),
+    }
 }
 
 /// See the module docs for the full design rationale.
 #[derive(Debug)]
 struct PinningVerifier {
     algorithms: WebPkiSupportedAlgorithms,
-    mode: PinMode,
+    roots: Arc<Vec<TrustAnchor<'static>>>,
+    pins: Vec<String>,
 }
 
 impl PinningVerifier {
-    fn capturing() -> Arc<Self> {
+    fn new(policy: TrustPolicy) -> Arc<Self> {
         Arc::new(Self {
             algorithms: supported_algorithms(),
-            mode: PinMode::Capture(Mutex::new(Vec::new())),
+            roots: policy.roots,
+            pins: policy.pins,
         })
-    }
-
-    fn enforcing(pins: Vec<String>) -> Arc<Self> {
-        Arc::new(Self {
-            algorithms: supported_algorithms(),
-            mode: PinMode::Enforce(pins),
-        })
-    }
-
-    /// The SPKI hashes captured after a successful handshake. Empty until
-    /// (unless) one has completed; always empty for an `enforcing` verifier.
-    fn captured(&self) -> Vec<String> {
-        match &self.mode {
-            PinMode::Capture(slot) => slot.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-            PinMode::Enforce(_) => Vec::new(),
-        }
     }
 }
 
@@ -152,33 +230,41 @@ impl ServerCertVerifier for PinningVerifier {
         intermediates: &[CertificateDer<'_>],
         server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: UnixTime,
+        now: UnixTime,
     ) -> Result<ServerCertVerified, TlsError> {
         let parsed = ParsedCertificate::try_from(end_entity)?;
         rustls::client::verify_server_name(&parsed, server_name)?;
 
-        let mut observed = Vec::with_capacity(MAX_PINNED_CHAIN_DEPTH);
-        observed.push(spki_sha256_base64(end_entity)?);
-        for cert in intermediates.iter().take(MAX_PINNED_CHAIN_DEPTH - 1) {
-            observed.push(spki_sha256_base64(cert)?);
-        }
+        let leaf = webpki::EndEntityCert::try_from(end_entity).map_err(chain_error)?;
 
-        match &self.mode {
-            PinMode::Capture(slot) => {
-                *slot.lock().unwrap_or_else(|e| e.into_inner()) = observed;
-                Ok(ServerCertVerified::assertion())
+        // Set once webpki has built a fully valid path, so a failure after that
+        // point is known to be the pin rather than the chain.
+        let chain_validated = Cell::new(false);
+        let require_pin = |path: &webpki::VerifiedPath<'_>| {
+            chain_validated.set(true);
+            if path_matches_pin(path, &self.pins) {
+                Ok(())
+            } else {
+                Err(webpki::Error::UnknownIssuer)
             }
-            PinMode::Enforce(pinned) => {
-                if observed.iter().any(|hash| pinned.contains(hash)) {
-                    Ok(ServerCertVerified::assertion())
-                } else {
-                    Err(TlsError::General(
-                        "certificate pin mismatch: the backend presented a certificate whose \
-                         public key does not match the pin recorded when it was configured"
-                            .to_string(),
-                    ))
-                }
-            }
+        };
+
+        match leaf.verify_for_usage(
+            self.algorithms.all,
+            &self.roots,
+            intermediates,
+            now,
+            webpki::KeyUsage::server_auth(),
+            None,
+            Some(&require_pin),
+        ) {
+            Ok(_) => Ok(ServerCertVerified::assertion()),
+            Err(_) if chain_validated.get() => Err(TlsError::General(
+                "certificate pin mismatch: the backend presented a valid certificate chain, \
+                 but nothing in it matches the pins recorded when it was configured"
+                    .to_string(),
+            )),
+            Err(e) => Err(chain_error(e)),
         }
     }
 
@@ -205,14 +291,14 @@ impl ServerCertVerifier for PinningVerifier {
     }
 }
 
-fn build_client_config(verifier: Arc<PinningVerifier>) -> ClientConfig {
+fn build_client_config(policy: TrustPolicy) -> ClientConfig {
     // `.builder()` resolves its `CryptoProvider` from crate features
     // (`rustls`'s `ring` feature, enabled and unambiguous — see Cargo.toml)
     // when no process-level default has been installed yet; it only panics if
     // that resolution is ambiguous, which a single enabled backend never is.
     ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(verifier)
+        .with_custom_certificate_verifier(PinningVerifier::new(policy))
         .with_no_client_auth()
 }
 
@@ -229,9 +315,9 @@ fn build_pinned_reqwest_client(
 }
 
 /// Live pinned HTTP client + WebSocket TLS connector for the configured
-/// backend, sharing one `Enforce`-mode verifier so `net_fetch` and
-/// `net_ws_connect` apply identical pin logic. Built once — by
-/// `capture_pins` + `build_enforcing_context` inside `api_config_set`, or by
+/// backend, sharing one verifier so `net_fetch` and `net_ws_connect` apply
+/// identical validation and pin logic. Built once — by `capture_pins` +
+/// `build_enforcing_context` inside `api_config_set`, or by
 /// `net::load_or_reset_pinned_net` at startup — and held in `net::PinnedNet`
 /// for as long as the backend stays configured.
 #[derive(Clone)]
@@ -240,32 +326,23 @@ pub struct PinnedContext {
     pub ws_connector: Arc<ClientConfig>,
 }
 
-/// Builds the enforcing `PinnedContext` for an already-known pin set (either
-/// freshly captured, or loaded back from the config store).
+/// Builds the enforcing `PinnedContext` for an already-known pin set (the ones
+/// `capture_pins` returned, loaded back from the config store).
 pub fn build_enforcing_context(
     pins: &[String],
     timeout: Duration,
 ) -> Result<PinnedContext, String> {
-    let verifier = PinningVerifier::enforcing(pins.to_vec());
-    let tls_config = build_client_config(verifier);
+    build_context(TrustPolicy::with_pins(pins.to_vec()), timeout)
+}
+
+fn build_context(policy: TrustPolicy, timeout: Duration) -> Result<PinnedContext, String> {
+    let tls_config = build_client_config(policy);
     let ws_connector = Arc::new(tls_config.clone());
     let client = build_pinned_reqwest_client(tls_config, timeout)?;
     Ok(PinnedContext {
         client,
         ws_connector,
     })
-}
-
-struct Capture {
-    client: reqwest::Client,
-    verifier: Arc<PinningVerifier>,
-}
-
-fn build_capturing_client(timeout: Duration) -> Result<Capture, String> {
-    let verifier = PinningVerifier::capturing();
-    let tls_config = build_client_config(verifier.clone());
-    let client = build_pinned_reqwest_client(tls_config, timeout)?;
-    Ok(Capture { client, verifier })
 }
 
 async fn require_health_ok(client: &reqwest::Client, url: &str) -> Result<(), String> {
@@ -283,17 +360,26 @@ async fn require_health_ok(client: &reqwest::Client, url: &str) -> Result<(), St
     Ok(())
 }
 
-/// TOFU-pins `origin` (see module docs): connects once and records the leaf +
-/// intermediate SPKI hash(es) actually presented. Requires a real `2xx` from
-/// `<origin>/api/health` — not just a completed handshake — so a listener
+/// Admits `origin` for pinning (see module docs): connects once through the
+/// same verifier every later request goes through — WebPKI chain validation,
+/// then the ISRG root pins on the validated path — and requires a real `2xx`
+/// from `<origin>/api/health`, not just a completed handshake, so a listener
 /// that answers TLS but isn't actually this backend can't be pinned by
-/// accident.
+/// accident. Returns the pin set to persist and enforce.
 ///
 /// Plaintext `http://` to a loopback host (debug builds only — see
 /// `api_config::ALLOW_LOOPBACK_HTTP`) has no TLS to pin; this returns an
 /// empty pin set for that case, matching the mobile clients' "skip pinning
 /// for localhost/127.0.0.1".
 pub async fn capture_pins(origin: &Url, timeout: Duration) -> Result<Vec<String>, String> {
+    capture_pins_with(origin, timeout, TrustPolicy::isrg()).await
+}
+
+async fn capture_pins_with(
+    origin: &Url,
+    timeout: Duration,
+    policy: TrustPolicy,
+) -> Result<Vec<String>, String> {
     let health_url = format!("{}/api/health", origin.origin().ascii_serialization());
 
     if origin.scheme() == "http" {
@@ -302,12 +388,9 @@ pub async fn capture_pins(origin: &Url, timeout: Duration) -> Result<Vec<String>
         return Ok(Vec::new());
     }
 
-    let capture = build_capturing_client(timeout)?;
-    require_health_ok(&capture.client, &health_url).await?;
-    let pins = capture.verifier.captured();
-    if pins.is_empty() {
-        return Err("connected but could not determine the backend's certificate pins".to_string());
-    }
+    let pins = policy.pins.clone();
+    let client = build_pinned_reqwest_client(build_client_config(policy), timeout)?;
+    require_health_ok(&client, &health_url).await?;
     Ok(pins)
 }
 
@@ -330,25 +413,26 @@ fn loopback_http_client(origin: &Url, timeout: Duration) -> Result<reqwest::Clie
 /// The client the first-run health probe (`net::net_probe_health`, #1711) must
 /// use for `target`.
 ///
-/// The probe has to reach the same trust decision `capture_pins` will reach a
-/// moment later, because the probe is only a preview of it. A default
-/// `reqwest` client does not: it demands a chain to an OS-trusted root, while
-/// this app's trust model is SPKI pinning that deliberately ignores the chain
-/// (module docs). Using it made the probe stricter than the real gate, so a
-/// self-signed or private-CA backend — a supported deployment — was rejected
-/// with "unreachable" before `api_config_set` could ever pin it.
-///
-/// For `https://` this is therefore a capturing client — the pins it observes
-/// are discarded, the probe returns only a `bool`. It is not a relaxation: the
-/// verifier still checks the handshake signature and the hostname against the
-/// certificate's subject names, and `api_config_set` accepts the very same
-/// certificates. There is deliberately no path that builds a client with
-/// verification disabled.
+/// The probe is only a preview of the trust decision `capture_pins` makes a
+/// moment later, so it has to reach the same one. For `https://` it therefore
+/// uses the very same verifier `capture_pins` does — WebPKI validation plus the
+/// ISRG root pins. A looser probe would report a backend as reachable that
+/// `api_config_set` then refuses; a stricter one (the pre-#1711 default
+/// `reqwest` client) would refuse a backend `api_config_set` accepts. There is
+/// deliberately no path that builds a client with verification disabled.
 pub fn build_probe_client(target: &Url, timeout: Duration) -> Result<reqwest::Client, String> {
+    build_probe_client_with(target, timeout, TrustPolicy::isrg())
+}
+
+fn build_probe_client_with(
+    target: &Url,
+    timeout: Duration,
+    policy: TrustPolicy,
+) -> Result<reqwest::Client, String> {
     if target.scheme() == "http" {
         return loopback_http_client(target, timeout);
     }
-    Ok(build_capturing_client(timeout)?.client)
+    build_pinned_reqwest_client(build_client_config(policy), timeout)
 }
 
 #[cfg(test)]
@@ -356,41 +440,134 @@ mod tests {
     use super::*;
     use std::sync::Arc as StdArc;
 
-    use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
+    };
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
-    fn self_signed_cert() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
-        self_signed_cert_for(&["127.0.0.1", "localhost"])
+    // -----------------------------------------------------------------
+    // A throwaway PKI. Production trusts the Mozilla roots and pins ISRG
+    // Root X1/X2, none of whose private keys a test has, so every test that
+    // needs a *genuine* chain builds its own root and trusts it through
+    // `TrustPolicy`, which is the only thing the production policy differs by.
+    // -----------------------------------------------------------------
+
+    struct Ca {
+        der: CertificateDer<'static>,
+        issuer: Issuer<'static, KeyPair>,
     }
 
-    fn self_signed_cert_for(names: &[&str]) -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
-        let CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(names.iter().map(|n| n.to_string()).collect::<Vec<_>>())
-                .expect("self-signed cert generation");
-        let cert_der = cert.der().clone();
-        let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
-        (cert_der, key_der)
+    impl Ca {
+        fn root(name: &str) -> Self {
+            let (params, key) = Self::ca_params(name);
+            let der = params.self_signed(&key).expect("root cert").der().clone();
+            Self {
+                der,
+                issuer: Issuer::new(params, key),
+            }
+        }
+
+        fn intermediate(&self, name: &str) -> Self {
+            let (params, key) = Self::ca_params(name);
+            let der = params
+                .signed_by(&key, &self.issuer)
+                .expect("intermediate cert")
+                .der()
+                .clone();
+            Self {
+                der,
+                issuer: Issuer::new(params, key),
+            }
+        }
+
+        fn ca_params(name: &str) -> (CertificateParams, KeyPair) {
+            let mut params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+            params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+            params.distinguished_name.push(DnType::CommonName, name);
+            (params, KeyPair::generate().expect("ca key"))
+        }
+
+        fn leaf(&self, names: &[&str]) -> Leaf {
+            let params =
+                CertificateParams::new(names.iter().map(|n| n.to_string()).collect::<Vec<_>>())
+                    .expect("leaf params");
+            let key = KeyPair::generate().expect("leaf key");
+            let der = params
+                .signed_by(&key, &self.issuer)
+                .expect("leaf cert")
+                .der()
+                .clone();
+            Leaf::new(der, &key)
+        }
+
+        fn pin(&self) -> String {
+            pin_of(&self.der)
+        }
     }
+
+    struct Leaf {
+        der: CertificateDer<'static>,
+        key: PrivateKeyDer<'static>,
+    }
+
+    impl Leaf {
+        fn new(der: CertificateDer<'static>, key: &KeyPair) -> Self {
+            Self {
+                der,
+                key: PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+            }
+        }
+
+        fn self_signed(names: &[&str]) -> Self {
+            let params =
+                CertificateParams::new(names.iter().map(|n| n.to_string()).collect::<Vec<_>>())
+                    .expect("params");
+            let key = KeyPair::generate().expect("key");
+            let der = params.self_signed(&key).expect("self-signed").der().clone();
+            Self::new(der, &key)
+        }
+    }
+
+    fn pin_of(der: &CertificateDer<'_>) -> String {
+        let cert = webpki::EndEntityCert::try_from(der).expect("parse cert");
+        cert_pin(&cert)
+    }
+
+    fn policy_trusting(root: &Ca, pins: Vec<String>) -> TrustPolicy {
+        let anchor = webpki::anchor_from_trusted_cert(&root.der)
+            .expect("root as anchor")
+            .to_owned();
+        TrustPolicy {
+            roots: StdArc::new(vec![anchor]),
+            pins,
+        }
+    }
+
+    const LOCAL: &[&str] = &["127.0.0.1", "localhost"];
 
     /// Spawns a minimal HTTPS server bound to `127.0.0.1:0` that answers every
-    /// request `200 OK`, on its own thread with its own Tokio runtime — so
-    /// the test itself does not need to be `#[tokio::test]`, matching the
-    /// plaintext raw-socket test server pattern already used in `net.rs`.
-    /// Returns the server's origin (`https://127.0.0.1:<port>`).
+    /// request `200 OK`, presenting `chain` (leaf first), on its own thread
+    /// with its own Tokio runtime — so the test itself does not need to be
+    /// `#[tokio::test]`, matching the plaintext raw-socket test server pattern
+    /// already used in `net.rs`. Returns the server's origin
+    /// (`https://127.0.0.1:<port>`).
+    ///
+    /// `key_der` need not belong to `chain[0]`: one test needs exactly that
+    /// forged server (a certificate chain replayed without its private key).
     fn spawn_tls_server(
-        cert_der: CertificateDer<'static>,
+        chain: Vec<CertificateDer<'static>>,
         key_der: PrivateKeyDer<'static>,
     ) -> String {
         let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let origin = format!("https://{}", std_listener.local_addr().expect("local_addr"));
 
         // A resolver rather than `with_single_cert`: the latter refuses a key
-        // that does not belong to the certificate, and one test needs exactly
-        // that forged server (a certificate replayed without its private key).
+        // that does not belong to the certificate.
         let signing_key = rustls::crypto::ring::sign::any_supported_type(&key_der)
             .expect("supported signing key");
         let resolver = rustls::sign::SingleCertAndKey::from(rustls::sign::CertifiedKey::new(
-            vec![cert_der],
+            chain,
             signing_key,
         ));
         let server_config = rustls::ServerConfig::builder()
@@ -435,6 +612,14 @@ mod tests {
         origin
     }
 
+    /// Serves `leaf` followed by `rest` (the certificates a real server sends
+    /// after its leaf).
+    fn serve(leaf: Leaf, rest: &[&CertificateDer<'static>]) -> String {
+        let mut chain = vec![leaf.der];
+        chain.extend(rest.iter().map(|c| (*c).clone()));
+        spawn_tls_server(chain, leaf.key)
+    }
+
     /// A dedicated, fully-enabled (`enable_all` — IO + time drivers) Tokio
     /// runtime per call, rather than `tauri::async_runtime`'s shared global
     /// one: reqwest's per-request timeout races against `tokio::time::sleep`,
@@ -451,186 +636,352 @@ mod tests {
             .block_on(fut)
     }
 
-    #[test]
-    fn spki_pin_round_trips_through_capture_and_enforce() {
-        let (cert_a, key_a) = self_signed_cert();
-        let origin_a = spawn_tls_server(cert_a, key_a);
-        let target = Url::parse(&origin_a).expect("origin url");
-
-        // `reqwest::Client::builder().build()` (inside `capture_pins` and
-        // `build_enforcing_context`) must run inside an entered Tokio
-        // runtime — its connection-pool setup needs the time driver even
-        // before any request is sent — so both live in the same `block_on`
-        // call, matching how production code always builds them from inside
-        // an async Tauri command.
-        let (status, pin_count) = block_on(async {
-            let pins = capture_pins(&target, Duration::from_secs(5))
-                .await
-                .expect("TOFU capture against a reachable self-signed server must succeed");
-            let ctx =
-                build_enforcing_context(&pins, Duration::from_secs(5)).expect("pinned context");
-            let res = ctx
-                .client
-                .get(format!("{origin_a}/api/health"))
+    /// GET `<origin>/api/health` through an enforcing client built from
+    /// `policy`; `Ok(())` only on a `2xx`.
+    fn get_health(policy: TrustPolicy, origin: &str) -> Result<(), reqwest::Error> {
+        block_on(async {
+            let ctx = build_context(policy, Duration::from_secs(5)).expect("pinned context");
+            ctx.client
+                .get(format!("{origin}/api/health"))
                 .send()
-                .await
-                .expect("request against the pinned, matching server must succeed");
-            (res.status(), pins.len())
-        });
-        assert_eq!(
-            pin_count, 1,
-            "a self-signed leaf has no intermediate to capture"
-        );
-        assert!(status.is_success());
+                .await?
+                .error_for_status()
+                .map(|_| ())
+        })
     }
 
-    #[test]
-    fn pinned_client_refuses_a_different_key_even_when_reachable() {
-        let (cert_a, key_a) = self_signed_cert();
-        let (cert_b, key_b) = self_signed_cert();
+    fn capture(origin: &str, policy: TrustPolicy) -> Result<Vec<String>, String> {
+        let target = Url::parse(origin).expect("origin url");
+        block_on(capture_pins_with(&target, Duration::from_secs(5), policy))
+    }
 
-        let origin_a = spawn_tls_server(cert_a, key_a);
-        let target_a = Url::parse(&origin_a).expect("origin url");
-        // A second, independently generated (self-signed — an unpinned
-        // client would refuse it too, but that is not the point: this is
-        // exactly the class of certificate #775 exists to refuse even when
-        // *some* trust anchor, real CA or coerced/mis-issued, vouches for
-        // it) server presenting a different key.
-        let origin_b = spawn_tls_server(cert_b, key_b);
-
-        let err = block_on(async {
-            let pins = capture_pins(&target_a, Duration::from_secs(5))
-                .await
-                .expect("TOFU capture");
-            let ctx =
-                build_enforcing_context(&pins, Duration::from_secs(5)).expect("pinned context");
-            ctx.client
-                .get(format!("{origin_b}/api/health"))
-                .send()
-                .await
-        })
-        .expect_err("a pinned client must refuse a server presenting a different key");
+    fn assert_pin_mismatch(err: &reqwest::Error) {
         let message = format!("{err:?}").to_lowercase();
         assert!(
-            message.contains("pin") || err.is_connect(),
+            message.contains("pin"),
             "expected a pin-mismatch error, got: {err:?}"
         );
     }
 
+    fn assert_refused(result: Result<(), reqwest::Error>, why: &str) {
+        assert!(result.is_err(), "{why}");
+    }
+
+    // -----------------------------------------------------------------
+    // Genuine chains are accepted
+    // -----------------------------------------------------------------
+
     #[test]
-    fn ws_connector_enforces_the_same_pin_as_the_http_client() {
+    fn a_genuine_chain_to_the_pinned_root_is_accepted_and_captured() {
+        let root = Ca::root("Test Root");
+        let intermediate = root.intermediate("Test Intermediate");
+        // A real deployment: Caddy sends the leaf and its intermediate, never the root.
+        let origin = serve(intermediate.leaf(LOCAL), &[&intermediate.der]);
+        let pins = vec![root.pin()];
+
+        let captured = capture(&origin, policy_trusting(&root, pins.clone()))
+            .expect("capture must accept a chain that validates and carries the pin");
+        assert_eq!(captured, pins);
+        get_health(policy_trusting(&root, captured), &origin)
+            .expect("the enforcing client must accept the same chain");
+    }
+
+    #[test]
+    fn a_renewed_leaf_under_the_same_root_pin_is_still_accepted() {
+        // Pinning the root (not the leaf or intermediate) is what lets a routine
+        // leaf renewal, or an intermediate rotation, keep working.
+        let root = Ca::root("Test Root");
+        let pins = vec![root.pin()];
+        for name in ["Intermediate A", "Intermediate B"] {
+            let intermediate = root.intermediate(name);
+            let origin = serve(intermediate.leaf(LOCAL), &[&intermediate.der]);
+            get_health(policy_trusting(&root, pins.clone()), &origin)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn a_pin_on_the_leaf_or_an_intermediate_of_a_valid_chain_is_accepted() {
+        let root = Ca::root("Test Root");
+        let intermediate = root.intermediate("Test Intermediate");
+        let leaf = intermediate.leaf(LOCAL);
+        let leaf_pin = pin_of(&leaf.der);
+        let origin = serve(leaf, &[&intermediate.der]);
+
+        get_health(policy_trusting(&root, vec![leaf_pin]), &origin).expect("leaf pin");
+        get_health(policy_trusting(&root, vec![intermediate.pin()]), &origin)
+            .expect("intermediate pin, on a chain that validates through it");
+    }
+
+    #[test]
+    fn ws_connector_enforces_the_same_policy_as_the_http_client() {
         // `PinnedContext::ws_connector` is the identical rustls `ClientConfig`
-        // (same verifier, same mode) the HTTP client uses — exercise it
-        // directly via a raw TLS connect, matching how `net::net_ws_connect`
-        // wraps it in `tokio_tungstenite::Connector::Rustls`.
-        let (cert_a, key_a) = self_signed_cert();
-        let (cert_b, key_b) = self_signed_cert();
+        // (same verifier) the HTTP client uses — exercise it directly via a raw
+        // TLS connect, matching how `net::net_ws_connect` wraps it in
+        // `tokio_tungstenite::Connector::Rustls`.
+        let root = Ca::root("Test Root");
+        let genuine = serve(root.leaf(LOCAL), &[]);
+        let forged = serve(Leaf::self_signed(LOCAL), &[&root.der]);
 
-        let origin_a = spawn_tls_server(cert_a, key_a);
-        let target_a = Url::parse(&origin_a).expect("origin url");
-        let pins = block_on(capture_pins(&target_a, Duration::from_secs(5))).expect("TOFU capture");
-        let ctx = build_enforcing_context(&pins, Duration::from_secs(5)).expect("pinned context");
-
-        let origin_b = spawn_tls_server(cert_b, key_b);
-        let addr_b = origin_b
-            .strip_prefix("https://")
-            .expect("origin has https scheme")
-            .to_string();
-
-        let outcome = block_on(async move {
-            let connector = tokio_rustls::TlsConnector::from(ctx.ws_connector.clone());
-            let tcp = tokio::net::TcpStream::connect(&addr_b)
-                .await
-                .expect("tcp connect to server B");
-            let server_name = ServerName::try_from("127.0.0.1").expect("server name");
-            connector.connect(server_name, tcp).await
-        });
+        let connect = |origin: &str| {
+            let addr = origin
+                .strip_prefix("https://")
+                .expect("https origin")
+                .to_string();
+            let ctx = build_context(
+                policy_trusting(&root, vec![root.pin()]),
+                Duration::from_secs(5),
+            )
+            .expect("pinned context");
+            block_on(async move {
+                let connector = tokio_rustls::TlsConnector::from(ctx.ws_connector.clone());
+                let tcp = tokio::net::TcpStream::connect(&addr)
+                    .await
+                    .expect("tcp connect");
+                let server_name = ServerName::try_from("127.0.0.1").expect("server name");
+                connector.connect(server_name, tcp).await.map(|_| ())
+            })
+        };
+        connect(&genuine).expect("the WS connector must accept a genuine chain");
         assert!(
-            outcome.is_err(),
-            "the WS TLS connector must refuse the same mismatched key the HTTP client refuses"
+            connect(&forged).is_err(),
+            "the WS connector must refuse the forged chain the HTTP client refuses"
         );
     }
 
     // -----------------------------------------------------------------
-    // First-run probe (#1711)
+    // Forged chains are refused (#2157)
     // -----------------------------------------------------------------
 
-    fn probe(client: &reqwest::Client, origin: &str) -> bool {
-        let target = Url::parse(&format!("{origin}/api/health")).expect("probe url");
-        block_on(crate::net::probe_health(client, target))
+    #[test]
+    fn an_attackers_leaf_beside_the_public_intermediate_is_refused() {
+        // The #2157 reproduction. The real deployment sends [leaf, intermediate];
+        // the old verifier recorded both SPKIs and accepted any chain containing
+        // either. An attacker needs only the intermediate's public bytes.
+        let root = Ca::root("Test Root");
+        let intermediate = root.intermediate("Test Intermediate");
+        let pins = vec![pin_of(&intermediate.der)];
+
+        let attacker = serve(Leaf::self_signed(LOCAL), &[&intermediate.der]);
+
+        // Capture, i.e. first contact, must not accept it either.
+        assert!(
+            capture(&attacker, policy_trusting(&root, pins.clone())).is_err(),
+            "capture must validate the chain too"
+        );
+        assert_refused(
+            get_health(policy_trusting(&root, pins), &attacker),
+            "a self-signed leaf plus the public intermediate must not satisfy the intermediate pin",
+        );
     }
 
-    fn probe_with_production_client(origin: &str) -> bool {
+    #[test]
+    fn an_attackers_leaf_beside_the_public_root_is_refused() {
+        let root = Ca::root("Test Root");
+        let attacker = serve(Leaf::self_signed(LOCAL), &[&root.der]);
+        assert!(capture(&attacker, policy_trusting(&root, vec![root.pin()])).is_err());
+        assert_refused(
+            get_health(policy_trusting(&root, vec![root.pin()]), &attacker),
+            "a self-signed leaf plus the root's public bytes must not satisfy the root pin",
+        );
+    }
+
+    #[test]
+    fn a_self_signed_leaf_is_refused_even_when_its_own_key_is_pinned() {
+        // The pre-#2157 trust-on-first-use behaviour: pin whatever answered.
+        let leaf = Leaf::self_signed(LOCAL);
+        let own_pin = pin_of(&leaf.der);
+        let root = Ca::root("Test Root");
+        let origin = serve(leaf, &[]);
+
+        assert!(capture(&origin, policy_trusting(&root, vec![own_pin.clone()])).is_err());
+        assert_refused(
+            get_health(policy_trusting(&root, vec![own_pin]), &origin),
+            "a chain that validates to no root must be refused whatever it carries",
+        );
+    }
+
+    #[test]
+    fn a_valid_chain_to_an_unpinned_root_is_a_pin_mismatch() {
+        // Chain validation alone is exactly what a coerced or mis-issued
+        // certificate passes; the pin is what stops it.
+        let pinned_root = Ca::root("Pinned Root");
+        let other_root = Ca::root("Other Trusted Root");
+        let origin = serve(other_root.leaf(LOCAL), &[]);
+
+        // Both roots are trusted; only one is pinned.
+        let mut policy = policy_trusting(&pinned_root, vec![pinned_root.pin()]);
+        let other_anchor = webpki::anchor_from_trusted_cert(&other_root.der)
+            .expect("anchor")
+            .to_owned();
+        let mut roots = (*policy.roots).clone();
+        roots.push(other_anchor);
+        policy.roots = StdArc::new(roots);
+
+        assert!(capture(&origin, policy.clone()).is_err());
+        let err = get_health(policy, &origin).expect_err("an unpinned root must be refused");
+        assert_pin_mismatch(&err);
+    }
+
+    #[test]
+    fn a_valid_chain_replayed_without_its_private_key_is_refused() {
+        // The attacker holds the (public) chain but not the leaf's key, so the
+        // handshake signature cannot verify.
+        let root = Ca::root("Test Root");
+        let genuine = root.leaf(LOCAL);
+        let someone_elses_key = Leaf::self_signed(LOCAL).key;
+        let origin = spawn_tls_server(vec![genuine.der], someone_elses_key);
+
+        assert_refused(
+            get_health(policy_trusting(&root, vec![root.pin()]), &origin),
+            "a certificate presented without its private key must be refused",
+        );
+    }
+
+    #[test]
+    fn a_chain_for_a_different_host_is_refused() {
+        let root = Ca::root("Test Root");
+        let origin = serve(root.leaf(&["not-this-host.example"]), &[]);
+        assert_refused(
+            get_health(policy_trusting(&root, vec![root.pin()]), &origin),
+            "a chain valid for another hostname must be refused",
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // The production policy: Mozilla roots, ISRG Root X1/X2 pins
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn the_production_roots_contain_both_isrg_roots_under_the_documented_pins() {
+        // Ties the constants to the trust store: if either pin were mistyped, or
+        // the root program dropped a root, the production policy could never
+        // accept a genuine Let's Encrypt chain.
+        let policy = TrustPolicy::isrg();
+        for pin in ISRG_ROOT_PINS {
+            assert!(
+                policy.roots.iter().any(|anchor| anchor_pin(anchor) == pin),
+                "no trust anchor in the Mozilla root program hashes to the pin {pin}"
+            );
+        }
+        assert_eq!(policy.pins, ISRG_ROOT_PINS);
+    }
+
+    fn isrg_root_der(pin: &str) -> CertificateDer<'static> {
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .find(|der| pin_of(der) == pin)
+            .expect("ISRG root in the Mozilla program")
+            .clone()
+    }
+
+    #[test]
+    fn production_policy_refuses_a_forged_chain_carrying_an_isrg_root() {
+        // A self-signed leaf next to the real, public ISRG Root X1 / X2 bytes.
+        for pin in ISRG_ROOT_PINS {
+            let origin = serve(Leaf::self_signed(LOCAL), &[&isrg_root_der(pin)]);
+            let target = Url::parse(&origin).expect("origin url");
+
+            let captured = block_on(capture_pins(&target, Duration::from_secs(5)));
+            assert!(
+                captured.is_err(),
+                "capture must refuse a forged chain carrying ISRG root {pin}"
+            );
+            let pins = ISRG_ROOT_PINS
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>();
+            assert_refused(
+                get_health(TrustPolicy::with_pins(pins), &origin),
+                "enforcement must refuse a forged chain carrying an ISRG root",
+            );
+        }
+    }
+
+    #[test]
+    fn production_policy_refuses_a_self_signed_backend() {
+        let origin = serve(Leaf::self_signed(LOCAL), &[]);
+        let target = Url::parse(&origin).expect("origin url");
+        assert!(block_on(capture_pins(&target, Duration::from_secs(5))).is_err());
+    }
+
+    /// Live handshake against Let's Encrypt's own test sites, one per root.
+    /// Needs network, so it is `#[ignore]`d; run with
+    /// `cargo test -- --ignored genuine_lets_encrypt`.
+    #[test]
+    #[ignore = "needs network access to letsencrypt.org"]
+    fn genuine_lets_encrypt_chains_to_isrg_roots_are_accepted() {
+        for host in [
+            "valid-isrgrootx1.letsencrypt.org",
+            "valid-isrgrootx2.letsencrypt.org",
+        ] {
+            let ctx = build_enforcing_context(
+                &ISRG_ROOT_PINS
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>(),
+                Duration::from_secs(10),
+            )
+            .expect("pinned context");
+            let outcome = block_on(async move {
+                let connector = tokio_rustls::TlsConnector::from(ctx.ws_connector.clone());
+                let tcp = tokio::net::TcpStream::connect((host, 443))
+                    .await
+                    .expect("tcp connect");
+                let server_name = ServerName::try_from(host).expect("server name");
+                connector.connect(server_name, tcp).await.map(|_| ())
+            });
+            outcome.unwrap_or_else(|e| panic!("{host}: {e:?}"));
+            println!("accepted genuine chain: {host}");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // First-run probe (#1711): must reach the same decision as capture_pins
+    // -----------------------------------------------------------------
+
+    fn probe_with(policy: TrustPolicy, origin: &str) -> bool {
         let target = Url::parse(origin).expect("origin url");
         // `reqwest::Client::builder().build()` needs an entered runtime.
         block_on(async {
-            let client =
-                build_probe_client(&target, Duration::from_secs(5)).expect("probe client builds");
+            let client = build_probe_client_with(&target, Duration::from_secs(5), policy)
+                .expect("probe client builds");
             let health = Url::parse(&format!("{origin}/api/health")).expect("probe url");
             crate::net::probe_health(&client, health).await
         })
     }
 
     #[test]
-    fn probe_accepts_a_self_signed_backend_that_the_default_root_store_refuses() {
-        let (cert, key) = self_signed_cert();
-        let origin = spawn_tls_server(cert, key);
+    fn probe_and_capture_agree_on_a_genuine_chain() {
+        let root = Ca::root("Test Root");
+        let origin = serve(root.leaf(LOCAL), &[]);
+        let policy = policy_trusting(&root, vec![root.pin()]);
+        assert!(probe_with(policy.clone(), &origin));
+        capture(&origin, policy).expect("capture accepts what the probe accepted");
+    }
 
-        // The pre-#1711 probe client: default WebPKI roots. A self-signed
-        // certificate chains to nothing, so it refuses a server the app can
-        // in fact be configured against. This is the bug, pinned as a fact so
-        // the accept assertion below cannot pass vacuously.
-        let default_client = block_on(async {
-            reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("default client")
-        });
+    #[test]
+    fn probe_and_capture_agree_on_a_forged_chain() {
+        let root = Ca::root("Test Root");
+        let origin = serve(Leaf::self_signed(LOCAL), &[&root.der]);
+        let policy = policy_trusting(&root, vec![root.pin()]);
         assert!(
-            !probe(&default_client, &origin),
-            "premise: a default-trust client must refuse a self-signed backend"
+            !probe_with(policy.clone(), &origin),
+            "the probe must not report a forged backend as reachable"
         );
-
         assert!(
-            probe_with_production_client(&origin),
-            "the probe must accept exactly what api_config_set will go on to pin"
+            capture(&origin, policy).is_err(),
+            "probe and capture must agree"
         );
-        // ...and that really is the case: TOFU capture succeeds on it.
-        let target = Url::parse(&origin).expect("origin url");
-        block_on(capture_pins(&target, Duration::from_secs(5)))
-            .expect("capture_pins accepts the certificate the probe accepted");
     }
 
     #[test]
     fn probe_refuses_a_certificate_issued_for_a_different_host() {
-        // Reachable, healthy (200) and TLS-valid in itself, but the
-        // certificate names another host. The pinning verifier still checks
-        // the hostname, so the probe must not wave it through.
-        let (cert, key) = self_signed_cert_for(&["not-this-host.example"]);
-        let origin = spawn_tls_server(cert, key);
-        assert!(
-            !probe_with_production_client(&origin),
-            "a certificate for another hostname must be refused"
-        );
-        let target = Url::parse(&origin).expect("origin url");
-        assert!(
-            block_on(capture_pins(&target, Duration::from_secs(5))).is_err(),
-            "probe and capture_pins must agree"
-        );
-    }
-
-    #[test]
-    fn probe_refuses_a_replayed_certificate_without_its_private_key() {
-        // The attacker holds the (public) certificate but not its key, so the
-        // handshake signature cannot verify. The probe must not be satisfiable
-        // by certificate bytes alone.
-        let (real_cert, _real_key) = self_signed_cert();
-        let (_other_cert, other_key) = self_signed_cert();
-        let origin = spawn_tls_server(real_cert, other_key);
-        assert!(
-            !probe_with_production_client(&origin),
-            "a certificate presented without its private key must be refused"
-        );
+        let root = Ca::root("Test Root");
+        let origin = serve(root.leaf(&["not-this-host.example"]), &[]);
+        let policy = policy_trusting(&root, vec![root.pin()]);
+        assert!(!probe_with(policy.clone(), &origin));
+        assert!(capture(&origin, policy).is_err());
     }
 
     #[test]
