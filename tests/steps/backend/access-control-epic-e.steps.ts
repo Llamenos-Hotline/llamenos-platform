@@ -227,17 +227,33 @@ function resolveApproverPubkey(world: Record<string, unknown>, label: string): s
 
 // ── H01: Erasure co-approver admin check ─────────────────────────────
 
-Given('a registered volunteer user with pubkey {string}', async ({ request, world }, label: string) => {
+/** Register `label` and make them a member of `hubLabel` holding `roleIds` there (and nothing globally). */
+async function registerHubMember(
+  request: APIRequestContext,
+  world: Record<string, unknown>,
+  label: string,
+  hubLabel: string,
+  roleIds: string[],
+): Promise<void> {
+  const hubId = await ensureHub(request, world, hubLabel)
   const user = await createUserViaApi(request, { roleIds: ['role-volunteer'] })
+  await apiPost(request, `/hubs/${hubId}/members`, { pubkey: user.pubkey, roleIds })
   getS(world).actors[label] = { pubkey: user.pubkey, seedHex: user.seedHex, registered: true }
+}
+
+Given('a registered user {string} holds role {string} in hub {string}', async ({ request, world }, label: string, roleId: string, hubLabel: string) => {
+  await registerHubMember(request, world, label, hubLabel, [roleId])
 })
 
-Given('a registered admin user with pubkey {string}', async ({ request, world }, label: string) => {
-  const user = await createUserViaApi(request, { roleIds: ['role-super-admin'] })
-  getS(world).actors[label] = { pubkey: user.pubkey, seedHex: user.seedHex, registered: true }
+// A role the instance never heard of by name: only its permissions can make its holder an admin.
+Given('a registered user {string} holds a custom role granting {string} and {string} in hub {string}', async ({ request, world }, label: string, first: string, second: string, hubLabel: string) => {
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const role = await createRoleViaApi(request, { name: `epic-e night coordinators ${unique}`, slug: `epic-e-night-coordinators-${unique}`, permissions: [first, second] })
+  await registerHubMember(request, world, label, hubLabel, [role.id])
 })
 
-Given('a registered admin user with pubkey {string} and role {string}', async ({ request, world }, label: string, roleId: string) => {
+// Authority over a hub's data comes from the hub's roles, never from a global role id (#2232).
+Given('a registered user {string} holds only the global role {string}', async ({ request, world }, label: string, roleId: string) => {
   const user = await createUserViaApi(request, { roleIds: [roleId] })
   getS(world).actors[label] = { pubkey: user.pubkey, seedHex: user.seedHex, registered: true }
 })

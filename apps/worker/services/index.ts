@@ -106,7 +106,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   const settings = new SettingsService(db)
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
   const hubShred = new HubShredService(db, opts?.blobStorage)
-  const erasure = new ErasureService(db, identity, {
+  const erasure = new ErasureService(db, {
     deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
   })
 

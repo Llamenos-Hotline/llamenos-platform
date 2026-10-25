@@ -5,7 +5,7 @@
  * admin immediate erasure, cryptographic cascade execution,
  * and re-encryption job queuing.
  */
-import { eq, and, sql, desc, count, type SQL } from 'drizzle-orm'
+import { eq, and, or, ne, sql, desc, count, type SQL } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   erasureRequests,
@@ -22,12 +22,14 @@ import {
   hubKeys,
   hubs,
   retentionPlatformFloors,
+  securityEvents,
+  userSignalContacts,
 } from '../db/schema'
 import { ServiceError } from './settings'
-import { adminStateOf, assertHubsKeepAnAdmin } from '../lib/hub-admin'
+import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, type HubRoleAssignment } from '../lib/hub-admin'
 import { createLogger } from '../lib/logger'
-import type { AuditService } from './audit'
-import type { IdentityService } from './identity'
+import { ERASED_ACTOR, type AuditService } from './audit'
+import { SIP_REVOCATION_EVENT } from '../telephony/registrar'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
@@ -61,8 +63,6 @@ function hasEnvelopeFor(column: SQL, pubkey: string): SQL {
   return sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${column}) AS envelope WHERE envelope->>'pubkey' = ${pubkey})`
 }
 
-const ADMIN_ROLES = ['role-super-admin', 'role-admin', 'role-hub-admin'] as const
-
 /**
  * Blob-envelope-mirror deletion, injected by the service registry. The hub
  * shred leaves queued scope='hub' marker jobs in re_encryption_jobs when a
@@ -91,7 +91,6 @@ async function isErasedUser(tx: Pick<Database, 'select'>, userPubkey: string): P
 export class ErasureService {
   constructor(
     protected db: Database,
-    private readonly identity?: Pick<IdentityService, 'getUserInternal'>,
     private readonly blobMirrors?: BlobMirrorDeleter,
   ) {}
 
@@ -224,7 +223,7 @@ export class ErasureService {
     let isEmergency = false
 
     if (emergency) {
-      await this.verifyCoApproval(userId, userId, emergency, config)
+      await this.verifyCoApproval(userId, userId, await this.hubsInScopeOfSelfErasure(userId, hubId), emergency, config)
       effectiveDelayHours = EMERGENCY_MIN_HOURS
       isEmergency = true
     }
@@ -264,20 +263,46 @@ export class ErasureService {
    * erasure is refused with a 409 naming the hub, and succeeds once another
    * active admin exists there. Erasure is deferred, not denied — the subject
    * (or an operator) makes someone else an admin, or deletes the hub, and
-   * retries.
+   * retries. The refusal says so, because erasure is a legal obligation and a
+   * bare "no" would leave the person with no route to it.
+   *
+   * The subject is never counted as their own replacement: `assertHubsKeepAnAdmin`
+   * counts the hub's admins excluding them, and its candidate filter (the one
+   * `listAdminPubkeys` uses) already drops anyone with an erasure in flight.
    */
   private async assertErasureKeepsHubAdmins(tx: Pick<Database, 'select' | 'execute'>, userId: string): Promise<void> {
     // Row lock, as on every other guarded path: the guard locks the hubs named in
     // this row, so it must not be a snapshot a concurrent grant can outdate.
     const [current] = await tx.select().from(users).where(eq(users.pubkey, userId)).for('update').limit(1)
     if (!current) return
-    await assertHubsKeepAnAdmin(
-      tx,
-      userId,
-      adminStateOf(current),
-      { active: false, status: 'erased', hubRoles: [] },
-      'erase this account',
-    )
+    try {
+      await assertHubsKeepAnAdmin(
+        tx,
+        userId,
+        adminStateOf(current),
+        { active: false, status: 'erased', hubRoles: [] },
+        'erase this account',
+      )
+    } catch (err) {
+      if (err instanceof ServiceError && err.status === 409) {
+        throw new ServiceError(
+          409,
+          `${err.message} Erasure is not denied: once that hub has another admin, request it again.`,
+        )
+      }
+      throw err
+    }
+  }
+
+  /**
+   * The hubs whose admin may co-approve a person's erasure: the hub the request
+   * was made in, or — on the hub-less route — every hub the person belongs to,
+   * since their data lives in each of them.
+   */
+  private async hubsInScopeOfSelfErasure(userId: string, hubId: string): Promise<string[]> {
+    if (hubId) return [hubId]
+    const [row] = await this.db.select({ hubRoles: users.hubRoles }).from(users).where(eq(users.pubkey, userId)).limit(1)
+    return [...new Set(((row?.hubRoles as HubRoleAssignment[] | null) ?? []).map(hr => hr.hubId))]
   }
 
   async cancelSelfRequest(userId: string): Promise<void> {
@@ -301,10 +326,18 @@ export class ErasureService {
    * the second pair of eyes (spec §14.1). `signSubject` is what the signature
    * covers (the user id, or the hub id for a shred); `requester` is who asked
    * — the co-approver must never be the same party.
+   *
+   * The second pair of eyes must be an admin of a hub whose data is being
+   * erased — `hubIds`, the hubs in scope — by the one admin predicate in
+   * `lib/hub-admin.ts` (roles held IN that hub that confer `HUB_ADMIN_PERMISSIONS`,
+   * resolved against the live role definitions). No role id or name is matched
+   * and global roles are not consulted: a hub that renames or splits its admin
+   * role keeps working, and authority in one hub is none in another (D1, #2232).
    */
   private async verifyCoApproval(
     signSubject: string,
     requester: string,
+    hubIds: readonly string[],
     emergency: {
       coApproverPubkey: string
       coApproverSignature: string
@@ -338,12 +371,11 @@ export class ErasureService {
       throw new ServiceError(400, 'Co-approver signature verification failed')
     }
 
-    // H01: Verify co-approver is a registered admin device
-    const coApproverUser = await this.identity?.getUserInternal(emergency.coApproverPubkey) ?? null
-    const isAdmin = coApproverUser?.roles.some(r => (ADMIN_ROLES as readonly string[]).includes(r)) ?? false
-    if (!isAdmin) {
-      throw new ServiceError(403, 'Co-approver must be a registered admin device')
+    // H01: the co-approver must be an admin of the hub being erased
+    for (const hubId of hubIds) {
+      if ((await listAdminPubkeys(this.db, hubId)).includes(emergency.coApproverPubkey)) return
     }
+    throw new ServiceError(403, 'Co-approver must be a registered admin device')
   }
 
   // ---------------------------------------------------------------------------
@@ -395,7 +427,7 @@ export class ErasureService {
     const config = await this.getConfig(hubId)
     let isEmergency = false
     if (emergency) {
-      await this.verifyCoApproval(hubId, requestedBy, emergency, config)
+      await this.verifyCoApproval(hubId, requestedBy, [hubId], emergency, config)
       isEmergency = true
     }
 
@@ -591,7 +623,12 @@ export class ErasureService {
       // Delete devices
       await tx.delete(devices).where(eq(devices.pubkey, userId))
 
-      // Anonymize user row
+      // Anonymize user row. The pubkey stays (it is the primary key other rows
+      // reference), so everything that would let it be read as a person — roles,
+      // hub membership, languages and preferences — goes. Without this the erased
+      // pubkey stays a stable, richly described pseudonym (#2187). The guard above
+      // already proved no hub depends on this account as an admin, so emptying
+      // hub_roles cannot orphan one.
       await tx
         .update(users)
         .set({
@@ -601,9 +638,24 @@ export class ErasureService {
           active: false,
           encryptedSecretKey: '',
           availability: 'unavailable',
+          roles: [],
+          hubRoles: [],
+          spokenLanguages: [],
+          callPreference: null,
+          uiLanguage: null,
+          specializations: [],
+          supportedMessagingChannels: [],
+          teamId: null,
+          supervisorPubkey: null,
           updatedAt: new Date(),
         })
         .where(eq(users.pubkey, userId))
+
+      // The Signal contact is a sealed phone number or username, recoverable by
+      // anyone who can open its envelope — a person's identifier, not a setting.
+      await tx.delete(userSignalContacts).where(eq(userSignalContacts.userPubkey, userId))
+
+      await this.scrubSecurityEvents(tx, userId)
 
       // Phase 3: Crypto-shredding
 
@@ -614,7 +666,7 @@ export class ErasureService {
       await tx
         .update(auditLog)
         .set({
-          actorPubkey: '[erased]',
+          actorPubkey: ERASED_ACTOR,
           erasedAt: new Date(),
         })
         .where(eq(auditLog.actorPubkey, userId))
@@ -623,7 +675,7 @@ export class ErasureService {
       await tx.execute(sql`
         UPDATE audit_log
         SET details = NULL, erased_at = NOW()
-        WHERE actor_pubkey = '[erased]'
+        WHERE actor_pubkey = ${ERASED_ACTOR}
         AND erased_at IS NOT NULL
         AND details IS NOT NULL
         AND jsonb_typeof(details) != 'null'
@@ -672,6 +724,32 @@ export class ErasureService {
     })
 
     return { reEncryptionJobIds }
+  }
+
+  /**
+   * Remove what the security-event log holds about an erased user: events
+   * attributed to them and events that name them in metadata (device ids,
+   * `ip_hash`, free-form detail).
+   *
+   * The one exception is `sipIdentityRevoked`. The SIP registrar derives a
+   * volunteer's credential epoch from the COUNT of those events
+   * (`IdentityService.countSecurityEvents`), so deleting them would rewind the
+   * epoch and make a credential that was deliberately revoked valid again.
+   * Those rows stay but are reduced to the single fact the count needs — the
+   * pubkey in metadata — with device and IP dropped.
+   */
+  private async scrubSecurityEvents(tx: Pick<Database, 'delete' | 'update'>, userId: string): Promise<void> {
+    const aboutUser = or(
+      eq(securityEvents.userPubkey, userId),
+      sql`${securityEvents.metadata}->>'pubkey' = ${userId}`,
+    )
+    await tx
+      .delete(securityEvents)
+      .where(and(aboutUser, ne(securityEvents.eventType, SIP_REVOCATION_EVENT)))
+    await tx
+      .update(securityEvents)
+      .set({ deviceId: null, ipHash: null, metadata: { pubkey: userId } })
+      .where(and(aboutUser, eq(securityEvents.eventType, SIP_REVOCATION_EVENT)))
   }
 
   // ---------------------------------------------------------------------------

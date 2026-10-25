@@ -41,7 +41,7 @@ const DATABASE_URL =
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
 const settings = new SettingsService(db)
-const erasure = new ErasureService(db, identity)
+const erasure = new ErasureService(db)
 const audit = new AuditService(db)
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -256,6 +256,9 @@ describe('GDPR erasure of the only admin', () => {
     const hubId = await makeHub('erase-request', admin)
     const message = await expectRefused(() => erasure.createSelfRequest(admin, hubId, 'please erase me'))
     expect(message).toContain(hubId)
+    // Erasure is a legal obligation: the refusal must say how to get to it.
+    expect(message).toContain('Make another active member an admin')
+    expect(message).toContain('request it again')
     expect(await erasure.getMyRequest(admin)).toBeNull()
   })
 

@@ -50,8 +50,14 @@ function makeChainEntry(
   }
 }
 
+/** The stored row as the database returns it: erasure leaves `details` NULL, which the builder's type excludes. */
+type StoredEntry = Omit<ReturnType<typeof makeChainEntry>, 'details'> & {
+  details: Record<string, unknown> | null
+  erasedAt?: Date | null
+}
+
 /** Build a valid 3-entry chain. */
-function buildValidChain() {
+function buildValidChain(): StoredEntry[] {
   const e1 = makeChainEntry('e1', 'login', '2026-01-01T00:00:00.000Z', null)
   const e2 = makeChainEntry('e2', 'noteCreated', '2026-01-01T00:01:00.000Z', e1.entryHash, { note: 'test' })
   const e3 = makeChainEntry('e3', 'logout', '2026-01-01T00:02:00.000Z', e2.entryHash)
@@ -119,23 +125,58 @@ describe('AuditService.verifyChain', () => {
     expect(result.firstBrokenEntry!.reason).toBe('entryHash mismatch')
   })
 
-  it('accepts a GDPR-erased entry whose content was rewritten, but still checks its linkage', async () => {
+  it('accepts a GDPR-erased entry in the shape erasure leaves, but still checks its linkage', async () => {
     const { db } = setupVerifyDb()
     const service = new AuditService(db as any)
 
     const chain = buildValidChain()
-    // Erasure rewrites actorPubkey in place and stamps erasedAt; the hash can no longer be recomputed.
-    chain[1] = { ...chain[1], actorPubkey: '[erased]', erasedAt: new Date() } as typeof chain[1]
+    // Erasure rewrites actorPubkey to a tombstone, NULLs details and stamps erasedAt; the hash can no longer be recomputed.
+    chain[1] = { ...chain[1], actorPubkey: '[erased]', details: null, erasedAt: new Date() }
     db.$setSelectResults([[{ total: 3 }], chain])
     expect(await service.verifyChain('hub-1')).toEqual({ valid: true, totalEntries: 3, checkedEntries: 3 })
 
+    // A hub crypto-shred leaves the same shape under its own tombstone.
+    const shredded = buildValidChain()
+    shredded[1] = { ...shredded[1], actorPubkey: '[shredded]', details: null, erasedAt: new Date() }
+    db.$setSelectResults([[{ total: 3 }], shredded])
+    expect((await service.verifyChain('hub-1')).valid).toBe(true)
+
     // ...but breaking the linkage of an erased entry is still caught.
     const broken = buildValidChain()
-    broken[1] = { ...broken[1], previousEntryHash: 'x'.repeat(64), actorPubkey: '[erased]', erasedAt: new Date() } as typeof broken[1]
+    broken[1] = { ...broken[1], previousEntryHash: 'x'.repeat(64), actorPubkey: '[erased]', details: null, erasedAt: new Date() }
     db.$setSelectResults([[{ total: 3 }], broken])
     const result = await service.verifyChain('hub-1')
     expect(result.valid).toBe(false)
     expect(result.firstBrokenEntry!.reason).toBe('previousEntryHash mismatch')
+  })
+
+  it('does not let a stamped erasedAt excuse an entry that still carries rewritten details', async () => {
+    const { db } = setupVerifyDb()
+    const service = new AuditService(db as any)
+
+    // The bypass: stamp erased_at on a live entry, then rewrite its content.
+    const chain = buildValidChain()
+    chain[1] = { ...chain[1], actorPubkey: '[erased]', details: { note: 'forged' }, erasedAt: new Date() }
+    db.$setSelectResults([[{ total: 3 }], chain])
+
+    const result = await service.verifyChain('hub-1')
+    expect(result.valid).toBe(false)
+    expect(result.firstBrokenEntry!.id).toBe('e2')
+    expect(result.firstBrokenEntry!.reason).toBe('erasedAt set on an entry that still carries details')
+  })
+
+  it('does not let a stamped erasedAt excuse an entry that still names a real actor', async () => {
+    const { db } = setupVerifyDb()
+    const service = new AuditService(db as any)
+
+    const chain = buildValidChain()
+    chain[1] = { ...chain[1], actorPubkey: 'f'.repeat(64), details: null, erasedAt: new Date() }
+    db.$setSelectResults([[{ total: 3 }], chain])
+
+    const result = await service.verifyChain('hub-1')
+    expect(result.valid).toBe(false)
+    expect(result.firstBrokenEntry!.id).toBe('e2')
+    expect(result.firstBrokenEntry!.reason).toBe('erasedAt set on an entry that still names its actor')
   })
 
   it('does not accept a tampered entry merely because erasedAt is null', async () => {
@@ -143,7 +184,7 @@ describe('AuditService.verifyChain', () => {
     const service = new AuditService(db as any)
 
     const chain = buildValidChain()
-    chain[1] = { ...chain[1], actorPubkey: 'f'.repeat(64), erasedAt: null } as typeof chain[1]
+    chain[1] = { ...chain[1], actorPubkey: 'f'.repeat(64), erasedAt: null }
     db.$setSelectResults([[{ total: 3 }], chain])
 
     const result = await service.verifyChain('hub-1')

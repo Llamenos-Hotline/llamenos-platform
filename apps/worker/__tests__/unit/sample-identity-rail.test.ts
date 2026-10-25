@@ -39,6 +39,7 @@ import { isRevokedSigningKey, revokedSigningKeys } from '@worker/lib/revoked-sig
 import { authenticateRequest, validateToken } from '@worker/lib/auth'
 import { IdentityService } from '@worker/services/identity'
 import { ErasureService } from '@worker/services/erasure'
+import { users } from '@worker/db/schema'
 import { SAMPLE_ACCOUNTS } from '@worker/lib/sample-dataset'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
 import { trackedFiles } from '../../../../tests/orchestrator/codeowners'
@@ -262,7 +263,13 @@ describe('the signing keys whose seeds this repository published', () => {
     })
 
     it.each(revoked)('%s: cannot co-approve an emergency erasure, even with a valid signature', async (pubkey) => {
-      const erasure = new ErasureService({} as never, identity)
+      // The database says this key is a genuine admin of hub-1 (a default hub-admin
+      // role held there): only the revoked-key filter stands between it and the
+      // second approval. `select().from(roles)` yields the live catalog (empty —
+      // DEFAULT_ROLES resolves); `select().from(users).where()` the candidate rows.
+      const candidates = [{ pubkey, active: true, status: 'active', hubRoles: [{ hubId: 'hub-1', roleIds: ['role-hub-admin'] }] }]
+      const from = (table: unknown) => Object.assign(Promise.resolve([]), { where: async () => (table === users ? candidates : []) })
+      const erasure = new ErasureService({ select: () => ({ from }) } as never)
       vi.spyOn(erasure, 'getMyRequest').mockResolvedValue(null)
       vi.spyOn(erasure, 'getConfig').mockResolvedValue({
         hubId: 'hub-1', delayHours: 72, hubShredDelayHours: 48, emergencyOverrideEnabled: true, updatedAt: new Date(), updatedBy: LIVE,

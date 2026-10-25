@@ -5,7 +5,12 @@ Feature: Backend access control and input validation (Epic E)
   records/by-contact, account-lockdown re-auth, blast input sanitization (H02),
   SSRF fail-closed on DNS failure (H07), and PUK envelope race condition (H09).
 
-  # ── H01: Co-approver must be a registered admin device ────────────────────
+  # ── H01: Co-approver must be an admin of the hub whose data is erased ─────
+  #
+  # "Admin" is whatever holds settings:manage + notes:read-all IN that hub
+  # (lib/hub-admin.ts) — never a role id or name, never a global role (#2232).
+  # The requester must be a member of the hub: on this hub-less route their
+  # hubs are the scope of the approval.
 
   @backend
   Scenario: Erasure co-approver with volunteer role is rejected
@@ -14,8 +19,8 @@ Feature: Backend access control and input validation (Epic E)
     # request" check (400) before the admin-role check (403) ever runs. The
     # original draft of this scenario used "vol-pk-1" for both roles, which
     # could only ever exercise that earlier check, never H01.
-    Given a registered volunteer user with pubkey "vol-pk-1"
-    And a registered volunteer user with pubkey "vol-pk-3"
+    Given a registered user "vol-pk-1" holds role "role-volunteer" in hub "hub-h01"
+    And a registered user "vol-pk-3" holds role "role-volunteer" in hub "hub-h01"
     When "vol-pk-1" submits an emergency erasure request
     And the co-approver signature is made by "vol-pk-3" (a volunteer, not an admin)
     Then the response status is 403
@@ -23,11 +28,37 @@ Feature: Backend access control and input validation (Epic E)
 
   @backend
   Scenario: Erasure co-approver with hub-admin role is accepted
-    Given a registered admin user with pubkey "admin-pk-1" and role "role-hub-admin"
-    And a registered volunteer user with pubkey "vol-pk-2"
+    Given a registered user "admin-pk-1" holds role "role-hub-admin" in hub "hub-h01"
+    And a registered user "vol-pk-2" holds role "role-volunteer" in hub "hub-h01"
     When "vol-pk-2" submits an emergency erasure request
     And the co-approver signature is made by "admin-pk-1" (a hub admin)
     Then the response status is 200
+
+  @backend
+  Scenario: Erasure co-approver whose admin role is custom is accepted
+    Given a registered user "admin-pk-2" holds a custom role granting "settings:manage" and "notes:read-all" in hub "hub-h01"
+    And a registered user "vol-pk-4" holds role "role-volunteer" in hub "hub-h01"
+    When "vol-pk-4" submits an emergency erasure request
+    And the co-approver signature is made by "admin-pk-2" (a hub admin)
+    Then the response status is 200
+
+  @backend
+  Scenario: Erasure co-approver holding a global admin role but no role in the hub is rejected
+    Given a registered user "admin-pk-3" holds only the global role "role-super-admin"
+    And a registered user "vol-pk-5" holds role "role-volunteer" in hub "hub-h01"
+    When "vol-pk-5" submits an emergency erasure request
+    And the co-approver signature is made by "admin-pk-3"
+    Then the response status is 403
+    And the error mentions co-approver must be a registered admin device
+
+  @backend
+  Scenario: Erasure co-approver who administers a different hub is rejected
+    Given a registered user "admin-pk-4" holds role "role-hub-admin" in hub "hub-h01-other"
+    And a registered user "vol-pk-6" holds role "role-volunteer" in hub "hub-h01"
+    When "vol-pk-6" submits an emergency erasure request
+    And the co-approver signature is made by "admin-pk-4"
+    Then the response status is 403
+    And the error mentions co-approver must be a registered admin device
 
   @backend
   Scenario: Erasure co-approver with unknown pubkey is rejected
