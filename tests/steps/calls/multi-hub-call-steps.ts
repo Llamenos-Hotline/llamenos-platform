@@ -14,12 +14,15 @@
  * routing never registers a ringing call nobody can answer, so the volunteer is put in
  * the second hub's fallback group and the simulation is asked to refuse a call that
  * would ring nobody (`checkVolunteers`), keeping the precondition loud.
+ *
+ * The second hub also selects the mock telephony provider: the answer route refuses a
+ * pickup on a hub with no way to connect the volunteer (#2168), and a bare test hub has none.
  */
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
 import { TestIds, Timeouts } from '../../helpers'
 import { rowTestId } from '../../test-ids'
-import { apiGet, setFallbackGroupViaApi } from '../../api-helpers'
+import { apiGet, enableMockTelephonyViaApi, setFallbackGroupViaApi } from '../../api-helpers'
 import type { CallRecord } from '@protocol/schemas/calls'
 import { simulateIncomingCall, uniqueCallerNumber } from '../../simulation-helpers'
 
@@ -57,6 +60,10 @@ When('a call comes in on the volunteer\'s second hub while the first hub is acti
   // The call rings the volunteer on the second hub: nobody is on shift there, so the
   // hub's fallback group is its ring set.
   await setFallbackGroupViaApi(backendRequest, [volunteerPubkey!], hubId)
+  // Answering from the app is a database write that bridges nobody, so the server only
+  // accepts it on a hub that can connect the volunteer (#2168): the mock provider is that
+  // hub for a test. Without it the answer is refused (422) and the call stays ringing.
+  await enableMockTelephonyViaApi(backendRequest, hubId!)
 
   const { callId, status } = await simulateIncomingCall(backendRequest, {
     callerNumber: uniqueCallerNumber(),
