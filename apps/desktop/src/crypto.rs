@@ -2122,28 +2122,36 @@ mod ipc_surface_tests {
         }
     }
 
+    /// A fresh challenge nonce, as the relay would send one. The binding tests
+    /// need two distinct nonces, not particular ones.
+    fn fresh_nonce() -> String {
+        let mut bytes = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+        hex::encode(bytes)
+    }
+
     #[test]
     fn ws_challenge_signature_is_bound_to_the_label_pubkey_nonce_and_timestamp() {
         let dev = device();
-        let sig = dev
-            .state
-            .ws_challenge_signature("n-1", 1_700_000_000)
-            .unwrap();
+        let (nonce, other_nonce) = (fresh_nonce(), fresh_nonce());
+        let ts = 1_700_000_000;
+        let sig = dev.state.ws_challenge_signature(&nonce, ts).unwrap();
         let sig_bytes = hex::decode(&sig).unwrap();
         let verify = |message: String| {
             device_keys::verify_signature(message.as_bytes(), &sig_bytes, &dev.signing_pubkey_hex)
                 .unwrap_or(false)
         };
         assert!(verify(format!(
-            "{LABEL_WS_CHALLENGE}:{}:n-1:1700000000",
+            "{LABEL_WS_CHALLENGE}:{}:{nonce}:{ts}",
             dev.signing_pubkey_hex
         )));
         assert!(!verify(format!(
-            "{LABEL_WS_CHALLENGE}:{}:n-1:1700000001",
-            dev.signing_pubkey_hex
+            "{LABEL_WS_CHALLENGE}:{}:{nonce}:{}",
+            dev.signing_pubkey_hex,
+            ts + 1
         )));
         assert!(!verify(format!(
-            "{LABEL_WS_CHALLENGE}:{}:n-2:1700000000",
+            "{LABEL_WS_CHALLENGE}:{}:{other_nonce}:{ts}",
             dev.signing_pubkey_hex
         )));
     }
@@ -2151,7 +2159,7 @@ mod ipc_surface_tests {
     #[test]
     fn a_locked_device_signs_nothing() {
         let locked = CryptoState::new();
-        assert!(locked.ws_challenge_signature("n", 1).is_err());
+        assert!(locked.ws_challenge_signature(&fresh_nonce(), 1).is_err());
     }
 
     #[test]
