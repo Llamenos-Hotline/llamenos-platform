@@ -8,13 +8,8 @@
  * - Media attachments
  */
 
-import { timingSafeEqual } from 'node:crypto'
-
 import type { RCSConfig } from '@shared/types'
 import { hashPhone } from '../../lib/crypto'
-import { createLogger } from '../../lib/logger'
-
-const logger = createLogger('messaging.rcs')
 import type {
   MessagingAdapter,
   IncomingMessage,
@@ -25,6 +20,7 @@ import type {
   MessageStatusUpdate,
 } from '../adapter'
 import type { MessageDeliveryStatus } from '../../types'
+import { constantTimeEqual, hasWebhookSecret, missingWebhookSecretMessage } from '../webhook-secret'
 import { RBMClient } from './rbm-client'
 import type {
   RBMWebhookPayload,
@@ -102,12 +98,13 @@ export class RCSAdapter implements MessagingAdapter {
 
   /**
    * Validate the webhook request by checking the Authorization bearer token.
-   * Uses constant-time comparison to prevent timing attacks.
+   * Uses constant-time comparison to prevent timing attacks. Fails closed:
+   * with no webhookSecret configured nothing can be authenticated, so
+   * nothing is accepted.
    */
   async validateWebhook(request: Request): Promise<boolean> {
-    if (!this.config.webhookSecret) {
-      logger.warn('Accepting unauthenticated RCS webhook — no webhookSecret configured')
-      return true
+    if (!hasWebhookSecret(this.config.webhookSecret)) {
+      return false
     }
 
     // Google RBM uses a bearer token for webhook validation
@@ -263,6 +260,9 @@ export class RCSAdapter implements MessagingAdapter {
    * Check RBM agent status by attempting to get an access token.
    */
   async getChannelStatus(): Promise<ChannelStatus> {
+    if (!hasWebhookSecret(this.config.webhookSecret)) {
+      return { connected: false, error: missingWebhookSecretMessage('rcs') }
+    }
     const result = await this.client.checkStatus()
     return {
       connected: result.connected,
@@ -301,14 +301,4 @@ export class RCSAdapter implements MessagingAdapter {
       return null
     }
   }
-}
-
-/**
- * Constant-time string comparison to prevent timing attacks on webhook secrets.
- */
-function constantTimeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a, 'utf8')
-  const bb = Buffer.from(b, 'utf8')
-  if (ba.length !== bb.length) return false
-  return timingSafeEqual(ba, bb)
 }

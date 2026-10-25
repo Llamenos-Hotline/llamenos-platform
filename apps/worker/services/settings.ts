@@ -106,6 +106,7 @@ import {
   resolveTTL,
 } from '../lib/ttl'
 import { createLogger } from '../lib/logger'
+import { webhookSecretProblem } from '../messaging/webhook-secret'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
@@ -995,6 +996,12 @@ export class SettingsService {
   async updateMessagingConfig(
     data: Partial<MessagingConfig>,
   ): Promise<MessagingConfig> {
+    // Judge only what this request writes: a stored config that predates the
+    // requirement must not block an unrelated edit, and it stays fail-closed
+    // anyway (its adapter refuses to build and its webhook is rejected).
+    const secretProblem = webhookSecretProblem(data)
+    if (secretProblem) throw new ServiceError(400, secretProblem)
+
     const current = await this.getMessagingConfig()
     const updated = { ...current, ...data }
 
