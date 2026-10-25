@@ -30,20 +30,13 @@ export async function listRawContacts(params?: {
   limit?: number
   contactTypeHash?: string
   statusHash?: string
-  nameToken?: string
 }) {
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   qs.set('limit', String(params?.limit ?? 50))
   if (params?.contactTypeHash) qs.set('contactTypeHash', params.contactTypeHash)
   if (params?.statusHash) qs.set('statusHash', params.statusHash)
-  if (params?.nameToken) qs.set('nameToken', params.nameToken)
   return request<{ contacts: RawContact[]; total: number; page: number; limit: number; hasMore: boolean }>(hp(`/directory?${qs}`))
-}
-
-/** Search contacts by trigram tokens */
-export async function searchRawContacts(tokens: string) {
-  return request<{ contacts: RawContact[] }>(hp(`/directory/search?tokens=${encodeURIComponent(tokens)}`))
 }
 
 /** Get a single raw contact by ID */
@@ -70,10 +63,6 @@ export async function listDirectoryContacts(params?: {
     limit: params?.limit,
     contactTypeHash: params?.contactType,
   })
-}
-
-export async function searchDirectoryContacts(tokens: string) {
-  return searchRawContacts(tokens)
 }
 
 export async function getDirectoryContact(id: string) {
