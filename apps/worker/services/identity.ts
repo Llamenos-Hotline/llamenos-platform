@@ -384,11 +384,12 @@ export class IdentityService {
 
   /**
    * Every admin X25519 recipient for an envelope set: `adminDecryptionPubkey`
-   * (`ADMIN_DECRYPTION_PUBKEY`, the instance escrow key) plus the registered
-   * device keys of every admin of `hubId` — a hub admin of it or an
-   * instance-wide admin, the same predicate the last-admin invariant counts
-   * with (`lib/hub-admin.ts`). Without a `hubId` (a record with no hub, or a
-   * server-sealed record with no hub of its own) only instance-wide admins.
+   * (`ADMIN_DECRYPTION_PUBKEY`, the escrow key) plus the registered device keys
+   * of every admin of `hubId` — the members holding an admin role in it, the
+   * same predicate the last-admin invariant counts with (`lib/hub-admin.ts`).
+   * Super-admins are never recipients (D1, #2190): they are zero-knowledge. A
+   * record with no hub, or a server-sealed one with no hub of its own, has no hub
+   * admins, so only the escrow key.
    *
    * The one definition of "a key an admin holds": server-sealed records are
    * wrapped to it, and client-sealed ones are checked against it.
@@ -699,10 +700,10 @@ export class IdentityService {
     }
     updates.updatedAt = new Date()
 
-    // Rewriting roles or hubRoles, or deactivating, can take away admin
-    // authority; those updates run under the admin invariant (#2126, #2190).
-    const touchesAdminAuthority =
-      updates.hubRoles !== undefined || updates.roles !== undefined || updates.active === false
+    // Rewriting hubRoles, or deactivating, can take away admin authority; those
+    // updates run under the admin invariant (#2126, #2190). Global `roles` carry
+    // none: only a role held in a hub makes a user an admin of it.
+    const touchesAdminAuthority = updates.hubRoles !== undefined || updates.active === false
     const [row] = touchesAdminAuthority
       ? await this.db.transaction(async (tx) => {
           const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
@@ -714,7 +715,6 @@ export class IdentityService {
             adminStateOf({
               active: updates.active ?? current.active,
               status: current.status,
-              roles: updates.roles ?? current.roles,
               hubRoles: updates.hubRoles ?? current.hubRoles,
             }),
             updates.active === false ? 'deactivate this user' : 'change this user\'s roles',

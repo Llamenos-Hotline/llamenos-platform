@@ -66,7 +66,7 @@ describe('assertAdminCanRead', () => {
     expect(svc.identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(ADMIN, HUB)
   })
 
-  it('resolves a record with no hub against instance-wide admins only', async () => {
+  it('resolves a record with no hub with no hub (so no hub admins, only the escrow key)', async () => {
     const svc = services([ADMIN])
     await assertAdminCanRead(svc, {}, undefined, [{ pubkey: ADMIN }], 'A note')
     expect(svc.identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, undefined)

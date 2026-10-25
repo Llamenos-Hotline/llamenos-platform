@@ -10,11 +10,11 @@
  * trusted to the client (#2113).
  *
  * What counts as an admin is decided in ONE place, `lib/hub-admin.ts`
- * (`administersHub`): a hub admin of the record's hub, or an instance-wide
- * super-admin — the very set the hub last-admin invariant (#2126) refuses to let
- * shrink to nothing (#2190). The recipient keys are the registered device keys
- * of those users plus `ADMIN_DECRYPTION_PUBKEY`, the instance escrow key every
- * shipped client seals to. The check is "at least one envelope is addressed to
+ * (`administersHub`): a member holding an admin role in the record's hub — the
+ * very set the hub last-admin invariant (#2126) refuses to let shrink to nothing
+ * (#2190). Super-admins are zero-knowledge and never readers (D1). The
+ * recipient keys are the registered device keys of those users plus
+ * `ADMIN_DECRYPTION_PUBKEY`, the escrow key every shipped client seals to. The check is "at least one envelope is addressed to
  * one of them" — not "every admin", because clients wrap to the key the server
  * publishes and a device registered a moment later must not turn a correct write
  * into a 422.
@@ -44,8 +44,8 @@ type AddressedEnvelope = { pubkey: string }
  * key, so only a modified or stale client reaches this branch; the 503 and the
  * error log tell the operator to fix the deployment.
  *
- * @param hubId the record's hub; undefined for a record with no hub, which only
- *   instance-wide admins can be responsible for.
+ * @param hubId the record's hub; undefined for a record with no hub, which has
+ *   no hub admins, so only the escrow key can read it.
  * @param what names the record for the error log and the response message.
  */
 export async function assertAdminCanRead(

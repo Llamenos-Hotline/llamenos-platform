@@ -56,31 +56,20 @@ function makeUserRow(overrides: Partial<{
 }
 
 /**
- * A db whose `transaction` hands the callback a tx that serves the shapes the
- * admin-invariant guard reads — the user row under `FOR UPDATE`, then the role
- * catalog — and records the write. Updates that touch `roles`, `hubRoles` or
- * `active` run inside a transaction under that guard (#2126, #2190).
+ * A db that records a plain (non-transactional) update. Global `roles` carry no
+ * hub-admin authority (D1, #2190), so rewriting them does not run under the
+ * admin invariant — only `hubRoles` and deactivation do.
  */
-function guardedUpdateDb(existingRow: ReturnType<typeof makeUserRow>, updatedRow: ReturnType<typeof makeUserRow>) {
+function plainUpdateDb(updatedRow: ReturnType<typeof makeUserRow>) {
   const updateSet = vi.fn()
-  const tx = {
-    select: vi.fn()
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            for: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([existingRow]) }),
-          }),
-        }),
-      })
-      .mockReturnValue({ from: vi.fn().mockResolvedValue([]) }),
-    execute: vi.fn().mockResolvedValue([]),
+  const db = {
     update: vi.fn().mockReturnValue({
       set: updateSet.mockReturnValue({
         where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([updatedRow]) }),
       }),
     }),
+    transaction: vi.fn(),
   }
-  const db = { transaction: vi.fn().mockImplementation(async (fn: (t: typeof tx) => unknown) => fn(tx)) }
   return { db, updateSet }
 }
 
@@ -423,9 +412,8 @@ describe('IdentityService — User CRUD', () => {
     })
 
     it('never demotes the configured platform admin', async () => {
-      const existingRow = makeUserRow({ pubkey: 'admin-pk' })
       const updatedRow = makeUserRow({ pubkey: 'admin-pk', roles: ['role-super-admin'] })
-      const { db, updateSet } = guardedUpdateDb(existingRow, updatedRow)
+      const { db, updateSet } = plainUpdateDb(updatedRow)
 
       const svc = new IdentityService(db as never, 'admin-pk')
       await svc.updateUser('admin-pk', { roles: ['role-volunteer'] } as never, true)
@@ -452,9 +440,8 @@ describe('IdentityService — User CRUD', () => {
     })
 
     it('admin can update restricted fields like roles', async () => {
-      const existingRow = makeUserRow({ pubkey: 'pk-1' })
       const updatedRow = makeUserRow({ pubkey: 'pk-1', roles: ['role-admin'] })
-      const { db, updateSet } = guardedUpdateDb(existingRow, updatedRow)
+      const { db, updateSet } = plainUpdateDb(updatedRow)
 
       const svc = new IdentityService(db as never)
       await svc.updateUser(
@@ -465,6 +452,7 @@ describe('IdentityService — User CRUD', () => {
 
       const setVals = updateSet.mock.calls[0][0]
       expect(setVals.roles).toEqual(['role-admin'])
+      expect(db.transaction).not.toHaveBeenCalled()
     })
 
     it('never allows overwriting pubkey', async () => {

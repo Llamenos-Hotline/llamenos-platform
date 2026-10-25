@@ -18,13 +18,15 @@
  * "who is an admin of this hub" — up against both enforcement points and
  * require that they agree, including for the users the invariant must NOT count.
  *
+ * Super-admins are zero-knowledge and NEVER readers (operator decision D1): the
+ * definition does not consult `users.roles`, so a super-admin is neither counted
+ * nor sealed to for any hub in which it holds no admin role of its own.
+ *
  * Fixtures: every user, device and hub carries a per-run suffix and is removed on
- * teardown. The suite refuses to start if an active super-admin already exists,
- * because one would count as an admin of every hub here and turn each "the hub
- * has no admin" assertion into a vacuous pass.
+ * teardown.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
-import { eq, inArray, sql } from 'drizzle-orm'
+import { describe, it, expect, afterAll } from 'bun:test'
+import { eq, inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
@@ -105,10 +107,6 @@ async function makeHub(label: string, founder: Person): Promise<string> {
   return id
 }
 
-async function deleteUserRow(person: Person): Promise<void> {
-  await db.delete(users).where(eq(users.pubkey, person.pubkey))
-}
-
 const recipientsOf = (hubId: string | undefined) => identity.listAdminEnvelopeRecipients(ESCROW, hubId)
 
 /** Resolve to the ServiceError an operation throws, or fail if it succeeds. */
@@ -128,18 +126,6 @@ const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.r
 /** `escrow: null` models a deployment with no ADMIN_DECRYPTION_PUBKEY. */
 const guard = (hubId: string | undefined, envelopes: ReturnType<typeof sealedTo>, escrow: string | null = ESCROW) =>
   assertAdminCanRead(services, { ADMIN_DECRYPTION_PUBKEY: escrow ?? undefined }, hubId, envelopes, 'A note')
-
-beforeAll(async () => {
-  const [{ n }] = await db.execute<{ n: number }>(
-    sql`SELECT count(*)::int AS n FROM users WHERE active AND status = 'active' AND roles @> ARRAY['role-super-admin']::text[]`,
-  ) as unknown as Array<{ n: number }>
-  if (n > 0) {
-    throw new Error(
-      `${n} active super-admin(s) already exist in this database. A super-admin administers every hub, ` +
-      'so these tests would pass vacuously. Run against an isolated database (bun scripts/worktree-db.ts use-isolated).',
-    )
-  }
-})
 
 afterAll(async () => {
   await db.delete(notes).where(inArray(notes.hubId, createdHubs))
@@ -175,30 +161,54 @@ describe('who the envelope guard accepts is who the invariant counts', () => {
     expect(err.status).toBe(409)
   })
 
-  it('a super-admin is a recipient of every hub — and the invariant counts them for every hub', async () => {
+  it('a super-admin is NOT a recipient of any hub, and the invariant does not count them (D1)', async () => {
     const founder = await makePerson('s-admin')
     const hubId = await makeHub('super', founder)
     const sup = await makeSuperAdmin('s-super')
-    try {
-      expect(await recipientsOf(hubId)).toContain(sup.deviceKey)
-      expect(await recipientsOf(undefined)).toContain(sup.deviceKey)
-      // Invariant side: the founder may leave, the super-admin still administers the hub.
-      await identity.removeHubRole({ pubkey: founder.pubkey, hubId })
-      // Restored before the super-admin goes: this fixture must not leave an
-      // adminless hub behind for the later cases' super-admins to be blamed for.
-      await identity.setHubRole({ pubkey: founder.pubkey, hubId, roleIds: ['role-hub-admin'] })
-    } finally {
-      await deleteUserRow(sup)
-    }
+
+    expect(await recipientsOf(hubId)).not.toContain(sup.deviceKey)
+    expect(await recipientsOf(undefined)).not.toContain(sup.deviceKey)
+    // A record with no hub has no hub admins: only the escrow key reads it.
+    expect(await recipientsOf(undefined)).toEqual([ESCROW])
+    // Invariant side: the super-admin does not carry the hub, so the founder may not leave.
+    const err = await refusal(() => identity.removeHubRole({ pubkey: founder.pubkey, hubId }))
+    expect(err.status).toBe(409)
+    expect((await refusal(() => guard(hubId, sealedTo(sup.deviceKey)))).status).toBe(422)
+  })
+
+  it('a super-admin who is also a MEMBER of the hub without an admin role is neither a recipient nor counted', async () => {
+    const founder = await makePerson('sm-admin')
+    const hubId = await makeHub('super-member', founder)
+    const sup = await makePerson('sm-super', {
+      roles: ['role-super-admin'],
+      hubRoles: [{ hubId, roleIds: ['role-volunteer'] }],
+    })
+
+    expect(await recipientsOf(hubId)).not.toContain(sup.deviceKey)
+    expect((await refusal(() => identity.removeHubRole({ pubkey: founder.pubkey, hubId }))).status).toBe(409)
+  })
+
+  it('a super-admin who also holds an admin role IN the hub counts as that hub\'s admin, like anyone else', async () => {
+    const founder = await makePerson('sa-admin')
+    const hubId = await makeHub('super-admin-role', founder)
+    const sup = await makePerson('sa-super', {
+      roles: ['role-super-admin'],
+      hubRoles: [{ hubId, roleIds: ['role-hub-admin'] }],
+    })
+
+    expect(await recipientsOf(hubId)).toContain(sup.deviceKey)
+    await identity.removeHubRole({ pubkey: founder.pubkey, hubId })
+    expect((await refusal(() => identity.removeHubRole({ pubkey: sup.pubkey, hubId }))).status).toBe(409)
   })
 
   it.each([
     ['deactivated', { active: false }],
     ['erased', { status: 'erased', active: false }],
-  ] as const)('a %s super-admin is neither a recipient nor counted', async (_label, state) => {
+  ] as const)('a %s hub admin is neither a recipient nor counted', async (_label, state) => {
     const founder = await makePerson('gone-admin')
     const hubId = await makeHub('gone', founder)
-    const gone = await makePerson('gone-super', { roles: ['role-super-admin'], ...state })
+    const gone = await makePerson('gone-peer', { ...state })
+    await db.update(users).set({ hubRoles: [{ hubId, roleIds: ['role-hub-admin'] }] }).where(eq(users.pubkey, gone.pubkey))
 
     expect(await recipientsOf(hubId)).not.toContain(gone.deviceKey)
     // Invariant side: they do not satisfy "the hub keeps an admin".
@@ -207,14 +217,14 @@ describe('who the envelope guard accepts is who the invariant counts', () => {
     expect((await refusal(() => guard(hubId, sealedTo(gone.deviceKey)))).status).toBe(422)
   })
 
-  it('a super-admin on a revoked signing key is neither a recipient nor counted', async () => {
+  it('a hub admin on a revoked signing key is neither a recipient nor counted', async () => {
     const founder = await makePerson('revoked-founder')
     const hubId = await makeHub('revoked', founder)
     const [revokedKey] = [...revokedSigningKeys()]
     // Its private half is published, so it must carry no authority at all. The
     // key is fixed, so clear any row a previously aborted run left behind.
     await db.delete(users).where(eq(users.pubkey, revokedKey))
-    await db.insert(users).values({ pubkey: revokedKey, displayName: 'revoked', roles: ['role-super-admin'] })
+    await db.insert(users).values({ pubkey: revokedKey, displayName: 'revoked', hubRoles: [{ hubId, roleIds: ['role-hub-admin'] }] })
     createdUsers.push(revokedKey)
     const revokedDevice = hexKey('d1')
     await db.insert(devices).values({ pubkey: revokedKey, platform: 'desktop', x25519Pubkey: revokedDevice })
@@ -267,32 +277,30 @@ describe('a note satisfying one definition but not the other is refused (it can 
     await guard(hubId, sealedTo(founder.deviceKey), null)
   })
 
-  it('removing the last remaining admin of EITHER kind is refused, and succeeds once another exists', async () => {
+  it('a super-admin can never be the last admin: it is freely removable, and a real hub admin is not', async () => {
     const founder = await makePerson('chain-founder')
     const hubId = await makeHub('chain', founder)
-    const sup = await makeSuperAdmin('chain-super')
-    try {
-      // The super-admin carries the hub while the hub admin leaves ...
-      await identity.removeHubRole({ pubkey: founder.pubkey, hubId })
-      await guard(hubId, sealedTo(sup.deviceKey))
-      expect((await refusal(() => guard(hubId, sealedTo(founder.deviceKey)))).status).toBe(422)
+    const sup = await makePerson('chain-super', {
+      roles: ['role-super-admin'],
+      hubRoles: [{ hubId, roleIds: ['role-volunteer'] }],
+    })
 
-      // ... so the super-admin is now the hub's only admin and cannot be removed.
-      expect((await refusal(() => identity.deleteUser(sup.pubkey))).status).toBe(409)
-      expect((await refusal(() => identity.updateUser(sup.pubkey, { roles: ['role-volunteer'] }, true))).status).toBe(409)
-      expect((await refusal(() => identity.updateUser(sup.pubkey, { active: false }, true))).status).toBe(409)
-      const [still] = await db.select({ roles: users.roles }).from(users).where(eq(users.pubkey, sup.pubkey))
-      expect(still?.roles).toEqual(['role-super-admin'])
+    // The founder is the hub's only admin; the super-admin member does not help.
+    expect((await refusal(() => identity.removeHubRole({ pubkey: founder.pubkey, hubId }))).status).toBe(409)
+    expect((await refusal(() => identity.updateUser(founder.pubkey, { active: false }, true))).status).toBe(409)
+    expect((await refusal(() => identity.deleteUser(founder.pubkey))).status).toBe(409)
 
-      // A new hub admin takes over; now the super-admin may go.
-      const successor = await makePerson('chain-successor')
-      await identity.setHubRole({ pubkey: successor.pubkey, hubId, roleIds: ['role-hub-admin'] })
-      await identity.updateUser(sup.pubkey, { roles: ['role-volunteer'] }, true)
-      expect(await recipientsOf(hubId)).not.toContain(sup.deviceKey)
-      expect(await recipientsOf(hubId)).toContain(successor.deviceKey)
-    } finally {
-      await deleteUserRow(sup)
-    }
+    // The super-admin is not an admin of the hub, so nothing stops it from going.
+    await identity.updateUser(sup.pubkey, { roles: ['role-volunteer'] }, true)
+    await identity.updateUser(sup.pubkey, { active: false }, true)
+    await identity.deleteUser(sup.pubkey)
+
+    // A new hub admin takes over; now the founder may go.
+    const successor = await makePerson('chain-successor')
+    await identity.setHubRole({ pubkey: successor.pubkey, hubId, roleIds: ['role-hub-admin'] })
+    await identity.removeHubRole({ pubkey: founder.pubkey, hubId })
+    expect(await recipientsOf(hubId)).not.toContain(founder.deviceKey)
+    expect(await recipientsOf(hubId)).toContain(successor.deviceKey)
   })
 })
 

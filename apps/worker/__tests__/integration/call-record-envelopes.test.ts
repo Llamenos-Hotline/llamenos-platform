@@ -52,13 +52,13 @@ const CALLER_HASH = hashPhone(RAW_CALLER, HMAC_SECRET)
 /** Stored records seal with no AAD; the label is bound as the HPKE info. */
 const NO_AAD = new Uint8Array(0)
 
-/** A super-admin user with a registered device carrying an X25519 key. */
-async function seedAdmin() {
+/** An admin user with a registered device carrying an X25519 key. */
+async function seedAdmin(roles: string[] = []) {
   const admin = reader()
   await fresh.db.insert(schema.users).values({
     pubkey: admin.pubkey,
     displayName: 'Admin',
-    roles: ['role-super-admin'],
+    roles,
     active: true,
   })
   await fresh.db.insert(schema.devices).values({
@@ -203,17 +203,19 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     // services by hand — prove the construction path production uses
     // (createServices) actually seals.
     const { createServices } = await import('../../services')
+    const escrow = reader()
     const services = createServices(fresh.db, {
       hmacSecret: HMAC_SECRET,
       env: {
         ENVIRONMENT: 'test',
         SERVER_SECRET: 'ab'.repeat(32),
+        // The escrow key is the only hub-less recipient; the X25519 key IS the reader() pubkey.
+        ADMIN_DECRYPTION_PUBKEY: escrow.pubkey,
       },
     })
-
-    const admin = await seedAdmin()
-    // createServices resolves admin recipients from super-admin device keys.
-    expect(admin.pubkey).toBeTruthy()
+    // A super-admin with a registered device is zero-knowledge (D1, #2190): it
+    // must NOT be sealed to.
+    const superAdmin = await seedAdmin(['role-super-admin'])
 
     await services.calls.addCall('hub-1', {
       callId: 'call-seal-4',
@@ -223,7 +225,9 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await services.calls.endCall('hub-1', 'call-seal-4')
 
     const row = await readRecord('call-seal-4')
-    expect((row!.adminEnvelopes as unknown[]).length).toBeGreaterThan(0)
+    const sealedTo = (row!.adminEnvelopes as Array<{ pubkey: string }>).map(e => e.pubkey)
+    expect(sealedTo).toEqual([escrow.pubkey])
+    expect(sealedTo).not.toContain(superAdmin.pubkey)
     expect(row!.encryptedContent).toMatch(/^[0-9a-f]+$/)
   })
 })

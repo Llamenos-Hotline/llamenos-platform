@@ -110,8 +110,9 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
   })
 
-  // Every admin X25519 recipient for server-sealed envelope sets:
-  // ADMIN_DECRYPTION_PUBKEY plus each active super-admin's device keys.
+  // The X25519 recipients for hub-less server-sealed envelope sets (call records,
+  // audit keys): ADMIN_DECRYPTION_PUBKEY. Super-admins are never readers (D1,
+  // #2190), and a record with no hub has no hub admins.
   const resolveAdminRecipients = (): Promise<string[]> =>
     identity.listAdminEnvelopeRecipients(opts?.env?.ADMIN_DECRYPTION_PUBKEY)
 
