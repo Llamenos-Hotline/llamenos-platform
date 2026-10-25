@@ -16,12 +16,27 @@ import {
 } from '../telephony/registrar'
 import { webrtcTokenResponseSchema, sipTokenResponseSchema, telephonyStatusResponseSchema } from '@protocol/schemas/webrtc'
 import { callerHasAnyHubAccess } from '../lib/hub-scope'
+import type { TelephonyProviderConfig } from '@shared/types'
 import { authErrors } from '../openapi/helpers'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('routes.webrtc')
 
 const webrtc = new Hono<AppEnv>()
+
+/**
+ * Whether the registrar master secret the issued credential is derived from is
+ * present. Every volunteer's PJSIP secret is derived from SIP_REGISTRAR_SECRET
+ * and it has no stand-in: deriving from another server key would couple SIP
+ * credentials to that key's rotation (D6). Only asterisk issues credentials
+ * (see sipCredentialsMayBeIssued), so every other provider is unaffected.
+ *
+ * /sip-token refuses on this and /sip-status reports on it — one predicate, so
+ * the two routes cannot disagree.
+ */
+function sipRegistrarSecretPresent(config: TelephonyProviderConfig | null, env: AppEnv['Bindings']): boolean {
+  return config?.type !== 'asterisk' || Boolean(env.SIP_REGISTRAR_SECRET)
+}
 
 /**
  * GET /api/telephony/webrtc-token
@@ -162,10 +177,7 @@ webrtc.get('/sip-token',
       // per-volunteer identity (never generateSipParams — that path returns
       // the hub's shared credential, which is what the gate exists to refuse).
       if (config.type === 'asterisk') {
-        // Every volunteer's PJSIP secret is derived from this master secret and
-        // it has no stand-in: deriving from another server key would couple SIP
-        // credentials to that key's rotation (D6).
-        if (!c.env.SIP_REGISTRAR_SECRET) {
+        if (!sipRegistrarSecretPresent(config, c.env)) {
           logger.error('SIP token refused: SIP_REGISTRAR_SECRET is not configured')
           return c.json({ error: 'In-app SIP audio is unavailable: the SIP registrar is not configured on this server.' }, 503)
         }
@@ -219,11 +231,15 @@ webrtc.get('/sip-status',
     const services = c.get('services')
     const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
     // Must agree with /sip-token, which refuses while the credential would be
-    // shared (#1203) and refuses a caller holding no hub role (#1540).
+    // shared (#1203), refuses a caller holding no hub role (#1540) and refuses
+    // while the registrar secret is unset (D6).
     // Reporting available:true here and then refusing there would make clients
     // retry a door that is deliberately shut.
     return c.json({
-      available: isSipConfigured(config) && sipCredentialsMayBeIssued(config) && callerHasAnyHubAccess(c),
+      available: isSipConfigured(config)
+        && sipCredentialsMayBeIssued(config)
+        && sipRegistrarSecretPresent(config, c.env)
+        && callerHasAnyHubAccess(c),
       provider: config?.type ?? null,
     })
   })
