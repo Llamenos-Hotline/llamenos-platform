@@ -63,6 +63,8 @@ VALID_VARS = {
     "webhook_base_url": "https://api.hotline.example.org",
     "hmac_secret": secrets.token_hex(32),
     "server_secret": secrets.token_hex(32),
+    "server_kek": secrets.token_hex(32),
+    "ban_hash_key": secrets.token_hex(32),
     "pg_password": secrets.token_urlsafe(24),
     "storage_access_key": secrets.token_hex(16),
     "storage_secret_key": secrets.token_urlsafe(24),

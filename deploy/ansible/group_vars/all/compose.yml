@@ -17,6 +17,20 @@
 
 llamenos_services_dir: "{{ app_dir }}/services"
 
+# File-only secrets. This directory is a SIBLING of llamenos_services_dir, never
+# inside it: the config backup archives llamenos_services_dir whole (every
+# service .env), and update.yml snapshots each service directory into
+# llamenos_rollback_dir. A key that must stay out of the database must also stay
+# out of both, so it lives here and nowhere under either.
+#
+# ban-hash-key keys the ban-list hash (BAN_HASH_KEY). It is mounted into the app
+# container as the compose secret `ban-hash-key` (/run/secrets/ban-hash-key) and
+# is refused if it appears as an environment variable. The operator keeps the
+# offline copy (vars.yml's ban_hash_key, vault-encrypted on the control node);
+# roles/backup-config asserts it is not collected by a backup path.
+llamenos_secrets_dir: "{{ app_dir }}/secrets"
+llamenos_ban_hash_key_file: "{{ llamenos_secrets_dir }}/ban-hash-key"
+
 llamenos_compose_app: "{{ llamenos_services_dir }}/app/docker-compose.yml"
 llamenos_compose_postgres: "{{ llamenos_services_dir }}/postgres/docker-compose.yml"
 llamenos_compose_rustfs: "{{ llamenos_services_dir }}/rustfs/docker-compose.yml"

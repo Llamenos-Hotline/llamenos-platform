@@ -202,6 +202,17 @@ secrets:
   twilioAuthToken: ""
   twilioPhoneNumber: ""
   serverSecret: ""       # Required: 64-char hex, generate with: openssl rand -hex 32
+  # Key-encryption key for data the server must read back (provider credentials, reply
+  # addresses, queued sends). Required: 64-char hex, a DIFFERENT value from hmacSecret and
+  # serverSecret (the app refuses to boot otherwise). Generate with: openssl rand -hex 32.
+  # With existingSecret, add a `server-kek` key to that Secret.
+  serverKek: ""
+  # Ban-list hash key, kept in a Secret of its own and mounted as the file
+  # /run/secrets/ban-hash-key (never an env var). Required: 64-char hex. Not part of any
+  # backup the chart makes: keep your own offline copy, because losing it loses every ban.
+  # Or name a Secret you manage yourself (it must carry a `ban-hash-key` key).
+  banHashKey: ""
+  existingBanHashKeySecret: ""
 
 # Service account
 serviceAccount:

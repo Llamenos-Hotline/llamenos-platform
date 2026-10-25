@@ -47,6 +47,9 @@ else
   STORAGE_AK="$(openssl rand -base64 16 | tr -d '=/+')"
   STORAGE_SK="$(openssl rand -base64 24)"
   SERVER_SECRET_VAL="$(openssl rand -hex 32)"
+  # One role per secret: HMAC_SECRET hashes, SERVER_KEK encrypts what the server
+  # must read back, SERVER_SECRET derives relay/server identity keys. Never reuse one.
+  SERVER_KEK_VAL="$(openssl rand -hex 32)"
 
   # Use sed to fill in generated values
   sed -i "s|^PG_PASSWORD=.*|PG_PASSWORD=${PG_PASS}|" .env
@@ -54,6 +57,7 @@ else
   sed -i "s|^STORAGE_ACCESS_KEY=.*|STORAGE_ACCESS_KEY=${STORAGE_AK}|" .env
   sed -i "s|^STORAGE_SECRET_KEY=.*|STORAGE_SECRET_KEY=${STORAGE_SK}|" .env
   sed -i "s|^SERVER_SECRET=.*|SERVER_SECRET=${SERVER_SECRET_VAL}|" .env
+  sed -i "s|^SERVER_KEK=.*|SERVER_KEK=${SERVER_KEK_VAL}|" .env
 
   echo "Generated .env with random secrets."
   echo ""
@@ -67,6 +71,20 @@ else
   echo ""
   echo "Edit .env now, then press Enter to continue (or Ctrl-C to abort)."
   read -r
+fi
+
+# The ban-list hash key is a secret FILE, never a .env entry (the app refuses it
+# in the environment). Created once and never overwritten: it is not in any backup,
+# so regenerating it silently drops every ban. Keep an offline copy.
+source ../../scripts/lib/ban-hash-key.sh
+if [ -s secrets/ban-hash-key ]; then
+  echo "secrets/ban-hash-key already exists — keeping it."
+else
+  ensure_ban_hash_key_file secrets/ban-hash-key 0444
+  echo "Generated secrets/ban-hash-key (the ban-list hash key)."
+  echo "  It is deliberately NOT in .env and NOT in config backups. Keep an offline"
+  echo "  copy: a rebuilt host without it loses every ban, with no recovery."
+  echo ""
 fi
 
 # Validate required fields

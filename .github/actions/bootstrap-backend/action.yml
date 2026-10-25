@@ -52,6 +52,7 @@ runs:
           "PG_POOL_SIZE=40" \
           "PG_PASSWORD=ci-test-password" \
           "HMAC_SECRET=$(openssl rand -hex 32)" \
+          "SERVER_KEK=$(openssl rand -hex 32)" \
           "STORAGE_ACCESS_KEY=testaccess" \
           "STORAGE_SECRET_KEY=testsecret123456" \
           "HOTLINE_NAME=Llámenos" \
@@ -66,6 +67,9 @@ runs:
           "TOKEN_MAX_AGE_MS=3600000" \
           "TURN_SECRET=$(openssl rand -hex 32)" \
           > .env
+        # The ban-list hash key is a secret FILE the app mounts, never a .env entry.
+        source scripts/lib/ban-hash-key.sh
+        ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444
 
     - name: Build and start Docker Compose (core services)
       shell: bash

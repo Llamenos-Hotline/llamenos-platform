@@ -122,6 +122,16 @@ describe('issueRegistrationToken', () => {
     )
   }
 
+  it('refuses to issue a token when no token secret is configured (no empty-key signing, no fallback)', () => {
+    const svc = new UserNotificationsService(
+      { findByUser: vi.fn() } as never,
+      { get: vi.fn() } as never,
+      { log: vi.fn() } as never,
+      { ...config, tokenSecret: '' },
+    )
+    expect(() => svc.issueRegistrationToken('hash123')).toThrow(/NOTIFIER_TOKEN_SECRET/)
+  })
+
   it('produces a payload.signature format', () => {
     const svc = makeService()
     const token = svc.issueRegistrationToken('hash123')

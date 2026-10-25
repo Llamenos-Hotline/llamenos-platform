@@ -402,6 +402,8 @@ empty so preflight fails loudly if one is forgotten):
 | `llamenos_app_image` | see next section |
 | `hmac_secret` | `openssl rand -hex 32` |
 | `server_secret` | `openssl rand -hex 32` (exactly 64 hex chars) |
+| `server_kek` | `openssl rand -hex 32` — encrypts what the server must read back; **a different value from `hmac_secret` and `server_secret`** (preflight refuses a repeat). Rotation is a re-encrypt: [KEK_ROTATION.md](../security/KEK_ROTATION.md) |
+| `ban_hash_key` | `openssl rand -hex 32` — written to a secret file outside `.env` and outside config backups. **Keep an offline copy**: a rebuilt host without it loses every ban |
 | `pg_password` | `openssl rand -base64 24` |
 | `storage_access_key` / `storage_secret_key` | `openssl rand -hex 16` / `openssl rand -base64 24` |
 | `backup_age_public_key` | public half of `age-keygen -o backup-key.txt`; **keep the private key off the server** |

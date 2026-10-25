@@ -70,13 +70,9 @@ const notifierUrl = process.env.NOTIFIER_URL || ''
 const notifierApiKey = readSecret('notifier-api-key', 'NOTIFIER_API_KEY')
 // notifierTokenSecret has no fallback to another secret: it is the key the
 // sidecar verifies registration tokens with, and it has exactly that one role.
+// Unset means no tokens can be issued (UserNotificationsService refuses), never
+// tokens signed with another secret or with an empty key.
 const notifierTokenSecret = readSecret('notifier-token-secret', 'NOTIFIER_TOKEN_SECRET')
-if (notifierUrl && !notifierTokenSecret) {
-  throw new Error(
-    '[llamenos] NOTIFIER_URL is set but NOTIFIER_TOKEN_SECRET is not. The notifier sidecar needs its own ' +
-    'token secret (generate with: openssl rand -hex 32); it is not derived from HMAC_SECRET.',
-  )
-}
 const services: Services = createServices(db, {
   hmacSecret,
   serverKek,

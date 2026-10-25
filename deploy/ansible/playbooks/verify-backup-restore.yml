@@ -68,6 +68,12 @@
         - "{{ app_dir }}/scripts"
         - "{{ app_dir }}/backups"
 
+    - name: Create the secrets directory (a sibling of the services directory)
+      ansible.builtin.file:
+        path: "{{ llamenos_secrets_dir }}"
+        state: directory
+        mode: "0700"
+
     - name: Write the postgres Compose fixture
       ansible.builtin.copy:
         dest: "{{ llamenos_compose_postgres }}"
@@ -119,6 +125,16 @@
         content: |
           POSTGRES_PASSWORD={{ pg_password }}
           SERVER_SECRET={{ roundtrip_canary_secret }}
+
+    # The ban-list hash key, written exactly where roles/llamenos-app writes it
+    # (llamenos_ban_hash_key_file: a sibling of the services directory). The
+    # config backup archives llamenos_services_dir; this key must NOT be in it.
+    - name: Write the ban-hash-key secret file the way the app role does
+      ansible.builtin.copy:
+        dest: "{{ llamenos_ban_hash_key_file }}"
+        content: "{{ roundtrip_ban_hash_key }}\n"
+        mode: "0400"
+      no_log: true
 
     - name: Start the scratch services
       ansible.builtin.command:
@@ -233,7 +249,7 @@
           set -uo pipefail
           hits=0
           for f in $(find "{{ app_dir }}/backups" -type f -name 'llamenos-*'); do
-            for needle in '{{ roundtrip_canary_secret }}' '{{ pg_password }}' '{{ roundtrip_marker }}'; do
+            for needle in '{{ roundtrip_canary_secret }}' '{{ pg_password }}' '{{ roundtrip_marker }}' '{{ roundtrip_ban_hash_key }}'; do
               if LC_ALL=C grep -qaF "${needle}" "${f}"; then
                 echo "PLAINTEXT LEAK: ${needle:0:8}... found in ${f}"
                 hits=$((hits + 1))
@@ -259,6 +275,39 @@
         that:
           - "'leak_count=0' in rt_leak_scan.stdout"
         fail_msg: "{{ rt_leak_scan.stdout }}"
+        quiet: true
+
+    # The scan above only sees ciphertext, so it cannot tell "kept out of the
+    # archive" from "encrypted into it". D6 needs the former: decrypt the config
+    # archive with the throwaway private key and look INSIDE. The canary proves
+    # the right archive was opened (a per-service .env IS collected); the ban key
+    # must be absent by value and by file name.
+    - name: Decrypt the config archive and look inside it for the ban-list hash key
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          archive="$(ls -1t "{{ backup_config_dir }}"/daily/llamenos-config-*.tar.gz.age | head -1)"
+          work="$(mktemp -d)"
+          trap 'rm -rf "${work}"' EXIT
+          age -d -i "{{ backup_age_private_key_path }}" -o "${work}/config.tar.gz" "${archive}"
+          mkdir "${work}/x"
+          tar -xzf "${work}/config.tar.gz" -C "${work}/x"
+          canary_files="$(grep -rlaF '{{ roundtrip_canary_secret }}' "${work}/x" | wc -l)"
+          ban_key_files="$(grep -rlaF '{{ roundtrip_ban_hash_key }}' "${work}/x" | wc -l)"
+          ban_key_named="$(find "${work}/x" -name 'ban-hash-key*' | wc -l)"
+          echo "canary_files=${canary_files} ban_key_files=${ban_key_files} ban_key_named=${ban_key_named}"
+      register: rt_config_inspect
+      changed_when: false
+      no_log: true
+
+    - name: Assert the config archive holds the service env but not the ban-list hash key
+      ansible.builtin.assert:
+        that:
+          - "rt_config_inspect.stdout is search('canary_files=[1-9]')"
+          - "'ban_key_files=0 ' in rt_config_inspect.stdout"
+          - "rt_config_inspect.stdout | trim is search('ban_key_named=0$')"
+        fail_msg: "The config archive is wrong: {{ rt_config_inspect.stdout }}"
         quiet: true
 
 # ── Destroy ─────────────────────────────────────────────────────────
