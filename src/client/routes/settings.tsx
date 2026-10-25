@@ -225,6 +225,8 @@ function SettingsPage() {
               return (
                 <button
                   key={lang.code}
+                  type="button"
+                  aria-pressed={selected}
                   onClick={() => {
                     setSelectedLanguages(prev =>
                       selected

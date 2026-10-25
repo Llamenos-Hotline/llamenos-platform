@@ -268,6 +268,47 @@ When('I click the {string} header again', async ({ page }, headerText: string) =
   await clickSectionHeader(page, headerText)
 })
 
+/** Tab (keyboard only) until a settings section's trigger button holds focus. */
+When('I tab to the {string} section header', async ({ page }, headerText: string) => {
+  const testId = sectionTestIdMap[headerText]
+  expect(testId, `no test id mapped for settings section "${headerText}"`).toBeTruthy()
+  const trigger = page.getByTestId(`${testId}-trigger`)
+  await expect(trigger).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The page has a finite tab order: reaching the trigger within it proves it is
+  // keyboard-focusable. Bounded so an unreachable trigger fails instead of hanging.
+  for (let i = 0; i < 200; i++) {
+    await page.keyboard.press('Tab')
+    if (await trigger.evaluate(el => el === document.activeElement)) return
+  }
+  throw new Error(`"${headerText}" section header was never reached by Tab`)
+})
+
+When('I press {string} on the focused element', async ({ page }, key: string) => {
+  // No body click first (unlike the shortcut step): that would drop the keyboard focus under test.
+  await page.keyboard.press(key)
+})
+
+async function expectSectionHeaderExpanded(page: Page, headerText: string, expanded: boolean) {
+  const testId = sectionTestIdMap[headerText]
+  expect(testId, `no test id mapped for settings section "${headerText}"`).toBeTruthy()
+  const trigger = page.getByTestId(`${testId}-trigger`)
+  await expect(trigger).toHaveRole('button')
+  await expect(trigger).toHaveAttribute('aria-expanded', String(expanded), { timeout: Timeouts.ELEMENT })
+}
+
+Then('the {string} section header should report itself expanded', async ({ page }, headerText: string) => {
+  await expectSectionHeaderExpanded(page, headerText, true)
+})
+
+Then('the {string} section header should report itself collapsed', async ({ page }, headerText: string) => {
+  await expectSectionHeaderExpanded(page, headerText, false)
+})
+
+Then('the toggled language option should report itself pressed', async ({ page }) => {
+  const chip = page.getByTestId(TestIds.SETTINGS_PROFILE).getByRole('button', { name: /Français/ })
+  await expect(chip).toHaveAttribute('aria-pressed', 'true', { timeout: Timeouts.ELEMENT })
+})
+
 Then(
   'both {string} and {string} sections should be visible',
   async ({ page }, sec1: string, sec2: string) => {
@@ -288,7 +329,7 @@ Then(
 
 Then('each settings section should have a {string} button', async ({ page }) => {
   // Each SettingsSection renders with data-testid={id} and data-settings-section.
-  // The copy-link button lives inside the CardHeader trigger element.
+  // The copy-link button is a sibling of the section's trigger button inside the CardHeader.
   // Wait for at least one settings section to be visible before counting
   const sections = page.locator('[data-testid][data-settings-section]')
   await expect(sections.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
