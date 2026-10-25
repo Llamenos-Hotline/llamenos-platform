@@ -50,8 +50,8 @@ const buttonTextToTestIdMap: Record<string, string> = {
   'Log Out': TestIds.LOGOUT_BTN,
   'Recovery Options': TestIds.RECOVERY_OPTIONS_BTN,
   'Confirm': TestIds.CONFIRM_DIALOG_OK,
-  'Clock In': TestIds.BREAK_TOGGLE_BTN,
-  'Clock Out': TestIds.BREAK_TOGGLE_BTN,
+  'Clock In': TestIds.CLOCK_TOGGLE_BTN,
+  'Clock Out': TestIds.CLOCK_TOGGLE_BTN,
   'Go to Dashboard': 'setup-complete-btn',
   'Update Profile': 'form-save-btn',
 }
@@ -313,8 +313,8 @@ Then('the {string} button should be enabled', async ({ page }, name: string) => 
 Then('the {string} button should be visible', async ({ page }, name: string) => {
   // Map feature-file button names to actual UI text/testid
   const testIdMap: Record<string, string> = {
-    'Clock In': TestIds.BREAK_TOGGLE_BTN,
-    'Clock Out': TestIds.BREAK_TOGGLE_BTN,
+    'Clock In': TestIds.CLOCK_TOGGLE_BTN,
+    'Clock Out': TestIds.CLOCK_TOGGLE_BTN,
   }
   const testId = testIdMap[name]
   if (testId) {
@@ -326,8 +326,8 @@ Then('the {string} button should be visible', async ({ page }, name: string) => 
 
 Then('the {string} button should not be visible', async ({ page }, name: string) => {
   const testIdMap: Record<string, string> = {
-    'Clock In': TestIds.BREAK_TOGGLE_BTN,
-    'Clock Out': TestIds.BREAK_TOGGLE_BTN,
+    'Clock In': TestIds.CLOCK_TOGGLE_BTN,
+    'Clock Out': TestIds.CLOCK_TOGGLE_BTN,
   }
   const testId = testIdMap[name]
   if (testId) {

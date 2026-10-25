@@ -505,6 +505,34 @@ services:
     # container's docker logging driver never sees — `docker compose logs`
     # would read an empty log, the exact trap the #1689 smoke assertion guards
     # against on the Ansible path.
+    #
+    # PEER ACL (#2136). Every volunteer holds working TURN credentials and this
+    # container shares the host's network, so an allocation is a socket on the
+    # host that a volunteer can aim at the app, signal-cli, postgres, Asterisk's
+    # ARI and the host's own address. coturn denies loopback by default and
+    # nothing else, so every other non-routable range and the relay's own
+    # address are denied here (ranges, not CIDR: coturn aborts on CIDR). TCP
+    # relay (RFC 6062) is off — WebRTC does not use it. See the Ansible template
+    # (deploy/ansible/roles/llamenos-coturn/templates/compose/coturn.j2) for the
+    # full reasoning and the measurements.
+    #
+    # TURN_MEDIA_PEER_IP is the MEDIA SERVER: a relayed call is volunteer ->
+    # relay -> Asterisk, Asterisk advertises its docker-bridge address (inside
+    # the denied 172.16/12), and with that range denied and no allowance the call
+    # connects and carries no audio. Set it to Asterisk's address to relay media.
+    # Left unset, the relay can reach no private address at all, which is the
+    # safe default for a stack whose relay is on loopback (as here). coturn
+    # matches by IP only, so the allowance cannot be scoped to the RTP ports, and
+    # once it is set every other peer is refused. It is not pinned in this file
+    # because a fixed subnet would collide between parallel compose projects; the
+    # Ansible path pins Asterisk's address. Note Asterisk sits on the `internal:
+    # true` network below, which the host (and so this container) cannot route to
+    # — measured — so relayed media does not reach it on this path with or
+    # without the allowance.
+    #
+    # Behind 1:1 NAT (--external-ip), coturn exempts the host's own addresses from
+    # this ACL whatever is denied — measured. Do not treat the host-address denial
+    # as holding there.
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
@@ -516,6 +544,24 @@ services:
       --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
       --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
       ${TURN_EXTERNAL_IP:+--external-ip=${TURN_EXTERNAL_IP}}
+      --denied-peer-ip=0.0.0.0-0.255.255.255
+      --denied-peer-ip=10.0.0.0-10.255.255.255
+      --denied-peer-ip=100.64.0.0-100.127.255.255
+      --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=169.254.0.0-169.254.255.255
+      --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=192.0.0.0-192.0.0.255
+      --denied-peer-ip=192.168.0.0-192.168.255.255
+      --denied-peer-ip=198.18.0.0-198.19.255.255
+      --denied-peer-ip=::-::1
+      --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+      --denied-peer-ip=${TURN_RELAY_IP:-127.0.0.1}
+      --denied-peer-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      ${TURN_MEDIA_PEER_IP:+--allowed-peer-ip=${TURN_MEDIA_PEER_IP}}
+      --no-tcp-relay
+      --no-multicast-peers
       --no-tls
       --no-dtls
       --no-cli
