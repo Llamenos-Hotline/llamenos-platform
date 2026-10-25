@@ -1240,7 +1240,7 @@ dev.post('/test-simulate/signal-queue/enqueue', async (c) => {
     return c.json({ error: 'hubId, conversationId, recipientIdentifier, and body are required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   const id = await queue.enqueue({
     hubId: body.hubId,
     conversationId: body.conversationId,
@@ -1260,7 +1260,7 @@ dev.post('/test-simulate/signal-queue/mark-failed', async (c) => {
     return c.json({ error: 'messageId is required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   const [before] = await getDb().select().from(signalMessageQueue).where(eq(signalMessageQueue.id, body.messageId))
   if (!before) {
     return c.json({ error: 'Message not found' }, 404)
@@ -1286,7 +1286,7 @@ dev.post('/test-simulate/signal-queue/mark-sent', async (c) => {
     return c.json({ error: 'messageId is required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   await queue.markSent(body.messageId, body.externalId)
   return c.json({ ok: true })
 })
@@ -1322,7 +1322,7 @@ dev.get('/test-simulate/signal-queue/rate-limited', async (c) => {
     return c.json({ error: 'recipientIdentifier query param is required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   const rateLimited = await queue.isRateLimited(recipientIdentifier)
   return c.json({ rateLimited })
 })

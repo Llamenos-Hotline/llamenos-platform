@@ -93,7 +93,16 @@ export class BlastsService {
   constructor(
     protected db: Database,
     protected hmacSecret?: string,
+    protected serverKek?: string,
   ) {}
+
+  /** Seal a subscriber identifier under SERVER_KEK; the server needs it back to send. */
+  private sealIdentifier(identifier: string): string {
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
+    }
+    return encryptContactIdentifier(identifier, this.serverKek)
+  }
 
   // --- Preference token generation ---
 
@@ -237,9 +246,7 @@ export class BlastsService {
     for (const entry of entries) {
       const identifierHash = this.hashIdentifier(entry.identifier)
       const preferenceToken = this.generatePreferenceToken(identifierHash)
-      const encrypted = this.hmacSecret
-        ? encryptContactIdentifier(entry.identifier, this.hmacSecret)
-        : null
+      const encrypted = this.sealIdentifier(entry.identifier)
       const newChannels = [{ type: entry.channel, verified: false }]
       const entryTags = entry.tags ?? []
 
@@ -425,9 +432,7 @@ export class BlastsService {
 
       // Create new subscriber
       const preferenceToken = this.generatePreferenceToken(data.identifierHash)
-      const encrypted = this.hmacSecret
-        ? encryptContactIdentifier(data.identifier, this.hmacSecret)
-        : null
+      const encrypted = this.sealIdentifier(data.identifier)
       const [created] = await this.db
         .insert(subscribers)
         .values({
@@ -1169,8 +1174,10 @@ export class BlastsService {
 
     // Delegate to crypto utility for decryption
     const { decryptContactIdentifier } = await import('../lib/crypto')
-    if (!this.hmacSecret) return null
-    return decryptContactIdentifier(row.encryptedIdentifier, this.hmacSecret)
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
+    }
+    return decryptContactIdentifier(row.encryptedIdentifier, this.serverKek)
   }
 
   async resolveSubscriberIdentifierHash(subscriberId: string): Promise<string | null> {

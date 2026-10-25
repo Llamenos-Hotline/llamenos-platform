@@ -67,6 +67,9 @@ services:
       # Wire up sidecar services so integration tests can reach them
       - NOTIFIER_URL=http://signal-notifier:3100
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-ci-test-notifier-key}
+      # Must equal the signal-notifier sidecar's value below; the app no longer
+      # derives it from HMAC_SECRET.
+      - NOTIFIER_TOKEN_SECRET=${NOTIFIER_TOKEN_SECRET:-ci-test-token-secret}
     depends_on:
       postgres:
         condition: service_healthy

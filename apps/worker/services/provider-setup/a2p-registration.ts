@@ -140,7 +140,7 @@ const CAMPAIGN_TRANSITIONS: Record<CampaignStatus, CampaignStatus[]> = {
 export class A2pRegistrationService {
   constructor(
     private readonly db: Database,
-    private readonly hmacSecret: string,
+    private readonly serverKek: string,
   ) {}
 
   /**
@@ -167,7 +167,7 @@ export class A2pRegistrationService {
     }
 
     const brandSid = await this.callTwilioSubmitBrand(brandInfo)
-    const encryptedBrandSid = encryptCredentials({ sid: brandSid }, this.hmacSecret)
+    const encryptedBrandSid = encryptCredentials({ sid: brandSid }, this.serverKek)
 
     if (existing) {
       await this.db
@@ -221,11 +221,11 @@ export class A2pRegistrationService {
     this.enforceCampaignTransition(row.campaignStatus as CampaignStatus, 'pending')
 
     const brandSid = row.brandSid
-      ? (decryptCredentials(row.brandSid, this.hmacSecret).sid as string)
+      ? (decryptCredentials(row.brandSid, this.serverKek).sid as string)
       : ''
 
     const campaignSid = await this.callTwilioSubmitCampaign(brandSid, campaignInfo)
-    const encryptedCampaignSid = encryptCredentials({ sid: campaignSid }, this.hmacSecret)
+    const encryptedCampaignSid = encryptCredentials({ sid: campaignSid }, this.serverKek)
 
     await this.db
       .update(a2pRegistrations)
@@ -255,7 +255,7 @@ export class A2pRegistrationService {
 
     // Poll brand status if still pending
     if (row.brandStatus === 'pending' && row.brandSid) {
-      const brandSid = decryptCredentials(row.brandSid, this.hmacSecret).sid as string
+      const brandSid = decryptCredentials(row.brandSid, this.serverKek).sid as string
       const brandStatusFromProvider = await this.pollTwilioBrandStatus(brandSid)
       if (brandStatusFromProvider === 'APPROVED') {
         updates.brandStatus = 'approved'
@@ -268,7 +268,7 @@ export class A2pRegistrationService {
 
     // Poll campaign status if still pending
     if (row.campaignStatus === 'pending' && row.campaignSid) {
-      const campaignSid = decryptCredentials(row.campaignSid, this.hmacSecret).sid as string
+      const campaignSid = decryptCredentials(row.campaignSid, this.serverKek).sid as string
       const campaignStatusFromProvider = await this.pollTwilioCampaignStatus(campaignSid)
       if (campaignStatusFromProvider === 'REGISTERED') {
         updates.campaignStatus = 'approved'
@@ -418,8 +418,8 @@ export class A2pRegistrationService {
       providerType: row.providerType,
       brandStatus: row.brandStatus as BrandStatus,
       campaignStatus: row.campaignStatus as CampaignStatus,
-      brandSidMasked: row.brandSid ? maskSid(decryptCredentials(row.brandSid, this.hmacSecret).sid as string) : null,
-      campaignSidMasked: row.campaignSid ? maskSid(decryptCredentials(row.campaignSid, this.hmacSecret).sid as string) : null,
+      brandSidMasked: row.brandSid ? maskSid(decryptCredentials(row.brandSid, this.serverKek).sid as string) : null,
+      campaignSidMasked: row.campaignSid ? maskSid(decryptCredentials(row.campaignSid, this.serverKek).sid as string) : null,
       error: row.error,
       submittedAt: row.submittedAt?.toISOString() ?? null,
       approvedAt: row.approvedAt?.toISOString() ?? null,

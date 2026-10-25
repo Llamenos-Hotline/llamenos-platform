@@ -349,13 +349,20 @@ CI uses the production compose with test overlay:
 
 ```bash
 # CI-only (bundles app into Docker image — no live reload)
+# Prefer `bun run test:docker:up`, which creates the ban-hash-key file first.
 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build app
 ```
+
+The app mounts the ban-list hash key from `deploy/docker/secrets/ban-hash-key` (a gitignored
+file, never an env var) and refuses to start without it. `bun run test:docker:up`,
+`scripts/ios-build.sh uitest` and `scripts/test-integration-full.sh` create a development key
+if it is absent; a hand-typed `docker compose up` needs
+`source scripts/lib/ban-hash-key.sh && ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444` first.
 
 ### Environment Variables
 
 Dev compose uses hardcoded defaults (user: `llamenos`, password: `dev`).
-Production compose requires `.env` with `PG_PASSWORD`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `HMAC_SECRET`.
+Production compose requires `.env` with `PG_PASSWORD`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `HMAC_SECRET`, `SERVER_KEK`.
 
 ## CI vs Local Differences
 

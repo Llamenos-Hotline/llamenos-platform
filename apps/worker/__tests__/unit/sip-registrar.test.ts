@@ -602,17 +602,17 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('SIP_REGISTRAR_SECRET falls back to HMAC_SECRET when unset', async () => {
+  it('refuses to issue a credential when SIP_REGISTRAR_SECRET is unset, deriving from no other secret', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
       services: { settings },
       env: { SIP_REGISTRAR_SECRET: '' },
     })
     const res = await app.request('/sip-token')
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { sip: { password: string } }
-    const username = volunteerSipUsername(PUBKEY_A)
-    expect(body.sip.password).toBe(deriveVolunteerSipSecret('hmac-secret', username))
+    expect(res.status).toBe(503)
+    expect(await res.text()).toContain('registrar is not configured')
+    // nothing was provisioned at the PBX under a derived secret
+    expect(calls).toHaveLength(0)
   })
 
   it('hands the client the SIP edge trust anchor so the TLS chain can be verified', async () => {
@@ -649,6 +649,60 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
     const res = await app.request('/sip-status')
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ available: true, provider: 'asterisk' })
+  })
+})
+
+// --- /sip-status and /sip-token agree under every configuration (D6) --------
+
+describe('GET /api/telephony/sip-status agrees with /sip-token', () => {
+  const vendorConfig = (): TelephonyProviderConfig => ({
+    type: 'twilio',
+    accountSid: 'AC1',
+    authToken: 'tok',
+    sipDomain: 'x.sip.twilio.com',
+    sipUsername: 'hub-trunk',
+    sipPassword: 'hub-secret',
+  }) as unknown as TelephonyProviderConfig
+
+  async function both(config: TelephonyProviderConfig | null, env: Partial<AppEnv['Bindings']>) {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(config) }
+    const app = await createSipTokenApp({ services: { settings }, env })
+    const status = (await (await app.request('/sip-status')).json()) as { available: boolean; provider: string | null }
+    const token = await app.request('/sip-token')
+    return { status, tokenStatus: token.status }
+  }
+
+  it('asterisk with SIP_REGISTRAR_SECRET set: available, and the token is issued', async () => {
+    const { status, tokenStatus } = await both(asteriskConfig(), { SIP_REGISTRAR_SECRET: MASTER })
+    expect(status).toEqual({ available: true, provider: 'asterisk' })
+    expect(tokenStatus).toBe(200)
+  })
+
+  it('asterisk with SIP_REGISTRAR_SECRET unset (the default compose): unavailable, and the token is refused', async () => {
+    const { status, tokenStatus } = await both(asteriskConfig(), { SIP_REGISTRAR_SECRET: '' })
+    expect(status).toEqual({ available: false, provider: 'asterisk' })
+    expect(tokenStatus).toBe(503)
+  })
+
+  it('asterisk with SIP_REGISTRAR_SECRET absent from the environment entirely: unavailable, token refused', async () => {
+    const { status, tokenStatus } = await both(asteriskConfig(), { SIP_REGISTRAR_SECRET: undefined })
+    expect(status.available).toBe(false)
+    expect(tokenStatus).toBe(503)
+  })
+
+  it.each([
+    ['set', MASTER],
+    ['unset', ''],
+  ])('a vendor provider is unavailable whether the registrar secret is %s, and the token is refused', async (_label, secret) => {
+    const { status, tokenStatus } = await both(vendorConfig(), { SIP_REGISTRAR_SECRET: secret })
+    expect(status).toEqual({ available: false, provider: 'twilio' })
+    expect(tokenStatus).toBe(503)
+  })
+
+  it('no provider configured: unavailable, and the token route 404s', async () => {
+    const { status, tokenStatus } = await both(null, { SIP_REGISTRAR_SECRET: MASTER })
+    expect(status).toEqual({ available: false, provider: null })
+    expect(tokenStatus).toBe(404)
   })
 })
 

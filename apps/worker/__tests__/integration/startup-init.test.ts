@@ -12,9 +12,11 @@
  * Each test gets its own database, dropped on teardown.
  */
 import { spawn, spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { DEFAULT_ROLES } from '@shared/permissions'
@@ -38,6 +40,13 @@ const ADMIN_PUBKEY = 'c'.repeat(64)
  */
 const ADMIN_DECRYPTION_PUBKEY = 'd'.repeat(64)
 const BOOT_TIMEOUT_MS = 60_000
+
+// BAN_HASH_KEY reaches the server only as a secret file; BAN_HASH_KEY_FILE points
+// this boot at a scratch one, exactly as a deployment mounts /run/secrets/ban-hash-key.
+const SECRET_DIR = mkdtempSync(path.join(tmpdir(), 'startup-init-secrets-'))
+const BAN_HASH_KEY_FILE = path.join(SECRET_DIR, 'ban-hash-key')
+writeFileSync(BAN_HASH_KEY_FILE, `${'e'.repeat(64)}\n`)
+afterAll(() => rmSync(SECRET_DIR, { recursive: true, force: true }))
 
 const createdDatabases: string[] = []
 
@@ -108,6 +117,8 @@ async function bootServer(
     PORT: String(port),
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
+    BAN_HASH_KEY_FILE,
     HOTLINE_NAME: 'Boot Test',
     ENVIRONMENT: 'production',
     WEBHOOK_BASE_URL: 'https://boot-test.invalid',
@@ -208,6 +219,29 @@ afterEach(async () => {
 }, BOOT_TIMEOUT_MS)
 
 const DEFAULT_ROLE_IDS = DEFAULT_ROLES.map((r) => r.id).sort()
+
+describe('server startup: one role per secret', () => {
+  it('refuses to boot without the ban-hash-key secret file', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { BAN_HASH_KEY_FILE: path.join(SECRET_DIR, 'absent') } }),
+    ).rejects.toThrow(/ban-hash-key/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses BAN_HASH_KEY as an environment variable even with the file present', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { BAN_HASH_KEY: 'f'.repeat(64) } }),
+    ).rejects.toThrow(/must not be set as an environment variable/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses to boot when HMAC_SECRET and SERVER_KEK are one value', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { SERVER_KEK: 'a'.repeat(64) } }),
+    ).rejects.toThrow(/identical/)
+  }, BOOT_TIMEOUT_MS * 2)
+})
 
 describe('server startup initialisation', () => {
   it('a never-seeded database boots with the configured admin and the default roles', async () => {

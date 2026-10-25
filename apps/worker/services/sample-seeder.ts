@@ -44,6 +44,7 @@ const HOUR_MS = 3_600_000
 export interface SampleSeedEnv extends DevSurfacesEnv {
   ENVIRONMENT: string
   HMAC_SECRET: string
+  SERVER_KEK: string
   TWILIO_ACCOUNT_SID?: string
   TWILIO_AUTH_TOKEN?: string
   TWILIO_PHONE_NUMBER?: string
@@ -310,7 +311,7 @@ export async function seedSampleDataset(
     })
     await services.conversations.setContactIdentifier(
       conversation.id,
-      encryptContactIdentifier(sample.sender, env.HMAC_SECRET),
+      encryptContactIdentifier(sample.sender, env.SERVER_KEK),
     )
     summary.conversations++
     for (const message of sample.messages) {

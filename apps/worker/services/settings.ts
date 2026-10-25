@@ -1439,7 +1439,7 @@ export class SettingsService {
     return { ok: true }
   }
 
-  async getTelephonyProvider(hmacSecret?: string, hubId?: string): Promise<TelephonyProviderConfig | null> {
+  async getTelephonyProvider(serverKek?: string, hubId?: string): Promise<TelephonyProviderConfig | null> {
     // When a hubId is provided, read the hub-scoped config instead of the global one.
     const hubCondition = hubId
       ? eq(providerConfigs.hubId, hubId)
@@ -1458,11 +1458,11 @@ export class SettingsService {
       phoneNumber: (row.phoneNumbers as string[])?.[0] ?? '',
     }
 
-    // Decrypt credentials if hmacSecret is provided and credentials exist
-    if (row.credentials && hmacSecret) {
+    // Decrypt credentials if the server KEK is provided and credentials exist
+    if (row.credentials && serverKek) {
       try {
         const { decryptCredentials } = await import('./provider-setup/crypto')
-        const creds = decryptCredentials(row.credentials, hmacSecret)
+        const creds = decryptCredentials(row.credentials, serverKek)
         Object.assign(config, creds)
       } catch {
         // Credentials may be plain JSON (legacy) — try parsing directly
@@ -1471,7 +1471,7 @@ export class SettingsService {
         } catch { /* ignore */ }
       }
     } else if (row.credentials) {
-      // No hmacSecret — try plain JSON parse (legacy path)
+      // No KEK — try plain JSON parse (legacy path)
       try {
         Object.assign(config, JSON.parse(row.credentials))
       } catch { /* encrypted, can't decrypt without secret */ }
@@ -2613,9 +2613,9 @@ export class SettingsService {
    */
   async getHubTelephonyProvider(
     hubId: string,
-    hmacSecret?: string,
+    serverKek?: string,
   ): Promise<TelephonyProviderConfig | null> {
-    return this.getTelephonyProvider(hmacSecret, hubId)
+    return this.getTelephonyProvider(serverKek, hubId)
   }
 
   async setHubTelephonyProvider(

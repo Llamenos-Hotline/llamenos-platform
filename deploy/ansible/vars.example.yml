@@ -191,9 +191,25 @@ admin_pubkey: ""
 
 admin_decryption_pubkey: ""
 
-# HMAC secret for hashing phone numbers and IPs
-# Generate with: openssl rand -hex 32
+# HMAC secret for hashing phone numbers and IPs. A hashing key ONLY: it
+# encrypts nothing, so rotating it never makes stored data unreadable (it only
+# stops phone/IP hashes matching). Generate with: openssl rand -hex 32
 hmac_secret: ""
+
+# Key-encryption key for data the server must read back: telephony/messaging
+# provider credentials, conversation reply addresses, queued Signal sends and
+# storage credentials. Its own secret -- never reuse hmac_secret or
+# server_secret (preflight refuses a repeated value). Losing or rotating it
+# without re-encrypting makes that data unreadable: see
+# docs/security/KEK_ROTATION.md. Generate with: openssl rand -hex 32
+server_kek: ""
+
+# Keys the ban-list hash. Written to a SECRET FILE outside the services
+# directory (never into .env), so no config backup carries it. Because it is
+# not in the backups, a full rebuild without your own offline copy loses every
+# ban: keep this vars.yml (vault-encrypted) backed up where it lives.
+# Generate with: openssl rand -hex 32
+ban_hash_key: ""
 
 # ─── PostgreSQL ──────────────────────────────────────────────────
 # Database password (generate with: openssl rand -hex 24). Any value works --

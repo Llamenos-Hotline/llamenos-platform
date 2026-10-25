@@ -44,9 +44,10 @@ export function createSignalQueueDrainOpts(
   db: Database,
   resolveSignalAdapter: SignalAdapterResolver,
   hmacSecret: string,
+  serverKek: string,
   retentionDays: number = DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS,
 ): SignalQueueDrainWorkerOpts {
-  return { queue: new SignalMessageQueue(db, hmacSecret), resolveSignalAdapter, retentionDays }
+  return { queue: new SignalMessageQueue(db, hmacSecret, serverKek), resolveSignalAdapter, retentionDays }
 }
 
 let intervalId: ReturnType<typeof setInterval> | null = null

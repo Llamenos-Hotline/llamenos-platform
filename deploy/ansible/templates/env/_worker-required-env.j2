@@ -170,6 +170,18 @@ SIGNAL_QUEUE_RETENTION_DAYS={{ signal_queue_retention_days }}
 {% endfor %}
 ENVIRONMENT={{ app_environment | default('production') }}
 HMAC_SECRET={{ hmac_secret }}
+{#
+  SERVER_KEK is the key-encryption key for everything the server must read back:
+  provider credentials, conversation reply addresses, queued Signal sends,
+  storage credentials. One role, one value (D6, #2171): HMAC_SECRET only hashes,
+  SERVER_SECRET only derives relay/server identity keys. preflight.yml refuses a
+  vars.yml where any two of them are equal.
+
+  BAN_HASH_KEY is deliberately NOT rendered here. It is a secret FILE
+  (roles/llamenos-app, `llamenos_ban_hash_key_file`), kept outside .env so no
+  config backup, rollback snapshot or env_file ever holds it.
+#}
+SERVER_KEK={{ server_kek }}
 STORAGE_ENDPOINT=http://rustfs:9000
 STORAGE_ACCESS_KEY={{ storage_access_key }}
 STORAGE_SECRET_KEY={{ storage_secret_key }}

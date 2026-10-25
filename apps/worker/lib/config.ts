@@ -12,7 +12,32 @@
  * docs/superpowers/specs/2026-03-21-hardening-final.md Gap 4.
  */
 
+import fs from 'node:fs'
+
 const HEX_RE = /^[0-9a-f]+$/
+
+/** Where a file-only secret is mounted unless `<NAME>_FILE` points elsewhere (dev, CI). */
+const SECRETS_DIR = '/run/secrets'
+
+/**
+ * Read a secret that is delivered ONLY as a file, never as an environment
+ * variable. The path is `${SECRETS_DIR}/<name>`, or the file named by
+ * `<NAME>_FILE` (`ban-hash-key` → `BAN_HASH_KEY_FILE`) so dev and CI can point
+ * at a scratch file without the value ever entering an env block. Returns
+ * undefined when the file does not exist or is empty.
+ */
+export function readSecretFile(
+  name: string,
+  env: ConfigInput = process.env,
+): string | undefined {
+  const override = env[`${name.toUpperCase().replace(/-/g, '_')}_FILE`]?.trim()
+  const path = override || `${SECRETS_DIR}/${name}`
+  try {
+    return fs.readFileSync(path, 'utf-8').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
 
 type ConfigInput = Partial<Record<string, string | undefined>>
 
@@ -34,6 +59,58 @@ function assertHex64(env: ConfigInput, key: string): void {
       `[llamenos] ${key} must be exactly 64 lowercase hex characters (got length ${val.length}). ` +
       `Generate with: openssl rand -hex 32`
     )
+  }
+}
+
+const ROLE_SECRETS = ['HMAC_SECRET', 'SERVER_SECRET', 'SERVER_KEK'] as const
+
+/** No two role secrets may share a value: that is a secret with two roles. */
+function assertDistinctSecrets(env: ConfigInput): void {
+  for (let i = 0; i < ROLE_SECRETS.length; i++) {
+    for (let j = i + 1; j < ROLE_SECRETS.length; j++) {
+      const a = env[ROLE_SECRETS[i]!]?.trim()
+      const b = env[ROLE_SECRETS[j]!]?.trim()
+      if (a && a === b) {
+        throw new Error(
+          `[llamenos] ${ROLE_SECRETS[i]} and ${ROLE_SECRETS[j]} are identical. Each server ` +
+          `secret has exactly one role; generate a separate value for each with: openssl rand -hex 32`
+        )
+      }
+    }
+  }
+}
+
+/**
+ * BAN_HASH_KEY keys the ban-list hash. It is delivered only as the
+ * `ban-hash-key` secret file: kept out of `.env`, so out of every config
+ * backup, because a hash of a phone number under a key the database holds is
+ * reversible by anyone who reads the database. Supplying it as an environment
+ * variable is refused rather than quietly accepted.
+ */
+function assertBanHashKey(env: ConfigInput, readFile: (name: string) => string | undefined): void {
+  if (env['BAN_HASH_KEY']?.trim()) {
+    throw new Error(
+      '[llamenos] BAN_HASH_KEY must not be set as an environment variable. Deliver it only as ' +
+      'the /run/secrets/ban-hash-key secret file, so it never lands in .env or a config backup.'
+    )
+  }
+  const val = readFile('ban-hash-key')
+  if (!val) {
+    throw new Error(
+      '[llamenos] Required secret file ban-hash-key is missing or empty. Mount it at ' +
+      '/run/secrets/ban-hash-key (or point BAN_HASH_KEY_FILE at it). Generate with: openssl rand -hex 32'
+    )
+  }
+  if (val.length !== 64 || !HEX_RE.test(val)) {
+    throw new Error(
+      `[llamenos] ban-hash-key must be exactly 64 lowercase hex characters (got length ${val.length}). ` +
+      `Generate with: openssl rand -hex 32`
+    )
+  }
+  for (const other of ROLE_SECRETS) {
+    if (env[other]?.trim() === val) {
+      throw new Error(`[llamenos] ban-hash-key and ${other} are identical. Each server secret has exactly one role.`)
+    }
   }
 }
 
@@ -65,11 +142,21 @@ function warnIfAbsent(env: ConfigInput, key: string, featureNote: string): void 
  *
  * @param env - Environment object to validate (defaults to process.env).
  */
-export function validateConfig(env: ConfigInput = process.env): void {
+export function validateConfig(
+  env: ConfigInput = process.env,
+  readFile: (name: string) => string | undefined = (name) => readSecretFile(name, env),
+): void {
   // --- Required vars ---
   assertDatabaseUrl(env)
+  // One role per secret (D6, #2171): HMAC_SECRET only hashes, SERVER_KEK only
+  // encrypts data the server must read back, SERVER_SECRET derives the relay and
+  // server identity keys. A deployment that supplies one value for two roles
+  // couples their rotations and their blast radius.
   assertHex64(env, 'HMAC_SECRET')
   assertHex64(env, 'SERVER_SECRET')
+  assertHex64(env, 'SERVER_KEK')
+  assertDistinctSecrets(env)
+  assertBanHashKey(env, readFile)
 
   // ADMIN_PUBKEY: 64 hex chars (Ed25519 public key, hex-encoded)
   // Optional: if not set, the first admin is bootstrapped via the Tauri desktop app.

@@ -31,7 +31,7 @@
     "test:all": "scripts/test-orchestrator.sh",
     "test:desktop": "scripts/test-desktop.sh",
     "test:desktop:wdio": "bunx wdio tests/desktop/wdio.conf.ts",
-    "test:docker:up": "cd deploy/docker && docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait app",
+    "test:docker:up": "bash -c 'source scripts/lib/ban-hash-key.sh && ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444' && cd deploy/docker && docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait app",
     "test:docker:down": "cd deploy/docker && docker compose -f docker-compose.yml -f docker-compose.test.yml down -v",
     "test:worker": "scripts/test-worker.sh",
     "test:worker:unit": "bunx vitest run --config vitest.unit.config.ts",

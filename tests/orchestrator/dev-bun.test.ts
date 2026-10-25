@@ -22,6 +22,7 @@ function makeWorktree(envFile: string | null): string {
   mkdirSync(join(root, 'scripts', 'lib'), { recursive: true })
   cpSync(join(REPO, 'scripts/dev-bun.sh'), join(root, 'scripts/dev-bun.sh'))
   cpSync(join(REPO, 'scripts/lib/worktree-db.sh'), join(root, 'scripts/lib/worktree-db.sh'))
+  cpSync(join(REPO, 'scripts/lib/ban-hash-key.sh'), join(root, 'scripts/lib/ban-hash-key.sh'))
   if (envFile !== null) writeFileSync(join(root, '.env'), envFile)
   return root
 }

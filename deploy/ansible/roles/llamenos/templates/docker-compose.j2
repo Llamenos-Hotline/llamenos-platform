@@ -18,6 +18,10 @@ services:
     # here for the app service.
     env_file:
       - .env
+    # BAN_HASH_KEY is delivered only as this secret file, never through env_file
+    # (roles/llamenos-app/templates/compose/app.j2 has the full note).
+    secrets:
+      - ban-hash-key
 {% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
     # The SIP edge's PUBLIC trust anchor the app publishes to clients in
     # /api/telephony/sip-token (SIP_TLS_CA_FILE in .env). Same mount, same
@@ -174,6 +178,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+secrets:
+  ban-hash-key:
+    file: {{ llamenos_ban_hash_key_file }}
 
 volumes:
   postgres-data:

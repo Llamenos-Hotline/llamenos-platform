@@ -11,10 +11,10 @@ import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
  */
 export function encryptCredentials(
   creds: Record<string, unknown>,
-  hmacSecret: string,
+  serverKek: string,
 ): string {
   const plaintext = utf8ToBytes(JSON.stringify(creds))
-  const ct = serverEncrypt(plaintext, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(hmacSecret))
+  const ct = serverEncrypt(plaintext, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(serverKek))
   return bytesToHex(ct)
 }
 
@@ -25,9 +25,9 @@ export function encryptCredentials(
  */
 export function decryptCredentials(
   encrypted: string,
-  hmacSecret: string,
+  serverKek: string,
 ): Record<string, unknown> {
   const ct = hexToBytes(encrypted)
-  const plaintext = serverDecrypt(ct, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(hmacSecret))
+  const plaintext = serverDecrypt(ct, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(serverKek))
   return JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>
 }

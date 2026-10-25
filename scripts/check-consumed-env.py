@@ -79,7 +79,12 @@ UNRENDERED_BY_DESIGN: dict[str, str] = {
     "NOTIFIER_API_KEY": "deprecated alias for SIGNAL_NOTIFIER_BEARER_TOKEN",
 
     # ── Absent means a correct in-code default, not a skipped control.
-    "NOTIFIER_TOKEN_SECRET": "falls back to HMAC_SECRET (rendered), which is the intended key",
+    "NOTIFIER_TOKEN_SECRET": (
+        "the key the signal-notifier sidecar verifies registration tokens with. Only the "
+        "docker-compose `signal` profile runs that sidecar and no Ansible role deploys it, "
+        "so there is no consumer on an Ansible host to render it for. It has NO fallback to "
+        "HMAC_SECRET (D6): the app refuses to boot with the notifier configured and this unset"
+    ),
     "CERT_PIN_HASHES": (
         "an OVERRIDE of the Let's Encrypt ISRG Root X1/X2 defaults. The Caddy role pins "
         "acme_ca to Let's Encrypt with no fallback issuer, so the default is already the "
@@ -135,6 +140,10 @@ NON_ENV_BINDINGS = {
     "STORAGE_MANAGER",
     "STORAGE_ADMIN",
     "WS_MANAGER",
+    # Read from the `ban-hash-key` secret FILE at boot and injected, never an
+    # environment variable: validateConfig refuses it in the environment, and the
+    # Ansible templates must not render it (check-required-env.py asserts that).
+    "BAN_HASH_KEY",
 }
 
 # `<PROVIDER>_WEBHOOK_IPS` is built at runtime from the provider name

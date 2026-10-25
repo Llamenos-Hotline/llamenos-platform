@@ -25,6 +25,7 @@ const DATABASE_URL =
 
 const TEST_SCHEMA = `test_signal_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const HMAC_SECRET = 'a'.repeat(64)
+const SERVER_KEK = 'c'.repeat(64)
 
 const LEGACY_QUEUE_DDL = `
   CREATE TABLE ${TEST_SCHEMA}.signal_message_queue (
@@ -83,7 +84,7 @@ beforeAll(async () => {
   }
 
   db = drizzle({ client: testSql, schema }) as unknown as Database
-  queue = new SignalMessageQueue(db, HMAC_SECRET)
+  queue = new SignalMessageQueue(db, HMAC_SECRET, SERVER_KEK)
 })
 
 afterAll(async () => {

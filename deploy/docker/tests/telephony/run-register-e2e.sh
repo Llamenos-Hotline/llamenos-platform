@@ -50,8 +50,8 @@ export SIP_TCP_PORT="$E2E_SIP_EDGE_PORT"
 export SIPS_PORT="$E2E_SIP_EDGE_TLS_PORT"
 export E2E_ARI_REST_URL="http://127.0.0.1:$E2E_PBX_ARI_PORT/ari"
 export E2E_BRIDGE_URL="http://127.0.0.1:$E2E_BRIDGE_PORT"
-# The registrar machinery under test: an explicit master secret (the compose
-# fallback to HMAC_SECRET is exercised by the unit suite), and a TURN secret
+# The registrar machinery under test: an explicit master secret (there is no
+# fallback to HMAC_SECRET: the unit suite pins its absence), and a TURN secret
 # so the e2e can verify the minted RFC 8489 credentials against it.
 export SIP_REGISTRAR_SECRET="${SIP_REGISTRAR_SECRET:-registrar-e2e-$(openssl rand -hex 16)}"
 export E2E_TURN_HOST="${E2E_TURN_HOST:-turn.example.org}"
@@ -62,6 +62,10 @@ export ARI_PASSWORD="${ARI_PASSWORD:-e2e+ari/pass=$(openssl rand -hex 4)}"
 export BRIDGE_SECRET="${BRIDGE_SECRET:-$(openssl rand -hex 32)}"
 export HMAC_SECRET="$(openssl rand -hex 32)"
 export SERVER_SECRET="$(openssl rand -hex 32)"
+export SERVER_KEK="$(openssl rand -hex 32)"
+# BAN_HASH_KEY is a secret file the app mounts, never an env var.
+source "$ROOT/scripts/lib/ban-hash-key.sh"
+ensure_ban_hash_key_file "$ROOT/deploy/docker/secrets/ban-hash-key" 0444
 export STORAGE_ACCESS_KEY="${STORAGE_ACCESS_KEY:-rustfsadmin}"
 export STORAGE_SECRET_KEY="${STORAGE_SECRET_KEY:-rustfsadmin}"
 export ADMIN_PUBKEY="$(bun -e "import { seedHexToPubkey, ADMIN_SEED } from './tests/api-helpers'; console.log(seedHexToPubkey(ADMIN_SEED))")"

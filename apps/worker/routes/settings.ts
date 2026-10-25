@@ -439,9 +439,8 @@ settings.get('/telephony-provider',
   requirePermission('settings:manage-telephony'),
   async (c) => {
     const services = c.get('services')
-    const hmacSecret = c.env.HMAC_SECRET as string | undefined
     const hubId = c.get('hubId') as string | undefined
-    const result = await services.settings.getTelephonyProvider(hmacSecret, hubId)
+    const result = await services.settings.getTelephonyProvider(c.env.SERVER_KEK, hubId)
     return c.json(result)
   },
 )

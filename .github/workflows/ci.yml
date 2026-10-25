@@ -1146,6 +1146,7 @@ jobs:
             "PG_POOL_SIZE=40" \
             "PG_PASSWORD=ci-test-password" \
             "HMAC_SECRET=$(openssl rand -hex 32)" \
+            "SERVER_KEK=$(openssl rand -hex 32)" \
             "STORAGE_ACCESS_KEY=testaccess" \
             "STORAGE_SECRET_KEY=testsecret123456" \
             "HOTLINE_NAME=Llámenos" \
@@ -1163,6 +1164,9 @@ jobs:
             "TWILIO_AUTH_TOKEN=ci-test-twilio-auth-token-not-a-real-secret" \
             "TWILIO_PHONE_NUMBER=+15559876543" \
             > .env
+          # The ban-list hash key is a secret FILE the app mounts, never a .env entry.
+          source scripts/lib/ban-hash-key.sh
+          ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444
 
       - name: Build and start Docker Compose (core services)
         run: |
@@ -2935,6 +2939,7 @@ jobs:
           ADMIN_DECRYPTION_PUBKEY=${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
           SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
           HMAC_SECRET=$(openssl rand -hex 32)
+          SERVER_KEK=$(openssl rand -hex 32)
           PG_PASSWORD=$(openssl rand -hex 16)
           STORAGE_ACCESS_KEY=smoketestaccess
           STORAGE_SECRET_KEY=$(openssl rand -hex 16)
@@ -2946,9 +2951,13 @@ jobs:
           TURN_SECRET=$(openssl rand -hex 32)
           GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)
           NOTIFIER_API_KEY=$(openssl rand -hex 16)
+          NOTIFIER_TOKEN_SECRET=$(openssl rand -hex 32)
           TOKEN_MAX_AGE_MS=3600000
           PG_POOL_SIZE=10
           ENVEOF
+          # The ban-list hash key is a secret file, not a .env value (see first-run.sh).
+          source scripts/lib/ban-hash-key.sh
+          ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444
           echo "wrote .env with $(grep -c . .env) values"
 
       # No optional profiles. That is the point: the default deployment, which

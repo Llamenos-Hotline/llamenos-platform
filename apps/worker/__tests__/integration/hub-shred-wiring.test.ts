@@ -229,7 +229,7 @@ beforeAll(async () => {
 
   // THE point of this suite: the production service registry, built exactly as
   // src/server/index.ts builds it. Nothing below constructs a service.
-  services = createServices(db, { hmacSecret: HMAC_SECRET, env: { ENVIRONMENT: 'test' } })
+  services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
   await services.settings.ensureInit()
 }, 180_000)
 

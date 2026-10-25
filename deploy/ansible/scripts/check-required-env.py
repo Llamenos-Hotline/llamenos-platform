@@ -415,6 +415,50 @@ def _compose_app_block(text: str) -> str:
     return "\n".join(out)
 
 
+def check_ban_hash_key_file_only(
+    env_renders: dict[str, Path],
+    compose_renders: dict[str, Path],
+) -> list[str]:
+    """BAN_HASH_KEY is a secret FILE, never a rendered environment variable (D6).
+
+    The ban-list hash key must stay out of every file the config backup, a
+    rollback snapshot or `env_file` can reach, so:
+
+      - no .env render may assign BAN_HASH_KEY (the worker's validateConfig
+        refuses it in the environment anyway; this catches it before deploy);
+      - each app compose render must declare the `ban-hash-key` compose secret
+        and source it from a path OUTSIDE the services directory, which is the
+        tree backup-config archives and update.yml snapshots.
+    """
+    failures: list[str] = []
+    for label, path in env_renders.items():
+        if "BAN_HASH_KEY" in rendered_keys(path):
+            failures.append(
+                f"{label}: renders BAN_HASH_KEY. It must be delivered only as the "
+                "ban-hash-key secret file, never through .env"
+            )
+    for label, path in compose_renders.items():
+        text = path.read_text()
+        match = re.search(r"^secrets:\s*\n\s+ban-hash-key:\s*\n\s+file:\s*(\S+)", text, re.M)
+        if match is None:
+            failures.append(
+                f"{label}: does not declare the top-level `ban-hash-key` compose secret "
+                "sourced from a file"
+            )
+            continue
+        source = match.group(1)
+        if "/services/" in source or source.endswith("/services"):
+            failures.append(
+                f"{label}: sources ban-hash-key from {source}, inside the services "
+                "directory that config backups archive"
+            )
+        if not re.search(r"^\s+secrets:\s*\n\s+- ban-hash-key\s*$", text, re.M):
+            failures.append(
+                f"{label}: the app service does not mount the `ban-hash-key` secret"
+            )
+    return failures
+
+
 def check_calling_vars(
     calling_env: dict[str, Path],
     base_env: dict[str, Path],
@@ -1002,6 +1046,26 @@ def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
             "when their feature is on and not when it is off, the anchor mount "
             "accompanies SIP_TLS_CA_FILE, and TURN_SECRET matches coturn's "
             "--static-auth-secret"
+        )
+
+    print("\n[check-required-env] BAN_HASH_KEY is a secret file, never an env var:")
+    ban_key_failures = check_ban_hash_key_file_only(
+        env_renders={
+            "roles/llamenos/templates/env.j2 (monolithic)": renders.monolithic_env,
+            "roles/llamenos-app/templates/env/app.j2 (per-service)": renders.app_env,
+            "roles/llamenos/templates/env.j2 (monolithic, full scenario)": renders.monolithic_env_full,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, full scenario)": renders.app_env_full,
+        },
+        compose_renders={
+            "roles/llamenos-app/templates/compose/app.j2": renders.compose_app_base,
+            "roles/llamenos/templates/docker-compose.j2": renders.compose_monolithic_prod,
+        },
+    )
+    failures.extend(ban_key_failures)
+    if not ban_key_failures:
+        print(
+            "[check-required-env] OK   no render assigns BAN_HASH_KEY, and both app composes "
+            "mount the ban-hash-key secret from outside the services directory"
         )
 
     if failures:
