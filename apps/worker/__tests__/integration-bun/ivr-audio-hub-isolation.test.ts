@@ -67,6 +67,11 @@ interface Actor { pubkey: string; roles: string[]; hubRoles: { hubId: string; ro
 /** Administers hub A and nothing else: the attacker in every cross-hub case. */
 const ADMIN_A: Actor = { pubkey: hex('a1'), roles: [], hubRoles: [{ hubId: HUB_A, roleIds: ['role-hub-admin'] }] }
 const ADMIN_B: Actor = { pubkey: hex('b1'), roles: [], hubRoles: [{ hubId: HUB_B, roleIds: ['role-hub-admin'] }] }
+/**
+ * Holds `settings:manage-ivr` through a GLOBAL role but not `system:manage-instance`,
+ * so the global mount's permission check alone would let it through.
+ */
+const GLOBAL_ADMIN: Actor = { pubkey: hex('d1'), roles: ['role-hub-admin'], hubRoles: [] }
 /** Holds the instance-level permission: manages the platform defaults. */
 const INSTANCE: Actor = { pubkey: hex('c1'), roles: ['role-super-admin'], hubRoles: [] }
 
@@ -216,10 +221,14 @@ describe('ivr_audio is per hub (#2239)', () => {
     await setScope(undefined, DEFAULT_WAV)
     await setScope(HUB_B, B_WAV)
 
-    expect((await ivr(ADMIN_A, platform, 'PUT', PROMPT, HIJACK_WAV)).status).toBe(403)
-    expect((await ivr(ADMIN_A, platform, 'DELETE', PROMPT)).status).toBe(403)
-    expect((await ivr(ADMIN_A, platform, 'GET', PROMPT)).status).toBe(403)
-    expect((await ivr(ADMIN_A, platform, 'PUT', `${PROMPT}?hubId=${HUB_B}`, HIJACK_WAV)).status).toBe(403)
+    for (const actor of [ADMIN_A, GLOBAL_ADMIN]) {
+      expect((await ivr(actor, platform, 'PUT', PROMPT, HIJACK_WAV)).status).toBe(403)
+      expect((await ivr(actor, platform, 'DELETE', PROMPT)).status).toBe(403)
+      expect((await ivr(actor, platform, 'GET', PROMPT)).status).toBe(403)
+      expect((await ivr(actor, platform, 'GET')).status).toBe(403)
+      expect((await ivr(actor, platform, 'PUT', `${PROMPT}?hubId=${HUB_B}`, HIJACK_WAV)).status).toBe(403)
+    }
+    expect(sameBytes(await played(undefined), DEFAULT_WAV)).toBe(true)
 
     // The instance holder naming a hub on the global mount writes the DEFAULT, not that hub.
     expect((await ivr(INSTANCE, platform, 'PUT', `${PROMPT}?hubId=${HUB_B}`, HIJACK_WAV)).status).toBe(200)

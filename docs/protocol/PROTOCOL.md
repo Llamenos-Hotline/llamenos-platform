@@ -1453,9 +1453,12 @@ Response: {
 #### IVR Audio (Public -- Twilio Fetches During Calls)
 
 ```
-GET /api/ivr-audio/:promptType/:language
+GET /api/ivr-audio/:promptType/:language           // platform default
+GET /api/ivr-audio/:hubId/:promptType/:language    // a call in that hub
 Response: audio/wav binary
 // promptType: [a-z_-]+, language: [a-z]{2,5}(-[A-Z]{2})?
+// Both are signed and expiring (?exp=&sig=); the hub is inside the signed path.
+// The hub form serves that hub's recording, else the platform default.
 ```
 
 #### Messaging Preferences (Token-Validated, No Auth)
@@ -2045,6 +2048,12 @@ Response: { "ok": true }
 ```
 
 #### IVR Audio
+
+Recordings are per hub (`ivr_audio` is keyed `(hub_id, prompt_type, language)`). A call
+in hub H plays H's recording, else the platform default, else generated speech.
+Under `/api/hubs/:hubId/settings/ivr-audio` each verb reaches only that hub's recordings.
+On the global mount (`/api/settings/ivr-audio`) they manage the platform defaults and
+additionally require `system:manage-instance`; `?hubId=` is ignored there.
 
 ```
 GET /api/settings/ivr-audio
