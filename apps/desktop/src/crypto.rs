@@ -15,7 +15,11 @@ use std::sync::{Mutex, MutexGuard};
 
 use llamenos_core::{
     auth, backup, device_keys, hpke_envelope,
-    labels::{LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_EVENT_EPOCH},
+    labels::{
+        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_EVENT_EPOCH, LABEL_MESSAGE,
+        LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
+        LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
+    },
     puk, sas, sigchain,
 };
 use tauri::Manager;
@@ -37,6 +41,42 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, String> {
     mutex
         .lock()
         .map_err(|_| "Internal error: state lock poisoned".to_string())
+}
+
+// ── Label allow-lists for the generic HPKE-open commands ─────────────
+//
+// `hpke_open_from_state` and `hpke_open_key_from_state` unwrap with the device
+// X25519 key and hand the plaintext to the webview. Left label-generic they are
+// an unwrap oracle: webview JS could open the hub-key envelope
+// (`LABEL_HUB_KEY_WRAP`) or the PUK seed envelope (`LABEL_PUK_WRAP_TO_DEVICE`)
+// and walk away with a long-lived secret that otherwise never leaves Rust, and
+// that keeps working after the session ends. So the label is checked HERE, in
+// Rust, against the closed set of labels whose plaintext the webview legitimately
+// needs. Everything else — hub key, PUK seed, recovery shares, provisioning —
+// has a dedicated Rust-only command and is refused by these two.
+
+/// Labels whose plaintext is human-readable text the UI renders.
+/// Both are platform-role fields sealed by an admin to their own device: the
+/// plaintext is the role's own name/description, which the admin already sees.
+const OPEN_ALLOWED_LABELS: &[&str] = &[
+    LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
+    LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
+];
+
+/// Labels whose 32-byte plaintext is a PER-ITEM content key (one note, one
+/// message, one call record) that the webview needs to run the AES-GCM content
+/// layer. Each key unlocks exactly one record, and the caller already holds that
+/// record's ciphertext — it is not a long-lived secret.
+const OPEN_KEY_ALLOWED_LABELS: &[&str] = &[LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META];
+
+fn require_allowed_label(command: &str, label: &str, allowed: &[&str]) -> Result<(), String> {
+    if allowed.contains(&label) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{command}: label '{label}' is not openable from the webview"
+        ))
+    }
 }
 
 // ── CryptoState — device key secrets live ONLY here, never in the webview ──
@@ -136,11 +176,84 @@ impl CryptoState {
         expected_label: &str,
         aad_hex: &str,
     ) -> Result<String, String> {
+        require_allowed_label("hpke_open_key_from_state", expected_label, OPEN_KEY_ALLOWED_LABELS)?;
         let aad = hex::decode(aad_hex).map_err(err_str)?;
         let secret_hex = self.encryption_secret_hex()?;
         let key = hpke_envelope::hpke_open_key(envelope, &secret_hex, expected_label, &aad)
             .map_err(err_str)?;
         Ok(hex::encode(key))
+    }
+
+    /// HPKE-open an envelope with the device X25519 secret — the inner half of
+    /// `hpke_open_from_state`, callable without a Tauri runtime.
+    fn hpke_open_hex(
+        &self,
+        envelope: &hpke_envelope::HpkeEnvelope,
+        expected_label: &str,
+        aad_hex: &str,
+    ) -> Result<String, String> {
+        require_allowed_label("hpke_open_from_state", expected_label, OPEN_ALLOWED_LABELS)?;
+        let aad = hex::decode(aad_hex).map_err(err_str)?;
+        let secret_hex = self.encryption_secret_hex()?;
+        let plaintext = hpke_envelope::hpke_open(envelope, &secret_hex, expected_label, &aad)
+            .map_err(err_str)?;
+        Ok(hex::encode(plaintext))
+    }
+
+    /// Sign `message` with the device signing key — private: the only callers are
+    /// the purpose-bound commands below, which build the message themselves.
+    fn sign_hex(&self, message: &str) -> Result<String, String> {
+        self.with_secrets(|secrets| {
+            Ok(hex::encode(device_keys::sign_bytes(secrets, message.as_bytes())))
+        })
+    }
+
+    /// Signature over the relay WebSocket auth challenge (see
+    /// `sign_ws_challenge_from_state`).
+    fn ws_challenge_signature(&self, nonce: &str, ts: u64) -> Result<String, String> {
+        let ds = self.get_device_state()?;
+        self.sign_hex(&format!(
+            "{LABEL_WS_CHALLENGE}:{}:{nonce}:{ts}",
+            ds.signing_pubkey_hex
+        ))
+    }
+
+    /// Body of `recovery_share_contribute_from_state`, without Tauri state.
+    fn recovery_share_contribution(
+        &self,
+        envelope: &hpke_envelope::HpkeEnvelope,
+        commitment_hex: String,
+        session_id: &str,
+        new_device_pubkey_hex: &str,
+    ) -> Result<serde_json::Value, String> {
+        let ds = self.get_device_state()?;
+        let secret_hex = self.encryption_secret_hex()?;
+        let share =
+            hpke_envelope::hpke_open(envelope, &secret_hex, LABEL_RECOVERY_GROUP_SHARE_WRAP, &[])
+                .map_err(err_str)?;
+        let Some((&x, y)) = share.split_first() else {
+            return Err("Decrypted share is empty".into());
+        };
+        if !shamir_verify(x, hex::encode(y), commitment_hex)? {
+            return Err("Share does not match its commitment".into());
+        }
+
+        let aad = format!("{session_id}:{}", ds.signing_pubkey_hex);
+        let sealed = hpke_envelope::hpke_seal(
+            &share,
+            new_device_pubkey_hex,
+            LABEL_RECOVERY_SHARE_CONTRIBUTE,
+            aad.as_bytes(),
+        )
+        .map_err(err_str)?;
+        let encrypted_share = serde_json::to_string(&sealed).map_err(err_str)?;
+        let signature =
+            self.sign_hex(&format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:{session_id}:{encrypted_share}"))?;
+
+        Ok(serde_json::json!({
+            "encryptedShare": encrypted_share,
+            "signature": signature,
+        }))
     }
 
     #[cfg(test)]
@@ -302,18 +415,25 @@ pub fn create_nonceless_auth_token_from_state(
 }
 
 // ── Ed25519 signing/verification ────────────────────────────────────
+//
+// There is deliberately NO command that signs caller-supplied bytes: that would
+// be the device key exported as an oracle. Every signature the webview can ask
+// for is purpose-bound — Rust builds the message from a fixed domain label plus
+// typed fields, so the signature is only ever valid in that one context.
 
-/// Sign a message (hex-encoded) using the device's Ed25519 key.
+/// Sign the relay WebSocket auth challenge with the device's Ed25519 key.
+///
+/// The signed message is `{LABEL_WS_CHALLENGE}:{signing pubkey}:{nonce}:{ts}` —
+/// the exact string `apps/worker/routes/ws.ts` rebuilds to verify. The pubkey is
+/// read from CryptoState, not from the caller, so JS cannot have the device
+/// vouch for another identity.
 #[tauri::command]
-pub fn ed25519_sign_from_state(
+pub fn sign_ws_challenge_from_state(
     state: tauri::State<'_, CryptoState>,
-    message_hex: String,
+    nonce: String,
+    ts: u64,
 ) -> Result<String, String> {
-    let message = hex::decode(&message_hex).map_err(err_str)?;
-    state.with_secrets(|secrets| {
-        let sig = device_keys::sign_bytes(secrets, &message);
-        Ok(hex::encode(sig))
-    })
+    state.ws_challenge_signature(&nonce, ts)
 }
 
 /// Verify an Ed25519 signature (stateless — no secrets needed).
@@ -346,6 +466,7 @@ pub fn hpke_seal(
 }
 
 /// HPKE open: decrypt an envelope using the device's X25519 key from CryptoState.
+/// Only the labels in [`OPEN_ALLOWED_LABELS`] are openable.
 #[tauri::command]
 pub fn hpke_open_from_state(
     state: tauri::State<'_, CryptoState>,
@@ -353,11 +474,7 @@ pub fn hpke_open_from_state(
     expected_label: String,
     aad_hex: String,
 ) -> Result<String, String> {
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let secret_hex = state.encryption_secret_hex()?;
-    let plaintext =
-        hpke_envelope::hpke_open(&envelope, &secret_hex, &expected_label, &aad).map_err(err_str)?;
-    Ok(hex::encode(plaintext))
+    state.hpke_open_hex(&envelope, &expected_label, &aad_hex)
 }
 
 /// HPKE seal a 32-byte key for a recipient (convenience wrapper).
@@ -381,6 +498,7 @@ pub fn hpke_seal_key(
 }
 
 /// HPKE open a 32-byte key from an envelope using CryptoState.
+/// Only the labels in [`OPEN_KEY_ALLOWED_LABELS`] are openable.
 #[tauri::command]
 pub fn hpke_open_key_from_state(
     state: tauri::State<'_, CryptoState>,
@@ -934,34 +1052,73 @@ pub fn shamir_verify(x: u8, y_hex: String, commitment_hex: String) -> Result<boo
 
 // ── H16: Recovery group key isolation — combine+decrypt in Rust only ──
 
-/// Generate an X25519 recovery group keypair, immediately Shamir-split the private key,
-/// and return ONLY the public key + shares. The private key NEVER leaves Rust.
+/// Generate an X25519 recovery group keypair, Shamir-split the private key, and
+/// seal each share to its holder's X25519 pubkey — all inside Rust.
+///
+/// Returns the group public key, one sealed envelope per holder (in
+/// `holder_encryption_pubkeys` order) and the share commitments. Neither the
+/// private key nor any plaintext share crosses the IPC boundary: with N ≥
+/// threshold plaintext shares the webview could reconstruct the group key
+/// itself, which is the same as being handed the key.
 #[tauri::command]
-pub fn recovery_group_create(total: u8, threshold: u8) -> Result<serde_json::Value, String> {
+pub fn recovery_group_create(
+    total: u8,
+    threshold: u8,
+    holder_encryption_pubkeys: Vec<String>,
+) -> Result<serde_json::Value, String> {
     use x25519_dalek::{PublicKey, StaticSecret};
 
-    if threshold < 2 || threshold > 5 {
-        return Err("Threshold must be 2-5".into());
-    }
-    if total < 3 || total > 5 {
-        return Err("Total must be 3-5".into());
-    }
-    if threshold > total {
-        return Err("Threshold cannot exceed total".into());
+    if holder_encryption_pubkeys.len() != usize::from(total) {
+        return Err("Exactly one holder pubkey is required per share".into());
     }
 
     let secret = StaticSecret::random_from_rng(rand::rngs::OsRng);
     let public = PublicKey::from(&secret);
     let secret_hex = hex::encode(secret.as_bytes());
 
-    // Split immediately — private key bytes are consumed here
+    // Split immediately — the private key bytes are consumed here (also validates
+    // total/threshold).
     let split_result = shamir_split(secret_hex, total, threshold)?;
+
+    let mut share_envelopes = Vec::with_capacity(split_result.shares.len());
+    for (share, holder_pubkey) in split_result.shares.iter().zip(&holder_encryption_pubkeys) {
+        // Share plaintext: x (1 byte) || y.
+        let mut plaintext = vec![share.x];
+        plaintext.extend(hex::decode(&share.y).map_err(err_str)?);
+        let sealed = hpke_envelope::hpke_seal(
+            &plaintext,
+            holder_pubkey,
+            LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            &[],
+        )
+        .map_err(err_str)?;
+        share_envelopes.push(serde_json::to_value(sealed).map_err(err_str)?);
+    }
 
     Ok(serde_json::json!({
         "publicKeyHex": hex::encode(public.as_bytes()),
-        "shares": serde_json::to_value(&split_result.shares).map_err(err_str)?,
+        "shareEnvelopes": share_envelopes,
         "commitments": split_result.commitments,
     }))
+}
+
+/// Approve a recovery session: open this device's share, check it against its
+/// commitment, seal it to the recovering user's new device, and sign the result
+/// — all inside Rust, so the plaintext share never reaches the webview.
+///
+/// Returns `{ encryptedShare, signature }`. `encryptedShare` is the serialized
+/// sealed envelope; `signature` covers
+/// `{LABEL_RECOVERY_SHARE_CONTRIBUTE}:{session_id}:{encryptedShare}` under the
+/// device signing key, so it binds the contribution to this session.
+#[tauri::command]
+pub fn recovery_share_contribute_from_state(
+    state: tauri::State<'_, CryptoState>,
+    envelope: hpke_envelope::HpkeEnvelope,
+    commitment_hex: String,
+    session_id: String,
+    new_device_pubkey_hex: String,
+) -> Result<serde_json::Value, String> {
+    state.recovery_share_contribution(&envelope, commitment_hex, &session_id, &new_device_pubkey_hex)
 }
 
 /// HPKE-encrypted share envelope for recovery group reconstruction.
@@ -1240,33 +1397,6 @@ pub fn wipe_keys(
 }
 
 // ── Device provisioning (nsec NEVER enters the webview) ────────────
-
-/// Primary device: encrypt this device's key bundle for a new device's ephemeral pubkey.
-/// Uses the device's X25519 encryption seed for ECDH; the bundle carries BOTH the
-/// Ed25519 signing seed and the X25519 encryption seed (PROTOCOL.md §2.11 keeps them
-/// independent, so neither can be re-derived from the other on the receiving side).
-/// Returns { encryptedHex, sasCode, primaryEncPubkeyHex }.
-#[tauri::command]
-pub fn provision_encrypt_for_device(
-    state: tauri::State<'_, CryptoState>,
-    ephemeral_pubkey_hex: String,
-) -> Result<serde_json::Value, String> {
-    state.with_secrets(|secrets| {
-        let result = llamenos_core::provisioning::encrypt_device_bundle_for_provisioning(
-            secrets,
-            &ephemeral_pubkey_hex,
-        )
-        .map_err(err_str)?;
-
-        let enc_pubkey = hex::encode(secrets.encryption_pubkey().to_bytes());
-
-        Ok(serde_json::json!({
-            "encryptedHex": result.encrypted_hex,
-            "sasCode": result.sas_code,
-            "primaryEncPubkeyHex": enc_pubkey,
-        }))
-    })
-}
 
 /// New device: generate an ephemeral X25519 keypair for provisioning.
 /// The secret is stored in CryptoState. Only the pubkey is returned.
@@ -1789,5 +1919,289 @@ mod stored_record_conformance_tests {
             assert!(open_record_as(&state, rec, reader, &wrap, &[]).is_err());
             assert!(open_record_as(&state, rec, reader, "", &content_aad).is_err());
         }
+    }
+}
+
+// ── IPC surface: nothing here hands a long-lived secret to the webview ──
+//
+// These tests call the same `CryptoState` methods the `#[tauri::command]`
+// wrappers delegate to. Every denial test seals the envelope under the denied
+// label FIRST, so the refusal can only come from the allow-list — a plain label
+// mismatch would fail for the wrong reason and prove nothing.
+#[cfg(test)]
+mod ipc_surface_tests {
+    use super::*;
+    use llamenos_core::labels::{
+        LABEL_DEVICE_PROVISION, LABEL_HUB_KEY_WRAP, LABEL_PUK_WRAP_TO_DEVICE,
+    };
+
+    struct TestDevice {
+        state: CryptoState,
+        encryption_seed: [u8; 32],
+        encryption_pubkey_hex: String,
+        signing_pubkey_hex: String,
+    }
+
+    fn device() -> TestDevice {
+        let mut signing_seed = [0u8; 32];
+        let mut encryption_seed = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut signing_seed);
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut encryption_seed);
+        let secrets = device_keys::DeviceSecrets {
+            signing_seed,
+            encryption_seed,
+        };
+        let ds = device_keys::DeviceKeyState {
+            device_id: "ipc-surface-test".into(),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        let state = CryptoState::new();
+        let (encryption_pubkey_hex, signing_pubkey_hex) =
+            (ds.encryption_pubkey_hex.clone(), ds.signing_pubkey_hex.clone());
+        state.load_secrets_for_test(secrets, ds);
+        TestDevice {
+            state,
+            encryption_seed,
+            encryption_pubkey_hex,
+            signing_pubkey_hex,
+        }
+    }
+
+    fn seal(dev: &TestDevice, plaintext: &[u8], label: &str) -> hpke_envelope::HpkeEnvelope {
+        hpke_envelope::hpke_seal(plaintext, &dev.encryption_pubkey_hex, label, &[]).unwrap()
+    }
+
+    #[test]
+    fn open_returns_the_plaintext_only_for_the_allow_listed_text_labels() {
+        let dev = device();
+        for label in OPEN_ALLOWED_LABELS {
+            let env = seal(&dev, b"Shift supervisor", label);
+            let hex_plain = dev.state.hpke_open_hex(&env, label, "").unwrap();
+            assert_eq!(hex::decode(hex_plain).unwrap(), b"Shift supervisor");
+        }
+    }
+
+    #[test]
+    fn open_refuses_the_hub_key_and_puk_envelopes_even_under_their_own_label() {
+        let dev = device();
+        for label in [
+            LABEL_HUB_KEY_WRAP,
+            LABEL_PUK_WRAP_TO_DEVICE,
+            LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            LABEL_RECOVERY_SHARE_CONTRIBUTE,
+            LABEL_DEVICE_PROVISION,
+            // A per-item key label is not a text label either.
+            LABEL_NOTE_KEY,
+        ] {
+            let env = seal(&dev, &[7u8; 32], label);
+            // Sanity: the envelope IS valid under that label — the oracle would
+            // have returned the key had the allow-list not stopped it.
+            assert!(
+                hpke_envelope::hpke_open(&env, &hex::encode(dev.encryption_seed), label, &[])
+                    .is_ok()
+            );
+            let err = dev.state.hpke_open_hex(&env, label, "").unwrap_err();
+            assert!(err.contains("not openable from the webview"), "{label}: {err}");
+        }
+    }
+
+    #[test]
+    fn open_key_returns_only_per_item_content_keys() {
+        let dev = device();
+        for label in OPEN_KEY_ALLOWED_LABELS {
+            let env = seal(&dev, &[9u8; 32], label);
+            assert_eq!(
+                dev.state.hpke_open_key_hex(&env, label, "").unwrap(),
+                hex::encode([9u8; 32])
+            );
+        }
+    }
+
+    #[test]
+    fn open_key_refuses_the_hub_key_and_puk_seed_envelopes() {
+        let dev = device();
+        for label in [
+            LABEL_HUB_KEY_WRAP,
+            LABEL_PUK_WRAP_TO_DEVICE,
+            LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            LABEL_RECOVERY_SHARE_CONTRIBUTE,
+            LABEL_DEVICE_PROVISION,
+            // Allowed for the TEXT command, but its plaintext is not a content key.
+            LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
+        ] {
+            let env = seal(&dev, &[7u8; 32], label);
+            let err = dev.state.hpke_open_key_hex(&env, label, "").unwrap_err();
+            assert!(err.contains("not openable from the webview"), "{label}: {err}");
+        }
+    }
+
+    #[test]
+    fn ws_challenge_signature_is_bound_to_the_label_pubkey_nonce_and_timestamp() {
+        let dev = device();
+        let sig = dev.state.ws_challenge_signature("n-1", 1_700_000_000).unwrap();
+        let sig_bytes = hex::decode(&sig).unwrap();
+        let verify = |message: String| {
+            device_keys::verify_signature(message.as_bytes(), &sig_bytes, &dev.signing_pubkey_hex)
+                .unwrap_or(false)
+        };
+        assert!(verify(format!(
+            "{LABEL_WS_CHALLENGE}:{}:n-1:1700000000",
+            dev.signing_pubkey_hex
+        )));
+        assert!(!verify(format!(
+            "{LABEL_WS_CHALLENGE}:{}:n-1:1700000001",
+            dev.signing_pubkey_hex
+        )));
+        assert!(!verify(format!(
+            "{LABEL_WS_CHALLENGE}:{}:n-2:1700000000",
+            dev.signing_pubkey_hex
+        )));
+    }
+
+    #[test]
+    fn a_locked_device_signs_nothing() {
+        let locked = CryptoState::new();
+        assert!(locked.ws_challenge_signature("n", 1).is_err());
+    }
+
+    #[test]
+    fn recovery_group_create_seals_every_share_and_returns_no_plaintext() {
+        let holders: Vec<TestDevice> = (0..3).map(|_| device()).collect();
+        let pubkeys: Vec<String> = holders.iter().map(|h| h.encryption_pubkey_hex.clone()).collect();
+        let out = recovery_group_create(3, 2, pubkeys).unwrap();
+
+        let keys: Vec<&String> = out.as_object().unwrap().keys().collect();
+        assert!(
+            !keys.iter().any(|k| *k == "shares"),
+            "plaintext shares must not be returned, got keys {keys:?}"
+        );
+
+        let envelopes = out["shareEnvelopes"].as_array().unwrap();
+        assert_eq!(envelopes.len(), 3);
+        // Each holder can open exactly its own envelope, and two shares rebuild
+        // the group key whose public half was returned.
+        let mut shares = Vec::new();
+        for (holder, env) in holders.iter().zip(envelopes).take(2) {
+            let env: hpke_envelope::HpkeEnvelope = serde_json::from_value(env.clone()).unwrap();
+            let plain = hpke_envelope::hpke_open(
+                &env,
+                &hex::encode(holder.encryption_seed),
+                LABEL_RECOVERY_GROUP_SHARE_WRAP,
+                &[],
+            )
+            .unwrap();
+            shares.push(ShamirShareJson {
+                x: plain[0],
+                y: hex::encode(&plain[1..]),
+            });
+        }
+        let group_secret = shamir_combine(serde_json::to_string(&shares).unwrap()).unwrap();
+        let secret: [u8; 32] = hex::decode(group_secret).unwrap().try_into().unwrap();
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+        assert_eq!(out["publicKeyHex"].as_str().unwrap(), hex::encode(public.as_bytes()));
+        assert_eq!(out["commitments"].as_array().unwrap().len(), 3);
+
+        // Holder 0 cannot open holder 1's envelope.
+        let other: hpke_envelope::HpkeEnvelope =
+            serde_json::from_value(envelopes[1].clone()).unwrap();
+        assert!(hpke_envelope::hpke_open(
+            &other,
+            &hex::encode(holders[0].encryption_seed),
+            LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            &[]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn recovery_group_create_needs_one_holder_pubkey_per_share() {
+        let holders: Vec<TestDevice> = (0..2).map(|_| device()).collect();
+        let pubkeys: Vec<String> = holders.iter().map(|h| h.encryption_pubkey_hex.clone()).collect();
+        assert!(recovery_group_create(3, 2, pubkeys).is_err());
+    }
+
+    #[test]
+    fn recovery_share_contribution_reseals_the_share_without_exposing_it() {
+        let holder = device();
+        let recovering = device();
+        let created = recovery_group_create(
+            3,
+            2,
+            vec![
+                holder.encryption_pubkey_hex.clone(),
+                device().encryption_pubkey_hex,
+                device().encryption_pubkey_hex,
+            ],
+        )
+        .unwrap();
+        let held: hpke_envelope::HpkeEnvelope =
+            serde_json::from_value(created["shareEnvelopes"][0].clone()).unwrap();
+        let commitment = created["commitments"][0].as_str().unwrap().to_string();
+
+        let out = holder
+            .state
+            .recovery_share_contribution(&held, commitment.clone(), "sess-1", &recovering.encryption_pubkey_hex)
+            .unwrap();
+        let keys: Vec<&String> = out.as_object().unwrap().keys().collect();
+        assert_eq!(keys.len(), 2, "only the sealed share and its signature: {keys:?}");
+
+        // The recovering device opens the contribution under the contribution
+        // label with the session-bound AAD, and gets back the holder's own share.
+        let encrypted = out["encryptedShare"].as_str().unwrap();
+        let contribution: hpke_envelope::HpkeEnvelope = serde_json::from_str(encrypted).unwrap();
+        let aad = format!("sess-1:{}", holder.signing_pubkey_hex);
+        let opened = hpke_envelope::hpke_open(
+            &contribution,
+            &hex::encode(recovering.encryption_seed),
+            LABEL_RECOVERY_SHARE_CONTRIBUTE,
+            aad.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            shamir_commit(opened[0], hex::encode(&opened[1..])).unwrap(),
+            commitment
+        );
+        assert!(hpke_envelope::hpke_open(
+            &contribution,
+            &hex::encode(recovering.encryption_seed),
+            LABEL_RECOVERY_SHARE_CONTRIBUTE,
+            b"sess-2:wrong"
+        )
+        .is_err());
+
+        let signature = hex::decode(out["signature"].as_str().unwrap()).unwrap();
+        let signed = format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:sess-1:{encrypted}");
+        assert!(device_keys::verify_signature(
+            signed.as_bytes(),
+            &signature,
+            &holder.signing_pubkey_hex
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn recovery_share_contribution_refuses_a_share_that_fails_its_commitment() {
+        let holder = device();
+        let recovering = device();
+        let created = recovery_group_create(
+            3,
+            2,
+            vec![
+                holder.encryption_pubkey_hex.clone(),
+                device().encryption_pubkey_hex,
+                device().encryption_pubkey_hex,
+            ],
+        )
+        .unwrap();
+        let held: hpke_envelope::HpkeEnvelope =
+            serde_json::from_value(created["shareEnvelopes"][0].clone()).unwrap();
+        // Commitment of a DIFFERENT share.
+        let wrong = created["commitments"][1].as_str().unwrap().to_string();
+        let err = holder
+            .state
+            .recovery_share_contribution(&held, wrong, "sess-1", &recovering.encryption_pubkey_hex)
+            .unwrap_err();
+        assert!(err.contains("commitment"), "{err}");
     }
 }

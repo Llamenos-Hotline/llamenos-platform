@@ -180,16 +180,18 @@ describe('Native Crypto IPC', () => {
           .join('')
         const aadHex = '' // no additional authenticated data for this smoke test
 
+        // hpke_open_from_state only opens the platform-role text labels.
+        const OPENABLE = 'llamenos:platform-role-name-encrypt:v1'
         const envelope = await invoke('hpke_seal', {
           plaintextHex,
           recipientPubkeyHex,
-          label: 'llamenos:note-key',
+          label: OPENABLE,
           aadHex,
         }) as HpkeEnvelope
 
         const decryptedHex = await invoke('hpke_open_from_state', {
           envelope,
-          expectedLabel: 'llamenos:note-key',
+          expectedLabel: OPENABLE,
           aadHex,
         }) as string
 
@@ -204,11 +206,32 @@ describe('Native Crypto IPC', () => {
         try {
           await invoke('hpke_open_from_state', {
             envelope,
-            expectedLabel: 'llamenos:message',
+            expectedLabel: 'llamenos:platform-role-desc-encrypt:v1',
             aadHex,
           })
         } catch {
           wrongLabelRejected = true
+        }
+
+        // The hub-key and PUK-seed envelopes must stay in Rust: sealed under
+        // their OWN label (so a label mismatch cannot be the reason) they are
+        // still refused by both generic open commands.
+        const refused: Record<string, boolean> = {}
+        for (const label of ['llamenos:hub-key-wrap', 'llamenos:puk:wrap:device:v1']) {
+          const sealed = await invoke('hpke_seal', {
+            plaintextHex: '07'.repeat(32),
+            recipientPubkeyHex,
+            label,
+            aadHex,
+          }) as HpkeEnvelope
+          for (const cmd of ['hpke_open_from_state', 'hpke_open_key_from_state']) {
+            try {
+              await invoke(cmd, { envelope: sealed, expectedLabel: label, aadHex })
+              refused[`${cmd}:${label}`] = false
+            } catch (e) {
+              refused[`${cmd}:${label}`] = /not openable from the webview/.test(String(e))
+            }
+          }
         }
 
         return {
@@ -216,6 +239,7 @@ describe('Native Crypto IPC', () => {
           envelopeVersion: envelope.v,
           roundTrip: decryptedText === plaintext,
           wrongLabelRejected,
+          refused,
         }
       } catch (e: unknown) {
         return { success: false as const, error: e instanceof Error ? e.message : String(e) }
@@ -226,5 +250,6 @@ describe('Native Crypto IPC', () => {
     expect(result.envelopeVersion).toBe(3)
     expect(result.roundTrip).toBe(true)
     expect(result.wrongLabelRejected).toBe(true)
+    expect(Object.values(result.refused)).toEqual([true, true, true, true])
   })
 })

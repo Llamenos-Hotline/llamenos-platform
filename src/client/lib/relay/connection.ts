@@ -11,10 +11,9 @@
  * - Time-bucketed event deduplication
  */
 
-import { ed25519Sign, ed25519Verify, decryptServerEvent } from '../platform'
+import { signWsChallenge, ed25519Verify, decryptServerEvent } from '../platform'
 import { createRelaySocket } from '../net'
 import { bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_WS_CHALLENGE } from '@shared/crypto-labels'
 import { wsServerMessageSchema } from '@protocol/schemas/ws-messages'
 import type { WsEventMessage, WsServerMessage } from '@protocol/schemas/ws-messages'
 import type { LlamenosEvent, RelayState, RelayEventHandler } from './types'
@@ -286,9 +285,8 @@ export class RelayConnection {
 
     try {
       const ts = Date.now()
-      const signedMessage = `${LABEL_WS_CHALLENGE}:${this.devicePubkey}:${nonce}:${ts}`
-      const messageHex = bytesToHex(utf8ToBytes(signedMessage))
-      const sigHex = await ed25519Sign(messageHex)
+      // Rust builds `LABEL_WS_CHALLENGE:pubkey:nonce:ts` itself and signs it.
+      const sigHex = await signWsChallenge(nonce, ts)
 
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({
