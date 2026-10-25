@@ -421,6 +421,13 @@
       "when": 1792870369277,
       "tag": "0059_hub_admin_invariant",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792927248900,
+      "tag": "0060_device_x25519_set_at",
+      "breakpoints": true
     }
   ]
 }

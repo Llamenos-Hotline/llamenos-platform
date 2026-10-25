@@ -185,3 +185,63 @@ describe('desktop device registration (#1548 groundwork)', () => {
     expect(parsed.success).toBe(true)
   })
 })
+
+/**
+ * `devices.x25519_set_at` is the key's age for the history re-wrap gate (#2143).
+ * It must move when the key's VALUE changes and only then: `registered_at` does
+ * not move on an overwrite, which is exactly the stolen-session replay.
+ */
+describe('devices.x25519_set_at tracks the key, not the row (#2143)', () => {
+  /** Epoch milliseconds, read in SQL: the raw client does not hand back Dates. */
+  const setAtOf = async (pubkey: string) => {
+    const [row] = await sql<{ setAt: number; registeredAt: number }[]>`
+      SELECT (extract(epoch FROM x25519_set_at) * 1000)::float8 AS "setAt",
+             (extract(epoch FROM registered_at) * 1000)::float8 AS "registeredAt"
+      FROM devices WHERE pubkey = ${pubkey}
+    `
+    return row
+  }
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  it('is set on insert', async () => {
+    const pubkey = freshPubkey()
+    await db.insert(schema.users).values({ pubkey })
+    const before = Date.now()
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, x25519Pubkey: HEX64 })
+    const row = await setAtOf(pubkey)
+    expect(row.setAt).toBeGreaterThanOrEqual(before - 1000)
+    expect(row.setAt).toBeLessThanOrEqual(Date.now() + 1000)
+  })
+
+  it('does not move when the same key is registered again', async () => {
+    const pubkey = freshPubkey()
+    await db.insert(schema.users).values({ pubkey })
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, x25519Pubkey: HEX64 })
+    const first = await setAtOf(pubkey)
+    await sleep(20)
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, x25519Pubkey: HEX64, deviceName: 'relaunch' })
+    expect((await setAtOf(pubkey)).setAt).toBe(first.setAt)
+  })
+
+  it('moves when a session overwrites the key of an existing device, though registered_at does not', async () => {
+    const pubkey = freshPubkey()
+    await db.insert(schema.users).values({ pubkey })
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, x25519Pubkey: HEX64 })
+    const first = await setAtOf(pubkey)
+    await sleep(20)
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, x25519Pubkey: 'ef'.repeat(32) })
+    const after = await setAtOf(pubkey)
+    expect(after.registeredAt).toBe(first.registeredAt)
+    expect(after.setAt).toBeGreaterThan(first.setAt)
+  })
+
+  it('does not move on a registration that carries no X25519 key', async () => {
+    const pubkey = freshPubkey()
+    await db.insert(schema.users).values({ pubkey })
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, x25519Pubkey: HEX64 })
+    const first = await setAtOf(pubkey)
+    await sleep(20)
+    await identity.registerDevice(pubkey, { platform: 'desktop', ed25519Pubkey: HEX64, deviceName: 'rename only' })
+    expect((await setAtOf(pubkey)).setAt).toBe(first.setAt)
+  })
+})

@@ -674,11 +674,13 @@ Trigger (on the re-wrapping client):
 
 Loop, per conversation:
   1. gaps = GET /hubs/:hubId/conversations/:id/assignee-envelopes
-       → { assignedTo, recipients: x25519_hex[],
-           messages: [{ id, readerEnvelopes: RecipientEnvelope[],
+       → { assignedTo,
+           recipients: [{ pubkey: x25519_hex, keySetAt: iso8601, confirmed: bool }],
+           messages: [{ id, createdAt: iso8601, readerEnvelopes: RecipientEnvelope[],
                         missingRecipients: x25519_hex[] }] }
      At most 200 messages, oldest first. Messages with NO envelopes are never
-     listed: nobody holds a key that could re-wrap them.
+     listed: nobody holds a key that could re-wrap them. Neither is a message
+     whose every missing key is withheld by the gate in step 3.
      If gaps.messages is empty → done.
 
   2. Refuse an incoherent answer: assignedTo must be set, and every
@@ -688,7 +690,8 @@ Loop, per conversation:
        own = readerEnvelopes.find(e => e.pubkey is this device's key)
        if none → skip (this device is not a reader; another reader must do it)
        message_key = HPKE.Open(own, info = UTF-8("llamenos:message"), aad = empty)
-       for each pk in missingRecipients:
+       for each pk in missingRecipients that mayRewrapHistoryTo(recipients[pk], message.createdAt):
+         (a key withheld by the gate is skipped and logged, never an error)
          sealed = HPKE.Seal(pk, message_key, info = UTF-8("llamenos:message"), aad = empty)
          entry  = { messageId: id,
                     envelope: { pubkey: pk, enc: hex(sealed[0..32]), ct: hex(sealed[32..]) } }
@@ -701,8 +704,9 @@ Loop, per conversation:
      All-or-nothing. 400 if any envelope names a key that is not a registered
      X25519 device key of the CURRENT assignee; 404 if a message is not in the
      conversation; 409 if the conversation has no assignee or a message has no
-     readers. An envelope for a recipient that already has one on that message
-     is skipped — first write wins, because the server cannot tell a correct
+     readers. 400 also if an envelope names a key for which
+     mayRewrapHistoryTo is false (see Trust). An envelope for a recipient that
+     already has one on that message is skipped — first write wins, because the server cannot tell a correct
      re-wrap from a wrong one.
 
   5. If no entry was produced, or added == 0 (another re-wrapper got there
@@ -749,7 +753,34 @@ covers. The client refuses answers that are internally inconsistent (step 2),
 but it cannot yet verify a device key independently; that requires the user
 sigchain (§2.11, "Device Authorization (Sigchain)") to be checked before sealing, and when
 it is wired in, the re-wrapper MUST verify each recipient against the
-assignee's sigchain.
+assignee's sigchain. **That is the M2 gate; until then this is an accepted
+risk** (docs/security/THREAT_MODEL.md, "Recipient Keys Are Server-Listed").
+
+What the exchange does enforce is a narrower rule, aimed at a stolen session
+rather than the server. A record is never re-wrapped to a key that was set
+after it was written unless that key is confirmed:
+
+```
+mayRewrapHistoryTo(recipient, recordCreatedAt) =
+    recipient.confirmed  OR  recipient.keySetAt <= recordCreatedAt
+```
+
+- `keySetAt` is `devices.x25519_set_at`: when the X25519 value last changed
+  (set on insert; moved by a registration that changes the value; untouched by
+  a re-registration of the same key). `registered_at` is not used — it does not
+  move when a session overwrites an existing device's key.
+- `confirmed` is true when a device verification (SAS) of that device exists
+  from the key's owner or from an admin of the conversation's hub, recorded at
+  or after `keySetAt`, against the device's current signing key.
+- A key that predates the record (the ordinary claim path) is unaffected.
+
+The client applies the rule before sealing; the server repeats it when envelopes
+are POSTed. The client is the primary gate — the server's refusal is defence in
+depth. Every input is server-asserted, so a server that backdates `keySetAt` or
+inserts a verification defeats it; it raises the bar for a holder of a stolen
+session, not for a malicious server. Any further automatic re-wrap of history
+MUST use this same predicate (`mayRewrapHistoryTo`,
+`packages/shared/history-rewrap-gate.ts`).
 
 ### 2.5 Call Record Metadata Encryption
 

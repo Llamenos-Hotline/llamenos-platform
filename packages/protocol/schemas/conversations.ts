@@ -82,9 +82,28 @@ export const volunteerLoadResponseSchema = z.object({
 // already open a message unwraps its content key locally and seals it to the
 // assignee's device keys.
 
+/**
+ * One X25519 device key of the assignee, with what the re-wrap gate needs to
+ * decide whether history may be sealed to it (PROTOCOL.md §2.4.1 "Trust").
+ */
+export const assigneeRecipientSchema = z.object({
+  pubkey: pubkeySchema,
+  /** When the key last took its current value (ISO 8601). Not `registeredAt`. */
+  keySetAt: z.string(),
+  /**
+   * True when a device verification (SAS) by the key's owner or a hub admin
+   * covers the key as it stands now.
+   */
+  confirmed: z.boolean(),
+})
+
+export type AssigneeRecipient = z.infer<typeof assigneeRecipientSchema>
+
 /** One message the current assignee cannot yet open. */
 export const assigneeEnvelopeGapSchema = z.object({
   id: z.string(),
+  /** When the message was written (ISO 8601): the age the recipient keys are judged against. */
+  createdAt: z.string(),
   /** The message's existing envelopes, so the re-wrapper can open its own. */
   readerEnvelopes: z.array(recipientEnvelopeSchema),
   /** The assignee's X25519 device keys this message has no envelope for. */
@@ -100,8 +119,8 @@ export type AssigneeEnvelopeGap = z.infer<typeof assigneeEnvelopeGapSchema>
  */
 export const assigneeEnvelopeGapsResponseSchema = z.object({
   assignedTo: pubkeySchema.nullable(),
-  /** Every X25519 device key of the assignee — the keys to seal to. */
-  recipients: z.array(pubkeySchema),
+  /** Every X25519 device key of the assignee — the keys that may be sealed to, subject to the gate. */
+  recipients: z.array(assigneeRecipientSchema),
   messages: z.array(assigneeEnvelopeGapSchema),
 })
 
@@ -118,7 +137,8 @@ export type AssigneeEnvelopeEntry = z.infer<typeof assigneeEnvelopeEntrySchema>
 /**
  * `POST /conversations/:id/assignee-envelopes` — append-only, all-or-nothing.
  * Every envelope must name a registered X25519 device key of the CURRENT
- * assignee.
+ * assignee, and none may name a key set after its message was written unless
+ * that key is confirmed (the same rule the re-wrapping client applies).
  */
 export const addAssigneeEnvelopesBodySchema = z.object({
   envelopes: z.array(assigneeEnvelopeEntrySchema).min(1).max(1000),

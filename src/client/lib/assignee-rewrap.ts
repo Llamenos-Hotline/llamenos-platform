@@ -26,6 +26,7 @@
  */
 import { useEffect } from 'react'
 import { KIND_CONVERSATION_ASSIGNED } from '@shared/event-kinds'
+import { mayRewrapHistoryTo } from '@shared/history-rewrap-gate'
 import type { AssigneeEnvelopeEntry, AssigneeEnvelopeGapsResponse } from '@protocol/schemas'
 import {
   addAssigneeEnvelopes,
@@ -48,6 +49,18 @@ const SWEEP_PAGE_SIZE = 200
 
 const REWRAP_KINDS = [KIND_CONVERSATION_ASSIGNED]
 
+/**
+ * May a record created at `recordCreatedAt` be re-wrapped to `recipient`?
+ *
+ * True for a key that already existed when the record was written (the normal
+ * claim path) and for any confirmed key; false for an unconfirmed key set after
+ * the record. The one rule, shared with the server's own refusal, so a future
+ * re-wrap (a new admin's device, an encrypted display name) calls THIS rather
+ * than growing a second definition. Its inputs are server-asserted: it raises
+ * the bar for a stolen session, not for a malicious server (THREAT_MODEL.md).
+ */
+export { mayRewrapHistoryTo }
+
 /** The permissions both assignee-envelope routes require. */
 export const REWRAP_PERMISSIONS = ['conversations:read-all', 'conversations:update'] as const
 
@@ -67,11 +80,20 @@ export async function rewrapConversationForAssignee(hubId: string, conversationI
     if (gaps.messages.length === 0) return total
     assertCoherentGaps(conversationId, gaps)
 
+    const recipientByKey = new Map(gaps.recipients.map(r => [r.pubkey, r]))
     const entries: AssigneeEnvelopeEntry[] = []
     for (const gap of gaps.messages) {
+      const allowed = gap.missingRecipients.filter(key => {
+        // A key the answer does not describe cannot pass the gate.
+        const recipient = recipientByKey.get(key)
+        if (recipient && mayRewrapHistoryTo(recipient, gap.createdAt)) return true
+        reportWithheldKey(conversationId, key)
+        return false
+      })
+      if (allowed.length === 0) continue
       let sealed
       try {
-        sealed = await rewrapMessageKey(gap.readerEnvelopes, gap.missingRecipients)
+        sealed = await rewrapMessageKey(gap.readerEnvelopes, allowed)
       } catch (err) {
         // An envelope addressed to this device that does not open is a defect
         // (wrong key or AAD at write time). Report it and re-wrap the rest:
@@ -101,13 +123,33 @@ export async function rewrapConversationForAssignee(hubId: string, conversationI
 
 const X25519_HEX = /^[0-9a-f]{64}$/
 
+const reportedWithheld = new Set<string>()
+
+/**
+ * Say, once per conversation and key, that history is being withheld from an
+ * unconfirmed key. Once, because the sweep revisits every conversation on each
+ * relay reconnect and would otherwise repeat the line for as long as the key
+ * stays unconfirmed.
+ */
+function reportWithheldKey(conversationId: string, key: string): void {
+  const id = `${conversationId}/${key}`
+  if (reportedWithheld.has(id)) return
+  reportedWithheld.add(id)
+  console.warn(
+    `[assignee-rewrap] conversation ${conversationId}: not re-wrapping history to device key ` +
+    `${key.slice(0, 8)}… — it was set after those messages were written and is not confirmed`,
+  )
+}
+
 /**
  * Refuse a gap list that is not internally consistent before sealing anything.
  *
  * The keys to seal to come from the server's device registry — the same
  * registry every message write path already trusts to name a user's readers
  * (PROTOCOL.md §2.4.1, "Trust"). Nothing on the client can yet verify them
- * independently; that needs the user sigchain. What CAN be checked is that the
+ * independently; that needs the user sigchain. `mayRewrapHistoryTo` narrows
+ * what a stolen session can reach, but it reads the registry's own timestamps.
+ * What CAN be checked here is that the
  * answer names an assignee, and that every key a message is to be sealed to is
  * one of that assignee's listed device keys and a well-formed X25519 key. A
  * response that fails either is not an answer this protocol produces, so the
@@ -117,7 +159,7 @@ function assertCoherentGaps(conversationId: string, gaps: AssigneeEnvelopeGapsRe
   if (!gaps.assignedTo) {
     throw new Error(`assignee-envelope gaps for ${conversationId} name messages but no assignee`)
   }
-  const recipients = new Set(gaps.recipients)
+  const recipients = new Set(gaps.recipients.map(r => r.pubkey))
   for (const key of recipients) {
     if (!X25519_HEX.test(key)) {
       throw new Error(`assignee-envelope gaps for ${conversationId} list a malformed recipient key`)

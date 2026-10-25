@@ -38,7 +38,7 @@ function makeApp(opts: { permissions?: string[]; callerHubId?: string; convHubId
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
     getById: vi.fn().mockResolvedValue({ id: 'conv-1', hubId: convHubId, assignedTo: 'vol-pubkey', status: 'active' }),
-    listAssigneeEnvelopeGaps: vi.fn().mockResolvedValue({ assignedTo: 'd'.repeat(64), recipients: [RECIPIENT], messages: [] }),
+    listAssigneeEnvelopeGaps: vi.fn().mockResolvedValue({ assignedTo: 'd'.repeat(64), recipients: [{ pubkey: RECIPIENT, keySetAt: '2026-10-01T00:00:00.000Z', confirmed: false }], messages: [] }),
     addAssigneeEnvelopes: vi.fn().mockResolvedValue({ added, assignedTo: 'vol-pubkey' }),
     getByIdForHub: vi.fn(),
   }
