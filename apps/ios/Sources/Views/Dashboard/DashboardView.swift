@@ -224,23 +224,7 @@ struct DashboardView: View {
                 )
             }
 
-            GridRow {
-                quickActionCard(
-                    title: NSLocalizedString("dashboard_call_history", comment: "Call History"),
-                    icon: "clock.arrow.circlepath",
-                    destination: .callHistory,
-                    accessibilityID: "dashboard-call-history-action"
-                )
-
-                quickActionCard(
-                    title: NSLocalizedString("dashboard_help", comment: "Help"),
-                    icon: "questionmark.circle.fill",
-                    destination: .help,
-                    accessibilityID: "dashboard-help-action"
-                )
-            }
-
-            // Two per row, whichever of the restricted screens this user may open.
+            // Two per row, whichever of the remaining screens this user may open.
             let restricted = restrictedQuickActions
             ForEach(Array(stride(from: 0, to: restricted.count, by: 2)), id: \.self) { start in
                 GridRow {
@@ -266,12 +250,19 @@ struct DashboardView: View {
     }
 
     /// Quick actions for screens only some roles can use, each shown only with the
-    /// permission its screen's API requires (apps/worker/routes: contacts-v2 →
-    /// contacts:view, blasts → blasts:read, records triage → reports:triage).
-    /// They were all gated on settings:read, which every volunteer holds, so
-    /// volunteers were offered three screens the server then refused.
+    /// permission its screen's API requires (apps/worker/routes: calls history →
+    /// calls:read-history, contacts-v2 → contacts:view, blasts → blasts:read, records
+    /// triage → reports:triage). They were all gated on settings:read, which every
+    /// volunteer holds, so volunteers were offered screens the server then refused with
+    /// a 403. Help has no permission and is always shown.
     private var restrictedQuickActions: [QuickAction] {
-        [
+        let actions: [(permission: String?, action: QuickAction)] = [
+            ("calls:read-history", QuickAction(
+                title: NSLocalizedString("dashboard_call_history", comment: "Call History"),
+                icon: "clock.arrow.circlepath",
+                destination: .callHistory,
+                accessibilityID: "dashboard-call-history-action"
+            )),
             ("contacts:view", QuickAction(
                 title: NSLocalizedString("dashboard_contacts", comment: "Contacts"),
                 icon: "person.crop.circle.badge.clock",
@@ -290,9 +281,16 @@ struct DashboardView: View {
                 destination: .triage,
                 accessibilityID: "dashboard-triage-action"
             )),
+            (nil, QuickAction(
+                title: NSLocalizedString("dashboard_help", comment: "Help"),
+                icon: "questionmark.circle.fill",
+                destination: .help,
+                accessibilityID: "dashboard-help-action"
+            )),
         ]
-        .filter { appState.hasPermission($0.0) }
-        .map { $0.1 }
+        return actions
+            .filter { $0.permission.map(appState.hasPermission) ?? true }
+            .map { $0.action }
     }
 
     private func quickActionCard(title: String, icon: String, destination: QuickActionDestination, accessibilityID: String) -> some View {

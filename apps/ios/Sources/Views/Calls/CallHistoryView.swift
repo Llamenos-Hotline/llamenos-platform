@@ -151,7 +151,16 @@ struct CallHistoryView: View {
 
         NavigationStack {
             ZStack {
-                if vm.isLoading && vm.calls.isEmpty {
+                if !canViewHistory {
+                    // Reached by a deep link or a stale route: the dashboard never offers
+                    // this screen without the permission, and the server would 403 the load.
+                    BrandEmptyState(
+                        icon: "lock",
+                        title: NSLocalizedString("call_history_title", comment: "Call History"),
+                        message: NSLocalizedString("errors_forbidden", comment: "No permission"),
+                        accessibilityID: "call-history-forbidden"
+                    )
+                } else if vm.isLoading && vm.calls.isEmpty {
                     ProgressView()
                         .accessibilityIdentifier("call-history-loading")
                 } else if let error = vm.errorMessage, vm.calls.isEmpty {
@@ -208,9 +217,14 @@ struct CallHistoryView: View {
                 await vm.refresh()
             }
             .task(id: hubContext.activeHubId) {
+                guard canViewHistory else { return }
                 await vm.loadCallHistory()
             }
         }
+    }
+
+    private var canViewHistory: Bool {
+        appState.hasPermission("calls:read-history")
     }
 
     // MARK: - Calls List

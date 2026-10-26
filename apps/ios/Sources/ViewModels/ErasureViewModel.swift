@@ -56,11 +56,11 @@ final class ErasureViewModel {
                 path: "/api/erasure/me"
             )
             activeRequest = response.request
-        } catch {
+        } catch APIError.requestFailed(let statusCode, _) where statusCode == 404 {
             // 404 means no active request — that's fine
-            if !error.localizedDescription.contains("404") {
-                errorMessage = error.localizedDescription
-            }
+            activeRequest = nil
+        } catch {
+            errorMessage = error.localizedDescription
             activeRequest = nil
         }
 

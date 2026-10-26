@@ -377,8 +377,9 @@ final class WakeKeyService {
 
         do {
             try await apiService.request(method: "POST", path: "/api/devices/register", wireBody: body)
-        } catch APIError.requestFailed(let statusCode, let responseBody) where statusCode == 400 || statusCode == 422 {
-            throw WakeKeyError.registrationRejected("HTTP \(statusCode): \(responseBody)")
+        } catch APIError.requestFailed(let statusCode, _) where statusCode == 400 || statusCode == 422 {
+            // The status, not the body: the body is server text and is never shown.
+            throw WakeKeyError.registrationRejected("HTTP \(statusCode)")
         } catch {
             throw WakeKeyError.registrationFailed(error.localizedDescription)
         }

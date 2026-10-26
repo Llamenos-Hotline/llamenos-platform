@@ -232,12 +232,184 @@ final class OfflineQueueTests: XCTestCase {
         XCTAssertEqual(gatedQueue.pendingCount, 0)
         XCTAssertFalse(gatedQueue.isReplaying)
     }
+
+    // MARK: - Permanent refusals (#2208)
+
+    func testPermanentRefusalClassification() {
+        for status in [400, 403, 404, 410, 413, 422] {
+            XCTAssertTrue(APIError.isPermanentRefusal(status: status), "\(status) can never succeed on replay")
+        }
+        // 401 may clear once the device is registered; 408/429 are transient; 409 means
+        // the write already landed; 5xx is the server's problem, not the request's.
+        for status in [200, 201, 401, 408, 409, 429, 500, 502, 503] {
+            XCTAssertFalse(APIError.isPermanentRefusal(status: status), "\(status) must not be rejected")
+        }
+    }
+
+    func testRefusedWriteLeavesTheQueueAfterTheFirstRefusalAndKeepsItsBody() async throws {
+        let (refusingQueue, _) = try makeQueue(answering: 404)
+        let body = #"{"encryptedContent":"abc"}"#
+        let id = refusingQueue.enqueue(path: "/api/notes", method: "POST", body: body)
+
+        await refusingQueue.replay()
+
+        XCTAssertEqual(StatusURLProtocol.requestCount(), 1)
+        XCTAssertTrue(refusingQueue.getQueue().isEmpty, "a refused write must not stay queued as 'waiting to sync'")
+        XCTAssertEqual(refusingQueue.pendingCount, 0)
+        XCTAssertEqual(refusingQueue.rejected.map(\.id), [id])
+        XCTAssertEqual(refusingQueue.rejected.first?.body, body, "the author's content must survive the refusal")
+        XCTAssertEqual(refusingQueue.rejected.first?.rejectedStatus, 404)
+
+        await refusingQueue.replay()
+        XCTAssertEqual(StatusURLProtocol.requestCount(), 1, "a refused write must not be re-sent on the next replay")
+        refusingQueue.clear()
+    }
+
+    func testRejectedWritesSurviveRelaunchAndClearPurgesThem() async throws {
+        let (refusingQueue, refusingAPI) = try makeQueue(answering: 403)
+        refusingQueue.enqueue(path: "/api/notes", method: "POST", body: #"{"n":1}"#)
+        await refusingQueue.replay()
+
+        let relaunched = OfflineQueue(apiService: refusingAPI)
+        XCTAssertEqual(relaunched.rejected.count, 1, "a refusal the author has not seen yet must outlive the app")
+        XCTAssertEqual(relaunched.pendingCount, 0)
+
+        relaunched.clear()
+        XCTAssertTrue(relaunched.rejected.isEmpty)
+        XCTAssertTrue(OfflineQueue(apiService: refusingAPI).rejected.isEmpty, "logout and wipe must purge rejected writes too")
+    }
+
+    func testDismissRejectedDiscardsOnlyThatWrite() async throws {
+        let (refusingQueue, _) = try makeQueue(answering: 400)
+        let first = refusingQueue.enqueue(path: "/api/notes", method: "POST", body: #"{"n":1}"#)
+        let second = refusingQueue.enqueue(path: "/api/notes", method: "POST", body: #"{"n":2}"#)
+        await refusingQueue.replay()
+        XCTAssertEqual(refusingQueue.rejected.map(\.id), [first, second])
+
+        refusingQueue.dismissRejected(id: first)
+
+        XCTAssertEqual(refusingQueue.rejected.map(\.id), [second])
+        refusingQueue.clear()
+    }
+
+    func testRetryRejectedSendsTheSameContentAgain() async throws {
+        let (refusingQueue, _) = try makeQueue(answering: 403)
+        let body = #"{"encryptedContent":"keep-me"}"#
+        let id = refusingQueue.enqueue(path: "/api/notes", method: "POST", body: body)
+        await refusingQueue.replay()
+        XCTAssertEqual(StatusURLProtocol.requestCount(), 1)
+
+        // The refusal was fixed (a permission was granted): the server now accepts it.
+        StatusURLProtocol.status = 201
+        refusingQueue.retryRejected(id: id)
+        XCTAssertTrue(refusingQueue.rejected.isEmpty)
+        XCTAssertEqual(refusingQueue.pendingCount, 1)
+
+        await refusingQueue.replay()
+
+        XCTAssertEqual(StatusURLProtocol.requestCount(), 2)
+        XCTAssertEqual(StatusURLProtocol.lastBody(), body, "the retry must carry the author's original content")
+        XCTAssertTrue(refusingQueue.getQueue().isEmpty)
+        XCTAssertTrue(refusingQueue.rejected.isEmpty)
+        refusingQueue.clear()
+    }
+
+    func testAWriteClearedWhileInFlightIsNotResurrectedAsRejected() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [GatedReplayURLProtocol.self]
+        let gatedAPI = APIService(cryptoService: CryptoService(), hubContext: HubContext(), sessionConfiguration: config)
+        try gatedAPI.configure(hubURLString: "https://offline-queue.test")
+        let gatedQueue = OfflineQueue(apiService: gatedAPI)
+        gatedQueue.clear()
+        GatedReplayURLProtocol.reset()
+
+        gatedQueue.enqueue(path: "/api/notes", method: "POST", body: #"{"n":1}"#)
+        let replay = Task { await gatedQueue.replay() }
+        let arrived = await Task.detached { GatedReplayURLProtocol.firstRequestArrived.wait(timeout: .now() + 10) }.value
+        XCTAssertEqual(arrived, .success)
+
+        gatedQueue.clear()
+        GatedReplayURLProtocol.releaseFirstRequest.signal()
+        await replay.value
+
+        XCTAssertTrue(gatedQueue.rejected.isEmpty, "a late 400 must not put a logged-out user's write back on disk")
+    }
+
+    // MARK: - Helpers
+
+    /// A queue whose every request is answered with `status`.
+    private func makeQueue(answering status: Int) throws -> (OfflineQueue, APIService) {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StatusURLProtocol.self]
+        let statusAPI = APIService(cryptoService: CryptoService(), hubContext: HubContext(), sessionConfiguration: config)
+        try statusAPI.configure(hubURLString: "https://offline-queue.test")
+        let statusQueue = OfflineQueue(apiService: statusAPI)
+        statusQueue.clear()
+        StatusURLProtocol.reset(status: status)
+        return (statusQueue, statusAPI)
+    }
+}
+
+// MARK: - StatusURLProtocol
+
+/// Answers every request with a fixed status and records how many arrived and the last
+/// body. Registered per-session through `protocolClasses`, never globally.
+private final class StatusURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var _status = 200
+    private static var count = 0
+    private static var _lastBody: String?
+
+    static var status: Int {
+        get { lock.withLock { _status } }
+        set { lock.withLock { _status = newValue } }
+    }
+
+    static func reset(status: Int) {
+        lock.withLock {
+            _status = status
+            count = 0
+            _lastBody = nil
+        }
+    }
+
+    static func requestCount() -> Int { lock.withLock { count } }
+    static func lastBody() -> String? { lock.withLock { _lastBody } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let body = request.httpBody ?? request.httpBodyStream.map { stream -> Data in
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read <= 0 { break }
+                data.append(buffer, count: read)
+            }
+            return data
+        }
+        let code = Self.lock.withLock { () -> Int in
+            Self.count += 1
+            Self._lastBody = body.flatMap { String(data: $0, encoding: .utf8) }
+            return Self._status
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("{}".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 // MARK: - GatedReplayURLProtocol
 
 /// Holds the first request until the test releases it, then answers 400 — a permanent
-/// client error, which `replay()` records against the operation rather than removing it.
+/// client error, which `replay()` moves to `rejected` (unless it was cleared meanwhile).
 /// Registered per-session through `protocolClasses`, never globally.
 private final class GatedReplayURLProtocol: URLProtocol {
     static let firstRequestArrived = DispatchSemaphore(value: 0)

@@ -7,27 +7,68 @@ enum APIError: LocalizedError {
     case invalidURL(String)
     case noBaseURL
     case insecureConnection(String)
+    /// The server answered with a non-2xx status. `body` is kept for callers that
+    /// branch on it; it is never rendered or logged, because a refusal body can carry
+    /// server internals (required permission names, a development-only `debug` field).
     case requestFailed(statusCode: Int, body: String)
     case networkError(Error)
     case decodingError(Error)
     case authTokenCreationFailed(Error)
 
+    /// What a volunteer is shown. Everything here is a localized sentence — never an
+    /// HTTP status line, a response body or a decoder path (#2207).
     var errorDescription: String? {
         switch self {
-        case .invalidURL(let url):
-            return "Invalid URL: \(url)"
         case .noBaseURL:
             return NSLocalizedString("error_no_hub_url", comment: "No hub URL configured")
         case .insecureConnection(let reason):
             return reason
-        case .requestFailed(let code, let body):
-            return "HTTP \(code): \(body)"
-        case .networkError(let error):
-            return error.localizedDescription
-        case .decodingError(let error):
-            return "Decoding error: \(Self.describe(decoding: error))"
-        case .authTokenCreationFailed(let error):
-            return "Auth token creation failed: \(error.localizedDescription)"
+        case .requestFailed(let code, _):
+            return NSLocalizedString(Self.messageKey(forStatus: code), comment: "Why the server refused the request")
+        case .networkError:
+            return NSLocalizedString(Self.messageKey(forStatus: 0), comment: "Server unreachable")
+        case .invalidURL, .decodingError, .authTokenCreationFailed:
+            return NSLocalizedString("error_boundary_title", comment: "Something went wrong")
+        }
+    }
+
+    /// The `Localizable.strings` key explaining a refused request.
+    ///
+    /// 401 is the device not being known to the hub yet (a fresh identity before an
+    /// admin adds it), not the volunteer being offline. 408, 429, 5xx and "no response"
+    /// (0) all mean try again shortly. Any other 4xx is a request this client got wrong
+    /// and has no better user-facing sentence than the generic one.
+    static func messageKey(forStatus status: Int) -> String {
+        switch status {
+        case 401: return "errors_device_not_registered"
+        case 403: return "errors_forbidden"
+        case 404: return "errors_not_found"
+        case 0, 408, 429, 500...599: return "errors_server_unavailable"
+        default: return "error_boundary_title"
+        }
+    }
+
+    /// Whether a replayed write answered with this status can never succeed on a later
+    /// attempt: a 4xx the server gave for this exact request. 401 (the device may be
+    /// registered by the next replay), 408 and 429 (transient) are retried, and 409 is
+    /// an idempotent "already applied", handled by the caller as success.
+    static func isPermanentRefusal(status: Int) -> Bool {
+        (400..<500).contains(status) && ![401, 408, 409, 429].contains(status)
+    }
+}
+
+extension APIError: CustomDebugStringConvertible {
+    /// For logs and debugger output only — carries the diagnostic detail
+    /// `errorDescription` deliberately withholds from the volunteer, except the body.
+    var debugDescription: String {
+        switch self {
+        case .invalidURL(let url): return "Invalid URL: \(url)"
+        case .noBaseURL: return "No base URL"
+        case .insecureConnection(let reason): return reason
+        case .requestFailed(let code, _): return "HTTP \(code)"
+        case .networkError(let error): return "Network error: \(error.localizedDescription)"
+        case .decodingError(let error): return "Decoding error: \(Self.describe(decoding: error))"
+        case .authTokenCreationFailed(let error): return "Auth token creation failed: \(error.localizedDescription)"
         }
     }
 }
