@@ -9,6 +9,8 @@ import type { RelayEventHandler } from './relay/types'
 
 const subscribed: { hubIds: readonly string[]; kinds: number[]; handler: RelayEventHandler }[] = []
 const requested: { path: string; method: string }[] = []
+/** Paths the mocked server refuses (a call someone else answered, an unreachable hub). */
+const refused = new Set<string>()
 const ringing = vi.hoisted(() => ({ startRinging: vi.fn(), stopRinging: vi.fn() }))
 
 vi.mock('./relay/hooks', () => ({
@@ -29,6 +31,7 @@ vi.mock('./api/client', async (importActual) => ({
   ...(await importActual<typeof import('./api/client')>()),
   request: vi.fn(async (path: string, options?: RequestInit) => {
     requested.push({ path, method: options?.method ?? 'GET' })
+    if (refused.has(path)) throw new Error('refused')
     // The membership endpoint ConfigProvider reads. Not reached from here —
     // these hooks take membership from the mocked context above — but the
     // server-side truth it states is the same: hub-public-only is not the
@@ -46,7 +49,8 @@ vi.mock('./api/client', async (importActual) => ({
 }))
 
 import { setActiveHub, createNote } from './api'
-import { useCalls, useConversations } from './hooks'
+import { useConversations } from './hooks'
+import { CallsProvider, useCalls } from './calls-context'
 import { rememberedCallHub, clearRememberedCallHubs } from './call-hubs'
 
 function latest(kindsIncludes: number) {
@@ -59,18 +63,19 @@ describe('useCalls with the user in two hubs and hub A active', () => {
   beforeEach(() => {
     subscribed.length = 0
     requested.length = 0
+    refused.clear()
     ringing.startRinging.mockClear()
     ringing.stopRinging.mockClear()
     setActiveHub('hub-A')
   })
 
   it('subscribes to call events on every member hub, not only the active one', async () => {
-    renderHook(() => useCalls())
+    renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(new Set(latest(KIND_CALL_RING).hubIds)).toEqual(new Set(['hub-A', 'hub-B'])))
   })
 
   it('does not subscribe to a hub the user is not a member of', async () => {
-    renderHook(() => useCalls())
+    renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(latest(KIND_CALL_RING).hubIds).toContain('hub-B'))
     // `hub-public-only` is active on the server and not in this user's
     // membership. Subscribing to it would be the inverse of the multi-hub
@@ -80,7 +85,7 @@ describe('useCalls with the user in two hubs and hub A active', () => {
   })
 
   it('polls active calls on every member hub and tags each call with its hub', async () => {
-    const { result } = renderHook(() => useCalls())
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
     // Membership is resolved before these hooks mount, so both hubs are polled
     // from the first cycle; the set of polled hubs must be exactly the members
@@ -90,7 +95,7 @@ describe('useCalls with the user in two hubs and hub A active', () => {
   })
 
   it('answers, hangs up and reports spam against the call\'s own hub', async () => {
-    const { result } = renderHook(() => useCalls())
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
     requested.length = 0
 
@@ -103,15 +108,42 @@ describe('useCalls with the user in two hubs and hub A active', () => {
     expect(requested).toEqual([{ path: '/hubs/hub-B/calls/CA-on-hub-B/spam', method: 'POST' }])
   })
 
+  it('throws and puts the call back when the server refuses the answer, so the caller can say so', async () => {
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
+    await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
+    refused.add('/hubs/hub-B/calls/CA-on-hub-B/answer')
+
+    await act(async () => {
+      await expect(result.current.answerCall('CA-on-hub-B')).rejects.toThrow('refused')
+    })
+    expect(result.current.currentCall).toBeNull()
+  })
+
+  it('keeps the call current when the hangup is refused, so it can be retried', async () => {
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
+    await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
+    await act(async () => { await result.current.answerCall('CA-on-hub-B') })
+    refused.add('/hubs/hub-B/calls/CA-on-hub-B/hangup')
+
+    await act(async () => {
+      await expect(result.current.hangupCall('CA-on-hub-B')).rejects.toThrow('refused')
+    })
+    expect(result.current.currentCall).toMatchObject({ id: 'CA-on-hub-B', hubId: 'hub-B' })
+
+    refused.clear()
+    await act(async () => { await result.current.hangupCall('CA-on-hub-B') })
+    expect(result.current.currentCall).toBeNull()
+  })
+
   it('remembers which hub each call belongs to so a later note is filed there', async () => {
     clearRememberedCallHubs()
-    const { result } = renderHook(() => useCalls())
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
     await waitFor(() => expect(rememberedCallHub('CA-on-hub-B')).toBe('hub-B'))
   })
 
   it('hangs up against the call\'s own hub', async () => {
-    const { result } = renderHook(() => useCalls())
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
     await act(async () => { await result.current.answerCall('CA-on-hub-B') })
     requested.length = 0
@@ -120,12 +152,13 @@ describe('useCalls with the user in two hubs and hub A active', () => {
   })
 
   it('rings for a call:ring relayed from a non-active hub and remembers its hub', async () => {
-    const { result } = renderHook(() => useCalls())
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(new Set(latest(KIND_CALL_RING).hubIds).has('hub-B')).toBe(true))
     act(() => {
       latest(KIND_CALL_RING).handler(KIND_CALL_RING, { type: 'call:ring', callId: 'CA-relayed', startedAt: '2026-01-01T00:00:01Z' } as never, 'hub-B')
     })
-    expect(ringing.startRinging).toHaveBeenCalled()
+    // Generic text only — the ring never names or numbers the caller (lock screens).
+    expect(ringing.startRinging).toHaveBeenCalledWith('Incoming Call', 'Someone is calling the hotline')
     expect(result.current.ringingCalls.find(c => c.id === 'CA-relayed')).toMatchObject({ hubId: 'hub-B' })
   })
 })

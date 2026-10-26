@@ -10,7 +10,9 @@ import { setServerEventKeys } from '@/lib/platform'
 import { needsServerAddress } from '@/lib/api-config'
 import { ServerAddressScreen } from '@/components/setup/ServerAddressScreen'
 import { RelayProvider } from '@/lib/relay/context'
-import { useCalls, useShiftStatus } from '@/lib/hooks'
+import { useShiftStatus } from '@/lib/hooks'
+import { CallsProvider, useCalls } from '@/lib/calls-context'
+import { IncomingCallAnnouncer } from '@/components/call/incoming-call-announcer'
 import { useAssigneeRewrap } from '@/lib/assignee-rewrap'
 import { CommandPalette, triggerCommandPalette } from '@/components/command-palette'
 import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog'
@@ -269,7 +271,9 @@ function RelayWrappedLayout() {
       devicePubkey={publicKey ?? undefined}
       isAuthenticated={true}
     >
-      <AuthenticatedLayout />
+      <CallsProvider>
+        <AuthenticatedLayout />
+      </CallsProvider>
     </RelayProvider>
   )
 }
@@ -298,6 +302,8 @@ function AuthenticatedLayout() {
 
   return (
     <div className="flex h-screen">
+      <IncomingCallAnnouncer />
+
       {/* Skip link */}
       <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">
         {t('a11y.skipToContent')}
