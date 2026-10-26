@@ -19,24 +19,33 @@ import {
   wipeVaultFile,
   isValidSeedHex,
 } from './platform'
+import { createIdleLock } from './auto-lock'
+import { clearCallNoteDrafts } from './call-note-drafts'
 
 // --- Private state (closure-scoped, never exported) ---
 let unlocked = false
 let publicKey: string | null = null
 
 // --- Auto-lock ---
-let idleTimer: ReturnType<typeof setTimeout> | null = null
 const lockCallbacks: Set<() => void> = new Set()
 const unlockCallbacks: Set<() => void> = new Set()
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 let autoLockDisabled = false
+const idleLock = createIdleLock({ timeoutMs: IDLE_TIMEOUT_MS, onIdle: () => lock() })
 
+/** Start (or restart) idle counting after the key became unlocked. */
 function resetIdleTimer() {
   if (autoLockDisabled) return
-  if (idleTimer) clearTimeout(idleTimer)
-  if (unlocked) {
-    idleTimer = setTimeout(() => lock(), IDLE_TIMEOUT_MS)
-  }
+  if (unlocked) idleLock.arm()
+}
+
+/**
+ * Tell the idle lock whether the user is on an answered call, on ANY member hub.
+ * While true the idle timer does not run; when it turns false a full timeout starts.
+ * The tab-hide lock below is unaffected.
+ */
+export function setOnCall(onCall: boolean): void {
+  idleLock.setBusy(onCall)
 }
 
 // Lock on tab hide — with configurable grace period so users can switch windows to copy/paste
@@ -119,10 +128,7 @@ export async function unlock(pin: string): Promise<string | null> {
 export function lock() {
   unlocked = false
   // Don't clear publicKey — it's not secret and useful for display
-  if (idleTimer) {
-    clearTimeout(idleTimer)
-    idleTimer = null
-  }
+  idleLock.disarm()
   // Lock Rust CryptoState (fire-and-forget)
   lockCrypto().catch(() => {})
   lockCallbacks.forEach(cb => cb())
@@ -226,6 +232,7 @@ export function onUnlock(cb: () => void): () => void {
  * Used when max PIN attempts exceeded.
  */
 export async function wipeKey() {
+  clearCallNoteDrafts()
   lock()
   await wipeVaultFile()
 }
