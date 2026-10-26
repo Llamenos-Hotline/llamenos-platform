@@ -236,9 +236,18 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # there is no newer base to bump to. So the fixed package is installed
 # explicitly. The `>=` constraint makes the build fail loudly if the repo ever
 # stops offering a fixed version, rather than silently shipping the old one.
-# Drop the RUN below once a caddy base image ships brotli-libs >= 1.2.1-r0.
+# Drop the brotli-libs pin once a caddy base image ships brotli-libs >= 1.2.1-r0.
+#
+# Same treatment for curl/libcurl: CVE-2026-92392 (HIGH, HTTP/2 upload
+# use-after-free) is fixed in Alpine 3.23's curl/libcurl 8.23.0-r0, while the
+# newest published caddy:2.11.7-alpine (3.23.7) still ships 8.22.0-r0. Only this
+# stage trips on it: the `app` stage is Debian-slim and carries no curl at all,
+# whereas the Caddy base image bundles the curl CLI and libcurl. Nothing in the
+# Caddy container calls curl (its healthcheck is `caddy version`), so this is
+# patched rather than removed only to keep the base image's contents unchanged.
+# Drop the curl/libcurl pins once a caddy base image ships curl >= 8.23.0-r0.
 FROM caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f AS static
-RUN apk add --no-cache 'brotli-libs>=1.2.1-r0'
+RUN apk add --no-cache 'brotli-libs>=1.2.1-r0' 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0'
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
 # NOTE: /srv/crypto (the Tier-4 sandboxed-crypto-iframe origin referenced by
