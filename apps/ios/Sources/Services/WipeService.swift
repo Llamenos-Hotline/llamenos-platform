@@ -17,6 +17,8 @@ final class WipeService {
     private let offlineQueue: OfflineQueue
     private let crashReportingService: CrashReportingService
     private let webSocketService: WebSocketService
+    private let authMeLoader: AuthMeLoader
+    private let permissionService: PermissionService
 
     init(
         keychainService: KeychainService,
@@ -24,7 +26,9 @@ final class WipeService {
         wakeKeyService: WakeKeyService,
         offlineQueue: OfflineQueue,
         crashReportingService: CrashReportingService,
-        webSocketService: WebSocketService
+        webSocketService: WebSocketService,
+        authMeLoader: AuthMeLoader,
+        permissionService: PermissionService
     ) {
         self.keychainService = keychainService
         self.cryptoService = cryptoService
@@ -32,6 +36,8 @@ final class WipeService {
         self.offlineQueue = offlineQueue
         self.crashReportingService = crashReportingService
         self.webSocketService = webSocketService
+        self.authMeLoader = authMeLoader
+        self.permissionService = permissionService
     }
 
     /// Full destructive wipe — used by panic wipe and remote device wipe.
@@ -97,7 +103,12 @@ final class WipeService {
         // 12. WebSocket — disconnect from relay
         webSocketService.disconnect()
 
-        // 13. UserDefaults — remove all app preferences
+        // 13. Permissions — stop the retrying `/api/auth/me` refresh (its keys are gone, it
+        // could only fail forever) and drop the permission set it was keeping.
+        authMeLoader.cancel()
+        permissionService.clear()
+
+        // 14. UserDefaults — remove all app preferences
         if let bundleId = Bundle.main.bundleIdentifier {
             UserDefaults.standard.removePersistentDomain(forName: bundleId)
         }

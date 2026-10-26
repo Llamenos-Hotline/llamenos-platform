@@ -3998,6 +3998,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "Çok fazla başarısız denemeden sonra biyometrik kilit açma kilitlendi. PIN'inizi girin.",
     "biometricNotEnrolled": "Cihazınızın biyometrik verileri değiştiği için biyometrik kilit açma kapatıldı. PIN'inizi girin.",
     "biometricPinMismatch": "Biyometrik kilit açma başarısız oldu. PIN'inizi girin.",
