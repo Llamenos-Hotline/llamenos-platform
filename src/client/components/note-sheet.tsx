@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useNoteSheet } from '@/lib/note-sheet-context'
+import { useCalls } from '@/lib/calls-context'
+import { getCallNoteDraft, setCallNoteDraft } from '@/lib/call-note-drafts'
 import { useDraft } from '@/lib/use-draft'
 import { encryptNote } from '@/lib/platform'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
@@ -33,6 +35,7 @@ export function NoteSheet() {
   const { hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey } = useAuth()
   const { isOpen, mode, editNoteId, initialCallId, initialConversationId, initialHubId, initialText, initialFields, close, onSaved } = useNoteSheet()
   const { toast } = useToast()
+  const { dismissEndedCall } = useCalls()
   const [saving, setSaving] = useState(false)
   const [recentCalls, setRecentCalls] = useState<CallRecord[]>([])
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
@@ -42,13 +45,30 @@ export function NoteSheet() {
   const draftKey = mode === 'edit' && editNoteId ? `edit:${editNoteId}` : isConversationNote ? `conv:${initialConversationId}` : 'new'
   const draft = useDraft(draftKey)
 
+  // A note opened on a call the app holds (the "Call Ended" prompt) belongs to that call's
+  // own hub, and its text IS the in-call note draft — the same in-memory entry the call
+  // panel was writing, not a copy. Neither the call id nor the text is persisted: the
+  // persisted `useDraft` below is bypassed for both.
+  const heldCallId = mode === 'new' && !isConversationNote && initialCallId && initialHubId ? initialCallId : ''
+  const [, rerender] = useReducer((n: number) => n + 1, 0)
+  const text = heldCallId ? getCallNoteDraft(heldCallId) : draft.text
+  const callId = heldCallId || draft.callId
+  const setText = (value: string) => {
+    if (heldCallId) {
+      setCallNoteDraft(heldCallId, value)
+      rerender()
+    } else {
+      draft.setText(value)
+    }
+  }
+
   // Seed draft from initial values when sheet opens
   useEffect(() => {
     if (!isOpen) return
     if (mode === 'edit' && initialText && !draft.text) {
       draft.setText(initialText)
     }
-    if (initialCallId && !draft.callId) {
+    if (initialCallId && !heldCallId && !draft.callId) {
       draft.setCallId(initialCallId)
     }
     // Seed custom field values from initial (edit mode)
@@ -59,7 +79,7 @@ export function NoteSheet() {
         }
       }
     }
-  }, [isOpen, mode, initialText, initialCallId])
+  }, [isOpen, mode, initialText, initialCallId, heldCallId])
 
   // Load custom fields and recent calls
   useEffect(() => {
@@ -71,9 +91,9 @@ export function NoteSheet() {
   }, [isAdmin, isOpen, isConversationNote])
 
   async function handleSave() {
-    if (!hasDeviceKey || !publicKey || !draft.text.trim()) return
+    if (!hasDeviceKey || !publicKey || !text.trim()) return
     // For new notes: require either callId or conversationId
-    if (mode === 'new' && !isConversationNote && !draft.callId.trim()) return
+    if (mode === 'new' && !isConversationNote && !callId.trim()) return
 
     // Validate custom fields
     const errors = validateCustomFields(visibleFields, draft.fields, t, { isAdmin })
@@ -83,7 +103,7 @@ export function NoteSheet() {
     setSaving(true)
     try {
       // Build NotePayload with custom field values
-      const payload: NotePayload = { text: draft.text }
+      const payload: NotePayload = { text }
       const fieldValues = Object.entries(draft.fields).filter(([, v]) => v !== '' && v !== undefined)
       if (fieldValues.length > 0) {
         payload.fields = Object.fromEntries(fieldValues)
@@ -109,8 +129,13 @@ export function NoteSheet() {
         await createNote({ conversationId: initialConversationId, encryptedContent, authorEnvelope, adminEnvelopes }, initialHubId)
       } else {
         // A call note belongs to the call's hub, which may not be the active one.
-        const hubId = resolveCallHubId(draft.callId, getActiveHub())
-        await createNote({ callId: draft.callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
+        const hubId = heldCallId ? initialHubId : resolveCallHubId(callId, getActiveHub())
+        await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
+      }
+      if (heldCallId) {
+        // Written up: no longer an unsaved draft, and the call stops asking for a note.
+        setCallNoteDraft(heldCallId, '')
+        dismissEndedCall(heldCallId)
       }
       draft.clearDraft()
       close()
@@ -138,7 +163,7 @@ export function NoteSheet() {
     .filter(f => fieldMatchesContext(f, fieldContext))
     .filter(f => isAdmin || f.visibleToUsers)
 
-  const canSave = saving || !draft.text.trim() || (mode === 'new' && !isConversationNote && !draft.callId.trim())
+  const canSave = saving || !text.trim() || (mode === 'new' && !isConversationNote && !callId.trim())
 
   return (
     <Sheet open={isOpen} onOpenChange={open => { if (!open) close() }}>
@@ -175,7 +200,7 @@ export function NoteSheet() {
                 <Badge variant="secondary" className="text-sm">{initialCallId.slice(0, 24)}</Badge>
               ) : recentCalls.length > 0 ? (
                 <Select
-                  value={draft.callId || undefined}
+                  value={callId || undefined}
                   onValueChange={(v) => {
                     if (v === '__manual') {
                       draft.setCallId('')
@@ -200,7 +225,7 @@ export function NoteSheet() {
                 <Input
                   id="sheet-call-id"
                   data-testid="sheet-call-id-input"
-                  value={draft.callId}
+                  value={callId}
                   onChange={e => draft.setCallId(e.target.value)}
                   placeholder={t('notes.callIdPlaceholder')}
                   disabled={mode === 'edit'}
@@ -229,8 +254,8 @@ export function NoteSheet() {
             <textarea
               id="sheet-note-text"
               data-testid="sheet-note-text"
-              value={draft.text}
-              onChange={e => draft.setText(e.target.value)}
+              value={text}
+              onChange={e => setText(e.target.value)}
               placeholder={t('notes.notePlaceholder')}
               rows={8}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-y min-h-[120px]"

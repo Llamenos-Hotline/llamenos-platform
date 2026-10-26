@@ -4,7 +4,9 @@ import { useAuth } from '@/lib/auth'
 import { useEffect, useState } from 'react'
 import { useCallTimer, useShiftStatus } from '@/lib/hooks'
 import { useCalls, useIncomingCalls } from '@/lib/calls-context'
+import { useNoteSheet } from '@/lib/note-sheet-context'
 import { IncomingCallCard } from '@/components/call/incoming-call-card'
+import { CallEndedPrompt } from '@/components/call/call-ended-prompt'
 import { callReadiness } from '@/lib/call-readiness'
 import { useClockIn, useClockOut } from '@/lib/queries/shifts'
 import { createNote, banAndHangup, getUserPresence, listUsers, type HubCall, type UserPresence, type User } from '@/lib/api'
@@ -49,7 +51,8 @@ function DashboardPage() {
   const { isAuthenticated, isAdmin, hasDeviceKey, publicKey, onBreak, toggleBreak, hasPermission } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate()
-  const { calls, currentCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls } = useCalls()
+  const { calls, currentCall, endedCall, dismissEndedCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls } = useCalls()
+  const noteSheet = useNoteSheet()
   const incoming = useIncomingCalls()
   // A ringing call is already a live call on this hub — the count must not read 0 while one rings.
   const liveCallCount = ringingCalls.length + activeCalls.length
@@ -277,6 +280,15 @@ function DashboardPage() {
             }
           }}
           authorPubkey={publicKey}
+        />
+      )}
+
+      {/* Our own call just ended: offer to write it up while it is fresh. */}
+      {!currentCall && endedCall && (
+        <CallEndedPrompt
+          call={endedCall}
+          onAddNote={call => noteSheet.openNewNote(call.id, call.hubId)}
+          onDismiss={() => dismissEndedCall()}
         />
       )}
 
