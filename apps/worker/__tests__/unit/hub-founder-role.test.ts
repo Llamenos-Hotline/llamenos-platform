@@ -50,6 +50,24 @@ describe('hubFounderRoleIds', () => {
     expect(hubFounderRoleIds(catalog)).not.toContain('role-instance')
   })
 
+  it.each([['system:manage-instance'], ['system:manage-roles'], ['system:manage-hubs'], ['system:*']])(
+    'never picks a role carrying instance-level %s, however small it is',
+    (instancePermission) => {
+      // A role planted in the shared catalog must not win the selection by being
+      // small and then hand every future founder instance authority.
+      const catalog: RoleCatalog = [
+        role('role-planted', [...MIN, instancePermission]),
+        role('role-honest', [...MIN, 'users:*', 'shifts:*', 'bans:*']),
+      ]
+      expect(hubFounderRoleIds(catalog)).toEqual(['role-honest'])
+    },
+  )
+
+  it('still accepts read-only system:view-* permissions, as the shipped admin role carries', () => {
+    const catalog: RoleCatalog = [role('role-viewer-admin', [...MIN, 'system:view-roles'])]
+    expect(hubFounderRoleIds(catalog)).toEqual(['role-viewer-admin'])
+  })
+
   it('returns nothing when no role grants the minimum, so createHub refuses', () => {
     const catalog: RoleCatalog = [
       ...DEFAULT_ROLES.map(r => role(r.id, ['calls:answer'])),

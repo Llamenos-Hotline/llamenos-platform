@@ -120,15 +120,30 @@ export function mergeHubRole(
 // ---------------------------------------------------------------------------
 
 /**
+ * A permission that carries instance-level authority: the `*` wildcard and
+ * anything in the `system` domain that is not a read-only `system:view-*`
+ * (including the `system:*` wildcard). Such a permission is never a hub
+ * permission — see {@link hubFounderRoleIds}.
+ */
+function isInstanceLevel(permission: string): boolean {
+  return permission === '*' || (permission.startsWith('system:') && !permission.startsWith('system:view-'))
+}
+
+/**
  * The role a hub's founder is granted, chosen by permission rather than by id:
  * the single role in `catalog` that satisfies the admin minimum
  * ({@link rolesConferHubAdmin}) with the fewest permissions, so the founder
  * gets the least authority that still administers the hub. A hub that renamed,
  * split or re-permissioned its admin role keeps working.
  *
- * Roles holding the `*` wildcard are skipped: that is instance-level authority
- * (the super-admin), never a hub role — a hub grant of it would make the
- * founder a super-admin of every hub (#2153). Empty when no role qualifies.
+ * The catalog is shared and editable by anyone who can manage roles, so the
+ * choice is bounded: a role holding any instance-level permission
+ * ({@link isInstanceLevel}: the `*` wildcard, `system:manage-*`, `system:*`…) is
+ * never a candidate. That is the super-admin's authority; granting it as a hub
+ * role would make a hub's founder an instance administrator (#2153), and a role
+ * planted in the catalog could otherwise win this selection by being small.
+ * Whatever is chosen therefore confers hub-level authority only. Empty when no
+ * role qualifies.
  *
  * Default roles absent from `catalog` (the roles table mid-reset) resolve
  * through DEFAULT_ROLES, exactly as {@link rolesConferHubAdmin} resolves them.
@@ -136,7 +151,7 @@ export function mergeHubRole(
 export function hubFounderRoleIds(catalog: RoleCatalog): string[] {
   const known = new Set(catalog.map(r => r.id))
   const candidates = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
-    .filter(r => !r.permissions.includes('*') && rolesConferHubAdmin([r.id], catalog))
+    .filter(r => !r.permissions.some(isInstanceLevel) && rolesConferHubAdmin([r.id], catalog))
     .sort((a, b) => a.permissions.length - b.permissions.length || a.id.localeCompare(b.id))
   return candidates.length > 0 ? [candidates[0].id] : []
 }
