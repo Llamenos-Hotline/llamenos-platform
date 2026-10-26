@@ -280,12 +280,11 @@ final class APIServiceWireFormatTests: XCTestCase {
             // not happen, and the route still wrote a `recordUpdated` audit entry.
             ("updateRecord", UpdateRecordRequest(statusHash: "aa11", severityHash: "bb22")),
 
-            // POST /api/devices/register — registerDeviceBodySchema. The only body in
-            // this set whose breakage was observed end to end against a live server
-            // rather than inferred from the schema: the real client, on every launch,
-            // sent {"device_id","push_token","wake_key_public","platform"} and the
-            // server answered 400 "Provide pushToken … or x25519Pubkey …" because both
-            // of the schema's `.refine()`s read keys that were no longer there.
+            // POST /api/devices/register — registerDeviceBodySchema. The body whose
+            // breakage was observed end to end against a live server: the real client
+            // sent {"device_id","push_token","wake_key_public","platform"} and the server
+            // answered 400 "Provide pushToken … or x25519Pubkey …" because both of the
+            // schema's `.refine()`s read keys that were no longer there.
             //
             // `pushToken` and `wakeKeyPublic` are `.optional()` on the object, so the
             // key-drop analysis alone puts this in the "silent" column — but the two
@@ -293,18 +292,20 @@ final class APIServiceWireFormatTests: XCTestCase {
             // That is why it is here with `optionalKeys: []`: the refine, not the field
             // modifier, decides whether a dropped key 400s.
             //
-            // A second defect this endpoint carries, unrelated to the key casing and
-            // not fixed by it, is #1716: the schema does not declare `deviceId` at all.
-            //
-            // It failed in silence anyway, because
-            // `LlamenosApp.didRegisterForRemoteNotificationsWithDeviceToken` swallows the
-            // throw as "non-fatal" — so iOS has never had a row in `devices`, and no
-            // push token, wake key or HPKE device recipient has ever been registered.
-            ("registerDevice", DeviceRegistrationRequest(
+            // The body is the generated `RegisterDeviceBody` (#2201) and carries both
+            // identity keys. Before that it was a hand-written struct with neither, so
+            // the one row that ever registered had `x25519_pubkey: ''` and the server had
+            // nothing to seal to for an iOS user.
+            ("registerDevice", RegisterDeviceBody(
+                appVersion: nil,
+                deviceModel: nil,
+                deviceName: nil,
+                ed25519Pubkey: Self.pubkey,
+                osVersion: nil,
+                platform: .ios,
                 pushToken: Self.pubkey,
                 wakeKeyPublic: Self.enc,
-                platform: "ios",
-                deviceId: "44444444-4444-4444-8444-444444444444"
+                x25519Pubkey: Self.enc
             )),
 
             // PATCH /api/settings/transcription — transcriptionSettingsSchema. Both

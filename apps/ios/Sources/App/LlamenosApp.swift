@@ -68,6 +68,10 @@ struct LlamenosApp: App {
                             })
                         }
 
+                        if let failure = appState.wakeKeyService.registrationError {
+                            DeviceRegistrationBanner(message: failure)
+                        }
+
                         ContentView()
                             .environment(appState)
                             .environment(router)
@@ -258,7 +262,15 @@ struct LlamenosApp: App {
 /// SwiftUI's `@UIApplicationDelegateAdaptor` bridges this into the app lifecycle.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     /// Injected by LlamenosApp on appear so the delegate can forward push tokens.
-    var appState: AppState?
+    var appState: AppState? {
+        didSet {
+            guard let appState, let token = pendingPushToken else { return }
+            pendingPushToken = nil
+            appState.wakeKeyService.updatePushToken(token)
+        }
+    }
+    /// An APNs token that arrived before `appState` was injected.
+    private var pendingPushToken: String?
     /// Injected by LlamenosApp on appear for notification tap → deep link navigation.
     var router: Router?
 
@@ -284,14 +296,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let tokenHex = deviceToken.map { String(format: "%02x", $0) }.joined()
         // APNs token is sensitive — never log even a prefix in production.
 
-        guard let appState else { return }
-        Task {
-            do {
-                try await appState.wakeKeyService.registerDevice(pushToken: tokenHex)
-            } catch {
-                // non-fatal
-            }
+        // Held until AppState is injected: the token can arrive before `onAppear` runs,
+        // and APNs does not deliver it a second time.
+        guard let appState else {
+            pendingPushToken = tokenHex
+            return
         }
+        appState.wakeKeyService.updatePushToken(tokenHex)
     }
 
     func application(

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 // MARK: - WakeKeyError
@@ -10,6 +11,16 @@ enum WakeKeyError: LocalizedError {
     case noPrivateKey
     case decryptionFailed(String)
     case registrationFailed(String)
+    /// The server refused the registration body itself (400/422). Retrying the same
+    /// body cannot succeed, so the retry loop stops and the error stays surfaced.
+    case registrationRejected(String)
+    /// Registration was attempted while the device keys are locked. The request
+    /// would go out unsigned and be refused with a 401, so it is never sent.
+    case deviceLocked
+    /// The unlocked device state carries no usable Ed25519/X25519 public key. A
+    /// registration with empty keys is stored by the server and then sealed to
+    /// nothing, so it is refused here rather than sent.
+    case deviceKeysUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -23,20 +34,14 @@ enum WakeKeyError: LocalizedError {
             return NSLocalizedString("error_no_wake_key", comment: "No wake key found")
         case .decryptionFailed(let detail):
             return L10n.format("error_wake_decrypt_failed", comment: "Wake decrypt failed: %@", detail)
-        case .registrationFailed(let detail):
+        case .registrationFailed(let detail), .registrationRejected(let detail):
             return L10n.format("error_wake_register_failed", comment: "Device registration failed: %@", detail)
+        case .deviceLocked:
+            return L10n.format("error_wake_register_failed", comment: "Device registration failed: %@", "device is locked")
+        case .deviceKeysUnavailable:
+            return L10n.format("error_wake_register_failed", comment: "Device registration failed: %@", "device keys unavailable")
         }
     }
-}
-
-// MARK: - DeviceRegistrationRequest
-
-/// Request body for `POST /api/devices/register`.
-struct DeviceRegistrationRequest: Encodable, Sendable {
-    let pushToken: String
-    let wakeKeyPublic: String
-    let platform: String
-    let deviceId: String
 }
 
 // MARK: - WakeKeyService
@@ -54,12 +59,14 @@ struct DeviceRegistrationRequest: Encodable, Sendable {
 ///
 /// Flow:
 /// 1. On first launch: `ensureKeypairExists()` generates and stores the wake key
-/// 2. On push token receipt: `registerDevice(pushToken:)` sends wake pubkey + token to server
+/// 2. After every unlock, and again when the APNs token arrives: `registerDeviceIfUnlocked()`
+///    sends the device's X25519/Ed25519 public keys (+ wake pubkey and token once known),
+///    signed, and retries until the server accepts it
 /// 3. On push receipt: notification service extension calls `decryptWakePayload()` to
 ///    decrypt the HPKE-encrypted notification content
 ///
-/// `@MainActor` (#1920 audit): `registerDevice(pushToken:)` ran on the global executor from
-/// the push-token callback's `Task`, reading `publicKeyHex` and writing `isRegistered`,
+/// `@MainActor` (#1920 audit): `registerDevice` ran on the global executor from
+/// the push-token callback's `Task`, reading `publicKeyHex` and writing the registration state,
 /// while `cleanup()` — logout and wipe, on main — cleared both. Every other caller (the
 /// app delegate's push handlers, `AppState`, `WipeService`) already runs on main.
 @MainActor
@@ -74,8 +81,18 @@ final class WakeKeyService {
     /// Whether the wake keypair has been generated.
     var hasKeypair: Bool { publicKeyHex != nil }
 
-    /// Whether the device is registered with the server.
-    private(set) var isRegistered: Bool = false
+    /// Whether the server has accepted this process's current registration. Derived from
+    /// the last accepted body, never persisted: a stored flag would outlive the server
+    /// row it describes (wipe, reinstall, key change) and read as registered when not.
+    var isRegistered: Bool { registeredFingerprint != nil }
+
+    /// The APNs token, once the system has delivered one. Held in memory only: the
+    /// system re-delivers it at every launch, and it is needed again after each unlock.
+    private(set) var pushToken: String?
+
+    /// Why the last registration attempt failed, or nil once the server accepted one.
+    /// Observed by the UI so a device that cannot be sent anything says so.
+    private(set) var registrationError: String?
 
     // MARK: - Private Properties
 
@@ -85,14 +102,34 @@ final class WakeKeyService {
 
     private static let wakePrivateKeyAccount = "wake-private-key"
     private static let wakePublicKeyAccount = "wake-public-key"
-    private static let deviceRegisteredAccount = "device-registered"
+
+    private static let log = Logger(subsystem: "org.llamenos.hotline", category: "DeviceRegistration")
+
+    /// Waits between failed registration attempts; the last one repeats. The endpoint
+    /// sits in the server's `strict` rate-limit bucket (5/hour), so the first five
+    /// attempts are spread over ~13 minutes and the tail is slow rather than a burst
+    /// that locks the device out of registering at all.
+    private let retryDelays: [Duration]
+
+    /// The registration in flight or waiting to retry. Cancelled on lock and logout.
+    private var registrationTask: Task<Void, Never>?
+
+    /// Fingerprint of the last body the server accepted, so an unlock that changes
+    /// nothing does not spend a request. A new key or token changes it and registers again.
+    private var registeredFingerprint: String?
 
     // MARK: - Initialization
 
-    init(keychainService: KeychainService, cryptoService: CryptoService, apiService: APIService) {
+    init(
+        keychainService: KeychainService,
+        cryptoService: CryptoService,
+        apiService: APIService,
+        retryDelays: [Duration] = [.seconds(5), .seconds(30), .seconds(120), .seconds(600), .seconds(900)]
+    ) {
         self.keychainService = keychainService
         self.cryptoService = cryptoService
         self.apiService = apiService
+        self.retryDelays = retryDelays
         loadExistingKeys()
     }
 
@@ -104,12 +141,8 @@ final class WakeKeyService {
             if let pubKeyData = try keychainService.retrieve(key: Self.wakePublicKeyAccount) {
                 publicKeyHex = String(data: pubKeyData, encoding: .utf8)
             }
-            if let regData = try keychainService.retrieve(key: Self.deviceRegisteredAccount) {
-                isRegistered = regData.first == 1
-            }
         } catch {
             publicKeyHex = nil
-            isRegistered = false
         }
     }
 
@@ -237,36 +270,130 @@ final class WakeKeyService {
 
     // MARK: - Device Registration
 
-    /// Register this device's push token and wake public key with the server.
-    func registerDevice(pushToken: String) async throws {
-        guard let wakePublicKey = publicKeyHex else {
-            throw WakeKeyError.noPrivateKey
+    /// Record the APNs token and register it, if the device is unlocked. While locked
+    /// the token is only held: the unlock hook registers it together with the keys.
+    func updatePushToken(_ token: String) {
+        pushToken = token
+        registerDeviceIfUnlocked()
+    }
+
+    /// Start registering this device, signed, retrying until the server accepts it.
+    ///
+    /// A no-op while locked (an unsigned request is a guaranteed 401) and while an
+    /// attempt is already running. Call it from every point the device becomes usable
+    /// (unlock, onboarding) and whenever the push token changes.
+    func registerDeviceIfUnlocked() {
+        guard cryptoService.isUnlocked, registrationTask == nil else { return }
+        registrationTask = Task { [weak self] in
+            await self?.registerUntilAccepted()
+            // A cancelled task was already replaced or cleared by cancelRegistration().
+            if !Task.isCancelled { self?.registrationTask = nil }
+        }
+    }
+
+    /// Stop any pending attempt. Called on lock and logout: the next unlock starts afresh.
+    func cancelRegistration() {
+        registrationTask?.cancel()
+        registrationTask = nil
+    }
+
+    /// Whether a registration attempt (or a wait between two) is currently scheduled.
+    var isRegistering: Bool { registrationTask != nil }
+
+    private func registerUntilAccepted() async {
+        var failures = 0
+        while !Task.isCancelled {
+            do {
+                try await registerDevice()
+                registrationError = nil
+                // A token that arrived during the request changes the body: go again.
+                guard let current = try? Self.fingerprint(of: registrationBody()),
+                      current != registeredFingerprint else { return }
+            } catch is CancellationError {
+                return
+            } catch WakeKeyError.deviceLocked {
+                // Locked mid-flight; the next unlock registers.
+                return
+            } catch {
+                registrationError = error.localizedDescription
+                Self.log.error("Device registration failed: \(error.localizedDescription, privacy: .public)")
+                if Self.isPermanent(error) { return }
+                let delay = retryDelays.isEmpty ? .seconds(60) : retryDelays[min(failures, retryDelays.count - 1)]
+                failures += 1
+                do { try await Task.sleep(for: delay) } catch { return }
+            }
+        }
+    }
+
+    /// A body the server rejected as invalid will be rejected again; every other
+    /// failure (network, 401 before the user row exists, 429, 5xx) can clear.
+    private static func isPermanent(_ error: Error) -> Bool {
+        if case WakeKeyError.registrationRejected = error { return true }
+        return false
+    }
+
+    /// The body to register right now, built from the live device state.
+    ///
+    /// Always carries both public keys: identity is what the server seals to, and it
+    /// must not depend on APNs having produced a token. The push fields ride along
+    /// only once a token is known.
+    func registrationBody() throws -> RegisterDeviceBody {
+        guard cryptoService.isUnlocked else { throw WakeKeyError.deviceLocked }
+        guard let signing = cryptoService.signingPubkeyHex, Self.isKeyHex(signing),
+              let encryption = cryptoService.encryptionPubkeyHex, Self.isKeyHex(encryption) else {
+            throw WakeKeyError.deviceKeysUnavailable
         }
 
-        // Get or generate device ID
-        let deviceId: String
-        if let existingId = try keychainService.retrieveString(key: KeychainKey.deviceID) {
-            deviceId = existingId
-        } else {
-            deviceId = UUID().uuidString
-            try keychainService.storeString(deviceId, key: KeychainKey.deviceID)
+        var wakePublicKey: String?
+        if pushToken != nil {
+            try ensureKeypairExists()
+            guard let wake = publicKeyHex else { throw WakeKeyError.noPrivateKey }
+            wakePublicKey = wake
         }
 
-        let request = DeviceRegistrationRequest(
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return RegisterDeviceBody(
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            deviceModel: nil,
+            deviceName: nil,
+            ed25519Pubkey: signing,
+            osVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)",
+            platform: .ios,
             pushToken: pushToken,
             wakeKeyPublic: wakePublicKey,
-            platform: "ios",
-            deviceId: deviceId
+            x25519Pubkey: encryption
         )
+    }
+
+    /// Register this device's keys (and push token, if known) with the server, signed.
+    ///
+    /// Throws when the device is locked or its keys are unavailable instead of sending
+    /// a registration the server cannot use. Skips the request when the server already
+    /// holds exactly this registration.
+    func registerDevice() async throws {
+        let body = try registrationBody()
+        let fingerprint = try Self.fingerprint(of: body)
+        if fingerprint == registeredFingerprint { return }
 
         do {
-            try await apiService.request(method: "POST", path: "/api/devices/register", body: request)
-            let regData = Data([1])
-            try keychainService.store(key: Self.deviceRegisteredAccount, data: regData)
-            isRegistered = true
+            try await apiService.request(method: "POST", path: "/api/devices/register", wireBody: body)
+        } catch APIError.requestFailed(let statusCode, let responseBody) where statusCode == 400 || statusCode == 422 {
+            throw WakeKeyError.registrationRejected("HTTP \(statusCode): \(responseBody)")
         } catch {
             throw WakeKeyError.registrationFailed(error.localizedDescription)
         }
+
+        registeredFingerprint = fingerprint
+    }
+
+    private static func fingerprint(of body: RegisterDeviceBody) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return String(decoding: try encoder.encode(body), as: UTF8.self)
+    }
+
+    private static func isKeyHex(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy(\.isHexDigit)
     }
 
     // MARK: - Wake Payload Decryption
@@ -325,9 +452,10 @@ final class WakeKeyService {
         ]
         SecItemDelete(deleteQuery as CFDictionary)
         keychainService.delete(key: Self.wakePublicKeyAccount)
-        keychainService.delete(key: Self.deviceRegisteredAccount)
         publicKeyHex = nil
-        isRegistered = false
+        cancelRegistration()
+        registeredFingerprint = nil
+        registrationError = nil
     }
 
     // MARK: - Hex Utility

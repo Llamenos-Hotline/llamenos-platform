@@ -259,45 +259,6 @@ final class SecurityHardeningTests: XCTestCase {
         )
     }
 
-    func testWakeKeyServiceRegistrationRequiresKeypair() {
-        // registerDevice() should throw WakeKeyError.noPrivateKey if called
-        // before ensureKeypairExists().
-        let keychainService = KeychainService()
-        // Clear any wake key entries left by prior tests or runs
-        keychainService.delete(key: "wake-private-key")
-        keychainService.delete(key: "wake-public-key")
-        keychainService.delete(key: "device-registered")
-
-        let cryptoService = CryptoService()
-        let apiService = APIService(cryptoService: cryptoService, hubContext: HubContext())
-
-        let wakeKeyService = WakeKeyService(
-            keychainService: keychainService,
-            cryptoService: cryptoService,
-            apiService: apiService
-        )
-
-        let expectation = XCTestExpectation(description: "registerDevice should fail without keypair")
-
-        Task {
-            do {
-                try await wakeKeyService.registerDevice(pushToken: "test-token")
-                XCTFail("registerDevice should throw when no keypair exists")
-            } catch let error as WakeKeyError {
-                if case .noPrivateKey = error {
-                    // Expected
-                } else {
-                    XCTFail("Expected noPrivateKey error, got \(error)")
-                }
-            } catch {
-                XCTFail("Expected WakeKeyError, got \(type(of: error))")
-            }
-            expectation.fulfill()
-        }
-
-        wait(for: [expectation], timeout: 5)
-    }
-
     // MARK: - Gap 3.1: Wake Key X25519 Curve Verification
 
     func testWakeKeyDerivedPublicKeyIsX25519Length() throws {
