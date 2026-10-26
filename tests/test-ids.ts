@@ -132,6 +132,8 @@ export const TestIds = {
   INCOMING_CALL_ROW: 'incoming-call-row',
   /** Answer button inside an incoming call row; append `-<callId>` via rowTestId */
   ANSWER_CALL_BTN: 'answer-call-btn',
+  /** Live region that announces a ringing call to assistive technology */
+  INCOMING_CALL_ANNOUNCEMENT: 'incoming-call-announcement',
   /** Hub label shown on a call when the user is a member of several hubs */
   CALL_HUB_LABEL: 'call-hub-label',
   CALL_TIMER: 'call-timer',

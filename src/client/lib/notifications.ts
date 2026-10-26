@@ -117,7 +117,12 @@ function showBrowserNotification(title: string, body: string) {
 
 // --- Public API ---
 
-export async function startRinging(incomingText: string) {
+/**
+ * `title` and `body` are already translated by the caller and must stay generic —
+ * never name or number the caller: both reach the tab title and the OS
+ * notification, which show on a lock screen.
+ */
+export async function startRinging(title: string, body: string) {
   if (isRinging) return
   isRinging = true
 
@@ -129,14 +134,14 @@ export async function startRinging(incomingText: string) {
     ringInterval = setInterval(playRingTone, RING_DURATION + RING_PAUSE)
   }
 
-  // Tab title flash (generic text only — no caller info on lock screens)
-  startTitleFlash(incomingText)
+  // Tab title flash
+  startTitleFlash(title)
 
-  // Browser notification (generic text — never include caller info to prevent leak on lock screens)
+  // Browser notification
   if (prefs.browserNotificationsEnabled) {
     const granted = await requestPermission()
     if (granted) {
-      showBrowserNotification('Incoming Call', 'A call is waiting')
+      showBrowserNotification(title, body)
     }
   }
 }
