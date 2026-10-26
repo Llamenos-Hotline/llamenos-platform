@@ -35,7 +35,7 @@ function OnboardingPage() {
   const inviteCode = params.get('code') || ''
 
   const [step, setStep] = useState<Step>('loading')
-  const [inviteData, setInviteData] = useState<{ name: string; roleIds: string[] } | null>(null)
+  const [inviteData, setInviteData] = useState<{ name: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [uiLang, setUiLang] = useState(i18n.language || 'en')
 
@@ -88,7 +88,7 @@ function OnboardingPage() {
     }
     validateInvite(inviteCode).then(result => {
       if (result.outcome === 'valid') {
-        setInviteData({ name: result.name, roleIds: result.roleIds || ['role-volunteer'] })
+        setInviteData({ name: result.name })
         setStep('welcome')
       } else if (result.outcome === 'invalid') {
         setErrorRetryable(false)

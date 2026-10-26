@@ -4577,6 +4577,7 @@
     "role": "Vai trò",
     "roleAdmin": "Quản trị viên",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "Mặc định của hub",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Tình nguyện viên",

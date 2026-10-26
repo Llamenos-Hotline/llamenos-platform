@@ -4,6 +4,12 @@ import type { AppEnv } from '@worker/types'
 import userRoutes from '@worker/routes/users'
 import { ServiceError } from '@worker/services/settings'
 import { DEFAULT_ROLES } from '@shared/permissions'
+import { resolveHubDefaultMemberRoles } from '@worker/lib/hub-default-role'
+
+vi.mock('@worker/lib/hub-default-role', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@worker/lib/hub-default-role')>()),
+  resolveHubDefaultMemberRoles: vi.fn().mockResolvedValue([]),
+}))
 
 const VOLUNTEER_PERMISSIONS = DEFAULT_ROLES.find(r => r.id === 'role-volunteer')!.permissions
 
@@ -43,6 +49,7 @@ function createTestApp(opts: {
 
   const services: Record<string, unknown> = {
     identity: serviceMock.identity || {},
+    settings: serviceMock.settings || {},
     cases: serviceMock.cases || {},
     audit: mockAuditService,
   }
@@ -147,9 +154,9 @@ describe('users routes', () => {
   // -------------------------------------------------------------------------
 
   describe('POST /users', () => {
-    it('creates a user with default volunteer role when roleIds omitted', async () => {
+    it('grants no role when roleIds is omitted and there is no hub to name a default', async () => {
       const createUserSpy = vi.fn().mockResolvedValue({
-        volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-volunteer'] },
+        volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: [] },
       })
       const { app, auditLogSpy } = createTestApp({
         permissions: ['users:create', ...VOLUNTEER_PERMISSIONS],
@@ -163,10 +170,33 @@ describe('users routes', () => {
       })
 
       expect(res.status).toBe(201)
-      expect(createUserSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ roleIds: ['role-volunteer'] }),
-      )
+      // No role is implied by the code: a hard-coded `role-volunteer` here was a
+      // default-role id acting as an authorisation decision (#2233).
+      expect(createUserSpy).toHaveBeenCalledWith(expect.objectContaining({ roleIds: [] }))
       expect(auditLogSpy).toHaveBeenCalledOnce()
+    })
+
+    it("grants the hub template's default member role when roleIds is omitted under a hub", async () => {
+      vi.mocked(resolveHubDefaultMemberRoles).mockResolvedValueOnce(['role-reviewer'])
+      const createUserSpy = vi.fn().mockResolvedValue({
+        volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: [], hubRoles: [] },
+      })
+      const { app } = createTestApp({
+        permissions: ['*'],
+        hubId: 'hub-1',
+        serviceMock: { identity: { createUser: createUserSpy, getUsers: vi.fn(), getUser: vi.fn() } },
+      })
+
+      await app.request('/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), name: 'New User', phone: '+15551234567' }),
+      })
+
+      expect(resolveHubDefaultMemberRoles).toHaveBeenCalledWith(expect.anything(), 'hub-1')
+      expect(createUserSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ hubId: 'hub-1', roleIds: ['role-reviewer'] }),
+      )
     })
 
     it('creates a user with provided roleIds', async () => {
@@ -190,7 +220,7 @@ describe('users routes', () => {
       )
     })
 
-    it('defaults to volunteer when roleIds is empty array', async () => {
+    it('treats an empty roleIds array as no role named', async () => {
       const createUserSpy = vi.fn().mockResolvedValue({
         volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-volunteer'] },
       })
@@ -207,7 +237,7 @@ describe('users routes', () => {
 
       expect(res.status).toBe(201)
       expect(createUserSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ roleIds: ['role-volunteer'] }),
+        expect.objectContaining({ roleIds: [] }),
       )
     })
 

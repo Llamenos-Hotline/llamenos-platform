@@ -1841,6 +1841,7 @@
     "role": "Роль",
     "roleAdmin": "Адміністратор",
     "roleHubAdmin": "Адміністратор хабу",
+    "roleHubDefault": "За замовчуванням для хабу",
     "roleReporter": "Репортер",
     "roleReviewer": "Рецензент",
     "roleVolunteer": "Волонтер",

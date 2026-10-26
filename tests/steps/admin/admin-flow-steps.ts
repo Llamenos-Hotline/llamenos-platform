@@ -8,7 +8,7 @@
  */
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
-import { TestIds, uniquePhone, Timeouts } from '../../helpers'
+import { TestIds, uniquePhone, Timeouts, chooseFormRole } from '../../helpers'
 import {
   listVolunteersViaApi,
   listShiftsViaApi,
@@ -25,6 +25,7 @@ When('I add a new volunteer with a unique name and phone', async ({ page, adminW
   await page.getByLabel('Name').fill(adminWorld.lastUserName)
   await page.getByLabel('Phone Number').fill(phone)
   await page.getByLabel('Phone Number').blur()
+  await chooseFormRole(page)
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
 })
 

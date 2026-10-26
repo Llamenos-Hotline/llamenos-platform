@@ -122,9 +122,10 @@ routes.post('/',
 
     // The creator becomes the hub's first admin in the same transaction as the
     // hub itself (#2126): a hub never exists without one, and if the grant
-    // cannot be made the hub is not created.
+    // cannot be made the hub is not created. The founder's role is the one the
+    // role catalog designates for it by permission, not a role id.
     try {
-      await services.settings.createHub(hub, { pubkey, roleIds: ['role-hub-admin'] })
+      await services.settings.createHub(hub, { pubkey })
     } catch (err) {
       if (err instanceof ServiceError) {
         return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)

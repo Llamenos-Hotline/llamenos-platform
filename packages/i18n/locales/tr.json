@@ -1841,6 +1841,7 @@
     "role": "Rol",
     "roleAdmin": "Yönetici",
     "roleHubAdmin": "Merkez Yöneticisi",
+    "roleHubDefault": "Hub varsayılanı",
     "roleReporter": "Raporcu",
     "roleReviewer": "İnceleyici",
     "roleVolunteer": "Gönüllü",

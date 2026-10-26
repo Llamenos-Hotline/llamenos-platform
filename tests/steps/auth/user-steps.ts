@@ -12,6 +12,7 @@ import {
   Timeouts,
   createUserAndGetDeviceKey,
   dismissDeviceKeyCard,
+  chooseFormRole,
   loginAsVolunteer,
   loginAsAdmin,
   navigateAfterLogin,
@@ -101,6 +102,7 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   const phone = `+1212${Date.now().toString().slice(-7)}`
   await page.getByLabel('Phone Number').fill(phone)
   await page.getByLabel('Phone Number').blur()
+  await chooseFormRole(page)
   // The invite form submits with 'create-invite-btn', not 'form-save-btn'.
   const createInviteBtn = page.getByTestId('create-invite-btn')
   await expect(createInviteBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })

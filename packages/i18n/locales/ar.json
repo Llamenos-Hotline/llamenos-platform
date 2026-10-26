@@ -4577,6 +4577,7 @@
     "role": "الدور",
     "roleAdmin": "مسؤول",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "الافتراضي للمركز",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "متطوع",

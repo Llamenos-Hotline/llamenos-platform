@@ -4577,6 +4577,7 @@
     "role": "역할",
     "roleAdmin": "관리자",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "허브 기본값",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "자원봉사자",

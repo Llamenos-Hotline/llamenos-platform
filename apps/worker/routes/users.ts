@@ -11,6 +11,7 @@ import { audit } from '../services/audit'
 import { callerIsSuperAdmin, checkRoleGrant } from '../lib/hub-scope'
 import { isSuperAdmin, resolveHubRoleIds } from '@shared/permissions'
 import type { Context } from 'hono'
+import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
 import { revokeSipIdentityIfRoleless, revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 // Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
@@ -196,7 +197,14 @@ users.post('/',
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const hubId = c.get('hubId')
-    const roleIds = (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || ['role-volunteer']
+    // The creator's explicit choice wins; otherwise the hub's template decides
+    // (as for invites), and a template naming none grants none — never a role
+    // the code picked. A user with no role still joins the hub, for an operator
+    // to assign.
+    const requestedRoleIds = (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || []
+    const roleIds = requestedRoleIds.length > 0 || !hubId
+      ? requestedRoleIds
+      : await resolveHubDefaultMemberRoles(services.settings, hubId)
 
     // The creator must already hold every permission they grant (prevents privilege escalation)
     const denied = checkRoleGrant(c, roleIds)

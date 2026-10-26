@@ -4577,6 +4577,7 @@
     "role": "Роль",
     "roleAdmin": "Администратор",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "По умолчанию для хаба",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Волонтёр",

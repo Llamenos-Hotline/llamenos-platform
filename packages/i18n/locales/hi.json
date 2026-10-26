@@ -4577,6 +4577,7 @@
     "role": "भूमिका",
     "roleAdmin": "एडमिन",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "हब का डिफ़ॉल्ट",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "स्वयंसेवक",

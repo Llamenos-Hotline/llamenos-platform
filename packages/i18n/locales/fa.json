@@ -1841,6 +1841,7 @@
     "role": "نقش",
     "roleAdmin": "مدیر",
     "roleHubAdmin": "مدیر هاب",
+    "roleHubDefault": "پیش‌فرض مرکز",
     "roleReporter": "گزارشگر",
     "roleReviewer": "بازبین",
     "roleVolunteer": "داوطلب",

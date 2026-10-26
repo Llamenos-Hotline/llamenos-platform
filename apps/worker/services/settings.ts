@@ -112,6 +112,7 @@ import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import {
   assertRoleChangeKeepsAdmins,
+  hubFounderRoleIds,
   loadRoleCatalog,
   lockHubAdminSets,
   mergeHubRole,
@@ -2037,10 +2038,15 @@ export class SettingsService {
    * or the roles named would not make them an admin. The previous shape created
    * the hub and then granted the creator's role in a separate step whose
    * failure was only logged, which left a hub nobody could administer.
+   *
+   * `founder.roleIds` names the roles to grant; omitted, the founder gets the
+   * role the live catalog designates for it BY PERMISSION ({@link hubFounderRoleIds}),
+   * resolved inside the transaction so a concurrent role edit cannot change it
+   * between the choice and the grant.
    */
   async createHub(
     hub: Hub,
-    founder: { pubkey: string; roleIds: readonly string[] },
+    founder: { pubkey: string; roleIds?: readonly string[] },
   ): Promise<{ hub: Hub }> {
     await this.db.transaction(async (tx) => {
       const [existing] = await tx
@@ -2065,7 +2071,9 @@ export class SettingsService {
       // role must either finish first (and fail this check) or wait until the
       // hub's admin is committed (and be counted by its own guard).
       await lockHubAdminSets(tx, [hub.id])
-      if (!rolesConferHubAdmin(founder.roleIds, await loadRoleCatalog(tx))) {
+      const catalog = await loadRoleCatalog(tx)
+      const founderRoleIds = founder.roleIds ?? hubFounderRoleIds(catalog)
+      if (!rolesConferHubAdmin(founderRoleIds, catalog)) {
         throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
       }
 
@@ -2091,7 +2099,7 @@ export class SettingsService {
       await tx
         .update(users)
         .set({
-          hubRoles: mergeHubRole((founderRow.hubRoles as HubRoleAssignment[] | null) ?? [], hub.id, founder.roleIds),
+          hubRoles: mergeHubRole((founderRow.hubRoles as HubRoleAssignment[] | null) ?? [], hub.id, founderRoleIds),
           updatedAt: now,
         })
         .where(eq(users.pubkey, founder.pubkey))
