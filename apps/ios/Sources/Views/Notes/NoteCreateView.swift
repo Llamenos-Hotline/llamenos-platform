@@ -183,7 +183,6 @@ struct NoteCreateView: View {
                         .font(.brand(.headline))
                         .foregroundStyle(Color.brandForeground)
                 }
-                .accessibilityIdentifier("note-call-picker")
 
                 // Error display
                 if let error = errorMessage {
