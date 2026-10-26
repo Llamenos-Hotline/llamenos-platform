@@ -205,12 +205,14 @@ final class ActiveCallUITests: BaseUITest {
         }
     }
 
-    /// Answer goes to the server, and the screen shows what the server decided: either the
-    /// call is this volunteer's (and the call card appears), or the hub cannot connect them
-    /// in the app (422) and the card says to answer on the phone.
-    func testAnswerShowsWhatTheServerDecided() {
+    /// Answer goes to the server, and the screen reports what the server decided. This
+    /// identity is not on a shift, so the server was not ringing it and refuses the answer
+    /// (403 "Not rung for this call"): the volunteer is told, the call stays a ring, and it
+    /// does not become "my call". (The 422 "answer on your phone" and the success path are
+    /// pinned in `DashboardCallsTests`, which can script the server's answer.)
+    func testAnswerRefusedByTheServerIsReportedAndTheRingStays() {
         var callId = ""
-        given("a call is ringing on my hub") {
+        given("a call is ringing on my hub and the server is not ringing me") {
             launchOnFreshHub()
             callId = ringCall(callerNumber: "+15551110009", hubId: callHubId)
             XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
@@ -218,18 +220,13 @@ final class ActiveCallUITests: BaseUITest {
         when("I tap Answer") {
             tapOnceHittable("answer-call-button")
         }
-        then("the card matches the server: my call, or answer on the phone") {
-            XCTAssertTrue(
-                anyElementExists(["active-call-card", "answer-on-phone"], timeout: 20),
-                "Answering should end in my call or in 'answer on your phone', never in silence"
-            )
+        then("I am told it did not happen, and nothing was answered") {
+            XCTAssertTrue(find("dashboard-error").waitForExistence(timeout: 20), "A refused answer should be reported")
+            XCTAssertFalse(find("active-call-card").exists, "A refused answer does not make the ring my call")
+            XCTAssertTrue(find("incoming-call-card").exists, "The call is still ringing")
             let held = serverActiveCalls(hubId: callHubId).first { $0.id == callId }
-            if find("active-call-card").exists {
-                XCTAssertEqual(held?.answeredBy, appIdentityPubkey(), "The card is shown only for a call I answered")
-            } else {
-                XCTAssertNil(held?.answeredBy, "'Answer on your phone' means nobody was bridged in the app")
-                XCTAssertEqual(held?.status, "ringing")
-            }
+            XCTAssertNil(held?.answeredBy)
+            XCTAssertEqual(held?.status, "ringing")
         }
     }
 
