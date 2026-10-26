@@ -87,7 +87,7 @@ export function IvrLanguagesSection({ settings, onChange, expanded, onToggle, st
               className={`flex items-center justify-between rounded-lg border px-4 py-2 ${digit ? 'border-border' : 'border-dashed border-muted-foreground/40'}`}
             >
               <div className="flex items-center gap-2">
-                <Badge variant="outline" className="text-xs font-mono w-8 justify-center">
+                <Badge variant="outline" className="text-xs font-mono w-8 justify-center" data-testid={`ivr-digit-${code}`}>
                   {digit || '–'}
                 </Badge>
                 <span className="text-sm">{lang.label}</span>
@@ -123,7 +123,7 @@ export function IvrLanguagesSection({ settings, onChange, expanded, onToggle, st
       </div>
 
       {uncoveredLanguageCount > 0 && (
-        <div role="status" className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2">
+        <div role="status" data-testid="ivr-uncovered-flag" data-count={uncoveredLanguageCount} className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
           <div>
             <p className="text-sm font-medium">{t('ivr.uncoveredLanguages', { count: uncoveredLanguageCount })}</p>
@@ -133,7 +133,7 @@ export function IvrLanguagesSection({ settings, onChange, expanded, onToggle, st
       )}
 
       {menuFull && (
-        <p className="text-xs text-muted-foreground mt-1">{maxLanguagesMessage}</p>
+        <p data-testid="ivr-menu-full" className="text-xs text-muted-foreground mt-1">{maxLanguagesMessage}</p>
       )}
 
       {/* Available languages — not yet enabled */}
@@ -150,6 +150,7 @@ export function IvrLanguagesSection({ settings, onChange, expanded, onToggle, st
                 <div key={lang.code} className="flex items-center justify-between rounded-lg border border-border/50 px-4 py-2">
                   <span className="text-sm text-muted-foreground">{lang.label}</span>
                   <Switch
+                    data-testid={`ivr-enable-${lang.code}`}
                     checked={false}
                     onCheckedChange={() => toggle(lang.code, true)}
                   />
