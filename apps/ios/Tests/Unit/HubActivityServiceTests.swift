@@ -82,6 +82,13 @@ struct HubActivityServiceTests {
         #expect(svc.state(for: "hub-001").unreadConversationCount == 1)
     }
 
+    @Test func envelopesAddedChangesNoCounts() {
+        // The keys for messages already counted arrived; nothing new to read (#2202).
+        let svc = HubActivityService()
+        svc.handle(event(hubId: "hub-001", type: .conversationEnvelopesAdded))
+        #expect(svc.state(for: "hub-001") == HubActivityState())
+    }
+
     @Test func openHubClearsUnreadCounts() {
         let svc = HubActivityService()
         svc.handle(event(hubId: "hub-001", type: .messageNew))

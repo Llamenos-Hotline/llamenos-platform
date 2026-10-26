@@ -63,6 +63,9 @@ enum HubEventType: String, Sendable {
     case conversationNew = "conversation:new"
     case conversationAssigned = "conversation:assigned"
     case conversationClosed = "conversation:closed"
+    /// An admin device re-sealed a conversation's content keys to the assignee's registered
+    /// device keys (`POST /conversations/:id/assignee-envelopes`, #1512). Ids and a count only.
+    case conversationEnvelopesAdded = "conversation:envelopes-added"
     case deviceWipe = "device:wipe"
     case unknown
 }
