@@ -616,8 +616,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_BAN_KEY_DERIVE,     // 103
     LABEL_CALLER_NUMBER_SEAL, // 104
     // 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
-    HMAC_MESSAGING_CONTACT_PREFIX,     // 105
-    LABEL_MESSAGING_CONTACT_HUB_KEY,   // 106
+    HMAC_MESSAGING_CONTACT_PREFIX,   // 105
+    LABEL_MESSAGING_CONTACT_HUB_KEY, // 106
 ];
 
 /// Look up a label string by its numeric ID.
@@ -815,7 +815,10 @@ mod tests {
         assert_eq!(LABEL_BAN_KEY_DERIVE, "llamenos:ban-key-derive:v1");
         assert_eq!(LABEL_CALLER_NUMBER_SEAL, "llamenos:caller-number-seal:v1");
         assert_eq!(HMAC_MESSAGING_CONTACT_PREFIX, "llamenos:messaging-contact:");
-        assert_eq!(LABEL_MESSAGING_CONTACT_HUB_KEY, "llamenos:messaging-contact-hub-key:v1");
+        assert_eq!(
+            LABEL_MESSAGING_CONTACT_HUB_KEY,
+            "llamenos:messaging-contact-hub-key:v1"
+        );
     }
 
     /// Verify registry index stability.
