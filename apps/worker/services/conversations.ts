@@ -759,7 +759,6 @@ export class ConversationsService {
      */
     contactHash: string,
     /**
-    /**
      * The platform admin's X25519 HPKE recipient, or `undefined` when the
      * deployment has none. Typed as a brand so an Ed25519 auth key — which is
      * also 64 hex characters, and which the messaging router used to pass here

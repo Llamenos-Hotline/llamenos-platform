@@ -145,12 +145,19 @@ final class ContactsViewModelTests: XCTestCase {
         XCTAssertNotNil(viewModel.errorMessage, "An unreachable list must be reported, not shown as 'no results'")
     }
 
-    func testSummaryMatchesLastFourAndHashPrefixAndIgnoresMask() throws {
+    /// The server keeps no part of the number (#2182), so the start of the hash
+    /// is all a query can name. The `beef`, `ef99` and `***dead` negatives below
+    /// all matched under the previous substring-plus-last-four-plus-mask matcher,
+    /// so this fails against it and pins the new contract.
+    func testSummaryMatchesOnlyTheStartOfTheHash() throws {
         let row = try summary("deadbeef99")
-        XCTAssertTrue(row.matches("5150"))
-        XCTAssertTrue(row.matches("***5150"), "The displayed form finds the same contact")
+        XCTAssertTrue(row.matches("dead"))
         XCTAssertTrue(row.matches("DEADBEEF"), "Hash match is case-insensitive")
+        XCTAssertTrue(row.matches("  dead  "), "Surrounding whitespace is ignored")
         XCTAssertTrue(row.matches("  "), "An empty query matches everything")
+        XCTAssertFalse(row.matches("beef"), "A fragment from inside the hash is not a match (prefix only)")
+        XCTAssertFalse(row.matches("ef99"), "The tail of the hash is not a match: there is no last4 to search")
+        XCTAssertFalse(row.matches("***dead"), "The mask is not stripped: the displayed form is no longer a last4 mask")
         XCTAssertFalse(row.matches("0000"))
     }
 
