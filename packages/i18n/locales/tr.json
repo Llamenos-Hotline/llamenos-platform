@@ -718,15 +718,16 @@
   },
   "ivr": {
     "selfAnnouncement": "Türkçe için [N] tuşuna basın.",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Bu merkezde kimsenin konuşmadığı etkin diller: {{count}}",
+    "uncoveredHint": "Bunlardan birini seçen arayan, o dili konuşan kimseye ulaşamayabilir. Üye profillerine konuşulan dilleri ekleyin veya dili kapatın.",
+    "maxLanguagesReached": "Tuş takımı menüsü en fazla {{max}} dil alır. Diğer dillerdeki arayanlar telefon numarası önekine göre eşleştirilir."
   },
   "ivrAudio": {
     "delete": "Sil",

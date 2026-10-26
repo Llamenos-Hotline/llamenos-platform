@@ -9,7 +9,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
-import { setLastResponse } from './shared-state'
+import { getSharedState, setLastResponse } from './shared-state'
 import { apiGet, apiPatch, apiPost } from '../../api-helpers'
 
 interface IvrOverrideState {
@@ -78,4 +78,14 @@ Then('the hub\'s IVR languages should equal the instance-wide IVR languages', ({
   const s = getS(world)
   expect(s.instanceLanguages).toBeDefined()
   expect(s.lastLanguages).toEqual(s.instanceLanguages)
+})
+
+Then('the IVR language settings should be the list plus a count of at most {int}', ({ world }, max: number) => {
+  const data = getSharedState(world).lastResponse!.data as Record<string, unknown>
+  // Exactly these two members: a third would be a way to learn who speaks what.
+  expect(Object.keys(data).sort()).toEqual(['enabledLanguages', 'uncoveredLanguageCount'])
+  const count = data.uncoveredLanguageCount
+  expect(Number.isInteger(count)).toBe(true)
+  expect(count as number).toBeGreaterThanOrEqual(0)
+  expect(count as number).toBeLessThanOrEqual(max)
 })

@@ -37,14 +37,16 @@ export async function updateCallSettings(data: Partial<CallSettings>) {
 
 // --- IVR Language Settings ---
 
+export type IvrLanguageSettings = import('@protocol/schemas').IvrLanguageSettings
+
 export async function getIvrLanguages(hubId?: string) {
   const qs = hubId ? `?hubId=${encodeURIComponent(hubId)}` : ''
-  return request<{ enabledLanguages: string[] }>(`/settings/ivr-languages${qs}`)
+  return request<IvrLanguageSettings>(`/settings/ivr-languages${qs}`)
 }
 
 export async function updateIvrLanguages(data: { enabledLanguages: string[] }, hubId?: string) {
   const qs = hubId ? `?hubId=${encodeURIComponent(hubId)}` : ''
-  return request<{ enabledLanguages: string[] }>(`/settings/ivr-languages${qs}`, {
+  return request<IvrLanguageSettings>(`/settings/ivr-languages${qs}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   })

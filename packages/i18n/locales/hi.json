@@ -2517,15 +2517,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "हिन्दी के लिए, [N] दबाएँ।",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "सक्षम की गई वे भाषाएँ जिन्हें इस hub में कोई नहीं बोलता: {{count}}",
+    "uncoveredHint": "इनमें से कोई भाषा चुनने वाला कॉलर शायद ऐसे किसी व्यक्ति तक न पहुँच पाए जो वह भाषा बोलता हो। सदस्यों की प्रोफ़ाइल में बोली जाने वाली भाषाएँ जोड़ें, या उस भाषा को बंद करें।",
+    "maxLanguagesReached": "कीपैड मेनू में अधिकतम {{max}} भाषाएँ आती हैं। अन्य भाषाओं के कॉलर फ़ोन नंबर के उपसर्ग से पहचाने जाते हैं।"
   },
   "ivrAudio": {
     "delete": "हटाएं",

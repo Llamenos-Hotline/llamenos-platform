@@ -14,6 +14,7 @@ import {
   type SpamSettings,
   type CallSettings,
   type IvrAudioRecording,
+  type IvrLanguageSettings,
   type CustomFieldDefinition,
   type TelephonyProviderConfig,
   getMessagingConfig,
@@ -56,7 +57,8 @@ function AdminSettingsPage() {
   const [callSet, setCallSet] = useState<CallSettings | null>(null)
   const [globalTranscription, setGlobalTranscription] = useState(false)
   const [allowUserOptOut, setAllowUserOptOut] = useState(false)
-  const [ivrEnabled, setIvrEnabled] = useState<string[]>([...IVR_LANGUAGES])
+  const [ivrSettings, setIvrSettings] = useState<IvrLanguageSettings>({ enabledLanguages: [...IVR_LANGUAGES], uncoveredLanguageCount: 0 })
+  const ivrEnabled = ivrSettings.enabledLanguages
   const [ivrAudio, setIvrAudio] = useState<IvrAudioRecording[]>([])
   const [loading, setLoading] = useState(true)
   const [webauthnSettings, setWebauthnSettings] = useState<WebAuthnSettings | null>(null)
@@ -81,7 +83,7 @@ function AdminSettingsPage() {
         setGlobalTranscription(r.globalEnabled)
         setAllowUserOptOut(r.allowUserOptOut)
       }),
-      getIvrLanguages().then(r => setIvrEnabled(r.enabledLanguages)),
+      getIvrLanguages().then(setIvrSettings),
       listIvrAudio().then(r => setIvrAudio(r.recordings)),
       getWebAuthnSettings().then(setWebauthnSettings).catch(() => toast(t('common.error'), 'error')),
       getCustomFields().then(r => setCustomFieldDefs(r.fields)).catch(() => toast(t('common.error'), 'error')),
@@ -188,8 +190,8 @@ function AdminSettingsPage() {
       />
 
       <IvrLanguagesSection
-        enabled={ivrEnabled}
-        onChange={setIvrEnabled}
+        settings={ivrSettings}
+        onChange={setIvrSettings}
         expanded={expanded.has('ivr-languages')}
         onToggle={(open) => toggleSection('ivr-languages', open)}
         statusSummary={ivrStatus}

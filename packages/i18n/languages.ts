@@ -239,6 +239,12 @@ export const IVR_LANGUAGES: string[] = [
   'es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru',
 ]
 
+/**
+ * The keypad has ten digits (1-9 then 0), so an IVR language menu holds at most
+ * ten languages. Every other language is reached by phone-prefix detection.
+ */
+export const IVR_MENU_MAX_LANGUAGES = 10
+
 /** Convert IVR array index to phone digit string */
 export function ivrIndexToDigit(index: number): string {
   if (index >= 0 && index <= 8) return String(index + 1)

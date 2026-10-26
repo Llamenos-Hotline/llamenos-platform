@@ -2517,15 +2517,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "한국어는 [N] 번을 눌러주세요.",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "이 hub에서 아무도 구사하지 않는 활성 언어: {{count}}",
+    "uncoveredHint": "이 중 하나를 선택한 발신자는 해당 언어를 구사하는 사람에게 연결되지 않을 수 있습니다. 멤버 프로필에 구사 언어를 추가하거나 해당 언어를 끄세요.",
+    "maxLanguagesReached": "키패드 메뉴에는 최대 {{max}}개 언어를 넣을 수 있습니다. 다른 언어의 발신자는 전화번호 접두사로 구분됩니다."
   },
   "ivrAudio": {
     "delete": "삭제",
