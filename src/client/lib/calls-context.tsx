@@ -6,7 +6,23 @@ import type { HubCall } from './api'
 
 type CallFeed = ReturnType<typeof useCallFeed>
 
-const CallsContext = createContext<CallFeed | null>(null)
+/**
+ * What a route sees when it renders with no signed-in session around it. The router
+ * keeps the previous route mounted for a render while it moves to /login or
+ * /profile-setup, and those branches have no relay and so no feed: "no calls" is the
+ * truth there, and answering one is an error rather than a silent no-op.
+ */
+const NO_SESSION_FEED: CallFeed = {
+  calls: [],
+  currentCall: null,
+  ringingCalls: [],
+  activeCalls: [],
+  answerCall: () => Promise.reject(new Error('No call feed: not signed in')),
+  hangupCall: () => Promise.reject(new Error('No call feed: not signed in')),
+  reportSpam: () => Promise.reject(new Error('No call feed: not signed in')),
+}
+
+const CallsContext = createContext<CallFeed>(NO_SESSION_FEED)
 
 /**
  * Owns the one call feed (relay subscriptions + polling for every member hub).
@@ -20,9 +36,7 @@ export function CallsProvider({ children }: { children: ReactNode }) {
 }
 
 export function useCalls(): CallFeed {
-  const feed = useContext(CallsContext)
-  if (!feed) throw new Error('useCalls must be used inside <CallsProvider>')
-  return feed
+  return useContext(CallsContext)
 }
 
 export interface IncomingCall {

@@ -108,6 +108,14 @@ describe('useCalls with the user in two hubs and hub A active', () => {
     expect(requested).toEqual([{ path: '/hubs/hub-B/calls/CA-on-hub-B/spam', method: 'POST' }])
   })
 
+  it('is an empty, inert feed for a route that renders with no signed-in session around it', async () => {
+    const { result } = renderHook(() => useCalls())
+    expect(result.current.calls).toEqual([])
+    expect(result.current.currentCall).toBeNull()
+    await expect(result.current.answerCall('CA-on-hub-B')).rejects.toThrow('not signed in')
+    expect(requested).toEqual([])
+  })
+
   it('throws and puts the call back when the server refuses the answer, so the caller can say so', async () => {
     const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))

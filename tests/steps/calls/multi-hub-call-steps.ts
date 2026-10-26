@@ -82,9 +82,32 @@ Then('the volunteer should see that call ringing', async ({ page }) => {
   await expect(page.getByTestId(rowTestId(TestIds.INCOMING_CALL_ROW, callId!))).toBeVisible({ timeout: RING_TIMEOUT })
 })
 
+Then('the ring should be announced to assistive technology', async ({ page }) => {
+  // The region is always mounted and its text changes when a call rings — that change is
+  // what a screen reader speaks. Generic text only: the caller's number must not be in it.
+  // (The hub name may follow a dash, and a test hub's name carries digits, so judge the text before it.)
+  const region = page.getByTestId(TestIds.INCOMING_CALL_ANNOUNCEMENT)
+  await expect(region).toHaveAttribute('aria-live', 'polite')
+  await expect(region).not.toBeEmpty({ timeout: Timeouts.ELEMENT })
+  const [spoken] = (await region.textContent())!.split(' — ')
+  expect(spoken).not.toMatch(/\d/)
+})
+
 When('the volunteer answers that call', async ({ page }) => {
   const { callId } = await recordedIds(page)
   await page.getByTestId(rowTestId(TestIds.ANSWER_CALL_BTN, callId!)).click()
+})
+
+When('the volunteer answers that call with the keyboard alone', async ({ page }) => {
+  const { callId } = await recordedIds(page)
+  // Focus is offered to Answer when the ring arrives; Enter on a native button is all it takes.
+  await expect(page.getByTestId(rowTestId(TestIds.ANSWER_CALL_BTN, callId!))).toBeFocused({ timeout: Timeouts.ELEMENT })
+  await page.keyboard.press('Enter')
+})
+
+When('the volunteer answers that call with the answer shortcut', async ({ page }) => {
+  // Works from anywhere, including a text field: nothing here clicks or focuses the card.
+  await page.keyboard.press('ControlOrMeta+Shift+A')
 })
 
 Then('the volunteer should be on an active call', async ({ page }) => {

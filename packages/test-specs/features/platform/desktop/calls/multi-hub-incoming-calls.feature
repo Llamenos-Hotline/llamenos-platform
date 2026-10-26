@@ -15,6 +15,26 @@ Feature: Incoming calls ring on every member hub
     Then the volunteer should be on an active call
     And that call should be answered on the second hub
 
+  # An incoming ring that cannot be perceived or answered is a missed call. It must be
+  # announced to a screen reader and answerable with no pointer at all.
+
+  Scenario: A ringing call is announced and answered with the keyboard alone
+    Given a volunteer assigned to multiple hubs
+    When a call comes in on the volunteer's second hub while the first hub is active
+    Then the volunteer should see that call ringing
+    And the ring should be announced to assistive technology
+    When the volunteer answers that call with the keyboard alone
+    Then the volunteer should be on an active call
+    And that call should be answered on the second hub
+
+  Scenario: The answer shortcut answers a ringing call on the call's own hub
+    Given a volunteer assigned to multiple hubs
+    When a call comes in on the volunteer's second hub while the first hub is active
+    Then the volunteer should see that call ringing
+    When the volunteer answers that call with the answer shortcut
+    Then the volunteer should be on an active call
+    And that call should be answered on the second hub
+
   # A note about a call belongs to the call's hub, wherever in the UI it is written.
   # Filing it to the active hub instead would show it to the wrong hub's admins and
   # hide it from the right ones — and nothing would report an error.
