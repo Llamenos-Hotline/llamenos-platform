@@ -132,3 +132,85 @@ Then('the restored device key matches the one the backup was made from', async (
     .toBe(backupWorld.pubkeyHex)
   expect((await readKeyManager()).unlocked).toBe(true)
 })
+
+// --- Keyboard-only restore (#2215) ------------------------------------------
+// Nothing below clicks, hovers or fills: every interaction is Tab, Enter or
+// typed keys, and every assertion is about where focus is and what the field
+// is called to assistive technology.
+
+When('I choose my encrypted backup file using only the keyboard', async ({ page, backupWorld }) => {
+  // Walk the tab order until the file button is focused. If the picker were a
+  // div, or the hidden input were the only control, this walk would never land.
+  const focusedTestId = () => page.evaluate(
+    () => document.activeElement?.getAttribute('data-testid') ?? null,
+  )
+  for (let i = 0; i < 12 && (await focusedTestId()) !== 'backup-file-btn'; i++) {
+    await page.keyboard.press('Tab')
+  }
+  expect(await focusedTestId(), 'the backup file button must be reachable by Tab').toBe('backup-file-btn')
+
+  // Enter on the button must reach the file input, which is what opens the
+  // chooser. The native dialog itself is not asserted: headless Chromium drops
+  // it intermittently when workers run in parallel, even though the click on
+  // the input is dispatched every time.
+  const inputClicked = page.evaluate(() => new Promise<boolean>(resolve => {
+    document.addEventListener('click', e => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') resolve(true)
+    }, true)
+    setTimeout(() => resolve(false), 5000)
+  }))
+  await page.keyboard.press('Enter')
+  expect(await inputClicked, 'Enter on the button must activate the file input').toBe(true)
+  await page.getByTestId(TestIds.BACKUP_FILE_INPUT).setInputFiles(backupWorld.filePath)
+})
+
+Then('focus should be on the recovery key field named {string}', async ({ page }, name: string) => {
+  const field = page.getByLabel(name, { exact: true })
+  await expect(field).toBeFocused({ timeout: Timeouts.ELEMENT })
+  await expect(field).toHaveAttribute('data-testid', TestIds.RECOVERY_KEY_INPUT)
+  // The step's heading is the field group's name, so entering it announces both.
+  await expect(page.getByRole('group', { name: 'Decrypt backup file' })).toBeVisible()
+})
+
+When('I type my recovery key and move to the decrypt button using only the keyboard', async ({ page, backupWorld }) => {
+  await page.keyboard.type(backupWorld.recoveryKey)
+  // Recovery key → PIN field → Decrypt button.
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId(TestIds.DECRYPT_BACKUP_BTN)).toBeFocused()
+})
+
+Then('focus should be on the new PIN field named {string}', async ({ page }, name: string) => {
+  const field = page.getByLabel(name, { exact: true })
+  await expect(field).toBeFocused({ timeout: Timeouts.AUTH })
+  await expect(field).toHaveAttribute('type', 'password')
+})
+
+Then('the new PIN field should be described by the create PIN heading', async ({ page }) => {
+  const field = page.getByTestId(TestIds.PIN_INPUT).locator('input')
+  await expect(field).toHaveAccessibleDescription(/Create a PIN or passphrase/)
+})
+
+When('I type the PIN {string} and press Enter using only the keyboard', async ({ page }, pin: string) => {
+  await page.keyboard.type(pin)
+  await page.keyboard.press('Enter')
+})
+
+Then('the new PIN field should announce the confirm PIN heading', async ({ page }) => {
+  const field = page.getByTestId(TestIds.PIN_INPUT).locator('input')
+  // Focus stays in the field across create → confirm, so the change has to
+  // arrive through the live region and the field's description.
+  await expect(field).toBeFocused()
+  await expect(field).toHaveValue('')
+  await expect(page.getByRole('status').filter({ hasText: 'Confirm your PIN or passphrase' })).toBeVisible()
+  await expect(field).toHaveAccessibleDescription(/Confirm your PIN or passphrase/)
+})
+
+Then('the new PIN field name should not contain the PIN {string}', async ({ page }, pin: string) => {
+  const field = page.getByTestId(TestIds.PIN_INPUT).locator('input')
+  await page.keyboard.type(pin)
+  await expect(field).toHaveValue(pin)
+  await expect(field).toHaveAccessibleName('Enter your PIN or passphrase')
+  expect(await field.evaluate((el: HTMLInputElement) => el.getAttribute('aria-label') ?? '')).not.toContain(pin)
+  await expect(field).not.toHaveAccessibleDescription(new RegExp(pin))
+})

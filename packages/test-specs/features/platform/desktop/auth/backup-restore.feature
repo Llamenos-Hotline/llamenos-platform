@@ -48,3 +48,19 @@ Feature: Encrypted Backup Restore
     Given I am on the login screen
     When I upload a version 3 backup file
     Then I should see "Invalid backup file"
+
+  # The same flow, with no pointer: every control is reached by Tab and operated
+  # by Enter or typing, focus lands where the next input is, and each field
+  # carries its purpose as its accessible name without the PIN ever being in it.
+  Scenario: A keyboard-only user can restore from a backup file
+    Given I have downloaded an encrypted backup of my device key
+    And I am on the login screen
+    When I choose my encrypted backup file using only the keyboard
+    Then focus should be on the recovery key field named "Enter your recovery key"
+    When I type my recovery key and move to the decrypt button using only the keyboard
+    And I press "Enter" on the focused element
+    Then focus should be on the new PIN field named "Enter your PIN or passphrase"
+    And the new PIN field should be described by the create PIN heading
+    When I type the PIN "restore-pin-9" and press Enter using only the keyboard
+    Then the new PIN field should announce the confirm PIN heading
+    And the new PIN field name should not contain the PIN "restore-pin-9"
