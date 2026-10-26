@@ -55,6 +55,7 @@ import {
   users,
 } from '../db/schema'
 import type { SpamSettings, CallSettings } from '../types'
+import { isHubMember } from '../lib/hub-membership'
 import type {
   CustomFieldDefinition,
   TelephonyProviderConfig,
@@ -87,11 +88,12 @@ import type {
   EntityFieldDefinition,
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
+import type { IvrLanguageSettings } from '@protocol/schemas/settings'
 import type {
   ReportTypeDefinition,
   ReportFieldDefinition,
 } from '@protocol/schemas/report-types'
-import { IVR_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
+import { IVR_LANGUAGES, IVR_MENU_MAX_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
 import { speechLanguageFor } from './ivr-speech/voices'
@@ -543,6 +545,28 @@ export class SettingsService {
   }
 
   /**
+   * The IVR language settings screen's view: the enabled list plus how many of
+   * those languages nobody in the hub speaks. A COUNT only — the distinct set of
+   * spoken languages is computed in SQL and never leaves this method, so the
+   * response cannot be used to learn who speaks what.
+   *
+   * Kept apart from `getIvrLanguages`, which runs on every inbound call and has
+   * no use for a roster query.
+   */
+  async getIvrLanguageSettings(hubId?: string): Promise<IvrLanguageSettings> {
+    const { enabledLanguages } = await this.getIvrLanguages(hubId)
+    const spoken = await this.db
+      .selectDistinct({ code: sql<string>`unnest(${users.spokenLanguages})` })
+      .from(users)
+      .where(and(eq(users.active, true), eq(users.status, 'active'), hubId ? isHubMember(hubId) : undefined))
+    const covered = new Set(spoken.map((row) => row.code))
+    return {
+      enabledLanguages,
+      uncoveredLanguageCount: enabledLanguages.filter((code) => !covered.has(code)).length,
+    }
+  }
+
+  /**
    * Get the ordered IVR language list for a hub, with cascade fallback:
    * hub_settings.ivrLanguages → system_settings.ivr_languages → IVR_LANGUAGES constant
    */
@@ -598,6 +622,15 @@ export class SettingsService {
     )
     if (valid.length === 0) {
       throw new ServiceError(400, 'No valid IVR language codes provided')
+    }
+    // The keypad has ten digits. A language beyond the tenth would get no digit
+    // from `ivrIndexToDigit` and be dropped from the menu the caller hears, so a
+    // longer list is refused here rather than saved and silently truncated.
+    if (valid.length > IVR_MENU_MAX_LANGUAGES) {
+      throw new ServiceError(
+        400,
+        `The IVR menu holds at most ${IVR_MENU_MAX_LANGUAGES} languages — other languages are reached by phone-prefix detection`,
+      )
     }
     // Constrain to what the active provider can actually speak (#732) —
     // reuses the catalog resolution built for #679 / PR #673 rather than

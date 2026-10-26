@@ -7,6 +7,7 @@
  */
 import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
+import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
@@ -231,18 +232,6 @@ function sanitizeUserForHub(vol: User, hubId: string, allRoles: Role[]): ReturnT
     roles: resolveHubRoleIds(vol.roles, assignment, allRoles, hubId),
     hubRoles: assignment,
   }
-}
-
-/**
- * SQL predicate: the user holds a role assignment in `hubId`.
- *
- * Compares `hubId` as a text parameter. Binding a JSON string and casting it
- * (`@> ${JSON.stringify(...)}::jsonb`) reaches Postgres double-encoded — a
- * jsonb *string*, not an array — so the containment never matched and every
- * hub's member list came back empty.
- */
-function isHubMember(hubId: string) {
-  return sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${users.hubRoles}) AS assignment WHERE assignment->>'hubId' = ${hubId})`
 }
 
 /** Map a DB invite row to InviteCode interface */

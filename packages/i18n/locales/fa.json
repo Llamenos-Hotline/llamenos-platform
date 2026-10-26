@@ -718,15 +718,16 @@
   },
   "ivr": {
     "selfAnnouncement": "برای فارسی، [N] را فشار دهید.",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "زبان‌های فعالی که هیچ‌کس در این هاب به آن‌ها صحبت نمی‌کند: {{count}}",
+    "uncoveredHint": "تماس‌گیرنده‌ای که یکی از این زبان‌ها را انتخاب کند ممکن است به کسی که آن زبان را بلد است نرسد. زبان‌های گفتاری را به نمایه اعضا اضافه کنید یا آن زبان را غیرفعال کنید.",
+    "maxLanguagesReached": "منوی صفحه‌کلید حداکثر {{max}} زبان را در خود جا می‌دهد. تماس‌گیرندگان با زبان‌های دیگر بر اساس پیش‌شماره تلفن شناسایی می‌شوند."
   },
   "ivrAudio": {
     "delete": "حذف",

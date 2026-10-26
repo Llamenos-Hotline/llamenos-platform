@@ -16,6 +16,7 @@ import {
   webauthnSettingsSchema,
   transcriptionSettingsSchema,
   ivrLanguagesSchema,
+  ivrLanguageSettingsSchema,
   setupStateSchema,
   customFieldsBodySchema,
   createReportTypeBodySchema,
@@ -301,7 +302,7 @@ settings.get('/ivr-languages',
         description: 'IVR language settings',
         content: {
           'application/json': {
-            schema: resolver(ivrLanguagesSchema),
+            schema: resolver(ivrLanguageSettingsSchema),
           },
         },
       },
@@ -312,7 +313,7 @@ settings.get('/ivr-languages',
   async (c) => {
     const services = c.get('services')
     const hubId = targetHubId(c)
-    const result = await services.settings.getIvrLanguages(hubId)
+    const result = await services.settings.getIvrLanguageSettings(hubId)
     return c.json(result)
   },
 )
@@ -326,7 +327,7 @@ settings.patch('/ivr-languages',
         description: 'IVR language settings updated',
         content: {
           'application/json': {
-            schema: resolver(ivrLanguagesSchema),
+            schema: resolver(ivrLanguageSettingsSchema),
           },
         },
       },
@@ -340,9 +341,9 @@ settings.patch('/ivr-languages',
     const body = c.req.valid('json')
     const services = c.get('services')
     const hubId = targetHubId(c)
-    const result = await services.settings.updateIvrLanguages(body as Parameters<typeof services.settings.updateIvrLanguages>[0], hubId)
+    await services.settings.updateIvrLanguages(body as Parameters<typeof services.settings.updateIvrLanguages>[0], hubId)
     await audit(services.audit, 'ivrLanguagesUpdated', pubkey, { ...(body as Record<string, unknown>), hubId }, undefined, targetHubId(c) ?? null)
-    return c.json(result)
+    return c.json(await services.settings.getIvrLanguageSettings(hubId))
   },
 )
 

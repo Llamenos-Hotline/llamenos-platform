@@ -2519,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "Для русского языка нажмите [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Включённые языки, на которых никто в этом хабе не говорит: {{count}}",
+    "uncoveredHint": "Звонящий, выбравший один из них, может не дозвониться до того, кто на нём говорит. Добавьте языки общения в профили участников или отключите язык.",
+    "maxLanguagesReached": "В меню клавиатуры помещается {{max}} языков. Звонящие на других языках определяются по телефонному префиксу."
   },
   "ivrAudio": {
     "delete": "Удалить",

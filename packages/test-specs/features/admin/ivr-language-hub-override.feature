@@ -41,3 +41,28 @@ Feature: Per-hub IVR language menu override
     # Substring must be specific: a bare "vi" also matches the word "provider".
     And the error message contains "cannot speak: vi"
     And the error message contains "telnyx"
+
+  # The keypad has ten digits (1-9, 0). An 11th language would get no digit and
+  # be dropped from the menu the caller hears, so the API refuses it instead of
+  # saving a list the menu cannot honour.
+  @backend
+  Scenario: A hub menu longer than the keypad is refused rather than truncated
+    When the admin sets the hub's IVR languages to "es,en,zh,tl,vi,ar,fr,ht,ko,ru,hi"
+    Then the response status should be 400
+    And the error message contains "at most 10 languages"
+
+  @backend
+  Scenario: A hub menu that fills the keypad exactly is accepted in order
+    When the admin sets the hub's IVR languages to "es,en,zh,tl,vi,ar,fr,ht,ko,ru"
+    Then the response status should be 200
+    And the hub's IVR languages should be exactly "es,en,zh,tl,vi,ar,fr,ht,ko,ru"
+
+  # Coverage is a staffing aid, not a roster: the response carries how many
+  # enabled languages nobody in the hub speaks, and never which languages or who.
+  @backend
+  Scenario: The IVR language settings report an uncovered-language count and nothing more
+    When the admin sets the hub's IVR languages to "fr,de"
+    And the admin gets the hub's IVR languages
+    Then the response status should be 200
+    And the IVR language settings should be the list plus a count of at most 2
+

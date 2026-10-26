@@ -239,6 +239,19 @@ export const ivrLanguagesSchema = z.object({
   enabledLanguages: z.array(z.string()),
 })
 
+/**
+ * What the IVR language settings screen reads and gets back from a save.
+ *
+ * `uncoveredLanguageCount` is how many enabled languages no hub member lists in
+ * `spokenLanguages` — a caller who picks one of those reaches nobody who speaks
+ * it. It is a COUNT, never the languages or the people: naming who speaks what
+ * would turn a staffing aid into a roster disclosure about volunteers.
+ */
+export const ivrLanguageSettingsSchema = ivrLanguagesSchema.extend({
+  uncoveredLanguageCount: z.number().int().nonnegative(),
+})
+export type IvrLanguageSettings = z.infer<typeof ivrLanguageSettingsSchema>
+
 /** Hub-scoped IVR language configuration (ordered list) */
 export const hubIvrLanguagesSchema = z.object({
   ivrLanguages: z.array(z.string()),

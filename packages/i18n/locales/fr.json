@@ -2519,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "Pour le français, appuyez sur [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Langues activées que personne dans ce hub ne parle : {{count}}",
+    "uncoveredHint": "Un appelant qui choisit l'une d'elles risque de ne joindre personne qui la parle. Ajoutez des langues parlées aux profils des membres, ou désactivez la langue.",
+    "maxLanguagesReached": "Le menu du clavier contient {{max}} langues. Les appelants des autres langues sont reconnus par l'indicatif téléphonique."
   },
   "ivrAudio": {
     "delete": "Supprimer",

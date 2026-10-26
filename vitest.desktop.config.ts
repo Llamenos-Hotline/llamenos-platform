@@ -8,6 +8,7 @@ export default defineConfig({
       "src/client/lib/**/*.test.ts",
       "src/client/lib/**/*.test.tsx",
       "src/client/components/**/__tests__/**/*.test.ts",
+      "src/client/components/**/__tests__/**/*.test.tsx",
     ],
     environment: "happy-dom",
     setupFiles: ["./vitest.desktop.setup.ts"],

@@ -415,6 +415,24 @@ describe('SettingsService.updateIvrLanguages', () => {
     expect(result.enabledLanguages).toContain('en')
     expect(result.enabledLanguages).toContain('es')
   })
+
+  it('fills the keypad exactly: ten languages are accepted in the order given', async () => {
+    const { service } = setup()
+    const ten = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru']
+
+    const result = await service.updateIvrLanguages({ enabledLanguages: ten })
+    expect(result.enabledLanguages).toEqual(ten)
+  })
+
+  it('refuses an 11th language rather than saving a menu with an unreachable entry', async () => {
+    const { db, service } = setup()
+    const eleven = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru', 'hi']
+
+    await expect(
+      service.updateIvrLanguages({ enabledLanguages: eleven }),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('at most 10 languages') })
+    expect(db.update).not.toHaveBeenCalled()
+  })
 })
 
 // ---------------------------------------------------------------------------

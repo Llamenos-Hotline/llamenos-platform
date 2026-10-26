@@ -2519,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "Tiếng Việt, nhấn [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Ngôn ngữ đã bật mà không ai trong hub này nói được: {{count}}",
+    "uncoveredHint": "Người gọi chọn một trong số này có thể không gặp được ai nói ngôn ngữ đó. Hãy thêm ngôn ngữ sử dụng vào hồ sơ thành viên hoặc tắt ngôn ngữ.",
+    "maxLanguagesReached": "Menu bàn phím chứa tối đa {{max}} ngôn ngữ. Người gọi bằng ngôn ngữ khác được nhận diện theo đầu số điện thoại."
   },
   "ivrAudio": {
     "delete": "Xóa",
