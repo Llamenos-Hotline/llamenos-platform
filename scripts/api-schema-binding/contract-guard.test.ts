@@ -190,6 +190,16 @@ describe('call-site parsing follows the way the clients build paths', () => {
     expect(f.path).toBe('/api/hubs/:param/onboard/nope')
   })
 
+  test('kotlin: ApiService.hubPath(hubId, path) names the hub explicitly, through a helper whose body starts on the next line', () => {
+    const f = only(kotlin(`
+      private fun callPath(call: ActiveCall, action: String): String =
+          apiService.hubPath(call.hubId ?: apiService.activeHubIdOrNull(), "/api/calls/\${call.id}/$action")
+      suspend fun hangup(call: ActiveCall) = apiService.requestNoContent("POST", callPath(call, "nope"))
+    `))
+    expect(f.category).toBe('unmounted')
+    expect(f.path).toBe('/api/hubs/:param/calls/:param/nope')
+  })
+
   test('a private hubPath() that only appends a query is not read as hub scoping', () => {
     expect(kotlin(`
       private fun hubPath(path: String): String = if (hubId != null) "$path?hubId=$hubId" else path
