@@ -4,7 +4,7 @@
 
 # Stage 1: Install runtime deps
 # node:26-slim digest pinned 2026-05-18 — update via scripts/update-image-digests.sh
-FROM node:26-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4 AS deps
+FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS deps
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
 
@@ -44,7 +44,7 @@ RUN cargo build --release --manifest-path packages/crypto/Cargo.toml --features 
     && cp packages/crypto/target/release/libllamenos_core.so packages/crypto/dist/server/
 
 # Stage 3: Production
-FROM node:26-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4
+FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r llamenos && useradd -r -g llamenos -d /app -s /sbin/nologin llamenos
 WORKDIR /app

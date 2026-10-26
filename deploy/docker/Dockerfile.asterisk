@@ -21,7 +21,7 @@
 ARG ASTERISK_VERSION=22.10.1
 
 # ── Build the resolver module ────────────────────────────────────────────────
-FROM debian:trixie@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 AS resolver-builder
+FROM debian:trixie@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS resolver-builder
 ARG ASTERISK_VERSION
 ARG ASTERISK_SHA256=0953564c44fa49827f3c9d70ca6e80db83828c9848440852c6be44c961855353
 ARG DEBIAN_FRONTEND=noninteractive
@@ -69,7 +69,7 @@ RUN menuselect/menuselect --disable-category MENUSELECT_RES menuselect.makeopts 
 
 # ── The vetted PBX image, plus the module ────────────────────────────────────
 # 22.10.1 — NOT below 22.10.0, see #1687
-FROM andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6
+FROM andrius/asterisk@sha256:532e68e4194e968e866a27f321ccce03fdd66bd7e369ffa17c07e7210da0fde1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libunbound8 \
     && rm -rf /var/lib/apt/lists/*
