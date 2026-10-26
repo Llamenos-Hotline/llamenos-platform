@@ -369,11 +369,14 @@
     "active": "Wicitaan Socda",
     "addNote": "Qoraal kudar",
     "answer": "Ka jawaab",
+    "answerFailed": "Wicitaanka lagama jawaabi karin. Waxaa laga yaabaa in qof kale horey uga jawaabay.",
+    "answerOnPhone": "Ka jawaab telefoonkaaga",
     "banned": "Lambarkaan waa la mamnuucay",
     "caller": "Wacaha",
     "duration": "Muddo",
     "ended": "Wicitaan Dhammaatay",
     "hangUp": "Dejiso",
+    "hangupFailed": "Wicitaanka lama joojin karin. Mar kale isku day.",
     "hold": "Sugitaan",
     "incoming": "Wicitaan Soo socda",
     "mute": "Aamusnaw",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "Qalabkan weli looma diiwaangelin xarunta (hub) aad ku jirto. U sheeg qof maamula xaruntaada inuu ku daro.",
+    "forbidden": "Ma haysatid ogolaansho aad ku samayso arrintan. U sheeg qof maamula xarunta (hub) aad ku jirto.",
+    "notFound": "Tani mar dambe ma jirto. Waxaa laga yaabaa in la saaray.",
+    "serverUnavailable": "Hadda serverka lama gaari karo. Mar kale isku day daqiiqad ka dib."
+  },
   "hubs": {
     "accessDenied": "Marin la diiday",
     "createHub": "Samee Xarun",
@@ -913,6 +922,7 @@
     "keyLocked": "Furahu waa xiran yahay",
     "lockoutRemaining": "Xiran. Mar kale isku day {{seconds}} ilbiriqsiyadii kadib.",
     "mismatch": "PIN-yadu ma isu mid yihiin. Mar kale isku day.",
+    "progress": "{{count}} ka mid ah {{total}}",
     "setEncrypting": "Furuhaa waa la siraysaa...",
     "setSubtitle": "Dooro PIN 6-8 lambar ah si aad ugu ilaaliso furuhaaga",
     "setTitle": "Samee PIN",
@@ -930,7 +940,7 @@
     "description": "Geli PIN-kaaga si aad u sii waddo tallaabodan.",
     "maxAttempts": "Tijaabiyada ugu badnaan waa la dhaafay. Furahu waa la tirtiray.",
     "title": "Xaqiiji Aqoonsigaaga",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN-ku sax ma aha."
   },
   "preferences": {
     "invalidToken": "Isku xirka doorashada waa khalad ama waa dhammaatay",
@@ -3569,8 +3579,8 @@
   },
   "lock": {
     "app": "Xir Abka",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Furaha waa la tirtiray sababta oo ah isku daygii fashilmay ayaa aad u badnaa",
+    "wrongPin": "PIN khaldan"
   },
   "login": {
     "subtitle": "Khadka taleefanka xiisadda ee amaan ah",
@@ -4194,6 +4204,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Lama kaydin: serverku wuu diiday",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4399,7 +4410,7 @@
   },
   "callActions": {
     "openNotes": "Qoraallo",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Mamnuuc oo dejiso",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4560,9 +4571,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Qof ayaa wacaya khadka gargaarka",
+  "incomingCallAnswer": "Ka jawaab",
+  "incomingCallDecline": "Diid",
   "incomingCallMicrophoneRequired": "Gelitaanka makarafoonka waa lagama maarmaan si aad uga jawaabto wicitaannada abka.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",

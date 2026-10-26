@@ -369,11 +369,14 @@
     "active": "ንቁ ጥሪ",
     "addNote": "ማስታወሻ ጨምር",
     "answer": "መልስ",
+    "answerFailed": "ጥሪውን መመለስ አልተቻለም። ሌላ ሰው ቀድሞ አንስቶ ሊሆን ይችላል።",
+    "answerOnPhone": "በስልክዎ ይመልሱ",
     "banned": "ይህ ቁጥር ታግዷል",
     "caller": "ደዋይ",
     "duration": "ቆይታ",
     "ended": "ጥሪ ተጠናቋል",
     "hangUp": "ዝጋ",
+    "hangupFailed": "ጥሪውን መዝጋት አልተቻለም። እንደገና ይሞክሩ።",
     "hold": "አቆይ",
     "incoming": "ገቢ ጥሪ",
     "mute": "ድምጽ አጥፋ",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "ይህ መሣሪያ በማዕከልዎ ገና አልተመዘገበም። ማዕከልዎን ከሚያስተዳድር ሰው እንዲያክለው ይጠይቁ።",
+    "forbidden": "ይህን ለማድረግ ፈቃድ የለዎትም። ማዕከልዎን ከሚያስተዳድር ሰው ይጠይቁ።",
+    "notFound": "ይህ ከአሁን በኋላ የለም። ተወግዶ ሊሆን ይችላል።",
+    "serverUnavailable": "አሁን አገልጋዩን ማግኘት አልተቻለም። ትንሽ ቆይተው እንደገና ይሞክሩ።"
+  },
   "hubs": {
     "accessDenied": "ተደራሽነት ተከልክሏል",
     "createHub": "ሃብ ፍጠር",
@@ -913,6 +922,7 @@
     "keyLocked": "ቁልፍ ተቆልፏል",
     "lockoutRemaining": "ተቆልፏል። በ {{seconds}} ሰከንዶች ውስጥ እንደገና ይሞክሩ።",
     "mismatch": "PIN ዎች አይዛመዱም። እንደገና ይሞክሩ።",
+    "progress": "{{count}} ከ {{total}}",
     "setEncrypting": "ቁልፍዎን በመመስጠር ላይ...",
     "setSubtitle": "ቁልፍዎን ለመጠበቅ 6-8 አሃዝ PIN ይምረጡ",
     "setTitle": "PIN ይፍጠሩ",
@@ -930,7 +940,7 @@
     "description": "ይህን ድርጊት ለመቀጠል PIN ዎን ያስገቡ።",
     "maxAttempts": "ከፍተኛ ሙከራዎች ተሟልተዋል። ቁልፍ ተጠፍቷል።",
     "title": "ማንነትዎን ያረጋግጡ",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN ትክክል አይደለም።"
   },
   "preferences": {
     "invalidToken": "ልክ ያልሆነ ወይም ጊዜው ያለፈ የምርጫ ማገናኛ",
@@ -3675,8 +3685,8 @@
   },
   "lock": {
     "app": "መተግበሪያ ቆልፍ",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "ብዙ ጊዜ በመሳሳትዎ ቁልፉ ተሰርዟል",
+    "wrongPin": "የተሳሳተ PIN"
   },
   "triage": {
     "emptyTitle": "ሪፖርቶች የሉም",
@@ -4127,6 +4137,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "አልተቀመጠም፦ አገልጋዩ አልተቀበለውም",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4375,7 +4386,7 @@
   "methodVoice": "ድምጽ",
   "callActions": {
     "openNotes": "ማስታወሻዎች",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "አግድና ዝጋ",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4560,9 +4571,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "አንድ ሰው የስልክ መስመሩን እየደወለ ነው",
+  "incomingCallAnswer": "መልስ",
+  "incomingCallDecline": "አትቀበል",
   "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",

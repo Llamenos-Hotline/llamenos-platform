@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Chặn và ngắt máy",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Chặn người gọi và ngắt máy?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "Cuộc gọi đang hoạt động",
-    "addNote": "Add Note",
+    "addNote": "Thêm ghi chú",
     "answer": "Trả lời",
+    "answerFailed": "Không thể trả lời cuộc gọi. Có thể người khác đã trả lời trước.",
+    "answerOnPhone": "Trả lời trên điện thoại của bạn",
     "banned": "Số này đã bị chặn",
     "caller": "Người gọi",
     "duration": "Thời lượng",
     "ended": "Cuộc gọi đã kết thúc",
     "hangUp": "Gác máy",
+    "hangupFailed": "Không thể kết thúc cuộc gọi. Vui lòng thử lại.",
     "hold": "Giữ máy",
     "incoming": "Cuộc gọi đến",
     "mute": "Tắt tiếng",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "Chuyển đến hộp thư thoại",
     "unknown": "Số không xác định",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "Người gọi không xác định",
     "unmute": "Bật tiếng",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "Cuộc gọi hôm nay",
     "cases": "Hồ sơ",
-    "clockIn": "Clock In",
+    "clockIn": "Bắt đầu ca",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "Kết thúc ca",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2071,6 +2074,12 @@
     "httpNotAllowed": "Không cho phép kết nối HTTP không an toàn. Hãy dùng địa chỉ HTTPS.",
     "pinLockoutDuration": "Thử sai quá nhiều lần. Hãy thử lại sau {{seconds}} giây.",
     "pinWiped": "Nhập sai mã PIN quá nhiều lần. Để bảo vệ bạn, tất cả khóa trên thiết bị này đã bị xóa."
+  },
+  "errors": {
+    "deviceNotRegistered": "Thiết bị này chưa được đăng ký với hub của bạn. Hãy nhờ người quản lý hub của bạn thêm thiết bị này.",
+    "forbidden": "Bạn không có quyền thực hiện việc này. Hãy hỏi người quản lý hub của bạn.",
+    "notFound": "Mục này không còn nữa. Có thể nó đã bị xóa.",
+    "serverUnavailable": "Hiện không thể kết nối với máy chủ. Vui lòng thử lại sau giây lát."
   },
   "eventType": {
     "call": "Cuộc gọi",
@@ -2491,9 +2500,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Có người đang gọi đến đường dây nóng",
+  "incomingCallAnswer": "Trả lời",
+  "incomingCallDecline": "Từ chối",
   "incomingCallMicrophoneRequired": "Cần quyền truy cập micrô để trả lời cuộc gọi trong ứng dụng.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2547,8 +2556,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Khóa đã bị xóa do quá nhiều lần thử không thành công",
+    "wrongPin": "Sai mã PIN"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2752,7 @@
     "pendingCountOne": "{{count}} đang chờ",
     "pendingSyncMessage": "{{count}} thao tác đang chờ đồng bộ",
     "pendingSyncMessageOne": "{{count}} thao tác đang chờ đồng bộ",
+    "rejected": "Chưa lưu: máy chủ đã từ chối",
     "relayReconnected": "Đã kết nối lại — đang đồng bộ sự kiện bị bỏ lỡ",
     "relayReconnecting": "Đang kết nối lại máy chủ thời gian thực...",
     "syncComplete": "Tất cả thao tác đã được đồng bộ thành công",
@@ -2878,6 +2888,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "Mã PIN không khớp. Vui lòng thử lại.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} trên {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2902,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "Mã PIN không đúng."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",

@@ -369,11 +369,14 @@
     "active": "Banga Çalak",
     "addNote": "Not Lê Zêde Bike",
     "answer": "Bersiv bide",
+    "answerFailed": "Bersiva banga nehat dayîn. Dibe ku kesekî din berê bersiv da be.",
+    "answerOnPhone": "Li ser têlefona xwe bersiv bide",
     "banned": "Ev jimare hatiye qedexekirin",
     "caller": "Bangker",
     "duration": "Dirêjahî",
     "ended": "Bang Qediya",
     "hangUp": "Biqede",
+    "hangupFailed": "Banga nehat qedandin. Dîsa biceribîne.",
     "hold": "Li bendê bihêle",
     "incoming": "Banga Hatinî",
     "mute": "Dengê xwe bigire",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "Ev amûr hê li navenda te ne tomarkirî ye. Ji kesekî ku navenda te îdare dike bixwaze ku wê lê zêde bike.",
+    "forbidden": "Destûra te ji bo vê tune. Ji kesekî ku navenda te îdare dike bipirse.",
+    "notFound": "Ev êdî tune ye. Dibe ku hatibe rakirin.",
+    "serverUnavailable": "Niha nayê gihîştin serverê. Piştî demekê dîsa biceribîne."
+  },
   "hubs": {
     "accessDenied": "Gihîştin hat redkirin",
     "createHub": "Navend Biafirîne",
@@ -913,6 +922,7 @@
     "keyLocked": "Kilîd kilîtkirî ye",
     "lockoutRemaining": "Hatiye kilîtkirin. Piştî {{seconds}} çirkeyan dîsa biceribîne.",
     "mismatch": "PIN li hev nakin. Dîsa biceribîne.",
+    "progress": "{{count}} ji {{total}}",
     "setEncrypting": "Kilîda te tê şîfrekirin...",
     "setSubtitle": "PIN ek 6-8 jimareyî hilbijêre da ku kilîda xwe biparêzî",
     "setTitle": "PIN ek Biafirîne",
@@ -930,7 +940,7 @@
     "description": "Ji bo berdewamkirina vê çalakiyê PIN a xwe binivîse.",
     "maxAttempts": "Herî zêde hewldan derbaskirî. Kilîd hat paqijkirin.",
     "title": "Nasnameya Xwe Piştrast Bike",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN ne rast e."
   },
   "preferences": {
     "invalidToken": "Girêdana bijarteyan ne derbasdar e an qediyaye",
@@ -3951,8 +3961,8 @@
   "retry": "Dîsa biceribîne",
   "lock": {
     "app": "Serlêdanê Kilît Bike",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Ji ber gelek hewldanên têkçûyî mifte hate jêbirin",
+    "wrongPin": "PIN şaş e"
   },
   "schema": {
     "category": "Kategorî",
@@ -4267,7 +4277,7 @@
   },
   "callActions": {
     "openNotes": "Not",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Qedexe bike û biqede",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4318,6 +4328,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Nehat tomarkirin: server red kir",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4560,9 +4571,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Kesek bi xeta alîkariyê re têkilî datîne",
+  "incomingCallAnswer": "Bersiv bide",
+  "incomingCallDecline": "Red bike",
   "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",

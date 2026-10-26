@@ -770,11 +770,14 @@
     "active": "Active Call",
     "addNote": "Add Note",
     "answer": "Answer",
+    "answerFailed": "Couldn't answer the call. Someone else may have picked up first.",
+    "answerOnPhone": "Answer on your phone",
     "banned": "This number is banned",
     "caller": "Caller",
     "duration": "Duration",
     "ended": "Call Ended",
     "hangUp": "Hang Up",
+    "hangupFailed": "Couldn't end the call. Try again.",
     "hold": "Hold",
     "incoming": "Incoming Call",
     "mute": "Mute",
@@ -1999,6 +2002,12 @@
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
+  "errors": {
+    "deviceNotRegistered": "This device isn't registered with your hub yet. Ask someone who manages your hub to add it.",
+    "forbidden": "You don't have permission to do this. Ask someone who manages your hub.",
+    "notFound": "This no longer exists. It may have been removed.",
+    "serverUnavailable": "Can't reach the server right now. Try again in a moment."
+  },
   "eventType": {
     "call": "Call",
     "conversation": "Conversation",
@@ -2679,6 +2688,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Not saved: the server refused it",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -2814,6 +2824,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "Credentials don't match. Try again.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} of {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a PIN (8+ digits) or passphrase (8+ characters) to protect your key",
     "setTitle": "Create a PIN or passphrase",
