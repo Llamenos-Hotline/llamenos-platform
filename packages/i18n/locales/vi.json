@@ -2064,6 +2064,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "Mở khóa sinh trắc học đã bị khóa do thử sai quá nhiều lần. Hãy nhập mã PIN.",
     "biometricNotEnrolled": "Dữ liệu sinh trắc học trên thiết bị của bạn đã thay đổi, vì vậy mở khóa sinh trắc học đã bị tắt. Hãy nhập mã PIN.",

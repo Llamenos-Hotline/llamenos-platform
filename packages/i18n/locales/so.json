@@ -3627,6 +3627,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "Furitaanka biometric-ka waa la xiray ka dib isku day badan oo fashilmay. Geli PIN-kaaga.",
     "biometricNotEnrolled": "Xogta biometric-ka ee qalabkaagu way isbedeshay, sidaa darteed furitaanka biometric-ka waa la demiyay. Geli PIN-kaaga.",
     "biometricPinMismatch": "Furitaanka biometric-ku wuu fashilmay. Geli PIN-kaaga.",

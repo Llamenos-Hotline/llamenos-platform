@@ -2064,6 +2064,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "失败次数过多，生物识别解锁已被锁定。请输入您的PIN码。",
     "biometricNotEnrolled": "您设备的生物识别信息已更改，因此生物识别解锁已关闭。请输入您的PIN码。",

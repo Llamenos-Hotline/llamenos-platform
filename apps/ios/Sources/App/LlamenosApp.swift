@@ -72,6 +72,10 @@ struct LlamenosApp: App {
                             DeviceRegistrationBanner(message: failure)
                         }
 
+                        if let failure = appState.permissionService.refreshFailure {
+                            PermissionsRefreshBanner(failure: failure)
+                        }
+
                         ContentView()
                             .environment(appState)
                             .environment(router)

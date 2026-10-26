@@ -4369,6 +4369,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "Biometric unlock is locked after too many failed attempts. Enter your PIN.",
     "biometricNotEnrolled": "Your device's biometrics changed, so biometric unlock was turned off. Enter your PIN.",
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",

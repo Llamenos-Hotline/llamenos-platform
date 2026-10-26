@@ -2064,6 +2064,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "실패 횟수가 너무 많아 생체 인식 잠금 해제가 잠겼습니다. PIN을 입력하세요.",
     "biometricNotEnrolled": "기기의 생체 인식 정보가 변경되어 생체 인식 잠금 해제가 꺼졌습니다. PIN을 입력하세요.",
