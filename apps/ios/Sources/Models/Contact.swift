@@ -10,8 +10,7 @@ extension SharedContactTimelineListResponseContact: Identifiable {
     public var id: String { contactHash }
 
     var displayIdentifier: String {
-        if let last4 { return "***\(last4)" }
-        return String(contactHash.prefix(8)) + "..."
+        String(contactHash.prefix(8)) + "..."
     }
 
     var totalInteractions: Int {
@@ -19,17 +18,15 @@ extension SharedContactTimelineListResponseContact: Identifiable {
     }
 
     /// Whether `query` names this contact. The server holds contacts only as
-    /// hashes (plus the last four digits of a phone number), so those are the
-    /// only things there is to search. Leading `*` is ignored so the displayed
-    /// form (`***1234`) finds the same contact as the digits.
+    /// hashes and keeps no part of the number (#2182), so the start of the hash
+    /// is the only thing there is to search. Prefix only: a fragment from inside
+    /// the hash would match unrelated contacts.
     func matches(_ query: String) -> Bool {
         let needle = query
-            .filter { $0 != "*" }
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         guard !needle.isEmpty else { return true }
-        if let last4, last4.lowercased().contains(needle) { return true }
-        return contactHash.lowercased().contains(needle)
+        return contactHash.lowercased().hasPrefix(needle)
     }
 }
 
@@ -37,7 +34,7 @@ extension SharedContactTimelineListResponseContact: Identifiable {
 // across files, so the navigation destination's `Hashable` is spelled out.
 extension SharedContactTimelineListResponseContact: Hashable {
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.contactHash == rhs.contactHash && lhs.last4 == rhs.last4
+        lhs.contactHash == rhs.contactHash
             && lhs.firstSeen == rhs.firstSeen && lhs.lastSeen == rhs.lastSeen
             && lhs.callCount == rhs.callCount && lhs.conversationCount == rhs.conversationCount
             && lhs.noteCount == rhs.noteCount && lhs.reportCount == rhs.reportCount
@@ -45,7 +42,6 @@ extension SharedContactTimelineListResponseContact: Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(contactHash)
-        hasher.combine(last4)
         hasher.combine(firstSeen)
         hasher.combine(lastSeen)
         hasher.combine(callCount)
@@ -127,7 +123,6 @@ struct ContactTimelineResponse: Decodable, Sendable {
 /// Full contact profile including linked cases and identifiers.
 struct ContactDetail: Codable, Sendable {
     let contactHash: String
-    let last4: String?
     let firstSeen: String
     let lastSeen: String
     let callCount: Int
@@ -139,8 +134,7 @@ struct ContactDetail: Codable, Sendable {
     let identifiers: [ContactIdentifier]?
 
     var displayIdentifier: String {
-        if let last4 { return "***\(last4)" }
-        return String(contactHash.prefix(8)) + "..."
+        String(contactHash.prefix(8)) + "..."
     }
 }
 
@@ -172,7 +166,6 @@ extension ContactDetail {
     init(summary: SharedContactTimelineListResponseContact, activity: ContactTimelineDetailResponse) {
         self.init(
             contactHash: summary.contactHash,
-            last4: summary.last4,
             firstSeen: summary.firstSeen,
             lastSeen: summary.lastSeen,
             callCount: Int(summary.callCount),
@@ -193,13 +186,11 @@ extension ContactDetail {
 struct AppContactRelationship: Codable, Identifiable, Sendable {
     var id: String { relatedContactHash + ":" + relationshipType }
     let relatedContactHash: String
-    let relatedLast4: String?
     let relationshipType: String
     let createdAt: String?
 
     var relatedDisplayIdentifier: String {
-        if let relatedLast4 { return "***\(relatedLast4)" }
-        return String(relatedContactHash.prefix(8)) + "..."
+        String(relatedContactHash.prefix(8)) + "..."
     }
 }
 

@@ -208,7 +208,6 @@ struct TriageDetailView: View {
                 assignedTo: nil,
                 channelType: "reports",
                 contactIdentifierHash: "hash",
-                contactLast4: nil,
                 createdAt: ISO8601DateFormatter().string(from: Date()),
                 id: "preview-1",
                 lastMessageAt: nil,

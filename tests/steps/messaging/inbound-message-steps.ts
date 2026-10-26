@@ -14,6 +14,7 @@ import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { Navigation } from '../../pages/index'
 import { enableMessagingViaApi } from '../../api-helpers'
+import { conversationLabel } from '../../conversation-seeding'
 import {
   simulateIncomingMessage,
   uniqueCallerNumber,
@@ -45,7 +46,7 @@ async function sendInbound(
 ): Promise<void> {
   await enableMessagingViaApi(backendRequest, [channel])
   const senderNumber = uniqueCallerNumber()
-  const inbound = { last4: senderNumber.slice(-4), conversationIds: [] as string[], bodies: [] as string[] }
+  const inbound = { label: '', conversationIds: [] as string[], bodies: [] as string[] }
   for (let i = 0; i < count; i++) {
     const body = `Inbound ${channel} ${i + 1} ${Date.now()}`
     const { conversationId, messageId } = await simulateIncomingMessage(backendRequest, {
@@ -59,6 +60,7 @@ async function sendInbound(
     inbound.conversationIds.push(conversationId)
     inbound.bodies.push(body)
   }
+  inbound.label = await conversationLabel(backendRequest, workerHub, inbound.conversationIds[0]!)
   world.inbound = inbound
 }
 
@@ -67,15 +69,15 @@ function requireInbound(world: import('../fixtures').ConversationWorld) {
   return world.inbound
 }
 
-function senderConversation(page: import('@playwright/test').Page, last4: string) {
-  return page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: last4 })
+function senderConversation(page: import('@playwright/test').Page, label: string) {
+  return page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: label })
 }
 
 Then("that sender's conversation should appear in the conversation list", async ({ page, conversationWorld }) => {
   const inbound = requireInbound(conversationWorld)
   await Navigation.goToConversations(page)
   await expect(page.getByTestId(TestIds.CONVERSATION_LIST)).toBeVisible({ timeout: Timeouts.API })
-  await expect(senderConversation(page, inbound.last4)).toBeVisible({ timeout: Timeouts.API })
+  await expect(senderConversation(page, inbound.label)).toBeVisible({ timeout: Timeouts.API })
 })
 
 Then('those messages should belong to one conversation', async ({ conversationWorld }) => {
@@ -89,7 +91,7 @@ Then(
   async ({ page, conversationWorld }) => {
     const inbound = requireInbound(conversationWorld)
     await Navigation.goToConversations(page)
-    const item = senderConversation(page, inbound.last4)
+    const item = senderConversation(page, inbound.label)
     await expect(item).toHaveCount(1, { timeout: Timeouts.API })
     await item.click()
     const thread = page.getByTestId(TestIds.CONVERSATION_THREAD)

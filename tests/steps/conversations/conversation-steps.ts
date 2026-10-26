@@ -34,7 +34,7 @@ Given('I open a conversation', async ({ page, backendRequest, workerHub, convers
   const { Navigation } = await import('../../pages/index')
   await Navigation.goToConversations(page)
 
-  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.last4 })
+  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.label })
   await expect(item).toBeVisible({ timeout: Timeouts.API })
   await item.click()
   await expect(page.getByTestId(TestIds.CONVERSATION_THREAD)).toBeVisible({ timeout: Timeouts.ELEMENT })

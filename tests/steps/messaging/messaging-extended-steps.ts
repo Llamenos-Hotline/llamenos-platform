@@ -114,7 +114,7 @@ async function seedAndSelectConversation(
   })
   world.seeded = seeded
   await Navigation.goToConversations(page)
-  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.last4 })
+  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.label })
   await expect(item).toBeVisible({ timeout: Timeouts.ELEMENT })
   await item.click()
   return seeded
@@ -178,7 +178,7 @@ Given('I sent a message in a conversation', async ({ page, backendRequest, worke
   // Re-select so the thread refetches and shows the outbound message.
   await Navigation.goToDashboard(page)
   await Navigation.goToConversations(page)
-  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.last4 })
+  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.label })
   await expect(item).toBeVisible({ timeout: Timeouts.ELEMENT })
   await item.click()
 })

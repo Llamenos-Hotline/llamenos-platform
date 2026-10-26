@@ -75,17 +75,16 @@ final class ContactsViewModelTests: XCTestCase {
         return api
     }
 
-    private func summaryJSON(_ hash: String, last4: String?, notes: Int = 0, conversations: Int = 0) -> String {
-        let last4Field = last4.map { #""last4":"\#($0)","# } ?? ""
-        return #"""
-        {"contactHash":"\#(hash)",\#(last4Field)"firstSeen":"2026-01-01T00:00:00.000Z","lastSeen":"2026-02-01T00:00:00.000Z","callCount":4,"conversationCount":\#(conversations),"noteCount":\#(notes),"reportCount":1}
+    private func summaryJSON(_ hash: String, notes: Int = 0, conversations: Int = 0) -> String {
+        #"""
+        {"contactHash":"\#(hash)","firstSeen":"2026-01-01T00:00:00.000Z","lastSeen":"2026-02-01T00:00:00.000Z","callCount":4,"conversationCount":\#(conversations),"noteCount":\#(notes),"reportCount":1}
         """#
     }
 
-    private func summary(_ hash: String, last4: String?, notes: Int = 0, conversations: Int = 0) throws -> SharedContactTimelineListResponseContact {
+    private func summary(_ hash: String, notes: Int = 0, conversations: Int = 0) throws -> SharedContactTimelineListResponseContact {
         try JSONDecoder().decode(
             SharedContactTimelineListResponseContact.self,
-            from: Data(summaryJSON(hash, last4: last4, notes: notes, conversations: conversations).utf8)
+            from: Data(summaryJSON(hash, notes: notes, conversations: conversations).utf8)
         )
     }
 
@@ -96,21 +95,21 @@ final class ContactsViewModelTests: XCTestCase {
     /// list a conversation-only contact twice though the server repeats it on
     /// every page.
     func testSearchReadsEveryPageOfTheListAndNeverCallsASearchRoute() async throws {
-        let conversationOnly = summaryJSON("cccc0000", last4: "7777", conversations: 2)
-        let page1 = #"{"contacts":[\#(summaryJSON("aaaa1111", last4: "1111", notes: 1)),\#(conversationOnly)],"total":3}"#
-        let page2 = #"{"contacts":[\#(summaryJSON("bbbb2222", last4: "4242", notes: 1)),\#(conversationOnly)],"total":3}"#
+        let conversationOnly = summaryJSON("cccc0000", conversations: 2)
+        let page1 = #"{"contacts":[\#(summaryJSON("aaaa1111", notes: 1)),\#(conversationOnly)],"total":3}"#
+        let page2 = #"{"contacts":[\#(summaryJSON("bbbb2222", notes: 1)),\#(conversationOnly)],"total":3}"#
         let api = try makeAPI(responses: [
             "GET /api/hubs/\(hubId)/contacts?page=1&limit=200": page1,
             "GET /api/hubs/\(hubId)/contacts?page=2&limit=200": page2,
         ])
         let viewModel = ContactsViewModel(apiService: api)
-        viewModel.searchQuery = "***4242"
+        viewModel.searchQuery = "bbbb"
 
         await viewModel.search()
 
         XCTAssertNil(viewModel.errorMessage, "Search over a mounted list route must not fail")
         XCTAssertEqual(viewModel.contacts.map(\.contactHash), ["bbbb2222"],
-                       "A contact on page 2 is found by the digits the row displays")
+                       "A contact on page 2 is found by the start of the hash the row displays")
         XCTAssertEqual(viewModel.total, 1)
         XCTAssertEqual(
             ContactsStubURLProtocol.requests(),
@@ -124,10 +123,10 @@ final class ContactsViewModelTests: XCTestCase {
     }
 
     func testSearchWithNoMatchEmptiesTheListRatherThanKeepingStaleRows() async throws {
-        let page = #"{"contacts":[\#(summaryJSON("aaaa1111", last4: "1111"))],"total":1}"#
+        let page = #"{"contacts":[\#(summaryJSON("aaaa1111"))],"total":1}"#
         let api = try makeAPI(responses: ["GET /api/hubs/\(hubId)/contacts?page=1&limit=200": page])
         let viewModel = ContactsViewModel(apiService: api)
-        viewModel.contacts = [try summary("stale0000", last4: "0000")]
+        viewModel.contacts = [try summary("stale0000")]
         viewModel.searchQuery = "9999"
 
         await viewModel.search()
@@ -139,7 +138,7 @@ final class ContactsViewModelTests: XCTestCase {
     func testSearchSurfacesAFailedListRequest() async throws {
         let api = try makeAPI(responses: [:])
         let viewModel = ContactsViewModel(apiService: api)
-        viewModel.searchQuery = "1111"
+        viewModel.searchQuery = "aaaa"
 
         await viewModel.search()
 
@@ -147,7 +146,7 @@ final class ContactsViewModelTests: XCTestCase {
     }
 
     func testSummaryMatchesLastFourAndHashPrefixAndIgnoresMask() throws {
-        let row = try summary("deadbeef99", last4: "5150")
+        let row = try summary("deadbeef99")
         XCTAssertTrue(row.matches("5150"))
         XCTAssertTrue(row.matches("***5150"), "The displayed form finds the same contact")
         XCTAssertTrue(row.matches("DEADBEEF"), "Hash match is case-insensitive")
@@ -164,7 +163,7 @@ final class ContactsViewModelTests: XCTestCase {
         let hash = "aaaa1111"
         let activity = #"{"notes":[{"id":"n1"},{"id":"n2"},{"id":"n3"}],"conversations":[{"id":"c1"}]}"#
         let api = try makeAPI(responses: ["GET /api/hubs/\(hubId)/contacts/\(hash)": activity])
-        let row = try summary(hash, last4: "1111", notes: 99, conversations: 99)
+        let row = try summary(hash, notes: 99, conversations: 99)
         let viewModel = ContactDetailViewModel(apiService: api, summary: row)
 
         await viewModel.loadContact()
@@ -175,14 +174,13 @@ final class ContactsViewModelTests: XCTestCase {
         XCTAssertEqual(contact.conversationCount, 1)
         XCTAssertEqual(contact.callCount, 4, "Calls and reports are not in the activity response; the row's counts stand")
         XCTAssertEqual(contact.reportCount, 1)
-        XCTAssertEqual(contact.last4, "1111")
         XCTAssertNil(contact.contactType, "The server holds no contact type for a hashed contact; none is invented")
         XCTAssertEqual(ContactsStubURLProtocol.requests(), ["GET /api/hubs/\(hubId)/contacts/\(hash)"])
     }
 
     func testDetailReportsAnUnmountedRouteInsteadOfRenderingAnEmptyProfile() async throws {
         let api = try makeAPI(responses: [:])
-        let viewModel = ContactDetailViewModel(apiService: api, summary: try summary("aaaa1111", last4: nil))
+        let viewModel = ContactDetailViewModel(apiService: api, summary: try summary("aaaa1111"))
 
         await viewModel.loadContact()
 

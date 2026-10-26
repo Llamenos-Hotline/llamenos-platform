@@ -70,13 +70,13 @@ export type ConversationWorld = {
   /**
    * The conversation the scenario's Given step seeded and selected. Steps that
    * must re-select it after the app clears the detail selection (closing sets
-   * selectedId to null) find it by its unique last-4 digits.
+   * selectedId to null) find it by its contact label.
    */
   seeded?: SeededConversation
   /** The outbound message posted by "I sent a message in a conversation". */
   outbound?: { conversationId: string; messageId: string; body: string }
   /** Inbound messages simulated at the worker's hub from one sender, in arrival order. */
-  inbound?: { last4: string; conversationIds: string[]; bodies: string[] }
+  inbound?: { label: string; conversationIds: string[]; bodies: string[] }
 }
 
 export type SasWorld = {

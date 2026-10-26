@@ -31,7 +31,7 @@ type Page = import('@playwright/test').Page
 
 /**
  * Navigate to the conversations page and select the seeded conversation.
- * Selection is scoped by the sender's unique last-4 digits so parallel workers
+ * Selection is scoped by the conversation's contact label so parallel workers
  * never select each other's conversations. The conversation was seeded through
  * the real API, so it must render — a missing card is an app bug.
  * The seeded conversation is recorded on the world so steps that must re-select
@@ -45,7 +45,7 @@ async function navigateAndSelect(
 ): Promise<void> {
   world.seeded = seeded
   await Navigation.goToConversations(page)
-  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.last4 })
+  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded.label })
   await expect(item).toBeVisible({ timeout: Timeouts.ELEMENT })
   await item.click()
 }
@@ -160,7 +160,7 @@ When('I reopen the conversation', async ({ page, conversationWorld }) => {
   expect(seeded, 'a Given step must have seeded the scenario\'s conversation').toBeDefined()
   await Navigation.goToDashboard(page)
   await Navigation.goToConversations(page)
-  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded!.last4 })
+  const item = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: seeded!.label })
   await expect(item).toBeVisible({ timeout: Timeouts.ELEMENT })
   await item.click()
   const reopenBtn = page.getByTestId(TestIds.CONV_REOPEN_BTN)
