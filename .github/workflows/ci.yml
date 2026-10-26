@@ -1164,9 +1164,9 @@ jobs:
             "TWILIO_AUTH_TOKEN=ci-test-twilio-auth-token-not-a-real-secret" \
             "TWILIO_PHONE_NUMBER=+15559876543" \
             > .env
-          # The ban-list hash key is a secret FILE the app mounts, never a .env entry.
-          source scripts/lib/ban-hash-key.sh
-          ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444
+          # The ban-list and messaging-thread hash keys are secret FILES the app mounts, never .env entries.
+          source scripts/lib/server-hash-keys.sh
+          ensure_hash_key_files deploy/docker/secrets 0444
 
       - name: Build and start Docker Compose (core services)
         run: |
@@ -2961,9 +2961,9 @@ jobs:
           TOKEN_MAX_AGE_MS=3600000
           PG_POOL_SIZE=10
           ENVEOF
-          # The ban-list hash key is a secret file, not a .env value (see first-run.sh).
-          source scripts/lib/ban-hash-key.sh
-          ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444
+          # The hash keys are secret files, not .env values (see first-run.sh).
+          source scripts/lib/server-hash-keys.sh
+          ensure_hash_key_files deploy/docker/secrets 0444
           echo "wrote .env with $(grep -c . .env) values"
 
       # No optional profiles. That is the point: the default deployment, which

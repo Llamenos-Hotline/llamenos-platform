@@ -123,6 +123,7 @@ hmac_secret: ""                  # openssl rand -hex 32   (exactly 64 lowercase 
 server_secret: ""                # openssl rand -hex 32   (exactly 64 hex chars)
 server_kek: ""                   # openssl rand -hex 32   (own value: encrypts server-readable data)
 ban_hash_key: ""                 # openssl rand -hex 32   (own value: secret FILE, never in .env or backups)
+messaging_hash_key: ""           # openssl rand -hex 32   (own value: secret FILE, never in .env or backups)
 pg_password: ""                  # openssl rand -hex 24   (>= 16 chars)
 storage_access_key: ""           # openssl rand -hex 16
 storage_secret_key: ""           # openssl rand -hex 24   (>= 16 chars)

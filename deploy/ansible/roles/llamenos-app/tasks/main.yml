@@ -23,10 +23,10 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
-- name: Write the ban-list hash key secret file
-  ansible.builtin.include_tasks: ban-hash-key.yml
+- name: Write the hash key secret files
+  ansible.builtin.include_tasks: hash-keys.yml
   vars:
-    ban_hash_key_restart_handler: Restart app service
+    hash_keys_restart_handler: Restart app service
 
 - name: Template app compose file
   ansible.builtin.template:

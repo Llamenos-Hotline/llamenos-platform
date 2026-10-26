@@ -73,19 +73,23 @@ else
   read -r
 fi
 
-# The ban-list hash key is a secret FILE, never a .env entry (the app refuses it
-# in the environment). Created once and never overwritten: it is not in any backup,
-# so regenerating it silently drops every ban. Keep an offline copy.
-source ../../scripts/lib/ban-hash-key.sh
-if [ -s secrets/ban-hash-key ]; then
-  echo "secrets/ban-hash-key already exists — keeping it."
-else
-  ensure_ban_hash_key_file secrets/ban-hash-key 0444
-  echo "Generated secrets/ban-hash-key (the ban-list hash key)."
-  echo "  It is deliberately NOT in .env and NOT in config backups. Keep an offline"
-  echo "  copy: a rebuilt host without it loses every ban, with no recovery."
-  echo ""
-fi
+# The ban-list and messaging-thread hash keys are secret FILES, never .env entries
+# (the app refuses them in the environment). Each is created once and never
+# overwritten: they are in no backup, so regenerating one silently drops every ban
+# (ban-hash-key) or splits every returning contact into a new thread
+# (messaging-hash-key). Keep an offline copy of both.
+source ../../scripts/lib/server-hash-keys.sh
+for key in "${HASH_KEY_NAMES[@]}"; do
+  if [ -s "secrets/$key" ]; then
+    echo "secrets/$key already exists — keeping it."
+  else
+    ensure_hash_key_file "secrets/$key" 0444
+    echo "Generated secrets/$key."
+    echo "  It is deliberately NOT in .env and NOT in config backups. Keep an offline"
+    echo "  copy: a rebuilt host without it loses what it keys, with no recovery."
+    echo ""
+  fi
+done
 
 # Validate required fields
 source .env 2>/dev/null || true

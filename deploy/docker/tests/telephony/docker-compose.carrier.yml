@@ -61,9 +61,11 @@ services:
       - SIP_TLS_CA_FILE=/var/lib/llamenos/sip-tls/kamailio.pem
     volumes:
       - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
-    # BAN_HASH_KEY is a secret file, never an env var (run-*-e2e.sh create it).
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files, never env vars
+    # (run-*-e2e.sh create them).
     secrets:
       - ban-hash-key
+      - messaging-hash-key
     ports:
       - "127.0.0.1:${E2E_WORKER_PORT:-3931}:3000"
     depends_on:
@@ -101,9 +103,12 @@ services:
       retries: 6
       start_period: 10s
 
-# The ban-list hash key, as the file the app reads at /run/secrets/ban-hash-key.
-# Created by the run-*-e2e.sh launchers (scripts/lib/ban-hash-key.sh); relative
-# to deploy/docker/ like every path in this file, and gitignored.
+# The ban-list and messaging-thread hash keys, as the files the app reads at
+# /run/secrets/<name>. Created by the run-*-e2e.sh launchers
+# (scripts/lib/server-hash-keys.sh); relative to deploy/docker/ like every path in
+# this file, and gitignored.
 secrets:
   ban-hash-key:
     file: ./secrets/ban-hash-key
+  messaging-hash-key:
+    file: ./secrets/messaging-hash-key

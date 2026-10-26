@@ -25,22 +25,25 @@
     state: present
   when: age_installed.rc != 0
 
-# BAN_HASH_KEY must stay out of every backup (D6, A16): a key that has to stay
-# out of the database must also stay out of the archive that ships offsite. It
-# lives in llamenos_secrets_dir, a sibling of llamenos_services_dir. Refuse to
-# run if a path in the archive set would collect it -- whether someone widened
-# backup_config_paths to {{ app_dir }}, or moved the secret under the services tree.
-- name: Assert no config backup path collects the ban-hash-key secret file
+# BAN_HASH_KEY and MESSAGING_HASH_KEY must stay out of every backup (D6, A16; D2):
+# a key that has to stay out of the database must also stay out of the archive that
+# ships offsite. They live in llamenos_secrets_dir, a sibling of
+# llamenos_services_dir. Refuse to run if a path in the archive set would collect
+# either -- whether someone widened backup_config_paths to {{ app_dir }}, or moved
+# a secret under the services tree.
+- name: Assert no config backup path collects a hash key secret file
   ansible.builtin.assert:
     that:
-      - llamenos_ban_hash_key_file != item
-      - not (llamenos_ban_hash_key_file | string).startswith((item | string | regex_replace('/+$', '')) ~ '/')
+      - item.0 != item.1
+      - not (item.0 | string).startswith((item.1 | string | regex_replace('/+$', '')) ~ '/')
     fail_msg: >-
-      The config backup path '{{ item }}' would collect {{ llamenos_ban_hash_key_file }}.
-      BAN_HASH_KEY must be excluded from every backup: narrow the path or move
-      llamenos_secrets_dir (group_vars/all/compose.yml).
+      The config backup path '{{ item.1 }}' would collect {{ item.0 }}.
+      BAN_HASH_KEY and MESSAGING_HASH_KEY must be excluded from every backup: narrow
+      the path or move llamenos_secrets_dir (group_vars/all/compose.yml).
     quiet: true
-  loop: "{{ backup_config_paths + backup_config_extra_paths }}"
+  loop: "{{ [llamenos_ban_hash_key_file, llamenos_messaging_hash_key_file] | product(backup_config_paths + backup_config_extra_paths) | list }}"
+  loop_control:
+    label: "{{ item.1 }}"
 
 - name: Create config backup directories
   ansible.builtin.file:

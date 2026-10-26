@@ -213,6 +213,14 @@ secrets:
   # Or name a Secret you manage yourself (it must carry a `ban-hash-key` key).
   banHashKey: ""
   existingBanHashKeySecret: ""
+  # Messaging-thread hash key (names a conversation's contact per hub), kept in a Secret
+  # of its own and mounted as the file /run/secrets/messaging-hash-key (never an env var).
+  # Required: 64-char hex, a different value from every other secret. Not part of any
+  # backup the chart makes: keep your own offline copy, because losing it splits every
+  # returning contact into a new thread.
+  # Or name a Secret you manage yourself (it must carry a `messaging-hash-key` key).
+  messagingHashKey: ""
+  existingMessagingHashKeySecret: ""
 
 # Service account
 serviceAccount:

@@ -140,10 +140,12 @@ NON_ENV_BINDINGS = {
     "STORAGE_MANAGER",
     "STORAGE_ADMIN",
     "WS_MANAGER",
-    # Read from the `ban-hash-key` secret FILE at boot and injected, never an
-    # environment variable: validateConfig refuses it in the environment, and the
-    # Ansible templates must not render it (check-required-env.py asserts that).
+    # Read from the `ban-hash-key` / `messaging-hash-key` secret FILES at boot and
+    # injected, never an environment variable: validateConfig refuses them in the
+    # environment, and the Ansible templates must not render them
+    # (check-required-env.py asserts that).
     "BAN_HASH_KEY",
+    "MESSAGING_HASH_KEY",
 }
 
 # `<PROVIDER>_WEBHOOK_IPS` is built at runtime from the provider name

@@ -81,6 +81,20 @@ not ride along with anything that is exported as env or bundled for backup.
 {{- end }}
 {{- end }}
 
+{{/*
+Name of the Secret holding the messaging-thread hash key (MESSAGING_HASH_KEY, D2). A
+Secret of its own, for the same reason as the ban key: the app mounts it as a FILE at
+/run/secrets/messaging-hash-key and refuses it as an environment variable, and it must
+not share a Secret with the ban key (each keys one hash and nothing else).
+*/}}
+{{- define "llamenos.messagingHashKeySecretName" -}}
+{{- if .Values.secrets.existingMessagingHashKeySecret }}
+{{- .Values.secrets.existingMessagingHashKeySecret }}
+{{- else }}
+{{- include "llamenos.fullname" . }}-messaging-hash-key
+{{- end }}
+{{- end }}
+
 {{- define "llamenos.secretName" -}}
 {{- if .Values.secrets.existingSecret }}
 {{- .Values.secrets.existingSecret }}

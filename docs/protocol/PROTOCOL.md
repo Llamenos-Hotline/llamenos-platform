@@ -228,6 +228,8 @@ Every HPKE/ECIES derivation, HKDF context, HMAC key, and signature binding uses 
 |----------|-------|---------|
 | `HMAC_PHONE_PREFIX` | `llamenos:phone:` | Phone number hashing prefix |
 | `HMAC_IP_PREFIX` | `llamenos:ip:` | IP address hashing prefix |
+| `HMAC_BAN_PREFIX` | `llamenos:ban:` | Ban-list hashing prefix (§2.10 Ban Hashing) |
+| `HMAC_MESSAGING_CONTACT_PREFIX` | `llamenos:messaging-contact:` | Messaging thread hashing prefix (§2.10 Messaging Thread Hashing) |
 | `HMAC_KEYID_PREFIX` | `llamenos:keyid:` | Key identification hashing prefix |
 | `HMAC_SUBSCRIBER` | `llamenos:subscriber` | Subscriber identifier HMAC key |
 | `HMAC_PREFERENCE_TOKEN` | `llamenos:preference-token` | Preference token HMAC key |
@@ -1091,6 +1093,25 @@ banHash(phone_e164, scope, ban_hash_key_hex):
 ```
 
 A hub's hash cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again (§4.47). Neither the ban store nor any ban response carries digits of the number.
+
+#### Messaging Thread Hashing
+
+A messaging conversation is identified by a per-hub keyed hash of the sender's identifier (`conversations.contact_identifier_hash`). `MESSAGING_HASH_KEY` is a file-only secret (`/run/secrets/messaging-hash-key`; never in the database, `.env` or a config backup) and is a key of its own: nothing else is hashed under it, so no ban, blast or audit hash of the same number can be compared with a thread hash.
+
+```
+messagingContactHash(identifier, hub_id | null, messaging_hash_key_hex):
+  // scope = the hub id, or the literal "global" for a webhook with no ?hub=
+  scope_key = HKDF-SHA256(ikm  = hex_to_bytes(messaging_hash_key_hex),
+                          salt = "",
+                          info = UTF-8(LABEL_MESSAGING_CONTACT_HUB_KEY + ":" + scope),
+                          len  = 32)
+  input = UTF-8(HMAC_MESSAGING_CONTACT_PREFIX + identifier)
+  return hex(HMAC-SHA256(scope_key, input))
+```
+
+`identifier` is `IncomingMessage.senderIdentifier`, the same value the sealed reply address holds (the Signal UUID when present, otherwise the number). It is computed once, by the messaging router after the adapter has parsed the webhook; adapters do not hash. The same contact in two hubs has two unrelated hashes. The reply address (`contact_identifiers`) stays sealed under `SERVER_KEK` with `LABEL_CONTACT_ID`; its format is unchanged.
+
+No part of the contact's number is stored or displayed: the conversation has no `contactLast4`, and `ContactTimelineSummary` has no `last4`. A client names a thread by a short prefix of `contactIdentifierHash`, or "Unknown" when it is empty, and searches by that prefix.
 
 ### 2.11 Per-Device Key Storage (Current)
 

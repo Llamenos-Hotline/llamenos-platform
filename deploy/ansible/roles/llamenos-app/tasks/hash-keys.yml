@@ -1,0 +1,41 @@
+---
+# Writes the server's file-only hash keys to their secret files (D6 / #2171, D2 / #2182):
+#
+#   ban-hash-key        BAN_HASH_KEY        keys the ban-list hash
+#   messaging-hash-key  MESSAGING_HASH_KEY  keys the per-hub messaging-thread hash
+#
+# Included by roles/llamenos-app and, for the deprecated monolithic path, by
+# roles/llamenos. The directory is a sibling of llamenos_services_dir, NOT inside
+# it (group_vars/all/compose.yml explains why): no config backup, rollback
+# snapshot or env_file may ever hold these keys.
+#
+# `hash_keys_restart_handler` names the handler that restarts the app on the
+# including role's path (the two paths use different handler names).
+#
+# Modes. The directory is 0700 so no other host user can reach the files. Each
+# file is 0444 because compose bind-mounts it at /run/secrets/<name> and the app
+# reads it as its own uid, which under `docker_userns_remap: true` is neither the
+# owner nor in the deploy group; the daemon (root) traverses the 0700 directory,
+# the container only ever sees the file.
+- name: Create the secrets directory (outside the backed-up services directory)
+  ansible.builtin.file:
+    path: "{{ llamenos_secrets_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0700"
+
+- name: Write the hash key secret files
+  ansible.builtin.copy:
+    content: "{{ item.value }}\n"
+    dest: "{{ item.dest }}"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0444"
+  loop:
+    - { dest: "{{ llamenos_ban_hash_key_file }}", value: "{{ ban_hash_key }}" }
+    - { dest: "{{ llamenos_messaging_hash_key_file }}", value: "{{ messaging_hash_key }}" }
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: true
+  notify: "{{ hash_keys_restart_handler }}"

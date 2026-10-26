@@ -101,6 +101,6 @@ tests/load/*.json
 # Evidence from deploy/docker/tests/telephony/run-android-sip-e2e.sh (logs, issued credentials)
 .android-sip-evidence/
 
-# Local ban-list hash key (scripts/lib/ban-hash-key.sh) and compose secret files
+# Local hash keys (scripts/lib/server-hash-keys.sh) and compose secret files
 .dev-secrets/
 deploy/docker/secrets/

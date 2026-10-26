@@ -15,12 +15,15 @@ services:
     # truth now — do not add an `environment:` list back here.
     env_file:
       - .env.app
-    # BAN_HASH_KEY is delivered ONLY as this file (/run/secrets/ban-hash-key),
-    # never through env_file: validateConfig() refuses it as an environment
-    # variable. The source sits outside the services directory so no config
-    # backup or rollback snapshot carries it (group_vars/all/compose.yml).
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY are delivered ONLY as these files
+    # (/run/secrets/ban-hash-key, /run/secrets/messaging-hash-key), never through
+    # env_file: validateConfig() refuses them as environment variables. The sources
+    # sit outside the services directory so no config backup or rollback snapshot
+    # carries them (group_vars/all/compose.yml). Append new file-only secrets:
+    # scripts/check-required-env.py reads this list in order.
     secrets:
       - ban-hash-key
+      - messaging-hash-key
 {% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
     # The SIP edge's PUBLIC trust anchor, which the app publishes to clients in
     # /api/telephony/sip-token (SIP_TLS_CA_FILE in .env.app). roles/kamailio
@@ -73,6 +76,8 @@ services:
 secrets:
   ban-hash-key:
     file: {{ llamenos_ban_hash_key_file }}
+  messaging-hash-key:
+    file: {{ llamenos_messaging_hash_key_file }}
 
 networks:
   llamenos-web:

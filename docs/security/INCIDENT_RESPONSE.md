@@ -71,6 +71,7 @@ Procedures for responding to security incidents affecting a Llamenos deployment.
 - HMAC secret (lets the holder test guessed phone numbers against stored hashes)
 - `SERVER_KEK` (opens provider credentials, reply addresses and queued sends; see [KEK_ROTATION.md](KEK_ROTATION.md))
 - The `ban-hash-key` file (lets the holder test guessed numbers against the ban list)
+- The `messaging-hash-key` file (lets the holder test guessed numbers against the stored messaging thread hashes, hub by hub)
 - Telephony credentials (can make API calls to telephony providers)
 - Server secret (can impersonate server on WebSocket)
 - Hub key (if captured from memory — can decrypt hub events)

@@ -11,13 +11,14 @@ provider credentials.
 | `SERVER_KEK` | Encrypts data the server must read back (table below) | `.env` | An attacker with the database reads provider credentials and reply addresses | Needs a re-encrypt (below). **Not** a restart-and-go change |
 | `SERVER_SECRET` | HKDF root for the relay and server identity keys | `.env` | Forged relay events | Re-derives the server identity; clients re-pin |
 | `BAN_HASH_KEY` | Keys the ban-list hash | Secret **file** `/run/secrets/ban-hash-key`; never `.env`, never a config backup | Same as `HMAC_SECRET` but for the ban list | Empties the ban list: the numbers are not stored, so nothing can be re-hashed |
+| `MESSAGING_HASH_KEY` | Keys the per-hub messaging-thread hash | Secret **file** `/run/secrets/messaging-hash-key`; never `.env`, never a config backup | An attacker with the database can test guessed numbers against thread hashes, hub by hub | Every returning contact opens a new thread: the identifiers behind the hashes are sealed, and re-hashing them all would put every contact in memory at once. Messages and reply addresses are untouched |
 | `NOTIFIER_TOKEN_SECRET` | Signs/verifies Signal-notifier registration tokens | Compose env (`signal` profile) | Forged registration tokens | Safe; re-issue tokens |
 | `SIP_REGISTRAR_SECRET` | Master secret for every volunteer's PJSIP endpoint password | `.env` (asterisk only) | Anyone can derive SIP passwords | Rotates every volunteer's SIP credential at once |
 
 None of these falls back to another. The app refuses to start when `HMAC_SECRET`,
-`SERVER_SECRET`, `SERVER_KEK` or the ban key share a value, when `SERVER_KEK` or
-the ban key file is missing, and when `BAN_HASH_KEY` is set as an environment
-variable. In-app SIP is refused while `SIP_REGISTRAR_SECRET` is unset, and
+`SERVER_SECRET`, `SERVER_KEK`, the ban key or the messaging key share a value, when
+`SERVER_KEK`, the ban key file or the messaging key file is missing, and when
+`BAN_HASH_KEY` or `MESSAGING_HASH_KEY` is set as an environment variable. In-app SIP is refused while `SIP_REGISTRAR_SECRET` is unset, and
 Signal registration tokens are refused while `NOTIFIER_TOKEN_SECRET` is unset.
 
 ## What `SERVER_KEK` seals
@@ -75,17 +76,20 @@ If the KEK is lost without a rotation, every row above is unrecoverable. Provide
 credentials can be re-entered by an admin; conversation reply addresses and queued
 sends cannot be reconstructed.
 
-## `BAN_HASH_KEY` is deliberately not in the backups
+## `BAN_HASH_KEY` and `MESSAGING_HASH_KEY` are deliberately not in the backups
 
-The ban key must stay out of the database *and* out of anything that is backed up
+The ban key and the messaging key must stay out of the database *and* out of anything that is backed up
 with it, or the database plus its backup read the ban list. So it is a file
-(`<app_dir>/secrets/ban-hash-key` on Ansible hosts, `deploy/docker/secrets/ban-hash-key`
-for Compose, a separate Secret for Helm), outside the services directory that
+(`<app_dir>/secrets/<name>` on Ansible hosts, `deploy/docker/secrets/<name>`
+for Compose, a separate Secret each for Helm; `<name>` is `ban-hash-key` and
+`messaging-hash-key`), outside the services directory that
 `backup-config` archives and that `update.yml` snapshots. `backup-config` refuses to
-run if a backup path would collect it, and `verify-backup-restore.yml` decrypts the
-config archive and asserts the key is absent.
+run if a backup path would collect either, and `verify-backup-restore.yml` decrypts the
+config archive and asserts both keys are absent.
 
 The consequence is accepted (A16): a full rebuild without your own copy loses every
-ban. Keep an offline copy: the vault-encrypted `vars.yml` on the control node
-(`ban_hash_key`) is that copy for Ansible deployments; for Compose, copy
-`secrets/ban-hash-key` somewhere offline when `first-run.sh` creates it.
+ban (`ban-hash-key`) and splits every returning contact into a new thread
+(`messaging-hash-key`). Keep an offline copy of each: the vault-encrypted `vars.yml` on
+the control node (`ban_hash_key`, `messaging_hash_key`) is that copy for Ansible
+deployments; for Compose, copy `secrets/ban-hash-key` and `secrets/messaging-hash-key`
+somewhere offline when `first-run.sh` creates them.

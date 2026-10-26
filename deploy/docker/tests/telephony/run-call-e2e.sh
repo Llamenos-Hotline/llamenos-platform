@@ -39,9 +39,9 @@ export BRIDGE_SECRET="${BRIDGE_SECRET:-$(openssl rand -hex 32)}"
 export HMAC_SECRET="$(openssl rand -hex 32)"
 export SERVER_SECRET="$(openssl rand -hex 32)"
 export SERVER_KEK="$(openssl rand -hex 32)"
-# BAN_HASH_KEY is a secret file the app mounts, never an env var.
-source "$ROOT/scripts/lib/ban-hash-key.sh"
-ensure_ban_hash_key_file "$ROOT/deploy/docker/secrets/ban-hash-key" 0444
+# BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files the app mounts, never env vars.
+source "$ROOT/scripts/lib/server-hash-keys.sh"
+ensure_hash_key_files "$ROOT/deploy/docker/secrets" 0444
 export ADMIN_PUBKEY="$(bun -e "import { seedHexToPubkey, ADMIN_SEED } from './tests/api-helpers'; console.log(seedHexToPubkey(ADMIN_SEED))")"
 # The X25519 HPKE recipient derived from the same seed — a different key from
 # ADMIN_PUBKEY, and required whenever it is set (#1283).

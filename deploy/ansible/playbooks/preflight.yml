@@ -413,16 +413,36 @@
             openssl rand -hex 32
         success_msg: "ban_hash_key: [set, 64 hex chars]"
 
-    - name: Assert hmac_secret, server_secret, server_kek and ban_hash_key are four different values
+    - name: Assert messaging_hash_key is a valid 64-character lowercase hex string
       ansible.builtin.assert:
         that:
-          - ([hmac_secret, server_secret, server_kek, ban_hash_key] | unique | length) == 4
+          - messaging_hash_key is defined
+          - messaging_hash_key | length == 64
+          - messaging_hash_key is match('^[0-9a-f]{64}$')
         fail_msg: |
-          Two of hmac_secret, server_secret, server_kek and ban_hash_key are
-          identical. Each server secret has exactly one role; a shared value
-          couples their rotations and their blast radius. Generate each with
-          'openssl rand -hex 32'.
-        success_msg: "hmac_secret, server_secret, server_kek, ban_hash_key: [distinct]"
+          REQUIRED: 'messaging_hash_key' must be exactly 64 lowercase hex characters.
+
+          Length seen: {{ messaging_hash_key | default('') | length }} (expected: 64)
+
+          It keys the per-hub messaging-thread hash and is written to a secret file
+          outside the services directory, so no config backup carries it. Keep an
+          offline copy: a rebuilt host without it splits every returning contact
+          into a new thread (no recovery).
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "messaging_hash_key: [set, 64 hex chars]"
+
+    - name: Assert hmac_secret, server_secret, server_kek, ban_hash_key and messaging_hash_key are five different values
+      ansible.builtin.assert:
+        that:
+          - ([hmac_secret, server_secret, server_kek, ban_hash_key, messaging_hash_key] | unique | length) == 5
+        fail_msg: |
+          Two of hmac_secret, server_secret, server_kek, ban_hash_key and
+          messaging_hash_key are identical. Each server secret has exactly one
+          role; a shared value couples their rotations and their blast radius.
+          Generate each with 'openssl rand -hex 32'.
+        success_msg: "hmac_secret, server_secret, server_kek, ban_hash_key, messaging_hash_key: [distinct]"
 
     - name: Assert pg_password meets minimum length
       ansible.builtin.assert:
