@@ -432,6 +432,33 @@ export function hasPermission(roleIds: string[], roles: Role[], permission: stri
   return permissionGranted(perms, permission)
 }
 
+// --- The admin permission minimum ---
+
+/** What a role must grant, in union with the user's other roles in the hub, to make them a hub admin. */
+export const HUB_ADMIN_PERMISSIONS = ['settings:manage', 'notes:read-all'] as const
+
+/** The slice of a role definition the admin predicate needs. */
+export type RoleCatalog = ReadonlyArray<Pick<Role, 'id' | 'permissions'>>
+
+function permissionsOfRole(roleId: string, catalog: RoleCatalog): readonly string[] {
+  return (catalog.find(r => r.id === roleId) ?? DEFAULT_ROLES.find(r => r.id === roleId))?.permissions ?? []
+}
+
+/**
+ * True when `roleIds`, together, carry hub-admin authority: the permission
+ * minimum {@link HUB_ADMIN_PERMISSIONS}, resolved against `catalog` (default
+ * roles missing from it resolve through DEFAULT_ROLES).
+ *
+ * THE definition of "holds admin roles". The worker's last-admin guards and
+ * envelope-recipient list (`apps/worker/lib/hub-admin.ts`) and the client's
+ * admin badge both call it — roles are user-definable bundles of permissions,
+ * so nothing may decide "admin" by a role's id or name.
+ */
+export function rolesConferHubAdmin(roleIds: readonly string[], catalog: RoleCatalog): boolean {
+  const granted = roleIds.flatMap(id => permissionsOfRole(id, catalog))
+  return HUB_ADMIN_PERMISSIONS.every(permission => permissionGranted(granted, permission))
+}
+
 /**
  * Get the "primary" role for display purposes — the highest-privilege role.
  * Order: super-admin > hub-admin > reviewer > volunteer > reporter > custom

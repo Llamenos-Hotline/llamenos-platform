@@ -4588,6 +4588,7 @@
     "role": "角色",
     "roleAdmin": "管理员",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "中心默认",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "志愿者",

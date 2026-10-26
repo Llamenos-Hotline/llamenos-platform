@@ -4440,6 +4440,7 @@
     "role": "Role",
     "roleAdmin": "Admin",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "Hub default",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Volunteer",

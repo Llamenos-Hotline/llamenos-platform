@@ -4,13 +4,16 @@ import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo } from 'react'
 import {
   listUsers,
+  listRoles,
   listAuditLog,
   listShifts,
   updateUser,
   type User,
+  type RoleDefinition,
   type AuditLogEntry,
   type Shift,
 } from '@/lib/api'
+import { rolesConferHubAdmin } from '@shared/permissions'
 import { useToast } from '@/lib/toast'
 import {
   ArrowLeft,
@@ -49,6 +52,7 @@ function UserProfilePage() {
   const { toast } = useToast()
   const [user, setUser] = useState<User | null>(null)
   const [shifts, setShifts] = useState<Shift[]>([])
+  const [roles, setRoles] = useState<RoleDefinition[]>([])
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([])
   const [auditTotal, setAuditTotal] = useState(0)
   const [auditPage, setAuditPage] = useState(1)
@@ -63,10 +67,12 @@ function UserProfilePage() {
     Promise.all([
       listUsers(),
       listShifts(),
-    ]).then(([userRes, shiftRes]) => {
+      listRoles(),
+    ]).then(([userRes, shiftRes, rolesRes]) => {
       const found = userRes.users.find(u => u.pubkey === pubkey) || null
       setUser(found)
       setShifts(shiftRes.shifts)
+      setRoles(rolesRes.roles)
     }).catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
   }, [pubkey, t, toast])
@@ -84,6 +90,8 @@ function UserProfilePage() {
     () => shifts.filter(s => s.userPubkeys.includes(pubkey)),
     [shifts, pubkey],
   )
+
+  const holdsAdminRole = user !== null && rolesConferHubAdmin(user.roles, roles)
 
   if (!isAdmin) {
     return <div className="text-muted-foreground">{t('common.accessDenied')}</div>
@@ -141,11 +149,11 @@ function UserProfilePage() {
                 <code data-testid="volunteer-pubkey" className="text-xs text-muted-foreground">{user.pubkey}</code>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Badge data-testid="volunteer-role-badge" variant={user.roles.includes('role-super-admin') || user.roles.includes('role-hub-admin') ? 'default' : 'secondary'}>
-                  {user.roles.includes('role-super-admin') || user.roles.includes('role-hub-admin') ? (
+                <Badge data-testid="volunteer-role-badge" variant={holdsAdminRole ? 'default' : 'secondary'}>
+                  {holdsAdminRole ? (
                     <><ShieldCheck className="h-3 w-3" /> {t('users.roleAdmin')}</>
                   ) : (
-                    <><Shield className="h-3 w-3" /> {t('users.roleVolunteer')}</>
+                    <><Shield className="h-3 w-3" /> {roles.find(r => r.id === user.roles[0])?.name || '\u2014'}</>
                   )}
                 </Badge>
                 <Badge data-testid="volunteer-status-badge" variant="outline" className={

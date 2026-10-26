@@ -22,7 +22,7 @@ export const users = pgTable('users', {
   roles: text('roles')
     .array()
     .notNull()
-    .default(sql`'{"role-volunteer"}'::text[]`),
+    .default(sql`'{}'::text[]`),
   displayName: text('display_name'),
   phone: text('phone'),
     // Valid values: 'active', 'inactive', 'erased' (EP08: set on account erasure)

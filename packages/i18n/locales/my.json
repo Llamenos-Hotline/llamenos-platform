@@ -1851,6 +1851,7 @@
     "role": "ရာထူး",
     "roleAdmin": "စီမံခန့်ခွဲသူ",
     "roleHubAdmin": "ဟပ်စီမံခန့်ခွဲသူ",
+    "roleHubDefault": "ဟပ်၏ မူလ",
     "roleReporter": "အစီရင်ခံသူ",
     "roleReviewer": "ပြန်လည်စစ်ဆေးသူ",
     "roleVolunteer": "စေတနာ့ဝန်ထမ်း",

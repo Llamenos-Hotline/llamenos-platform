@@ -310,7 +310,10 @@ describe('hubs routes', () => {
 
       expect(createHubSpy).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'New Hub' }),
-        { pubkey: 'a'.repeat(64), roleIds: ['role-hub-admin'] },
+        // No role named: the service resolves the founder's role by permission
+        // (#2233). A route that named an id here would break the moment a hub
+        // renamed or re-permissioned its admin role.
+        { pubkey: 'a'.repeat(64) },
       )
       // No second, separately-failable step that could leave the hub adminless
       expect(setHubRoleSpy).not.toHaveBeenCalled()

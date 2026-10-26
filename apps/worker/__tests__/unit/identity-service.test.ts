@@ -291,7 +291,7 @@ describe('IdentityService — User CRUD', () => {
   })
 
   describe('createUser', () => {
-    it('creates user with default role-volunteer', async () => {
+    it('creates a user with no role when none is given', async () => {
       const insertValues = vi.fn()
       const returnedRow = makeUserRow({ pubkey: 'new-pk' })
 
@@ -315,7 +315,8 @@ describe('IdentityService — User CRUD', () => {
 
       expect(volunteer.pubkey).toBe('new-pk')
       const vals = insertValues.mock.calls[0][0]
-      expect(vals.roles).toEqual(['role-volunteer'])
+      // No role is implied (#2233): a default-role id is not the service's to pick.
+      expect(vals.roles).toEqual([])
     })
 
     it('uses provided roleIds', async () => {

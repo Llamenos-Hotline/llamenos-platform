@@ -58,20 +58,19 @@
 import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
-import { DEFAULT_ROLES, permissionGranted, type Role } from '@shared/permissions'
+import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, rolesConferHubAdmin, type RoleCatalog } from '@shared/permissions'
 import { ServiceError } from '../services/settings'
 import { isRevokedSigningKey } from './revoked-signing-keys'
 
-/** What a role must grant, in union with the user's other roles in the hub, to make them a hub admin. */
-export const HUB_ADMIN_PERMISSIONS = ['settings:manage', 'notes:read-all'] as const
+// The permission minimum and the pure "do these roles confer admin" predicate
+// live in @shared/permissions so the client's admin badge calls the very same
+// function. Re-exported: this file stays the home of the invariant.
+export { HUB_ADMIN_PERMISSIONS, rolesConferHubAdmin, type RoleCatalog }
 
 export interface HubRoleAssignment {
   hubId: string
   roleIds: string[]
 }
-
-/** The slice of a role definition the invariant needs. */
-export type RoleCatalog = ReadonlyArray<Pick<Role, 'id' | 'permissions'>>
 
 /** The slice of a user row the invariant needs. */
 export interface AdminState {
@@ -120,14 +119,41 @@ export function mergeHubRole(
 // Pure predicate
 // ---------------------------------------------------------------------------
 
-function permissionsOf(roleId: string, catalog: RoleCatalog): readonly string[] {
-  return (catalog.find(r => r.id === roleId) ?? DEFAULT_ROLES.find(r => r.id === roleId))?.permissions ?? []
+/**
+ * A permission that carries instance-level authority: the `*` wildcard and
+ * anything in the `system` domain that is not a read-only `system:view-*`
+ * (including the `system:*` wildcard). Such a permission is never a hub
+ * permission — see {@link hubFounderRoleIds}.
+ */
+function isInstanceLevel(permission: string): boolean {
+  return permission === '*' || (permission.startsWith('system:') && !permission.startsWith('system:view-'))
 }
 
-/** True when `roleIds`, together, carry hub-admin authority. */
-export function rolesConferHubAdmin(roleIds: readonly string[], catalog: RoleCatalog): boolean {
-  const granted = roleIds.flatMap(id => permissionsOf(id, catalog))
-  return HUB_ADMIN_PERMISSIONS.every(permission => permissionGranted(granted, permission))
+/**
+ * The role a hub's founder is granted, chosen by permission rather than by id:
+ * the single role in `catalog` that satisfies the admin minimum
+ * ({@link rolesConferHubAdmin}) with the fewest permissions, so the founder
+ * gets the least authority that still administers the hub. A hub that renamed,
+ * split or re-permissioned its admin role keeps working.
+ *
+ * The catalog is shared and editable by anyone who can manage roles, so the
+ * choice is bounded: a role holding any instance-level permission
+ * ({@link isInstanceLevel}: the `*` wildcard, `system:manage-*`, `system:*`…) is
+ * never a candidate. That is the super-admin's authority; granting it as a hub
+ * role would make a hub's founder an instance administrator (#2153), and a role
+ * planted in the catalog could otherwise win this selection by being small.
+ * Whatever is chosen therefore confers hub-level authority only. Empty when no
+ * role qualifies.
+ *
+ * Default roles absent from `catalog` (the roles table mid-reset) resolve
+ * through DEFAULT_ROLES, exactly as {@link rolesConferHubAdmin} resolves them.
+ */
+export function hubFounderRoleIds(catalog: RoleCatalog): string[] {
+  const known = new Set(catalog.map(r => r.id))
+  const candidates = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
+    .filter(r => !r.permissions.some(isInstanceLevel) && rolesConferHubAdmin([r.id], catalog))
+    .sort((a, b) => a.permissions.length - b.permissions.length || a.id.localeCompare(b.id))
+  return candidates.length > 0 ? [candidates[0].id] : []
 }
 
 function canAct(state: AdminState): boolean {

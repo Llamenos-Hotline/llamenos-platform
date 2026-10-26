@@ -1851,6 +1851,7 @@
     "role": "Ruk'amal",
     "roleAdmin": "B'anel",
     "roleHubAdmin": "B'anel rech Hub",
+    "roleHubDefault": "Hub default",
     "roleReporter": "Aj Rutzijol",
     "roleReviewer": "Tz'etonel",
     "roleVolunteer": "Aj Samajel",

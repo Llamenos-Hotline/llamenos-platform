@@ -1851,6 +1851,7 @@
     "role": "ሚና",
     "roleAdmin": "አስተዳዳሪ",
     "roleHubAdmin": "የሃብ አስተዳዳሪ",
+    "roleHubDefault": "የማዕከሉ ነባሪ",
     "roleReporter": "ሪፖርተር",
     "roleReviewer": "ገምጋሚ",
     "roleVolunteer": "ፈቃደኛ",

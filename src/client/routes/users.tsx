@@ -15,6 +15,7 @@ import {
   type InviteCode,
   type RoleDefinition,
 } from '@/lib/api'
+import { rolesConferHubAdmin } from '@shared/permissions'
 import { generateEphemeralKeypair } from '@/lib/platform'
 import { useToast } from '@/lib/toast'
 import { UserPlus, Shield, ShieldCheck, Trash2, Key, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
@@ -270,7 +271,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
   const { toast } = useToast()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [roleId, setRoleId] = useState('role-volunteer')
+  const [roleId, setRoleId] = useState('')
   const [saving, setSaving] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
@@ -281,7 +282,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
     }
     setSaving(true)
     try {
-      const res = await createInvite({ name, phone, roleIds: [roleId] })
+      const res = await createInvite({ name, phone, roleIds: roleId ? [roleId] : undefined })
       onCreated(res.invite)
       toast(t('users.inviteCreated'), 'success')
     } catch {
@@ -325,7 +326,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
             <Label htmlFor="invite-role">{t('users.role')}</Label>
             <Select value={roleId} onValueChange={setRoleId}>
               <SelectTrigger id="invite-role" data-testid="user-form-role-select">
-                <SelectValue />
+                <SelectValue placeholder={t('users.roleHubDefault')} />
               </SelectTrigger>
               <SelectContent>
                 {roles.map(role => (
@@ -357,7 +358,7 @@ function AddUserForm({ roles, onCreated, onCancel }: {
   const { toast } = useToast()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [roleId, setRoleId] = useState('role-volunteer')
+  const [roleId, setRoleId] = useState('')
   const [saving, setSaving] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
@@ -369,7 +370,7 @@ function AddUserForm({ roles, onCreated, onCancel }: {
     setSaving(true)
     try {
       const keyPair = await generateEphemeralKeypair()
-      const user = await createUser({ name, phone, roleIds: [roleId], pubkey: keyPair.publicKey })
+      const user = await createUser({ name, phone, roleIds: roleId ? [roleId] : undefined, pubkey: keyPair.publicKey })
       // Expose seedHex for test infrastructure (deviceImportAndLoad requires Ed25519 seed, not secp256k1)
       const win = window as unknown as Record<string, unknown>
       if (typeof window !== 'undefined' && win.__TEST_PLATFORM) {
@@ -418,7 +419,7 @@ function AddUserForm({ roles, onCreated, onCancel }: {
             <Label htmlFor="vol-role">{t('users.role')}</Label>
             <Select value={roleId} onValueChange={setRoleId}>
               <SelectTrigger id="vol-role" data-testid="user-form-role-select">
-                <SelectValue />
+                <SelectValue placeholder={t('users.roleHubDefault')} />
               </SelectTrigger>
               <SelectContent>
                 {roles.map(role => (
@@ -453,9 +454,12 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
   const [showPhone, setShowPhone] = useState(false)
   const pinChallenge = usePinChallenge()
 
-  const primaryRoleId = user.roles[0] || 'role-volunteer'
+  // A member may hold no role (the hub template named no default), and roles are
+  // user-definable permission bundles: "admin" is what the roles grant, never
+  // which id or name they carry.
+  const primaryRoleId = user.roles[0] ?? ''
   const primaryRole = roles.find(r => r.id === primaryRoleId)
-  const isAdminRole = primaryRoleId === 'role-super-admin' || primaryRoleId === 'role-hub-admin'
+  const isAdminRole = rolesConferHubAdmin(user.roles, roles)
 
   async function changeRole(newRoleId: string) {
     if (newRoleId === primaryRoleId) return
@@ -517,7 +521,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
       <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
         <Badge data-testid="volunteer-row-role-badge" variant={isAdminRole ? 'default' : 'secondary'}>
           {isAdminRole && <ShieldCheck className="h-3 w-3" />}
-          {primaryRole?.name || primaryRoleId}
+          {primaryRole?.name || primaryRoleId || '\u2014'}
           {user.roles.length > 1 && (
             <span className="ml-1 text-xs opacity-70">+{user.roles.length - 1}</span>
           )}
@@ -541,7 +545,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
           <Select value={primaryRoleId} onValueChange={changeRole}>
             <SelectTrigger data-testid="volunteer-row-role-select" className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs shadow-none" aria-label={t('users.changeRole')}>
               <Shield className="h-3 w-3" />
-              <SelectValue />
+              <SelectValue placeholder={'\u2014'} />
             </SelectTrigger>
             <SelectContent>
               {roles.map(role => (

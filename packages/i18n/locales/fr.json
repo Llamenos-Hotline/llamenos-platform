@@ -4588,6 +4588,7 @@
     "role": "Rôle",
     "roleAdmin": "Administrateur",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "Valeur par défaut du hub",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Bénévole",

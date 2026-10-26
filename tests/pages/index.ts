@@ -8,7 +8,7 @@
 
 import { type Page, type Locator, expect } from '@playwright/test'
 import { TestIds } from '../test-ids'
-import { Timeouts } from '../helpers'
+import { Timeouts, chooseFormRole } from '../helpers'
 
 // ============ Base Page Helpers ============
 
@@ -177,6 +177,7 @@ export const VolunteerPage = {
     await page.getByLabel('Name').fill(name)
     await page.getByLabel('Phone Number').fill(phone)
     await page.getByLabel('Phone Number').blur()
+    await chooseFormRole(page)
     await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
     await expect(page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)).toBeVisible({ timeout: 15000 })
   },

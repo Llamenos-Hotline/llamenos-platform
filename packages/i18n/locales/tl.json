@@ -4588,6 +4588,7 @@
     "role": "Tungkulin",
     "roleAdmin": "Admin",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "Default ng hub",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Boluntaryo",

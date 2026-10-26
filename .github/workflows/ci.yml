@@ -2821,8 +2821,14 @@ jobs:
 
       - name: Run ESLint on changed files
         if: steps.changed.outputs.files != ''
+        env:
+          # Via env, never `${{ }}` inside the script: the shell would expand
+          # the `$pubkey` in `users_.$pubkey.tsx` (TanStack route files carry a
+          # literal `$`) to nothing, and ESLint then fails on a path that does
+          # not exist (#2266). A filename is data, not shell source.
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
         run: |
-          echo "${{ steps.changed.outputs.files }}" | xargs -r bunx eslint
+          printf '%s\n' "$CHANGED_FILES" | xargs -r -d '\n' bunx eslint
 
   # ─── Migration Drift Check ────────────────────────────────────
   migration-drift:

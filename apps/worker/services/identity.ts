@@ -607,7 +607,10 @@ export class IdentityService {
   }
 
   /**
-   * Create a new volunteer.
+   * Create a new user.
+   *
+   * No role is implied: `roleIds` is what they hold, and none means none (the
+   * route resolves the hub template's default before calling).
    *
    * With a hubId they are created as a member of that hub, holding `roleIds`
    * THERE and nothing globally: the account-wide `roles` column is authority
@@ -629,7 +632,7 @@ export class IdentityService {
     hubId?: string
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
-    const grantedRoleIds = data.roleIds ?? data.roles ?? ['role-volunteer']
+    const grantedRoleIds = data.roleIds ?? data.roles ?? []
     const roles = this.enforceAdminRoles(data.pubkey, data.hubId ? [] : grantedRoleIds)
     // onConflictDoNothing (not onConflictDoUpdate): a second create for a pubkey
     // that already belongs to a DIFFERENT person must never overwrite their row —

@@ -444,6 +444,16 @@ export async function logout(page: Page) {
 }
 
 /**
+ * Pick a role in the add-user / invite form. The form preselects nothing — a user
+ * created without one holds no role unless the hub template names a default
+ * (#2233) — so a flow that needs a user who can answer calls must choose.
+ */
+export async function chooseFormRole(page: Page, roleId = 'role-volunteer'): Promise<void> {
+  await page.getByTestId(TestIds.USER_FORM_ROLE_SELECT).click()
+  await page.locator(`[data-testid="${TestIds.USER_FORM_ROLE_OPTION}"][data-role-id="${roleId}"]`).click()
+}
+
+/**
  * Create a volunteer via UI and return the raw Ed25519 seed hex for login.
  *
  * The displayed device key is only for user display. Internally,
@@ -461,6 +471,7 @@ export async function createUserAndGetDeviceKey(page: Page, name: string, phone:
   await page.getByLabel('Name').fill(name)
   await page.getByLabel('Phone Number').fill(phone)
   await page.getByLabel('Phone Number').blur()
+  await chooseFormRole(page)
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
 
   const keyCode = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)
