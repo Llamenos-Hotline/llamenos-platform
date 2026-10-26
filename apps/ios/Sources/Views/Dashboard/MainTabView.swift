@@ -94,6 +94,9 @@ struct MainTabView: View {
                 .tag(Tab.settings)
         }
         .tint(.brandPrimary)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            RejectedWritesBanner()
+        }
         .accessibilityIdentifier("main-tab-view")
         .task {
             await fetchUnreadCount()

@@ -221,7 +221,9 @@ final class DashboardViewModel {
             try await apiService.request(method: "POST", path: APIService.hubPath(call.hubId, "/api/calls/\(call.id)/hangup"))
             currentCall = nil
         } catch {
-            errorMessage = error.localizedDescription
+            // The call is still on screen and still ringing the caller: say the hang-up
+            // did not happen, rather than the bare refusal reason.
+            errorMessage = NSLocalizedString("calls_hangup_failed", comment: "Couldn't end the call. Try again.")
         }
     }
 
@@ -248,7 +250,7 @@ final class DashboardViewModel {
             }
             currentCall = nil
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = NSLocalizedString("call_actions_ban_failed", comment: "Failed to ban caller")
         }
     }
 
