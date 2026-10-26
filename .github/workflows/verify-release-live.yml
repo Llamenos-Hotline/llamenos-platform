@@ -676,7 +676,16 @@ jobs:
 
           pkg, api_base = sys.argv[1], sys.argv[2]
 
-          info = json.load(open("/tmp/play-sa.json"))
+          # A secret that is not the key file verbatim (base64, a placeholder,
+          # a pasted path) fails json.load at char 0 with no hint which input
+          # was wrong. Say so, without echoing any of the secret's content.
+          try:
+              info = json.load(open("/tmp/play-sa.json"))
+          except json.JSONDecodeError:
+              sys.exit(
+                  "secrets.PLAY_SERVICE_ACCOUNT is not a JSON document - it must hold "
+                  "the service-account key file verbatim; reissue it"
+              )
           creds = service_account.Credentials.from_service_account_info(
               info, scopes=["https://www.googleapis.com/auth/androidpublisher"]
           )
