@@ -182,7 +182,7 @@ final class DashboardViewModel {
             // Recent notes are browsing data for the active hub only.
             guard attributed.hubId == hubContext.activeHubId else { return }
             Task { await fetchRecentNotes() }
-        case .messageNew, .messageStatus, .conversationNew, .conversationAssigned, .conversationClosed:
+        case .messageNew, .messageStatus, .conversationNew, .conversationAssigned, .conversationClosed, .conversationEnvelopesAdded:
             // Message events don't affect dashboard — handled by ConversationsViewModel
             break
         case .deviceWipe, .unknown:

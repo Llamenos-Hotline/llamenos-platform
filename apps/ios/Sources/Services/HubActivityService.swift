@@ -83,6 +83,10 @@ final class HubActivityService {
         case .conversationClosed:
             s.unreadConversationCount = max(0, s.unreadConversationCount - 1)
 
+        case .conversationEnvelopesAdded:
+            // Keys for messages already counted — no new conversation or message.
+            break
+
         case .noteCreated, .voicemailNew, .presenceSummary, .presenceDetail, .deviceWipe, .unknown:
             break
         }

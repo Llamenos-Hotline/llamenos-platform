@@ -5,25 +5,24 @@ import SwiftUI
 /// Detail view for a single conversation, showing message bubbles, channel indicator,
 /// text input, and real-time updates.
 ///
-/// The screen owns the conversation it shows (#1913). It used to look the conversation up
-/// in `vm.allConversations`, but this screen builds its own view model and only ever
-/// loaded messages into it, so that list was always empty: no channel header, a generic
-/// title, and a closed conversation that still offered a reply bar. The channel header,
-/// the title and the reply bar now all derive from `GET /api/conversations/:id`.
+/// The screen's view model owns the conversation it shows (#1913). It used to look the
+/// conversation up in `vm.allConversations`, but this screen builds its own view model and
+/// only ever loaded messages into it, so that list was always empty: no channel header, a
+/// generic title, and a closed conversation that still offered a reply bar. The channel
+/// header, the title and the reply bar now all derive from `GET /api/conversations/:id`.
+///
+/// A waiting conversation is taken with an explicit Claim (`POST …/claim`); replying never
+/// claims. The thread re-reads when a relay event says its messages or assignee changed.
 struct ConversationDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
     @State private var viewModelBox = ViewModelBox<ConversationsViewModel>()
 
-    /// The conversation as the server last reported it; nil until it has loaded.
-    @State private var conversation: AppConversation?
-    /// Why the conversation could not be loaded, if it could not.
-    @State private var conversationLoadError: String?
-
     let conversationId: String
 
     var body: some View {
         let vm = resolvedViewModel
+        let conversation = vm.currentConversation
 
         VStack(spacing: 0) {
             if let conversation {
@@ -31,7 +30,7 @@ struct ConversationDetailView: View {
             }
 
             // Messages
-            if let error = conversationLoadError {
+            if let error = vm.conversationLoadError, conversation == nil {
                 errorState(error, vm: vm)
             } else if conversation == nil || (vm.isLoadingMessages && vm.currentMessages.isEmpty) {
                 loadingState
@@ -51,36 +50,20 @@ struct ConversationDetailView: View {
                 replyBar(vm: vm, conversation: conversation)
             }
         }
-        .navigationTitle(conversationTitle)
+        .navigationTitle(conversationTitle(conversation))
         .navigationBarTitleDisplayMode(.inline)
         .task(id: conversationId) {
-            await load(vm: vm)
+            // Listen before loading so an event during the load is not missed; the filter
+            // drops events until the thread's hub is known.
+            vm.startEventListener()
+            await vm.loadThread(for: conversationId)
         }
+        .onDisappear { vm.stopEventListener() }
         // `.contain` keeps the container a container (#1914). A bare identifier on a
         // plain VStack is pushed down onto every child, overwriting `reply-text-field`,
         // `send-message-button` and the header's id, so none of them was reachable.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversation-detail-view")
-    }
-
-    // MARK: - Loading
-
-    private func load(vm: ConversationsViewModel) async {
-        await loadConversation()
-        await vm.loadMessages(for: conversationId)
-    }
-
-    private func loadConversation() async {
-        do {
-            let loaded: AppConversation = try await appState.apiService.request(
-                method: "GET",
-                path: "/api/conversations/\(conversationId)"
-            )
-            conversation = loaded
-            conversationLoadError = nil
-        } catch {
-            conversationLoadError = error.localizedDescription
-        }
     }
 
     // MARK: - Channel Header
@@ -119,8 +102,14 @@ struct ConversationDetailView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(vm.currentMessages) { message in
-                        MessageBubbleView(message: message)
-                            .id(message.id)
+                        switch message {
+                        case .readable(let readable):
+                            MessageBubbleView(message: readable)
+                                .id(message.id)
+                        case .unreadable(let unreadable):
+                            UnreadableMessageRow(message: unreadable)
+                                .id(message.id)
+                        }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -167,52 +156,98 @@ struct ConversationDetailView: View {
             .accessibilityIdentifier("conversation-closed-bar")
         } else {
             VStack(spacing: 0) {
-                Divider()
-                HStack(spacing: 12) {
-                    TextField(
-                        NSLocalizedString("conversation_reply_placeholder", comment: "Type a message..."),
-                        text: Binding(
-                            get: { vm.replyText },
-                            set: { vm.replyText = $0 }
-                        ),
-                        axis: .vertical
-                    )
-                    .lineLimit(1...5)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("reply-text-field")
-
-                    Button {
-                        Task {
-                            await vm.sendReply()
-                            // A reply can change the conversation's status (a waiting
-                            // conversation is claimed by answering it); re-read it.
-                            await loadConversation()
-                        }
-                    } label: {
-                        if vm.isSending {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(
-                                    vm.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        ? Color.brandMutedForeground
-                                        : Color.brandPrimary
-                                )
-                        }
-                    }
-                    .disabled(
-                        vm.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || vm.isSending
-                    )
-                    .accessibilityIdentifier("send-message-button")
-                    .accessibilityLabel(NSLocalizedString("conversation_send", comment: "Send message"))
+                if ConversationAccess.canClaim(conversation, hasPermission: appState.hasPermission) {
+                    claimBar(vm: vm, conversation: conversation)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                if ConversationAccess.canReply(
+                    conversation,
+                    userPubkey: appState.cryptoService.signingPubkeyHex,
+                    hasPermission: appState.hasPermission
+                ) {
+                    composer(vm: vm)
+                }
             }
             .background(Color.brandCard)
+        }
+    }
+
+    /// The explicit Claim control for a waiting, unassigned conversation.
+    private func claimBar(vm: ConversationsViewModel, conversation: AppConversation) -> some View {
+        VStack(spacing: 8) {
+            Divider()
+            if let error = vm.claimErrorMessage {
+                Text(error)
+                    .font(.brand(.footnote))
+                    .foregroundStyle(Color.red)
+                    .accessibilityIdentifier("claim-error")
+            }
+            Button {
+                Task { await vm.claimConversation(conversation.id) }
+            } label: {
+                if vm.isClaiming {
+                    ProgressView()
+                } else {
+                    Text(NSLocalizedString("conversations_claim", comment: "Claim"))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(vm.isClaiming)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+            .accessibilityIdentifier("claim-conversation-button")
+        }
+    }
+
+    private func composer(vm: ConversationsViewModel) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            if let error = vm.sendErrorMessage {
+                Text(error)
+                    .font(.brand(.footnote))
+                    .foregroundStyle(Color.red)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("send-error")
+            }
+            HStack(spacing: 12) {
+                TextField(
+                    NSLocalizedString("conversation_reply_placeholder", comment: "Type a message..."),
+                    text: Binding(
+                        get: { vm.replyText },
+                        set: { vm.replyText = $0 }
+                    ),
+                    axis: .vertical
+                )
+                .lineLimit(1...5)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("reply-text-field")
+
+                Button {
+                    Task { await vm.sendReply() }
+                } label: {
+                    if vm.isSending {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(
+                                vm.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Color.brandMutedForeground
+                                    : Color.brandPrimary
+                            )
+                    }
+                }
+                .disabled(
+                    vm.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || vm.isSending
+                )
+                .accessibilityIdentifier("send-message-button")
+                .accessibilityLabel(NSLocalizedString("conversation_send", comment: "Send message"))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
     }
 
@@ -229,9 +264,9 @@ struct ConversationDetailView: View {
         } actions: {
             Button {
                 Task {
-                    conversationLoadError = nil
+                    vm.conversationLoadError = nil
                     vm.errorMessage = nil
-                    await load(vm: vm)
+                    await vm.loadThread(for: conversationId)
                 }
             } label: {
                 Text(NSLocalizedString("retry", comment: "Retry"))
@@ -279,7 +314,7 @@ struct ConversationDetailView: View {
 
     // MARK: - Helpers
 
-    private var conversationTitle: String {
+    private func conversationTitle(_ conversation: AppConversation?) -> String {
         conversation?.contactDisplayHash
             ?? NSLocalizedString("conversation_title", comment: "Conversation")
     }
@@ -389,6 +424,40 @@ struct MessageBubbleView: View {
             ? NSLocalizedString("message_inbound", comment: "Received")
             : NSLocalizedString("message_outbound", comment: "Sent")
         return "\(direction): \(message.text). \(message.fullDateDisplay)"
+    }
+}
+
+// MARK: - UnreadableMessageRow
+
+/// Stands in for a message this device could not open, so the thread says that someone
+/// wrote in instead of reading as empty.
+struct UnreadableMessageRow: View {
+    let message: ThreadMessage.UnreadableMessage
+
+    var body: some View {
+        HStack {
+            if message.direction == "outbound" {
+                Spacer(minLength: 60)
+            }
+            HStack(spacing: 8) {
+                Image(systemName: "lock.fill")
+                    .font(.caption)
+                Text(NSLocalizedString(
+                    "hubs_key_unavailable",
+                    comment: "Encrypted content can't be opened on this device yet"
+                ))
+                .font(.brand(.footnote))
+            }
+            .foregroundStyle(Color.brandMutedForeground)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.brandBorder, style: StrokeStyle(lineWidth: 1, dash: [4])))
+            if message.direction != "outbound" {
+                Spacer(minLength: 60)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("message-unreadable-\(message.id)")
     }
 }
 
