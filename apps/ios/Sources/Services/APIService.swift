@@ -370,7 +370,10 @@ final class APIService: @unchecked Sendable {
     func configure(hubURLString: String) throws {
         var urlString = hubURLString.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let isLocalhost = urlString.contains("localhost") || urlString.contains("127.0.0.1")
+        // The host decides this, not a substring: "http://evil.example/localhost" is not local.
+        let hasScheme = urlString.lowercased().hasPrefix("http://") || urlString.lowercased().hasPrefix("https://")
+        let host = URLComponents(string: hasScheme ? urlString : "https://\(urlString)")?.host?.lowercased()
+        let isLocalhost = host == "localhost" || host == "127.0.0.1"
 
         // H6: Reject insecure HTTP connections (except localhost)
         if urlString.lowercased().hasPrefix("http://"), !isLocalhost {

@@ -64,10 +64,6 @@ final class AuthViewModel {
     /// behind on the device.
     func createNewIdentity() async {
         errorMessage = nil
-        // An invite link names the hub it belongs to; that hub wins over a typed URL.
-        if let linkedHub = InviteCodeParser.parse(inviteEnrollment.input)?.hubURL {
-            hubURL = linkedHub
-        }
         guard await validateAndStoreHubURL() else { return }
 
         isLoading = true
@@ -78,6 +74,19 @@ final class AuthViewModel {
             return
         }
         currentStep = .settingPIN
+    }
+
+    // MARK: - Invite Input
+
+    /// An invite link names the hub it came from. Offer that hub by filling an empty hub
+    /// field, as soon as the link is pasted, so it is on screen before anything is sent to
+    /// it. A hub the user already typed is never replaced: a link is whoever sent it, and
+    /// the typed hub is the one the user chose to trust.
+    func inviteInputChanged() {
+        guard hubURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let linkedHub = InviteCodeParser.parse(inviteEnrollment.input)?.hubURL
+        else { return }
+        hubURL = linkedHub
     }
 
     // MARK: - Hub URL

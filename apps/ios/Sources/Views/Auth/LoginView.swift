@@ -95,6 +95,7 @@ struct LoginView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("invite-code-input")
+                        .onChange(of: vm.inviteEnrollment.input) { vm.inviteInputChanged() }
 
                         // Without an invite the new identity belongs to no hub, so say how
                         // to get one rather than letting the account sit empty.

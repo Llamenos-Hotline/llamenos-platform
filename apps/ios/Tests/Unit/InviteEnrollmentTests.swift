@@ -387,3 +387,84 @@ final class InviteEnrollmentTests: XCTestCase {
         XCTAssertNil(enrollment.redeemError)
     }
 }
+
+// MARK: - InviteHubSelectionTests
+
+/// An invite link names a hub, and a link is whoever sent it. These pin that it can only
+/// fill an empty hub field, where the user sees it, and never replace a hub they chose.
+@MainActor
+final class InviteHubSelectionTests: XCTestCase {
+    private let code = "3f6f1c2a-9b7d-4e1f-8a55-0c2d9e4b7a10"
+
+    private func makeViewModel(hubURL: String) -> AuthViewModel {
+        let crypto = CryptoService()
+        let api = APIService(cryptoService: crypto, hubContext: HubContext())
+        let auth = AuthService(cryptoService: crypto, keychainService: KeychainService())
+        let viewModel = AuthViewModel(
+            authService: auth,
+            apiService: api,
+            inviteEnrollment: InviteEnrollmentService(apiService: api, cryptoService: crypto)
+        )
+        viewModel.hubURL = hubURL
+        return viewModel
+    }
+
+    func testPastedLinkFillsAnEmptyHubField() {
+        let viewModel = makeViewModel(hubURL: "")
+        viewModel.inviteEnrollment.input = "https://hub.example.org/onboarding?code=\(code)"
+
+        viewModel.inviteInputChanged()
+
+        XCTAssertEqual(viewModel.hubURL, "https://hub.example.org")
+    }
+
+    func testPastedLinkNeverReplacesATypedHub() {
+        let viewModel = makeViewModel(hubURL: "https://my-hub.example.org")
+        viewModel.inviteEnrollment.input = "https://evil.example/onboarding?code=\(code)"
+
+        viewModel.inviteInputChanged()
+
+        XCTAssertEqual(viewModel.hubURL, "https://my-hub.example.org")
+    }
+
+    func testABareCodeLeavesTheHubFieldAlone() {
+        let viewModel = makeViewModel(hubURL: "")
+        viewModel.inviteEnrollment.input = code
+
+        viewModel.inviteInputChanged()
+
+        XCTAssertEqual(viewModel.hubURL, "")
+    }
+}
+
+// MARK: - HubURLLocalhostTests
+
+/// Plain HTTP is allowed to the developer's own machine and nowhere else. The exemption
+/// is decided by the URL's host, so a remote URL that merely mentions "localhost" gets no
+/// cleartext connection (the invite flow now sends a signed redemption to this URL).
+@MainActor
+final class HubURLLocalhostTests: XCTestCase {
+    private func api() -> APIService {
+        APIService(cryptoService: CryptoService(), hubContext: HubContext())
+    }
+
+    func testRemoteHostThatMentionsLocalhostIsStillHttpsOnly() {
+        for url in ["http://evil.example/localhost", "http://localhost.evil.example", "http://evil.example/?next=127.0.0.1"] {
+            XCTAssertThrowsError(try api().configure(hubURLString: url), "\(url) must not be allowed over HTTP")
+        }
+    }
+
+    func testRemoteHostWithoutASchemeGetsHttps() throws {
+        let service = api()
+        try service.configure(hubURLString: "evil.example/localhost")
+        XCTAssertEqual(service.baseURL?.scheme, "https")
+    }
+
+    func testLoopbackStaysAllowedOverHttp() throws {
+        let service = api()
+        try service.configure(hubURLString: "http://localhost:3000")
+        XCTAssertEqual(service.baseURL?.absoluteString, "http://localhost:3000")
+        try service.configure(hubURLString: "127.0.0.1:3000")
+        XCTAssertEqual(service.baseURL?.absoluteString, "http://127.0.0.1:3000")
+    }
+}
