@@ -69,7 +69,7 @@ RUN menuselect/menuselect --disable-category MENUSELECT_RES menuselect.makeopts 
 
 # ── The vetted PBX image, plus the module ────────────────────────────────────
 # 22.10.1 — NOT below 22.10.0, see #1687
-FROM andrius/asterisk@sha256:532e68e4194e968e866a27f321ccce03fdd66bd7e369ffa17c07e7210da0fde1
+FROM andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libunbound8 \
     && rm -rf /var/lib/apt/lists/*
