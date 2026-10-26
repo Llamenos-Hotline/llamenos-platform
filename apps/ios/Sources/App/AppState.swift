@@ -139,7 +139,8 @@ final class AppState {
         )
         self.linphoneService = linphone
         self.permissionService = permission
-        self.authMeLoader = AuthMeLoader(apiService: api, permissionService: permission)
+        let authMe = AuthMeLoader(apiService: api, permissionService: permission)
+        self.authMeLoader = authMe
         self.shiftClockService = ShiftClockService(apiService: api)
         self.wipeService = WipeService(
             keychainService: keychain,
@@ -147,7 +148,9 @@ final class AppState {
             wakeKeyService: wake,
             offlineQueue: offline,
             crashReportingService: crashReporting,
-            webSocketService: ws
+            webSocketService: ws,
+            authMeLoader: authMe,
+            permissionService: permission
         )
 
         // Wire offline queue into API service for automatic enqueue on network errors
