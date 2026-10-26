@@ -241,12 +241,21 @@ auth.post('/me/logout',
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const authHeader = c.req.header('Authorization') || ''
-    // Revoke the session token if using session-based auth
-    if (authHeader.startsWith('Session ')) {
-      const token = authHeader.slice(8).trim()
-      await services.identity.revokeSession(token)
+    // Revoke the session token if using session-based auth. The middleware's
+    // token, not the header's: a renewal on this very request rotates it.
+    const sessionToken = c.get('sessionToken')
+    if (sessionToken) {
+      await services.identity.revokeSession(sessionToken)
     }
+    // Only the LAST live session leaving takes the user off shift. Logging out
+    // of a phone must not silence the desktop that is still signed in; but once
+    // nothing can answer, a call routed to them rings a person who is not there
+    // and spends the ring (#2205). Counted after the revoke, with the same
+    // liveness test the auth middleware applies, so an expired or revoked
+    // session is not "another device". Clocking out never ends a session.
+    const clockedOutOf = (await services.identity.countLiveSessions(pubkey)) === 0
+      ? await services.activeShifts.clockOutEverywhere(pubkey)
+      : []
     // Close this key's live relay sockets and drop their subscriptions. A
     // WebSocket authenticates with an Ed25519 challenge, not the session token,
     // so revoking the session leaves an open socket receiving every hub this
@@ -254,6 +263,9 @@ auth.post('/me/logout',
     // account is still active (#1655).
     getConnectionManager()?.terminateUser(pubkey, 'logged_out')
     await audit(services.audit, 'logout', pubkey, {}, undefined, null)
+    for (const hubId of clockedOutOf) {
+      await audit(services.audit, 'shiftClockOut', pubkey, { reason: 'last_session_logout' }, undefined, hubId)
+    }
     return c.json({ ok: true })
   },
 )

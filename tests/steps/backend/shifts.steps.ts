@@ -23,6 +23,7 @@ import {
 } from './shared-state'
 import {
   ADMIN_SEED,
+  devPost,
   apiGet,
   apiPost,
   apiPut,
@@ -53,6 +54,8 @@ interface ShiftsEP07State {
   registeredVolunteers: Record<string, { pubkey: string; seedHex: string }>
   /** The volunteer the ring-target scenarios put on the schedule (and whose clock-in they drive). */
   scheduledVolunteer?: { pubkey: string; seedHex: string }
+  /** Session tokens minted for the scheduled volunteer, in the order the scenario signed them in. */
+  scheduledVolunteerSessions: string[]
 }
 
 const EP07_KEY = 'shiftsEP07'
@@ -66,6 +69,7 @@ Before({ tags: '@backend' }, async ({ world }) => {
     shiftLabels: {},
     pubkeyLabels: {},
     registeredVolunteers: {},
+    scheduledVolunteerSessions: [],
   })
 })
 
@@ -501,4 +505,74 @@ Then('the scheduled volunteer is a ring target', async ({ request, world, worker
 
 Then('the scheduled volunteer is not a ring target', async ({ request, world, workerHub }) => {
   expect(await ringTargets(request, workerHub)).not.toContain(scheduledVolunteer(world).pubkey)
+})
+
+// ── Logout and the shift (#2205) ──────────────────────────────────────────────
+// A logout takes a user off shift only when it ends their LAST live session. A
+// "session" here is a real server session (the kind the auth middleware
+// validates), minted the way the WebAuthn login would; the user's own signing
+// key — which authenticates without one — is never revoked by a logout.
+
+Given('the scheduled volunteer is signed in on {int} device(s)', async ({ request, world }, count: number) => {
+  const s = getEP07State(world)
+  const vol = scheduledVolunteer(world)
+  for (let i = 0; i < count; i++) {
+    const { status, data } = await devPost<{ token: string }>(request, '/test-create-session', { pubkey: vol.pubkey })
+    expect(status, 'POST /test-create-session').toBe(200)
+    s.scheduledVolunteerSessions.push(data.token)
+  }
+})
+
+async function sessionRequest(
+  request: APIRequestContext,
+  method: 'GET' | 'POST',
+  path: string,
+  token: string,
+): Promise<number> {
+  const headers = { Authorization: `Session ${token}`, 'Content-Type': 'application/json' }
+  const res = method === 'GET'
+    ? await request.get(`/api${path}`, { headers })
+    : await request.post(`/api${path}`, { headers, data: {} })
+  return res.status()
+}
+
+When('the scheduled volunteer logs out of their first device', async ({ request, world }) => {
+  const [first] = getEP07State(world).scheduledVolunteerSessions
+  expect(first, 'the scenario signed the volunteer in before logging out').toBeDefined()
+  expect(await sessionRequest(request, 'POST', '/auth/me/logout', first), 'POST /auth/me/logout').toBe(200)
+})
+
+When('the scheduled volunteer logs out with a signed request', async ({ request, world }) => {
+  const { status } = await apiPost(request, '/auth/me/logout', {}, scheduledVolunteer(world).seedHex)
+  expect(status, 'POST /auth/me/logout').toBe(200)
+})
+
+Then('the scheduled volunteer is still clocked in on the hub', async ({ request, world, workerHub }) => {
+  const { activeShifts } = (await apiGet<{ activeShifts: Array<{ pubkey: string }> }>(
+    request, `/hubs/${workerHub}/shifts/active`, ADMIN_SEED,
+  )).data
+  expect(activeShifts.map(a => a.pubkey)).toContain(scheduledVolunteer(world).pubkey)
+})
+
+Then('the scheduled volunteer is no longer clocked in on the hub', async ({ request, world, workerHub }) => {
+  const { activeShifts } = (await apiGet<{ activeShifts: Array<{ pubkey: string }> }>(
+    request, `/hubs/${workerHub}/shifts/active`, ADMIN_SEED,
+  )).data
+  expect(activeShifts.map(a => a.pubkey)).not.toContain(scheduledVolunteer(world).pubkey)
+})
+
+Then('the volunteer\'s first device session is revoked', async ({ request, world }) => {
+  const [first] = getEP07State(world).scheduledVolunteerSessions
+  expect(await sessionRequest(request, 'GET', '/auth/me', first)).toBe(401)
+})
+
+Then('the volunteer\'s second device session is still valid', async ({ request, world }) => {
+  const second = getEP07State(world).scheduledVolunteerSessions[1]
+  expect(second, 'the scenario signed in on a second device').toBeDefined()
+  expect(await sessionRequest(request, 'GET', '/auth/me', second)).toBe(200)
+})
+
+Then('the volunteer\'s signing key still authenticates', async ({ request, world }) => {
+  const { status } = await apiGet(request, '/auth/me', scheduledVolunteer(world).seedHex)
+  expect(status, 'a logout revokes sessions, never keys').toBe(200)
 })

@@ -90,7 +90,7 @@ function createApp() {
     await next()
   })
   app.use('*', auth)
-  app.get('/test', (c) => c.json({ ok: true, pubkey: c.get('pubkey'), permissions: c.get('permissions') }))
+  app.get('/test', (c) => c.json({ ok: true, pubkey: c.get('pubkey'), permissions: c.get('permissions'), sessionToken: c.get('sessionToken') }))
 
   return { app, services }
 }
@@ -263,6 +263,17 @@ describe('auth middleware', () => {
     const res = await req(app, '/test')
     expect(res.status).toBe(200)
     expect(res.headers.get('X-New-Session-Token')).toBe(newToken)
+  })
+
+  it('exposes the rotated token, not the stale header token, as the request\'s session', async () => {
+    const user = makeUser()
+    const newToken = 'rotated-session-token-hex' // gitleaks:allow
+    mockParseSessionHeader.mockReturnValue('stale-header-token')
+    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user, newSessionToken: newToken })
+    const { app } = createApp()
+
+    const res = await req(app, '/test')
+    expect((await res.json()).sessionToken).toBe(newToken)
   })
 
   it('does not set X-New-Session-Token header when session was not rotated', async () => {

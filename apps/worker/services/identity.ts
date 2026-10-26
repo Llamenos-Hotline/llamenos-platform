@@ -62,6 +62,7 @@ import {
   SESSION_DURATION_MS,
   RENEWAL_THRESHOLD_MS,
   decideSessionRenewal,
+  type RenewalDecision,
 } from '../lib/session-renewal'
 import { decideDeviceRegistration } from '../lib/device-eviction'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
@@ -248,6 +249,26 @@ function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
     usedAt: row.usedAt?.toISOString(),
     usedBy: row.usedBy ?? undefined,
   }
+}
+
+/** The verdict on a stored session: a renewal decision, or that its signing key was revoked. */
+type SessionVerdict = RenewalDecision | { action: 'revoked_key' }
+
+/**
+ * The single definition of whether a stored session may authenticate.
+ * `validateSession` acts on the verdict (renew, delete, reject); `countLiveSessions`
+ * only reads it, so the two can never disagree about what "live" means.
+ */
+function classifySession(
+  row: Pick<typeof sessions.$inferSelect, 'pubkey' | 'expiresAt' | 'createdAt'>,
+  now: Date,
+): SessionVerdict {
+  if (isRevokedSigningKey(row.pubkey)) return { action: 'revoked_key' }
+  return decideSessionRenewal(row.expiresAt, now, RENEWAL_THRESHOLD_MS, SESSION_DURATION_MS, row.createdAt)
+}
+
+function isSessionLive(verdict: SessionVerdict): boolean {
+  return verdict.action === 'valid' || verdict.action === 'renew'
 }
 
 /** Map a DB session row to ServerSession interface */
@@ -1175,18 +1196,12 @@ export class IdentityService {
     }
 
     // Checked before any renewal: a session under a revoked key is removed, never extended.
-    if (isRevokedSigningKey(row.pubkey)) {
+    const decision = classifySession(row, new Date())
+
+    if (decision.action === 'revoked_key') {
       await this.db.delete(sessions).where(eq(sessions.token, token))
       throw new ServiceError(401, 'Invalid session')
     }
-
-    const decision = decideSessionRenewal(
-      row.expiresAt,
-      new Date(),
-      RENEWAL_THRESHOLD_MS,
-      SESSION_DURATION_MS,
-      row.createdAt,
-    )
 
     if (decision.action === 'max_lifetime_exceeded') {
       await this.db.delete(sessions).where(eq(sessions.token, token))
@@ -1231,6 +1246,21 @@ export class IdentityService {
    */
   async revokeSession(token: string): Promise<void> {
     await this.db.delete(sessions).where(eq(sessions.token, token))
+  }
+
+  /**
+   * How many sessions this pubkey can still authenticate with.
+   *
+   * "Live" is exactly the verdict `validateSession` (and so the auth
+   * middleware) reaches — `classifySession` — evaluated without its side
+   * effects: no renewal, which would rotate another device's token out from
+   * under it, and no deletion. A row that is expired, past its absolute
+   * lifetime or under a revoked signing key does not count.
+   */
+  async countLiveSessions(pubkey: string): Promise<number> {
+    const rows = await this.db.select().from(sessions).where(eq(sessions.pubkey, pubkey))
+    const now = new Date()
+    return rows.filter(row => isSessionLive(classifySession(row, now))).length
   }
 
   /**
