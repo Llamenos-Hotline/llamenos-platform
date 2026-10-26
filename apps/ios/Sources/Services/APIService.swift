@@ -655,6 +655,22 @@ final class APIService: @unchecked Sendable {
         let _: EmptyResponse = try await request(method: method, path: path, wireBody: wireBody)
     }
 
+    // MARK: - Session
+
+    /// Tell the server this device's session is over (`POST /api/auth/me/logout`).
+    ///
+    /// The server decides what that costs the user: when it ends their last live
+    /// session they are also clocked out of every hub, so a call is no longer routed
+    /// to someone who has left (#2205). Logging out here while another device is
+    /// still signed in leaves that device ringing.
+    ///
+    /// Must be sent BEFORE local state is wiped. The request is signed by the device
+    /// key, which logout locks away; once it is gone the server never learns the
+    /// session ended and keeps ringing a logged-out volunteer.
+    func endSession() async throws {
+        try await request(method: "POST", path: "/api/auth/me/logout")
+    }
+
     // MARK: - CMS Report Types
 
     /// Fetch CMS report type definitions from the settings endpoint.

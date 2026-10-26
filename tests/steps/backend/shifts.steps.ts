@@ -513,7 +513,7 @@ Then('the scheduled volunteer is not a ring target', async ({ request, world, wo
 // validates), minted the way the WebAuthn login would; the user's own signing
 // key — which authenticates without one — is never revoked by a logout.
 
-Given(/^the scheduled volunteer is signed in on (\d+) devices?$/, async ({ request, world }, count: number) => {
+Given('the scheduled volunteer is signed in on {int} device(s)', async ({ request, world }, count: number) => {
   const s = getEP07State(world)
   const vol = scheduledVolunteer(world)
   for (let i = 0; i < count; i++) {

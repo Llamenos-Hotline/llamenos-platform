@@ -442,7 +442,24 @@ final class AppState {
         authMeLoader.cancel()
     }
 
-    /// Called when the user logs out / resets identity.
+    /// Log out: end the session on the server, then wipe local state.
+    ///
+    /// The server call comes first because it is signed by the device key that
+    /// `didLogout()` locks away, and because it is what takes a user who has left
+    /// off the ringing roster (#2205). A server that cannot be reached must not trap
+    /// the user in the app, so the local logout proceeds regardless; the failure is
+    /// logged, not swallowed.
+    func logOut() async {
+        do {
+            try await apiService.endSession()
+        } catch {
+            logger.error("Logout did not reach the server; continuing locally: \(error.localizedDescription)")
+        }
+        didLogout()
+    }
+
+    /// Wipe local state after logout / identity reset. Does not tell the server —
+    /// use `logOut()` for a user-initiated logout.
     func didLogout() {
         wipeService.logout()
         cancelRoleFetch()
@@ -622,7 +639,7 @@ final class AppState {
                 return url
             } catch {
                 if Task.isCancelled { return nil }
-                logger.warning("Relay config fetch failed (attempt \(attempt + 1)): \(error.localizedDescription, privacy: .public)")
+                logger.warning("Relay config fetch failed (attempt \(attempt + 1)): \(error.localizedDescription)")
                 if attempt + 1 < maxAttempts {
                     try? await Task.sleep(for: .seconds(pow(2.0, Double(attempt))))
                 }

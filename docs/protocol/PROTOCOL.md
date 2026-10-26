@@ -1543,6 +1543,13 @@ POST /api/auth/me/logout
 Auth: Bearer or Session
 Response: { "ok": true }
 // If using Session auth, the token is revoked server-side
+// If that was the user's LAST live session (same liveness test as the auth
+// middleware: not expired, not past its absolute lifetime, signing key not
+// revoked), the user is also clocked out of every hub and each is audited as
+// `shiftClockOut`. Otherwise they stay on shift and keep ringing on their other
+// signed-in devices. Only sessions are revoked — never devices or keys.
+// A client MUST send this before discarding its credentials: a logout the
+// server never hears about leaves the user clocked in and being rung.
 ```
 
 #### Update Profile
