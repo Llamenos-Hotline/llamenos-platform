@@ -4,26 +4,54 @@ import SwiftUI
 
 /// Sheet view for creating a new encrypted note. Includes a text editor for the note body
 /// and dynamically renders custom field inputs based on the field definitions from the server.
+///
+/// A note belongs to a call, chosen from `choices` — never typed: the server accepts only a
+/// real call of the hub (#2125), and iOS never shows a volunteer a call's id.
 struct NoteCreateView: View {
     let customFields: [CustomFieldsListResponseField]
-    /// Called with the note text, custom field values, the call ID and any attached transcript.
-    let onSave: (String, [String: AnyCodableValue]?, String, String?) async throws -> Void
+    /// The calls the note can be filed against.
+    let choices: [CallReference]
+    /// Whether more choices are still being fetched.
+    var isLoadingChoices: Bool = false
+    /// Why the choices could not be fetched, if they could not.
+    var choicesError: String?
+    /// Called with the note text, custom field values, the chosen call and any attached transcript.
+    let onSave: (String, [String: AnyCodableValue]?, CallReference, String?) async throws -> Void
     var transcriptionService: TranscriptionService?
 
     @Environment(\.dismiss) private var dismiss
 
     @State private var noteText: String = ""
     @State private var fieldValues: [String: AnyCodableValue] = [:]
-    @State private var callId: String = ""
+    @State private var selectedCallId: String?
     @State private var isSaving: Bool = false
     @State private var errorMessage: String?
     @State private var attachedTranscript: String?
 
     private var trimmedText: String { noteText.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var trimmedCallId: String { callId.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var selectedCall: CallReference? { choices.first { $0.id == selectedCallId } }
 
     /// Save needs the note text and the call it is about.
-    private var canSave: Bool { !trimmedText.isEmpty && !trimmedCallId.isEmpty && !isSaving }
+    private var canSave: Bool { !trimmedText.isEmpty && selectedCall != nil && !isSaving }
+
+    /// - Parameter initialCall: The call the note is prefilled with (it must be in `choices`).
+    init(
+        customFields: [CustomFieldsListResponseField],
+        choices: [CallReference],
+        initialCall: CallReference? = nil,
+        isLoadingChoices: Bool = false,
+        choicesError: String? = nil,
+        transcriptionService: TranscriptionService? = nil,
+        onSave: @escaping (String, [String: AnyCodableValue]?, CallReference, String?) async throws -> Void
+    ) {
+        self.customFields = customFields
+        self.choices = choices
+        self.isLoadingChoices = isLoadingChoices
+        self.choicesError = choicesError
+        self.transcriptionService = transcriptionService
+        self.onSave = onSave
+        _selectedCallId = State(initialValue: initialCall?.id)
+    }
 
     /// Editable custom fields (filtered + sorted).
     ///
@@ -129,16 +157,27 @@ struct NoteCreateView: View {
                     }
                 }
 
-                // Call ID section — a note belongs to a call (the server rejects one without)
+                // Call section — a note belongs to a call (the server rejects one without)
                 Section {
-                    TextField(
-                        NSLocalizedString("notes_call_id_placeholder", comment: "Call ID or reference"),
-                        text: $callId
-                    )
-                    .font(.brandMono(.body))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .accessibilityIdentifier("note-call-id-input")
+                    ForEach(choices) { call in
+                        callChoiceRow(call)
+                    }
+                    if choices.isEmpty {
+                        if isLoadingChoices {
+                            ProgressView()
+                        } else {
+                            Text(NSLocalizedString("call_history_empty_title", comment: "No Call History"))
+                                .font(.brand(.footnote))
+                                .foregroundStyle(Color.brandMutedForeground)
+                                .accessibilityIdentifier("note-call-choices-empty")
+                        }
+                    }
+                    if let choicesError {
+                        Text(choicesError)
+                            .font(.brand(.footnote))
+                            .foregroundStyle(Color.brandMutedForeground)
+                            .accessibilityIdentifier("note-call-choices-error")
+                    }
                 } header: {
                     Text(NSLocalizedString("note_create_call_id_label", comment: "Associated Call"))
                         .font(.brand(.headline))
@@ -197,6 +236,33 @@ struct NoteCreateView: View {
             )
             .interactiveDismissDisabled(isSaving)
         }
+    }
+
+    // MARK: - Call Choice
+
+    private func callChoiceRow(_ call: CallReference) -> some View {
+        let isSelected = call.id == selectedCallId
+        return Button {
+            selectedCallId = call.id
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(call.title)
+                        .font(.brand(.body))
+                        .foregroundStyle(Color.brandForeground)
+                    Text(call.startedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.brand(.caption))
+                        .foregroundStyle(Color.brandMutedForeground)
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.brandPrimary)
+                }
+            }
+        }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("note-call-choice-\(call.id)")
     }
 
     // MARK: - Custom Field Input
@@ -341,7 +407,7 @@ struct NoteCreateView: View {
     // MARK: - Save
 
     private func saveNote() async {
-        guard canSave else { return }
+        guard canSave, let call = selectedCall else { return }
 
         // Validate required fields
         for field in editableFields where field.isRequired {
@@ -356,7 +422,7 @@ struct NoteCreateView: View {
 
         do {
             let fields = fieldValues.isEmpty ? nil : fieldValues
-            try await onSave(trimmedText, fields, trimmedCallId, attachedTranscript)
+            try await onSave(trimmedText, fields, call, attachedTranscript)
         } catch {
             errorMessage = error.localizedDescription
             isSaving = false
@@ -385,6 +451,11 @@ struct NoteCreateView: View {
                 required: false, order: 2
             ),
         ],
+        choices: [
+            CallReference(id: "call-1", hubId: "hub-1", startedAt: Date(), phase: .ended),
+            CallReference(id: "call-2", hubId: "hub-1", startedAt: Date().addingTimeInterval(-3600), phase: .recorded(.answered)),
+        ],
+        initialCall: CallReference(id: "call-1", hubId: "hub-1", startedAt: Date(), phase: .ended),
         onSave: { _, _, _, _ in }
     )
 }

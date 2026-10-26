@@ -883,12 +883,13 @@ final class APIConnectedUITests: BaseUITest {
         when("an incoming call is simulated") {
             _ = ringCall(callerNumber: "+15551110001", hubId: hubId)
         }
-        then("the dashboard shows the ringing call, naming the caller") {
+        then("the dashboard shows a ring, not an active call, and does not name the caller") {
             XCTAssertTrue(
-                find("active-call-card").waitForExistence(timeout: 20),
-                "The ring event should put the call on the dashboard"
+                find("incoming-call-card").waitForExistence(timeout: 20),
+                "The ring event should put the call on the dashboard as an incoming call"
             )
-            XCTAssertTrue(app.staticTexts["0001"].exists, "The call card should identify the caller by last four digits")
+            XCTAssertFalse(find("active-call-card").exists, "A ringing call is not a call in progress")
+            XCTAssertFalse(app.staticTexts["0001"].exists, "A ring must not show the caller's digits")
         }
     }
 
@@ -899,7 +900,7 @@ final class APIConnectedUITests: BaseUITest {
             hubId = launchAsAdminOnFreshHub(named: "answer-call") ?? ""
             XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
             callId = ringCall(callerNumber: "+15551110002", hubId: hubId)
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
         }
         when("the call is answered by my identity") {
             let status = simulateAnswerCall(callId: callId, pubkey: appIdentityPubkey())
@@ -909,8 +910,9 @@ final class APIConnectedUITests: BaseUITest {
             let held = serverActiveCalls(hubId: hubId).first { $0.id == callId }
             XCTAssertEqual(held?.status, "in-progress")
             XCTAssertEqual(held?.answeredBy, appIdentityPubkey())
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 10), "The answered call should stay on the dashboard")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 10), "The answered call should become my call on the dashboard")
             XCTAssertTrue(find("call-elapsed-timer").exists, "An in-progress call runs an elapsed timer")
+            XCTAssertTrue(waitForCallCardToClear("incoming-call-card"), "The ring should be replaced by the call")
         }
     }
 
@@ -926,8 +928,9 @@ final class APIConnectedUITests: BaseUITest {
         when("the call ends") {
             XCTAssertEqual(simulateEndCall(callId: callId), "completed", "Ended call status should be completed")
         }
-        then("the call card leaves the dashboard and the server no longer holds the call") {
+        then("the call card leaves the dashboard, a Call Ended prompt takes its place, and the server no longer holds the call") {
             XCTAssertTrue(waitForCallCardToClear(), "The call card should disappear once the call has ended")
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 10), "My ended call should prompt for a note")
             XCTAssertFalse(serverActiveCalls(hubId: hubId).contains { $0.id == callId })
         }
     }
@@ -939,13 +942,13 @@ final class APIConnectedUITests: BaseUITest {
             hubId = launchAsAdminOnFreshHub(named: "voicemail") ?? ""
             XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
             callId = ringCall(callerNumber: "+15551110004", hubId: hubId)
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
         }
         when("the caller gives up and goes to voicemail") {
             XCTAssertEqual(simulateVoicemail(callId: callId), "unanswered", "Voicemail status should be unanswered")
         }
         then("the ringing call leaves the dashboard") {
-            XCTAssertTrue(waitForCallCardToClear(), "A call that went to voicemail is no longer ringing")
+            XCTAssertTrue(waitForCallCardToClear("incoming-call-card"), "A call that went to voicemail is no longer ringing")
             XCTAssertFalse(serverActiveCalls(hubId: hubId).contains { $0.id == callId })
         }
     }
@@ -1058,10 +1061,7 @@ final class APIConnectedUITests: BaseUITest {
             textEditor.tap()
             textEditor.typeText(noteText)
 
-            let callIdField = scrollToVisible("note-call-id-input")
-            XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
-            callIdField.tap()
-            callIdField.typeText(callId)
+            chooseNoteCall(callId)
 
             find("save-note").tap()
             XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")
