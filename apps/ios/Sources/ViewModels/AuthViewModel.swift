@@ -32,6 +32,7 @@ enum AuthStep: Equatable {
 final class AuthViewModel {
     private let authService: AuthService
     private let apiService: APIService
+    let inviteEnrollment: InviteEnrollmentService
 
     /// Current step in the auth flow.
     var currentStep: AuthStep = .login
@@ -45,20 +46,37 @@ final class AuthViewModel {
     /// Whether an async operation is in progress.
     var isLoading: Bool = false
 
-    init(authService: AuthService, apiService: APIService) {
+    init(authService: AuthService, apiService: APIService, inviteEnrollment: InviteEnrollmentService) {
         self.authService = authService
         self.apiService = apiService
+        self.inviteEnrollment = inviteEnrollment
         self.hubURL = authService.hubURL ?? ""
     }
 
     // MARK: - Create New Identity
 
-    /// Validate hub URL and proceed to PIN set.
+    /// Validate the hub URL and the invite (when one was entered), then proceed to PIN set.
     /// In the v3 model, device key generation happens atomically with PIN encryption
-    /// inside PINViewModel — no device key display step.
+    /// inside PINViewModel — no device key display step. The invite is redeemed after
+    /// that, because redeeming signs with the device key the PIN screen creates.
+    ///
+    /// A bad invite stops here, before any key exists, so a refused code leaves nothing
+    /// behind on the device.
     func createNewIdentity() async {
         errorMessage = nil
+        // An invite link names the hub it belongs to; that hub wins over a typed URL.
+        if let linkedHub = InviteCodeParser.parse(inviteEnrollment.input)?.hubURL {
+            hubURL = linkedHub
+        }
         guard await validateAndStoreHubURL() else { return }
+
+        isLoading = true
+        let inviteError = await inviteEnrollment.validate()
+        isLoading = false
+        if let inviteError {
+            errorMessage = inviteError
+            return
+        }
         currentStep = .settingPIN
     }
 

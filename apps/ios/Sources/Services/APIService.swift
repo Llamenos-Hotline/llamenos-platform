@@ -625,6 +625,62 @@ final class APIService: @unchecked Sendable {
         }
     }
 
+    /// A request to a public route: no `Authorization` header and no offline queue.
+    ///
+    /// For the invite routes (`GET /api/invites/validate/:code`, `POST /api/invites/redeem`).
+    /// They run before this device is a known user, so a header could not authenticate
+    /// anything; the redeem body carries its own signed token instead. The offline queue is
+    /// refused for the same reason: a redeem token is single-use and time-boxed, so replaying
+    /// it later could only fail, and a queued retry would hide that from the person waiting
+    /// on the screen.
+    func publicRequest<T: Decodable>(
+        method: String,
+        path: String,
+        rawBody: Data? = nil
+    ) async throws -> T {
+        guard let baseURL else { throw APIError.noBaseURL }
+
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
+        urlRequest.httpMethod = method.uppercased()
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let rawBody {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.httpBody = rawBody
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw APIError.networkError(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let bodyString = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw APIError.requestFailed(statusCode: httpResponse.statusCode, body: bodyString)
+        }
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    /// `publicRequest` with a body generated from `packages/protocol/schemas/`.
+    func publicRequest<T: Decodable>(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws -> T {
+        try await publicRequest(method: method, path: path, rawBody: try wireEncoder.encode(wireBody))
+    }
+
     /// Fire-and-forget request with no response body expected.
     func request(
         method: String,

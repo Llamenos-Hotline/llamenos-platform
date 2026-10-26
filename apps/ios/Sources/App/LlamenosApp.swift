@@ -162,11 +162,12 @@ struct LlamenosApp: App {
 
         switch host {
         case "hub-invite":
-            // Store the invite token so the login / registration flow can pick it up.
+            // Fill the login screen's invite field so the enrolment flow can pick it up.
             // Does not require authentication — a new volunteer may tap this link before
-            // creating their account.
-            if let token = queryItems?.first(where: { $0.name == "token" })?.value {
-                appState.pendingHubInviteToken = token
+            // creating their account. The code is validated against the hub when they
+            // continue, not trusted from the link.
+            if InviteCodeParser.parse(url.absoluteString) != nil {
+                appState.inviteEnrollment.input = url.absoluteString
             }
 
         default:
