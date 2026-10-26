@@ -3892,6 +3892,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "باز کردن قفل بیومتریک پس از تلاش‌های ناموفق زیاد قفل شده است. پین خود را وارد کنید.",
     "biometricNotEnrolled": "اطلاعات بیومتریک دستگاه شما تغییر کرده، بنابراین باز کردن قفل بیومتریک غیرفعال شد. پین خود را وارد کنید.",
     "biometricPinMismatch": "باز کردن قفل بیومتریک ناموفق بود. پین خود را وارد کنید.",

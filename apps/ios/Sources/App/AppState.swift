@@ -43,6 +43,7 @@ final class AppState {
     let linphoneService: LinphoneService
     let wipeService: WipeService
     let permissionService: PermissionService
+    let authMeLoader: AuthMeLoader
     let shiftClockService: ShiftClockService
 
     // MARK: - Auth State
@@ -98,6 +99,8 @@ final class AppState {
 
     /// Background task that listens for WebSocket events.
     private var eventListenerTask: Task<Void, Never>?
+    /// The `/api/auth/me` refresh in flight, or waiting to retry.
+    private var roleFetchTask: Task<Void, Never>?
     /// Resolves the relay endpoint from `/api/config` and connects.
     private var relayConnectTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "org.llamenos.hotline", category: "Relay")
@@ -136,6 +139,8 @@ final class AppState {
         )
         self.linphoneService = linphone
         self.permissionService = permission
+        let authMe = AuthMeLoader(apiService: api, permissionService: permission)
+        self.authMeLoader = authMe
         self.shiftClockService = ShiftClockService(apiService: api)
         self.wipeService = WipeService(
             keychainService: keychain,
@@ -143,7 +148,9 @@ final class AppState {
             wakeKeyService: wake,
             offlineQueue: offline,
             crashReportingService: crashReporting,
-            webSocketService: ws
+            webSocketService: ws,
+            authMeLoader: authMe,
+            permissionService: permission
         )
 
         // Wire offline queue into API service for automatic enqueue on network errors
@@ -357,6 +364,7 @@ final class AppState {
     /// Lock the app: clear device key from memory, set locked state.
     func lockApp() {
         wakeKeyService.cancelRegistration()
+        cancelRoleFetch()
         authService.lock()
         isLocked = true
         authStatus = .locked
@@ -426,9 +434,18 @@ final class AppState {
         isDeviceWiped = true
     }
 
+    /// Stop the permission refresh. Permissions are left as they are: a locked app that
+    /// is unlocked again asks afresh (`didUnlock`), and logout clears them.
+    private func cancelRoleFetch() {
+        roleFetchTask?.cancel()
+        roleFetchTask = nil
+        authMeLoader.cancel()
+    }
+
     /// Called when the user logs out / resets identity.
     func didLogout() {
         wipeService.logout()
+        cancelRoleFetch()
         eventListenerTask?.cancel()
         eventListenerTask = nil
         relayConnectTask?.cancel()
@@ -516,47 +533,46 @@ final class AppState {
         }
     }
 
-    /// Fetch the current user's role and permissions from the API after authentication.
+    /// Fetch the current user's permissions and profile from the API after authentication.
+    ///
+    /// Retries until the server answers (see `AuthMeLoader`). A failed request never
+    /// changes what the user may do: the last known permissions stay in force and
+    /// `permissionService.refreshFailure` says the refresh is pending.
     func fetchUserRole() {
-        Task {
-            do {
-                let response: AuthMeResponse = try await apiService.request(
-                    method: "GET",
-                    path: "/api/auth/me"
-                )
-                await MainActor.run {
-                    // Store fine-grained permissions from the server
-                    self.permissionService.update(permissions: response.permissions ?? [])
+        roleFetchTask?.cancel()
+        roleFetchTask = Task { [weak self] in
+            guard let self else { return }
+            switch await authMeLoader.refresh() {
+            case .cancelled:
+                return
+            case .denied:
+                syncDisplayRole()
+            case .loaded(let response):
+                syncDisplayRole()
 
-                    // Legacy role field — kept for backward compat with views that
-                    // haven't migrated to hasPermission() yet
-                    let hasAdminRole = response.roles.contains { $0.contains("admin") }
-                    self.userRole = hasAdminRole ? .admin : .volunteer
-
-                    // Store admin decryption pubkey for E2EE envelope encryption
-                    self.adminDecryptionPubkey = response.adminDecryptionPubkey
-                    // Persist to keychain so it's available immediately on next unlock
-                    if let pubkey = response.adminDecryptionPubkey {
-                        try? self.keychainService.storeString(pubkey, key: KeychainKey.adminDecryptionPubkey)
-                    }
-
-                    // Store server event keys in Rust CryptoState for epoch-aware decryption.
-                    // current key is required; previous key is optional (used during epoch rotation).
-                    if let keyHex = response.serverEventKeyHex {
-                        try? self.cryptoService.setServerEventKeys(
-                            currentHex: keyHex,
-                            previousHex: response.serverEventKeyPrevHex
-                        )
-                    }
+                // Store admin decryption pubkey for E2EE envelope encryption
+                adminDecryptionPubkey = response.adminDecryptionPubkey
+                // Persist to keychain so it's available immediately on next unlock
+                if let pubkey = response.adminDecryptionPubkey {
+                    try? keychainService.storeString(pubkey, key: KeychainKey.adminDecryptionPubkey)
                 }
-            } catch {
-                // Default to volunteer if role fetch fails
-                await MainActor.run {
-                    self.userRole = .volunteer
-                    self.permissionService.clear()
+
+                // Store server event keys in Rust CryptoState for epoch-aware decryption.
+                // current key is required; previous key is optional (used during epoch rotation).
+                if let keyHex = response.serverEventKeyHex {
+                    try? cryptoService.setServerEventKeys(
+                        currentHex: keyHex,
+                        previousHex: response.serverEventKeyPrevHex
+                    )
                 }
             }
         }
+    }
+
+    /// Display-only role badge, derived from the permissions the server granted — never
+    /// from a role's name or id. Views that gate behaviour use `hasPermission`.
+    private func syncDisplayRole() {
+        userRole = permissionService.isAdmin ? .admin : .volunteer
     }
 
     /// Relay event kinds subscribed on every member hub: call ring/update/voicemail,
