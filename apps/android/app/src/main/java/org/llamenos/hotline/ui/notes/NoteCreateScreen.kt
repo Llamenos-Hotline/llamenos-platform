@@ -69,6 +69,10 @@ import org.llamenos.hotline.ui.components.LoadingOverlay
  * secrecy before being sent to the API.
  *
  * @param viewModel Shared NotesViewModel handling encryption and API calls
+ * @param conversationId The conversation the note is about, if any
+ * @param callId The call the note is about, if any. A note needs one or the other: the
+ *   server refuses a note about nothing, so Save stays disabled without either.
+ * @param hubId The hub [callId] belongs to; null files the note to the active hub
  * @param onNavigateBack Callback after successful save or user cancellation
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,6 +82,7 @@ fun NoteCreateScreen(
     onNavigateBack: () -> Unit,
     conversationId: String? = null,
     callId: String? = null,
+    hubId: String? = null,
     transcriptionService: TranscriptionService? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -131,10 +136,10 @@ fun NoteCreateScreen(
                         IconButton(
                             onClick = {
                                 if (noteText.isNotBlank()) {
-                                    viewModel.createNote(noteText.trim(), fieldValues.toMap(), conversationId, callId, attachedTranscript)
+                                    viewModel.createNote(noteText.trim(), fieldValues.toMap(), conversationId, callId, attachedTranscript, hubId)
                                 }
                             },
-                            enabled = noteText.isNotBlank() && !uiState.isSaving,
+                            enabled = noteText.isNotBlank() && !uiState.isSaving && (callId != null || conversationId != null),
                             modifier = Modifier.testTag("note-save-button"),
                         ) {
                             Icon(

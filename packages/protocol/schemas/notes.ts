@@ -19,6 +19,11 @@ export const noteResponseSchema = z.object({
 
 export type EncryptedNote = z.infer<typeof noteResponseSchema>
 
+/** What `POST /notes` (201) and `PATCH /notes/:id` (200) answer: the stored note, wrapped — never bare. */
+export const noteStoredResponseSchema = z.object({
+  note: noteResponseSchema,
+})
+
 // --- List/wrapper response schemas ---
 
 export const noteListResponseSchema = z.object({

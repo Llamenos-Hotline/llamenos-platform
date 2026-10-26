@@ -80,7 +80,7 @@ private enum class MainTab(
  * @param onLock Callback to lock the app (clears key from memory)
  * @param onLogout Callback to fully logout (clears all data)
  * @param onNavigateToNoteDetail Callback to navigate to note detail screen
- * @param onNavigateToNoteCreate Callback to navigate to note create screen
+ * @param onNavigateToNoteCreate Callback to open the note editor on a call (id and its hub id), or on none
  * @param onNavigateToConversationDetail Callback to navigate to conversation detail screen
  * @param onNavigateToAdmin Callback to navigate to admin panel
  */
@@ -95,7 +95,7 @@ fun MainScreen(
     onLogout: () -> Unit,
     onPanicWipe: () -> Unit,
     onNavigateToNoteDetail: (String) -> Unit,
-    onNavigateToNoteCreate: () -> Unit,
+    onNavigateToNoteCreate: (callId: String?, hubId: String?) -> Unit,
     onNavigateToConversationDetail: (String) -> Unit,
     onNavigateToAdmin: () -> Unit,
     onNavigateToCommunications: () -> Unit = {},
@@ -161,6 +161,7 @@ fun MainScreen(
                         onLock = onLock,
                         onLogout = onLogout,
                         onNavigateToNotes = { selectedTab = MainTab.NOTES.ordinal },
+                        onNavigateToNoteCreate = onNavigateToNoteCreate,
                         onNavigateToNoteDetail = onNavigateToNoteDetail,
                         onNavigateToCallHistory = onNavigateToCallHistory,
                         onNavigateToReports = onNavigateToReports,
@@ -178,7 +179,12 @@ fun MainScreen(
                 MainTab.NOTES -> {
                     NotesScreen(
                         viewModel = notesViewModel,
-                        onNavigateToCreate = onNavigateToNoteCreate,
+                        // The editor opens on the volunteer's own call when there is one
+                        // (the one in progress, else the one that just ended), else on none.
+                        onNavigateToCreate = {
+                            val call = dashboardViewModel.noteTargetCall()
+                            onNavigateToNoteCreate(call?.id, call?.hubId)
+                        },
                         onNavigateToDetail = onNavigateToNoteDetail,
                     )
                 }

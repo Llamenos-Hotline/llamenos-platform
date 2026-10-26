@@ -21,6 +21,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import java.net.URLEncoder
 import org.llamenos.hotline.api.NetworkMonitor
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
@@ -140,10 +141,24 @@ sealed interface LlamenosRoute {
         }
     }
 
-    /** Note creation form, optionally linked to a conversation or call. */
+    /**
+     * Note creation form, optionally linked to a conversation or call. A call travels
+     * with the hub it belongs to (`hubId`): the note is filed there, whichever hub is
+     * being browsed. Without `hubId` the active hub is used (call history is the
+     * active hub's).
+     */
     data object NoteCreate : LlamenosRoute {
         override val route = "note_create"
-        const val ROUTE_PATTERN = "note_create?conversationId={conversationId}&callId={callId}"
+        const val ROUTE_PATTERN = "note_create?conversationId={conversationId}&callId={callId}&hubId={hubId}"
+
+        /** The route to the editor on [callId] in [hubId]; both null opens it on no call. */
+        fun forCall(callId: String?, hubId: String?): String {
+            val query = listOfNotNull(
+                callId?.let { "callId=${URLEncoder.encode(it, "UTF-8")}" },
+                hubId?.let { "hubId=${URLEncoder.encode(it, "UTF-8")}" },
+            )
+            return if (query.isEmpty()) route else "$route?${query.joinToString("&")}"
+        }
     }
 
     /** Conversation detail view. */
@@ -726,8 +741,8 @@ private fun NavigationTree(
                 onNavigateToNoteDetail = { noteId ->
                     navController.navigate("note/$noteId")
                 },
-                onNavigateToNoteCreate = {
-                    navController.navigate(LlamenosRoute.NoteCreate.route)
+                onNavigateToNoteCreate = { callId, hubId ->
+                    navController.navigate(LlamenosRoute.NoteCreate.forCall(callId, hubId))
                 },
                 onNavigateToConversationDetail = { conversationId ->
                     navController.navigate("conversation/$conversationId")
@@ -792,16 +807,23 @@ private fun NavigationTree(
                     nullable = true
                     defaultValue = null
                 },
+                navArgument("hubId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
             ),
         ) { backStackEntry ->
             val notesViewModel: NotesViewModel = hiltViewModel()
             val conversationId = backStackEntry.arguments?.getString("conversationId")
             val callId = backStackEntry.arguments?.getString("callId")
+            val hubId = backStackEntry.arguments?.getString("hubId")
             NoteCreateScreen(
                 viewModel = notesViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 conversationId = conversationId,
                 callId = callId,
+                hubId = hubId,
             )
         }
 

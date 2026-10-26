@@ -55,6 +55,7 @@ import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.mockPushRegistrationManager
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.ui.dashboard.DashboardViewModel
 import org.llamenos.hotline.ui.shifts.ShiftsViewModel
 import java.util.Collections
@@ -681,6 +682,7 @@ class SipRegistrationTest {
             sipRegistrar,
             mockk<HubRepository>(relaxed = true),
             mockPushRegistrationManager(),
+            EndedCallHold(),
         )
     }
 

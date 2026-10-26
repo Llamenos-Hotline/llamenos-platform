@@ -525,6 +525,7 @@ class ScreenshotTests {
                     onLock = {},
                     onLogout = {},
                     onNavigateToNotes = {},
+                    onNavigateToNoteCreate = { _, _ -> },
                     onNavigateToNoteDetail = {},
                     onNavigateToCallHistory = {},
                     onNavigateToReports = {},

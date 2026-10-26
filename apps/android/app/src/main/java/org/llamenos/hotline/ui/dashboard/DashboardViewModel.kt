@@ -30,6 +30,8 @@ import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.MeResponse
 import org.llamenos.hotline.service.PushRegistrationManager
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.CallRef
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.MyStatusResponse
 import javax.inject.Inject
@@ -44,6 +46,12 @@ data class DashboardUiState(
     val answerRate: Float? = null,
     val avgDurationSeconds: Int? = null,
     val currentCall: ActiveCall? = null,
+    /**
+     * This volunteer's own call that just ended and has not been written up: the
+     * dashboard shows "Call Ended / Add Note" for it. Held in memory only
+     * ([EndedCallHold]); it carries the call's own hub, never the browsed one.
+     */
+    val endedCall: CallRef? = null,
     val isHangingUp: Boolean = false,
     val isReportingSpam: Boolean = false,
     val isBanning: Boolean = false,
@@ -75,6 +83,7 @@ class DashboardViewModel @Inject constructor(
     private val sipRegistrar: SipRegistrar,
     private val hubRepository: HubRepository,
     private val pushRegistrationManager: PushRegistrationManager,
+    private val endedCallHold: EndedCallHold,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -135,6 +144,10 @@ class DashboardViewModel @Inject constructor(
             }
             .launchIn(viewModelScope)
 
+        endedCallHold.held
+            .onEach { held -> _uiState.update { it.copy(endedCall = held) } }
+            .launchIn(viewModelScope)
+
         pushRegistrationManager.distributorState
             .onEach { state ->
                 _uiState.update {
@@ -161,12 +174,14 @@ class DashboardViewModel @Inject constructor(
                 viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.CallEnded -> {
+                val ended = _uiState.value.currentCall?.takeIf { it.id == event.callId }
                 _uiState.update {
                     it.copy(
                         activeCallCount = maxOf(0, it.activeCallCount - 1),
                         currentCall = if (it.currentCall?.id == event.callId) null else it.currentCall,
                     )
                 }
+                holdIfOwn(ended)
             }
             is LlamenosEvent.CallUpdate -> {
                 viewModelScope.launch { fetchActiveCall(hubId) }
@@ -329,12 +344,13 @@ class DashboardViewModel @Inject constructor(
      * Hang up the current active call.
      */
     fun hangupCall() {
-        val callId = _uiState.value.currentCall?.id ?: return
+        val call = _uiState.value.currentCall ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isHangingUp = true) }
             try {
-                apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/hangup"))
+                apiService.requestNoContent("POST", callPath(call, "hangup"))
                 _uiState.update { it.copy(currentCall = null, isHangingUp = false) }
+                holdIfOwn(call)
             } catch (_: Exception) {
                 _uiState.update { it.copy(isHangingUp = false, errorRes = R.string.call_actions_ban_failed) }
             }
@@ -345,11 +361,11 @@ class DashboardViewModel @Inject constructor(
      * Report the current active call as spam.
      */
     fun reportSpam() {
-        val callId = _uiState.value.currentCall?.id ?: return
+        val call = _uiState.value.currentCall ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isReportingSpam = true) }
             try {
-                apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/spam"))
+                apiService.requestNoContent("POST", callPath(call, "spam"))
                 _uiState.update { it.copy(isReportingSpam = false) }
             } catch (_: Exception) {
                 _uiState.update { it.copy(isReportingSpam = false, errorRes = R.string.call_actions_ban_failed) }
@@ -361,20 +377,59 @@ class DashboardViewModel @Inject constructor(
      * Ban the caller and hang up the call.
      */
     fun banAndHangup(reason: String?) {
-        val callId = _uiState.value.currentCall?.id ?: return
+        val call = _uiState.value.currentCall ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isBanning = true) }
             try {
                 if (reason != null) {
-                    apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/ban"), BanRequest(reason))
+                    apiService.requestNoContent("POST", callPath(call, "ban"), BanRequest(reason))
                 } else {
-                    apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/ban"))
+                    apiService.requestNoContent("POST", callPath(call, "ban"))
                 }
                 _uiState.update { it.copy(currentCall = null, isBanning = false) }
+                holdIfOwn(call)
             } catch (_: Exception) {
                 _uiState.update { it.copy(isBanning = false, errorRes = R.string.call_actions_ban_failed) }
             }
         }
+    }
+
+    /** A call action goes to the call's own hub, which need not be the one being browsed. */
+    private fun callPath(call: ActiveCall, action: String): String =
+        apiService.hubPath(call.hubId ?: apiService.activeHubIdOrNull(), "/api/calls/${call.id}/$action")
+
+    // MARK: - Call Ended prompt
+
+    /**
+     * A call has just left [DashboardUiState.currentCall]. When it was this volunteer's
+     * (`answeredBy` is this device's signing key — never inferred from being the first
+     * call in the list) the card becomes "Call Ended / Add Note". The call is held by
+     * its own hub id, so a call that ended on a hub other than the browsed one still
+     * files its note to the right hub.
+     */
+    private fun holdIfOwn(call: ActiveCall?) {
+        val signingPubkey = _uiState.value.signingPubkey
+        val hubId = call?.hubId
+        if (call == null || hubId == null || signingPubkey.isEmpty() || call.answeredBy != signingPubkey) return
+        endedCallHold.hold(CallRef(id = call.id, hubId = hubId))
+    }
+
+    /** The volunteer dismissed the "Call Ended" prompt without writing a note. */
+    fun dismissEndedCall() {
+        endedCallHold.clear()
+    }
+
+    /**
+     * The call a note started from the Notes tab should be about: the volunteer's own
+     * call in progress, else the one that just ended. Null when there is neither — the
+     * editor then opens with no call.
+     */
+    fun noteTargetCall(): CallRef? {
+        val state = _uiState.value
+        val current = state.currentCall
+        val ownCurrent = current?.takeIf { it.answeredBy == state.signingPubkey && state.signingPubkey.isNotEmpty() }
+        val hubId = ownCurrent?.hubId
+        return if (ownCurrent != null && hubId != null) CallRef(ownCurrent.id, hubId) else state.endedCall
     }
 
     /**
@@ -385,17 +440,18 @@ class DashboardViewModel @Inject constructor(
      */
     private suspend fun fetchActiveCall(hubId: String? = null) {
         try {
-            val path = if (hubId.isNullOrEmpty()) {
-                apiService.hp("/api/calls/active")
-            } else {
-                "/api/hubs/$hubId/calls/active"
-            }
-            val response = apiService.request<ActiveCallsResponse>("GET", path)
-            val call = response.calls.firstOrNull()
+            val fetchedFrom = hubId?.takeUnless { it.isEmpty() } ?: apiService.activeHubIdOrNull()
+            val response = apiService.request<ActiveCallsResponse>("GET", apiService.hubPath(fetchedFrom, "/api/calls/active"))
+            val call = response.calls.firstOrNull()?.copy(hubId = fetchedFrom)
             if (call != null) {
                 if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "fetchActiveCall: found call id=${call.id} status=${call.status}")
             }
+            val previous = _uiState.value.currentCall
+            // A read of one hub says nothing about a call on another: hub B having no
+            // active call must not clear (or "end") the call this volunteer is on in hub A.
+            if (previous != null && previous.hubId != fetchedFrom) return
             _uiState.update { it.copy(currentCall = call) }
+            if (previous != null && call?.id != previous.id) holdIfOwn(previous)
         } catch (e: Exception) {
             // Non-fatal — active call will be updated on next event.
             // Log for CI diagnostics — silent 401s from replay detection or
@@ -457,6 +513,9 @@ class DashboardViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        // Lock, logout and panic wipe all pop the unlocked screens, which ends up here:
+        // nothing about the volunteer's last call outlives the session.
+        endedCallHold.clear()
         webSocketService.disconnect()
     }
 }

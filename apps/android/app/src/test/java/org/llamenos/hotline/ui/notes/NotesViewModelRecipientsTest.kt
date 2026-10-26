@@ -26,6 +26,7 @@ import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.NoteEnvelope
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.ui.cases.CaseManagementViewModel
 
 /**
@@ -101,6 +102,7 @@ class NotesViewModelRecipientsTest {
             activeHubState = mockk<ActiveHubState>(relaxed = true) {
                 every { activeHubId } returns MutableStateFlow(null)
             },
+            endedCallHold = EndedCallHold(),
         )
 
         vm.createNote(text = "call note", fieldValues = emptyMap(), callId = "call-1")
@@ -120,6 +122,7 @@ class NotesViewModelRecipientsTest {
             activeHubState = mockk<ActiveHubState>(relaxed = true) {
                 every { activeHubId } returns MutableStateFlow(null)
             },
+            endedCallHold = EndedCallHold(),
         )
 
         vm.updateNote(noteId = "note-1", text = "updated", fieldValues = emptyMap())
@@ -139,6 +142,7 @@ class NotesViewModelRecipientsTest {
             activeHubState = mockk<ActiveHubState>(relaxed = true) {
                 every { activeHubId } returns MutableStateFlow(null)
             },
+            endedCallHold = EndedCallHold(),
         )
 
         vm.sendReply(noteId = "note-1", text = "reply text")

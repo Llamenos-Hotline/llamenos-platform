@@ -29,6 +29,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.mockPushRegistrationManager
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.ui.calls.CallHistoryViewModel
 import org.llamenos.hotline.ui.cases.CaseManagementViewModel
 import org.llamenos.hotline.ui.contacts.ContactsViewModel
@@ -238,6 +239,7 @@ class HubScopedViewModelReloadTest {
                 mockk<CryptoService>(relaxed = true),
                 mockk<SessionState>(relaxed = true),
                 activeHubState,
+                EndedCallHold(),
             )
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "NotesViewModel")
@@ -331,6 +333,7 @@ class HubScopedViewModelReloadTest {
                 mockk(relaxed = true),
                 mockk<HubRepository>(relaxed = true),
                 mockPushRegistrationManager(),
+                EndedCallHold(),
             )
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "DashboardViewModel")

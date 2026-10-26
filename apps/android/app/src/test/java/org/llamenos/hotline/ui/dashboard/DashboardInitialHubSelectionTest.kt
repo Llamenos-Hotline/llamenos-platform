@@ -39,6 +39,7 @@ import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.mockPushRegistrationManager
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.SharedHubDetailResponseStatus
 
@@ -146,6 +147,7 @@ class DashboardInitialHubSelectionTest {
                 mockk<SipRegistrar>(relaxed = true),
                 hubRepository,
                 mockPushRegistrationManager(),
+                EndedCallHold(),
             )
             advanceUntilIdle()
 
@@ -181,6 +183,7 @@ class DashboardInitialHubSelectionTest {
                 mockk<SipRegistrar>(relaxed = true),
                 hubRepository,
                 mockPushRegistrationManager(),
+                EndedCallHold(),
             )
             advanceUntilIdle()
 
