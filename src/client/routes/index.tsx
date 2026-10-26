@@ -11,6 +11,7 @@ import { createNote, banAndHangup, getUserPresence, listUsers, type HubCall, typ
 import { usePersonalStats } from '@/lib/queries/analytics'
 import { encryptNote } from '@/lib/platform'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
+import { getCallNoteDraft, setCallNoteDraft } from '@/lib/call-note-drafts'
 import { useConfig } from '@/lib/config'
 import { useTranscription } from '@/lib/transcription'
 
@@ -378,7 +379,12 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
   const { toast } = useToast()
   const { adminDecryptionPubkey } = useAuth()
   const { formatted } = useCallTimer(call.startedAt)
-  const [noteText, setNoteText] = useState('')
+  // Held in memory (not disk) so it survives a lock, which unmounts this panel.
+  const [noteText, setNoteTextState] = useState(() => getCallNoteDraft(call.id))
+  const setNoteText = (text: string) => {
+    setNoteTextState(text)
+    setCallNoteDraft(call.id, text)
+  }
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showBanDialog, setShowBanDialog] = useState(false)
@@ -407,6 +413,8 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
       }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify({ text: noteText }), authorPubkey, [adminPub])
       await createNote({ callId: call.id, encryptedContent, authorEnvelope, adminEnvelopes }, call.hubId)
+      // Filed: no longer an unsaved draft to restore after a lock.
+      setCallNoteDraft(call.id, '')
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {

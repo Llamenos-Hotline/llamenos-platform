@@ -1,7 +1,9 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
 import { useAuth } from './auth'
 import { useConfig } from './config'
 import { useCallFeed } from './hooks'
+import { setOnCall } from './key-manager'
+import { clearCallNoteDrafts } from './call-note-drafts'
 import type { HubCall } from './api'
 
 type CallFeed = ReturnType<typeof useCallFeed>
@@ -32,6 +34,17 @@ const CallsContext = createContext<CallFeed>(NO_SESSION_FEED)
  */
 export function CallsProvider({ children }: { children: ReactNode }) {
   const feed = useCallFeed()
+  // An answered call, on whichever hub, keeps the idle auto-lock from firing: the
+  // feed spans every member hub, so this is not keyed to the active one.
+  const onCall = feed.currentCall !== null
+  useEffect(() => {
+    setOnCall(onCall)
+    // No answered call means no panel to restore a draft into — however the call
+    // ended (hang-up, caller hung up, spam report, lost from the feed). A lock
+    // keeps this provider mounted, so it never reaches here mid-call.
+    if (!onCall) clearCallNoteDrafts()
+    return () => setOnCall(false)
+  }, [onCall])
   return <CallsContext.Provider value={feed}>{children}</CallsContext.Provider>
 }
 
