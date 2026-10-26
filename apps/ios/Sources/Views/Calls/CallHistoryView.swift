@@ -38,6 +38,8 @@ enum CallStatus: String, CaseIterable, Sendable {
 /// A single call record from the call history API.
 struct CallHistoryEntry: Identifiable, Sendable {
     let id: String
+    /// The hub the call belongs to (the one the history was read from).
+    let hubId: String?
     let callerNumber: String?
     let status: CallStatus
     let duration: Int?
@@ -78,7 +80,8 @@ final class CallHistoryViewModel {
 
     // MARK: - Data Loading
 
-    func loadCallHistory() async {
+    /// - Parameter hubId: The hub the history is read from (the active hub).
+    func loadCallHistory(hubId: String?) async {
         guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
@@ -113,6 +116,7 @@ final class CallHistoryViewModel {
 
                 return CallHistoryEntry(
                     id: dto.id,
+                    hubId: dto.hubID ?? hubId,
                     callerNumber: callerNumber,
                     status: status,
                     duration: dto.duration.map { Int($0) },
@@ -131,9 +135,9 @@ final class CallHistoryViewModel {
         isLoading = false
     }
 
-    func refresh() async {
+    func refresh(hubId: String?) async {
         isLoading = false
-        await loadCallHistory()
+        await loadCallHistory(hubId: hubId)
     }
 }
 
@@ -168,7 +172,7 @@ struct CallHistoryView: View {
                         icon: "exclamationmark.triangle",
                         title: NSLocalizedString("call_history_error_title", comment: "Unable to Load"),
                         message: error,
-                        action: { Task { await vm.refresh() } },
+                        action: { Task { await vm.refresh(hubId: hubContext.activeHubId) } },
                         actionLabel: NSLocalizedString("common_retry", comment: "Retry"),
                         actionAccessibilityID: "call-history-retry"
                     )
@@ -214,11 +218,11 @@ struct CallHistoryView: View {
                 }
             }
             .refreshable {
-                await vm.refresh()
+                await vm.refresh(hubId: hubContext.activeHubId)
             }
             .task(id: hubContext.activeHubId) {
                 guard canViewHistory else { return }
-                await vm.loadCallHistory()
+                await vm.loadCallHistory(hubId: hubContext.activeHubId)
             }
         }
     }
@@ -233,7 +237,12 @@ struct CallHistoryView: View {
     private func callsList(vm: CallHistoryViewModel) -> some View {
         List {
             ForEach(vm.filteredCalls) { call in
-                callRow(call)
+                NavigationLink {
+                    CallHistoryDetailView(call: call)
+                } label: {
+                    callRow(call)
+                }
+                .accessibilityIdentifier("call-history-link-\(call.id)")
             }
         }
         .listStyle(.plain)

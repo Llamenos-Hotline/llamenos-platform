@@ -98,9 +98,10 @@ final class NotesViewModel {
     /// - Parameters:
     ///   - text: The note body text.
     ///   - fields: Custom field values keyed by field name.
-    ///   - callId: The call the note is about. The server requires a note to belong to
-    ///     a call or a conversation (`createNoteBodySchema` refines on
-    ///     `callId || conversationId`); this sheet files notes against a call.
+    ///   - call: The call the note is about, posted to the hub the call belongs to — not
+    ///     the active hub, which the server would refuse the call under (#2125). The server
+    ///     requires a note to belong to a call or a conversation (`createNoteBodySchema`
+    ///     refines on `callId || conversationId`); this sheet files notes against a call.
     ///   - transcript: Optional call transcript, appended to the note text. It must NOT
     ///     be sent as `conversationId` — that linked the note to a conversation whose
     ///     ID was the transcript text (#1293).
@@ -108,7 +109,7 @@ final class NotesViewModel {
     func createNote(
         text: String,
         fields: [String: AnyCodableValue]?,
-        callId: String,
+        call: CallReference,
         transcript: String?,
         adminPubkeys: [String]
     ) async throws {
@@ -148,7 +149,7 @@ final class NotesViewModel {
         let body = CreateNoteBody(
             adminEnvelopes: adminEnvelopes,
             authorEnvelope: authorEnvelope,
-            callID: callId,
+            callID: call.id,
             caseID: nil,
             contactHash: nil,
             conversationID: nil,
@@ -161,16 +162,13 @@ final class NotesViewModel {
         // sheet reported an error for a note the server had stored.
         let _: NoteDetailResponse = try await apiService.request(
             method: "POST",
-            path: apiService.hp("/api/notes"),
+            path: APIService.hubPath(call.hubId, "/api/notes"),
             body: body
         )
 
         // Haptic feedback on success
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
-
-        // Reload notes to include the new one
-        await refresh()
     }
 
     // MARK: - Note Decryption
@@ -239,6 +237,11 @@ final class NotesViewModel {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Load only the custom field definitions, for an editor opened away from the notes list.
+    func loadCustomFields() async {
+        await fetchCustomFields()
     }
 
     private func fetchCustomFields() async {

@@ -9,6 +9,8 @@ struct DashboardView: View {
     @Environment(HubContext.self) private var hubContext
     @State private var viewModelBox = ViewModelBox<DashboardViewModel>()
     @State private var quickActionDestination: QuickActionDestination?
+    /// The call a note is being written for, while the note editor is open.
+    @State private var noteCall: CallReference?
 
     var body: some View {
         let vm = resolvedViewModel
@@ -28,17 +30,31 @@ struct DashboardView: View {
                             .clipped()
                     }
 
-                    // 0. Active call panel (shown above everything when on a call)
+                    // 0. Calls that concern this volunteer (shown above everything): rings on
+                    //    any member hub, the call they answered, and their call just ended.
+                    ForEach(vm.ringingCalls) { call in
+                        IncomingCallView(
+                            call: call,
+                            answerOnPhone: vm.answerOnPhoneCallIds.contains(call.id),
+                            isAnswering: vm.answeringCallIds.contains(call.id),
+                            onAnswer: { await vm.answerCall(call) }
+                        )
+                    }
+
                     if let call = vm.currentCall {
                         ActiveCallView(
                             call: call,
                             onHangup: { await vm.hangupCall() },
                             onReportSpam: { await vm.reportSpam() },
                             onBanAndHangup: { reason in await vm.banAndHangup(reason: reason) },
-                            onQuickNote: {
-                                // Navigate to note creation — could be handled via
-                                // a sheet or navigation destination in the future
-                            }
+                            onQuickNote: { noteCall = call.reference }
+                        )
+                    }
+
+                    if let ended = vm.endedCall {
+                        EndedCallView(
+                            onAddNote: { noteCall = ended },
+                            onDismiss: { vm.dismissEndedCall() }
                         )
                     }
 
@@ -116,6 +132,15 @@ struct DashboardView: View {
             }
             .onDisappear {
                 vm.stopEventListener()
+            }
+            // The ended call's id is held in memory only: locking or logging out forgets it.
+            .onChange(of: appState.authStatus) { _, status in
+                if status != .unlocked { vm.clearCalls() }
+            }
+            .sheet(item: $noteCall) { call in
+                NoteCreateSheet(initialCall: call, heldCalls: vm.heldCalls) { saved in
+                    vm.noteSaved(for: saved)
+                }
             }
         }
     }
