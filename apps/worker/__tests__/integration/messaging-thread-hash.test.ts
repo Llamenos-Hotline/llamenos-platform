@@ -13,6 +13,8 @@
  *     leaves web (report) threads alone.
  *  4. Migration 0065 deletes the subscribers keyed by the old hash, so a returning
  *     subscriber's STOP matches the one row they re-create (#2261).
+ *  5. A subscriber created by the bulk importer is keyed by the same hash the router
+ *     computes, so their STOP registers (#2261).
  *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
  */
@@ -58,6 +60,7 @@ const ADMIN_DECRYPTION_PUBKEY = bytesToHex(x25519.getPublicKey(x25519.utils.rand
 const HUB_A = '9f2c1b64-0000-4000-8000-0000000000aa'
 const HUB_B = '9f2c1b64-0000-4000-8000-0000000000bb'
 const SENDER = '+15550100707'
+const IMPORTED_SENDER = '+15550100909'
 
 let services: Services
 
@@ -65,18 +68,19 @@ beforeAll(() => {
   services = createServices(fresh.db, {
     hmacSecret: HMAC_SECRET,
     serverKek: SERVER_KEK,
+    messagingHashKey: MESSAGING_HASH_KEY,
     env: { ENVIRONMENT: 'test', SERVER_SECRET: 'ab'.repeat(32) },
   })
 })
 
-function incoming(body: string): IncomingMessage {
-  return { channelType: 'sms', externalId: `SM-${crypto.randomUUID()}`, senderIdentifier: SENDER, body, timestamp: new Date().toISOString() }
+function incoming(body: string, sender: string): IncomingMessage {
+  return { channelType: 'sms', externalId: `SM-${crypto.randomUUID()}`, senderIdentifier: sender, body, timestamp: new Date().toISOString() }
 }
 
-async function webhook(hubId: string, body: string): Promise<{ status: number }> {
+async function webhook(hubId: string, body: string, sender: string = SENDER): Promise<{ status: number }> {
   vi.mocked(getMessagingAdapterFromService).mockResolvedValue({
     validateWebhook: vi.fn().mockResolvedValue(true),
-    parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body)),
+    parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body, sender)),
   } as unknown as MessagingAdapter)
   const { default: messaging } = await import('../../messaging/router')
   const app = new Hono<AppEnv>()
@@ -232,5 +236,42 @@ describe("migration 0065's data step (#2261)", () => {
     const after = await subscribersOf(HUB_A)
     expect(after.map((s) => s.status)).toEqual(['unsubscribed'])
     expect(after[0]!.id).toBe(joined!.id)
+  })
+})
+
+describe('a bulk-imported subscriber is matched by their own STOP (#2261)', () => {
+  const subscribersOf = (hubId: string) =>
+    fresh.db.select().from(schema.subscribers).where(eq(schema.subscribers.hubId, hubId))
+
+  it('importBulk keys the row by the router hash, so STOP unsubscribes it and adds no second row', async () => {
+    const result = await services.blasts.importBulk(HUB_B, [{ identifier: IMPORTED_SENDER, channel: 'sms' }])
+    expect(result).toMatchObject({ imported: 1, skipped: 0 })
+
+    const [imported] = (await subscribersOf(HUB_B)).filter((s) => s.identifierHash === messagingContactHash(IMPORTED_SENDER, HUB_B, MESSAGING_HASH_KEY))
+    expect(imported, 'the import did not write the router hash').toBeDefined()
+    expect(imported!.status).toBe('active')
+
+    // Nothing in the database is a hash of the number under HMAC_SECRET, whichever prefix.
+    const dump = await dumpDatabase()
+    expect(dump).not.toContain(hashPhone(IMPORTED_SENDER, HMAC_SECRET))
+
+    const before = (await subscribersOf(HUB_B)).length
+    expect((await webhook(HUB_B, 'STOP', IMPORTED_SENDER)).status).toBe(200)
+
+    const after = await subscribersOf(HUB_B)
+    expect(after).toHaveLength(before)
+    expect(after.find((s) => s.id === imported!.id)!.status).toBe('unsubscribed')
+  })
+
+  it('the same number imported into another hub is a different row, and that hub is not unsubscribed', async () => {
+    await services.blasts.importBulk(HUB_A, [{ identifier: IMPORTED_SENDER, channel: 'sms' }])
+    const inA = (await subscribersOf(HUB_A)).find((s) => s.identifierHash === messagingContactHash(IMPORTED_SENDER, HUB_A, MESSAGING_HASH_KEY))
+    expect(inA!.status).toBe('active')
+    expect(inA!.identifierHash).not.toBe(messagingContactHash(IMPORTED_SENDER, HUB_B, MESSAGING_HASH_KEY))
+  })
+
+  it('refuses to import without a messaging hash key, rather than writing a hash STOP can never match', async () => {
+    const keyless = createServices(fresh.db, { hmacSecret: HMAC_SECRET, serverKek: SERVER_KEK, env: { ENVIRONMENT: 'test' } })
+    await expect(keyless.blasts.importBulk(HUB_B, [{ identifier: '+15550100910', channel: 'sms' }])).rejects.toMatchObject({ status: 500 })
   })
 })

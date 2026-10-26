@@ -79,6 +79,7 @@ const services: Services = createServices(db, {
   hmacSecret,
   serverKek,
   firehoseSealKey,
+  messagingHashKey,
   notifierUrl,
   notifierApiKey,
   notifierTokenSecret,

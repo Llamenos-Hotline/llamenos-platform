@@ -6,7 +6,8 @@
 -- row also carries that hash, in subscribers.identifier_hash, and it was left alone.
 -- Every row there was written before this change by one of two paths, both keyed by
 -- HMAC_SECRET: the webhook keyword handler (hash of the number) and the bulk
--- importer (the same key under another prefix). The router now looks a sender up by
+-- importer (the same key under another prefix, which is why an imported subscriber's
+-- STOP never matched even before the re-key). The router now looks a sender up by
 -- the new hash, which can never equal an old one. Left in place, an existing
 -- subscriber's STOP would match nothing, the row would stay 'active', and the next
 -- blast would reach someone who had asked it not to. Their SUBSCRIBE would insert a
@@ -28,6 +29,8 @@
 -- with them (blast_deliveries.subscriber_id cascades), so an unsent blast is cut
 -- short; delivery history for sent blasts goes too.
 --
--- No HMAC_SECRET-keyed hash of a phone number is left in subscribers afterwards. The
--- bulk importer still writes one (#2262); that is a separate fix.
+-- No HMAC_SECRET-keyed hash of a phone number is left in subscribers afterwards, and
+-- none is written again: the bulk importer now hashes with the router's own function,
+-- HMAC(HKDF(MESSAGING_HASH_KEY, hub), number) under the single messaging-contact
+-- prefix, so a row it creates is the row a STOP finds.
 DELETE FROM "subscribers";

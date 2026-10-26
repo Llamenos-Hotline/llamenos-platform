@@ -30,8 +30,9 @@ import { hmac } from '@noble/hashes/hmac.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
-import { HMAC_PREFERENCE_TOKEN, HMAC_SUBSCRIBER } from '@shared/crypto-labels'
+import { HMAC_PREFERENCE_TOKEN } from '@shared/crypto-labels'
 import { encryptContactIdentifier } from '../lib/crypto'
+import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { ServiceError } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ export class BlastsService {
     protected db: Database,
     protected hmacSecret?: string,
     protected serverKek?: string,
+    protected messagingHashKey?: string,
   ) {}
 
   /** Seal a subscriber identifier under SERVER_KEK; the server needs it back to send. */
@@ -115,13 +117,17 @@ export class BlastsService {
     return bytesToHex(hmac(sha256, key, input))
   }
 
-  private hashIdentifier(identifier: string): string {
-    if (!this.hmacSecret) {
-      throw new ServiceError(500, 'HMAC secret not configured')
+  /**
+   * The subscriber's identity in a hub: the messaging contact hash, the same value
+   * the webhook router computes for a sender and looks the row up by. Every writer
+   * of `subscribers.identifier_hash` goes through here or takes the router's value,
+   * so a STOP always finds the row an import created (#2261).
+   */
+  private hashIdentifier(identifier: string, hubId: string): string {
+    if (!this.messagingHashKey) {
+      throw new ServiceError(500, 'Messaging hash key not configured')
     }
-    return bytesToHex(
-      hmac(sha256, hexToBytes(this.hmacSecret), utf8ToBytes(`${HMAC_SUBSCRIBER}${identifier}`)),
-    )
+    return messagingContactHash(identifier, hubId, this.messagingHashKey)
   }
 
   // --- Blast settings ---
@@ -244,7 +250,7 @@ export class BlastsService {
     // identifiers are handled atomically at the database level. Channel merge
     // uses SQL-level jsonb_agg to avoid read-modify-write races.
     for (const entry of entries) {
-      const identifierHash = this.hashIdentifier(entry.identifier)
+      const identifierHash = this.hashIdentifier(entry.identifier, hubId)
       const preferenceToken = this.generatePreferenceToken(identifierHash)
       const encrypted = this.sealIdentifier(entry.identifier)
       const newChannels = [{ type: entry.channel, verified: false }]

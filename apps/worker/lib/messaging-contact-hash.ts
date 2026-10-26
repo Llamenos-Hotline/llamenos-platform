@@ -33,9 +33,9 @@ function scopeKey(hubId: string | undefined, messagingHashKey: string): Uint8Arr
  * so the same contact in two hubs has two unrelated hashes and a hub's threads
  * cannot be linked to another's. MESSAGING_HASH_KEY is a file-only secret, never
  * in the database, `.env` or a config backup, so a database dump alone confirms
- * nothing about who a thread belongs to. It is a key of its own: nothing else
- * (bans, blasts, audit) is hashed under it, so no other hash of the same number
- * can be compared with this one.
+ * nothing about who a thread belongs to. It is a key of its own: only the blast
+ * subscriber's identifier hash shares it, on purpose (STOP must find the row an
+ * import made); no ban or audit hash of the same number can be compared with this one.
  *
  * `identifier` is the provider-level sender identity (`IncomingMessage.senderIdentifier`):
  * the same value the sealed reply address holds.
