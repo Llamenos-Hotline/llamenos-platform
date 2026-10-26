@@ -12,9 +12,19 @@ struct PINSetView: View {
     @State private var lockRotation: Double = 0
 
     var body: some View {
+        // Keys exist once the PIN is confirmed; from then on this screen is about joining
+        // the hub, not about the PIN.
+        if appState.inviteEnrollment.isRedeeming || appState.inviteEnrollment.redeemError != nil {
+            InviteRedeemView()
+        } else {
+            pinEntry
+        }
+    }
+
+    private var pinEntry: some View {
         let vm = resolvedPINViewModel
 
-        VStack(spacing: 24) {
+        return VStack(spacing: 24) {
             StepIndicator(totalSteps: 2, currentStep: 2)
                 .padding(.top, 8)
 
@@ -122,7 +132,7 @@ struct PINSetView: View {
             authService: appState.authService,
             maxLength: 128,
             onSuccess: {
-                appState.didCompleteOnboarding()
+                Task { await appState.completeEnrollment() }
             }
         )
         DispatchQueue.main.async {

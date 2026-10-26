@@ -32,6 +32,7 @@ enum AuthStep: Equatable {
 final class AuthViewModel {
     private let authService: AuthService
     private let apiService: APIService
+    let inviteEnrollment: InviteEnrollmentService
 
     /// Current step in the auth flow.
     var currentStep: AuthStep = .login
@@ -45,21 +46,47 @@ final class AuthViewModel {
     /// Whether an async operation is in progress.
     var isLoading: Bool = false
 
-    init(authService: AuthService, apiService: APIService) {
+    init(authService: AuthService, apiService: APIService, inviteEnrollment: InviteEnrollmentService) {
         self.authService = authService
         self.apiService = apiService
+        self.inviteEnrollment = inviteEnrollment
         self.hubURL = authService.hubURL ?? ""
     }
 
     // MARK: - Create New Identity
 
-    /// Validate hub URL and proceed to PIN set.
+    /// Validate the hub URL and the invite (when one was entered), then proceed to PIN set.
     /// In the v3 model, device key generation happens atomically with PIN encryption
-    /// inside PINViewModel — no device key display step.
+    /// inside PINViewModel — no device key display step. The invite is redeemed after
+    /// that, because redeeming signs with the device key the PIN screen creates.
+    ///
+    /// A bad invite stops here, before any key exists, so a refused code leaves nothing
+    /// behind on the device.
     func createNewIdentity() async {
         errorMessage = nil
         guard await validateAndStoreHubURL() else { return }
+
+        isLoading = true
+        let inviteError = await inviteEnrollment.validate()
+        isLoading = false
+        if let inviteError {
+            errorMessage = inviteError
+            return
+        }
         currentStep = .settingPIN
+    }
+
+    // MARK: - Invite Input
+
+    /// An invite link names the hub it came from. Offer that hub by filling an empty hub
+    /// field, as soon as the link is pasted, so it is on screen before anything is sent to
+    /// it. A hub the user already typed is never replaced: a link is whoever sent it, and
+    /// the typed hub is the one the user chose to trust.
+    func inviteInputChanged() {
+        guard hubURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let linkedHub = InviteCodeParser.parse(inviteEnrollment.input)?.hubURL
+        else { return }
+        hubURL = linkedHub
     }
 
     // MARK: - Hub URL

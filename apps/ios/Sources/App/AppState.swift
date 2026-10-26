@@ -45,6 +45,7 @@ final class AppState {
     let permissionService: PermissionService
     let authMeLoader: AuthMeLoader
     let shiftClockService: ShiftClockService
+    let inviteEnrollment: InviteEnrollmentService
 
     // MARK: - Auth State
 
@@ -89,11 +90,6 @@ final class AppState {
 
     /// Whether to show the soft-update banner (dismissible).
     var showUpdateBanner: Bool = false
-
-    /// Pending hub invite token from a `llamenos://hub-invite?token=` deep link.
-    /// Set before the user is authenticated so the login / registration flow can
-    /// use it when creating or linking an account to a hub.
-    var pendingHubInviteToken: String?
 
     // MARK: - WebSocket Event Listener
 
@@ -142,6 +138,7 @@ final class AppState {
         let authMe = AuthMeLoader(apiService: api, permissionService: permission)
         self.authMeLoader = authMe
         self.shiftClockService = ShiftClockService(apiService: api)
+        self.inviteEnrollment = InviteEnrollmentService(apiService: api, cryptoService: crypto)
         self.wipeService = WipeService(
             keychainService: keychain,
             cryptoService: crypto,
@@ -407,6 +404,23 @@ final class AppState {
         }
     }
 
+    /// Finish enrolment once the PIN screen has created the device keys.
+    ///
+    /// With an invite pending, redeem it first: the server only knows this device after
+    /// that, so registering its keys (`didCompleteOnboarding`) before it would be refused
+    /// as an unknown user. If redemption fails the invite stays pending and the
+    /// enrolment screen offers a retry; nothing here grants a role or a hub.
+    func completeEnrollment() async {
+        guard await inviteEnrollment.redeem() else { return }
+        didCompleteOnboarding()
+    }
+
+    /// The user chose to carry on without enrolling after a failed redemption.
+    func continueWithoutEnrolling() {
+        inviteEnrollment.abandon()
+        didCompleteOnboarding()
+    }
+
     /// Called after successful onboarding (new identity or import + PIN set).
     func didCompleteOnboarding() {
         isLocked = false
@@ -430,6 +444,7 @@ final class AppState {
     func handleDeviceWipe(reason: String) {
         wipeService.wipeAll()
         shiftClockService.reset()
+        inviteEnrollment.reset()
         deviceWipeReason = reason
         isDeviceWiped = true
     }
@@ -473,6 +488,7 @@ final class AppState {
         membershipLoadTask = nil
         hubMembershipService.reset()
         shiftClockService.reset()
+        inviteEnrollment.reset()
         authService.logout()
         isLocked = false
         authStatus = .unauthenticated

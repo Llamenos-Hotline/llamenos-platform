@@ -2,8 +2,10 @@ import SwiftUI
 
 // MARK: - LoginView
 
-/// Initial login screen. Provides a hub URL text field and identity creation:
-/// - "Create New Identity" → generates device keys with PIN encryption
+/// Initial login screen. Provides a hub URL text field, an invite code (or invite link)
+/// field, and identity creation:
+/// - "Create New Identity" → validates the invite, generates device keys with PIN
+///   encryption, then redeems the invite so the device joins the invite's hub
 /// Device linking is not offered in the pilot build — it reported success
 /// without importing any key material (#1028); it returns with the unified
 /// provisioning protocol tracked in #1027.
@@ -71,6 +73,40 @@ struct LoginView: View {
                         .accessibilityIdentifier("hub-url-input")
                     }
 
+                    // Invite code or link
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(NSLocalizedString("login_invite_code_label", comment: "Invite code (optional)"))
+                            .font(.brand(.caption))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+
+                        TextField(
+                            NSLocalizedString("login_invite_code_placeholder", comment: "Code or invite link"),
+                            text: Binding(
+                                get: { vm.inviteEnrollment.input },
+                                set: { vm.inviteEnrollment.input = $0 }
+                            )
+                        )
+                        .padding(12)
+                        .background(Color.brandCard)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.brandBorder, lineWidth: 1))
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("invite-code-input")
+                        .onChange(of: vm.inviteEnrollment.input) { vm.inviteInputChanged() }
+
+                        // Without an invite the new identity belongs to no hub, so say how
+                        // to get one rather than letting the account sit empty.
+                        if vm.inviteEnrollment.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(NSLocalizedString("help_faq_gs_a1", comment: "Ask your admin for an invite code"))
+                                .font(.brand(.caption))
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("invite-code-hint")
+                        }
+                    }
+
                     // Error message
                     if let error = vm.errorMessage {
                         Text(error)
@@ -127,7 +163,11 @@ struct LoginView: View {
         if let vm = viewModelBox.value {
             return vm
         }
-        let vm = AuthViewModel(authService: appState.authService, apiService: appState.apiService)
+        let vm = AuthViewModel(
+            authService: appState.authService,
+            apiService: appState.apiService,
+            inviteEnrollment: appState.inviteEnrollment
+        )
         viewModelBox.value = vm
         return vm
     }
