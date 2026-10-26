@@ -9,6 +9,7 @@ import { render, cleanup } from '@testing-library/react'
 const state = vi.hoisted(() => ({
   currentCall: null as { id: string; hubId: string } | null,
   setOnCall: vi.fn(),
+  clearDrafts: vi.fn(),
 }))
 
 vi.mock('./hooks', () => ({
@@ -23,6 +24,7 @@ vi.mock('./hooks', () => ({
   }),
 }))
 vi.mock('./key-manager', () => ({ setOnCall: state.setOnCall }))
+vi.mock('./call-note-drafts', () => ({ clearCallNoteDrafts: state.clearDrafts }))
 vi.mock('./auth', () => ({ useAuth: () => ({ onBreak: false }) }))
 vi.mock('./config', () => ({ useConfig: () => ({ hubs: [], isMultiHub: false }) }))
 
@@ -32,6 +34,7 @@ describe('CallsProvider → idle auto-lock', () => {
   beforeEach(() => {
     state.currentCall = null
     state.setOnCall.mockClear()
+    state.clearDrafts.mockClear()
   })
   afterEach(cleanup)
 
@@ -44,6 +47,12 @@ describe('CallsProvider → idle auto-lock', () => {
     state.currentCall = { id: 'CA-1', hubId: 'hub-B' }
     render(<CallsProvider>x</CallsProvider>)
     expect(state.setOnCall).toHaveBeenLastCalledWith(true)
+    expect(state.clearDrafts).not.toHaveBeenCalled()
+  })
+
+  it('drops unsaved drafts once there is no answered call', () => {
+    render(<CallsProvider>x</CallsProvider>)
+    expect(state.clearDrafts).toHaveBeenCalled()
   })
 
   it('stops reporting a call when the provider goes away', () => {

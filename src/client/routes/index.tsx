@@ -265,10 +265,7 @@ function DashboardPage() {
         <ActiveCallPanel
           call={currentCall}
           onHangup={() => {
-            hangupCall(currentCall.id)
-              // The call is over: its unsaved draft has nothing left to restore into.
-              .then(() => setCallNoteDraft(currentCall.id, ''))
-              .catch(() => toast(t('calls.hangupFailed'), 'error'))
+            hangupCall(currentCall.id).catch(() => toast(t('calls.hangupFailed'), 'error'))
           }}
           onReportSpam={() => reportSpam(currentCall.id)}
           onBanNumber={async (reason) => {
