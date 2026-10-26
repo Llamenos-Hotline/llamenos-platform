@@ -9,8 +9,10 @@
  *  2. The stored hash is `messagingContactHash`, the row has no last-4 column, and
  *     a dump of the database holds neither the number nor any hash of it under
  *     `HMAC_SECRET` or the ban key. The reply address still opens.
- *  3. Migration 0063's data step blanks the hash of every messaging thread and
+ *  3. Migration 0064's data step blanks the hash of every messaging thread and
  *     leaves web (report) threads alone.
+ *  4. Migration 0065 deletes the subscribers keyed by the old hash, so a returning
+ *     subscriber's STOP matches the one row they re-create (#2261).
  *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
  */
@@ -146,12 +148,12 @@ describe('a thread is named by a per-hub keyed hash', () => {
   })
 })
 
-describe("migration 0063's data step", () => {
+describe("migration 0064's data step", () => {
   /** The migration's first statement: the UPDATE that blanks the old hashes. */
   function blankingStatement(): string {
     const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
-    const file = readdirSync(dir).find((f) => f.startsWith('0063_') && f.endsWith('.sql'))
-    expect(file, 'migration 0063 is missing').toBeTruthy()
+    const file = readdirSync(dir).find((f) => f.startsWith('0064_') && f.endsWith('.sql'))
+    expect(file, 'migration 0064 is missing').toBeTruthy()
     const first = readFileSync(join(dir, file!), 'utf8').split('--> statement-breakpoint')[0]!
     return first.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim()
   }
@@ -180,5 +182,55 @@ describe("migration 0063's data step", () => {
       `SELECT count(*)::int AS n FROM conversations WHERE channel_type <> 'web' AND contact_identifier_hash LIKE 'old-%'`,
     )
     expect(left[0]!.n).toBe(0)
+  })
+})
+
+describe("migration 0065's data step (#2261)", () => {
+  /** Every executable statement of migration 0065, comments stripped. */
+  function statements(): string[] {
+    const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
+    const file = readdirSync(dir).find((f) => f.startsWith('0065_') && f.endsWith('.sql'))
+    expect(file, 'migration 0065 is missing').toBeTruthy()
+    return readFileSync(join(dir, file!), 'utf8')
+      .split('--> statement-breakpoint')
+      .map((s) => s.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
+      .filter(Boolean)
+  }
+
+  const subscribersOf = (hubId: string) =>
+    fresh.db.select().from(schema.subscribers).where(eq(schema.subscribers.hubId, hubId))
+
+  it('STOP from a pre-migration subscriber matches nothing, so the migration discards the row; afterwards STOP works and no duplicate accumulates', async () => {
+    // What the code before #2261 left behind: the sender's hash under HMAC_SECRET.
+    // One subscribed number, one that had already sent STOP, in two hubs.
+    const oldHash = hashPhone(SENDER, HMAC_SECRET)
+    await fresh.db.insert(schema.subscribers).values([
+      { hubId: HUB_A, identifierHash: oldHash, channels: [{ type: 'sms', verified: true }], status: 'active' },
+      { hubId: HUB_B, identifierHash: oldHash, channels: [{ type: 'sms', verified: true }], status: 'unsubscribed' },
+    ])
+
+    // The defect: the router hashes under MESSAGING_HASH_KEY, so STOP finds no row
+    // and the subscriber stays active.
+    expect((await webhook(HUB_A, 'STOP')).status).toBe(200)
+    expect((await subscribersOf(HUB_A)).map((s) => s.status)).toEqual(['active'])
+
+    for (const statement of statements()) await fresh.raw.unsafe(statement)
+
+    // Nothing is left that was keyed by HMAC_SECRET, in either hub.
+    expect(await fresh.db.select().from(schema.subscribers)).toEqual([])
+    expect(await dumpDatabase()).not.toContain(oldHash)
+
+    // The sender subscribes again: one row, under the new hash. STOP now reaches it,
+    // and does not leave a second row behind.
+    expect((await webhook(HUB_A, 'JOIN')).status).toBe(200)
+    const [joined, ...extra] = await subscribersOf(HUB_A)
+    expect(extra).toEqual([])
+    expect(joined!.identifierHash).toBe(messagingContactHash(SENDER, HUB_A, MESSAGING_HASH_KEY))
+    expect(joined!.status).toBe('active')
+
+    expect((await webhook(HUB_A, 'STOP')).status).toBe(200)
+    const after = await subscribersOf(HUB_A)
+    expect(after.map((s) => s.status)).toEqual(['unsubscribed'])
+    expect(after[0]!.id).toBe(joined!.id)
   })
 })
