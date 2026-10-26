@@ -26,7 +26,6 @@ describe('Push Encryption (HPKE)', () => {
     type: 'message',
     conversationId: 'conv-456',
     previewText: 'Hello there',
-    senderLast4: '1234',
   }
 
   it('encrypts wake-tier payload to valid hex', () => {

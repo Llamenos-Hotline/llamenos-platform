@@ -129,7 +129,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('whatsapp', settings, 'hmac'),
+      getMessagingAdapterFromService('whatsapp', settings),
     ).rejects.toThrow('whatsapp channel is not enabled')
   })
 
@@ -143,7 +143,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('sms', settings, 'hmac'),
+      getMessagingAdapterFromService('sms', settings),
     ).rejects.toThrow('SMS requires a configured telephony provider')
   })
 
@@ -156,7 +156,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('carrier_pigeon' as any, settings, 'hmac'),
+      getMessagingAdapterFromService('carrier_pigeon' as any, settings),
     ).rejects.toThrow('Unknown channel: carrier_pigeon')
   })
 
@@ -170,7 +170,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('sms', settings, 'hmac'),
+      getMessagingAdapterFromService('sms', settings),
     ).rejects.toThrow('SMS is not enabled')
   })
 
@@ -184,7 +184,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('whatsapp', settings, 'hmac'),
+      getMessagingAdapterFromService('whatsapp', settings),
     ).rejects.toThrow('WhatsApp is not configured')
   })
 
@@ -197,7 +197,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('signal', settings, 'hmac'),
+      getMessagingAdapterFromService('signal', settings),
     ).rejects.toThrow('Signal is not configured')
   })
 
@@ -210,7 +210,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('telegram', settings, 'hmac'),
+      getMessagingAdapterFromService('telegram', settings),
     ).rejects.toThrow('Telegram is not configured')
   })
 
@@ -223,7 +223,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('rcs', settings, 'hmac'),
+      getMessagingAdapterFromService('rcs', settings),
     ).rejects.toThrow('RCS is not configured')
   })
 })

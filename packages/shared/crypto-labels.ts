@@ -118,3 +118,5 @@ export const LABEL_AUDIT_USER_KEY_SERVER_SEAL = 'llamenos:audit-user-key-server-
 export const HMAC_BAN_PREFIX = 'llamenos:ban:'
 export const LABEL_BAN_KEY_DERIVE = 'llamenos:ban-key-derive:v1'
 export const LABEL_CALLER_NUMBER_SEAL = 'llamenos:caller-number-seal:v1'
+export const HMAC_MESSAGING_CONTACT_PREFIX = 'llamenos:messaging-contact:'
+export const LABEL_MESSAGING_CONTACT_HUB_KEY = 'llamenos:messaging-contact-hub-key:v1'

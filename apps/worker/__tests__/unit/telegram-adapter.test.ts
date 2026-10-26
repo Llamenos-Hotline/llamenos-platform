@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TelegramAdapter } from '@worker/messaging/telegram/adapter'
 import type { TelegramConfig } from '@shared/types'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 const botConfig: TelegramConfig = {
   enabled: true,
@@ -15,7 +14,7 @@ describe('TelegramAdapter', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    adapter = new TelegramAdapter(botConfig, HMAC_SECRET)
+    adapter = new TelegramAdapter(botConfig)
     fetchMock = vi.fn()
     globalThis.fetch = fetchMock as unknown as typeof fetch
   })
@@ -68,7 +67,7 @@ describe('TelegramAdapter', () => {
       expect(result.channelType).toBe('telegram')
       expect(result.externalId).toBe('42')
       expect(result.senderIdentifier).toBe('987654321')
-      expect(result.senderIdentifierHash).toBeTruthy()
+      expect(result).not.toHaveProperty('senderIdentifierHash')
       expect(result.body).toBe('Hello Telegram')
       expect(result.mediaUrls).toBeUndefined()
       expect(result.metadata?.chatId).toBe('987654321')
@@ -198,7 +197,7 @@ describe('TelegramAdapter', () => {
       )
     })
 
-    it('produces consistent senderIdentifierHash for same user', async () => {
+    it('leaves hashing to the router: same same user, same senderIdentifier, no hash', async () => {
       const makeRequest = () =>
         new Request('https://example.com/webhook', {
           method: 'POST',
@@ -216,7 +215,8 @@ describe('TelegramAdapter', () => {
         })
       const r1 = await adapter.parseIncomingMessage(makeRequest())
       const r2 = await adapter.parseIncomingMessage(makeRequest())
-      expect(r1.senderIdentifierHash).toBe(r2.senderIdentifierHash)
+      expect(r1.senderIdentifier).toBe(r2.senderIdentifier)
+      expect(r1).not.toHaveProperty('senderIdentifierHash')
     })
   })
 
@@ -226,7 +226,6 @@ describe('TelegramAdapter', () => {
     it.each([undefined, '', '   '])('fails closed when webhookSecret is %j, even with a matching header', async (secret) => {
       const adapterNoSecret = new TelegramAdapter(
         { enabled: true, botToken: 'tok', webhookSecret: secret as unknown as string },
-        HMAC_SECRET,
       )
       const unsigned = new Request('https://example.com/webhook', {
         method: 'POST',
@@ -248,7 +247,6 @@ describe('TelegramAdapter', () => {
     it('reports the missing secret in channel status instead of calling getMe', async () => {
       const adapterNoSecret = new TelegramAdapter(
         { enabled: true, botToken: 'tok', webhookSecret: '' },
-        HMAC_SECRET,
       )
       const status = await adapterNoSecret.getChannelStatus()
       expect(status.connected).toBe(false)
@@ -259,7 +257,6 @@ describe('TelegramAdapter', () => {
     it('refuses to register a webhook without a secret_token', async () => {
       const adapterNoSecret = new TelegramAdapter(
         { enabled: true, botToken: 'tok', webhookSecret: '' },
-        HMAC_SECRET,
       )
       const result = await adapterNoSecret.registerWebhook('https://hotline.example/api/messaging/telegram/webhook')
       expect(result.ok).toBe(false)

@@ -324,7 +324,7 @@ describe('POST /api/hubs/:hubId/notes, end to end', () => {
     const hubId = await makeHub(label, admin)
     const author = await makePerson(`${label}-author`, { hubRoles: [{ hubId, roleIds: ['role-volunteer'] }] })
     const [conversation] = await db.insert(conversations).values({
-      hubId, channelType: 'sms', contactIdentifierHash: nextId('contact'), contactLast4: '4242',
+      hubId, channelType: 'sms', contactIdentifierHash: nextId('contact'),
     }).returning()
     createdConversations.push(conversation.id)
     return { hubId, conversationId: conversation.id, author, admin }
@@ -395,7 +395,7 @@ describe('POST /api/hubs/:hubId/notes, end to end', () => {
     const hubId = await makeHub('e2e-bare', admin)
     const author = await makePerson('e2e-bare-author', { hubRoles: [{ hubId, roleIds: ['role-volunteer'] }] })
     const [conversation] = await db.insert(conversations).values({
-      hubId, channelType: 'sms', contactIdentifierHash: nextId('contact'), contactLast4: '4242',
+      hubId, channelType: 'sms', contactIdentifierHash: nextId('contact'),
     }).returning()
     createdConversations.push(conversation.id)
     const f = { hubId, conversationId: conversation.id, author, admin }

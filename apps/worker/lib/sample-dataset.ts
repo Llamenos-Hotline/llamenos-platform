@@ -238,14 +238,13 @@ export const SAMPLE_CASES: ReadonlyArray<SampleCase> = [
 export interface SampleConversation {
   /** Fictional sender number/handle used to derive the blind-index hash. */
   sender: string
-  last4: string
   assignedTo: Volunteer
   messages: ReadonlyArray<{ direction: 'inbound' | 'outbound'; text: string }>
 }
 
 export const SAMPLE_CONVERSATIONS: Record<MessagingChannelType, SampleConversation> = {
   sms: {
-    sender: '+15555550151', last4: '0151', assignedTo: 'maria',
+    sender: '+15555550151', assignedTo: 'maria',
     messages: [
       { direction: 'inbound', text: 'Hi, is this the support line? I saw the number on a flyer.' },
       { direction: 'outbound', text: 'Hello, yes it is. Thanks for reaching out. What would you like to talk about?' },
@@ -254,14 +253,14 @@ export const SAMPLE_CONVERSATIONS: Record<MessagingChannelType, SampleConversati
     ],
   },
   whatsapp: {
-    sender: '+15555550152', last4: '0152', assignedTo: 'james',
+    sender: '+15555550152', assignedTo: 'james',
     messages: [
       { direction: 'inbound', text: 'Hello! Do you have someone who speaks Portuguese?' },
       { direction: 'outbound', text: 'Hello, yes. I will connect you with a Portuguese-speaking volunteer. One moment please.' },
     ],
   },
   signal: {
-    sender: '+15555550153', last4: '0153', assignedTo: 'james',
+    sender: '+15555550153', assignedTo: 'james',
     messages: [
       { direction: 'inbound', text: 'Is this chat private? I would rather not use a regular phone call.' },
       { direction: 'outbound', text: 'Messages here are end-to-end encrypted and only the volunteer helping you and the admins can read them.' },
@@ -269,14 +268,14 @@ export const SAMPLE_CONVERSATIONS: Record<MessagingChannelType, SampleConversati
     ],
   },
   telegram: {
-    sender: '@sample_contact', last4: '0154', assignedTo: 'maria',
+    sender: '@sample_contact', assignedTo: 'maria',
     messages: [
       { direction: 'inbound', text: 'Hey, do you have a list of local support groups?' },
       { direction: 'outbound', text: 'We do! I will send you the current schedule. Is there a particular topic you are looking for?' },
     ],
   },
   rcs: {
-    sender: '+15555550155', last4: '0155', assignedTo: 'maria',
+    sender: '+15555550155', assignedTo: 'maria',
     messages: [
       { direction: 'inbound', text: 'Can I get a call back tomorrow afternoon?' },
       { direction: 'outbound', text: 'Of course. I have noted tomorrow afternoon. What is the best number to reach you on?' },

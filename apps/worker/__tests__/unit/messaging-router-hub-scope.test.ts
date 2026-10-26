@@ -3,7 +3,7 @@
  *
  * `messaging/router.ts` reads the hub from the webhook's `?hub=` query parameter
  * and uses it for the relay event and the push notification — but did not pass
- * it to `conversations.handleIncoming()`, whose third parameter is the hub the
+ * it to `conversations.handleIncoming()`, whose fourth parameter is the hub the
  * conversation belongs to. Every inbound conversation was therefore created with
  * `hub_id = NULL`, and `GET /hubs/:hubId/conversations` filters on
  * `eq(conversations.hubId, hubId)` — so no hub's list could ever show it. The
@@ -40,7 +40,6 @@ const incoming: IncomingMessage = {
   channelType: 'sms',
   externalId: 'SM-1140',
   senderIdentifier: '+15551110000',
-  senderIdentifierHash: 'hash-1140',
   body: 'hello',
   timestamp: '2026-10-03T00:00:00.000Z',
 }
@@ -81,6 +80,7 @@ async function createApp(services: Services) {
       ADMIN_PUBKEY: 'a'.repeat(64),
       ADMIN_DECRYPTION_PUBKEY: 'c'.repeat(64),
       HMAC_SECRET: 'b'.repeat(64),
+      MESSAGING_HASH_KEY: 'f'.repeat(64),
     } as unknown as AppEnv['Bindings']
     await next()
   })
@@ -106,9 +106,9 @@ describe('inbound messaging webhook hub scoping — #1140', () => {
 
     expect(res.status).toBe(200)
     expect(services.conversations.handleIncoming).toHaveBeenCalledTimes(1)
-    // Third argument is the hub the conversation belongs to. Omitting it writes
+    // Fourth argument is the hub the conversation belongs to. Omitting it writes
     // hub_id NULL, which no hub-scoped list query can match.
-    const [, , hubArg] = vi.mocked(services.conversations.handleIncoming).mock.calls[0]
+    const [, , , hubArg] = vi.mocked(services.conversations.handleIncoming).mock.calls[0]
     expect(hubArg).toBe(HUB)
   })
 
@@ -123,7 +123,7 @@ describe('inbound messaging webhook hub scoping — #1140', () => {
     })
 
     expect(res.status).toBe(200)
-    const [, , hubArg] = vi.mocked(services.conversations.handleIncoming).mock.calls[0]
+    const [, , , hubArg] = vi.mocked(services.conversations.handleIncoming).mock.calls[0]
     expect(hubArg).toBeUndefined()
   })
 })

@@ -22,7 +22,7 @@ const SECRETS_DIR = '/run/secrets'
 /**
  * Read a secret that is delivered ONLY as a file, never as an environment
  * variable. The path is `${SECRETS_DIR}/<name>`, or the file named by
- * `<NAME>_FILE` (`ban-hash-key` → `BAN_HASH_KEY_FILE`) so dev and CI can point
+ * `<NAME>_FILE` (`ban-hash-key` → `BAN_HASH_KEY_FILE`, `messaging-hash-key` → `MESSAGING_HASH_KEY_FILE`) so dev and CI can point
  * at a scratch file without the value ever entering an env block. Returns
  * undefined when the file does not exist or is empty.
  */
@@ -81,36 +81,59 @@ function assertDistinctSecrets(env: ConfigInput): void {
 }
 
 /**
- * BAN_HASH_KEY keys the ban-list hash. It is delivered only as the
- * `ban-hash-key` secret file: kept out of `.env`, so out of every config
- * backup, because a hash of a phone number under a key the database holds is
- * reversible by anyone who reads the database. Supplying it as an environment
- * variable is refused rather than quietly accepted.
+ * Keys that are delivered only as a secret FILE, never as an environment
+ * variable. Each keys one hash of a phone number or contact identifier; kept out
+ * of `.env`, so out of every config backup, because a hash under a key the
+ * database holds is reversible by anyone who reads the database. Supplying one
+ * as an environment variable is refused rather than quietly accepted.
  */
-function assertBanHashKey(env: ConfigInput, readFile: (name: string) => string | undefined): void {
-  if (env['BAN_HASH_KEY']?.trim()) {
+const FILE_ONLY_KEYS = [
+  { file: 'ban-hash-key', env: 'BAN_HASH_KEY', role: 'the ban-list hash' },
+  { file: 'messaging-hash-key', env: 'MESSAGING_HASH_KEY', role: 'the messaging-thread hash' },
+] as const
+
+function assertFileOnlyKey(
+  key: (typeof FILE_ONLY_KEYS)[number],
+  env: ConfigInput,
+  readFile: (name: string) => string | undefined,
+): string {
+  if (env[key.env]?.trim()) {
     throw new Error(
-      '[llamenos] BAN_HASH_KEY must not be set as an environment variable. Deliver it only as ' +
-      'the /run/secrets/ban-hash-key secret file, so it never lands in .env or a config backup.'
+      `[llamenos] ${key.env} must not be set as an environment variable. Deliver it only as ` +
+      `the /run/secrets/${key.file} secret file, so it never lands in .env or a config backup.`
     )
   }
-  const val = readFile('ban-hash-key')
+  const val = readFile(key.file)
   if (!val) {
     throw new Error(
-      '[llamenos] Required secret file ban-hash-key is missing or empty. Mount it at ' +
-      '/run/secrets/ban-hash-key (or point BAN_HASH_KEY_FILE at it). Generate with: openssl rand -hex 32'
+      `[llamenos] Required secret file ${key.file} is missing or empty. Mount it at ` +
+      `/run/secrets/${key.file} (or point ${key.env}_FILE at it). Generate with: openssl rand -hex 32`
     )
   }
   if (val.length !== 64 || !HEX_RE.test(val)) {
     throw new Error(
-      `[llamenos] ban-hash-key must be exactly 64 lowercase hex characters (got length ${val.length}). ` +
+      `[llamenos] ${key.file} must be exactly 64 lowercase hex characters (got length ${val.length}). ` +
       `Generate with: openssl rand -hex 32`
     )
   }
   for (const other of ROLE_SECRETS) {
     if (env[other]?.trim() === val) {
-      throw new Error(`[llamenos] ban-hash-key and ${other} are identical. Each server secret has exactly one role.`)
+      throw new Error(`[llamenos] ${key.file} and ${other} are identical. Each server secret has exactly one role.`)
     }
+  }
+  return val
+}
+
+/** Every file-only key, validated, and no two of them equal: each keys one hash and nothing else. */
+function assertFileOnlyKeys(env: ConfigInput, readFile: (name: string) => string | undefined): void {
+  const seen = new Map<string, string>()
+  for (const key of FILE_ONLY_KEYS) {
+    const val = assertFileOnlyKey(key, env, readFile)
+    const clash = seen.get(val)
+    if (clash) {
+      throw new Error(`[llamenos] ${clash} and ${key.file} are identical. Each server secret has exactly one role.`)
+    }
+    seen.set(val, key.file)
   }
 }
 
@@ -156,7 +179,7 @@ export function validateConfig(
   assertHex64(env, 'SERVER_SECRET')
   assertHex64(env, 'SERVER_KEK')
   assertDistinctSecrets(env)
-  assertBanHashKey(env, readFile)
+  assertFileOnlyKeys(env, readFile)
 
   // ADMIN_PUBKEY: 64 hex chars (Ed25519 public key, hex-encoded)
   // Optional: if not set, the first admin is bootstrapped via the Tauri desktop app.

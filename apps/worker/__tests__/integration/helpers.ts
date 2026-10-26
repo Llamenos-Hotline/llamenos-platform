@@ -123,6 +123,7 @@ export function createMockEnv(overrides?: Partial<Env>): Env {
     // Distinct values: a test that fixes one secret into two roles cannot tell which one was used.
     SERVER_KEK: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     BAN_HASH_KEY: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    MESSAGING_HASH_KEY: '9999999999999999999999999999999999999999999999999999999999999999',
   }
   return { ...defaultEnv, ...overrides }
 }

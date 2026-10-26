@@ -11,7 +11,6 @@ const NOTIFICATION_ONLY_MESSAGE = 'You have a new secure message. Open Llamenos 
 
 export interface DeliveryRouterDeps {
   settingsService: SettingsService
-  hmacSecret: string
   notifierUrl?: string
   notifierApiKey?: string
 }
@@ -91,7 +90,6 @@ export async function routeOutboundMessage(
         const signalAdapter = await getMessagingAdapterFromService(
           'signal',
           deps.settingsService,
-          deps.hmacSecret
         )
         const sendParams: SendMessageParams = {
           recipientIdentifier: params.recipientIdentifier,
@@ -111,7 +109,6 @@ export async function routeOutboundMessage(
   const adapter = await getMessagingAdapterFromService(
     params.channelType,
     deps.settingsService,
-    deps.hmacSecret
   )
 
   let body = params.body

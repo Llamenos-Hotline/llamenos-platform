@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Clock, User, MessageSquare, Search } from 'lucide-react'
 import type { Conversation } from '@/lib/api'
 import { ChannelBadge } from '@/components/ChannelBadge'
+import { contactLabel, matchesContactHash } from '@/lib/contact-label'
 
 interface ConversationListProps {
   conversations: Conversation[]
@@ -37,9 +38,7 @@ function ConversationCard({
 }) {
   const { t } = useTranslation()
 
-  const contactDisplay = conversation.contactLast4
-    ? `...${conversation.contactLast4}`
-    : t('conversations.unknownContact', 'Unknown')
+  const contactDisplay = contactLabel(conversation) ?? t('conversations.unknownContact', 'Unknown')
 
   const assigneeDisplay = conversation.assignedTo
     ? conversation.assignedTo.slice(0, 8)
@@ -118,7 +117,7 @@ export function ConversationList({ conversations, onSelect, selectedId }: Conver
     const query = searchQuery.trim().toLowerCase()
     const filtered = query
       ? conversations.filter(conv =>
-          (conv.contactLast4 && conv.contactLast4.includes(query)) ||
+          matchesContactHash(conv, query) ||
           conv.channelType.toLowerCase().includes(query) ||
           (conv.assignedTo && conv.assignedTo.toLowerCase().includes(query))
         )

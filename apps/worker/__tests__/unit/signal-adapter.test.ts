@@ -13,7 +13,6 @@ describe('SignalAdapter', () => {
         webhookSecret: 'test-webhook-secret',
         registeredNumber: '+15551234567',
       },
-      'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
     )
   })
 

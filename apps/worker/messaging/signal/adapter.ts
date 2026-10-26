@@ -16,7 +16,6 @@ import type {
   SignalAboutResponse,
   SignalReaction,
 } from './types'
-import { hashPhone } from '../../lib/crypto'
 import { timingSafeEqual } from 'node:crypto'
 import { safeFetch } from '../../lib/safe-fetch'
 
@@ -34,15 +33,13 @@ export class SignalAdapter implements MessagingAdapter {
   private readonly bridgeApiKey: string
   private readonly webhookSecret: string
   private readonly registeredNumber: string
-  private readonly hmacSecret: string
 
-  constructor(config: SignalConfig, hmacSecret: string) {
+  constructor(config: SignalConfig) {
     // Strip trailing slash from bridge URL for consistent path construction
     this.bridgeUrl = config.bridgeUrl.replace(/\/+$/, '')
     this.bridgeApiKey = config.bridgeApiKey
     this.webhookSecret = config.webhookSecret
     this.registeredNumber = config.registeredNumber
-    this.hmacSecret = hmacSecret
   }
 
   /**
@@ -94,7 +91,6 @@ export class SignalAdapter implements MessagingAdapter {
       channelType: 'signal',
       externalId: String(envelope.timestamp),
       senderIdentifier,
-      senderIdentifierHash: hashPhone(source, this.hmacSecret),
       body,
       mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,

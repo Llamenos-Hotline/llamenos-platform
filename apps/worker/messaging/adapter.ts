@@ -33,7 +33,6 @@ export interface IncomingMessage {
   channelType: MessagingChannelType
   externalId: string              // provider's message ID
   senderIdentifier: string        // phone number, WhatsApp ID, Signal UUID
-  senderIdentifierHash: string    // hashed for storage
   body?: string                   // text content (plaintext from transport)
   mediaUrls?: string[]            // attachment URLs from provider
   mediaTypes?: string[]           // MIME types of attachments

@@ -22,12 +22,11 @@ export interface TwilioCredentials {
  */
 export function createWhatsAppAdapter(
   config: WhatsAppConfig,
-  hmacSecret: string,
   twilioCredentials?: TwilioCredentials,
   webhookBaseUrl = '',
 ): MessagingAdapter {
   if (config.integrationMode === 'direct') {
-    return new WhatsAppAdapter(config, hmacSecret)
+    return new WhatsAppAdapter(config)
   }
 
   if (!twilioCredentials) {
@@ -43,5 +42,5 @@ export function createWhatsAppAdapter(
     webhookBaseUrl,
   )
 
-  return WhatsAppAdapter.createWithTwilioClient(config, client, hmacSecret)
+  return WhatsAppAdapter.createWithTwilioClient(config, client)
 }

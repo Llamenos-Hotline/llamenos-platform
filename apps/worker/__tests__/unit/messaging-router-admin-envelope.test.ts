@@ -41,7 +41,6 @@ const incoming: IncomingMessage = {
   channelType: 'sms',
   externalId: 'SM-1283',
   senderIdentifier: '+15551112283',
-  senderIdentifierHash: 'hash-1283',
   body: PLAINTEXT,
   timestamp: '2026-09-29T00:00:00.000Z',
 }
@@ -87,8 +86,7 @@ function setup() {
     id: 'conv-1283',
     hubId: null,
     channelType: 'sms',
-    contactIdentifierHash: incoming.senderIdentifierHash,
-    contactLast4: '2283',
+    contactIdentifierHash: 'thread-hash-1283',
     assignedTo: null,
     status: 'active',
   }])
@@ -119,6 +117,7 @@ async function createApp(services: Services, admin: ReturnType<typeof makeAdmin>
       ADMIN_PUBKEY: admin.signingPubkey,
       ...(withDecryptionKey ? { ADMIN_DECRYPTION_PUBKEY: admin.decryptionPubkey } : {}),
       HMAC_SECRET: 'b'.repeat(64),
+      MESSAGING_HASH_KEY: 'f'.repeat(64),
     } as unknown as AppEnv['Bindings']
     await next()
   })

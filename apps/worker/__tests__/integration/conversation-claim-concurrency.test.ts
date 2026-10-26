@@ -47,7 +47,6 @@ const DDL = `
     hub_id                    TEXT,
     channel_type              TEXT NOT NULL DEFAULT 'web',
     contact_identifier_hash   TEXT NOT NULL DEFAULT '',
-    contact_last4             TEXT,
     assigned_to               TEXT,
     status                    TEXT NOT NULL DEFAULT 'waiting',
     created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),

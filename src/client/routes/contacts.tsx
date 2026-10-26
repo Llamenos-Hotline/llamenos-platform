@@ -99,7 +99,7 @@ function ContactsPage() {
           </Button>
           <Contact className="h-6 w-6 text-primary" />
           <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">
-            {selectedContact?.last4 ? `***-${selectedContact.last4}` : t('contacts.contact', { defaultValue: 'Contact' })}
+            {selectedContact ? `${selectedContact.contactHash.slice(0, 12)}...` : t('contacts.contact', { defaultValue: 'Contact' })}
           </h1>
         </div>
 
@@ -249,7 +249,7 @@ function ContactsPage() {
                 <Contact className="h-5 w-5 text-muted-foreground shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="font-medium">
-                    {contact.last4 ? `***-${contact.last4}` : contact.contactHash.slice(0, 12) + '...'}
+                    {contact.contactHash.slice(0, 12) + '...'}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {t('contacts.lastSeen', { defaultValue: 'Last seen' })}: {new Date(contact.lastSeen).toLocaleDateString()}

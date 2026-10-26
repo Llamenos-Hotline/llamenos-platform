@@ -50,7 +50,6 @@ export interface CreateConversationInput {
   hubId?: string
   channelType?: MessagingChannelType | 'web'
   contactIdentifierHash?: string
-  contactLast4?: string
   assignedTo?: string
   status?: ConversationStatus
   metadata?: Record<string, unknown>
@@ -140,7 +139,6 @@ export interface VolunteerLoadResult {
 
 export interface ContactSummary {
   contactHash: string
-  last4?: string | null
   conversationCount: number
   reportCount: number
   firstSeen: Date
@@ -172,7 +170,6 @@ export class ConversationsService {
         hubId: input.hubId,
         channelType: input.channelType ?? 'web',
         contactIdentifierHash: input.contactIdentifierHash ?? '',
-        contactLast4: input.contactLast4,
         assignedTo: input.assignedTo,
         status: input.status ?? 'waiting',
         metadata: input.metadata ?? null,
@@ -755,6 +752,13 @@ export class ConversationsService {
   async handleIncoming(
     incoming: IncomingMessage,
     /**
+     * The thread identity of `incoming.senderIdentifier`: `messagingContactHash`,
+     * computed once by the caller (the messaging router, or the dev simulation)
+     * with the same hub id passed below. No adapter hashes, so a message can
+     * never be filed under a hash its own hub's key did not produce.
+     */
+    contactHash: string,
+    /**
     /**
      * The platform admin's X25519 HPKE recipient, or `undefined` when the
      * deployment has none. Typed as a brand so an Ed25519 auth key — which is
@@ -777,7 +781,7 @@ export class ConversationsService {
     // hubId scoping prevents cross-worker bleed in parallel test execution.
     const whereConditions = [
       eq(conversations.channelType, incoming.channelType),
-      eq(conversations.contactIdentifierHash, incoming.senderIdentifierHash),
+      eq(conversations.contactIdentifierHash, contactHash),
       sql`${conversations.status} IN ('active', 'waiting', 'closed')`,
     ]
     if (hubId) {
@@ -809,16 +813,12 @@ export class ConversationsService {
       }
     } else {
       // Create new conversation
-      const digits = incoming.senderIdentifier.replace(/\D/g, '')
-      const last4 = digits.length >= 4 ? digits.slice(-4) : digits
-
       const [created] = await this.db
         .insert(conversations)
         .values({
           hubId: hubId ?? null,
           channelType: incoming.channelType,
-          contactIdentifierHash: incoming.senderIdentifierHash,
-          contactLast4: last4,
+          contactIdentifierHash: contactHash,
           status: 'waiting',
           lastMessageAt: new Date(),
         })
@@ -1179,7 +1179,6 @@ export class ConversationsService {
     const rows = await this.db
       .select({
         contactHash: conversations.contactIdentifierHash,
-        last4: sql<string | null>`MIN(${conversations.contactLast4})`,
         conversationCount: sql<number>`COUNT(*) FILTER (WHERE ${conversations.metadata} IS NULL OR ${conversations.metadata}->>'type' IS NULL OR ${conversations.metadata}->>'type' != 'report')`,
         reportCount: sql<number>`COUNT(*) FILTER (WHERE ${conversations.metadata}->>'type' = 'report')`,
         firstSeen: sql<Date>`MIN(${conversations.createdAt})`,
@@ -1192,7 +1191,6 @@ export class ConversationsService {
 
     return rows.map((r) => ({
       contactHash: r.contactHash,
-      last4: r.last4,
       conversationCount: Number(r.conversationCount),
       reportCount: Number(r.reportCount),
       firstSeen: r.firstSeen,

@@ -120,3 +120,5 @@
 102	llamenos:ban:
 103	llamenos:ban-key-derive:v1
 104	llamenos:caller-number-seal:v1
+105	llamenos:messaging-contact:
+106	llamenos:messaging-contact-hub-key:v1

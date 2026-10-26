@@ -449,6 +449,13 @@
       "when": 1792997813531,
       "tag": "0063_users_roles_no_implicit_default",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1793001413531,
+      "tag": "0064_messaging_thread_hash_per_hub",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,4 @@
 import type { TelegramConfig } from '@shared/types'
-import { hashPhone } from '../../lib/crypto'
 import type {
   MessagingAdapter,
   IncomingMessage,
@@ -24,12 +23,10 @@ export class TelegramAdapter implements MessagingAdapter {
 
   private readonly client: TelegramBotClient
   private readonly webhookSecret: string
-  private readonly hmacSecret: string
 
-  constructor(config: TelegramConfig, hmacSecret: string) {
+  constructor(config: TelegramConfig) {
     this.client = new TelegramBotClient(config.botToken)
     this.webhookSecret = config.webhookSecret
-    this.hmacSecret = hmacSecret
   }
 
   /**
@@ -54,8 +51,6 @@ export class TelegramAdapter implements MessagingAdapter {
 
     // Use Telegram user ID as the stable sender identifier
     const senderIdentifier = String(from.id)
-    // HMAC hash the user ID for privacy-preserving storage
-    const senderIdentifierHash = hashPhone(senderIdentifier, this.hmacSecret)
 
     // Extract text content: prefer text, fall back to caption (for media messages)
     const body = message.text ?? message.caption ?? undefined
@@ -97,7 +92,6 @@ export class TelegramAdapter implements MessagingAdapter {
       channelType: 'telegram',
       externalId: String(message.message_id),
       senderIdentifier,
-      senderIdentifierHash,
       body,
       mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,

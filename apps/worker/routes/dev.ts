@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType } from '@shared/types'
-import { banHashes, hashPhone, sealCallerNumber } from '../lib/crypto'
+import { banHashes, sealCallerNumber } from '../lib/crypto'
+import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
@@ -1009,7 +1010,7 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   }
 
   const channel: MessagingChannelType = body.channel || 'sms'
-  const senderHash = hashPhone(body.senderNumber, c.env.HMAC_SECRET)
+  const senderHash = messagingContactHash(body.senderNumber, body.hubId, c.env.MESSAGING_HASH_KEY)
 
   const services = c.get('services')
   const adminDecryptionPubkey = adminHpkeRecipient(c.env)
@@ -1017,10 +1018,9 @@ dev.post('/test-simulate/incoming-message', async (c) => {
     channelType: channel,
     externalId: crypto.randomUUID(),
     senderIdentifier: body.senderNumber,
-    senderIdentifierHash: senderHash,
     body: body.body,
     timestamp: new Date().toISOString(),
-  }, adminDecryptionPubkey, body.hubId)
+  }, senderHash, adminDecryptionPubkey, body.hubId)
 
   // Publish to the conversation's hub (mirrors real messaging webhook flow)
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -1171,7 +1171,7 @@ dev.post('/test-simulate/signal-unknown-envelope', (c) => {
   const denied = simulationGuard(c)
   if (denied) return denied
 
-  const adapter = new SignalAdapter(TEST_SIGNAL_CONFIG, c.env.HMAC_SECRET)
+  const adapter = new SignalAdapter(TEST_SIGNAL_CONFIG)
   const payload: SignalWebhookPayload = {
     envelope: {
       source: '+15559876543',

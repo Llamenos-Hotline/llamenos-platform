@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TwilioSMSAdapter } from '@worker/messaging/sms/twilio'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 describe('TwilioSMSAdapter', () => {
   let adapter: TwilioSMSAdapter
@@ -12,7 +11,7 @@ describe('TwilioSMSAdapter', () => {
   const phoneNumber = '+15551234567'
 
   beforeEach(() => {
-    adapter = new TwilioSMSAdapter(accountSid, authToken, phoneNumber, HMAC_SECRET)
+    adapter = new TwilioSMSAdapter(accountSid, authToken, phoneNumber)
     fetchMock = vi.fn()
     globalThis.fetch = fetchMock as unknown as typeof fetch
   })
@@ -48,7 +47,7 @@ describe('TwilioSMSAdapter', () => {
       expect(result.channelType).toBe('sms')
       expect(result.externalId).toBe('SM123')
       expect(result.senderIdentifier).toBe('+15559876543')
-      expect(result.senderIdentifierHash).toBeTruthy()
+      expect(result).not.toHaveProperty('senderIdentifierHash')
       expect(result.body).toBe('Hello world')
       expect(result.mediaUrls).toBeUndefined()
       expect(result.mediaTypes).toBeUndefined()
@@ -100,7 +99,7 @@ describe('TwilioSMSAdapter', () => {
       expect(result.body).toBeUndefined()
     })
 
-    it('produces consistent senderIdentifierHash for same phone', async () => {
+    it('leaves hashing to the router: same same phone, same senderIdentifier, no hash', async () => {
       const makeRequest = () =>
         new Request('https://example.com/webhook', {
           method: 'POST',
@@ -109,7 +108,8 @@ describe('TwilioSMSAdapter', () => {
         })
       const r1 = await adapter.parseIncomingMessage(makeRequest())
       const r2 = await adapter.parseIncomingMessage(makeRequest())
-      expect(r1.senderIdentifierHash).toBe(r2.senderIdentifierHash)
+      expect(r1.senderIdentifier).toBe(r2.senderIdentifier)
+      expect(r1).not.toHaveProperty('senderIdentifierHash')
     })
   })
 
