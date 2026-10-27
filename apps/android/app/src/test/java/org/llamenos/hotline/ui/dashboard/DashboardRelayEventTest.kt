@@ -28,6 +28,7 @@ import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.hotline.mockPushRegistrationManager
 
@@ -84,6 +85,7 @@ class DashboardRelayEventTest {
             mockk<SipRegistrar>(relaxed = true),
             mockk<HubRepository>(relaxed = true),
             mockPushRegistrationManager(),
+            EndedCallHold(),
         )
     }
 

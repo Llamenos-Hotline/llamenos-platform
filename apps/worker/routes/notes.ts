@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
-import { listNotesQuerySchema, createNoteBodySchema, updateNoteBodySchema, createReplyBodySchema, noteResponseSchema, noteListResponseSchema, noteRepliesResponseSchema } from '@protocol/schemas/notes'
+import { listNotesQuerySchema, createNoteBodySchema, updateNoteBodySchema, createReplyBodySchema, noteResponseSchema, noteStoredResponseSchema, noteListResponseSchema, noteRepliesResponseSchema } from '@protocol/schemas/notes'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createLogger } from '../lib/logger'
@@ -118,7 +118,7 @@ notes.post('/',
         description: 'Note created',
         content: {
           'application/json': {
-            schema: resolver(noteResponseSchema),
+            schema: resolver(noteStoredResponseSchema),
           },
         },
       },
@@ -175,7 +175,7 @@ notes.patch('/:id',
         description: 'Note updated',
         content: {
           'application/json': {
-            schema: resolver(noteResponseSchema),
+            schema: resolver(noteStoredResponseSchema),
           },
         },
       },

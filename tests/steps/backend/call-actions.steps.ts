@@ -7,7 +7,7 @@
  * Note: Phone numbers are HMAC-hashed by CallRouterDO before storage,
  * so ban list verification uses count-based assertions rather than raw phone matching.
  */
-import { expect } from '@playwright/test'
+import { expect, type APIRequestContext } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
@@ -16,6 +16,7 @@ import { apiPost, apiGet, listBansViaApi, listNotesViaApi, sealedNoteFields } fr
 import {
   simulateIncomingCall,
   simulateAnswerCall,
+  simulateEndCall,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
 
@@ -123,23 +124,50 @@ When(
 
 // ── Note Actions ─────────────────────────────────────────────────
 
+/** POST a sealed note about the scenario's call to the scenario's hub, as the given volunteer. */
+async function postCallNote(request: APIRequestContext, world: Record<string, unknown>, volIndex: number, text: string): Promise<void> {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeTruthy()
+  const res = await apiPost(
+    request,
+    `/hubs/${state.hubId}/notes`,
+    {
+      ...(await sealedNoteFields(state.volunteers[volIndex].deviceKey, text)),
+      callId: state.callId,
+    },
+    state.volunteers[volIndex].deviceKey,
+  )
+  state.lastApiResponse = res
+  setLastResponse(world, res)
+}
+
 When(
   'volunteer {int} creates a note for the active call',
+  async ({ request, world }, volIndex: number) => postCallNote(request, world, volIndex, 'bdd test note for active call'),
+)
+
+// ── Ended-call note (the "Call Ended / Add Note" prompt) ─────────
+
+When('the call ends', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeTruthy()
+  await simulateEndCall(request, state.callId!)
+})
+
+Then(
+  'volunteer {int} cannot read the hub call history',
   async ({ request, world }, volIndex: number) => {
     const state = getScenarioState(world)
-    expect(state.callId).toBeTruthy()
-    const res = await apiPost(
-      request,
-      `/hubs/${state.hubId}/notes`,
-      {
-        ...(await sealedNoteFields(state.volunteers[volIndex].deviceKey, 'bdd test note for active call')),
-        callId: state.callId,
-      },
-      state.volunteers[volIndex].deviceKey,
-    )
-    state.lastApiResponse = res
-    setLastResponse(world, res)
+    const res = await apiGet(request, `/hubs/${state.hubId}/calls/history`, state.volunteers[volIndex].deviceKey)
+    // The note below must succeed WITHOUT this permission: a volunteer writes up their
+    // own call without being able to read everyone else's.
+    expect(res.status).toBe(403)
   },
+)
+
+When(
+  'volunteer {int} creates a note for the call that ended',
+  async ({ request, world }, volIndex: number) => postCallNote(request, world, volIndex, 'bdd test note for the call just ended'),
 )
 
 // ── Ban Callback ─────────────────────────────────────────────────

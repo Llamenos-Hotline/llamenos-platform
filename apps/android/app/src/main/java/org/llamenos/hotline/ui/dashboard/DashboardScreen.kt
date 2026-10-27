@@ -72,6 +72,7 @@ import org.llamenos.hotline.ui.notes.NotesViewModel
  * @param onLock Callback to lock the app (clears key from memory, navigates to PIN unlock)
  * @param onLogout Callback to fully logout (clears stored keys, navigates to login)
  * @param onNavigateToNotes Callback to switch to the Notes tab
+ * @param onNavigateToNoteCreate Callback to open the note editor on a call (or none)
  * @param onNavigateToNoteDetail Callback to navigate to a specific note detail screen
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +83,8 @@ fun DashboardScreen(
     onLock: () -> Unit,
     onLogout: () -> Unit,
     onNavigateToNotes: () -> Unit,
+    /** Opens the note editor on a call (id, the call's own hub id), or on no call when null. */
+    onNavigateToNoteCreate: (callId: String?, hubId: String?) -> Unit,
     onNavigateToNoteDetail: (String) -> Unit,
     onNavigateToCallHistory: () -> Unit,
     onNavigateToReports: () -> Unit,
@@ -190,10 +193,21 @@ fun DashboardScreen(
                         onHangup = { viewModel.hangupCall() },
                         onReportSpam = { viewModel.reportSpam() },
                         onBanAndHangup = { reason -> viewModel.banAndHangup(reason) },
-                        onQuickNote = onNavigateToNotes,
+                        onQuickNote = {
+                            onNavigateToNoteCreate(currentCall.id, currentCall.hubId)
+                        },
                         isHangingUp = uiState.isHangingUp,
                         isReportingSpam = uiState.isReportingSpam,
                         isBanning = uiState.isBanning,
+                    )
+                }
+
+                // Our own call just ended: offer to write it up while it is fresh.
+                val endedCall = uiState.endedCall
+                if (currentCall == null && endedCall != null) {
+                    CallEndedCard(
+                        onAddNote = { onNavigateToNoteCreate(endedCall.id, endedCall.hubId) },
+                        onDismiss = { viewModel.dismissEndedCall() },
                     )
                 }
 

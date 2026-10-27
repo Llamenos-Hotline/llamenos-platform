@@ -5,6 +5,7 @@ import { useMemberHubIds } from './member-hubs'
 import { useMyShiftStatus } from './queries/shifts'
 import { startRinging, stopRinging } from './notifications'
 import { rememberCallHub } from './call-hubs'
+import { isUnlocked } from './key-manager'
 import {
   listActiveCalls,
   listConversations,
@@ -32,6 +33,16 @@ const CALL_KINDS = [KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_
 const CONVERSATION_KINDS = [KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED]
 
 /**
+ * The volunteer's own call that just ended and has not been written up yet: the
+ * dashboard offers "Call Ended / Add Note" for it. It names the call's own hub — never
+ * the active one — and nothing about the caller. Held in memory only.
+ */
+export interface EndedCall {
+  id: string
+  hubId: string
+}
+
+/**
  * The call feed: real-time call state via WebSocket relay + REST polling fallback.
  *
  * Mounted exactly once, by `CallsProvider`; everything else reads it through
@@ -55,6 +66,7 @@ export function useCallFeed() {
   const { t } = useTranslation()
   const [calls, setCalls] = useState<HubCall[]>([])
   const [currentCall, setCurrentCall] = useState<HubCall | null>(null)
+  const [endedCall, setEndedCall] = useState<EndedCall | null>(null)
   const memberHubIds = useMemberHubIds()
   // Record every call's hub so a note about it can be filed to the right hub later,
   // even after the call left this list (e.g. hung up) and whatever hub is active.
@@ -65,6 +77,25 @@ export function useCallFeed() {
   currentCallRef.current = currentCall
   const callsRef = useRef(calls)
   callsRef.current = calls
+
+  /**
+   * The user's own call is over, however it ended (hang-up, caller hung up, spam report,
+   * lost from the feed). Only ever called for `currentCall`, which is set solely by this
+   * user answering — so "ended" here always means the user's own call. A failed answer
+   * does not come through here: no call was had.
+   *
+   * Nothing is held while locked: a lock drops the prompt, and a call that ends behind
+   * the lock screen must not resurrect one on unlock.
+   */
+  const endCurrentCall = useCallback((call: HubCall) => {
+    setCurrentCall(prev => (prev?.id === call.id ? null : prev))
+    if (isUnlocked()) setEndedCall({ id: call.id, hubId: call.hubId })
+  }, [])
+
+  /** Drop the held call: dismissed, or (with `callId`) its note was filed. */
+  const dismissEndedCall = useCallback((callId?: string) => {
+    setEndedCall(prev => (!callId || prev?.id === callId ? null : prev))
+  }, [])
 
   // --- WebSocket subscriptions for real-time call events (every member hub) ---
   useRelaySubscriptions(memberHubIds, CALL_KINDS, (_kind, content: LlamenosEvent, hubId) => {
@@ -106,7 +137,7 @@ export function useCallFeed() {
         // Update current call tracking
         if (currentCallRef.current?.id === update.callId) {
           if (update.status === 'completed') {
-            setCurrentCall(null)
+            endCurrentCall(currentCallRef.current)
           } else {
             setCurrentCall(prev => prev ? { ...prev, status: update.status, answeredBy: update.answeredBy ?? prev.answeredBy } : prev)
           }
@@ -150,10 +181,8 @@ export function useCallFeed() {
             const newIds = next.map(c => `${c.hubId}:${c.id}:${c.status}`).sort().join(',')
             return prevIds === newIds ? prev : next
           })
-          setCurrentCall(prev => {
-            if (!prev) return prev
-            return next.some(c => c.id === prev.id) ? prev : null
-          })
+          const current = currentCallRef.current
+          if (current && !next.some(c => c.id === current.id)) endCurrentCall(current)
         })
     }
 
@@ -192,24 +221,27 @@ export function useCallFeed() {
     // Only forget the call once the server has ended it: clearing first would hide a
     // call that is still live, with no panel left to hang up from.
     await apiHangupCall(callId, hubId)
-    setCurrentCall(prev => (prev?.id === callId ? null : prev))
-  }, [hubOf])
+    const current = currentCallRef.current
+    if (current?.id === callId) endCurrentCall(current)
+  }, [hubOf, endCurrentCall])
 
   const reportSpam = useCallback(async (callId: string) => {
     const hubId = hubOf(callId)
-    setCurrentCall(null)
+    const current = currentCallRef.current
+    if (current?.id === callId) endCurrentCall(current)
+    else setCurrentCall(null)
     if (!hubId) return
     try {
       await apiReportSpam(callId, hubId)
     } catch {
       // Report may fail if call already ended — safe to ignore
     }
-  }, [hubOf])
+  }, [hubOf, endCurrentCall])
 
   const ringingCalls = useMemo(() => calls.filter(c => c.status === 'ringing'), [calls])
   const activeCalls = useMemo(() => calls.filter(c => c.status === 'in-progress'), [calls])
 
-  return { calls, currentCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls }
+  return { calls, currentCall, endedCall, dismissEndedCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls }
 }
 
 /**

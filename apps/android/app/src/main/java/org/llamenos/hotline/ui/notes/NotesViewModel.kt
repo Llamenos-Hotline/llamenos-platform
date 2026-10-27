@@ -36,8 +36,9 @@ import org.llamenos.hotline.model.CreateNoteBodyAuthorEnvelope
 import org.llamenos.protocol.CreateReplyBody
 import org.llamenos.hotline.model.CreateReplyBodyReaderEnvelope
 import org.llamenos.hotline.model.Note
+import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.model.UpdateNoteBody
-import org.llamenos.protocol.NoteResponse
+import org.llamenos.protocol.NoteStoredResponse
 import org.llamenos.protocol.RecipientEnvelope
 import javax.inject.Inject
 
@@ -111,6 +112,7 @@ class NotesViewModel @Inject constructor(
     private val cryptoService: CryptoService,
     private val sessionState: SessionState,
     private val activeHubState: ActiveHubState,
+    private val endedCallHold: EndedCallHold,
 ) : ViewModel() {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -260,8 +262,19 @@ class NotesViewModel @Inject constructor(
      *
      * @param text The note body text
      * @param fieldValues Map of custom field name -> value
+     * @param callId The call the note is about. Required with [conversationId] absent: the
+     *   server refuses a note about nothing.
+     * @param hubId The hub [callId] belongs to, which need not be the one being browsed.
+     *   Null files the note to the active hub.
      */
-    fun createNote(text: String, fieldValues: Map<String, String>, conversationId: String? = null, callId: String? = null, transcript: String? = null) {
+    fun createNote(
+        text: String,
+        fieldValues: Map<String, String>,
+        conversationId: String? = null,
+        callId: String? = null,
+        transcript: String? = null,
+        hubId: String? = null,
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true, saveError = null, saveSuccess = false) }
 
@@ -322,8 +335,16 @@ class NotesViewModel @Inject constructor(
                     callID = callId,
                 )
 
-                apiService.request<NoteResponse>("POST", apiService.hp("/api/notes"), request)
+                // The server answers 201 `{ note }`, not the bare note.
+                val notesPath = if (callId != null && hubId != null) {
+                    apiService.hubPath(hubId, "/api/notes")
+                } else {
+                    apiService.hp("/api/notes")
+                }
+                apiService.request<NoteStoredResponse>("POST", notesPath, request)
 
+                // Written up: the call is no longer waiting for a note.
+                if (callId != null) endedCallHold.release(callId)
                 _uiState.update { it.copy(isSaving = false, saveSuccess = true) }
 
                 // Refresh the notes list to include the new note
@@ -456,7 +477,7 @@ class NotesViewModel @Inject constructor(
                     },
                 )
 
-                apiService.request<NoteResponse>("PATCH", apiService.hp("/api/notes/$noteId"), request)
+                apiService.request<NoteStoredResponse>("PATCH", apiService.hp("/api/notes/$noteId"), request)
 
                 // Update local state with edited content
                 val updatedNote = _uiState.value.selectedNote?.copy(

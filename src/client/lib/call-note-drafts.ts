@@ -9,6 +9,10 @@
  * draft is plaintext about a caller; writing it out would turn a UX fix into a
  * data-at-rest problem. Cleared by logout and by every wipe (`wipeKey`, which
  * both panic wipe and remote device wipe go through).
+ *
+ * This is the ONE store for "the note the volunteer is partway through writing" about
+ * a call: the in-call textarea, and — after the call ends — the note editor opened
+ * from the "Call Ended" prompt, read and write the same entry.
  */
 
 const drafts = new Map<string, string>()
@@ -23,6 +27,9 @@ export function setCallNoteDraft(callId: string, text: string): void {
   else drafts.delete(callId)
 }
 
-export function clearCallNoteDrafts(): void {
-  drafts.clear()
+/** Drop every draft, except the one for `keepCallId` (the ended call still awaiting its note). */
+export function clearCallNoteDrafts(keepCallId?: string): void {
+  for (const callId of [...drafts.keys()]) {
+    if (callId !== keepCallId) drafts.delete(callId)
+  }
 }

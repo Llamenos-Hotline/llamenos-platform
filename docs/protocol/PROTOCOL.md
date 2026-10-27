@@ -1810,12 +1810,13 @@ Response: { "notes": EncryptedNote[], "total": number }
 POST /api/notes
 Permission: notes:create
 Body: {
-  "callId": string,
+  "callId"?: string,            // an active call or a call record in the hub; no calls:read-history needed
+  "conversationId"?: string,    // one of callId / conversationId is required
   "encryptedContent": hex,
   "authorEnvelope"?: { "enc": hex64, "ct": hex },         // KeyEnvelope (HPKE; no pubkey field)
   "adminEnvelopes"?: { "pubkey": hex64, "enc": hex64, "ct": hex }[]  // RecipientEnvelope[]
 }
-Response: EncryptedNote
+Response: 201 { "note": EncryptedNote }   // NoteStoredResponse — wrapped, never the bare note
 
 PATCH /api/notes/:id
 Permission: notes:update-own
@@ -1824,7 +1825,7 @@ Body: {
   "authorEnvelope"?: { "enc": hex64, "ct": hex },         // KeyEnvelope (HPKE; no pubkey field)
   "adminEnvelopes"?: { "pubkey": hex64, "enc": hex64, "ct": hex }[]  // RecipientEnvelope[]
 }
-Response: EncryptedNote
+Response: { "note": EncryptedNote }       // NoteStoredResponse
 ```
 
 Hub-scoped: `/api/hubs/:hubId/notes/*`

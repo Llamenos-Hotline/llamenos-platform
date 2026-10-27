@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'r
 import { useAuth } from './auth'
 import { useConfig } from './config'
 import { useCallFeed } from './hooks'
-import { setOnCall } from './key-manager'
+import { onLock, setOnCall } from './key-manager'
 import { clearCallNoteDrafts } from './call-note-drafts'
 import type { HubCall } from './api'
 
@@ -17,6 +17,8 @@ type CallFeed = ReturnType<typeof useCallFeed>
 const NO_SESSION_FEED: CallFeed = {
   calls: [],
   currentCall: null,
+  endedCall: null,
+  dismissEndedCall: () => {},
   ringingCalls: [],
   activeCalls: [],
   answerCall: () => Promise.reject(new Error('No call feed: not signed in')),
@@ -37,14 +39,22 @@ export function CallsProvider({ children }: { children: ReactNode }) {
   // An answered call, on whichever hub, keeps the idle auto-lock from firing: the
   // feed spans every member hub, so this is not keyed to the active one.
   const onCall = feed.currentCall !== null
+  const endedCallId = feed.endedCall?.id ?? null
   useEffect(() => {
     setOnCall(onCall)
-    // No answered call means no panel to restore a draft into — however the call
-    // ended (hang-up, caller hung up, spam report, lost from the feed). A lock
-    // keeps this provider mounted, so it never reaches here mid-call.
-    if (!onCall) clearCallNoteDrafts()
     return () => setOnCall(false)
   }, [onCall])
+  // The note being written belongs to the answered call, or — once that call ends —
+  // to the held "Call Ended" prompt, which the draft carries over into. Anything else
+  // has nowhere to be restored into, however the call ended (hang-up, caller hung up,
+  // spam report, lost from the feed).
+  useEffect(() => {
+    if (!onCall) clearCallNoteDrafts(endedCallId ?? undefined)
+  }, [onCall, endedCallId])
+  // A lock, logout or wipe drops the prompt (all three go through lock()); the
+  // effect above then clears the draft it was holding.
+  const { dismissEndedCall } = feed
+  useEffect(() => onLock(() => dismissEndedCall()), [dismissEndedCall])
   return <CallsContext.Provider value={feed}>{children}</CallsContext.Provider>
 }
 
