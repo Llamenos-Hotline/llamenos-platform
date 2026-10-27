@@ -5,7 +5,7 @@ import XCTest
 /// UI-test builds ask for notifications with `.provisional`
 /// (`LlamenosApp.pushAuthorizationOptions`), which the system grants without a prompt,
 /// and nothing else the suite drives requests a permission. So a UI test never has a
-/// springboard alert to answer, on a fresh CI simulator or a re-used local one.
+/// springboard alert to answer: the app never presents one.
 ///
 /// Answering one was not deterministic. In run 40560664328 the notifications alert had
 /// been on screen for 4s when the helper tapped Allow dead centre; springboard animated
@@ -50,12 +50,20 @@ extension XCTestCase {
     /// met the alert. Returning `false` after the failure leaves the alert to the default
     /// handler only so the rest of the shard is not covered by it; the test has already
     /// failed with the alert's title in the message.
+    ///
+    /// A springboard permission alert is not owned by the app: it stays on screen after
+    /// the app is terminated and even after it is uninstalled (observed on iOS 26.5). A
+    /// local simulator that once showed the prompt to an older build and never had it
+    /// answered keeps showing it to every later build. CI creates a fresh simulator per
+    /// shard; locally, reboot the simulator to clear it.
     func failOnSystemAlert() {
         addUIInterruptionMonitor(withDescription: "No system alert in UI tests") { alert in
             XCTFail(
                 "A system alert appeared: \"\(alert.label)\". UI tests must never raise one — "
                     + "grant the permission without a prompt in UI_TESTING builds (see "
-                    + "LlamenosApp.pushAuthorizationOptions) instead of answering it."
+                    + "LlamenosApp.pushAuthorizationOptions) instead of answering it. If no "
+                    + "current code requests it, the alert is left over from an earlier build: "
+                    + "springboard keeps it across uninstall, so reboot the simulator."
             )
             return false
         }
