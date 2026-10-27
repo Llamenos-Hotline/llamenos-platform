@@ -716,27 +716,28 @@ export async function createBanViaApi(
   const phone = options?.phone ?? uniquePhone()
   const reason = options?.reason ?? 'E2E test ban'
 
-  const { status, data } = await apiPost<{ ban: { phone: string; phoneHash: string; reason: string } }>(request, hubPath('/bans', options?.hubId), { phone, reason })
+  const { status, data } = await apiPost<{ ban: { phoneHash: string; reason: string } }>(request, hubPath('/bans', options?.hubId), { phone, reason })
   if (status !== 200 && status !== 201) {
     throw new Error(`Failed to create ban: ${status}`)
   }
   return { phone, phoneHash: data.ban.phoneHash, reason }
 }
 
+/** Unban by the opaque handle the ban list returns (`phoneHash`); the server takes no number here. */
 export async function removeBanViaApi(
   request: APIRequestContext,
-  phone: string,
+  phoneHash: string,
   hubId?: string,
 ): Promise<void> {
-  const { status } = await apiDelete(request, hubPath(`/bans/${encodeURIComponent(phone)}`, hubId))
+  const { status } = await apiDelete(request, hubPath(`/bans/${phoneHash}`, hubId))
   if (status !== 200) throw new Error(`Failed to remove ban: ${status}`)
 }
 
 export async function listBansViaApi(
   request: APIRequestContext,
   hubId?: string,
-): Promise<Array<{ phone: string; phoneHash: string; reason: string; bannedBy: string; bannedAt: string }>> {
-  const { status, data } = await apiGet<{ bans: Array<{ phone: string; phoneHash: string; reason: string; bannedBy: string; bannedAt: string }> }>(request, hubPath('/bans', hubId))
+): Promise<Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }>> {
+  const { status, data } = await apiGet<{ bans: Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }> }>(request, hubPath('/bans', hubId))
   if (status !== 200) throw new Error(`Failed to list bans: ${status}`)
   return data.bans
 }
@@ -1223,7 +1224,7 @@ export async function cleanupTestData(
     userPubkeys?: string[]
     /** @deprecated Use userPubkeys instead */
     volunteerPubkeys?: string[]
-    banPhones?: string[]
+    banPhoneHashes?: string[]
     shiftIds?: string[]
     roleIds?: string[]
   },
@@ -1233,8 +1234,8 @@ export async function cleanupTestData(
   for (const pubkey of [...(data.userPubkeys ?? []), ...(data.volunteerPubkeys ?? [])]) {
     try { await deleteUserViaApi(request, pubkey) } catch (e) { errors.push(String(e)) }
   }
-  for (const phone of data.banPhones ?? []) {
-    try { await removeBanViaApi(request, phone) } catch (e) { errors.push(String(e)) }
+  for (const phoneHash of data.banPhoneHashes ?? []) {
+    try { await removeBanViaApi(request, phoneHash) } catch (e) { errors.push(String(e)) }
   }
   for (const id of data.shiftIds ?? []) {
     try { await deleteShiftViaApi(request, id) } catch (e) { errors.push(String(e)) }

@@ -369,11 +369,14 @@
     "active": "Активний дзвінок",
     "addNote": "Додати нотатку",
     "answer": "Відповісти",
+    "answerFailed": "Не вдалося відповісти на дзвінок. Можливо, хтось інший відповів першим.",
+    "answerOnPhone": "Відповісти на вашому телефоні",
     "banned": "Цей номер заблоковано",
     "caller": "Абонент",
     "duration": "Тривалість",
     "ended": "Дзвінок завершено",
     "hangUp": "Завершити",
+    "hangupFailed": "Не вдалося завершити дзвінок. Спробуйте ще раз.",
     "hold": "На утримання",
     "incoming": "Вхідний дзвінок",
     "mute": "Вимкнути мікрофон",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "Цей пристрій ще не зареєстровано у вашому хабі. Попросіть того, хто керує вашим хабом, додати його.",
+    "forbidden": "У вас немає дозволу на цю дію. Зверніться до того, хто керує вашим хабом.",
+    "notFound": "Цього більше немає. Можливо, його видалено.",
+    "serverUnavailable": "Зараз не вдається зв'язатися із сервером. Спробуйте ще раз трохи пізніше."
+  },
   "hubs": {
     "accessDenied": "Доступ заборонено",
     "createHub": "Створити хаб",
@@ -709,15 +718,16 @@
   },
   "ivr": {
     "selfAnnouncement": "Для української мови натисніть [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Увімкнені мови, якими ніхто в цьому хабі не володіє: {{count}}",
+    "uncoveredHint": "Абонент, який обере одну з них, може не додзвонитися до того, хто нею розмовляє. Додайте мови спілкування до профілів учасників або вимкніть мову.",
+    "maxLanguagesReached": "У меню клавіатури вміщується {{max}} мов. Абонентів, які телефонують іншими мовами, визначають за телефонним префіксом."
   },
   "ivrAudio": {
     "delete": "Видалити",
@@ -913,6 +923,7 @@
     "keyLocked": "Ключ заблоковано",
     "lockoutRemaining": "Заблоковано. Спробуйте через {{seconds}} секунд.",
     "mismatch": "PIN не збігаються. Спробуйте ще раз.",
+    "progress": "{{count}} з {{total}}",
     "setEncrypting": "Шифрування вашого ключа...",
     "setSubtitle": "Оберіть 6-8 значний PIN для захисту вашого ключа",
     "setTitle": "Створіть PIN",
@@ -930,7 +941,7 @@
     "description": "Введіть ваш PIN, щоб продовжити цю дію.",
     "maxAttempts": "Перевищено максимальну кількість спроб. Ключ видалено.",
     "title": "Підтвердіть вашу особу",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "Неправильний PIN."
   },
   "preferences": {
     "invalidToken": "Недійсне або прострочене посилання на налаштування",
@@ -1841,6 +1852,7 @@
     "role": "Роль",
     "roleAdmin": "Адміністратор",
     "roleHubAdmin": "Адміністратор хабу",
+    "roleHubDefault": "За замовчуванням для хабу",
     "roleReporter": "Репортер",
     "roleReviewer": "Рецензент",
     "roleVolunteer": "Волонтер",
@@ -3317,6 +3329,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Не збережено: сервер відхилив запит",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4158,6 +4171,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "Біометричне розблокування заблоковано через забагато невдалих спроб. Введіть PIN-код.",
     "biometricNotEnrolled": "Біометричні дані вашого пристрою змінилися, тому біометричне розблокування було вимкнено. Введіть PIN-код.",
     "biometricPinMismatch": "Не вдалося виконати біометричне розблокування. Введіть PIN-код.",
@@ -4384,7 +4399,7 @@
   },
   "callActions": {
     "openNotes": "Нотатки",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Заблокувати й завершити",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4450,8 +4465,8 @@
   "yes": "Так",
   "lock": {
     "app": "Заблокувати застосунок",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Ключ видалено через забагато невдалих спроб",
+    "wrongPin": "Неправильний PIN"
   },
   "notificationChannelShifts": "Зміни",
   "actionSave": "Зберегти",
@@ -4560,9 +4575,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Хтось телефонує на гарячу лінію",
+  "incomingCallAnswer": "Відповісти",
+  "incomingCallDecline": "Відхилити",
   "incomingCallMicrophoneRequired": "Щоб відповідати на дзвінки в застосунку, потрібен доступ до мікрофона.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",

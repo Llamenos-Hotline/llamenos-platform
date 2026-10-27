@@ -64,7 +64,19 @@ export interface Env {
   ENVIRONMENT: string
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
   CORS_ALLOWED_ORIGINS?: string   // Comma-separated allowed origins (overrides hardcoded defaults)
+  /** Hashing key ONLY (phone/IP hashes, signed URLs). Encrypts nothing. */
   HMAC_SECRET: string
+  /**
+   * Key-encryption key for data the server must read back: provider
+   * credentials, reply addresses, queued Signal sends. Distinct from
+   * HMAC_SECRET and SERVER_SECRET (D6, #2171).
+   */
+  SERVER_KEK: string
+  /**
+   * Ban-list hash key. Delivered only as the `ban-hash-key` secret file —
+   * never in `.env`, never in a config backup (D6, A16).
+   */
+  BAN_HASH_KEY: string
   /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
   SIGNAL_QUEUE_RETENTION_DAYS?: string
   METRICS_SCRAPE_TOKEN?: string
@@ -90,14 +102,14 @@ export interface Env {
   NOTIFIER_URL?: string
   /** @deprecated Use SIGNAL_NOTIFIER_BEARER_TOKEN */
   NOTIFIER_API_KEY?: string
-  NOTIFIER_TOKEN_SECRET?: string  // HMAC secret for signing client registration tokens (falls back to HMAC_SECRET)
+  NOTIFIER_TOKEN_SECRET?: string  // HMAC secret for signing client registration tokens 
 
   // Per-volunteer SIP registrar (profile: asterisk/telephony — see telephony/registrar.ts).
   // Master secret from which each volunteer's unique PJSIP endpoint secret is
   // derived (HMAC-SHA256, domain-separated by HMAC_SIP_VOLUNTEER_SECRET). Not
   // the hub credential and not the ARI password: rotating it rotates every
   // volunteer's SIP secret at once.
-  SIP_REGISTRAR_SECRET?: string // Falls back to HMAC_SECRET when unset
+  SIP_REGISTRAR_SECRET?: string // No fallback: in-app SIP is refused while unset
   // CoTURN relay (profile: telephony). Both must be set to mint the
   // time-limited TURN credentials /sip-token returns (RFC 8489 long-term
   // credentials against the coturn --static-auth-secret); either unset means

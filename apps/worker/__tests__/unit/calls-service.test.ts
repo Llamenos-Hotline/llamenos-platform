@@ -126,12 +126,12 @@ describe('CallsService', () => {
       const { svc } = createServiceWithData()
       const result = await svc.addCall('hub-1', {
         callId: 'call-123',
-        callerNumber: '+15551234567',
+        callerNumberSealed: 'sealed-1',
         callerLast4: '4567',
       })
       expect(result.callId).toBe('call-123')
       expect(result.hubId).toBe('hub-1')
-      expect(result.callerNumber).toBe('+15551234567')
+      expect(result.callerNumberSealed).toBe('sealed-1')
       expect(result.status).toBe('ringing')
     })
 
@@ -139,7 +139,7 @@ describe('CallsService', () => {
       const { svc } = createServiceWithData()
       const result = await svc.addCall('hub-1', {
         callId: 'call-456',
-        callerNumber: '+15559999999',
+        callerNumberSealed: null,
       })
       expect(result.status).toBe('ringing')
       expect(result.callerLast4).toBeNull()
@@ -149,7 +149,7 @@ describe('CallsService', () => {
       const { svc } = createServiceWithData()
       const result = await svc.addCall('hub-1', {
         callId: 'call-789',
-        callerNumber: '+15551111111',
+        callerNumberSealed: null,
         status: 'in-progress',
       })
       expect(result.status).toBe('in-progress')
@@ -163,7 +163,7 @@ describe('CallsService', () => {
           callId: 'call-1',
           hubId: 'hub-1',
           status: 'ringing',
-          callerNumber: '+15551234567',
+          callerNumberSealed: null,
           startedAt: new Date(),
           answeredBy: null,
         }],
@@ -213,7 +213,7 @@ describe('CallsService', () => {
           callId: 'call-end-1',
           hubId: 'hub-1',
           status: 'in-progress',
-          callerNumber: '+15551234567',
+          callerNumberSealed: null,
           callerLast4: '4567',
           startedAt: new Date(Date.now() - 60000), // Started 1 min ago
           answeredBy: 'pk1',
@@ -245,7 +245,7 @@ describe('CallsService', () => {
           callId: 'call-unanswered',
           hubId: 'hub-1',
           status: 'ringing',
-          callerNumber: '+15551234567',
+          callerNumberSealed: null,
           callerLast4: '4567',
           startedAt: new Date(Date.now() - 60000),
           answeredBy: null,

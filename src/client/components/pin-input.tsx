@@ -1,4 +1,5 @@
 import { useRef, useEffect, type KeyboardEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface PinInputProps {
   length?: number
@@ -9,6 +10,8 @@ interface PinInputProps {
   disabled?: boolean
   error?: boolean
   autoFocus?: boolean
+  /** Id(s) of the element(s) that describe this field's purpose, e.g. a step title. */
+  describedBy?: string
 }
 
 export function PinInput({
@@ -19,7 +22,9 @@ export function PinInput({
   disabled = false,
   error = false,
   autoFocus = true,
+  describedBy,
 }: PinInputProps) {
+  const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -46,13 +51,15 @@ export function PinInput({
         disabled={disabled}
         onChange={e => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="PIN or passphrase (8+ characters)"
+        placeholder={t('pin.placeholder')}
         className={`h-12 w-64 rounded-lg border px-3 text-center text-lg font-mono transition-colors focus:outline-none focus:ring-2 focus:ring-ring sm:h-14 sm:w-72 sm:text-xl ${
           error
             ? 'border-destructive bg-destructive/5 focus:ring-destructive/50'
             : 'border-input bg-background focus:border-primary'
         } ${disabled ? 'opacity-50' : ''}`}
-        aria-label="PIN or passphrase"
+        aria-label={t('pin.enterPin')}
+        aria-invalid={error || undefined}
+        aria-describedby={describedBy}
       />
     </div>
   )

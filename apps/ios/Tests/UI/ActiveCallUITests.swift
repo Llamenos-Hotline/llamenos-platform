@@ -35,8 +35,8 @@ final class ActiveCallUITests: BaseUITest {
     // MARK: - Scenario: Active call card visible when call exists
 
     /// The call card is the product of a call being answered: absent before, present after,
-    /// and it names the caller. Passing without a call is impossible — nothing but the card
-    /// is accepted.
+    /// and it does NOT name the caller — the volunteer who answers is not shown who is
+    /// calling (A17). Passing without a call is impossible — nothing but the card is accepted.
     func testActiveCallPanelVisible() {
         var callId = ""
         given("I am authenticated as admin with API and no call is in progress") {
@@ -47,14 +47,14 @@ final class ActiveCallUITests: BaseUITest {
         when("a call from +15551110001 is answered by my identity") {
             callId = answerCall(from: "+15551110001")
         }
-        then("the active call card should show the caller on the dashboard") {
+        then("the active call card should be on the dashboard without the caller's number") {
             XCTAssertTrue(
                 find("active-call-card").waitForExistence(timeout: 20),
                 "The dashboard should show the active call card for call \(callId)"
             )
-            XCTAssertTrue(
-                app.staticTexts["0001"].waitForExistence(timeout: 5),
-                "The card should identify the caller by the last four digits (0001)"
+            XCTAssertFalse(
+                app.staticTexts["0001"].exists,
+                "The card must not show any of the caller's digits to the answering volunteer"
             )
             XCTAssertTrue(
                 find("call-elapsed-timer").exists,
@@ -146,14 +146,198 @@ final class ActiveCallUITests: BaseUITest {
         }
     }
 
-    // MARK: - Scenario: Quick note button visible during active call
+    // MARK: - Scenario: Add Note on the call card files a note for that call
 
-    /// The quick note button is on the call card and tapping it must start a note for the
-    /// call. The dashboard wires the button to an empty closure
-    /// (`DashboardView.onQuickNote`), so the tap does nothing — the assertion that it opens
-    /// note creation cannot be met until that is built.
-    func testQuickNoteButtonVisibleDuringCall() throws {
-        throw XCTSkip("The dashboard's onQuickNote closure is empty — tapping Add Note during a call does nothing (#2026)")
+    /// Add Note opens the editor with this call already chosen, and the saved note carries
+    /// the call's id on the server.
+    func testQuickNoteButtonFilesNoteForTheCall() {
+        var callId = ""
+        let noteText = "Quick note \(UUID().uuidString.prefix(8))"
+        given("I am authenticated as admin with API and I am on a call") {
+            launchOnFreshHub()
+            callId = answerCall(from: "+15551110007")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+        }
+        when("I tap Add Note, write the note and save it") {
+            tapOnceHittable("quick-note-button")
+            let editor = find("note-text-editor")
+            XCTAssertTrue(editor.waitForExistence(timeout: 10), "Add Note should open the note editor")
+            XCTAssertTrue(
+                find("note-call-choice-\(callId)").waitForExistence(timeout: 20),
+                "The editor should offer this call"
+            )
+            editor.tap()
+            editor.typeText(noteText)
+            find("save-note").tap()
+            XCTAssertTrue(editor.waitForNonExistence(timeout: 20), "The editor should close once the note is saved")
+        }
+        then("the server holds a note filed under this call") {
+            XCTAssertFalse(find("note-create-error").exists)
+            XCTAssertTrue(
+                serverNoteCallIds(hubId: callHubId).contains(callId),
+                "The saved note should carry call \(callId), without the volunteer ever typing it"
+            )
+        }
+    }
+
+    // MARK: - Scenario: a ring is a ring
+
+    /// A call that is only ringing is not "my call": it renders as an incoming call with
+    /// Answer (or "answer on your phone"), and offers none of Hang Up / Spam / Ban.
+    func testRingRendersAsRingNotActiveCall() {
+        given("I am authenticated as admin with API and no call is in progress") {
+            launchOnFreshHub()
+            XCTAssertTrue(find("dashboard-identity").waitForExistence(timeout: 15))
+        }
+        when("a call from +15551110008 rings") {
+            _ = ringCall(callerNumber: "+15551110008", hubId: callHubId)
+        }
+        then("the dashboard shows an incoming call, not an active one, and not the caller's digits") {
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20), "A ring should render as a ring")
+            XCTAssertTrue(
+                anyElementExists(["answer-call-button", "answer-on-phone"], timeout: 5),
+                "A ring should offer Answer, or say to answer on the phone"
+            )
+            XCTAssertFalse(find("active-call-card").exists, "A ring is not a call in progress")
+            XCTAssertFalse(find("hangup-button").exists, "Hang Up belongs to a call this volunteer answered")
+            XCTAssertFalse(find("ban-hangup-button").exists)
+            XCTAssertFalse(app.staticTexts["0008"].exists, "A ring must not show the caller's digits")
+        }
+    }
+
+    /// Answer goes to the server, and the screen reports what the server decided. This
+    /// identity is not on a shift, so the server was not ringing it and refuses the answer
+    /// (403 "Not rung for this call"): the volunteer is told, the call stays a ring, and it
+    /// does not become "my call". (The 422 "answer on your phone" and the success path are
+    /// pinned in `DashboardCallsTests`, which can script the server's answer.)
+    func testAnswerRefusedByTheServerIsReportedAndTheRingStays() {
+        var callId = ""
+        given("a call is ringing on my hub and the server is not ringing me") {
+            launchOnFreshHub()
+            callId = ringCall(callerNumber: "+15551110009", hubId: callHubId)
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
+        }
+        when("I tap Answer") {
+            tapOnceHittable("answer-call-button")
+        }
+        then("I am told it did not happen, and nothing was answered") {
+            XCTAssertTrue(find("dashboard-error").waitForExistence(timeout: 20), "A refused answer should be reported")
+            XCTAssertFalse(find("active-call-card").exists, "A refused answer does not make the ring my call")
+            XCTAssertTrue(find("incoming-call-card").exists, "The call is still ringing")
+            let held = serverActiveCalls(hubId: callHubId).first { $0.id == callId }
+            XCTAssertNil(held?.answeredBy)
+            XCTAssertEqual(held?.status, "ringing")
+        }
+    }
+
+    // MARK: - Scenario: somebody else's call is not my call
+
+    /// A call another volunteer answered is counted but never shown as this volunteer's call,
+    /// so Hang Up / Spam / Ban (which the server would refuse with 403) are not offered.
+    func testCallAnsweredBySomeoneElseShowsNoCallCard() {
+        let someoneElse = String(repeating: "ab", count: 32)
+        var callId = ""
+        given("I am authenticated as admin with API and no call is in progress") {
+            launchOnFreshHub()
+            XCTAssertTrue(find("dashboard-identity").waitForExistence(timeout: 15))
+            callId = ringCall(callerNumber: "+15551110010", hubId: callHubId)
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
+        }
+        when("another volunteer answers it") {
+            XCTAssertEqual(simulateAnswerCall(callId: callId, pubkey: someoneElse), "in-progress")
+        }
+        then("the ring leaves my dashboard and no call card replaces it") {
+            let gone = NSPredicate(format: "exists == false")
+            let ringGone = XCTNSPredicateExpectation(predicate: gone, object: find("incoming-call-card"))
+            XCTAssertEqual(XCTWaiter().wait(for: [ringGone], timeout: 20), .completed, "The ring should clear")
+            XCTAssertFalse(find("active-call-card").exists, "Someone else's call is not my call")
+            XCTAssertFalse(find("hangup-button").exists)
+            XCTAssertEqual(
+                serverActiveCalls(hubId: callHubId).first { $0.id == callId }?.answeredBy, someoneElse
+            )
+        }
+    }
+
+    // MARK: - Scenario: a call ends, the volunteer is asked for a note
+
+    /// When this volunteer's own call ends the card becomes a "Call Ended" prompt; Add Note
+    /// opens the editor on that call and the saved note carries its id. The prompt is gone
+    /// once the note is saved.
+    func testEndedCallPromptsForANote() {
+        var callId = ""
+        let noteText = "Ended-call note \(UUID().uuidString.prefix(8))"
+        given("I am on a call") {
+            launchOnFreshHub()
+            callId = answerCall(from: "+15551110011")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+        }
+        when("the call ends") {
+            XCTAssertEqual(simulateEndCall(callId: callId), "completed")
+        }
+        then("a Call Ended prompt replaces the call card") {
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 20), "The ended call should prompt for a note")
+            XCTAssertTrue(waitForCallCardToClear(), "The in-call card should be gone")
+        }
+        when("I add a note from the prompt") {
+            tapOnceHittable("ended-call-add-note")
+            let editor = find("note-text-editor")
+            XCTAssertTrue(editor.waitForExistence(timeout: 10))
+            XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: 20))
+            editor.tap()
+            editor.typeText(noteText)
+            find("save-note").tap()
+            XCTAssertTrue(editor.waitForNonExistence(timeout: 20))
+        }
+        then("the note is filed under the call and the prompt is gone") {
+            XCTAssertTrue(serverNoteCallIds(hubId: callHubId).contains(callId))
+            XCTAssertTrue(find("ended-call-card").waitForNonExistence(timeout: 10), "Saving the note finishes the prompt")
+        }
+    }
+
+    /// Dismissing the prompt forgets the call; it does not come back.
+    func testDismissingEndedCallPromptForgetsTheCall() {
+        var callId = ""
+        given("my call has ended and the prompt is showing") {
+            launchOnFreshHub()
+            callId = answerCall(from: "+15551110012")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertEqual(simulateEndCall(callId: callId), "completed")
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 20))
+        }
+        when("I dismiss it") {
+            tapOnceHittable("ended-call-dismiss")
+        }
+        then("it is gone") {
+            XCTAssertTrue(find("ended-call-card").waitForNonExistence(timeout: 10))
+        }
+    }
+
+    // MARK: - Scenario: a history row opens a call with Add Note
+
+    /// A holder of calls:read-history and notes:create opens a history row to a detail with
+    /// Add Note, and the editor opens on that call.
+    func testCallHistoryRowOpensDetailWithAddNote() {
+        var callId = ""
+        given("a call of mine has ended") {
+            launchOnFreshHub()
+            callId = answerCall(from: "+15551110013")
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertEqual(simulateEndCall(callId: callId), "completed")
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 20))
+            tapOnceHittable("ended-call-dismiss")
+        }
+        when("I open Call History and tap the call's row") {
+            tapOnceHittable("dashboard-call-history-action")
+            let row = find("call-history-link-\(callId)")
+            XCTAssertTrue(row.waitForExistence(timeout: 20), "The ended call should be in the history")
+            row.tap()
+        }
+        then("the detail offers Add Note, which opens the editor on that call") {
+            XCTAssertTrue(find("call-detail-view").waitForExistence(timeout: 10))
+            tapOnceHittable("call-detail-add-note")
+            XCTAssertTrue(find("note-text-editor").waitForExistence(timeout: 10))
+            XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: 20))
+        }
     }
 
     // MARK: - Scenario: Report spam button visible during active call

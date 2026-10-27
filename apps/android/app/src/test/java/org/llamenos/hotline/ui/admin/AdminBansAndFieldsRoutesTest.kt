@@ -54,11 +54,11 @@ class AdminBansAndFieldsRoutesTest {
     private val bans = mutableListOf<JsonObject>()
     private var fields: JsonArray = JsonArray(emptyList())
 
-    /** The server's HMAC stands in as a stable 64-hex digest of the number. */
+    /** The server's keyed ban hash stands in as a stable 64-hex digest of the number; the response carries no digits of it. */
     private fun hashOf(phone: String) = "%064x".format(phone.filter { it.isDigit() }.toBigInteger())
 
     private fun ban(phone: String, reason: String): JsonObject = Json.parseToJsonElement(
-        """{"phone":"***${phone.takeLast(4)}","phoneHash":"${hashOf(phone)}","reason":"$reason",
+        """{"phoneHash":"${hashOf(phone)}","reason":"$reason",
         |"bannedBy":"${"aa".repeat(32)}","bannedAt":"2026-10-20T10:00:00.000Z"}""".trimMargin(),
     ).jsonObject
 
@@ -147,7 +147,8 @@ class AdminBansAndFieldsRoutesTest {
             // Round trip: the server holds it and the screen shows what the server holds.
             assertEquals(1, bans.size)
             val shown = vm.uiState.value.bans.single()
-            assertEquals("***4567", shown.phone)
+            // The list holds a reason and a date and no number, masked or not.
+            assertEquals("harassing calls", shown.reason)
             assertEquals(bans.single().getValue("phoneHash").jsonPrimitive.content, shown.phoneHash)
         }
 

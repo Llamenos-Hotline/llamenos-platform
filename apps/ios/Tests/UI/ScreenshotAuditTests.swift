@@ -93,13 +93,14 @@ final class ScreenshotAuditTests: BaseUITest {
         screenshot("02a-dashboard")
     }
 
-    /// Dashboard with an active call card (requires backend simulation).
+    /// Dashboard with a ringing call (requires backend simulation): a ring renders as an
+    /// incoming call, not as an active one.
     func testScreenshot_02b_DashboardActiveCall() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 15) else { return }
         simulateIncomingCall()
-        let callCard = find("active-call-card")
+        let callCard = find("incoming-call-card")
         _ = callCard.waitForExistence(timeout: 8)
         screenshot("02b-dashboard-active-call")
     }
@@ -112,7 +113,9 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 15) else { return }
-        simulateIncomingCall()
+        // The in-call card is for a call this identity answered.
+        let callId = simulateIncomingCall().callId
+        simulateAnswerCall(callId: callId, pubkey: appIdentityPubkey())
         let callCard = find("active-call-card")
         guard callCard.waitForExistence(timeout: 8) else { return }
         screenshot("03-active-call")

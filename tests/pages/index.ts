@@ -8,7 +8,7 @@
 
 import { type Page, type Locator, expect } from '@playwright/test'
 import { TestIds } from '../test-ids'
-import { Timeouts } from '../helpers'
+import { Timeouts, chooseFormRole } from '../helpers'
 
 // ============ Base Page Helpers ============
 
@@ -177,6 +177,7 @@ export const VolunteerPage = {
     await page.getByLabel('Name').fill(name)
     await page.getByLabel('Phone Number').fill(phone)
     await page.getByLabel('Phone Number').blur()
+    await chooseFormRole(page)
     await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
     await expect(page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)).toBeVisible({ timeout: 15000 })
   },
@@ -278,10 +279,11 @@ export const ShiftPage = {
 
 export const BanListPage = {
   /**
-   * Get a ban row by phone number.
+   * Get a ban row by its reason. The list shows a reason and a date and no
+   * number: the server keeps none for a ban.
    */
-  getRow(page: Page, phone: string): Locator {
-    return page.getByTestId(TestIds.BAN_ROW).filter({ hasText: phone })
+  getRow(page: Page, reason: string): Locator {
+    return page.getByTestId(TestIds.BAN_ROW).filter({ hasText: reason })
   },
 
   /**
@@ -300,18 +302,18 @@ export const BanListPage = {
     await page.getByLabel(/phone number/i).blur()
     await page.getByLabel(/reason/i).fill(reason)
     await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-    await expect(page.getByText(phone)).toBeVisible({ timeout: 10000 })
+    await expect(this.getRow(page, reason).first()).toBeVisible({ timeout: 10000 })
   },
 
   /**
-   * Remove a ban by phone.
+   * Remove a ban by its reason.
    */
-  async removeBan(page: Page, phone: string): Promise<void> {
-    const row = this.getRow(page, phone)
+  async removeBan(page: Page, reason: string): Promise<void> {
+    const row = this.getRow(page, reason)
     await row.getByTestId(TestIds.BAN_REMOVE_BTN).click()
     await page.getByTestId(TestIds.CONFIRM_DIALOG_OK).click()
     await expect(page.getByRole('dialog')).toBeHidden()
-    await expect(page.locator('main').getByText(phone)).not.toBeVisible()
+    await expect(this.getRow(page, reason)).toHaveCount(0)
   },
 
   /**

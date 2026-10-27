@@ -8,7 +8,7 @@
  */
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
-import { TestIds, uniquePhone, Timeouts } from '../../helpers'
+import { TestIds, uniquePhone, Timeouts, chooseFormRole } from '../../helpers'
 import {
   listVolunteersViaApi,
   listShiftsViaApi,
@@ -25,6 +25,7 @@ When('I add a new volunteer with a unique name and phone', async ({ page, adminW
   await page.getByLabel('Name').fill(adminWorld.lastUserName)
   await page.getByLabel('Phone Number').fill(phone)
   await page.getByLabel('Phone Number').blur()
+  await chooseFormRole(page)
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
 })
 
@@ -137,13 +138,9 @@ Then('the shift should no longer appear', async ({ page, backendRequest, workerH
 
 // --- Ban management ---
 
-/** Convert a full E.164 phone to the server's masked format: `***` + last 4 digits */
-function maskPhone(phone: string): string {
-  return phone.length >= 4 ? `***${phone.slice(-4)}` : '***'
-}
-
 When('I ban a unique phone number with reason {string}', async ({ page, adminWorld }, reason: string) => {
   adminWorld.lastPhone = uniquePhone()
+  adminWorld.lastBanReason = reason
   await page.getByTestId(TestIds.BAN_ADD_BTN).click()
   await page.getByLabel('Phone Number').fill(adminWorld.lastPhone)
   await page.getByLabel('Phone Number').blur()
@@ -151,22 +148,22 @@ When('I ban a unique phone number with reason {string}', async ({ page, adminWor
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
 })
 
+// The ban list holds no number, so a ban is found by the reason it was made with
+// (unique within the scenario's own hub).
 Then('the banned phone number should appear', async ({ page, backendRequest, workerHub, adminWorld }) => {
-  const masked = maskPhone(adminWorld.lastPhone)
-
-  // UI verification — phone is displayed in masked format (HIGH-W3)
-  const row = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: masked })
+  const row = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: adminWorld.lastBanReason })
   await expect(row.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The number is not on the row (the date's digits cannot collide with a unique phone's last 7).
+  expect((await row.first().innerText()).replace(/\D/g, '')).not.toContain(adminWorld.lastPhone.replace(/\D/g, '').slice(-7))
 
-  // API verification (phone field is masked)
   const bans = await listBansViaApi(backendRequest, workerHub)
-  const found = bans.find(b => b.phone === masked)
+  const found = bans.find(b => b.reason === adminWorld.lastBanReason)
   expect(found).toBeTruthy()
+  expect(found).not.toHaveProperty('phone')
 })
 
 When('I remove the ban for that phone number', async ({ page, adminWorld }) => {
-  const masked = maskPhone(adminWorld.lastPhone)
-  const banRow = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: masked })
+  const banRow = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: adminWorld.lastBanReason })
   await expect(banRow.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
   await banRow.getByTestId(TestIds.BAN_REMOVE_BTN).click()
   await page.getByTestId(TestIds.CONFIRM_DIALOG_OK).click()
@@ -174,16 +171,13 @@ When('I remove the ban for that phone number', async ({ page, adminWorld }) => {
 })
 
 Then('the phone number should no longer appear', async ({ page, backendRequest, workerHub, adminWorld }) => {
-  const masked = maskPhone(adminWorld.lastPhone)
-
   // UI verification
-  const row = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: masked })
+  const row = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: adminWorld.lastBanReason })
   await expect(row).not.toBeVisible({ timeout: Timeouts.ELEMENT })
 
   // API verification
   const bans = await listBansViaApi(backendRequest, workerHub)
-  const found = bans.find(b => b.phone === masked)
-  expect(found).toBeUndefined()
+  expect(bans.find(b => b.reason === adminWorld.lastBanReason)).toBeUndefined()
 })
 
 // --- Phone validation ---

@@ -1,11 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { validateConfig } from './config'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { validateConfig as validateConfigWithFiles, readSecretFile } from './config'
+import { secretFiles, TEST_BAN_HASH_KEY } from '../__tests__/helpers/secret-files'
+
+const validateConfig = (env: Parameters<typeof validateConfigWithFiles>[0]) =>
+  validateConfigWithFiles(env, secretFiles())
 
 describe('validateConfig', () => {
   const validEnv = {
     DATABASE_URL: 'postgresql://llamenos:dev@localhost:5432/llamenos',
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
+    SERVER_KEK: '1'.repeat(64),
     ADMIN_PUBKEY: 'c'.repeat(64),
     // Required once ADMIN_PUBKEY is set, and necessarily a different value —
     // Ed25519 identity vs X25519 HPKE recipient (#1283).
@@ -114,5 +122,31 @@ describe('validateConfig', () => {
 
   it('throws if ENVIRONMENT is missing', () => {
     expect(() => validateConfig({ ...validEnv, ENVIRONMENT: '' })).toThrow(/ENVIRONMENT/)
+  })
+})
+
+describe('readSecretFile', () => {
+  it('reads the file named by <NAME>_FILE, trimmed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-file-'))
+    try {
+      const file = path.join(dir, 'ban-hash-key')
+      fs.writeFileSync(file, `${TEST_BAN_HASH_KEY}\n`)
+      expect(readSecretFile('ban-hash-key', { BAN_HASH_KEY_FILE: file })).toBe(TEST_BAN_HASH_KEY)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('is undefined for a missing or empty file, never an env fallback', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-file-'))
+    try {
+      const empty = path.join(dir, 'empty')
+      fs.writeFileSync(empty, '\n')
+      expect(readSecretFile('ban-hash-key', { BAN_HASH_KEY_FILE: empty })).toBeUndefined()
+      expect(readSecretFile('ban-hash-key', { BAN_HASH_KEY_FILE: path.join(dir, 'absent'), BAN_HASH_KEY: TEST_BAN_HASH_KEY }))
+        .toBeUndefined()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

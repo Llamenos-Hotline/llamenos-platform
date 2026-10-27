@@ -74,7 +74,7 @@ jobs:
       version: ${{ steps.read.outputs.version }}
     steps:
       - name: Checkout merge commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
@@ -94,7 +94,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
@@ -153,7 +153,7 @@ jobs:
 
     steps:
       - name: Checkout merge commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
@@ -296,7 +296,7 @@ jobs:
 
     steps:
       - name: Checkout merge commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
@@ -548,7 +548,10 @@ jobs:
             listed=$(awk '{print $2}' CHECKSUMS.txt)
             for f in *; do
               case " $SEALS " in *" $f "*) continue ;; esac
-              printf '%s\n' "$listed" | grep -qxF -- "$f" || fail "${f} is published but not covered by CHECKSUMS.txt"
+              # A here-string, not `printf | grep -q`: grep -q exits on the first match,
+              # printf then dies of SIGPIPE on the unwritten rest, and pipefail reports a
+              # SUCCESSFUL match as a failed pipeline — a false "not covered" on the release path.
+              grep -qxF -- "$f" <<<"$listed" || fail "${f} is published but not covered by CHECKSUMS.txt"
             done
           else
             fail "CHECKSUMS.txt is missing or empty"
@@ -575,8 +578,12 @@ jobs:
             echo "::error::releases/latest is ${LATEST}, not v${NEW_VERSION} — the stable download links do not serve this release."
             exit 1
           fi
+          # Captured first, then matched with a here-string: `gh api | grep -q` under
+          # pipefail turns a successful early match into a SIGPIPE failure (a false 404),
+          # and would let a failed `gh api` read as "alias absent" instead of aborting.
+          ASSETS=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.assets[].name')
           for alias in llamenos-linux-x86_64.AppImage llamenos-windows-x64.msi llamenos-android.apk CHECKSUMS.txt; do
-            gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.assets[].name' | grep -qxF -- "$alias" \
+            grep -qxF -- "$alias" <<<"$ASSETS" \
               || { echo "::error::releases/latest/download/${alias} would 404."; exit 1; }
             echo "OK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${alias}"
           done
@@ -615,7 +622,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 

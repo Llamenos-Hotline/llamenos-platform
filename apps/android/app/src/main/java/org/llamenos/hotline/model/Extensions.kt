@@ -43,9 +43,9 @@ val SharedMemberDirectoryEntryStatus.labelRes: Int
 // ── BanListResponseBan (typealias BanEntry) ───────────────────────────────
 
 /**
- * The ban's `phoneHash` — the server's HMAC of the number. It is the key
- * `DELETE /api/bans/:phoneHash` takes and the only stable identity a ban has
- * (`phone` is the masked display form, `***1234`, and is not unique).
+ * The ban's `phoneHash` — the server's keyed hash of the banned number. It is
+ * the key `DELETE /api/bans/:phoneHash` takes and the only identity a ban has:
+ * the response carries no number, masked or otherwise.
  */
 val BanListResponseBan.id: String
     get() = phoneHash

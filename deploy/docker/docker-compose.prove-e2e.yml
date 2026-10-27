@@ -15,6 +15,11 @@
 # tests/global-setup.ts — supply them via --env-file (see .env.example for the
 # one-liner that prints the pair).
 #
+# Secrets (one role each): --env-file must carry HMAC_SECRET, SERVER_SECRET and
+# SERVER_KEK as three DIFFERENT values, and ./secrets/ban-hash-key must exist
+# (`source ../../scripts/lib/ban-hash-key.sh && ensure_ban_hash_key_file
+# secrets/ban-hash-key 0444`). The ban key is a file, never an env-file entry.
+#
 # Usage (from deploy/docker/):
 #   docker compose -p prove-e2e \
 #     -f docker-compose.yml -f docker-compose.prove-e2e.yml \

@@ -791,9 +791,11 @@ Active calls remain as plaintext (routing necessity). When a call completes, sen
 ```typescript
 interface CallRecordMetadata {
   answeredBy: string | null   // Volunteer pubkey
-  callerNumber: string        // HMAC-hashed phone number
+  callerNumber: string        // caller's E.164 number (never a hash — see below)
 }
 ```
+
+While the call is live the server holds the number only as `active_calls.caller_number_sealed`: AES-256-GCM under a key HKDF-derived from `SERVER_KEK` (info = `LABEL_CALLER_NUMBER_SEAL`, AAD = `label:callId`), so a volunteer can ban the caller without seeing it. It is opened once, into this envelope, and the active row is deleted in the same transaction (end or stale-call archive). No hash of the number is kept on the server (see §2.10 Ban Hashing).
 
 #### What Stays in Plaintext
 
@@ -1072,6 +1074,23 @@ hashIP(ip_string, hmac_secret_hex):
   return hex(HMAC-SHA256(key, input))[0..24]
   // Truncated to 96 bits (24 hex chars)
 ```
+
+#### Ban Hashing
+
+The server stores a hash of a number **only if that number is banned**. A caller who is not banned is hashed transiently to be compared with the ban lists and the digest is dropped. `BAN_HASH_KEY` is a file-only secret (never in the database, `.env` or a config backup).
+
+```
+banHash(phone_e164, scope, ban_hash_key_hex):
+  // scope = the hub id, or the literal "platform"
+  scope_key = HKDF-SHA256(ikm  = hex_to_bytes(ban_hash_key_hex),
+                          salt = "",
+                          info = UTF-8(LABEL_BAN_KEY_DERIVE + ":" + scope),
+                          len  = 32)
+  input = UTF-8(HMAC_BAN_PREFIX + phone_e164)
+  return hex(HMAC-SHA256(scope_key, input))
+```
+
+A hub's hash cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again (§4.47). Neither the ban store nor any ban response carries digits of the number.
 
 ### 2.11 Per-Device Key Storage (Current)
 
@@ -1524,6 +1543,13 @@ POST /api/auth/me/logout
 Auth: Bearer or Session
 Response: { "ok": true }
 // If using Session auth, the token is revoked server-side
+// If that was the user's LAST live session (same liveness test as the auth
+// middleware: not expired, not past its absolute lifetime, signing key not
+// revoked), the user is also clocked out of every hub and each is audited as
+// `shiftClockOut`. Otherwise they stay on shift and keep ringing on their other
+// signed-in devices. Only sessions are revoked — never devices or keys.
+// A client MUST send this before discarding its credentials: a logout the
+// server never hears about leaves the user clocked in and being rung.
 ```
 
 #### Update Profile
@@ -1954,23 +1980,26 @@ Hub-scoped: `/api/hubs/:hubId/reports/*`
 
 ```
 POST /api/bans
-Permission: bans:report
+Permission: bans:create
 Body: { "phone": string (E.164), "reason": string }
-Response: BanEntry
+Response: { "ban": BanEntry }
 
 GET /api/bans
 Permission: bans:read
 Response: { "bans": BanEntry[] }
+
+// BanEntry = { "phoneHash": string, "reason": string, "bannedBy": string, "bannedAt": string }
+// phoneHash is the §2.10 banHash for the hub: an opaque unban handle. No number, masked or not.
 
 POST /api/bans/bulk
 Permission: bans:bulk-create
 Body: { "phones": string[] (E.164), "reason": string }
 Response: { "ok": true, "count": number }
 
-DELETE /api/bans/:phone
+DELETE /api/bans/:phoneHash
 Permission: bans:delete
 Response: { "ok": true }
-// :phone is URL-encoded E.164 (e.g., %2B12125551234)
+// :phoneHash is the 64-hex handle from GET /api/bans. A number in the path is refused (400).
 ```
 
 Hub-scoped: `/api/hubs/:hubId/bans/*`
@@ -3453,8 +3482,9 @@ Response: { "bans": PlatformBan[] }
 
 POST   /api/bans/platform/promote
 Permission: bans:create-platform
-Body: { "banId": string }
+Body: { "banId": string, "phone": string (E.164) }
 Response: { "ok": true }
+// The number is entered again (§2.10): it must hash to the hub ban being promoted, else 400.
 ```
 
 ### 4.48 Platform Settings

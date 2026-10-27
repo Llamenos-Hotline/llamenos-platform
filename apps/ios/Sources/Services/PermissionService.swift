@@ -15,17 +15,46 @@ import Foundation
 @MainActor
 @Observable
 final class PermissionService {
+    /// Why the last refresh of `permissions` did not complete.
+    enum RefreshFailure: Equatable {
+        /// The server could not be asked. `permissions` is still what the server last
+        /// said, so the user keeps exactly the access they had.
+        case keptLastKnown
+        /// The server could not be asked and has never answered this session, so there
+        /// is nothing to keep: `permissions` is empty and gated UI stays hidden. This is
+        /// failing closed, and it is stated rather than shown as if it were the truth.
+        case noneKnown
+    }
+
     /// The user's effective permissions, loaded from `GET /api/auth/me`.
     private(set) var permissions: [String] = []
 
-    /// Update the permission set (called after auth/me response).
+    /// Set while the last refresh failed without an answer; cleared by the next answer.
+    private(set) var refreshFailure: RefreshFailure?
+
+    /// Whether the server has answered this session. Only an answer sets it.
+    private var hasServerAnswer = false
+
+    /// Replace the permission set with the server's answer. An empty set is a legitimate
+    /// answer (a 403, or a role with nothing granted); a failed request is not one — it
+    /// goes through `recordRefreshFailure()` and leaves `permissions` alone.
     func update(permissions: [String]) {
         self.permissions = permissions
+        hasServerAnswer = true
+        refreshFailure = nil
     }
 
-    /// Clear permissions on logout/lock.
+    /// The server could not be asked. Keeps the last known permissions: a timeout or a
+    /// 5xx says nothing about what this user may do, so it must not change it.
+    func recordRefreshFailure() {
+        refreshFailure = hasServerAnswer ? .keptLastKnown : .noneKnown
+    }
+
+    /// Clear permissions on logout.
     func clear() {
         permissions = []
+        hasServerAnswer = false
+        refreshFailure = nil
     }
 
     /// Check if the current user has a specific permission.

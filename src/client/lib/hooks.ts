@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useRelaySubscriptions } from './relay/hooks'
 import { useMemberHubIds } from './member-hubs'
 import { useMyShiftStatus } from './queries/shifts'
@@ -31,7 +32,13 @@ const CALL_KINDS = [KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_
 const CONVERSATION_KINDS = [KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED]
 
 /**
- * Hook to manage real-time call state via WebSocket relay + REST polling fallback.
+ * The call feed: real-time call state via WebSocket relay + REST polling fallback.
+ *
+ * Mounted exactly once, by `CallsProvider`; everything else reads it through
+ * `useCalls()` (calls-context.tsx). One feed means the dashboard, the sidebar,
+ * the note form and the keyboard shortcuts all see the same ringing and current
+ * call — separate per-component instances each held their own `currentCall`, so
+ * a call answered in one place was invisible in the others.
  *
  * Multi-hub axiom: calls are received from EVERY hub the user is a member of,
  * regardless of which hub is active in the UI. Each call carries the hub it
@@ -44,7 +51,8 @@ const CONVERSATION_KINDS = [KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED]
  * Call actions (answer, hangup, spam) are POST requests to REST endpoints.
  * The server is the sole authority for call state mutations.
  */
-export function useCalls() {
+export function useCallFeed() {
+  const { t } = useTranslation()
   const [calls, setCalls] = useState<HubCall[]>([])
   const [currentCall, setCurrentCall] = useState<HubCall | null>(null)
   const memberHubIds = useMemberHubIds()
@@ -77,7 +85,7 @@ export function useCalls() {
             hasVoicemail: false,
           }]
         })
-        startRinging('Incoming Call!')
+        startRinging(t('notification.incomingCall'), t('incomingCallBody'))
         break
       }
       case 'call:update': {
@@ -156,6 +164,11 @@ export function useCalls() {
 
   // --- Call actions via REST, always against the call's own hub ---
 
+  /**
+   * Both `answerCall` and `hangupCall` throw when the server refuses, after putting
+   * local state back as it was: the caller owns telling the user, because only it
+   * knows whether to say "someone else picked up" or "try again".
+   */
   const answerCall = useCallback(async (callId: string) => {
     const call = callsRef.current.find(c => c.id === callId)
     if (!call) return
@@ -163,9 +176,9 @@ export function useCalls() {
     setCurrentCall({ ...call, status: 'in-progress' })
     try {
       await apiAnswerCall(callId, call.hubId)
-    } catch {
-      // Revert optimistic update on failure
+    } catch (err) {
       setCurrentCall(null)
+      throw err
     }
   }, [])
 
@@ -175,13 +188,11 @@ export function useCalls() {
 
   const hangupCall = useCallback(async (callId: string) => {
     const hubId = hubOf(callId)
-    setCurrentCall(null)
     if (!hubId) return
-    try {
-      await apiHangupCall(callId, hubId)
-    } catch {
-      // Call may already be ended — safe to ignore
-    }
+    // Only forget the call once the server has ended it: clearing first would hide a
+    // call that is still live, with no panel left to hang up from.
+    await apiHangupCall(callId, hubId)
+    setCurrentCall(prev => (prev?.id === callId ? null : prev))
   }, [hubOf])
 
   const reportSpam = useCallback(async (callId: string) => {
@@ -195,15 +206,10 @@ export function useCalls() {
     }
   }, [hubOf])
 
-  return {
-    calls,
-    currentCall,
-    answerCall,
-    hangupCall,
-    reportSpam,
-    ringingCalls: calls.filter(c => c.status === 'ringing'),
-    activeCalls: calls.filter(c => c.status === 'in-progress'),
-  }
+  const ringingCalls = useMemo(() => calls.filter(c => c.status === 'ringing'), [calls])
+  const activeCalls = useMemo(() => calls.filter(c => c.status === 'in-progress'), [calls])
+
+  return { calls, currentCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls }
 }
 
 /**

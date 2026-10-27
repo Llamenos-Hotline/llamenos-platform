@@ -35,7 +35,7 @@ export interface ScenarioState {
   conversationId?: string
   messageId?: string
   lastApiResponse?: { status: number; data: unknown }
-  banPhones: string[]
+  banPhoneHashes: string[]
   /** Maps plaintext phone → server-hashed phone (from ban API responses) */
   phoneHashMap: Record<string, string>
   relayCapture?: RelayCapture
@@ -51,7 +51,7 @@ Before(async ({ world, workerHub }) => {
   const s: ScenarioState = {
     volunteers: [],
     shiftIds: [],
-    banPhones: [],
+    banPhoneHashes: [],
     phoneHashMap: {},
     hubId: workerHub,
   }
@@ -111,8 +111,9 @@ Given('{int} volunteers are on shift', async ({ request, world }, count: number)
 
 Given('{string} is on the ban list', async ({ request, world }, phone: string) => {
   const state = getScenarioState(world)
-  await createBanViaApi(request, { phone, reason: 'BDD test ban', hubId: state.hubId })
-  state.banPhones.push(phone)
+  const ban = await createBanViaApi(request, { phone, reason: 'BDD test ban', hubId: state.hubId })
+  state.phoneHashMap[phone] = ban.phoneHash
+  state.banPhoneHashes.push(ban.phoneHash)
 })
 
 // ── Call Completion Setup ──────────────────────────────────────────

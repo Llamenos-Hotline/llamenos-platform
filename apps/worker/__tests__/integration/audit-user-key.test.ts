@@ -302,6 +302,7 @@ describe('per-user audit key — wired', () => {
 
     const services = createServices(fresh.db, {
       hmacSecret: 'b'.repeat(64),
+      serverKek: 'c'.repeat(64),
       env: {
         ENVIRONMENT: 'test',
         SERVER_SECRET: SERVER_SECRET_HEX,

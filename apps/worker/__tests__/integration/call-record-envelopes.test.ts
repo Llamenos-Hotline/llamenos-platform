@@ -10,9 +10,10 @@
  *  1. `endCall` produces a populated envelope set: §2.5 metadata
  *     ({ answeredBy, callerNumber }) encrypted under LABEL_CALL_META, wrapped
  *     to every admin X25519 recipient.
- *  2. The full caller number appears in NO plaintext column (it is HMAC-hashed
- *     at ingestion; the hash lives inside the envelope; callerLast4 stays
- *     plaintext per §2.5's explicit list).
+ *  2. The full caller number appears in NO plaintext column. The live call
+ *     holds it only sealed under SERVER_KEK (`caller_number_sealed`); it is
+ *     opened once, into the admin envelope, and the active row (with the
+ *     sealed copy) is gone. callerLast4 stays plaintext per §2.5's list.
  *  3. The stale-call reaper (`getActiveCalls`) seals metadata the same way.
  *  4. With no admin recipient resolvable, the record is stored WITHOUT
  *     envelopes and the error is loud (loud-but-stored, matching the
@@ -34,7 +35,7 @@ import { LABEL_CALL_META } from '@shared/crypto-labels'
 import * as schema from '../../db/schema'
 import { CallsService } from '../../services/calls'
 import { buildReaderPubkeys } from '../../lib/encryption-keys'
-import { hashPhone } from '../../lib/crypto'
+import { sealCallerNumber } from '../../lib/crypto'
 import { freshHubDb, openEnvelope, reader } from './hub-shred-helpers'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
@@ -45,9 +46,10 @@ beforeAll(fresh.setup, 180_000)
 afterAll(fresh.teardown, 60_000)
 
 const HMAC_SECRET = 'b'.repeat(64)
+const SERVER_KEK = 'c'.repeat(64)
 const RAW_CALLER = '+15551234567'
-/** What ringing.ts stores on the active call: HMAC-hashed at ingestion. */
-const CALLER_HASH = hashPhone(RAW_CALLER, HMAC_SECRET)
+/** What ringing.ts stores on the active call: the number sealed under SERVER_KEK, bound to the call. */
+const sealedFor = (callId: string) => sealCallerNumber(RAW_CALLER, callId, SERVER_KEK)
 
 /** Stored records seal with no AAD; the label is bound as the HPKE info. */
 const NO_AAD = new Uint8Array(0)
@@ -74,6 +76,7 @@ function wiredCalls(adminUserPubkeys: () => Promise<string[]>) {
   return new CallsService(fresh.db, {
     getAdminRecipients: async () =>
       buildReaderPubkeys(fresh.db, undefined, await adminUserPubkeys()),
+    serverKek: SERVER_KEK,
   })
 }
 
@@ -104,7 +107,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
 
     await calls.addCall('hub-1', {
       callId: 'call-seal-1',
-      callerNumber: CALLER_HASH,
+      callerNumberSealed: sealedFor('call-seal-1'),
       callerLast4: '4567',
     })
     await calls.answerCall('hub-1', 'call-seal-1', volunteer)
@@ -130,9 +133,13 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     )
     const meta = JSON.parse(plaintext) as { answeredBy: string | null; callerNumber: string }
     expect(meta.answeredBy).toBe(volunteer)
-    // §2.5: callerNumber is the HMAC-hashed phone number, never the raw digits.
-    expect(meta.callerNumber).toBe(CALLER_HASH)
-    expect(meta.callerNumber).not.toContain(RAW_CALLER)
+    // The number reaches the admin envelope, and only there: it is opened once from
+    // the call's sealed copy and goes nowhere else.
+    expect(meta.callerNumber).toBe(RAW_CALLER)
+
+    // …and the live row, with its sealed copy of the number, is gone.
+    const left = await fresh.db.select().from(schema.activeCalls).where(eq(schema.activeCalls.callId, 'call-seal-1'))
+    expect(left).toEqual([])
   })
 
   it('seals metadata for an unanswered call (answeredBy null)', async () => {
@@ -141,7 +148,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
 
     await calls.addCall('hub-1', {
       callId: 'call-seal-2',
-      callerNumber: CALLER_HASH,
+      callerNumberSealed: sealedFor('call-seal-2'),
       callerLast4: '4567',
     })
     await calls.endCall('hub-1', 'call-seal-2')
@@ -165,7 +172,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await fresh.db.insert(schema.activeCalls).values({
       callId: 'call-stale-1',
       hubId: 'hub-1',
-      callerNumber: CALLER_HASH,
+      callerNumberSealed: sealedFor('call-stale-1'),
       callerLast4: '4567',
       status: 'ringing',
       startedAt: new Date(Date.now() - 10 * 60 * 1000),
@@ -180,6 +187,10 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     expect((row!.adminEnvelopes as unknown[]).length).toBeGreaterThan(0)
     expect(row!.encryptedContent).toMatch(/^[0-9a-f]+$/)
     expectNoRawCallerDigits(row as unknown as Record<string, unknown>)
+
+    // Archiving removes the live row, so the sealed number does not outlive the call.
+    const left = await fresh.db.select().from(schema.activeCalls).where(eq(schema.activeCalls.callId, 'call-stale-1'))
+    expect(left).toEqual([])
   })
 
   it('no admin recipient: loud-but-stored with an empty envelope set', async () => {
@@ -190,7 +201,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
 
     await calls.addCall('hub-1', {
       callId: 'call-seal-3',
-      callerNumber: CALLER_HASH,
+      callerNumberSealed: sealedFor('call-seal-3'),
       callerLast4: '4567',
     })
     const row = await calls.endCall('hub-1', 'call-seal-3')
@@ -206,6 +217,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     const escrow = reader()
     const services = createServices(fresh.db, {
       hmacSecret: HMAC_SECRET,
+      serverKek: 'c'.repeat(64),
       env: {
         ENVIRONMENT: 'test',
         SERVER_SECRET: 'ab'.repeat(32),
@@ -219,7 +231,7 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
 
     await services.calls.addCall('hub-1', {
       callId: 'call-seal-4',
-      callerNumber: CALLER_HASH,
+      callerNumberSealed: sealedFor('call-seal-4'),
       callerLast4: '4567',
     })
     await services.calls.endCall('hub-1', 'call-seal-4')

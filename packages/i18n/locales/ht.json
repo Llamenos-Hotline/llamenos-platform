@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Bloke epi rakwoche",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Bloke epi rakwoche?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "Apèl Aktif",
-    "addNote": "Add Note",
+    "addNote": "Ajoute nòt",
     "answer": "Reponn",
+    "answerFailed": "Nou pa t ka reponn apèl la. Gen kèk lòt moun ki te ka reponn avan.",
+    "answerOnPhone": "Reponn sou telefòn ou",
     "banned": "Nimewo sa a bloke",
     "caller": "Moun ki Rele",
     "duration": "Dire",
     "ended": "Apèl Fini",
     "hangUp": "Rakwoche",
+    "hangupFailed": "Nou pa t ka fini apèl la. Eseye ankò.",
     "hold": "An Atant",
     "incoming": "Apèl Antre",
     "mute": "Koupe Son",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "Voye nan Bwat Mesaj",
     "unknown": "Nimewo Enkoni",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "Moun k ap rele a pa konni",
     "unmute": "Aktive Son",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "Apèl Jodi a",
     "cases": "Dosye",
-    "clockIn": "Clock In",
+    "clockIn": "Kòmanse sèvis",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "Fini sèvis",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2064,6 +2067,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "Deblokaj byometrik bloke apre twòp tantativ ki echwe. Antre PIN ou.",
     "biometricNotEnrolled": "Byometri aparèy ou a chanje, kidonk deblokaj byometrik la dezaktive. Antre PIN ou.",
@@ -2071,6 +2076,12 @@
     "httpNotAllowed": "Koneksyon HTTP ki pa an sekirite pa otorize. Sèvi ak yon adrès HTTPS.",
     "pinLockoutDuration": "Twòp tantativ ki echwe. Eseye ankò nan {{seconds}} segonn.",
     "pinWiped": "Twòp tantativ PIN ki echwe. Pou sekirite ou, tout kle ki sou aparèy sa a efase."
+  },
+  "errors": {
+    "deviceNotRegistered": "Aparèy sa a poko anrejistre nan hub ou a. Mande yon moun ki jere hub ou a pou ajoute l.",
+    "forbidden": "Ou pa gen pèmisyon pou fè sa. Mande yon moun ki jere hub ou a.",
+    "notFound": "Sa a pa egziste ankò. Li ka te retire.",
+    "serverUnavailable": "Nou pa ka jwenn sèvè a kounye a. Eseye ankò nan yon ti moman."
   },
   "eventType": {
     "call": "Apèl",
@@ -2491,9 +2502,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Yon moun ap rele liy dirèk la",
+  "incomingCallAnswer": "Reponn",
+  "incomingCallDecline": "Refize",
   "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2508,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "Pou Kreyòl, peze [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Lang ki aktive men pesonn nan hub sa a pa pale: {{count}}",
+    "uncoveredHint": "Moun k ap rele ki chwazi youn nan yo ka pa jwenn pesonn ki pale li. Ajoute lang yo pale nan pwofil manm yo, oswa dezaktive lang lan.",
+    "maxLanguagesReached": "Meni klavye a kenbe jiska {{max}} lang. Moun k ap rele nan lòt lang yo idantifye selon prefiks nimewo telefòn nan."
   },
   "ivrAudio": {
     "delete": "Efase",
@@ -2547,8 +2559,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Yo efase kle a paske te gen twòp tantativ ki echwe",
+    "wrongPin": "PIN pa kòrèk"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2755,7 @@
     "pendingCountOne": "{{count}} an atant",
     "pendingSyncMessage": "{{count}} operasyon ap tann senkronizasyon",
     "pendingSyncMessageOne": "{{count}} operasyon ap tann senkronizasyon",
+    "rejected": "Pa anrejistre: sèvè a refize l",
     "relayReconnected": "Rekonekte — ap rattrape evènman ki te manke",
     "relayReconnecting": "Rekoneksyon ak sèvè an tan reyèl...",
     "syncComplete": "Tout operasyon senkronize avèk siksè",
@@ -2878,6 +2891,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "PIN yo pa menm. Eseye ankò.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} sou {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2905,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN la pa kòrèk."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",
@@ -4577,6 +4591,7 @@
     "role": "Wòl",
     "roleAdmin": "Administratè",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "Default ib la",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Volontè",

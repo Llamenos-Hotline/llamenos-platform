@@ -182,7 +182,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Disk headroom, before anything expensive and before this job creates a
       # simulator or a build product.
@@ -783,7 +783,7 @@ jobs:
           echo "$RUNNER_NAME (slot $slot) -> http $((3100 + slot)) / pg $((5500 + slot))"
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The loop this breaks (#1639): a cancelled job can leave its backend
       # running, that backend holds this runner's slot port, and every later

@@ -115,6 +115,7 @@ export class TaskScheduler {
   constructor(
     protected db: Database,
     private readonly hmacSecret: string = '',
+    private readonly serverKek: string = '',
     private readonly signalQueueRetentionDays: number = DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS,
   ) {}
 
@@ -198,6 +199,7 @@ export class TaskScheduler {
         this.db,
         () => deps.resolveAdapter('signal'),
         this.hmacSecret,
+        this.serverKek,
         this.signalQueueRetentionDays,
       ),
     )

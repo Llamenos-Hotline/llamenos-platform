@@ -43,20 +43,9 @@ struct NotesView: View {
                 get: { vm.showCreateSheet },
                 set: { vm.showCreateSheet = $0 }
             )) {
-                NoteCreateView(
-                    customFields: vm.customFields,
-                    onSave: { text, fields, callId, transcript in
-                        await appState.ensureAdminPubkeyLoaded()
-                        try await vm.createNote(
-                            text: text,
-                            fields: fields,
-                            callId: callId,
-                            transcript: transcript,
-                            adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
-                        )
-                        vm.showCreateSheet = false
-                    }
-                )
+                NoteCreateSheet(initialCall: nil) { _ in
+                    Task { await vm.refresh() }
+                }
             }
             .refreshable {
                 await vm.refresh()

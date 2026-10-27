@@ -12,7 +12,7 @@
 import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
-import { encryptCallRecordForStorage } from '../lib/crypto'
+import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
 
@@ -35,6 +35,11 @@ export interface CallsServiceDeps {
    * without envelopes (unit-test construction only).
    */
   getAdminRecipients?: () => Promise<string[]>
+  /**
+   * SERVER_KEK, to open the sealed caller number an active call carries. Without it
+   * (unit-test construction only) a finished call's record carries no number.
+   */
+  serverKek?: string
 }
 
 export class CallsService {
@@ -55,9 +60,10 @@ export class CallsService {
   /**
    * Seal a finished call's §2.5 metadata for the admin envelope set.
    *
-   * `callerNumber` on the active row is already the HMAC hash (ringing.ts
-   * hashes at ingestion), so the envelope never carries raw digits; §2.5 keeps
-   * callerLast4, timestamps, duration and flags in plaintext columns.
+   * The caller's number is opened from the row's KEK-sealed copy and goes only
+   * into the admin envelopes; the row, and with it the sealed copy, is deleted
+   * in the same transaction. §2.5 keeps callerLast4, timestamps, duration and
+   * flags in plaintext columns. No hash of the number is kept anywhere.
    *
    * Loud-but-stored, matching the inbound-message contract in
    * conversations.ts: with no resolvable admin recipient the record is still
@@ -65,7 +71,7 @@ export class CallsService {
    * and an operator-visible error.
    */
   private sealCallMetadata(
-    call: Pick<ActiveCallRow, 'callId' | 'answeredBy' | 'callerNumber'>,
+    call: Pick<ActiveCallRow, 'callId' | 'answeredBy' | 'callerNumberSealed'>,
     recipients: string[] | null,
   ): { encryptedContent: string; adminEnvelopes: unknown[] } {
     if (!recipients) return { encryptedContent: '', adminEnvelopes: [] }
@@ -79,9 +85,20 @@ export class CallsService {
       return { encryptedContent: '', adminEnvelopes: [] }
     }
     return encryptCallRecordForStorage(
-      { answeredBy: call.answeredBy ?? null, callerNumber: call.callerNumber },
+      { answeredBy: call.answeredBy ?? null, callerNumber: this.callerNumberOf(call) },
       recipients,
     )
+  }
+
+  /** The live call's caller number, or '' when it was never recorded or cannot be opened (logged, never thrown: the record is still written). */
+  private callerNumberOf(call: Pick<ActiveCallRow, 'callId' | 'callerNumberSealed'>): string {
+    if (!call.callerNumberSealed || !this.deps?.serverKek) return ''
+    try {
+      return openCallerNumber(call.callerNumberSealed, call.callId, this.deps.serverKek)
+    } catch (err) {
+      logger.error('caller number could not be opened; call record stored without it', err, { callId: call.callId })
+      return ''
+    }
   }
 
   // =========================================================================
@@ -134,7 +151,9 @@ export class CallsService {
       const age = now - new Date(row.startedAt).getTime()
       if (
         (row.status === 'ringing' && age > RINGING_TTL_MS) ||
-        (row.status === 'in-progress' && age > IN_PROGRESS_TTL_MS)
+        // A spam-reported call stays in active_calls with its status changed; it
+        // ages out like an in-progress one, so its sealed caller number cannot outlive it.
+        ((row.status === 'in-progress' || row.status === 'spam') && age > IN_PROGRESS_TTL_MS)
       ) {
         stale.push(row)
       } else {
@@ -240,7 +259,8 @@ export class CallsService {
     hubId: string,
     data: {
       callId: string
-      callerNumber: string
+      /** The caller's number sealed by `sealCallerNumber` for this call; null when it is not to be held. */
+      callerNumberSealed: string | null
       callerLast4?: string
       status?: string
     },
@@ -250,7 +270,7 @@ export class CallsService {
       .values({
         callId: data.callId,
         hubId,
-        callerNumber: data.callerNumber,
+        callerNumberSealed: data.callerNumberSealed,
         callerLast4: data.callerLast4 ?? null,
         status: data.status ?? 'ringing',
       })
@@ -294,7 +314,8 @@ export class CallsService {
   /**
    * End an active call: remove from active_calls and insert into call_records.
    * The history record's §2.5 metadata ({ answeredBy, callerNumber }) is sealed
-   * for the admin envelope set here — callers cannot supply their own.
+   * for the admin envelope set here — callers cannot supply their own. The row's
+   * sealed caller number goes with the row.
    */
   async endCall(hubId: string, callId: string): Promise<CallRecordRow> {
     const record = await this.db.transaction(async (tx) => {

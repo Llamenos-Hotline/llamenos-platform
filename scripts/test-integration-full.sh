@@ -67,6 +67,12 @@ teardown() {
 # ── Main ──────────────────────────────────────────────────────
 cd "${REPO_ROOT}"
 
+# The base compose's `app` service mounts the ban-list hash key from this file
+# and refuses to start without it; create a development key if absent
+# (gitignored, never printed).
+source "${SCRIPT_DIR}/lib/ban-hash-key.sh"
+ensure_ban_hash_key_file "${REPO_ROOT}/deploy/docker/secrets/ban-hash-key" 0444
+
 log "Starting ALL services (signal + telephony + inference profiles)..."
 docker compose \
   -f "${COMPOSE_BASE}" \

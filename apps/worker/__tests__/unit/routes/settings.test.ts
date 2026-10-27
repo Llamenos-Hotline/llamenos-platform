@@ -30,7 +30,7 @@ function createTestApp(opts: {
       updateSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false }),
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90 }),
       updateCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90 }),
-      getIvrLanguages: vi.fn().mockResolvedValue({ languages: ['en'] }),
+      getIvrLanguageSettings: vi.fn().mockResolvedValue({ enabledLanguages: ['en'], uncoveredLanguageCount: 0 }),
       updateIvrLanguages: vi.fn().mockResolvedValue({ languages: ['en'] }),
       getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
       updateTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
@@ -305,11 +305,23 @@ describe('settings route', () => {
       expect(res.status).toBe(403)
     })
 
-    it('PATCH /ivr-languages updates with permission', async () => {
-      const updateSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] })
+    it('GET /ivr-languages returns the enabled list with the uncovered count', async () => {
+      const getSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
       const app = createTestApp({
         permissions: ['settings:manage-ivr'],
-        services: { settings: { updateIvrLanguages: updateSpy } },
+        services: { settings: { getIvrLanguageSettings: getSpy } },
+      })
+      const res = await app.request('/ivr-languages')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
+    })
+
+    it('PATCH /ivr-languages saves, then answers with the refreshed count', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] })
+      const getSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
+      const app = createTestApp({
+        permissions: ['settings:manage-ivr'],
+        services: { settings: { updateIvrLanguages: updateSpy, getIvrLanguageSettings: getSpy } },
       })
       const res = await app.request('/ivr-languages', {
         method: 'PATCH',
@@ -317,6 +329,8 @@ describe('settings route', () => {
         body: JSON.stringify({ enabledLanguages: ['en', 'es'] }),
       })
       expect(res.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith({ enabledLanguages: ['en', 'es'] }, undefined)
+      expect(await res.json()).toEqual({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
     })
   })
 

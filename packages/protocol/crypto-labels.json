@@ -104,6 +104,9 @@
     "HMAC_SIP_VOLUNTEER_SECRET": "llamenos:sip-volunteer-secret:v1",
     "LABEL_DEVICE_PROVISION_BUNDLE": "llamenos:device-provision-bundle:v1",
     "LABEL_DEVICE_PROVISION_CLAIM": "llamenos:device-provision-claim:v1",
-    "LABEL_AUDIT_USER_KEY_SERVER_SEAL": "llamenos:audit-user-key-server-seal:v1"
+    "LABEL_AUDIT_USER_KEY_SERVER_SEAL": "llamenos:audit-user-key-server-seal:v1",
+    "HMAC_BAN_PREFIX": "llamenos:ban:",
+    "LABEL_BAN_KEY_DERIVE": "llamenos:ban-key-derive:v1",
+    "LABEL_CALLER_NUMBER_SEAL": "llamenos:caller-number-seal:v1"
   }
 }

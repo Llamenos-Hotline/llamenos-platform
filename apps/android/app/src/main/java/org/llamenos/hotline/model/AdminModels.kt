@@ -26,7 +26,7 @@ typealias Member = org.llamenos.protocol.MemberDirectoryResponseMember
 typealias MemberDirectory = org.llamenos.protocol.MemberDirectoryResponse
 
 // ---- Ban List ----
-// Generated BanListResponseBan has: phone, bannedBy, bannedAt, reason.
+// Generated BanListResponseBan has: phoneHash (opaque unban handle, not a number), bannedBy, bannedAt, reason.
 // Extension properties in Extensions.kt provide identifierHash, createdBy, createdAt.
 typealias BanEntry = org.llamenos.protocol.BanListResponseBan
 typealias BanListResponse = org.llamenos.protocol.BanListResponse

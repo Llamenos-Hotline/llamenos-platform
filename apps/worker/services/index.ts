@@ -85,12 +85,15 @@ export interface Services {
 }
 
 export interface ServicesOpts {
+  /** Hashing key only (HMAC_SECRET): never encrypts anything. */
   hmacSecret?: string
+  /** Key-encryption key (SERVER_KEK) for server-readable data: provider credentials, reply addresses, queued sends. */
+  serverKek?: string
   firehoseSealKey?: string
   env?: Record<string, string | undefined>
   notifierUrl?: string
   notifierApiKey?: string
-  /** Secret shared with the sidecar for signing client registration tokens. Falls back to hmacSecret. */
+  /** Secret shared with the sidecar for signing client registration tokens. Has no fallback to another secret. */
   notifierTokenSecret?: string
   /**
    * Object-storage binding (Env.BLOB_STORAGE) — required for the hub shred to
@@ -129,17 +132,17 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
       }
     : undefined)
 
-  const conversations = new ConversationsService(db, opts?.hmacSecret)
+  const conversations = new ConversationsService(db, opts?.serverKek)
   const firehose = new FirehoseService(db)
   const signalContacts = new SignalContactsService(db, opts?.hmacSecret ?? '')
   const securityPrefs = new SecurityPrefsService(db)
   const userNotifications = new UserNotificationsService(signalContacts, securityPrefs, audit, {
     notifierUrl: opts?.notifierUrl ?? '',
     notifierApiKey: opts?.notifierApiKey ?? '',
-    tokenSecret: opts?.notifierTokenSecret ?? opts?.hmacSecret ?? '',
+    tokenSecret: opts?.notifierTokenSecret ?? '',
   })
   const digestCron = new DigestCronService(db, userNotifications, securityPrefs)
-  const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', webhookOrigin(opts?.env ?? {}))
+  const providerSetup = new ProviderSetup(db, opts?.serverKek ?? '', webhookOrigin(opts?.env ?? {}))
 
   const services: Services = {
     identity,
@@ -147,14 +150,15 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     records: new RecordsService(db, audit),
     audit,
     shifts: new ShiftsService(db),
-    calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients }),
+    calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients, serverKek: opts?.serverKek }),
     conversations,
-    blasts: new BlastsService(db, opts?.hmacSecret),
+    blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek),
     contacts: new ContactsService(db),
     cases: new CasesService(db),
     scheduler: new TaskScheduler(
       db,
       opts?.hmacSecret ?? '',
+      opts?.serverKek ?? '',
       parseSignalQueueRetentionDays(opts?.env?.SIGNAL_QUEUE_RETENTION_DAYS),
     ),
     cryptoKeys: new CryptoKeysService(db),
@@ -169,13 +173,13 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     // `devSurfaceRequestAuthorized`, which needs the opt-in flag and the
     // configured secret as well (#1623). Listed explicitly rather than spread,
     // so what the service can read stays visible here.
-    signalRegistration: new SignalRegistrationService(db, opts?.hmacSecret ?? '', {
+    signalRegistration: new SignalRegistrationService(db, opts?.serverKek ?? '', {
       ENVIRONMENT: opts?.env?.ENVIRONMENT,
       DEV_ROUTES_ENABLED: opts?.env?.DEV_ROUTES_ENABLED,
       DEV_RESET_SECRET: opts?.env?.DEV_RESET_SECRET,
       E2E_TEST_SECRET: opts?.env?.E2E_TEST_SECRET,
     }),
-    a2pRegistration: new A2pRegistrationService(db, opts?.hmacSecret ?? ''),
+    a2pRegistration: new A2pRegistrationService(db, opts?.serverKek ?? ''),
     providerTemplates: new ProviderTemplateService(db),
     hubOnboard: new HubOnboardService(db, providerSetup, settings),
     erasure,

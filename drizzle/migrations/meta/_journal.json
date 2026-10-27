@@ -435,6 +435,20 @@
       "when": 1792947406856,
       "tag": "0061_ivr_audio_per_hub",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792963793950,
+      "tag": "0062_ban_hash_only_for_banned_numbers",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792997813531,
+      "tag": "0063_users_roles_no_implicit_default",
+      "breakpoints": true
     }
   ]
 }

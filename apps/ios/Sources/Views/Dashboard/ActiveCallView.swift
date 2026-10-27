@@ -2,21 +2,38 @@ import SwiftUI
 
 // MARK: - ActiveCall Model
 
-/// Represents a call currently in progress for this volunteer.
+/// A call that concerns this volunteer: ringing them, or answered by them.
+///
+/// Deliberately carries no caller number. The volunteer who answers is not shown who is
+/// calling (A17); the card identifies the call by its state and its timer.
 struct ActiveCall: Identifiable, Sendable {
     let id: String
-    /// The hub the call belongs to. Call actions (hang up, spam, ban) target this hub,
-    /// which need not be the active hub (multi-hub routing axiom).
+    /// The hub the call belongs to. Call actions (answer, hang up, spam, ban) target this
+    /// hub, which need not be the active hub (multi-hub routing axiom).
     let hubId: String
-    let callerNumber: String?
     let startedAt: Date
-    let status: String
+
+    init(_ call: SharedCall, hubId: String) {
+        self.id = call.id
+        self.hubId = hubId
+        self.startedAt = DateFormatting.parseISO(call.startedAt) ?? Date()
+    }
+
+    /// The call as a note can be filed against it.
+    func reference(phase: CallReference.Phase) -> CallReference {
+        CallReference(id: id, hubId: hubId, startedAt: startedAt, phase: phase)
+    }
+
+    /// The call as a note can be filed against it while the volunteer is on it.
+    var reference: CallReference { reference(phase: .inProgress) }
 }
 
 // MARK: - ActiveCallView
 
-/// In-call action panel shown on the dashboard when the volunteer has an active call.
-/// Provides call timer, hang up, report spam, ban + hang up (with reason), and quick note.
+/// In-call action panel shown on the dashboard for a call this volunteer answered (the
+/// call's `answeredBy` is their identity — the dashboard never builds it for any other
+/// call). Provides call timer, hang up, report spam, ban + hang up (with reason), and
+/// quick note.
 struct ActiveCallView: View {
     let call: ActiveCall
     let onHangup: () async -> Void
@@ -71,14 +88,9 @@ struct ActiveCallView: View {
                     .foregroundStyle(Color.blue)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(NSLocalizedString("calls_active", comment: "Active Call"))
-                    .font(.brand(.headline))
-                    .foregroundStyle(Color.blue)
-                Text(call.callerNumber ?? NSLocalizedString("calls_unknown_caller", comment: "Unknown Caller"))
-                    .font(.brand(.caption))
-                    .foregroundStyle(Color.brandMutedForeground)
-            }
+            Text(NSLocalizedString("calls_active", comment: "Active Call"))
+                .font(.brand(.headline))
+                .foregroundStyle(Color.blue)
 
             Spacer()
 

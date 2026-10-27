@@ -23,7 +23,7 @@ export class ProviderSetup {
 
   constructor(
     private readonly db: Database,
-    private readonly hmacSecret: string,
+    private readonly serverKek: string,
     /** Public webhook origin — see `webhookOrigin` in lib/provider-webhook-urls.ts. */
     private readonly webhookOrigin: string,
   ) {
@@ -41,7 +41,7 @@ export class ProviderSetup {
       throw new ProviderApiError(`Provider ${provider} not supported`, 400, 'Unsupported provider')
     }
 
-    const encryptedCreds = encryptCredentials(credentials, this.hmacSecret)
+    const encryptedCreds = encryptCredentials(credentials, this.serverKek)
 
     await this.settings.upsertProviderConfig({
       hubId: hubId ?? null,
@@ -81,7 +81,7 @@ export class ProviderSetup {
       }
     }
 
-    const creds = decryptCredentials(config.credentials, this.hmacSecret)
+    const creds = decryptCredentials(config.credentials, this.serverKek)
     const result = await impl.testConnection(creds)
 
     await this.settings.upsertProviderConfig({
@@ -230,7 +230,7 @@ export class ProviderSetup {
     const [stateRow] = await this.db.select().from(oauthStates).where(eq(oauthStates.id, stateId))
     if (!stateRow) return
 
-    const encryptedCreds = encryptCredentials(credentials, this.hmacSecret)
+    const encryptedCreds = encryptCredentials(credentials, this.serverKek)
 
     await this.settings.upsertProviderConfig({
       hubId: hubId ?? null,
@@ -326,7 +326,7 @@ export class ProviderSetup {
       )
     }
 
-    const creds = decryptCredentials(config.credentials, this.hmacSecret)
+    const creds = decryptCredentials(config.credentials, this.serverKek)
     return { impl, creds }
   }
 }

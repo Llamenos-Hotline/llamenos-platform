@@ -134,6 +134,26 @@ describe('rail: a release that ships no installable artifact must fail (#1229)',
     expect(status).toBe(0)
   })
 
+  it('REGRESSION: a successful match must not fail the pipeline when the manifest is larger than a pipe buffer (SIGPIPE under pipefail)', () => {
+    // `printf '%s\n' "$listed" | grep -qxF` under `set -o pipefail`: grep -q exits
+    // on the first match, printf then dies of SIGPIPE on the unwritten remainder,
+    // and pipefail reports the pipeline as failed although the match SUCCEEDED.
+    // Whether it trips depends on how much is left to write, so the manifest is
+    // made larger than a 64 KiB pipe buffer (~120 KiB here) — the failure is
+    // then a certainty rather than a race against the scheduler.
+    const files = writeCompleteRelease()
+    const filler = Object.fromEntries(
+      Array.from({ length: 480 }, (_, i) => [`filler-${String(i).padStart(5, '0')}-${'x'.repeat(230)}.bin`, `filler ${i}`]),
+    )
+    for (const [name, body] of Object.entries(filler)) writeFileSync(join(dir, name), body)
+    const covered = Object.entries(filler).map(([name, body]) => `${sha256(body)}  ${name}\n`)
+    writeFileSync(join(dir, 'CHECKSUMS.txt'), `${files['CHECKSUMS.txt']}${covered.join('')}`)
+    const { status, output } = runGuard()
+    expect(output).not.toContain('is published but not covered by CHECKSUMS.txt')
+    expect(output).toContain('is complete')
+    expect(status).toBe(0)
+  }, 30_000)
+
   it('REGRESSION: the exact v0.19.19 shape — eight metadata assets, a manifest of web-bundle files — fails', () => {
     for (const name of [
       'CHECKSUMS.txt.cosign.pem',

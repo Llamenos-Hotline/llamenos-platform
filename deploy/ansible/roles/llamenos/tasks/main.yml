@@ -32,6 +32,13 @@
     - scripts
     - logs
 
+- name: Write the ban-list hash key secret file
+  ansible.builtin.include_role:
+    name: llamenos-app
+    tasks_from: ban-hash-key
+  vars:
+    ban_hash_key_restart_handler: Restart llamenos stack
+
 - name: Template docker-compose.yml
   ansible.builtin.template:
     src: docker-compose.j2

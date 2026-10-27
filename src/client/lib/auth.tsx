@@ -8,6 +8,7 @@ import {
   createAuthToken,
 } from './platform'
 import * as keyManager from './key-manager'
+import { clearCallNoteDrafts } from './call-note-drafts'
 import { getMe, login, logout as apiLogout, updateMyAvailability, setOnAuthExpired, setOnApiActivity } from './api'
 import { permissionGranted } from '@shared/permissions'
 import { loginWithPasskey as webauthnLogin } from './webauthn'
@@ -567,6 +568,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Revoke server-side session token before clearing local state
     apiLogout()
     keyManager.lock()
+    // The next user of this device must not see this volunteer's unsaved call note.
+    clearCallNoteDrafts()
     resetDeviceRegistrationCache()
     sessionStorage.removeItem('llamenos-session-token')
     // The next user of this device must not inherit this volunteer's hub.

@@ -15,6 +15,12 @@ services:
     # truth now — do not add an `environment:` list back here.
     env_file:
       - .env.app
+    # BAN_HASH_KEY is delivered ONLY as this file (/run/secrets/ban-hash-key),
+    # never through env_file: validateConfig() refuses it as an environment
+    # variable. The source sits outside the services directory so no config
+    # backup or rollback snapshot carries it (group_vars/all/compose.yml).
+    secrets:
+      - ban-hash-key
 {% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
     # The SIP edge's PUBLIC trust anchor, which the app publishes to clients in
     # /api/telephony/sip-token (SIP_TLS_CA_FILE in .env.app). roles/kamailio
@@ -63,6 +69,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+secrets:
+  ban-hash-key:
+    file: {{ llamenos_ban_hash_key_file }}
 
 networks:
   llamenos-web:

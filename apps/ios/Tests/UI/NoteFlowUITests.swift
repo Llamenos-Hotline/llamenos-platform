@@ -129,11 +129,13 @@ final class NoteFlowUITests: BaseUITest {
         )
         XCTAssertFalse(find("note-create-error").exists, "A blocked save should not reach the server")
 
-        let callIdField = scrollToVisible("note-call-id-input")
-        XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
-        callIdField.tap()
-        callIdField.typeText("call-ui-test")
-        XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text and a call ID")
+        // A call is chosen from the calls the server knows, never typed: there is no
+        // free-text field to put an invented reference in (#2125 refuses it anyway).
+        XCTAssertFalse(find("note-call-id-input").exists, "The editor should not take a typed call reference")
+        XCTAssertTrue(
+            anyElementExists(["note-call-choices-empty", "note-call-choices-error"]),
+            "With no calls to offer the editor should say so rather than ask for one to be typed"
+        )
     }
 
     // MARK: - Empty State
@@ -218,10 +220,7 @@ final class NoteFlowUITests: BaseUITest {
         textEditor.tap()
         textEditor.typeText(text)
 
-        let callIdField = scrollToVisible("note-call-id-input")
-        XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
-        callIdField.tap()
-        callIdField.typeText(callId)
+        chooseNoteCall(callId)
 
         find("save-note").tap()
         XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")

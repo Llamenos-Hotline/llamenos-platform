@@ -55,25 +55,16 @@ struct HubActivityServiceTests {
         #expect(svc.state(for: "hub-001").activeCallCount == 3)
     }
 
-    // MARK: - Shift State Tests
+    // MARK: - Shift Events
 
-    @Test func shiftStartedSetsIsOnShift() {
+    @Test func shiftEventsDoNotChangeActivityState() {
+        // Shift state is the server's answer (ShiftClockService); a relay event only says it
+        // may have changed. A flag flipped here was a second notion of "on shift" (#2204).
         let svc = HubActivityService()
         svc.handle(event(hubId: "hub-001", type: .shiftStarted))
-        #expect(svc.state(for: "hub-001").isOnShift == true)
-    }
-
-    @Test func shiftEndedClearsIsOnShift() {
-        let svc = HubActivityService()
-        svc.handle(event(hubId: "hub-001", type: .shiftStarted))
+        svc.handle(event(hubId: "hub-001", type: .shiftUpdate))
         svc.handle(event(hubId: "hub-001", type: .shiftEnded))
-        #expect(svc.state(for: "hub-001").isOnShift == false)
-    }
-
-    @Test func shiftEndedWithoutStartDoesNotGoBelowFalse() {
-        let svc = HubActivityService()
-        svc.handle(event(hubId: "hub-001", type: .shiftEnded))
-        #expect(svc.state(for: "hub-001").isOnShift == false)
+        #expect(svc.state(for: "hub-001") == HubActivityState())
     }
 
     // MARK: - Unread Count Tests
@@ -91,6 +82,13 @@ struct HubActivityServiceTests {
         #expect(svc.state(for: "hub-001").unreadConversationCount == 1)
     }
 
+    @Test func envelopesAddedChangesNoCounts() {
+        // The keys for messages already counted arrived; nothing new to read (#2202).
+        let svc = HubActivityService()
+        svc.handle(event(hubId: "hub-001", type: .conversationEnvelopesAdded))
+        #expect(svc.state(for: "hub-001") == HubActivityState())
+    }
+
     @Test func openHubClearsUnreadCounts() {
         let svc = HubActivityService()
         svc.handle(event(hubId: "hub-001", type: .messageNew))
@@ -101,15 +99,13 @@ struct HubActivityServiceTests {
         #expect(state.unreadConversationCount == 0)
     }
 
-    @Test func openHubDoesNotAffectCallCountOrShiftState() {
+    @Test func openHubDoesNotAffectCallCount() {
         let svc = HubActivityService()
         svc.handle(event(hubId: "hub-001", type: .callRing))
-        svc.handle(event(hubId: "hub-001", type: .shiftStarted))
         svc.handle(event(hubId: "hub-001", type: .messageNew))
         svc.markHubOpened("hub-001")
         let state = svc.state(for: "hub-001")
         #expect(state.activeCallCount == 1)
-        #expect(state.isOnShift == true)
         #expect(state.unreadMessageCount == 0)
     }
 
@@ -140,13 +136,6 @@ struct HubActivityServiceTests {
         #expect(svc.state(for: "hub-002").unreadMessageCount == 1)
     }
 
-    @Test func shiftStateIsIsolatedPerHub() {
-        let svc = HubActivityService()
-        svc.handle(event(hubId: "hub-001", type: .shiftStarted))
-        #expect(svc.state(for: "hub-001").isOnShift == true)
-        #expect(svc.state(for: "hub-002").isOnShift == false)
-    }
-
     // MARK: - Default State Tests
 
     @Test func unknownHubReturnsDefaultZeroState() {
@@ -155,6 +144,5 @@ struct HubActivityServiceTests {
         #expect(state.activeCallCount == 0)
         #expect(state.unreadMessageCount == 0)
         #expect(state.unreadConversationCount == 0)
-        #expect(state.isOnShift == false)
     }
 }

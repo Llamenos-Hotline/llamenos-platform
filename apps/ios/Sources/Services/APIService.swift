@@ -7,27 +7,68 @@ enum APIError: LocalizedError {
     case invalidURL(String)
     case noBaseURL
     case insecureConnection(String)
+    /// The server answered with a non-2xx status. `body` is kept for callers that
+    /// branch on it; it is never rendered or logged, because a refusal body can carry
+    /// server internals (required permission names, a development-only `debug` field).
     case requestFailed(statusCode: Int, body: String)
     case networkError(Error)
     case decodingError(Error)
     case authTokenCreationFailed(Error)
 
+    /// What a volunteer is shown. Everything here is a localized sentence — never an
+    /// HTTP status line, a response body or a decoder path (#2207).
     var errorDescription: String? {
         switch self {
-        case .invalidURL(let url):
-            return "Invalid URL: \(url)"
         case .noBaseURL:
             return NSLocalizedString("error_no_hub_url", comment: "No hub URL configured")
         case .insecureConnection(let reason):
             return reason
-        case .requestFailed(let code, let body):
-            return "HTTP \(code): \(body)"
-        case .networkError(let error):
-            return error.localizedDescription
-        case .decodingError(let error):
-            return "Decoding error: \(Self.describe(decoding: error))"
-        case .authTokenCreationFailed(let error):
-            return "Auth token creation failed: \(error.localizedDescription)"
+        case .requestFailed(let code, _):
+            return NSLocalizedString(Self.messageKey(forStatus: code), comment: "Why the server refused the request")
+        case .networkError:
+            return NSLocalizedString(Self.messageKey(forStatus: 0), comment: "Server unreachable")
+        case .invalidURL, .decodingError, .authTokenCreationFailed:
+            return NSLocalizedString("error_boundary_title", comment: "Something went wrong")
+        }
+    }
+
+    /// The `Localizable.strings` key explaining a refused request.
+    ///
+    /// 401 is the device not being known to the hub yet (a fresh identity before an
+    /// admin adds it), not the volunteer being offline. 408, 429, 5xx and "no response"
+    /// (0) all mean try again shortly. Any other 4xx is a request this client got wrong
+    /// and has no better user-facing sentence than the generic one.
+    static func messageKey(forStatus status: Int) -> String {
+        switch status {
+        case 401: return "errors_device_not_registered"
+        case 403: return "errors_forbidden"
+        case 404: return "errors_not_found"
+        case 0, 408, 429, 500...599: return "errors_server_unavailable"
+        default: return "error_boundary_title"
+        }
+    }
+
+    /// Whether a replayed write answered with this status can never succeed on a later
+    /// attempt: a 4xx the server gave for this exact request. 401 (the device may be
+    /// registered by the next replay), 408 and 429 (transient) are retried, and 409 is
+    /// an idempotent "already applied", handled by the caller as success.
+    static func isPermanentRefusal(status: Int) -> Bool {
+        (400..<500).contains(status) && ![401, 408, 409, 429].contains(status)
+    }
+}
+
+extension APIError: CustomDebugStringConvertible {
+    /// For logs and debugger output only — carries the diagnostic detail
+    /// `errorDescription` deliberately withholds from the volunteer, except the body.
+    var debugDescription: String {
+        switch self {
+        case .invalidURL(let url): return "Invalid URL: \(url)"
+        case .noBaseURL: return "No base URL"
+        case .insecureConnection(let reason): return reason
+        case .requestFailed(let code, _): return "HTTP \(code)"
+        case .networkError(let error): return "Network error: \(error.localizedDescription)"
+        case .decodingError(let error): return "Decoding error: \(Self.describe(decoding: error))"
+        case .authTokenCreationFailed(let error): return "Auth token creation failed: \(error.localizedDescription)"
         }
     }
 }
@@ -329,7 +370,10 @@ final class APIService: @unchecked Sendable {
     func configure(hubURLString: String) throws {
         var urlString = hubURLString.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let isLocalhost = urlString.contains("localhost") || urlString.contains("127.0.0.1")
+        // The host decides this, not a substring: "http://evil.example/localhost" is not local.
+        let hasScheme = urlString.lowercased().hasPrefix("http://") || urlString.lowercased().hasPrefix("https://")
+        let host = URLComponents(string: hasScheme ? urlString : "https://\(urlString)")?.host?.lowercased()
+        let isLocalhost = host == "localhost" || host == "127.0.0.1"
 
         // H6: Reject insecure HTTP connections (except localhost)
         if urlString.lowercased().hasPrefix("http://"), !isLocalhost {
@@ -584,6 +628,62 @@ final class APIService: @unchecked Sendable {
         }
     }
 
+    /// A request to a public route: no `Authorization` header and no offline queue.
+    ///
+    /// For the invite routes (`GET /api/invites/validate/:code`, `POST /api/invites/redeem`).
+    /// They run before this device is a known user, so a header could not authenticate
+    /// anything; the redeem body carries its own signed token instead. The offline queue is
+    /// refused for the same reason: a redeem token is single-use and time-boxed, so replaying
+    /// it later could only fail, and a queued retry would hide that from the person waiting
+    /// on the screen.
+    func publicRequest<T: Decodable>(
+        method: String,
+        path: String,
+        rawBody: Data? = nil
+    ) async throws -> T {
+        guard let baseURL else { throw APIError.noBaseURL }
+
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
+        urlRequest.httpMethod = method.uppercased()
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let rawBody {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.httpBody = rawBody
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw APIError.networkError(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let bodyString = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw APIError.requestFailed(statusCode: httpResponse.statusCode, body: bodyString)
+        }
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    /// `publicRequest` with a body generated from `packages/protocol/schemas/`.
+    func publicRequest<T: Decodable>(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws -> T {
+        try await publicRequest(method: method, path: path, rawBody: try wireEncoder.encode(wireBody))
+    }
+
     /// Fire-and-forget request with no response body expected.
     func request(
         method: String,
@@ -612,6 +712,22 @@ final class APIService: @unchecked Sendable {
         wireBody: some Encodable
     ) async throws {
         let _: EmptyResponse = try await request(method: method, path: path, wireBody: wireBody)
+    }
+
+    // MARK: - Session
+
+    /// Tell the server this device's session is over (`POST /api/auth/me/logout`).
+    ///
+    /// The server decides what that costs the user: when it ends their last live
+    /// session they are also clocked out of every hub, so a call is no longer routed
+    /// to someone who has left (#2205). Logging out here while another device is
+    /// still signed in leaves that device ringing.
+    ///
+    /// Must be sent BEFORE local state is wiped. The request is signed by the device
+    /// key, which logout locks away; once it is gone the server never learns the
+    /// session ended and keeps ringing a logged-out volunteer.
+    func endSession() async throws {
+        try await request(method: "POST", path: "/api/auth/me/logout")
     }
 
     // MARK: - CMS Report Types

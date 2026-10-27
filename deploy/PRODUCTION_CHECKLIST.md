@@ -32,6 +32,9 @@ Detailed procedures are in `docs/runbooks/`:
 - [ ] `PG_PASSWORD` is cryptographically random (≥24 chars)
 - [ ] `HMAC_SECRET` is 64 hex chars (`openssl rand -hex 32`)
 - [ ] `SERVER_SECRET` is 64 hex chars
+- [ ] `SERVER_KEK` is 64 hex chars and a **different value** from `HMAC_SECRET` and `SERVER_SECRET`
+- [ ] `secrets/ban-hash-key` exists (created by `first-run.sh`), is NOT in `.env`, and an offline copy is stored
+- [ ] `NOTIFIER_TOKEN_SECRET` (signal profile) and `SIP_REGISTRAR_SECRET` (asterisk profile) are set; neither falls back to `HMAC_SECRET`
 - [ ] `STORAGE_ACCESS_KEY` and `STORAGE_SECRET_KEY` are unique and >= 24 chars
 - [ ] `ADMIN_PUBKEY` set to real admin's Ed25519 pubkey
 - [ ] `ADMIN_DECRYPTION_PUBKEY` set to the admin's X25519 pubkey — the SECOND key

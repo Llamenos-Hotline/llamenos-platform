@@ -28,16 +28,16 @@ const logger = createLogger('service-factories')
 export async function getTelephonyFromService(
   env: Env,
   settingsService: {
-    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
 ): Promise<TelephonyAdapter | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
   try {
-    // Without the secret the stored credentials are never decrypted, so the
+    // Without the KEK the stored credentials are never decrypted, so the
     // adapter is built from ciphertext and every provider call fails. The
     // structural type used to omit this parameter entirely, which made the
     // omission unrepresentable at the call site rather than merely missed.
-    const config = await settingsService.getTelephonyProvider(env.HMAC_SECRET)
+    const config = await settingsService.getTelephonyProvider(env.SERVER_KEK)
     if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
@@ -58,8 +58,8 @@ export async function getTelephonyFromService(
 
 /** The settings reads a hub's telephony configuration is resolved from. */
 interface TelephonySettingsReader {
-  getHubTelephonyProvider(hubId: string, hmacSecret?: string): Promise<TelephonyProviderConfig | null>
-  getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+  getHubTelephonyProvider(hubId: string, serverKek?: string): Promise<TelephonyProviderConfig | null>
+  getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
 }
 
 /**
@@ -86,7 +86,7 @@ export async function resolveHubTelephonyConfig(
 ): Promise<TelephonyProviderConfig | null> {
   if (hubId !== '') {
     try {
-      const config = await settingsService.getHubTelephonyProvider(hubId, env.HMAC_SECRET)
+      const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
       if (config) return config
     } catch (e) {
       if (e instanceof MockTelephonyRefusedError) {
@@ -97,7 +97,7 @@ export async function resolveHubTelephonyConfig(
     }
   }
   try {
-    return await settingsService.getTelephonyProvider(env.HMAC_SECRET)
+    return await settingsService.getTelephonyProvider(env.SERVER_KEK)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
       logger.error('Mock telephony provider refused', { reason: e.reason })
@@ -115,8 +115,8 @@ export async function resolveHubTelephonyConfig(
 export async function getHubTelephonyFromService(
   env: Env,
   settingsService: {
-    getHubTelephonyProvider(hubId: string, hmacSecret?: string): Promise<TelephonyProviderConfig | null>
-    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+    getHubTelephonyProvider(hubId: string, serverKek?: string): Promise<TelephonyProviderConfig | null>
+    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
   hubId: string,
 ): Promise<TelephonyAdapter | null> {
@@ -125,7 +125,7 @@ export async function getHubTelephonyFromService(
     // This is the path real call handling uses (services/ringing.ts:172),
     // so a per-hub provider that resolves but never decrypts is the same
     // silent fallback as not resolving at all.
-    const config = await settingsService.getHubTelephonyProvider(hubId, env.HMAC_SECRET)
+    const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
     if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {

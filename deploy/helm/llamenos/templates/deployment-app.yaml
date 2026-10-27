@@ -131,6 +131,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "llamenos.secretName" . }}
                   key: hmac-secret
+            - name: SERVER_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llamenos.secretName" . }}
+                  key: server-kek
             {{- /* Required by the app whenever ENVIRONMENT is production, which is this
                    chart's default. Without it the app refuses to boot rather than fall back
                    to the spoofable Host header for webhook signature validation. */}}
@@ -170,11 +175,21 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- /* BAN_HASH_KEY is a file, never an env var: the app refuses it in the
+                   environment. subPath mounts just the one file at the path the app reads. */}}
+            - name: ban-hash-key
+              mountPath: /run/secrets/ban-hash-key
+              subPath: ban-hash-key
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        - name: ban-hash-key
+          secret:
+            secretName: {{ include "llamenos.banHashKeySecretName" . }}
+            defaultMode: 0444
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -14,11 +14,13 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
 
   let authResult = await authenticateRequest(c.req.raw, services.identity)
 
-  // Store session token if session-based auth was used
+  // Store session token if session-based auth was used. A renewal rotates the
+  // token inside validateSession, so the header's token no longer names a row:
+  // route code that revokes or compares "this session" needs the rotated one.
   const authHeader = c.req.header('Authorization') ?? null
   const sessionToken = parseSessionHeader(authHeader)
   if (sessionToken) {
-    c.set('sessionToken', sessionToken)
+    c.set('sessionToken', authResult?.newSessionToken ?? sessionToken)
   }
 
   // If the session token was rotated during renewal, tell the client the new token

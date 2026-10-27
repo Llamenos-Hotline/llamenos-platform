@@ -9,6 +9,7 @@ export {
   LANGUAGE_CODES,
   DEFAULT_LANGUAGE,
   IVR_LANGUAGES,
+  IVR_MENU_MAX_LANGUAGES,
   ivrIndexToDigit,
   languageFromDigit,
   detectLanguageFromPhone,

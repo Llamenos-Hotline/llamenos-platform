@@ -375,6 +375,55 @@
             openssl rand -hex 32
         success_msg: "server_secret: [set, 64 chars]"
 
+    - name: Assert server_kek is a valid 64-character lowercase hex string
+      ansible.builtin.assert:
+        that:
+          - server_kek is defined
+          - server_kek | length == 64
+          - server_kek is match('^[0-9a-f]{64}$')
+        fail_msg: |
+          REQUIRED: 'server_kek' must be exactly 64 lowercase hex characters.
+
+          Length seen: {{ server_kek | default('') | length }} (expected: 64)
+
+          SERVER_KEK encrypts the data the server must read back (provider
+          credentials, reply addresses, queued sends). It is its own secret:
+          never reuse hmac_secret or server_secret for it.
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "server_kek: [set, 64 hex chars]"
+
+    - name: Assert ban_hash_key is a valid 64-character lowercase hex string
+      ansible.builtin.assert:
+        that:
+          - ban_hash_key is defined
+          - ban_hash_key | length == 64
+          - ban_hash_key is match('^[0-9a-f]{64}$')
+        fail_msg: |
+          REQUIRED: 'ban_hash_key' must be exactly 64 lowercase hex characters.
+
+          Length seen: {{ ban_hash_key | default('') | length }} (expected: 64)
+
+          It keys the ban-list hash and is written to a secret file outside the
+          services directory, so no config backup carries it. Keep an offline
+          copy: a rebuilt host without it loses every ban (no recovery).
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "ban_hash_key: [set, 64 hex chars]"
+
+    - name: Assert hmac_secret, server_secret, server_kek and ban_hash_key are four different values
+      ansible.builtin.assert:
+        that:
+          - ([hmac_secret, server_secret, server_kek, ban_hash_key] | unique | length) == 4
+        fail_msg: |
+          Two of hmac_secret, server_secret, server_kek and ban_hash_key are
+          identical. Each server secret has exactly one role; a shared value
+          couples their rotations and their blast radius. Generate each with
+          'openssl rand -hex 32'.
+        success_msg: "hmac_secret, server_secret, server_kek, ban_hash_key: [distinct]"
+
     - name: Assert pg_password meets minimum length
       ansible.builtin.assert:
         that:

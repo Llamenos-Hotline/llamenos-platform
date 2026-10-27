@@ -55,6 +55,7 @@ import {
   users,
 } from '../db/schema'
 import type { SpamSettings, CallSettings } from '../types'
+import { isHubMember } from '../lib/hub-membership'
 import type {
   CustomFieldDefinition,
   TelephonyProviderConfig,
@@ -87,11 +88,12 @@ import type {
   EntityFieldDefinition,
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
+import type { IvrLanguageSettings } from '@protocol/schemas/settings'
 import type {
   ReportTypeDefinition,
   ReportFieldDefinition,
 } from '@protocol/schemas/report-types'
-import { IVR_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
+import { IVR_LANGUAGES, IVR_MENU_MAX_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
 import { speechLanguageFor } from './ivr-speech/voices'
@@ -112,6 +114,7 @@ import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import {
   assertRoleChangeKeepsAdmins,
+  hubFounderRoleIds,
   loadRoleCatalog,
   lockHubAdminSets,
   mergeHubRole,
@@ -542,6 +545,28 @@ export class SettingsService {
   }
 
   /**
+   * The IVR language settings screen's view: the enabled list plus how many of
+   * those languages nobody in the hub speaks. A COUNT only — the distinct set of
+   * spoken languages is computed in SQL and never leaves this method, so the
+   * response cannot be used to learn who speaks what.
+   *
+   * Kept apart from `getIvrLanguages`, which runs on every inbound call and has
+   * no use for a roster query.
+   */
+  async getIvrLanguageSettings(hubId?: string): Promise<IvrLanguageSettings> {
+    const { enabledLanguages } = await this.getIvrLanguages(hubId)
+    const spoken = await this.db
+      .selectDistinct({ code: sql<string>`unnest(${users.spokenLanguages})` })
+      .from(users)
+      .where(and(eq(users.active, true), eq(users.status, 'active'), hubId ? isHubMember(hubId) : undefined))
+    const covered = new Set(spoken.map((row) => row.code))
+    return {
+      enabledLanguages,
+      uncoveredLanguageCount: enabledLanguages.filter((code) => !covered.has(code)).length,
+    }
+  }
+
+  /**
    * Get the ordered IVR language list for a hub, with cascade fallback:
    * hub_settings.ivrLanguages → system_settings.ivr_languages → IVR_LANGUAGES constant
    */
@@ -597,6 +622,15 @@ export class SettingsService {
     )
     if (valid.length === 0) {
       throw new ServiceError(400, 'No valid IVR language codes provided')
+    }
+    // The keypad has ten digits. A language beyond the tenth would get no digit
+    // from `ivrIndexToDigit` and be dropped from the menu the caller hears, so a
+    // longer list is refused here rather than saved and silently truncated.
+    if (valid.length > IVR_MENU_MAX_LANGUAGES) {
+      throw new ServiceError(
+        400,
+        `The IVR menu holds at most ${IVR_MENU_MAX_LANGUAGES} languages — other languages are reached by phone-prefix detection`,
+      )
     }
     // Constrain to what the active provider can actually speak (#732) —
     // reuses the catalog resolution built for #679 / PR #673 rather than
@@ -1439,7 +1473,7 @@ export class SettingsService {
     return { ok: true }
   }
 
-  async getTelephonyProvider(hmacSecret?: string, hubId?: string): Promise<TelephonyProviderConfig | null> {
+  async getTelephonyProvider(serverKek?: string, hubId?: string): Promise<TelephonyProviderConfig | null> {
     // When a hubId is provided, read the hub-scoped config instead of the global one.
     const hubCondition = hubId
       ? eq(providerConfigs.hubId, hubId)
@@ -1458,11 +1492,11 @@ export class SettingsService {
       phoneNumber: (row.phoneNumbers as string[])?.[0] ?? '',
     }
 
-    // Decrypt credentials if hmacSecret is provided and credentials exist
-    if (row.credentials && hmacSecret) {
+    // Decrypt credentials if the server KEK is provided and credentials exist
+    if (row.credentials && serverKek) {
       try {
         const { decryptCredentials } = await import('./provider-setup/crypto')
-        const creds = decryptCredentials(row.credentials, hmacSecret)
+        const creds = decryptCredentials(row.credentials, serverKek)
         Object.assign(config, creds)
       } catch {
         // Credentials may be plain JSON (legacy) — try parsing directly
@@ -1471,7 +1505,7 @@ export class SettingsService {
         } catch { /* ignore */ }
       }
     } else if (row.credentials) {
-      // No hmacSecret — try plain JSON parse (legacy path)
+      // No KEK — try plain JSON parse (legacy path)
       try {
         Object.assign(config, JSON.parse(row.credentials))
       } catch { /* encrypted, can't decrypt without secret */ }
@@ -2037,10 +2071,15 @@ export class SettingsService {
    * or the roles named would not make them an admin. The previous shape created
    * the hub and then granted the creator's role in a separate step whose
    * failure was only logged, which left a hub nobody could administer.
+   *
+   * `founder.roleIds` names the roles to grant; omitted, the founder gets the
+   * role the live catalog designates for it BY PERMISSION ({@link hubFounderRoleIds}),
+   * resolved inside the transaction so a concurrent role edit cannot change it
+   * between the choice and the grant.
    */
   async createHub(
     hub: Hub,
-    founder: { pubkey: string; roleIds: readonly string[] },
+    founder: { pubkey: string; roleIds?: readonly string[] },
   ): Promise<{ hub: Hub }> {
     await this.db.transaction(async (tx) => {
       const [existing] = await tx
@@ -2065,7 +2104,9 @@ export class SettingsService {
       // role must either finish first (and fail this check) or wait until the
       // hub's admin is committed (and be counted by its own guard).
       await lockHubAdminSets(tx, [hub.id])
-      if (!rolesConferHubAdmin(founder.roleIds, await loadRoleCatalog(tx))) {
+      const catalog = await loadRoleCatalog(tx)
+      const founderRoleIds = founder.roleIds ?? hubFounderRoleIds(catalog)
+      if (!rolesConferHubAdmin(founderRoleIds, catalog)) {
         throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
       }
 
@@ -2091,7 +2132,7 @@ export class SettingsService {
       await tx
         .update(users)
         .set({
-          hubRoles: mergeHubRole((founderRow.hubRoles as HubRoleAssignment[] | null) ?? [], hub.id, founder.roleIds),
+          hubRoles: mergeHubRole((founderRow.hubRoles as HubRoleAssignment[] | null) ?? [], hub.id, founderRoleIds),
           updatedAt: now,
         })
         .where(eq(users.pubkey, founder.pubkey))
@@ -2613,9 +2654,9 @@ export class SettingsService {
    */
   async getHubTelephonyProvider(
     hubId: string,
-    hmacSecret?: string,
+    serverKek?: string,
   ): Promise<TelephonyProviderConfig | null> {
-    return this.getTelephonyProvider(hmacSecret, hubId)
+    return this.getTelephonyProvider(serverKek, hubId)
   }
 
   async setHubTelephonyProvider(

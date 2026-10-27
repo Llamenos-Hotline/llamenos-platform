@@ -215,7 +215,7 @@ beforeAll(async () => {
 
   // THE point of this suite: the production service registry, built exactly as
   // src/server/index.ts builds it. No service is constructed by hand below.
-  services = createServices(db, { hmacSecret: HMAC_SECRET, env: { ENVIRONMENT: 'test' } })
+  services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
 
   // Roles must exist before permissions resolve, same as at boot.
   await services.settings.ensureInit()
@@ -273,7 +273,7 @@ describe('GET /calls/presence against the production service registry', () => {
     await clockIn(hubId, [onCall, free])
 
     const callId = `call-${nextId()}`
-    await services.calls.addCall(hubId, { callId, callerNumber: 'hashed-number', callerLast4: '1234' })
+    await services.calls.addCall(hubId, { callId, callerNumberSealed: null, callerLast4: '1234' })
     await services.calls.answerCall(hubId, callId, onCall)
 
     const presence = await getHubPresence(services, hubId)

@@ -11,6 +11,7 @@ import { audit } from '../services/audit'
 import { callerIsSuperAdmin, checkRoleGrant } from '../lib/hub-scope'
 import { isSuperAdmin, resolveHubRoleIds } from '@shared/permissions'
 import type { Context } from 'hono'
+import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
 import { revokeSipIdentityIfRoleless, revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 // Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
@@ -196,7 +197,14 @@ users.post('/',
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const hubId = c.get('hubId')
-    const roleIds = (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || ['role-volunteer']
+    // The creator's explicit choice wins; otherwise the hub's template decides
+    // (as for invites), and a template naming none grants none — never a role
+    // the code picked. A user with no role still joins the hub, for an operator
+    // to assign.
+    const requestedRoleIds = (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || []
+    const roleIds = requestedRoleIds.length > 0 || !hubId
+      ? requestedRoleIds
+      : await resolveHubDefaultMemberRoles(services.settings, hubId)
 
     // The creator must already hold every permission they grant (prevents privilege escalation)
     const denied = checkRoleGrant(c, roleIds)
@@ -286,9 +294,9 @@ users.patch('/:targetPubkey',
     // account holds nothing at all; a role change is a role-loss path like
     // hub-member removal and goes through the same predicate (#1540).
     if (body.active === false) {
-      await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
+      await revokeVolunteerSipIdentity(services, c.env.SERVER_KEK, targetPubkey)
     } else if (body.roles) {
-      await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
+      await revokeSipIdentityIfRoleless(services, c.env.SERVER_KEK, targetPubkey, c.get('allRoles'))
     }
 
     return c.json(asSeenFromHub(c, result.volunteer))
@@ -333,7 +341,7 @@ users.delete('/:targetPubkey',
     await services.identity.deleteUser(targetPubkey)
     // Best-effort: strip any per-volunteer SIP identity provisioned on our own
     // PBX (a no-op for vendor providers — nothing was ever issued there).
-    await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
+    await revokeVolunteerSipIdentity(services, c.env.SERVER_KEK, targetPubkey)
     await audit(services.audit, 'userRemoved', pubkey, { target: targetPubkey }, undefined, hubId ?? null)
     return c.json({ ok: true })
   },

@@ -14,6 +14,12 @@ import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_
 import type { RecipientEnvelope } from '@shared/types'
 import {
   hashPhone,
+  banHash,
+  banHashes,
+  PLATFORM_BAN_SCOPE,
+  callerRateLimitDigest,
+  sealCallerNumber,
+  openCallerNumber,
   hashIP,
   encryptMessageForStorage,
   encryptCallRecordForStorage,
@@ -244,9 +250,13 @@ describe('encryptContactIdentifier / decryptContactIdentifier', () => {
     expect(enc1).not.toBe(enc2)
   })
 
-  it('decrypting legacy plaintext returns it as-is', () => {
-    const plain = '+15551234567'
-    expect(decryptContactIdentifier(plain, SECRET)).toBe(plain)
+  it('refuses a value that was never sealed (no legacy plaintext path)', () => {
+    expect(() => decryptContactIdentifier('+15551234567', SECRET)).toThrow(/not sealed/)
+  })
+
+  it('cannot be opened under a different key', () => {
+    const enc = encryptContactIdentifier('+15551234567', SECRET)
+    expect(() => decryptContactIdentifier(enc, 'b'.repeat(64))).toThrow()
   })
 
   it('throws on corrupted ciphertext', () => {
@@ -512,5 +522,87 @@ describe('sealAuditKeyForServer / openServerSealedAuditKey', () => {
     // A blob sealed under the wrap label with the same context must not open as the server seal.
     const underWrapLabel = bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_WRAP, serverSecret, userPubkey))
     expect(() => openServerSealedAuditKey(underWrapLabel, userPubkey, serverSecret)).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ban hashes — only banned numbers are ever stored, one key per scope
+// ---------------------------------------------------------------------------
+
+describe('banHash', () => {
+  const KEY = 'b'.repeat(64) // gitleaks:allow
+  const NUMBER = '+15551234567'
+
+  it('is deterministic for one number, scope and key', () => {
+    expect(banHash(NUMBER, 'hub-1', KEY)).toBe(banHash(NUMBER, 'hub-1', KEY))
+    expect(banHash(NUMBER, 'hub-1', KEY)).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('differs per scope, so one hub, another hub and the platform cannot be compared', () => {
+    const hashes = new Set([
+      banHash(NUMBER, 'hub-1', KEY),
+      banHash(NUMBER, 'hub-2', KEY),
+      banHash(NUMBER, PLATFORM_BAN_SCOPE, KEY),
+    ])
+    expect(hashes.size).toBe(3)
+  })
+
+  it('differs per number and per key', () => {
+    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(banHash('+15559876543', 'hub-1', KEY))
+    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(banHash(NUMBER, 'hub-1', 'c'.repeat(64)))
+  })
+
+  it('shares nothing with hashPhone, the hash conversations and threads use', () => {
+    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(hashPhone(NUMBER, KEY))
+  })
+
+  it('banHashes gives the platform hash always and the hub hash only for a call that has a hub', () => {
+    expect(banHashes(NUMBER, 'hub-1', KEY)).toEqual({
+      hub: banHash(NUMBER, 'hub-1', KEY),
+      platform: banHash(NUMBER, PLATFORM_BAN_SCOPE, KEY),
+    })
+    expect(banHashes(NUMBER, undefined, KEY).hub).toBeUndefined()
+  })
+})
+
+describe('callerRateLimitDigest', () => {
+  const NUMBER = '+15551234567'
+  const T0 = Date.UTC(2026, 9, 25, 12, 0, 0)
+
+  it('links calls from one number inside a window', () => {
+    expect(callerRateLimitDigest(NUMBER, T0)).toBe(callerRateLimitDigest(NUMBER, T0 + 30_000))
+  })
+
+  it('cannot link a number across windows: the key is replaced each window', () => {
+    expect(callerRateLimitDigest(NUMBER, T0)).not.toBe(callerRateLimitDigest(NUMBER, T0 + 60_000))
+  })
+
+  it('does not equal a hash of the number under any server secret', () => {
+    const digest = callerRateLimitDigest(NUMBER, T0)
+    expect(digest).not.toBe(hashPhone(NUMBER, SECRET).slice(0, digest.length))
+  })
+})
+
+describe('sealCallerNumber / openCallerNumber', () => {
+  const KEK = 'a'.repeat(64) // gitleaks:allow
+
+  it('round-trips for the call it was sealed for', () => {
+    const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
+    expect(openCallerNumber(sealed, 'call-1', KEK)).toBe('+15551234567')
+  })
+
+  it('does not contain the number', () => {
+    expect(sealCallerNumber('+15551234567', 'call-1', KEK)).not.toContain('1234567')
+  })
+
+  it('refuses a sealed value copied onto another call, or opened with another key', () => {
+    const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
+    expect(() => openCallerNumber(sealed, 'call-2', KEK)).toThrow()
+    expect(() => openCallerNumber(sealed, 'call-1', 'c'.repeat(64))).toThrow()
+  })
+
+  it('is not openable as a contact identifier: it has its own derived key', () => {
+    const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
+    expect(() => decryptContactIdentifier(`enc:${sealed}`, KEK)).toThrow()
   })
 })

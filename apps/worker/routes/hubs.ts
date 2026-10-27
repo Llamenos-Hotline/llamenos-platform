@@ -122,9 +122,10 @@ routes.post('/',
 
     // The creator becomes the hub's first admin in the same transaction as the
     // hub itself (#2126): a hub never exists without one, and if the grant
-    // cannot be made the hub is not created.
+    // cannot be made the hub is not created. The founder's role is the one the
+    // role catalog designates for it by permission, not a role id.
     try {
-      await services.settings.createHub(hub, { pubkey, roleIds: ['role-hub-admin'] })
+      await services.settings.createHub(hub, { pubkey })
     } catch (err) {
       if (err instanceof ServiceError) {
         return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
@@ -139,11 +140,10 @@ routes.post('/',
       try {
         const creds = await storageManager.provisionHub(hub.id)
         if (creds) {
-          const hmacSecret = (c.env as unknown as Record<string, unknown>).HMAC_SECRET as string
           await services.settings.storeHubStorageCredentials({
             hubId: hub.id,
             accessKeyId: creds.accessKeyId,
-            encryptedSecretKey: encryptStorageCredential(creds.secretAccessKey, hmacSecret),
+            encryptedSecretKey: encryptStorageCredential(creds.secretAccessKey, c.env.SERVER_KEK),
             policyName: creds.policyName,
             userName: creds.userName,
           })
@@ -306,7 +306,7 @@ routes.delete('/:hubId/members/:pubkey',
       // per-volunteer SIP identity on our own PBX must die with it (a no-op
       // for vendor providers) — and /sip-token refuses to re-provision it,
       // under the same predicate (#1540).
-      await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
+      await revokeSipIdentityIfRoleless(services, c.env.SERVER_KEK, targetPubkey, c.get('allRoles'))
       await audit(services.audit, 'userRemoved', actorPubkey, { target: targetPubkey }, undefined, hubId)
       return c.json({ ok: true })
     } catch (err) {
@@ -364,7 +364,7 @@ routes.delete('/:hubId',
       await services.settings.deleteHub(hubId)
 
       for (const member of members) {
-        await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, member, c.get('allRoles'))
+        await revokeSipIdentityIfRoleless(services, c.env.SERVER_KEK, member, c.get('allRoles'))
       }
       return c.json({ ok: true })
     } catch (err) {

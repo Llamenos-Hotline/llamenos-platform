@@ -4,8 +4,6 @@ import Foundation
 
 /// Per-hub live activity state reflecting the latest relay events for that hub.
 struct HubActivityState: Equatable {
-    /// Whether the current user is currently on shift for this hub.
-    var isOnShift: Bool = false
     /// Number of active (ringing or in-progress) calls for this hub.
     var activeCallCount: Int = 0
     /// Number of unread messages for this hub since last opened.
@@ -65,14 +63,11 @@ final class HubActivityService {
             // Status update only — no count change.
             break
 
-        case .shiftStarted:
-            s.isOnShift = true
-
-        case .shiftEnded:
-            s.isOnShift = false
-
-        case .shiftUpdate:
-            // Generic shift update — no state change without explicit start/end signal.
+        case .shiftStarted, .shiftEnded, .shiftUpdate:
+            // Shift state is not tracked here: whether the user is a ring target on a hub is
+            // the server's answer (`ShiftClockService`), and a relay event only says that it
+            // may have changed. A local flag flipped by these events was a second notion of
+            // "on shift" that disagreed with the server (#2204).
             break
 
         case .messageNew:
@@ -87,6 +82,10 @@ final class HubActivityService {
 
         case .conversationClosed:
             s.unreadConversationCount = max(0, s.unreadConversationCount - 1)
+
+        case .conversationEnvelopesAdded:
+            // Keys for messages already counted — no new conversation or message.
+            break
 
         case .noteCreated, .voicemailNew, .presenceSummary, .presenceDetail, .deviceWipe, .unknown:
             break

@@ -82,6 +82,20 @@ Feature: Platform-Scoped Ban Management
     And a platform-scoped ban should exist for the same phone number
 
   @backend
+  Scenario: Promoting a hub ban requires the number to be entered again
+    Given a super admin user
+    And a hub-scoped ban exists with id "hub-ban-002"
+    When the admin POSTs to "/bans/platform/promote" with banId "hub-ban-002" and no phone number
+    Then the response status should be 400
+
+  @backend
+  Scenario: Promoting a hub ban with a different number is refused
+    Given a super admin user
+    And a hub-scoped ban exists with id "hub-ban-003"
+    When the admin POSTs to "/bans/platform/promote" with banId "hub-ban-003" and a different phone number
+    Then the response status should be 400
+
+  @backend
   Scenario: Cannot promote already platform-scoped ban
     Given a super admin user
     And a platform-scoped ban exists with id "platform-ban-001"

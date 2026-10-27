@@ -159,7 +159,7 @@ type FileRow = typeof files.$inferSelect
 export class ConversationsService {
   constructor(
     protected db: Database,
-    protected hmacSecret?: string,
+    protected serverKek?: string,
     protected adminPubkey?: string,
   ) {}
 
@@ -769,8 +769,8 @@ export class ConversationsService {
     isNew: boolean
     status: string
   }> {
-    if (!this.hmacSecret) {
-      throw new ServiceError(500, 'HMAC secret not configured')
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
     }
 
     // Find existing conversation from this sender on this channel.
@@ -830,7 +830,7 @@ export class ConversationsService {
       // Store encrypted contact identifier for outbound sends
       await this.setContactIdentifier(
         conv.id,
-        encryptContactIdentifier(incoming.senderIdentifier, this.hmacSecret),
+        encryptContactIdentifier(incoming.senderIdentifier, this.serverKek),
       )
     }
 
@@ -917,8 +917,8 @@ export class ConversationsService {
   }
 
   async getContactIdentifier(conversationId: string): Promise<string> {
-    if (!this.hmacSecret) {
-      throw new ServiceError(500, 'HMAC secret not configured')
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
     }
 
     const [row] = await this.db
@@ -929,15 +929,7 @@ export class ConversationsService {
 
     if (!row) throw new ServiceError(404, 'No contact identifier stored')
 
-    const identifier = decryptContactIdentifier(row.encryptedIdentifier, this.hmacSecret)
-
-    // Lazy migration: re-encrypt legacy plaintext entries
-    if (!row.encryptedIdentifier.startsWith('enc:')) {
-      await this.setContactIdentifier(
-        conversationId,
-        encryptContactIdentifier(identifier, this.hmacSecret),
-      )
-    }
+    const identifier = decryptContactIdentifier(row.encryptedIdentifier, this.serverKek)
 
     return identifier
   }

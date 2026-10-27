@@ -441,11 +441,11 @@ interface Entry {
   style: 'labelled' | 'positional'
 }
 
-const SWIFT_ENTRY: Entry = { callees: ['request', 'rawRequest'], style: 'labelled' }
+const SWIFT_ENTRY: Entry = { callees: ['request', 'rawRequest', 'publicRequest'], style: 'labelled' }
 const KOTLIN_ENTRY: Entry = { callees: ['request', 'requestNoContent', 'requestRawNoContent', 'requestBytes'], style: 'positional' }
 
 /** Request entry points: a bare own-parameter path handed on from one of these is plumbing. */
-const ENTRY_NAMES = new Set(['request', 'rawRequest', 'requestNoContent', 'requestRawNoContent', 'requestBytes', 'resolve'])
+const ENTRY_NAMES = new Set(['request', 'rawRequest', 'publicRequest', 'requestNoContent', 'requestRawNoContent', 'requestBytes', 'resolve'])
 
 function isPassThrough(m: FileModel, at: number, expr: string): boolean {
   const fn = enclosingFn(m, at)

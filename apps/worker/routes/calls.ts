@@ -7,6 +7,7 @@ import { getTelephonyFromService } from '../lib/service-factories'
 import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
+import { banHash, openCallerNumber, PLATFORM_BAN_SCOPE } from '../lib/crypto'
 import { ServiceError } from '../services/settings'
 import { resolveRingableVolunteers, canAnswerInApp, cancelLosingLegs } from '../services/ringing'
 import { getHubPresence } from '../services/presence'
@@ -22,11 +23,10 @@ import { authErrors, notFoundError } from '../openapi/helpers'
 const calls = new Hono<AppEnv>()
 
 // Every call a route returns is projected onto `callRecordResponseSchema`, never
-// passed through as a row. An active_calls row carries the HMAC of the caller's
-// number (`callerNumber`), who reported the call as spam, and the provider's
-// recording handle. The HMAC is a stable caller identifier: anyone holding it can
-// link two calls from one person, or confirm a number has called by computing it.
-// Bans resolve it server-side, so no client needs it.
+// passed through as a row. An active_calls row carries the caller's number sealed
+// under SERVER_KEK (`callerNumberSealed`), who reported the call as spam, and the
+// provider's recording handle. Bans open the sealed number server-side, so no
+// client needs it.
 
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
@@ -593,15 +593,19 @@ calls.post('/:callId/ban',
 
     const body = c.req.valid('json')
 
-    // Ban the caller (server resolves phone number — volunteer never sees it)
+    // Ban the caller (server resolves phone number — volunteer never sees it). The number is
+    // opened from the call's KEK-sealed copy and hashed under the hub's ban key; the call
+    // holds no hash of it. A call without a sealed number cannot be banned.
     let banned = false
     try {
+      if (!call.callerNumberSealed) throw new Error('call holds no caller number')
+      const banHubId = call.hubId ?? hubId ?? undefined
+      const number = openCallerNumber(call.callerNumberSealed, callId, c.env.SERVER_KEK)
       await services.records.addBan({
-        phone: call.callerNumber, // already HMAC-hashed at call ingestion
-        phoneDisplay: call.callerLast4 ? `***${call.callerLast4}` : undefined,
+        phoneHash: banHash(number, banHubId || PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY),
         reason: body.reason || 'Banned during active call',
         bannedBy: pubkey,
-        hubId: call.hubId ?? hubId ?? undefined,
+        hubId: banHubId,
       })
       banned = true
     } catch {

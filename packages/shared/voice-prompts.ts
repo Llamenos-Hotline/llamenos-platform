@@ -47,21 +47,9 @@ for (const key of VOICE_PROMPT_KEYS) {
 /** IVR self-announcement prompts keyed by language code. */
 export const IVR_PROMPTS: Record<string, string> = {}
 
-/** "For more languages, press [N]" keyed by language code. */
-export const IVR_MORE_PROMPTS: Record<string, string> = {}
-
-/** "To go back, press 0" keyed by language code. */
-export const IVR_BACK_PROMPTS: Record<string, string> = {}
-
 for (const lang of LANGUAGE_CODES) {
   const self = getLocaleString(lang, 'ivr.selfAnnouncement')
   if (self) IVR_PROMPTS[lang] = self
-
-  const more = getLocaleString(lang, 'ivr.moreLanguages')
-  if (more) IVR_MORE_PROMPTS[lang] = more
-
-  const back = getLocaleString(lang, 'ivr.goBack')
-  if (back) IVR_BACK_PROMPTS[lang] = back
 }
 
 // ---------------------------------------------------------------------------

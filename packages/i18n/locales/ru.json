@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Заблокировать и положить трубку",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Заблокировать и повесить трубку?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "Активный звонок",
-    "addNote": "Add Note",
+    "addNote": "Добавить заметку",
     "answer": "Ответить",
+    "answerFailed": "Не удалось ответить на звонок. Возможно, кто-то другой ответил первым.",
+    "answerOnPhone": "Ответьте на своём телефоне",
     "banned": "Этот номер заблокирован",
     "caller": "Звонящий",
     "duration": "Длительность",
     "ended": "Звонок завершён",
     "hangUp": "Положить трубку",
+    "hangupFailed": "Не удалось завершить звонок. Попробуйте ещё раз.",
     "hold": "Удержание",
     "incoming": "Входящий звонок",
     "mute": "Отключить звук",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "Перевести на голосовую почту",
     "unknown": "Неизвестный номер",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "Неизвестный абонент",
     "unmute": "Включить звук",
     "voicemail": "Voicemail"
   },
@@ -1781,9 +1784,9 @@
     "calls": "Calls",
     "callsToday": "Звонки сегодня",
     "cases": "Дела",
-    "clockIn": "Clock In",
+    "clockIn": "Начать смену",
     "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
-    "clockOut": "Clock Out",
+    "clockOut": "Завершить смену",
     "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
@@ -2064,6 +2067,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "Биометрическая разблокировка заблокирована из-за слишком большого числа неудачных попыток. Введите PIN-код.",
     "biometricNotEnrolled": "Биометрия вашего устройства изменилась, поэтому биометрическая разблокировка была отключена. Введите PIN-код.",
@@ -2071,6 +2076,12 @@
     "httpNotAllowed": "Небезопасные HTTP-подключения запрещены. Используйте адрес HTTPS.",
     "pinLockoutDuration": "Слишком много неудачных попыток. Повторите через {{seconds}} сек.",
     "pinWiped": "Слишком много неверных попыток ввода PIN-кода. В целях безопасности все ключи на этом устройстве удалены."
+  },
+  "errors": {
+    "deviceNotRegistered": "Это устройство ещё не зарегистрировано в вашем хабе. Попросите того, кто управляет вашим хабом, добавить его.",
+    "forbidden": "У вас нет прав на это действие. Обратитесь к тому, кто управляет вашим хабом.",
+    "notFound": "Этого больше нет. Возможно, оно было удалено.",
+    "serverUnavailable": "Сейчас не удаётся связаться с сервером. Повторите попытку чуть позже."
   },
   "eventType": {
     "call": "Звонок",
@@ -2491,9 +2502,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Кто-то звонит на горячую линию",
+  "incomingCallAnswer": "Ответить",
+  "incomingCallDecline": "Отклонить",
   "incomingCallMicrophoneRequired": "Для ответа на звонки в приложении требуется доступ к микрофону.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2508,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "Для русского языка нажмите [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Включённые языки, на которых никто в этом хабе не говорит: {{count}}",
+    "uncoveredHint": "Звонящий, выбравший один из них, может не дозвониться до того, кто на нём говорит. Добавьте языки общения в профили участников или отключите язык.",
+    "maxLanguagesReached": "В меню клавиатуры помещается {{max}} языков. Звонящие на других языках определяются по телефонному префиксу."
   },
   "ivrAudio": {
     "delete": "Удалить",
@@ -2547,8 +2559,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "Ключ удалён из-за слишком большого числа неудачных попыток",
+    "wrongPin": "Неверный PIN"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2743,6 +2755,7 @@
     "pendingCountOne": "{{count}} в ожидании",
     "pendingSyncMessage": "{{count}} операций ожидают синхронизации",
     "pendingSyncMessageOne": "{{count}} операция ожидает синхронизации",
+    "rejected": "Не сохранено: сервер отклонил запрос",
     "relayReconnected": "Переподключено — получение пропущенных событий",
     "relayReconnecting": "Переподключение к серверу реального времени...",
     "syncComplete": "Все операции успешно синхронизированы",
@@ -2878,6 +2891,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "PIN-коды не совпадают. Попробуйте снова.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} из {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2891,7 +2905,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "Неверный PIN."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",
@@ -4577,6 +4591,7 @@
     "role": "Роль",
     "roleAdmin": "Администратор",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "По умолчанию для хаба",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Волонтёр",

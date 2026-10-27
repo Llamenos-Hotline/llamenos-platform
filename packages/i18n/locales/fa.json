@@ -369,11 +369,14 @@
     "active": "تماس فعال",
     "addNote": "افزودن یادداشت",
     "answer": "پاسخ",
+    "answerFailed": "پاسخ به تماس ممکن نشد. شاید شخص دیگری زودتر پاسخ داده است.",
+    "answerOnPhone": "روی تلفن خود پاسخ دهید",
     "banned": "این شماره مسدود شده است",
     "caller": "تماس‌گیرنده",
     "duration": "مدت",
     "ended": "تماس پایان یافت",
     "hangUp": "قطع تماس",
+    "hangupFailed": "پایان دادن به تماس ممکن نشد. دوباره تلاش کنید.",
     "hold": "انتظار",
     "incoming": "تماس ورودی",
     "mute": "بی‌صدا",
@@ -656,6 +659,12 @@
     "cases": "Cases",
     "triage": "Triage"
   },
+  "errors": {
+    "deviceNotRegistered": "این دستگاه هنوز در مرکز شما ثبت نشده است. از فردی که مرکز شما را مدیریت می‌کند بخواهید آن را اضافه کند.",
+    "forbidden": "اجازهٔ انجام این کار را ندارید. از فردی که مرکز شما را مدیریت می‌کند بخواهید.",
+    "notFound": "این مورد دیگر وجود ندارد. شاید حذف شده باشد.",
+    "serverUnavailable": "اکنون دسترسی به سرور ممکن نیست. کمی بعد دوباره تلاش کنید."
+  },
   "hubs": {
     "accessDenied": "دسترسی رد شد",
     "createHub": "ایجاد هاب",
@@ -709,15 +718,16 @@
   },
   "ivr": {
     "selfAnnouncement": "برای فارسی، [N] را فشار دهید.",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "زبان‌های فعالی که هیچ‌کس در این هاب به آن‌ها صحبت نمی‌کند: {{count}}",
+    "uncoveredHint": "تماس‌گیرنده‌ای که یکی از این زبان‌ها را انتخاب کند ممکن است به کسی که آن زبان را بلد است نرسد. زبان‌های گفتاری را به نمایه اعضا اضافه کنید یا آن زبان را غیرفعال کنید.",
+    "maxLanguagesReached": "منوی صفحه‌کلید حداکثر {{max}} زبان را در خود جا می‌دهد. تماس‌گیرندگان با زبان‌های دیگر بر اساس پیش‌شماره تلفن شناسایی می‌شوند."
   },
   "ivrAudio": {
     "delete": "حذف",
@@ -913,6 +923,7 @@
     "keyLocked": "کلید قفل شده است",
     "lockoutRemaining": "قفل شده. بعد از {{seconds}} ثانیه دوباره تلاش کنید.",
     "mismatch": "PIN‌ها مطابقت ندارند. دوباره تلاش کنید.",
+    "progress": "{{count}} از {{total}}",
     "setEncrypting": "در حال رمزنگاری کلید شما...",
     "setSubtitle": "یک PIN ۶ تا ۸ رقمی برای محافظت از کلید خود انتخاب کنید",
     "setTitle": "ایجاد PIN",
@@ -930,7 +941,7 @@
     "description": "PIN خود را برای ادامه این عملیات وارد کنید.",
     "maxAttempts": "حداکثر تلاش‌ها تمام شد. کلید پاک شد.",
     "title": "تایید هویت شما",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN نادرست است."
   },
   "preferences": {
     "invalidToken": "لینک ترجیحات نامعتبر یا منقضی شده",
@@ -1841,6 +1852,7 @@
     "role": "نقش",
     "roleAdmin": "مدیر",
     "roleHubAdmin": "مدیر هاب",
+    "roleHubDefault": "پیش‌فرض مرکز",
     "roleReporter": "گزارشگر",
     "roleReviewer": "بازبین",
     "roleVolunteer": "داوطلب",
@@ -3881,6 +3893,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "باز کردن قفل بیومتریک پس از تلاش‌های ناموفق زیاد قفل شده است. پین خود را وارد کنید.",
     "biometricNotEnrolled": "اطلاعات بیومتریک دستگاه شما تغییر کرده، بنابراین باز کردن قفل بیومتریک غیرفعال شد. پین خود را وارد کنید.",
     "biometricPinMismatch": "باز کردن قفل بیومتریک ناموفق بود. پین خود را وارد کنید.",
@@ -4300,7 +4314,7 @@
   "phoneNumberLabel": "شماره تلفن",
   "callActions": {
     "openNotes": "یادداشت‌ها",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "مسدود کردن و قطع تماس",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4314,8 +4328,8 @@
   "save": "ذخیره",
   "lock": {
     "app": "قفل برنامه",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "کلید به دلیل تلاش‌های ناموفق زیاد پاک شد",
+    "wrongPin": "PIN اشتباه"
   },
   "platformSettings": {
     "transcriptionEnabled": "رونویسی",
@@ -4392,6 +4406,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "ذخیره نشد: سرور آن را نپذیرفت",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4560,9 +4575,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "شخصی با خط امداد تماس می‌گیرد",
+  "incomingCallAnswer": "پاسخ",
+  "incomingCallDecline": "رد کردن",
   "incomingCallMicrophoneRequired": "برای پاسخ دادن به تماس‌ها در برنامه، دسترسی به میکروفون لازم است.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",

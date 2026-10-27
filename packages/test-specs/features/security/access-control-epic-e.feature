@@ -274,20 +274,20 @@ Feature: Backend access control and input validation (Epic E)
     When I call GET /api/test-push-log with correct X-Test-Secret
     Then the response status is 200
 
-  # ── HIGH-W3: Ban list does not store plaintext phone numbers ─────────────
+  # ── HIGH-W3 / D2: a ban keeps a keyed hash and no digits of the number ───
 
   @backend
-  Scenario: Banning a phone stores only a masked display value (HIGH-W3)
+  Scenario: Banning a phone returns and stores no digits of the number (HIGH-W3)
     Given I am authenticated as an admin with "bans:create" permission
     When I ban the phone number "+12125551234" with reason "Spam"
-    Then the ban response contains phone "***1234"
-    And the stored phoneDisplay field does not contain the full phone number
+    Then the ban response carries no phone number
+    And the ban list carries no phone number
 
   @backend
-  Scenario: Bulk ban stores only masked display values (HIGH-W3)
+  Scenario: Bulk ban stores no digits of any number (HIGH-W3)
     Given I am authenticated as an admin with "bans:bulk-create" permission
     When I bulk ban phones ["+12125551234", "+12125555678"]
-    Then the stored phoneDisplay values are "***1234" and "***5678"
+    Then the ban list carries no phone number
 
   # ── HIGH-W6: Recovery group emergency override requires matching pubkey ──
 

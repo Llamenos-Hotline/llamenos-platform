@@ -40,7 +40,8 @@ Procedures for responding to security incidents affecting a Llamenos deployment.
    # Generate new secrets
    openssl rand -hex 32  # New PG_PASSWORD
    openssl rand -hex 32  # New SERVER_SECRET
-   openssl rand -hex 32  # New HMAC_SECRET
+   openssl rand -hex 32  # New HMAC_SECRET (hashing only; ban entries stop matching)
+   # SERVER_KEK is NOT rotated by swapping the value: it needs a re-encrypt, see KEK_ROTATION.md
 
    # Update .env and redeploy
    docker compose down
@@ -67,7 +68,9 @@ Procedures for responding to security incidents affecting a Llamenos deployment.
 
 ### What the Attacker COULD Obtain
 - Plaintext metadata (call timestamps, durations, routing data)
-- HMAC secret (can reverse phone hashes to phone numbers)
+- HMAC secret (lets the holder test guessed phone numbers against stored hashes)
+- `SERVER_KEK` (opens provider credentials, reply addresses and queued sends; see [KEK_ROTATION.md](KEK_ROTATION.md))
+- The `ban-hash-key` file (lets the holder test guessed numbers against the ban list)
 - Telephony credentials (can make API calls to telephony providers)
 - Server secret (can impersonate server on WebSocket)
 - Hub key (if captured from memory — can decrypt hub events)
@@ -152,7 +155,7 @@ The signal-notifier sidecar (port 3100) handles Signal message delivery and cont
    - Observe which identifiers have Signal registrations
    - NOT reverse HMAC hashes without the HMAC secret (held by the app, not the sidecar)
 
-4. **If the HMAC secret is also compromised**: The attacker can reverse phone hashes. Rotate `HMAC_SECRET` in the app and re-hash all stored identifiers.
+4. **If the HMAC secret is also compromised**: The attacker can test guessed phone numbers against stored hashes. Rotate `HMAC_SECRET` in the app; stored hashes (ban entries, audit IP hashes) stop matching rather than being re-hashed, because the numbers are not stored. `HMAC_SECRET` only hashes (D6): rotating it does not touch provider credentials or any encrypted data. If `SERVER_KEK` is also exposed, follow [KEK_ROTATION.md](KEK_ROTATION.md): it is a re-encrypt, not a restart.
 
 ### Key Separation Note
 

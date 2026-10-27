@@ -92,7 +92,7 @@ export async function mockAdminSettingsApi(
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ enabledLanguages: ['en', 'es'] }),
+      body: JSON.stringify({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 0 }),
     })
   })
 

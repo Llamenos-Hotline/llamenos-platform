@@ -8,6 +8,7 @@ final class WipeServiceTests: XCTestCase {
     private var wipeService: WipeService!
     private var keychainService: KeychainService!
     private var cryptoService: CryptoService!
+    private var permissionService: PermissionService!
 
     /// Whatever cache was installed before this test ran.
     private var previousSharedCache: URLCache!
@@ -40,7 +41,9 @@ final class WipeServiceTests: XCTestCase {
         let offline = OfflineQueue(apiService: api)
         let crashReporting = CrashReportingService()
         let ws = WebSocketService(cryptoService: crypto)
+        let permissions = PermissionService()
 
+        permissionService = permissions
         keychainService = keychain
         cryptoService = crypto
         wipeService = WipeService(
@@ -49,7 +52,9 @@ final class WipeServiceTests: XCTestCase {
             wakeKeyService: wake,
             offlineQueue: offline,
             crashReportingService: crashReporting,
-            webSocketService: ws
+            webSocketService: ws,
+            authMeLoader: AuthMeLoader(apiService: api, permissionService: permissions),
+            permissionService: permissions
         )
     }
 
@@ -59,6 +64,7 @@ final class WipeServiceTests: XCTestCase {
         wipeService = nil
         keychainService = nil
         cryptoService = nil
+        permissionService = nil
         cacheStoreDirectory = nil
         // URLCache writes to disk asynchronously and may still hold the store after this
         // test finishes. Leave the isolated directory in the app container rather than
@@ -67,6 +73,18 @@ final class WipeServiceTests: XCTestCase {
     }
 
     // MARK: - wipeAll
+
+    /// The retrying permission refresh keeps the last known set through failures; a wipe
+    /// removes the keys that could ever refresh it, so the set must go with them.
+    func testWipeAllDropsThePermissionsTheRefreshWasKeeping() {
+        permissionService.update(permissions: ["settings:manage"])
+        permissionService.recordRefreshFailure()
+
+        wipeService.wipeAll()
+
+        XCTAssertTrue(permissionService.permissions.isEmpty)
+        XCTAssertNil(permissionService.refreshFailure)
+    }
 
     func testWipeAllClearsUserDefaults() {
         // Populate a UserDefaults key

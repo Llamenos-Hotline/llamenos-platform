@@ -3,8 +3,9 @@ import { e164PhoneSchema } from './common'
 
 // --- Response schemas ---
 
+// A ban list entry carries no number, masked or otherwise: the server keeps only a
+// keyed hash of a banned number. `phoneHash` is an opaque handle for unbanning.
 export const banResponseSchema = z.object({
-  phone: z.string(),
   phoneHash: z.string(),
   reason: z.string(),
   bannedBy: z.string(),
@@ -62,6 +63,8 @@ export const bulkPlatformBanBodySchema = z.object({
 
 export const promoteBanBodySchema = z.object({
   banId: z.string().min(1),
+  /** The banned number, entered again: a hub's hash cannot be re-keyed to the platform's without it. */
+  phone: e164PhoneSchema,
 })
 
 export const searchBansQuerySchema = z.object({
