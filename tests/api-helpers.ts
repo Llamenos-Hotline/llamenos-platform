@@ -940,8 +940,9 @@ export async function updateRoleViaApi(
 export async function deleteRoleViaApi(
   request: APIRequestContext,
   id: string,
-): Promise<{ status: number }> {
-  // Returns status so callers can assert 403 for system roles
+): Promise<{ status: number; data: unknown }> {
+  // Returns status and body so callers can assert 403 for system roles and
+  // surface the server's reason when a delete is refused
   return apiDelete(request, `/settings/roles/${id}`)
 }
 

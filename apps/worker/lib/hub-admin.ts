@@ -199,6 +199,9 @@ async function listHubIds(db: Executor): Promise<string[]> {
   return (await db.select({ id: hubs.id }).from(hubs)).map(h => h.id)
 }
 
+/** A user who could count toward a hub's admin set. */
+type Candidate = { pubkey: string } & AdminState
+
 /**
  * Every user who could count toward the admin set of `hubIds`, with their
  * assignments: the members holding any role in one of the hubs. Narrowed in SQL to active, un-erased users with no erasure in
@@ -207,7 +210,7 @@ async function listHubIds(db: Executor): Promise<string[]> {
 async function loadCandidateAdmins(
   db: Executor,
   hubIds: readonly string[],
-): Promise<Array<{ pubkey: string } & AdminState>> {
+): Promise<Candidate[]> {
   if (hubIds.length === 0) return []
   const inScope = sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${users.hubRoles}) AS a WHERE a->>'hubId' IN (${sql.join(hubIds.map(id => sql`${id}`), sql`, `)}))`
   const rows = await db
@@ -230,21 +233,35 @@ async function loadCandidateAdmins(
   return rows.filter(row => !isRevokedSigningKey(row.pubkey)).map(row => ({ pubkey: row.pubkey, ...adminStateOf(row) }))
 }
 
-/** Admin counts per hub, under `catalog`, for the listed hubs. A hub with no admin is absent from the map. */
-async function countAdminsByHub(
-  db: Executor,
+/**
+ * Admin counts per hub among `candidates`, under `catalog`, for the listed hubs.
+ * A hub with no admin is absent from the map. Pure: counting twice from the same
+ * `candidates` can only differ by the catalog.
+ */
+function countAdmins(
+  candidates: readonly Candidate[],
   catalog: RoleCatalog,
   hubIds: readonly string[],
   excluding?: string,
-): Promise<Map<string, number>> {
+): Map<string, number> {
   const counts = new Map<string, number>()
-  for (const candidate of await loadCandidateAdmins(db, hubIds)) {
+  for (const candidate of candidates) {
     if (candidate.pubkey === excluding) continue
     for (const hubId of hubsAdministered(candidate, catalog, hubIds)) {
       counts.set(hubId, (counts.get(hubId) ?? 0) + 1)
     }
   }
   return counts
+}
+
+/** {@link countAdmins} over a fresh read of the users. */
+async function countAdminsByHub(
+  db: Executor,
+  catalog: RoleCatalog,
+  hubIds: readonly string[],
+  excluding?: string,
+): Promise<Map<string, number>> {
+  return countAdmins(await loadCandidateAdmins(db, hubIds), catalog, hubIds, excluding)
 }
 
 /**
@@ -376,10 +393,17 @@ export async function assertRoleChangeKeepsAdmins(
     ? current.filter(r => r.id !== roleId)
     : current.map(r => (r.id === roleId ? { id: r.id, permissions: [...permissions] } : r))
 
+  // ONE read of the users, counted under both catalogs. The catalog lock holds
+  // role edits and user-side guards still, but not everything that changes an
+  // admin set: purging a hub deletes its admins under no lock at all, and the
+  // transaction is READ COMMITTED. Two reads would let such a commit land
+  // between them and read as the role edit stripping that hub of its admin —
+  // refusing, with a 409, the deletion of a role that confers no admin authority.
   const everyHub = await listHubIds(tx)
-  const before = await countAdminsByHub(tx, current, everyHub)
+  const candidates = await loadCandidateAdmins(tx, everyHub)
+  const before = countAdmins(candidates, current, everyHub)
   if (before.size === 0) return
-  const after = await countAdminsByHub(tx, next, [...before.keys()])
+  const after = countAdmins(candidates, next, [...before.keys()])
   const stranded = [...before.keys()].filter(hubId => !after.has(hubId))
   if (stranded.length === 0) return
 
