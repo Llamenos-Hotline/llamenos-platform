@@ -116,8 +116,6 @@ final class DashboardViewModel {
     /// Bumped once a second while ringing so the elapsed-time display re-evaluates.
     private var tick: Int = 0
 
-    /// Nonisolated: it only stores its arguments, so the model can be built anywhere —
-    /// every state change after construction still happens on the main actor.
     /// Call-flow trace, for reading what the dashboard did when a UI test stalls (#2283):
     /// CI captures this subsystem from the simulator and uploads it with each shard.
     private static let log = Logger(subsystem: "org.llamenos.hotline", category: "CallFlow")
@@ -131,6 +129,8 @@ final class DashboardViewModel {
         #endif
     }
 
+    /// Nonisolated: it only stores its arguments, so the model can be built anywhere —
+    /// every state change after construction still happens on the main actor.
     nonisolated init(
         apiService: APIService,
         cryptoService: CryptoService,
@@ -197,9 +197,7 @@ final class DashboardViewModel {
     }
 
     /// Handle a decrypted, hub-attributed event and refresh only relevant data.
-    ///
-    /// Internal (not private) so unit tests can drive an event without a relay.
-    func handleTypedEvent(_ attributed: AttributedHubEvent) {
+    private func handleTypedEvent(_ attributed: AttributedHubEvent) {
         switch attributed.event {
         case .callRing, .callAnswered, .callUpdate, .callEnded, .voicemailNew, .presenceSummary, .presenceDetail:
             // A call the event says is over is shown as over NOW, from the event (#2283).
