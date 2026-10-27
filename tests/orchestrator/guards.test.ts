@@ -2601,6 +2601,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, prAuthor: 'dependabot[bot]',
+      prCommits: async () => [{ sha: 'head222', authorLogin: 'dependabot[bot]', committerLogin: 'web-flow', verified: true }],
       reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('bot-authored')

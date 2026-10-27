@@ -98,7 +98,8 @@ export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
  * anyone with push access can imitate, so keying the skip on the branch would
  * hand a free review bypass to any human who names a branch `dependabot/x`.
  * The author of a Dependabot PR is set by GitHub and cannot be spoofed that
- * way.
+ * way. The PR author alone is NOT enough, though: the skip also requires every
+ * commit on the branch to be a bot's (`commitsAllBotAuthored`, #2284).
  *
  * WHY SKIPPING IS DEFENSIBLE HERE, when a review normally is not optional:
  * the reviewer that refused #1273 made the argument itself — a model reading
@@ -112,6 +113,96 @@ export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
  * dependabot-auto-approve.yml deliberately does not auto-merge.
  */
 export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'dependabot']
+
+/**
+ * One commit on a PR, as `GET /repos/{r}/pulls/{n}/commits` reports it:
+ * the GitHub LOGIN of its author and committer (`null` when the git email
+ * maps to no account).
+ */
+export interface PrCommitIdentity {
+  sha: string
+  authorLogin: string | null | undefined
+  committerLogin: string | null | undefined
+  /** GitHub's `commit.verification.verified` — a signature GitHub checked. */
+  verified: boolean | null | undefined
+}
+
+/**
+ * GitHub's own committer identity for every commit made through its API or
+ * web UI. Dependabot's commits are made that way, so on a genuine Dependabot
+ * commit the AUTHOR is `dependabot[bot]` and the COMMITTER is `web-flow`
+ * (measured on #2278). It is accepted as a committer ONLY alongside a bot
+ * author: it is equally the committer of a human's "Update branch" click or
+ * web edit, and there the author is the human.
+ */
+const WEB_FLOW_COMMITTER = 'web-flow'
+
+/** The API returns at most 250 commits, 100 per page; the gate reads one page. */
+export const PR_COMMITS_PAGE_SIZE = 100
+
+/**
+ * Is EVERY commit on the PR a bot's? The bot-authored skip is only as good as
+ * this: keyed on the PR author alone, anyone could push onto a Dependabot
+ * branch and ride its skip (#2040 carried three `llamenos-auto` commits
+ * through unreviewed; #2254 the same).
+ *
+ * A commit counts only when its author is in `REVIEW_SKIP_AUTHORS` AND its
+ * committer is too (or `web-flow`, see above). Both matter: author is
+ * whoever the commit CLAIMS to be from, committer is whoever recorded it, and
+ * a bot-authored commit committed by a human (a cherry-pick, an amend) is a
+ * human's change. MERGE COMMITS are deliberately not exempted: a merge is the
+ * one place a human can alter content with no diff of its own (conflict
+ * resolution), and nothing here can prove a merge introduced nothing. It
+ * costs the common case nothing — Dependabot's rebase rewrites its commits
+ * (bot author, `web-flow` committer), it never creates a merge — and a human
+ * "Update branch" click on a bot PR is the one thing that now gets a review.
+ *
+ * Every commit must also carry a signature GitHub verified (Dependabot's
+ * do): author and committer are plain git fields any pusher can write, so
+ * without it an unsigned commit claiming to be Dependabot would pass.
+ *
+ * The list must contain `headSha` — the commit this run actually judges. The
+ * list is a live read and a push can land between the gate's checkout and it;
+ * a list that does not end at the judged head describes some other tree, so
+ * it proves nothing about this one.
+ *
+ * Fails closed: no commits, an unresolvable login, an unverified commit, a
+ * list that omits the judged head, or a possibly-truncated list all answer
+ * "not all bot". The reason is for the log.
+ *
+ * Limit, stated: someone able to use GitHub's commit API could still obtain a
+ * verified commit under Dependabot's identity. This closes the way the hole
+ * is actually hit — a commit pushed under its own identity — not that
+ * impersonation. The PR-author check it sits beside has the same property.
+ */
+export function commitsAllBotAuthored(
+  commits: readonly PrCommitIdentity[] | undefined,
+  headSha: string,
+): { ok: true } | { ok: false; reason: string } {
+  if (commits === undefined) return { ok: false, reason: 'the PR\'s commits could not be read' }
+  if (commits.length === 0) return { ok: false, reason: 'the PR\'s commit list is empty' }
+  if (commits.length >= PR_COMMITS_PAGE_SIZE) {
+    return { ok: false, reason: `the PR has ${commits.length}+ commits, more than one page — cannot show every one is a bot's` }
+  }
+  if (!commits.some((c) => c.sha === headSha)) {
+    return { ok: false, reason: `the commit list does not include the judged head ${headSha.slice(0, 8)} — it was read for a different push` }
+  }
+  const isBot = (login: string) => REVIEW_SKIP_AUTHORS.some((a) => a.toLowerCase() === login)
+  for (const c of commits) {
+    const author = loginOf(c.authorLogin ?? undefined)
+    const committer = loginOf(c.committerLogin ?? undefined)
+    const short = c.sha.slice(0, 8)
+    if (author === undefined || committer === undefined) {
+      return { ok: false, reason: `commit ${short} has no resolvable ${author === undefined ? 'author' : 'committer'} login` }
+    }
+    if (c.verified !== true) return { ok: false, reason: `commit ${short} has no GitHub-verified signature` }
+    if (!isBot(author)) return { ok: false, reason: `commit ${short} is authored by ${author}, not a bot` }
+    if (!isBot(committer) && committer !== WEB_FLOW_COMMITTER) {
+      return { ok: false, reason: `commit ${short} is committed by ${committer}, not a bot` }
+    }
+  }
+  return { ok: true }
+}
 
 /**
  * The `pull_request` ACTION that means "the head moved" — a push, a
@@ -1669,6 +1760,13 @@ export interface ReviewGateDeps {
    *  `reviewRequestFor` already consumes. Present so the gate can recognise
    *  an automated dependency PR by IDENTITY rather than by branch name. */
   prAuthor?: string | undefined
+  /**
+   * Every commit on the PR, by identity — asked ONLY when the PR author alone
+   * would earn the `bot-authored` skip. Absent or throwing means the skip
+   * does not apply (`commitsAllBotAuthored` fails closed): an unwired lookup
+   * must never read as "all bot".
+   */
+  prCommits?: (() => Promise<readonly PrCommitIdentity[] | undefined>) | undefined
   /** `decideReviewSet` with its live PR read already wired — injected so
    *  this function needs no `gh` and no filesystem of its own. */
   reviewSet(changedFiles: readonly string[]): Promise<ReviewSetDecision>
@@ -1825,11 +1923,29 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   // unmergeable for a day in exactly that state, each showing an "active"
   // review that could never complete.
   const skipAuthor = loginOf(deps.prAuthor)
+  //
+  // The PR author is necessary but NOT sufficient: anyone can push onto a
+  // bot's branch, and those commits would ride the skip unreviewed. So the
+  // skip also requires every commit on the branch to be a bot's
+  // (`commitsAllBotAuthored`). The commit list is read only here, after the
+  // cheap author test, so no other PR pays for it; any doubt falls through to
+  // the ordinary gate below.
   if (skipAuthor !== undefined && set.profiles.length === 0 &&
       REVIEW_SKIP_AUTHORS.some((a) => a.toLowerCase() === skipAuthor)) {
-    const reason = `authored by ${skipAuthor} — automated dependency update, no model review`
-    deps.log(`pr=${cacheKey.pr} ${reason} (a human still merges it)`)
-    return { kind: 'bot-authored', cacheKey, author: skipAuthor, reason }
+    let commits: readonly PrCommitIdentity[] | undefined
+    try {
+      commits = deps.prCommits === undefined ? undefined : await deps.prCommits()
+    } catch (e) {
+      deps.log(`reading the commits of pr=${cacheKey.pr} threw (fail closed): ${e instanceof Error ? e.message : String(e)}`)
+      commits = undefined
+    }
+    const allBot = commitsAllBotAuthored(commits, deps.ctx.headSha)
+    if (allBot.ok) {
+      const reason = `authored by ${skipAuthor} — automated dependency update, every commit a bot's, no model review`
+      deps.log(`pr=${cacheKey.pr} ${reason} (a human still merges it)`)
+      return { kind: 'bot-authored', cacheKey, author: skipAuthor, reason }
+    }
+    deps.log(`pr=${cacheKey.pr} is authored by ${skipAuthor} but gets the ordinary review gate: ${allBot.reason}`)
   }
 
   // Ordered here — after the cache check, before the request check — per
