@@ -177,7 +177,7 @@ final class DashboardViewModel {
             guard let self else { return }
             for await attributed in self.webSocketService.attributedEvents {
                 guard !Task.isCancelled else { break }
-                await self.handleTypedEvent(attributed)
+                self.handleTypedEvent(attributed)
             }
         }
     }

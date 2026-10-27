@@ -204,8 +204,9 @@ final class DashboardCallsTests: XCTestCase {
 
     /// Start the dashboard's relay listener and wait until it is subscribed.
     private func listen(_ vm: DashboardViewModel) async throws {
+        let before = ws.attributedListenerCountForTesting
         vm.startEventListener()
-        try await waitUntil { true }
+        try await waitUntil { self.ws.attributedListenerCountForTesting > before }
     }
 
     /// The volunteer's call ends while every request after the event hangs. The prompt to

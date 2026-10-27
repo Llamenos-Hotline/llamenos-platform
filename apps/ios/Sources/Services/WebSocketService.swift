@@ -628,6 +628,14 @@ final class WebSocketService {
         emit(AttributedHubEvent(hubId: hubId, event: eventType))
     }
 
+    /// How many consumers are subscribed to `attributedEvents`, so a test can wait for a
+    /// listener to subscribe before emitting (an event with no subscriber is dropped).
+    internal var attributedListenerCountForTesting: Int {
+        typedContinuationsLock.lock()
+        defer { typedContinuationsLock.unlock() }
+        return typedContinuations.count
+    }
+
     /// Inject decrypted event content through the real parser, for unit testing.
     internal func emitDecryptedEventForTesting(hubId: String, json: String) {
         if let attributed = Self.parseHubEvent(json, hubId: hubId) { emit(attributed) }
