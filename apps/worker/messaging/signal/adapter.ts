@@ -91,6 +91,7 @@ export class SignalAdapter implements MessagingAdapter {
       channelType: 'signal',
       externalId: String(envelope.timestamp),
       senderIdentifier,
+      aliases: sourceUuid && source ? [source] : undefined,
       body,
       mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,

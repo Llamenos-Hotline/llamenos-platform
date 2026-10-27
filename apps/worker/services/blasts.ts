@@ -32,7 +32,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
 import { HMAC_PREFERENCE_TOKEN } from '@shared/crypto-labels'
 import { encryptContactIdentifier } from '../lib/crypto'
-import { messagingContactHash } from '../lib/messaging-contact-hash'
+import { messagingContactHash, canonicalSubscriberIdentifier } from '../lib/messaging-contact-hash'
 import { ServiceError } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -121,13 +121,14 @@ export class BlastsService {
    * The subscriber's identity in a hub: the messaging contact hash, the same value
    * the webhook router computes for a sender and looks the row up by. Every writer
    * of `subscribers.identifier_hash` goes through here or takes the router's value,
-   * so a STOP always finds the row an import created (#2261).
+   * so a STOP always finds the row an import created (#2261). A phone number is
+   * filed in its canonical `+digits` spelling, which the router's lookup always tries.
    */
-  private hashIdentifier(identifier: string, hubId: string): string {
+  private hashIdentifier(identifier: string, channel: MessagingChannelType, hubId: string): string {
     if (!this.messagingHashKey) {
       throw new ServiceError(500, 'Messaging hash key not configured')
     }
-    return messagingContactHash(identifier, hubId, this.messagingHashKey)
+    return messagingContactHash(canonicalSubscriberIdentifier(channel, identifier), hubId, this.messagingHashKey)
   }
 
   // --- Blast settings ---
@@ -177,6 +178,18 @@ export class BlastsService {
       .limit(1)
 
     return row ?? null
+  }
+
+  /** Every subscriber of the hub filed under any of these hashes — one person can sit under several identifier shapes. */
+  async getSubscribersByIdentifierHashes(
+    identifierHashes: string[],
+    hubId: string,
+  ): Promise<SubscriberRow[]> {
+    if (identifierHashes.length === 0) return []
+    return this.db
+      .select()
+      .from(subscribers)
+      .where(and(eq(subscribers.hubId, hubId), inArray(subscribers.identifierHash, identifierHashes)))
   }
 
   async getSubscriberById(id: string): Promise<SubscriberRow | null> {
@@ -250,7 +263,7 @@ export class BlastsService {
     // identifiers are handled atomically at the database level. Channel merge
     // uses SQL-level jsonb_agg to avoid read-modify-write races.
     for (const entry of entries) {
-      const identifierHash = this.hashIdentifier(entry.identifier, hubId)
+      const identifierHash = this.hashIdentifier(entry.identifier, entry.channel, hubId)
       const preferenceToken = this.generatePreferenceToken(identifierHash)
       const encrypted = this.sealIdentifier(entry.identifier)
       const newChannels = [{ type: entry.channel, verified: false }]
@@ -380,7 +393,10 @@ export class BlastsService {
     hubId: string,
     data: {
       identifier: string
+      /** Where a new subscriber is filed. */
       identifierHash: string
+      /** Every hash an existing row for this sender may sit under (`identifierHash` included). */
+      lookupHashes: string[]
       keyword: string
       channel: MessagingChannelType
     },
@@ -393,19 +409,21 @@ export class BlastsService {
       normalizedKeyword === settings.unsubscribeKeyword.toUpperCase() ||
       normalizedKeyword === 'STOP'
     ) {
-      const existing = await this.getSubscriberByIdentifierHash(data.identifierHash, hubId)
-      if (existing) {
+      // Every row the sender sits under, not the first: an opt-out must hold for
+      // each identifier shape the same person is subscribed by.
+      const existing = await this.getSubscribersByIdentifierHashes(data.lookupHashes, hubId)
+      if (existing.length > 0) {
         await this.db
           .update(subscribers)
           .set({ status: 'unsubscribed' })
-          .where(eq(subscribers.id, existing.id))
+          .where(inArray(subscribers.id, existing.map((row) => row.id)))
       }
       return { action: 'unsubscribed', message: settings.unsubscribeMessage }
     }
 
     // --- Subscribe ---
     if (normalizedKeyword === settings.subscribeKeyword.toUpperCase()) {
-      const existing = await this.getSubscriberByIdentifierHash(data.identifierHash, hubId)
+      const [existing] = await this.getSubscribersByIdentifierHashes(data.lookupHashes, hubId)
       if (existing) {
         // RACE-13: Atomic channel merge at the SQL level to avoid read-modify-write race.
         // Uses jsonb_agg(DISTINCT elem) to merge existing channels with the new one.

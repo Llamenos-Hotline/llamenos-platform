@@ -197,6 +197,7 @@ describe('blast keywords are matched on the router hash (#2182)', () => {
     expect(services.blasts.handleSubscriberKeyword).toHaveBeenCalledWith(HUB, {
       identifier: SENDER,
       identifierHash: messagingContactHash(SENDER, HUB, KEY),
+      lookupHashes: expect.arrayContaining([messagingContactHash(SENDER, HUB, KEY)]),
       keyword: 'STOP',
       channel: 'sms',
     })
@@ -211,6 +212,7 @@ describe('blast keywords are matched on the router hash (#2182)', () => {
     expect(services.blasts.handleSubscriberKeyword).toHaveBeenCalledWith(HUB, {
       identifier: SENDER,
       identifierHash: messagingContactHash(SENDER, HUB, KEY),
+      lookupHashes: expect.arrayContaining([messagingContactHash(SENDER, HUB, KEY)]),
       keyword: 'JOIN',
       channel: 'sms',
     })
@@ -223,5 +225,96 @@ describe('blast keywords are matched on the router hash (#2182)', () => {
     await post(await createApp(services), `/api/messaging/sms/webhook?hub=${HUB}`)
 
     expect(services.blasts.handleSubscriberKeyword).not.toHaveBeenCalled()
+  })
+})
+
+// A person reaches the router under more than one identifier. The blast subscriber
+// they were imported as is filed under ONE of them, so a STOP has to be looked up by
+// every shape the webhook carried — otherwise the opt-out finds no row and the person
+// stays reachable (consent failure).
+describe('STOP is looked up by every identifier shape the sender carried', () => {
+  const UUID = '0b6f2c1e-1111-4222-8333-444455556666'
+  const NUMBER = '+15552220000'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const stopData = (services: Services) =>
+    vi.mocked(services.blasts.handleSubscriberKeyword).mock.calls[0][1] as unknown as {
+      identifierHash: string
+      lookupHashes: string[]
+    }
+
+  it('a Signal STOP with a UUID and a phone number looks up both', async () => {
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
+      channelType: 'signal',
+      senderIdentifier: UUID,
+      aliases: [NUMBER],
+      body: 'STOP',
+    })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
+
+    const { lookupHashes } = stopData(services)
+    expect(lookupHashes).toContain(messagingContactHash(UUID, HUB, KEY))
+    expect(lookupHashes).toContain(messagingContactHash(NUMBER, HUB, KEY))
+  })
+
+  it('a Signal STOP whose envelope hides the number uses the number a previous message recorded for the UUID', async () => {
+    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
+    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
+      channelType: 'signal',
+      senderIdentifier: UUID,
+      body: 'STOP',
+    })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
+
+    expect(lookup).toHaveBeenCalledWith(HUB, UUID)
+    expect(stopData(services).lookupHashes).toContain(messagingContactHash(NUMBER, HUB, KEY))
+    lookup.mockRestore()
+  })
+
+  it('a Signal JOIN never widens through the recorded number', async () => {
+    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
+    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
+      channelType: 'signal',
+      senderIdentifier: UUID,
+      body: 'join',
+    })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
+
+    expect(lookup).not.toHaveBeenCalled()
+    expect(stopData(services).lookupHashes).not.toContain(messagingContactHash(NUMBER, HUB, KEY))
+    lookup.mockRestore()
+  })
+
+  it('a WhatsApp sender whose number arrives without "+" also matches the imported "+number"', async () => {
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
+      channelType: 'whatsapp',
+      senderIdentifier: NUMBER.slice(1),
+      body: 'STOP',
+    })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/whatsapp/webhook?hub=${HUB}`)
+
+    expect(stopData(services).lookupHashes).toContain(messagingContactHash(NUMBER, HUB, KEY))
+  })
+
+  it('lookup hashes stay per hub', async () => {
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({ body: 'STOP' })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/sms/webhook?hub=${HUB}`)
+
+    expect(stopData(services).lookupHashes).not.toContain(messagingContactHash(SENDER, OTHER_HUB, KEY))
   })
 })
