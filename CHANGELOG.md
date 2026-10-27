@@ -404,6 +404,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.20.1 (2026-10-27)
+
+### Features
+
+- split HMAC_SECRET from SERVER_KEK; BAN_HASH_KEY is a file-only secret (D6, #2171) (#2237)
+- the server stores a ban hash only for banned numbers (D2, #2182) (#2251)
+- B-STRINGS-M1 — translate call-path keys, add the M1 error/answer/progress strings [I18N] (#2250)
+- cap the language menu at ten and flag languages nobody speaks [I18N] (#2217) (#2272)
+- enrol by invite code or link — validate, create keys, redeem, register (#1046) (#2264)
+- per-hub keyed thread hash under file-only messaging-hash-key; drop contact last4 (D2, #2182) (#2261)
+
+### Fixes
+
+- strip roles, membership, Signal contact and security events; erased_at no longer bypasses chain verification (#2187) (#2231)
+- history re-wrap never reaches an unconfirmed key newer than the record (#2143, #2148) (#2234)
+- make call recording opt-in per hub, default off, and disclose it to the caller (#1510)
+- make ivr_audio per hub so one hub's admin cannot overwrite another's greeting (#2239) (#2244)
+- webview cannot extract or misuse long-lived secrets over IPC (#2146, #2158) (#2227)
+- settings sections open by keyboard and screen reader (#2211, #1308) (#2248)
+- self-host DM Sans; no third-party request at launch (#2222) (#2249)
+- completeness guard false-fails on SIGPIPE under pipefail (#2252)
+- shift screens show what the server will ring, per member hub (#2204) (#2259)
+- backup restore and recovery work by keyboard, with labelled, translated fields (#2215) (#2260)
+- register the device's X25519/Ed25519 keys signed, after unlock, with retry (#2201) (#2253)
+- claim a waiting conversation and reply; unreadable messages show as rows (#2202) (#2263)
+- localized errors; refused queued writes reported to the author (#2207, #2208) (#2267)
+- founder role and admin badge are chosen by permission, not role id (#2233) (#2266)
+- a ring is announced, visible and keyboard-answerable on the call's own hub (#2212, #2213, #2216) (#2268)
+- a failed permission fetch keeps the user's permissions instead of downgrading to volunteer (#2265)
+- a ring renders as a ring, only my call has call actions, an ended call prompts for a note (#2027, #2026, #2203) (#2273)
+- no idle lock mid-call on any hub; in-call note draft survives the lock (#2210) (#2270)
+- pin curl/libcurl >= 8.23.0-r0 in the static stage (CVE-2026-92392) (#2274)
+- a logout that ends the last live session clocks the user out (#2205) (#2271)
+- verify-release-live names a non-JSON Play secret (main's release path: causes + #2241 ruling) (#2276)
+- ui (3) — per-runner bun HOME (Killed: 9 race) + wait for Add Ban field focus (#2279)
+- STOP matches every identifier shape a sender carries (#2280) (#2281)
+- Call Ended / Add Note prompt; Android can save a call note (#1341) (#2275)
+- stop two parallel-only 500/409s that eject merge groups from backend-bdd (#2282)
+
 ## 0.20.0 (2026-10-25)
 
 ### Breaking Changes
