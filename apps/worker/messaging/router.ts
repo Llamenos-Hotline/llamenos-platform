@@ -15,6 +15,7 @@ import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
 import type { SignalWebhookPayload } from './signal/types'
 import { SignalIdentityService } from './signal/identity'
+import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
@@ -95,7 +96,7 @@ messaging.post('/:channel/webhook',
 
   let adapter: MessagingAdapter
   try {
-    adapter = await getMessagingAdapterFromService(channel, services.settings, c.env.WEBHOOK_BASE_URL ?? '')
+    adapter = await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression, c.env.WEBHOOK_BASE_URL ?? '')
   } catch {
     return c.json({ error: `${channel} channel is not configured` }, 404)
   }
@@ -276,11 +277,17 @@ messaging.post('/:channel/webhook',
       await services.blasts.handleSubscriberKeyword(effectiveHubId, {
         identifier: incoming.senderIdentifier,
         ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: true }),
+        externalId: incoming.externalId,
         keyword: 'STOP',
         channel: incoming.channelType,
       })
       // Still forward to conversation for logging
     } else {
+      // START / UNSTOP: the one message that lifts an opt-out, for exactly the
+      // identifiers it carries (never a number merely recorded for the sender).
+      if (OPT_IN_KEYWORDS.has(normalizedBody)) {
+        await services.messagingSuppression.clear(incoming.channelType, carriedIdentifiers(incoming))
+      }
       // Check if it matches the subscribe keyword
       try {
         const settings = await services.blasts.getBlastSettings(effectiveHubId)
@@ -288,6 +295,7 @@ messaging.post('/:channel/webhook',
           await services.blasts.handleSubscriberKeyword(effectiveHubId, {
             identifier: incoming.senderIdentifier,
             ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: false }),
+            externalId: incoming.externalId,
             keyword: normalizedBody,
             channel: incoming.channelType,
           })
@@ -365,12 +373,18 @@ messaging.post('/:channel/webhook',
   return c.json({ ok: true })
 })
 
+/** Every identifier this message itself carries for its sender. */
+function carriedIdentifiers(incoming: IncomingMessage): string[] {
+  return [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
+}
+
 /**
- * The hashes a blast subscriber is filed and found under for this sender. Every
- * identifier the webhook carried counts: Signal's UUID and phone number, and, when
- * the envelope hides the number (phone-number privacy), the number a previous
- * message from this UUID recorded. A STOP matched on one shape alone would leave
- * the same person subscribed under the other.
+ * The hashes a blast subscriber is filed and found under for this sender, and the
+ * identifiers they came from (the suppression record is filed, or cleared, under
+ * the same ones). Every identifier the webhook carried counts: Signal's UUID and
+ * phone number, and, when the envelope hides the number (phone-number privacy),
+ * the number a previous message from this UUID recorded. A STOP matched on one
+ * shape alone would leave the same person subscribed under the other.
  *
  * The recorded number is server-linked, not carried by this message, so only an
  * opt-out may use it: widening a re-subscribe through it could grant consent to a
@@ -383,12 +397,12 @@ async function subscriberHashesFor(
   messagingHashKey: string,
   { includeRecorded }: { includeRecorded: boolean },
 ) {
-  const identifiers = [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
+  const identifiers = carriedIdentifiers(incoming)
   if (includeRecorded && incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
     const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
     if (known?.number) identifiers.push(known.number)
   }
-  return subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey)
+  return { identifiers, ...subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey) }
 }
 
 /**

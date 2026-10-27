@@ -41,6 +41,8 @@ import {
   files,
   subscribers,
   reEncryptionJobs,
+  blasts as blastsTable,
+  blastDeliveries,
 } from '../../db/schema'
 import { ErasureService } from '../../services/erasure'
 import { ConversationsService } from '../../services/conversations'
@@ -55,7 +57,8 @@ const db = createDatabase(DATABASE_URL)
 const erasure = new ErasureService(db)
 const conversationsService = new ConversationsService(db)
 const settings = new SettingsService(db)
-const blasts = new BlastsService(db)
+// The messaging hash key: the subscribe keyword clears the sender's opt-out record, which is keyed by it.
+const blasts = new BlastsService(db, undefined, undefined, 'b'.repeat(64))
 
 const createdHubIds: string[] = []
 
@@ -93,6 +96,7 @@ async function envelopeCount(
 afterAll(async () => {
   if (createdHubIds.length > 0) {
     await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.hubId, createdHubIds))
+    await db.delete(blastsTable).where(inArray(blastsTable.hubId, createdHubIds))
     await db.delete(subscribers).where(inArray(subscribers.hubId, createdHubIds))
     await db.delete(notes).where(inArray(notes.hubId, createdHubIds))
     await db.delete(files).where(
@@ -325,6 +329,7 @@ describe('BlastsService resubscribe merges a usable channel (#1595)', () => {
       identifier: '+15550001111',
       identifierHash,
       lookupHashes: [identifierHash],
+      identifiers: ['+15550001111'],
       keyword: 'JOIN',
       channel: 'whatsapp',
     })
@@ -354,5 +359,32 @@ describe('BlastsService resubscribe merges a usable channel (#1595)', () => {
         { type: 'whatsapp', verified: true },
       ]) as never,
     )
+  })
+})
+
+describe('BlastsService.drainDeliveryBatch returns typed rows under Bun SQL (#2286)', () => {
+  it('a claimed delivery carries its subscriberId and attempts, so the opt-out check can find the subscriber', async () => {
+    const hubId = await freshHub('drain')
+    const [subscriber] = await db.insert(subscribers).values({
+      hubId,
+      identifierHash: `hash-${Math.random().toString(36).slice(2, 10)}`,
+      channels: [{ type: 'sms', verified: true }],
+      status: 'active',
+      doubleOptInConfirmed: true,
+    }).returning()
+    const [blast] = await db.insert(blastsTable).values({ hubId, name: 'drain', status: 'sending', targetChannels: ['sms'] }).returning()
+    await db.insert(blastDeliveries).values({ blastId: blast!.id, subscriberId: subscriber!.id, channel: 'sms', status: 'pending', attempts: 2 })
+
+    // Raw `db.execute` rows come back snake_case on this driver; the worker reads
+    // `delivery.subscriberId`, which was undefined for every delivery.
+    const [claimed, ...rest] = await blasts.drainDeliveryBatch(blast!.id, 10)
+    expect(rest).toEqual([])
+    expect(claimed!.subscriberId).toBe(subscriber!.id)
+    expect(claimed!.attempts).toBe(2)
+    expect(claimed!.status).toBe('sending')
+    expect(await blasts.isSubscriberActive(claimed!.subscriberId)).toBe(true)
+
+    // Claimed once: a second poller gets nothing.
+    expect(await blasts.drainDeliveryBatch(blast!.id, 10)).toEqual([])
   })
 })

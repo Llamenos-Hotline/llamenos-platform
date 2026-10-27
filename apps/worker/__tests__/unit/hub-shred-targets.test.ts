@@ -58,10 +58,20 @@ describe('HUB_SHRED_TARGETS', () => {
     // forgetting one is how a volunteer in two hubs loses both.
     expect([...CROSS_HUB_TABLES].sort()).toEqual([
       'audit_user_keys', 'devices', 'entity_type_templates',
+      'messaging_suppression_identifiers',
       'platform_role_envelopes', 'provision_rooms', 'puk_envelopes',
       'roles', 'sessions', 'sigchain_links', 'user_role_envelopes',
       'user_signal_contacts', 'users', 'webauthn_credentials',
     ])
+  })
+
+  it('keeps every opt-out: a shred clears its hub provenance, never deletes it (#2286)', () => {
+    const suppression = scoped.filter(t => t.table === 'messaging_suppressions')
+    expect(suppression).toHaveLength(1)
+    expect(suppression[0]!.kind, 'deleting an opt-out hands consent back').toBe('clear-envelopes')
+    if (suppression[0]!.kind === 'clear-envelopes') {
+      expect(Object.keys(suppression[0]!.columns).sort()).toEqual(['source_external_id', 'source_hub_id'])
+    }
   })
 
   it('declares exactly one audit-shred step', () => {

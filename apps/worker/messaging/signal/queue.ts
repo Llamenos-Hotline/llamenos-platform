@@ -205,6 +205,18 @@ export class SignalMessageQueue {
   }
 
   /**
+   * Dead-letter a message at once, for a failure no retry can fix (the recipient
+   * opted out). The reason stays on the row for the dead-letter view.
+   */
+  async markDead(messageId: string, error: string): Promise<void> {
+    await this.db
+      .update(signalMessageQueue)
+      .set({ status: 'dead', lastError: error, updatedAt: new Date() })
+      .where(eq(signalMessageQueue.id, messageId))
+    logger.warn('Message moved to dead-letter queue without retry', { messageId, error })
+  }
+
+  /**
    * Mark a message as failed. If retries are exhausted, mark as dead-letter.
    */
   async markFailed(messageId: string, error: string, currentRetryCount: number): Promise<void> {

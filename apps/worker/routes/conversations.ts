@@ -425,6 +425,7 @@ conversations.post('/:id/messages',
             () => routeOutboundMessage(
               {
                 settingsService: services.settings,
+                suppression: services.messagingSuppression,
                 notifierUrl: c.env.NOTIFIER_URL,
                 notifierApiKey: c.env.NOTIFIER_API_KEY,
               },

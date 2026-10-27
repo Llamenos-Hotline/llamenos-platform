@@ -258,7 +258,7 @@ services.scheduler.start({
   ...schedulerServiceDeps(services),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
-      return await getMessagingAdapterFromService(channel, services.settings)
+      return await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression)
     } catch {
       return null
     }

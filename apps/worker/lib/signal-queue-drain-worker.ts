@@ -98,6 +98,10 @@ export async function drainSignalQueue(opts: SignalQueueDrainWorkerOpts): Promis
 
       if (result.success) {
         await opts.queue.markSent(message.id, result.externalId)
+      } else if (result.suppressed) {
+        // The recipient opted out after this was queued: dead-letter it now
+        // rather than retrying a send the backstop will refuse every time.
+        await opts.queue.markDead(message.id, result.error ?? 'suppressed')
       } else {
         await opts.queue.markFailed(message.id, result.error ?? 'Send failed', message.retryCount)
       }

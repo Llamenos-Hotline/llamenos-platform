@@ -8,7 +8,14 @@
 import { describe, it, expect } from 'vitest'
 import { createHmac, hkdfSync } from 'node:crypto'
 import { HMAC_MESSAGING_CONTACT_PREFIX, LABEL_MESSAGING_CONTACT_HUB_KEY, HMAC_PHONE_PREFIX } from '@shared/crypto-labels'
-import { messagingContactHash, GLOBAL_MESSAGING_SCOPE, canonicalSubscriberIdentifier, subscriberHashes } from './messaging-contact-hash'
+import {
+  messagingContactHash,
+  GLOBAL_MESSAGING_SCOPE,
+  SUPPRESSION_SCOPE,
+  canonicalSubscriberIdentifier,
+  subscriberHashes,
+  suppressionHashes,
+} from './messaging-contact-hash'
 import { banHash, hashPhone } from './crypto'
 
 const KEY = 'ab'.repeat(32) // gitleaks:allow
@@ -108,5 +115,54 @@ describe('subscriberHashes', () => {
     const { lookupHashes } = subscriberHashes('signal', [UUID, NUMBER], HUB_A, KEY)
     expect(lookupHashes).not.toContain(h(UUID, HUB_B))
     expect(lookupHashes).not.toContain(h(NUMBER, HUB_B))
+  })
+})
+
+// The opt-out record (#2286). One person, every shape #2281 covers, one hash per
+// canonical identifier — and no hash that equals any thread or subscriber hash.
+describe('suppressionHashes', () => {
+  const UUID = '0b6f2c1e-1111-4222-8333-444455556666'
+  const one = (channel: string, identifier: string) => {
+    const hashes = suppressionHashes(channel, [identifier], KEY)
+    expect(hashes).toHaveLength(1)
+    return hashes[0]!
+  }
+
+  it('is HMAC(HKDF(key, "suppression"), canonical identifier) under the registered labels', () => {
+    expect(one('sms', NUMBER)).toBe(reference(NUMBER, SUPPRESSION_SCOPE, KEY))
+    expect(one('signal', UUID)).toBe(reference(UUID, SUPPRESSION_SCOPE, KEY))
+  })
+
+  it.each([
+    ['sms', '+15551234567', 'E.164'],
+    ['sms', '15551234567', 'bare digits'],
+    ['whatsapp', '15551234567', "Meta's bare digits"],
+    ['whatsapp', 'whatsapp:+15551234567', "Twilio's channel-native handle"],
+    ['whatsapp', '+1 (555) 123-4567', 'an import in loose formatting'],
+    ['signal', '+15551234567', "a Signal sender's number"],
+  ])('a phone number on %s written as %s (%s) resolves to the one record hash', (channel, written) => {
+    expect(one(channel, written)).toBe(reference(NUMBER, SUPPRESSION_SCOPE, KEY))
+  })
+
+  it('a Signal UUID has a hash of its own, and a UUID+number STOP files both', () => {
+    expect(one('signal', UUID)).not.toBe(one('signal', NUMBER))
+    expect(suppressionHashes('signal', [UUID, NUMBER], KEY).sort()).toEqual([one('signal', UUID), one('signal', NUMBER)].sort())
+  })
+
+  it('collapses spellings of one number to one hash', () => {
+    expect(suppressionHashes('whatsapp', ['15551234567', '+15551234567', 'whatsapp:+15551234567'], KEY)).toHaveLength(1)
+  })
+
+  it('never reads a Telegram or RCS id as a phone number', () => {
+    expect(one('telegram', '15551234567')).not.toBe(one('sms', '15551234567'))
+    expect(one('rcs', '15551234567')).not.toBe(one('sms', '15551234567'))
+  })
+
+  it('equals no hub, global-webhook or subscriber hash of the same identifier', () => {
+    const hash = one('sms', NUMBER)
+    expect(hash).not.toBe(messagingContactHash(NUMBER, HUB_A, KEY))
+    expect(hash).not.toBe(messagingContactHash(NUMBER, undefined, KEY))
+    expect(subscriberHashes('sms', [NUMBER], HUB_A, KEY).lookupHashes).not.toContain(hash)
+    expect(SUPPRESSION_SCOPE).not.toBe(GLOBAL_MESSAGING_SCOPE)
   })
 })

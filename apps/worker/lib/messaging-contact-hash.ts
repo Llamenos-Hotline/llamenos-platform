@@ -105,3 +105,38 @@ export function subscriberHashes(
     lookupHashes: [...spellings].map(hash),
   }
 }
+
+/**
+ * The key scope of the opt-out (suppression) record. Like {@link GLOBAL_MESSAGING_SCOPE}
+ * it can never equal a hub id (hub ids are UUIDs), and it is distinct from "global",
+ * so a suppression hash equals neither a hub's thread or subscriber hash nor the
+ * thread hash of a `?hub=`-less webhook: a suppression row cannot be joined to any
+ * conversation or subscriber by its hash.
+ *
+ * Suppression is deployment-wide, not per hub, because the sender identity is: the
+ * messaging config (SMS number, WhatsApp business number, Signal account) is one row
+ * for the whole deployment, and every hub's blasts and replies go out from it. A
+ * person who texts STOP to that number has told the number to stop, whichever hub's
+ * webhook URL happened to receive the message.
+ */
+export const SUPPRESSION_SCOPE = 'suppression'
+
+/**
+ * Every hash an opt-out for these identifiers is filed and found under: the keyed
+ * hash of each identifier's canonical spelling ({@link canonicalSubscriberIdentifier}),
+ * so a bare-digits WhatsApp sender, an imported "+1 (555) …" and an E.164 "From"
+ * all land on one hash, and a Signal UUID lands on its own.
+ *
+ * The channel only decides whether an identifier is read as a phone number. The
+ * resulting hash does not depend on it, so a STOP on one phone channel matches the
+ * same number on another: the subscriber STOP already unsubscribes the whole row,
+ * every channel included, and the suppression record holds the same line.
+ */
+export function suppressionHashes(
+  channel: string,
+  identifiers: readonly string[],
+  messagingHashKey: string,
+): string[] {
+  const canonical = new Set(identifiers.map((identifier) => canonicalSubscriberIdentifier(channel, identifier)))
+  return [...canonical].map((identifier) => messagingContactHash(identifier, SUPPRESSION_SCOPE, messagingHashKey))
+}

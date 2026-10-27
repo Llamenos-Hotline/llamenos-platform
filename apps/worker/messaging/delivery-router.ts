@@ -3,6 +3,7 @@ import type { MessagingChannelType } from '@shared/types'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
 import type { SettingsService } from '../services/settings'
 import { createLogger } from '../lib/logger'
+import type { OutboundSuppression } from './suppression-guard'
 import { safeFetch } from '../lib/safe-fetch'
 
 const logger = createLogger('delivery-router')
@@ -11,6 +12,8 @@ const NOTIFICATION_ONLY_MESSAGE = 'You have a new secure message. Open Llamenos 
 
 export interface DeliveryRouterDeps {
   settingsService: SettingsService
+  /** The opt-out record every adapter checks before it sends. */
+  suppression: OutboundSuppression
   notifierUrl?: string
   notifierApiKey?: string
 }
@@ -90,6 +93,7 @@ export async function routeOutboundMessage(
         const signalAdapter = await getMessagingAdapterFromService(
           'signal',
           deps.settingsService,
+          deps.suppression,
         )
         const sendParams: SendMessageParams = {
           recipientIdentifier: params.recipientIdentifier,
@@ -109,6 +113,7 @@ export async function routeOutboundMessage(
   const adapter = await getMessagingAdapterFromService(
     params.channelType,
     deps.settingsService,
+    deps.suppression,
   )
 
   let body = params.body

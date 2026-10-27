@@ -5,6 +5,10 @@ import {
   getMessagingAdapterFromService,
 } from '@worker/lib/service-factories'
 
+
+/** A suppression record that holds nobody: these tests are about adapter selection. */
+const noSuppression = { blocksOutbound: async () => false }
+
 describe('getTelephonyFromService', () => {
   it('returns adapter from service config when available', async () => {
     const settings = {
@@ -129,7 +133,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('whatsapp', settings),
+      getMessagingAdapterFromService('whatsapp', settings, noSuppression),
     ).rejects.toThrow('whatsapp channel is not enabled')
   })
 
@@ -143,7 +147,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('sms', settings),
+      getMessagingAdapterFromService('sms', settings, noSuppression),
     ).rejects.toThrow('SMS requires a configured telephony provider')
   })
 
@@ -156,7 +160,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('carrier_pigeon' as any, settings),
+      getMessagingAdapterFromService('carrier_pigeon' as any, settings, noSuppression),
     ).rejects.toThrow('Unknown channel: carrier_pigeon')
   })
 
@@ -170,7 +174,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('sms', settings),
+      getMessagingAdapterFromService('sms', settings, noSuppression),
     ).rejects.toThrow('SMS is not enabled')
   })
 
@@ -184,7 +188,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('whatsapp', settings),
+      getMessagingAdapterFromService('whatsapp', settings, noSuppression),
     ).rejects.toThrow('WhatsApp is not configured')
   })
 
@@ -197,7 +201,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('signal', settings),
+      getMessagingAdapterFromService('signal', settings, noSuppression),
     ).rejects.toThrow('Signal is not configured')
   })
 
@@ -210,7 +214,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('telegram', settings),
+      getMessagingAdapterFromService('telegram', settings, noSuppression),
     ).rejects.toThrow('Telegram is not configured')
   })
 
@@ -223,7 +227,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('rcs', settings),
+      getMessagingAdapterFromService('rcs', settings, noSuppression),
     ).rejects.toThrow('RCS is not configured')
   })
 })

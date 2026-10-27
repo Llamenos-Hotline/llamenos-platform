@@ -628,6 +628,7 @@ settings.post('/messaging/test',
       const adapter = await getMessagingAdapterFromService(
         channel as import('@shared/types').MessagingChannelType,
         services.settings,
+        services.messagingSuppression,
       )
       const status = await adapter.getChannelStatus()
       return c.json({ connected: status.connected, error: status.error })
@@ -672,6 +673,7 @@ settings.post('/messaging/telegram/register-webhook',
       adapter = await getMessagingAdapterFromService(
         'telegram',
         services.settings,
+        services.messagingSuppression,
         c.env.WEBHOOK_BASE_URL ?? '',
       )
     } catch (err) {
