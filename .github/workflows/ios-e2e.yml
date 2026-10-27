@@ -403,6 +403,22 @@ jobs:
       # RUNNER_TEMP is the same co-tenancy rule as everything else here. It
       # is NOT what `bun install` uses — see the step above.
       #
+      # HOME is pinned on the setup-bun step ONLY, and that is the second
+      # co-tenancy rule: setup-bun installs bun at `$HOME/.bun/bin/bun`, and
+      # both runners on the Mac are the same macOS user, so that path is ONE
+      # file. On a cache hit it restores by `tar -xf -P` straight over that
+      # file — a rewrite in place of a signed Mach-O that a co-tenant may be
+      # exec'ing or already running (the native backend is a bun process for
+      # the whole job). macOS kills a process whose executable pages stop
+      # matching their signature: `bun install --frozen-lockfile` died
+      # `Killed: 9` (exit 137) 40 ms after it started, with no test run, in
+      # merge group 40438235535 — `ui (0)` on the other runner extracted its
+      # copy at 02:33:13.238 and this job's `bun install` began at 02:33:13.27.
+      # A per-runner HOME gives each job its own bun; later steps keep the
+      # real HOME, so ~/.bun/install/cache and the Xcode/simulator state are
+      # untouched. tests/guards.test.ts fails CI if a Mac-capable job's
+      # setup-bun step lacks it.
+      #
       # `${{ runner.temp }}`, not `$RUNNER_TEMP`: an `env:` value is not
       # shell-expanded, and the `runner` context is only available at STEP
       # level — a job-level `env:` cannot read it.
@@ -410,6 +426,7 @@ jobs:
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         env:
           TMPDIR: ${{ runner.temp }}
+          HOME: ${{ runner.temp }}/bun-home
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -828,11 +845,15 @@ jobs:
           echo "BUN_TMPDIR=$RUNNER_TEMP/bun-tmp" >> "$GITHUB_ENV"
 
       # TMPDIR pinned on every bun/node step for node's and bun's JS temp
-      # files — see `build` for why it is not what `bun install` uses.
+      # files — see `build` for why it is not what `bun install` uses. HOME is
+      # pinned here too, for the reason on `build`'s copy: the other Mac
+      # shard's cache restore rewrites a shared ~/.bun/bin/bun in place, which
+      # killed this job's `bun install` (`Killed: 9`) in merge group 40438235535.
       - name: Setup Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         env:
           TMPDIR: ${{ runner.temp }}
+          HOME: ${{ runner.temp }}/bun-home
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
