@@ -279,6 +279,23 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
     lookup.mockRestore()
   })
 
+  it('a Signal JOIN never widens through the recorded number', async () => {
+    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
+    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
+      channelType: 'signal',
+      senderIdentifier: UUID,
+      body: 'join',
+    })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
+
+    expect(lookup).not.toHaveBeenCalled()
+    expect(stopData(services).lookupHashes).not.toContain(messagingContactHash(NUMBER, HUB, KEY))
+    lookup.mockRestore()
+  })
+
   it('a WhatsApp sender whose number arrives without "+" also matches the imported "+number"', async () => {
     vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
       channelType: 'whatsapp',

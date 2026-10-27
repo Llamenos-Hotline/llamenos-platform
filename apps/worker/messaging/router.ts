@@ -275,7 +275,7 @@ messaging.post('/:channel/webhook',
     if (normalizedBody === 'STOP') {
       await services.blasts.handleSubscriberKeyword(effectiveHubId, {
         identifier: incoming.senderIdentifier,
-        ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY),
+        ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: true }),
         keyword: 'STOP',
         channel: incoming.channelType,
       })
@@ -287,7 +287,7 @@ messaging.post('/:channel/webhook',
         if (normalizedBody === settings.subscribeKeyword.toUpperCase()) {
           await services.blasts.handleSubscriberKeyword(effectiveHubId, {
             identifier: incoming.senderIdentifier,
-            ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY),
+            ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: false }),
             keyword: normalizedBody,
             channel: incoming.channelType,
           })
@@ -371,15 +371,20 @@ messaging.post('/:channel/webhook',
  * the envelope hides the number (phone-number privacy), the number a previous
  * message from this UUID recorded. A STOP matched on one shape alone would leave
  * the same person subscribed under the other.
+ *
+ * The recorded number is server-linked, not carried by this message, so only an
+ * opt-out may use it: widening a re-subscribe through it could grant consent to a
+ * row the sender never named.
  */
 async function subscriberHashesFor(
   services: Services,
   incoming: IncomingMessage,
   hubId: string | undefined,
   messagingHashKey: string,
+  { includeRecorded }: { includeRecorded: boolean },
 ) {
   const identifiers = [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
-  if (incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
+  if (includeRecorded && incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
     const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
     if (known?.number) identifiers.push(known.number)
   }
