@@ -15,6 +15,7 @@ import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
 import type { SignalWebhookPayload } from './signal/types'
 import { SignalIdentityService } from './signal/identity'
+import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
@@ -282,6 +283,11 @@ messaging.post('/:channel/webhook',
       })
       // Still forward to conversation for logging
     } else {
+      // START / UNSTOP: the one message that lifts an opt-out, for exactly the
+      // identifiers it carries (never a number merely recorded for the sender).
+      if (OPT_IN_KEYWORDS.has(normalizedBody)) {
+        await services.messagingSuppression.clear(incoming.channelType, carriedIdentifiers(incoming))
+      }
       // Check if it matches the subscribe keyword
       try {
         const settings = await services.blasts.getBlastSettings(effectiveHubId)
@@ -367,6 +373,11 @@ messaging.post('/:channel/webhook',
   return c.json({ ok: true })
 })
 
+/** Every identifier this message itself carries for its sender. */
+function carriedIdentifiers(incoming: IncomingMessage): string[] {
+  return [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
+}
+
 /**
  * The hashes a blast subscriber is filed and found under for this sender, and the
  * identifiers they came from (the suppression record is filed, or cleared, under
@@ -377,7 +388,7 @@ messaging.post('/:channel/webhook',
  *
  * The recorded number is server-linked, not carried by this message, so only an
  * opt-out may use it: widening a re-subscribe through it could grant consent to a
- * row the sender never named, or lift an opt-out the sender never revoked.
+ * row the sender never named.
  */
 async function subscriberHashesFor(
   services: Services,
@@ -386,7 +397,7 @@ async function subscriberHashesFor(
   messagingHashKey: string,
   { includeRecorded }: { includeRecorded: boolean },
 ) {
-  const identifiers = [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
+  const identifiers = carriedIdentifiers(incoming)
   if (includeRecorded && incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
     const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
     if (known?.number) identifiers.push(known.number)

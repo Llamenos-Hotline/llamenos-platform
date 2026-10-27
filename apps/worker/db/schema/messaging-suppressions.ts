@@ -4,8 +4,8 @@
  * An opt-out is a fact about an identifier, not about a subscriber row: a STOP from
  * someone we hold no subscriber for is recorded here all the same, and import and
  * every outbound send consult it, so a later import cannot make that person
- * reachable again. Only an explicit opt-in from the person (the subscribe keyword)
- * removes a record.
+ * reachable again. Only an explicit opt-in from the person (START / UNSTOP)
+ * removes an identifier from it.
  *
  * No identifier is stored in a readable or reversible form: a record is found by
  * `HMAC(HKDF(MESSAGING_HASH_KEY, "suppression"), canonical identifier)` — see

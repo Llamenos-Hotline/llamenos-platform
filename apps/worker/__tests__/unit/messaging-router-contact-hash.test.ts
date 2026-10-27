@@ -59,6 +59,7 @@ function makeServices() {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
     },
+    messagingSuppression: { clear: vi.fn().mockResolvedValue(true) },
     firehose: {},
     conversations: {
       handleIncoming: vi.fn().mockResolvedValue({
@@ -307,6 +308,32 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
     // Nor can it lift an opt-out through a number the message did not carry.
     expect(stopData(services).identifiers).toEqual([UUID])
     lookup.mockRestore()
+  })
+
+  it('START lifts the opt-out for the identifiers the message carried, never a recorded number (#2286)', async () => {
+    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
+    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
+      channelType: 'signal',
+      senderIdentifier: UUID,
+      body: ' Start ',
+    })))
+    const services = makeServices()
+
+    await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
+
+    expect(services.messagingSuppression.clear).toHaveBeenCalledWith('signal', [UUID])
+    expect(lookup).not.toHaveBeenCalled()
+    lookup.mockRestore()
+  })
+
+  it('an ordinary message and the hub subscribe keyword lift nothing', async () => {
+    for (const body of ['I need help', 'join']) {
+      vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({ body })))
+      const services = makeServices()
+      await post(await createApp(services), `/api/messaging/sms/webhook?hub=${HUB}`)
+      expect(services.messagingSuppression.clear, body).not.toHaveBeenCalled()
+    }
   })
 
   it('a WhatsApp sender whose number arrives without "+" also matches the imported "+number"', async () => {

@@ -21,7 +21,7 @@
  *     any one of them is unsubscribed by a STOP carrying another.
  *  7. A STOP is recorded against the identifier whether or not a subscriber exists
  *     (#2286): import files a suppressed identifier opted out, every shape of it
- *     reaches the one record, only the subscribe keyword clears it, and the
+ *     reaches the one record, only START/UNSTOP lifts it, and the
  *     outbound backstop refuses a send — a queued blast delivery included.
  *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
@@ -240,7 +240,9 @@ describe("migration 0065's data step (#2261)", () => {
     expect(await dumpDatabase()).not.toContain(oldHash)
 
     // The sender subscribes again: one row, under the new hash. STOP now reaches it,
-    // and does not leave a second row behind.
+    // and does not leave a second row behind. The STOP above is on record as an
+    // opt-out (#2286), so they lift it with START before the hub's JOIN is honoured.
+    expect((await webhook(HUB_A, 'START')).status).toBe(200)
     expect((await webhook(HUB_A, 'JOIN')).status).toBe(200)
     const [joined, ...extra] = await subscribersOf(HUB_A)
     expect(extra).toEqual([])
@@ -449,7 +451,7 @@ describe('an opt-out is a fact about the identifier, not a subscriber row (#2286
     expect((await subscriberFor(HUB_Y, signalNumber))!.status).toBe('unsubscribed')
   })
 
-  it('only an explicit opt-in clears it: an ordinary reply does not, the subscribe keyword does', async () => {
+  it('only START / UNSTOP lifts it: not a reply, not an import, not the hub subscribe keyword', async () => {
     const number = '+15550101005'
     await webhook(HUB_X, 'STOP', number)
     await webhook(HUB_X, 'hello, is anyone there?', number)
@@ -459,11 +461,42 @@ describe('an opt-out is a fact about the identifier, not a subscriber row (#2286
     await services.blasts.importBulk(HUB_X, [{ identifier: number, channel: 'sms' }])
     expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(true)
 
+    // The hub's own subscribe keyword is refused while the opt-out stands, so no
+    // row claims a consent the send path would refuse.
     expect((await webhook(HUB_X, 'JOIN', number)).status).toBe(200)
+    expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(true)
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('unsubscribed')
+
+    // A hub that picks an everyday word as its subscribe keyword cannot turn an
+    // ordinary reply into consent.
+    await services.blasts.updateBlastSettings(HUB_Y, { subscribeKeyword: 'HELLO' })
+    await webhook(HUB_Y, 'hello', number)
+    expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(true)
+
+    // START lifts it; after that the hub's JOIN subscribes, and an import is active.
+    expect((await webhook(HUB_X, 'start', number)).status).toBe(200)
     expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(false)
+    expect(await services.messagingSuppression.getRecord('sms', [number])).toBeNull()
+    await webhook(HUB_X, 'JOIN', number)
     expect((await subscriberFor(HUB_X, number))!.status).toBe('active')
     await services.blasts.importBulk(HUB_Y, [{ identifier: number, channel: 'sms' }])
     expect((await subscriberFor(HUB_Y, number))!.status).toBe('active')
+  })
+
+  it('an opt-in lifts only the identifiers it carries', async () => {
+    const uuid = '6a1d0c3e-2222-4333-8444-55556666aaaa'
+    const number = '+15550101010'
+    await webhook(HUB_X, 'STOP', uuid, { channelType: 'signal', aliases: [number] })
+
+    // UNSTOP from the UUID alone (phone-number privacy hides the number).
+    await webhook(HUB_X, 'UNSTOP', uuid, { channelType: 'signal' })
+    expect(await services.messagingSuppression.isSuppressed('signal', [uuid])).toBe(false)
+    expect(await services.messagingSuppression.isSuppressed('signal', [number])).toBe(true)
+
+    // Once an opt-in carries the number too, the record is gone.
+    await webhook(HUB_X, 'START', uuid, { channelType: 'signal', aliases: [number] })
+    expect(await services.messagingSuppression.isSuppressed('signal', [number])).toBe(false)
+    expect(await services.messagingSuppression.getRecord('signal', [uuid, number])).toBeNull()
   })
 
   it('the outbound backstop refuses a suppressed recipient, and the refusal is counted', async () => {

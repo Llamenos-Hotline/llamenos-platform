@@ -54,18 +54,18 @@ const VIA_CASE: HubScope = { via: 'parent', fk: 'case_id', parentTable: 'case_re
  * reason: it is documented as hub-key-sealed but has no hub_id, so which hub's
  * key wrapped it cannot be determined from the schema.
  *
- * `messaging_suppressions` / `messaging_suppression_identifiers` are the
- * deployment-wide opt-out record: a person who sent STOP to the shared sender
- * identity stays opted out of every hub, so shredding the hub whose webhook
- * happened to receive the STOP must not delete it — that would hand consent back
- * to someone who withdrew it. They hold keyed hashes only, no hub-sealed data.
+ * `messaging_suppression_identifiers` belongs to the deployment-wide opt-out
+ * record: a person who sent STOP to the shared sender identity stays opted out of
+ * every hub, so shredding the hub whose webhook happened to receive the STOP must
+ * not delete it — that would hand consent back to someone who withdrew it. It
+ * holds keyed hashes only. Its parent, `messaging_suppressions`, is a shred target
+ * for its hub provenance only (see below), never deleted.
  */
 export const CROSS_HUB_TABLES = [
   'audit_user_keys',
   'devices',
   'entity_type_templates',
   'messaging_suppression_identifiers',
-  'messaging_suppressions',
   'platform_role_envelopes',
   'provision_rooms',
   'puk_envelopes',
@@ -196,6 +196,14 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
   {
     kind: 'clear-envelopes', table: 'subscribers', scope: BY_HUB,
     columns: { encrypted_identifier: 'NULL' },
+  },
+  // An opt-out outlives the hub that received it (#2286): the row stays, so the
+  // person stays unreachable from every other hub, but what ties it to this hub
+  // — the hub id and the provider id of the STOP message — is cleared.
+  {
+    kind: 'clear-envelopes', table: 'messaging_suppressions',
+    scope: { via: 'hub-id', column: 'source_hub_id' },
+    columns: { source_hub_id: 'NULL', source_external_id: 'NULL' },
   },
 
   // --- Class D: key-recovery paths ----------------------------------------

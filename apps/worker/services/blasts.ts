@@ -97,7 +97,7 @@ export class BlastsService {
     protected hmacSecret?: string,
     protected serverKek?: string,
     protected messagingHashKey?: string,
-    /** The opt-out record: import files a suppressed identifier as unsubscribed, STOP writes it, the subscribe keyword clears it. */
+    /** The opt-out record: STOP writes it; import and the subscribe keyword consult it. */
     protected suppression: MessagingSuppressionService = new MessagingSuppressionService(db, messagingHashKey),
   ) {}
 
@@ -407,9 +407,8 @@ export class BlastsService {
       /** Every hash an existing row for this sender may sit under (`identifierHash` included). */
       lookupHashes: string[]
       /**
-       * Every identifier of the sender the keyword applies to — the suppression
-       * record is filed, or cleared, under each. For an opt-in, ONLY the ones the
-       * message itself carried.
+       * Every identifier of the sender the keyword applies to: a STOP files the
+       * opt-out under each; the subscribe keyword is refused while any is suppressed.
        */
       identifiers: string[]
       /** Provider message id of the inbound keyword message. */
@@ -449,9 +448,13 @@ export class BlastsService {
 
     // --- Subscribe ---
     if (normalizedKeyword === settings.subscribeKeyword.toUpperCase()) {
-      // The one thing that lifts an opt-out: the person asking, in a message of
-      // their own, to be messaged again.
-      await this.suppression.clear(data.channel, data.identifiers)
+      // The hub's subscribe keyword is not the deployment-wide opt-in: a sender
+      // who sent STOP must send START first (the router clears the opt-out on
+      // OPT_IN_KEYWORDS). Until then nothing is subscribed, so no row claims
+      // consent the send path would refuse anyway.
+      if (await this.suppression.isSuppressed(data.channel, data.identifiers)) {
+        return { action: 'suppressed', message: '' }
+      }
       const [existing] = await this.getSubscribersByIdentifierHashes(data.lookupHashes, hubId)
       if (existing) {
         // RACE-13: Atomic channel merge at the SQL level to avoid read-modify-write race.
