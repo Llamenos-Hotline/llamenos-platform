@@ -161,7 +161,7 @@ final class ShiftFlowUITests: BaseUITest {
                 "--reset-keychain", "--test-authenticated",
                 "--test-hub-url", "http://127.0.0.1:9",
             ])
-            app.launchAnsweringSystemPrompts()
+            app.launchToFirstScreen()
             XCTAssertTrue(find("main-tab-view").waitForExistence(timeout: 60))
         }
         when("I navigate to shifts") {

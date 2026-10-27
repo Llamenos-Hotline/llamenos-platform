@@ -136,9 +136,23 @@ struct LlamenosApp: App {
 
     // MARK: - Push Notifications
 
+    /// What the app asks for. UI-test builds add `.provisional`, which the system grants
+    /// without presenting the springboard permission alert. That alert is answered by
+    /// tapping Allow, and a correctly aimed tap on a settled alert is sometimes swallowed
+    /// (#2291): it stayed up for 30s and failed the shard's first test. With provisional
+    /// authorization every UI test runs the same request → granted → register path and
+    /// none of them ever has an alert to dismiss.
+    private static var pushAuthorizationOptions: UNAuthorizationOptions {
+        #if UI_TESTING
+        [.alert, .sound, .badge, .provisional]
+        #else
+        [.alert, .sound, .badge]
+        #endif
+    }
+
     /// Request notification authorization and register for remote notifications.
     private func requestPushNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+        UNUserNotificationCenter.current().requestAuthorization(options: Self.pushAuthorizationOptions) { granted, error in
             if let error {
                 return
             }

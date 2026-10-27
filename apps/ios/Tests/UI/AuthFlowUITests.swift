@@ -12,10 +12,11 @@ final class AuthFlowUITests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        failOnSystemAlert()
         app = XCUIApplication()
         // Reset state for clean test runs; skip hub validation for fake URLs
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-skip-hub-validation"])
-        app.launchAnsweringSystemPrompts()
+        app.launchToFirstScreen()
     }
 
     override func tearDown() {
