@@ -25,6 +25,13 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    ignore:
+      # Digest-only pin with no tag to compare, so dependabot proposes whatever
+      # `latest` is — Asterisk 23.5.0 against the vetted 22.10.1. Moving it is
+      # a coordinated change (ASTERISK_VERSION + ASTERISK_SHA256 in
+      # Dockerfile.asterisk, the compose pins, VETTED_DIGESTS in
+      # asterisk-image-dtls-pin.test.ts), never a lone digest swap.
+      - dependency-name: "andrius/asterisk"
     groups:
       docker-base-images:
         patterns: ["*"]
