@@ -105,12 +105,23 @@ final class AdminFlowUITests: BaseUITest {
         // itself so tapping it exercises the action rather than its container.
         app.buttons["add-ban-button"].tap()
 
+        let submit = app.buttons["submit-add-ban"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 10), "The Add Ban sheet should present its submit button")
+        XCTAssertFalse(submit.isEnabled, "Submission should stay disabled until an identifier is entered")
+
         let identifierInput = app.textFields["ban-hash-input"]
-        identifierInput.tap()
+        guard focusTextField(identifierInput) else { return }
         identifierInput.typeText(String(repeating: "a", count: 64))
 
-        XCTAssertTrue(
-            app.buttons["submit-add-ban"].isEnabled,
+        // `typeText` returns once the key events are synthesized, not once the binding behind the
+        // field has consumed them, so wait on the button the identifier is meant to enable.
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isEnabled == true"),
+            object: submit
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [enabled], timeout: 10),
+            .completed,
             "Entering a ban identifier should enable submission"
         )
     }
