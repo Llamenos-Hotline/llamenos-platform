@@ -324,6 +324,7 @@ describe('BlastsService resubscribe merges a usable channel (#1595)', () => {
     const result = await blasts.handleSubscriberKeyword(hubId, {
       identifier: '+15550001111',
       identifierHash,
+      lookupHashes: [identifierHash],
       keyword: 'JOIN',
       channel: 'whatsapp',
     })

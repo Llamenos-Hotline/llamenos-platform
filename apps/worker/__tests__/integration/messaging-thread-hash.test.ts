@@ -16,6 +16,10 @@
  *  5. A subscriber created by the bulk importer is keyed by the same hash the router
  *     computes, so their STOP registers (#2261).
  *
+ *  6. One person reaches the router under several identifiers (a Signal UUID and
+ *     phone number, WhatsApp digits with or without "+"); a subscriber filed under
+ *     any one of them is unsubscribed by a STOP carrying another.
+ *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
  */
 // pg-array-patch must be imported before any schema is loaded.
@@ -73,14 +77,19 @@ beforeAll(() => {
   })
 })
 
-function incoming(body: string, sender: string): IncomingMessage {
-  return { channelType: 'sms', externalId: `SM-${crypto.randomUUID()}`, senderIdentifier: sender, body, timestamp: new Date().toISOString() }
+function incoming(body: string, sender: string, overrides: Partial<IncomingMessage> = {}): IncomingMessage {
+  return { channelType: 'sms', externalId: `SM-${crypto.randomUUID()}`, senderIdentifier: sender, body, timestamp: new Date().toISOString(), ...overrides }
 }
 
-async function webhook(hubId: string, body: string, sender: string = SENDER): Promise<{ status: number }> {
+async function webhook(
+  hubId: string,
+  body: string,
+  sender: string = SENDER,
+  overrides: Partial<IncomingMessage> = {},
+): Promise<{ status: number }> {
   vi.mocked(getMessagingAdapterFromService).mockResolvedValue({
     validateWebhook: vi.fn().mockResolvedValue(true),
-    parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body, sender)),
+    parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body, sender, overrides)),
   } as unknown as MessagingAdapter)
   const { default: messaging } = await import('../../messaging/router')
   const app = new Hono<AppEnv>()
@@ -96,7 +105,7 @@ async function webhook(hubId: string, body: string, sender: string = SENDER): Pr
     await next()
   })
   app.route('/api/messaging', messaging)
-  const res = await app.request(`/api/messaging/sms/webhook?hub=${hubId}`, {
+  const res = await app.request(`/api/messaging/${overrides.channelType ?? 'sms'}/webhook?hub=${hubId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: crypto.randomUUID() }),
@@ -273,5 +282,70 @@ describe('a bulk-imported subscriber is matched by their own STOP (#2261)', () =
   it('refuses to import without a messaging hash key, rather than writing a hash STOP can never match', async () => {
     const keyless = createServices(fresh.db, { hmacSecret: HMAC_SECRET, serverKek: SERVER_KEK, env: { ENVIRONMENT: 'test' } })
     await expect(keyless.blasts.importBulk(HUB_B, [{ identifier: '+15550100910', channel: 'sms' }])).rejects.toMatchObject({ status: 500 })
+  })
+})
+
+describe('a STOP carrying one identifier shape unsubscribes the person filed under another', () => {
+  const SIGNAL_UUID = '0b6f2c1e-1111-4222-8333-444455556666'
+  const SIGNAL_NUMBER = '+15550100808'
+  const WA_NUMBER = '+15550100606'
+
+  const subscribersOf = (hubId: string) =>
+    fresh.db.select().from(schema.subscribers).where(eq(schema.subscribers.hubId, hubId))
+  const rowFor = async (hubId: string, identifier: string) =>
+    (await subscribersOf(hubId)).find((s) => s.identifierHash === messagingContactHash(identifier, hubId, MESSAGING_HASH_KEY))
+
+  it('imported by phone number, STOP arrives from the Signal UUID: the number is unsubscribed', async () => {
+    await services.blasts.importBulk(HUB_A, [{ identifier: SIGNAL_NUMBER, channel: 'signal' }])
+    const imported = await rowFor(HUB_A, SIGNAL_NUMBER)
+    expect(imported!.status).toBe('active')
+
+    // The Signal adapter's shape: UUID as the sender, the number as an alias.
+    expect((await webhook(HUB_A, 'STOP', SIGNAL_UUID, { channelType: 'signal', aliases: [SIGNAL_NUMBER] })).status).toBe(200)
+
+    expect((await rowFor(HUB_A, SIGNAL_NUMBER))!.status).toBe('unsubscribed')
+    // The opt-out is an update of the imported row, not a second record of the person.
+    expect(await rowFor(HUB_A, SIGNAL_UUID)).toBeUndefined()
+  })
+
+  it('imported by UUID, STOP arrives from the same envelope: the UUID row is unsubscribed', async () => {
+    await services.blasts.importBulk(HUB_B, [{ identifier: SIGNAL_UUID, channel: 'signal' }])
+
+    expect((await webhook(HUB_B, 'STOP', SIGNAL_UUID, { channelType: 'signal', aliases: [SIGNAL_NUMBER] })).status).toBe(200)
+
+    expect((await rowFor(HUB_B, SIGNAL_UUID))!.status).toBe('unsubscribed')
+  })
+
+  it('a person filed under both shapes is unsubscribed under both', async () => {
+    const hub = '9f2c1b64-0000-4000-8000-0000000000cc'
+    await services.blasts.importBulk(hub, [
+      { identifier: SIGNAL_UUID, channel: 'signal' },
+      { identifier: SIGNAL_NUMBER, channel: 'signal' },
+    ])
+
+    expect((await webhook(hub, 'STOP', SIGNAL_UUID, { channelType: 'signal', aliases: [SIGNAL_NUMBER] })).status).toBe(200)
+
+    expect((await subscribersOf(hub)).map((s) => s.status)).toEqual(['unsubscribed', 'unsubscribed'])
+  })
+
+  it('imported as "+number" in loose formatting, STOP from WhatsApp\'s bare digits: unsubscribed', async () => {
+    await services.blasts.importBulk(HUB_A, [{ identifier: '+1 (555) 010-0606', channel: 'whatsapp' }])
+    const imported = await rowFor(HUB_A, WA_NUMBER)
+    expect(imported!.status).toBe('active')
+
+    expect((await webhook(HUB_A, 'STOP', WA_NUMBER.slice(1), { channelType: 'whatsapp' })).status).toBe(200)
+
+    expect((await rowFor(HUB_A, WA_NUMBER))!.status).toBe('unsubscribed')
+  })
+
+  it('does not unsubscribe a different person in the same hub, or the same person in another hub', async () => {
+    const other = '+15550100505'
+    await services.blasts.importBulk(HUB_A, [{ identifier: other, channel: 'signal' }])
+    await services.blasts.importBulk(HUB_B, [{ identifier: other, channel: 'signal' }])
+
+    await webhook(HUB_A, 'STOP', SIGNAL_UUID, { channelType: 'signal', aliases: [SIGNAL_NUMBER] })
+
+    expect((await rowFor(HUB_A, other))!.status).toBe('active')
+    expect((await rowFor(HUB_B, other))!.status).toBe('active')
   })
 })

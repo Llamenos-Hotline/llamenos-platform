@@ -9,7 +9,7 @@ import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService } from '../lib/push-dispatch'
 import { createLogger } from '../lib/logger'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
-import { messagingContactHash } from '../lib/messaging-contact-hash'
+import { messagingContactHash, subscriberHashes } from '../lib/messaging-contact-hash'
 import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
@@ -275,7 +275,7 @@ messaging.post('/:channel/webhook',
     if (normalizedBody === 'STOP') {
       await services.blasts.handleSubscriberKeyword(effectiveHubId, {
         identifier: incoming.senderIdentifier,
-        identifierHash: senderHash,
+        ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY),
         keyword: 'STOP',
         channel: incoming.channelType,
       })
@@ -287,7 +287,7 @@ messaging.post('/:channel/webhook',
         if (normalizedBody === settings.subscribeKeyword.toUpperCase()) {
           await services.blasts.handleSubscriberKeyword(effectiveHubId, {
             identifier: incoming.senderIdentifier,
-            identifierHash: senderHash,
+            ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY),
             keyword: normalizedBody,
             channel: incoming.channelType,
           })
@@ -364,6 +364,27 @@ messaging.post('/:channel/webhook',
   // Return 200 to acknowledge webhook (providers expect fast acknowledgment)
   return c.json({ ok: true })
 })
+
+/**
+ * The hashes a blast subscriber is filed and found under for this sender. Every
+ * identifier the webhook carried counts: Signal's UUID and phone number, and, when
+ * the envelope hides the number (phone-number privacy), the number a previous
+ * message from this UUID recorded. A STOP matched on one shape alone would leave
+ * the same person subscribed under the other.
+ */
+async function subscriberHashesFor(
+  services: Services,
+  incoming: IncomingMessage,
+  hubId: string | undefined,
+  messagingHashKey: string,
+) {
+  const identifiers = [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
+  if (incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
+    const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
+    if (known?.number) identifiers.push(known.number)
+  }
+  return subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey)
+}
 
 /**
  * Try to auto-assign a new conversation to an available volunteer.
