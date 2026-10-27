@@ -14,6 +14,7 @@ import { ShiftsService } from './shifts'
 import { CallsService } from './calls'
 import { ConversationsService } from './conversations'
 import { BlastsService } from './blasts'
+import { MessagingSuppressionService } from './messaging-suppression'
 import { ContactsService } from './contacts'
 import { CasesService } from './cases'
 import { TaskScheduler, type TaskSchedulerServiceDeps } from './scheduler'
@@ -53,6 +54,8 @@ export interface Services {
   calls: CallsService
   conversations: ConversationsService
   blasts: BlastsService
+  /** Messaging opt-outs: every outbound adapter and the subscriber importer consult it. */
+  messagingSuppression: MessagingSuppressionService
   contacts: ContactsService
   cases: CasesService
   scheduler: TaskScheduler
@@ -144,6 +147,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     tokenSecret: opts?.notifierTokenSecret ?? '',
   })
   const digestCron = new DigestCronService(db, userNotifications, securityPrefs)
+  const messagingSuppression = new MessagingSuppressionService(db, opts?.messagingHashKey)
   const providerSetup = new ProviderSetup(db, opts?.serverKek ?? '', webhookOrigin(opts?.env ?? {}))
 
   const services: Services = {
@@ -154,7 +158,8 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     shifts: new ShiftsService(db),
     calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients, serverKek: opts?.serverKek }),
     conversations,
-    blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek, opts?.messagingHashKey),
+    blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek, opts?.messagingHashKey, messagingSuppression),
+    messagingSuppression,
     contacts: new ContactsService(db),
     cases: new CasesService(db),
     scheduler: new TaskScheduler(
@@ -252,6 +257,7 @@ export {
   CallsService,
   ConversationsService,
   BlastsService,
+  MessagingSuppressionService,
   ContactsService,
   CasesService,
   TaskScheduler,

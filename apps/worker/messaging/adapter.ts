@@ -57,6 +57,12 @@ export interface SendResult {
   success: boolean
   externalId?: string
   error?: string
+  /**
+   * Set when the send was refused because the recipient opted out (see
+   * `messaging/suppression-guard.ts`). Terminal: retrying cannot succeed and must
+   * not be attempted.
+   */
+  suppressed?: true
 }
 
 export interface ChannelStatus {

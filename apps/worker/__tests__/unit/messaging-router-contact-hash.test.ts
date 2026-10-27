@@ -198,6 +198,10 @@ describe('blast keywords are matched on the router hash (#2182)', () => {
       identifier: SENDER,
       identifierHash: messagingContactHash(SENDER, HUB, KEY),
       lookupHashes: expect.arrayContaining([messagingContactHash(SENDER, HUB, KEY)]),
+      // The suppression record is filed (STOP) or cleared (JOIN) under these, and
+      // names the inbound message that caused it.
+      identifiers: [SENDER],
+      externalId: expect.any(String),
       keyword: 'STOP',
       channel: 'sms',
     })
@@ -213,6 +217,10 @@ describe('blast keywords are matched on the router hash (#2182)', () => {
       identifier: SENDER,
       identifierHash: messagingContactHash(SENDER, HUB, KEY),
       lookupHashes: expect.arrayContaining([messagingContactHash(SENDER, HUB, KEY)]),
+      // The suppression record is filed (STOP) or cleared (JOIN) under these, and
+      // names the inbound message that caused it.
+      identifiers: [SENDER],
+      externalId: expect.any(String),
       keyword: 'JOIN',
       channel: 'sms',
     })
@@ -244,6 +252,7 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
     vi.mocked(services.blasts.handleSubscriberKeyword).mock.calls[0][1] as unknown as {
       identifierHash: string
       lookupHashes: string[]
+      identifiers: string[]
     }
 
   it('a Signal STOP with a UUID and a phone number looks up both', async () => {
@@ -276,6 +285,8 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
 
     expect(lookup).toHaveBeenCalledWith(HUB, UUID)
     expect(stopData(services).lookupHashes).toContain(messagingContactHash(NUMBER, HUB, KEY))
+    // The opt-out is recorded against the recorded number too, so a later import of it is opted out.
+    expect(stopData(services).identifiers).toEqual([UUID, NUMBER])
     lookup.mockRestore()
   })
 
@@ -293,6 +304,8 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
 
     expect(lookup).not.toHaveBeenCalled()
     expect(stopData(services).lookupHashes).not.toContain(messagingContactHash(NUMBER, HUB, KEY))
+    // Nor can it lift an opt-out through a number the message did not carry.
+    expect(stopData(services).identifiers).toEqual([UUID])
     lookup.mockRestore()
   })
 

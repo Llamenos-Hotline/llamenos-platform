@@ -17,6 +17,7 @@ import { createWhatsAppAdapter } from '../messaging/whatsapp/factory'
 import { createSignalAdapter } from '../messaging/signal/factory'
 import { createRCSAdapter } from '../messaging/rcs/factory'
 import { createTelegramAdapter } from '../messaging/telegram/factory'
+import { guardOutbound, type OutboundSuppression } from '../messaging/suppression-guard'
 import { createLogger } from './logger'
 
 const logger = createLogger('service-factories')
@@ -137,17 +138,33 @@ export async function getHubTelephonyFromService(
   return getTelephonyFromService(env, settingsService)
 }
 
+type MessagingSettingsSource = {
+  getMessagingConfig(): Promise<MessagingConfig>
+  getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
+}
+
 /**
  * Get a MessagingAdapter for the specified channel (service-based version).
  * Uses SettingsService instead of DO stubs.
+ *
+ * `suppression` is required, not optional: this is the one place adapters are
+ * built, and every adapter it returns refuses to send to an identifier that opted
+ * out (`messaging/suppression-guard.ts`). An outbound path cannot get an adapter
+ * that skips the check.
  */
 export async function getMessagingAdapterFromService(
   channel: MessagingChannelType,
-  settingsService: {
-    getMessagingConfig(): Promise<MessagingConfig>
-    getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
-  },
+  settingsService: MessagingSettingsSource,
+  suppression: OutboundSuppression,
   webhookBaseUrl = '',
+): Promise<MessagingAdapter> {
+  return guardOutbound(await createMessagingAdapter(channel, settingsService, webhookBaseUrl), suppression)
+}
+
+async function createMessagingAdapter(
+  channel: MessagingChannelType,
+  settingsService: MessagingSettingsSource,
+  webhookBaseUrl: string,
 ): Promise<MessagingAdapter> {
   const config = await settingsService.getMessagingConfig()
   if (!config || !config.enabledChannels.includes(channel)) {

@@ -53,11 +53,19 @@ const VIA_CASE: HubScope = { via: 'parent', fk: 'case_id', parentTable: 'case_re
  * different subject. `entity_type_templates` is excluded for a different
  * reason: it is documented as hub-key-sealed but has no hub_id, so which hub's
  * key wrapped it cannot be determined from the schema.
+ *
+ * `messaging_suppressions` / `messaging_suppression_identifiers` are the
+ * deployment-wide opt-out record: a person who sent STOP to the shared sender
+ * identity stays opted out of every hub, so shredding the hub whose webhook
+ * happened to receive the STOP must not delete it — that would hand consent back
+ * to someone who withdrew it. They hold keyed hashes only, no hub-sealed data.
  */
 export const CROSS_HUB_TABLES = [
   'audit_user_keys',
   'devices',
   'entity_type_templates',
+  'messaging_suppression_identifiers',
+  'messaging_suppressions',
   'platform_role_envelopes',
   'provision_rooms',
   'puk_envelopes',

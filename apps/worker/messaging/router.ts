@@ -95,7 +95,7 @@ messaging.post('/:channel/webhook',
 
   let adapter: MessagingAdapter
   try {
-    adapter = await getMessagingAdapterFromService(channel, services.settings, c.env.WEBHOOK_BASE_URL ?? '')
+    adapter = await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression, c.env.WEBHOOK_BASE_URL ?? '')
   } catch {
     return c.json({ error: `${channel} channel is not configured` }, 404)
   }
@@ -276,6 +276,7 @@ messaging.post('/:channel/webhook',
       await services.blasts.handleSubscriberKeyword(effectiveHubId, {
         identifier: incoming.senderIdentifier,
         ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: true }),
+        externalId: incoming.externalId,
         keyword: 'STOP',
         channel: incoming.channelType,
       })
@@ -288,6 +289,7 @@ messaging.post('/:channel/webhook',
           await services.blasts.handleSubscriberKeyword(effectiveHubId, {
             identifier: incoming.senderIdentifier,
             ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: false }),
+            externalId: incoming.externalId,
             keyword: normalizedBody,
             channel: incoming.channelType,
           })
@@ -366,15 +368,16 @@ messaging.post('/:channel/webhook',
 })
 
 /**
- * The hashes a blast subscriber is filed and found under for this sender. Every
- * identifier the webhook carried counts: Signal's UUID and phone number, and, when
- * the envelope hides the number (phone-number privacy), the number a previous
- * message from this UUID recorded. A STOP matched on one shape alone would leave
- * the same person subscribed under the other.
+ * The hashes a blast subscriber is filed and found under for this sender, and the
+ * identifiers they came from (the suppression record is filed, or cleared, under
+ * the same ones). Every identifier the webhook carried counts: Signal's UUID and
+ * phone number, and, when the envelope hides the number (phone-number privacy),
+ * the number a previous message from this UUID recorded. A STOP matched on one
+ * shape alone would leave the same person subscribed under the other.
  *
  * The recorded number is server-linked, not carried by this message, so only an
  * opt-out may use it: widening a re-subscribe through it could grant consent to a
- * row the sender never named.
+ * row the sender never named, or lift an opt-out the sender never revoked.
  */
 async function subscriberHashesFor(
   services: Services,
@@ -388,7 +391,7 @@ async function subscriberHashesFor(
     const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
     if (known?.number) identifiers.push(known.number)
   }
-  return subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey)
+  return { identifiers, ...subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey) }
 }
 
 /**

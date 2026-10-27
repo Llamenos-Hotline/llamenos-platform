@@ -58,6 +58,7 @@ describe('HUB_SHRED_TARGETS', () => {
     // forgetting one is how a volunteer in two hubs loses both.
     expect([...CROSS_HUB_TABLES].sort()).toEqual([
       'audit_user_keys', 'devices', 'entity_type_templates',
+      'messaging_suppression_identifiers', 'messaging_suppressions',
       'platform_role_envelopes', 'provision_rooms', 'puk_envelopes',
       'roles', 'sessions', 'sigchain_links', 'user_role_envelopes',
       'user_signal_contacts', 'users', 'webauthn_credentials',

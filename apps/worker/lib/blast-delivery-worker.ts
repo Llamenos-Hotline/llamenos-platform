@@ -10,7 +10,8 @@
  *   2. Every POLL_INTERVAL_MS, the worker checks for active blasts
  *   3. For each active blast, drains a batch of pending deliveries
  *   4. Sends each delivery through the appropriate messaging adapter
- *   5. Checks subscriber status before each send (mid-flight opt-out)
+ *   5. Checks subscriber status before each send (mid-flight opt-out); the
+ *      adapter itself refuses a suppressed recipient (messaging/suppression-guard.ts)
  *   6. Updates delivery status (sent/failed/opted_out)
  *   7. Syncs blast stats after each batch
  *   8. When all deliveries are terminal, blast transitions to 'sent'
@@ -125,7 +126,7 @@ async function pollForWork(): Promise<void> {
       const current = await deps.blastsService.getBlast(blast.id)
       if (current.status !== 'sending') continue
 
-      await processBlastBatch(blast.id, blast.hubId ?? '')
+      await processBlastBatch(deps, blast.id, blast.hubId ?? '')
     }
   } catch (err) {
     logger.error('Poll error', { error: String(err) })
@@ -135,11 +136,10 @@ async function pollForWork(): Promise<void> {
 }
 
 /**
- * Process one batch of deliveries for a blast.
+ * Process one batch of deliveries for a blast. Exported for tests; the poller
+ * calls it with the deps the worker was started with.
  */
-async function processBlastBatch(blastId: string, hubId: string): Promise<void> {
-  if (!deps) return
-
+export async function processBlastBatch(deps: BlastDeliveryWorkerDeps, blastId: string, hubId: string): Promise<void> {
   // Get blast settings for rate limit
   const settings = await deps.blastsService.getBlastSettings(hubId)
 
@@ -234,6 +234,10 @@ async function processBlastBatch(blastId: string, hubId: string): Promise<void> 
 
       if (result.success) {
         await deps.blastsService.markDeliverySent(delivery.id, result.externalId)
+      } else if (result.suppressed) {
+        // The outbound backstop refused it: the recipient opted out after this
+        // delivery was queued, or was never consenting. Terminal — no retry.
+        await deps.blastsService.markDeliveryOptedOut(delivery.id, result.error)
       } else {
         await deps.blastsService.markDeliveryFailed(
           delivery.id,

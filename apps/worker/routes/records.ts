@@ -1301,7 +1301,7 @@ records.post('/:id/notify-contacts',
 
     for (const recipient of body.recipients) {
       try {
-        const adapter = await getMessagingAdapterFromService(recipient.channel, services.settings)
+        const adapter = await getMessagingAdapterFromService(recipient.channel, services.settings, services.messagingSuppression)
         const sendResult = await adapter.sendMessage({
           recipientIdentifier: recipient.identifier,
           body: recipient.message,

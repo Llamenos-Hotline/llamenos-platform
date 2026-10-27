@@ -19,6 +19,10 @@
  *  6. One person reaches the router under several identifiers (a Signal UUID and
  *     phone number, WhatsApp digits with or without "+"); a subscriber filed under
  *     any one of them is unsubscribed by a STOP carrying another.
+ *  7. A STOP is recorded against the identifier whether or not a subscriber exists
+ *     (#2286): import files a suppressed identifier opted out, every shape of it
+ *     reaches the one record, only the subscribe keyword clears it, and the
+ *     outbound backstop refuses a send — a queued blast delivery included.
  *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
  */
@@ -39,6 +43,8 @@ import { banHash, hashPhone } from '../../lib/crypto'
 import { messagingContactHash } from '../../lib/messaging-contact-hash'
 import type { AppEnv } from '../../types'
 import type { MessagingAdapter, IncomingMessage } from '../../messaging/adapter'
+import { guardOutbound, SUPPRESSED_SEND_ERROR } from '../../messaging/suppression-guard'
+import { processBlastBatch } from '../../lib/blast-delivery-worker'
 import { freshHubDb } from './hub-shred-helpers'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
@@ -272,10 +278,13 @@ describe('a bulk-imported subscriber is matched by their own STOP (#2261)', () =
     expect(after.find((s) => s.id === imported!.id)!.status).toBe('unsubscribed')
   })
 
-  it('the same number imported into another hub is a different row, and that hub is not unsubscribed', async () => {
+  it('the same number imported into another hub is a different row, and starts opted out (#2286)', async () => {
+    // Before #2286 this row was 'active': the STOP above was kept only as hub B's
+    // row status. But every hub messages from the one deployment-wide sender, so the
+    // person told that sender to stop, and hub A's import must not undo it.
     await services.blasts.importBulk(HUB_A, [{ identifier: IMPORTED_SENDER, channel: 'sms' }])
     const inA = (await subscribersOf(HUB_A)).find((s) => s.identifierHash === messagingContactHash(IMPORTED_SENDER, HUB_A, MESSAGING_HASH_KEY))
-    expect(inA!.status).toBe('active')
+    expect(inA!.status).toBe('unsubscribed')
     expect(inA!.identifierHash).not.toBe(messagingContactHash(IMPORTED_SENDER, HUB_B, MESSAGING_HASH_KEY))
   })
 
@@ -347,5 +356,173 @@ describe('a STOP carrying one identifier shape unsubscribes the person filed und
 
     expect((await rowFor(HUB_A, other))!.status).toBe('active')
     expect((await rowFor(HUB_B, other))!.status).toBe('active')
+  })
+})
+
+describe('an opt-out is a fact about the identifier, not a subscriber row (#2286)', () => {
+  const HUB_X = '9f2c1b64-0000-4000-8000-0000000000d1'
+  const HUB_Y = '9f2c1b64-0000-4000-8000-0000000000d2'
+  const SIGNAL_UUID = '6a1d0c3e-2222-4333-8444-555566667777'
+
+  const subscriberFor = async (hubId: string, identifier: string) =>
+    (await fresh.db.select().from(schema.subscribers).where(eq(schema.subscribers.hubId, hubId)))
+      .find((s) => s.identifierHash === messagingContactHash(identifier, hubId, MESSAGING_HASH_KEY))
+  const suppressionCount = async () => (await fresh.db.select().from(schema.messagingSuppressions)).length
+
+  it('STOP from someone with no subscriber row, then an import of that number: the subscriber starts opted out', async () => {
+    const number = '+15550101001'
+    expect(await subscriberFor(HUB_X, number)).toBeUndefined()
+
+    expect((await webhook(HUB_X, 'STOP', number, { externalId: 'SM-stop-1001' })).status).toBe(200)
+
+    // Nothing to unsubscribe — and yet the instruction is kept.
+    expect(await subscriberFor(HUB_X, number)).toBeUndefined()
+    const record = await services.messagingSuppression.getRecord('sms', [number])
+    expect(record).toMatchObject({ channel: 'sms', sourceHubId: HUB_X, sourceExternalId: 'SM-stop-1001', blockedCount: 0 })
+    expect(Date.now() - record!.receivedAt.getTime()).toBeLessThan(60_000)
+
+    // The import that used to resurrect consent, into the hub that got the STOP and into another.
+    expect(await services.blasts.importBulk(HUB_X, [{ identifier: number, channel: 'sms' }])).toMatchObject({ imported: 1 })
+    await services.blasts.importBulk(HUB_Y, [{ identifier: number, channel: 'sms' }])
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('unsubscribed')
+    expect((await subscriberFor(HUB_Y, number))!.status).toBe('unsubscribed')
+
+    // Someone else in the same import is not affected.
+    await services.blasts.importBulk(HUB_X, [{ identifier: '+15550101009', channel: 'sms' }])
+    expect((await subscriberFor(HUB_X, '+15550101009'))!.status).toBe('active')
+
+    // The record holds no readable form of the number.
+    const dump = await dumpDatabase()
+    expect(dump).not.toContain(number)
+    expect(dump).not.toContain(number.slice(1))
+  })
+
+  it('re-importing a row that was active before the STOP files it opted out', async () => {
+    const number = '+15550101003'
+    await services.blasts.importBulk(HUB_X, [{ identifier: number, channel: 'sms' }])
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('active')
+
+    // The STOP reaches the shared sender through another hub's webhook.
+    await webhook(HUB_Y, 'STOP', number)
+    await services.blasts.importBulk(HUB_X, [{ identifier: number, channel: 'sms', tags: ['again'] }])
+
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('unsubscribed')
+  })
+
+  it('every identifier shape reaches the one record', async () => {
+    const number = '+15550101002'
+    const before = await suppressionCount()
+
+    // WhatsApp via Meta: bare digits.
+    await webhook(HUB_X, 'STOP', number.slice(1), { channelType: 'whatsapp' })
+    expect(await suppressionCount()).toBe(before + 1)
+    const id = (await services.messagingSuppression.getRecord('whatsapp', [number.slice(1)]))!.id
+
+    for (const [channel, written] of [
+      ['whatsapp', number],
+      ['whatsapp', '+1 (555) 010-1002'],
+      ['whatsapp', `whatsapp:${number}`],
+      ['sms', number],
+      ['signal', number],
+    ] as const) {
+      expect((await services.messagingSuppression.getRecord(channel, [written]))?.id, `${channel} ${written}`).toBe(id)
+      const hub = crypto.randomUUID()
+      await services.blasts.importBulk(hub, [{ identifier: written, channel }])
+      expect((await subscriberFor(hub, number))!.status, `${channel} ${written}`).toBe('unsubscribed')
+    }
+    // A Telegram id that happens to be the same digits is a different person.
+    expect(await services.messagingSuppression.isSuppressed('telegram', [number.slice(1)])).toBe(false)
+
+    // Signal: one STOP carrying a UUID and a number files both under one record...
+    const signalNumber = '+15550101004'
+    const beforeSignal = await suppressionCount()
+    await webhook(HUB_X, 'STOP', SIGNAL_UUID, { channelType: 'signal', aliases: [signalNumber] })
+    expect(await suppressionCount()).toBe(beforeSignal + 1)
+    const signalId = (await services.messagingSuppression.getRecord('signal', [SIGNAL_UUID]))!.id
+    expect((await services.messagingSuppression.getRecord('signal', [signalNumber]))!.id).toBe(signalId)
+    // ...a later STOP from the number alone reuses it rather than opening a second...
+    await webhook(HUB_Y, 'STOP', signalNumber, { channelType: 'signal' })
+    expect(await suppressionCount()).toBe(beforeSignal + 1)
+    // ...and an import under either shape starts opted out.
+    await services.blasts.importBulk(HUB_Y, [{ identifier: SIGNAL_UUID, channel: 'signal' }, { identifier: signalNumber, channel: 'signal' }])
+    expect((await subscriberFor(HUB_Y, SIGNAL_UUID))!.status).toBe('unsubscribed')
+    expect((await subscriberFor(HUB_Y, signalNumber))!.status).toBe('unsubscribed')
+  })
+
+  it('only an explicit opt-in clears it: an ordinary reply does not, the subscribe keyword does', async () => {
+    const number = '+15550101005'
+    await webhook(HUB_X, 'STOP', number)
+    await webhook(HUB_X, 'hello, is anyone there?', number)
+    expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(true)
+
+    // A subscriber row created by an import is not consent either.
+    await services.blasts.importBulk(HUB_X, [{ identifier: number, channel: 'sms' }])
+    expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(true)
+
+    expect((await webhook(HUB_X, 'JOIN', number)).status).toBe(200)
+    expect(await services.messagingSuppression.isSuppressed('sms', [number])).toBe(false)
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('active')
+    await services.blasts.importBulk(HUB_Y, [{ identifier: number, channel: 'sms' }])
+    expect((await subscriberFor(HUB_Y, number))!.status).toBe('active')
+  })
+
+  it('the outbound backstop refuses a suppressed recipient, and the refusal is counted', async () => {
+    const number = '+15550101006'
+    await webhook(HUB_X, 'STOP', number)
+    const providerSend = vi.fn().mockResolvedValue({ success: true, externalId: 'SM-out' })
+    const adapter = guardOutbound(
+      { channelType: 'sms', sendMessage: providerSend } as unknown as MessagingAdapter,
+      services.messagingSuppression,
+    )
+
+    // However the recipient is written.
+    const refused = await adapter.sendMessage({ recipientIdentifier: '1 (555) 010-1006', body: 'hi', conversationId: 'c1' })
+    expect(refused).toEqual({ success: false, error: SUPPRESSED_SEND_ERROR, suppressed: true })
+    expect(providerSend).not.toHaveBeenCalled()
+    const record = await services.messagingSuppression.getRecord('sms', [number])
+    expect(record!.blockedCount).toBe(1)
+    expect(record!.lastBlockedAt).toBeInstanceOf(Date)
+
+    expect(await adapter.sendMessage({ recipientIdentifier: '+15550101007', body: 'hi', conversationId: 'c2' })).toMatchObject({ success: true })
+    expect(providerSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('a blast delivery queued before the STOP is not delivered', async () => {
+    const number = '+15550101008'
+    // A consenting subscriber of hub X (subscribe keyword: active, confirmed, verified channel).
+    await webhook(HUB_X, 'JOIN', number)
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('active')
+
+    const blast = await services.blasts.createBlast({
+      hubId: HUB_X, name: 'weekly', content: { text: 'hello' }, targetChannels: ['sms'], createdBy: 'test',
+    })
+    // What `send()` does to it; called directly because send()'s daily-limit query
+    // binds a Date that postgres-js under Node refuses (Bun SQL in production does not).
+    await fresh.db.update(schema.blasts).set({ status: 'sending', sentAt: new Date() }).where(eq(schema.blasts.id, blast.id))
+    expect(await services.blasts.expandBlast(blast.id)).toBeGreaterThanOrEqual(1)
+    const subscriberId = (await subscriberFor(HUB_X, number))!.id
+    const [queued] = (await services.blasts.getDeliveries(blast.id)).deliveries.filter((d) => d.subscriberId === subscriberId)
+    expect(queued!.status).toBe('pending')
+
+    // The STOP arrives after the delivery was queued, through hub Y's webhook — the
+    // same sender identity. Hub X's subscriber row is untouched, so only the
+    // suppression record stands between the queue and the person.
+    await webhook(HUB_Y, 'STOP', number)
+    expect((await subscriberFor(HUB_X, number))!.status).toBe('active')
+
+    const providerSend = vi.fn().mockResolvedValue({ success: true, externalId: 'SM-blast' })
+    await processBlastBatch({
+      blastsService: services.blasts,
+      settingsService: services.settings,
+      resolveAdapter: async () => guardOutbound(
+        { channelType: 'sms', sendMessage: providerSend, sendMediaMessage: providerSend } as unknown as MessagingAdapter,
+        services.messagingSuppression,
+      ),
+      resolveIdentifier: (id) => services.blasts.resolveSubscriberIdentifier(id),
+    }, blast.id, HUB_X)
+
+    expect(providerSend).not.toHaveBeenCalled()
+    const [after] = (await services.blasts.getDeliveries(blast.id)).deliveries.filter((d) => d.id === queued!.id)
+    expect(after).toMatchObject({ status: 'opted_out', error: SUPPRESSED_SEND_ERROR })
   })
 })

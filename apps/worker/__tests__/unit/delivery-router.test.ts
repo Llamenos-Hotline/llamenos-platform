@@ -57,6 +57,7 @@ describe('delivery-router', () => {
           smsContentMode: messagingConfig.smsContentMode ?? 'notification-only',
         } satisfies MessagingConfig),
       } as unknown as SettingsService,
+      suppression: { blocksOutbound: vi.fn().mockResolvedValue(false) },
       notifierUrl: signalRegistered ? 'http://notifier:3100' : undefined,
       notifierApiKey: signalRegistered ? 'api-key' : undefined,
     }

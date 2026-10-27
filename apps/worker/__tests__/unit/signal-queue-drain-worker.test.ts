@@ -11,6 +11,7 @@ import {
 } from '../../messaging/signal/queue'
 import type { SignalMessageQueue } from '../../messaging/signal/queue'
 import type { MessagingAdapter, SendResult } from '../../messaging/adapter'
+import { SUPPRESSED_SEND_ERROR } from '../../messaging/suppression-guard'
 
 interface FakeRow {
   id: string
@@ -71,6 +72,11 @@ function createFakeQueue(maxRetries: number) {
       row.lastError = error
       row.status = nextRetryCount >= maxRetries ? 'dead' : 'pending'
     }),
+    markDead: vi.fn(async (id: string, error: string) => {
+      const row = rows.get(id)!
+      row.lastError = error
+      row.status = 'dead'
+    }),
     isRateLimited: vi.fn(async () => false),
   }
 
@@ -116,6 +122,22 @@ describe('drainSignalQueue', () => {
 
     expect(rows.get('m1')!.status).toBe('sent')
     expect(queue.markSent).toHaveBeenCalledWith('m1', 'ext-1')
+  })
+
+  it('dead-letters a message the opt-out backstop refused, at once and without a retry (#2286)', async () => {
+    const { queue, rows, seedPending } = createFakeQueue(5)
+    seedPending({
+      id: 'm1', hubId: 'hub-1', conversationId: 'conv-1',
+      recipientIdentifier: '+15550001', body: 'hi', mediaUrl: null, mediaType: null, retryCount: 0,
+    })
+    const adapter = fakeAdapter(async () => ({ success: false, error: SUPPRESSED_SEND_ERROR, suppressed: true }))
+
+    await drainSignalQueue({ queue: queue as unknown as SignalMessageQueue, resolveSignalAdapter: async () => adapter })
+
+    expect(rows.get('m1')!.status).toBe('dead')
+    expect(rows.get('m1')!.lastError).toBe(SUPPRESSED_SEND_ERROR)
+    expect(rows.get('m1')!.retryCount).toBe(0)
+    expect(queue.markFailed).not.toHaveBeenCalled()
   })
 
   it('puts every claimed message back on the retry clock when no adapter is configured, without burning a real send', async () => {

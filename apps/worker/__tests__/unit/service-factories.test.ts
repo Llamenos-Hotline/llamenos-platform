@@ -75,6 +75,10 @@ vi.mock('@worker/messaging/telegram/factory', () => ({
   createTelegramAdapter: vi.fn().mockImplementation(() => ({ channel: 'telegram' })),
 }))
 
+
+/** A suppression record that holds nobody: these tests are about adapter selection. */
+const noSuppression = { blocksOutbound: async () => false }
+
 describe('service-factories', () => {
 
   describe('getTelephonyFromService', () => {
@@ -268,7 +272,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', accountSid: 'AC', authToken: 't', phoneNumber: '+1' } as TelephonyProviderConfig),
       }
-      const adapter = await getMessagingAdapterFromService('sms', settingsService)
+      const adapter = await getMessagingAdapterFromService('sms', settingsService, noSuppression)
       expect(adapter).toEqual({ channel: 'sms' })
     })
 
@@ -277,7 +281,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('whatsapp', settingsService)
+      const adapter = await getMessagingAdapterFromService('whatsapp', settingsService, noSuppression)
       expect(adapter).toEqual({ channel: 'whatsapp' })
     })
 
@@ -286,7 +290,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('signal', settingsService)
+      const adapter = await getMessagingAdapterFromService('signal', settingsService, noSuppression)
       expect(adapter).toEqual({ channel: 'signal' })
     })
 
@@ -295,7 +299,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('rcs', settingsService)
+      const adapter = await getMessagingAdapterFromService('rcs', settingsService, noSuppression)
       expect(adapter).toEqual({ channel: 'rcs' })
     })
 
@@ -304,8 +308,26 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('telegram', settingsService)
+      const adapter = await getMessagingAdapterFromService('telegram', settingsService, noSuppression)
       expect(adapter).toEqual({ channel: 'telegram' })
+    })
+
+    it('every adapter it returns refuses a suppressed recipient before the provider is called (#2286)', async () => {
+      const { createSMSAdapter } = await import('@worker/messaging/sms/factory')
+      const providerSend = vi.fn().mockResolvedValue({ success: true, externalId: 'SM1' })
+      vi.mocked(createSMSAdapter).mockReturnValueOnce({ channelType: 'sms', sendMessage: providerSend } as never)
+      const blocksOutbound = vi.fn().mockResolvedValue(true)
+      const settingsService = {
+        getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
+        getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', accountSid: 'AC', authToken: 't', phoneNumber: '+1' } as TelephonyProviderConfig),
+      }
+
+      const adapter = await getMessagingAdapterFromService('sms', settingsService, { blocksOutbound })
+      const result = await adapter.sendMessage({ recipientIdentifier: '+15550001111', body: 'hi', conversationId: 'c' })
+
+      expect(result).toMatchObject({ success: false, suppressed: true })
+      expect(blocksOutbound).toHaveBeenCalledWith('sms', '+15550001111')
+      expect(providerSend).not.toHaveBeenCalled()
     })
 
     it('throws when channel is not enabled', async () => {
@@ -317,7 +339,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn(),
       }
-      await expect(getMessagingAdapterFromService('whatsapp', settingsService)).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('whatsapp', settingsService, noSuppression)).rejects.toThrow(
         'whatsapp channel is not enabled'
       )
     })
@@ -332,7 +354,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn(),
       }
-      await expect(getMessagingAdapterFromService('sms', settingsService)).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('sms', settingsService, noSuppression)).rejects.toThrow(
         'SMS is not enabled'
       )
     })
@@ -346,7 +368,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn().mockResolvedValue(null),
       }
-      await expect(getMessagingAdapterFromService('sms', settingsService)).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('sms', settingsService, noSuppression)).rejects.toThrow(
         'SMS requires a configured telephony provider'
       )
     })
