@@ -289,6 +289,19 @@ export function invalidateRolesCache(): void {
  */
 type InitMode = 'default' | 'development'
 
+/**
+ * Serialise the writers of a "DELETE all rows, INSERT the new list" replacement.
+ * Under READ COMMITTED a second writer's DELETE blocks on the first's row locks,
+ * then skips the rows the first deleted and cannot see the rows it inserted, so
+ * re-inserting a row that is kept (same id) fails on the primary key — a 500 for
+ * two concurrent template applications — and rows with new ids survive as a
+ * union (#686). Holding a transaction-scoped advisory lock makes each
+ * replacement see the previous one's committed state: last writer wins.
+ */
+async function lockReplaceAll(tx: Pick<Database, 'execute'>, table: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${table}:replace`}))`)
+}
+
 export class SettingsService {
   /**
    * Modes already initialised by this process (cleared by `reset`). Tracked per
@@ -3143,6 +3156,7 @@ export class SettingsService {
     hubId?: string
   }): Promise<{ entityTypes: EntityTypeDefinition[] }> {
     await this.db.transaction(async (tx) => {
+      await lockReplaceAll(tx, 'entity_type_definitions')
       if (data.hubId !== undefined) {
         await tx.delete(entityTypeDefinitions).where(eq(entityTypeDefinitions.hubId, data.hubId))
       } else {
@@ -3319,6 +3333,7 @@ export class SettingsService {
     hubId?: string
   }): Promise<{ relationshipTypes: RelationshipTypeDefinition[] }> {
     await this.db.transaction(async (tx) => {
+      await lockReplaceAll(tx, 'relationship_type_definitions')
       if (data.hubId !== undefined) {
         await tx.delete(relationshipTypeDefinitions).where(eq(relationshipTypeDefinitions.hubId, data.hubId))
       } else {
@@ -3587,6 +3602,7 @@ export class SettingsService {
     hubId?: string
   }): Promise<{ reportTypes: ReportTypeDefinition[] }> {
     await this.db.transaction(async (tx) => {
+      await lockReplaceAll(tx, 'report_type_definitions')
       if (data.hubId !== undefined) {
         await tx.delete(reportTypeDefinitions).where(eq(reportTypeDefinitions.hubId, data.hubId))
       } else {

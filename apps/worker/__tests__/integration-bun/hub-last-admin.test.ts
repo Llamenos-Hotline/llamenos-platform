@@ -30,6 +30,7 @@ import { RecordsService } from '../../services/records'
 import {
   ROLE_CATALOG_LOCK_KEY,
   hubAdminLockKey,
+  assertRoleChangeKeepsAdmins,
   listHubsWithoutAdmin,
   lockHubAdminSets,
 } from '../../lib/hub-admin'
@@ -499,6 +500,83 @@ describe('concurrent role edits and admin removals cannot strand a hub', () => {
       expect(settled.filter(r => r.status === 'fulfilled')).toHaveLength(1)
       expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
     }
+  })
+})
+
+describe('a role-definition guard decides from one view of the users', () => {
+  type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+  /**
+   * `tx` with a hook that runs once, right after the first query that reads
+   * `users` has returned. It stands in for another connection committing between
+   * two of the guard's reads: READ COMMITTED lets that commit show up in the
+   * guard's NEXT read. Whatever the guard does with the first result it must not
+   * depend on a second read agreeing with it.
+   */
+  function afterFirstUsersRead(tx: Tx, hook: () => Promise<void>): { tx: Tx; fired: () => boolean } {
+    let usersReads = 0
+    let fired = false
+    const wrap = (target: object, isUsersRead: boolean): object =>
+      new Proxy(target, {
+        get(obj, prop) {
+          const value = Reflect.get(obj, prop, obj)
+          if (prop === 'then' && isUsersRead && typeof value === 'function') {
+            return (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+              value.call(obj, async (rows: unknown) => {
+                if (++usersReads === 1) {
+                  fired = true
+                  await hook()
+                }
+                return rows
+              }).then(resolve, reject)
+          }
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            const result = value.apply(obj, args)
+            return result && typeof result === 'object' ? wrap(result, isUsersRead || args[0] === users) : result
+          }
+        },
+      })
+    const proxied = new Proxy(tx, {
+      get(obj, prop) {
+        const value = Reflect.get(obj, prop, obj)
+        if (prop !== 'select' || typeof value !== 'function') return typeof value === 'function' ? value.bind(obj) : value
+        return (...args: unknown[]) => wrap(value.apply(obj, args), false)
+      },
+    })
+    return { tx: proxied as Tx, fired: () => fired }
+  }
+
+  it('deleting a role that confers no admin authority is not refused because an unrelated hub was purged mid-guard', async () => {
+    // Hub H has exactly one admin. The role being deleted has nothing to do with
+    // that admin, so no deletion of it can strand H. A purge of H (a scenario's
+    // teardown) takes no role-catalog lock, so it can land between the guard's
+    // "before" and "after" counts; a guard that counts the two from separate
+    // reads then sees H lose its admin and blames the role.
+    const adminRoleId = nextId('role-purged-admin')
+    await db.insert(roles).values({
+      id: adminRoleId, slug: adminRoleId, permissions: ['settings:manage', 'notes:read-all'],
+      isDefault: false, isSystem: false, description: '',
+    })
+    createdRoles.push(adminRoleId)
+    const bystanderRoleId = nextId('role-bystander')
+    await db.insert(roles).values({
+      id: bystanderRoleId, slug: bystanderRoleId, permissions: ['notes:read-own', 'audit:read'],
+      isDefault: false, isSystem: false, description: '',
+    })
+    createdRoles.push(bystanderRoleId)
+    const founder = await makeUser('purged-founder')
+    const hubId = await makeHub('purged', founder, [adminRoleId])
+
+    const spy = { fired: () => false }
+    await db.transaction(async tx => {
+      const hooked = afterFirstUsersRead(tx, async () => { await settings.purgeHub(hubId) })
+      spy.fired = hooked.fired
+      await assertRoleChangeKeepsAdmins(hooked.tx, bystanderRoleId, null)
+    })
+
+    expect(spy.fired()).toBe(true)
+    expect((await db.select({ id: hubs.id }).from(hubs).where(eq(hubs.id, hubId)))).toEqual([])
   })
 })
 

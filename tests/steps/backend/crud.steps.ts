@@ -395,7 +395,8 @@ Then('the role should have {int} permissions', async ({ request, world }, count:
 })
 
 When('the admin deletes the custom role', async ({ request, world }) => {
-  await deleteRoleViaApi(request, getCrudState(world).roleId!)
+  const { status, data } = await deleteRoleViaApi(request, getCrudState(world).roleId!)
+  expect(status, `DELETE role failed: ${JSON.stringify(data)}`).toBe(200)
 })
 
 When('an admin attempts to delete the system {string} role', async ({ request, world }, roleId: string) => {
