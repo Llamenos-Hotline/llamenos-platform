@@ -28,6 +28,42 @@ struct AttributedHubEventTests {
         #expect(a.event == b.event)
     }
 
+    // MARK: - Call payload (#2283)
+
+    @Test func callUpdateCompletedNamesTheCallThatEnded() throws {
+        let e = try #require(WebSocketService.parseHubEvent(
+            #"{"type":"call:update","callId":"CA-1","status":"completed"}"#, hubId: "hub-1"))
+        #expect(e.event == .callUpdate)
+        #expect(e.callId == "CA-1")
+        #expect(e.callStatus == .completed)
+        #expect(e.endedCallId == "CA-1")
+    }
+
+    @Test func terminalStatusesAndVoicemailEndACall() throws {
+        let unanswered = try #require(WebSocketService.parseHubEvent(
+            #"{"type":"call:update","callId":"CA-2","status":"unanswered"}"#, hubId: "h"))
+        #expect(unanswered.endedCallId == "CA-2")
+        let voicemail = try #require(WebSocketService.parseHubEvent(
+            #"{"type":"voicemail:new","callId":"CA-3"}"#, hubId: "h"))
+        #expect(voicemail.endedCallId == "CA-3")
+        let ended = try #require(WebSocketService.parseHubEvent(
+            #"{"type":"call:ended","callId":"CA-4"}"#, hubId: "h"))
+        #expect(ended.endedCallId == "CA-4")
+    }
+
+    @Test func aLiveStatusOrAMissingCallIdEndsNothing() throws {
+        for json in [
+            #"{"type":"call:update","callId":"CA-5","status":"in-progress"}"#,
+            #"{"type":"call:update","callId":"CA-6","status":"ringing"}"#,
+            #"{"type":"call:update","status":"completed"}"#,
+            #"{"type":"call:update","callId":"CA-7","status":"some-future-status"}"#,
+            #"{"type":"call:ring","callId":"CA-8"}"#,
+        ] {
+            let e = try #require(WebSocketService.parseHubEvent(json, hubId: "h"))
+            #expect(e.endedCallId == nil, "\(json)")
+        }
+    }
+
     // MARK: - Attributed event stream delivery
 
     @Test func attributedEventsStreamDeliversEmittedEvents() async {

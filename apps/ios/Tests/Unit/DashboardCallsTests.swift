@@ -9,12 +9,20 @@ import XCTest
 private final class DashboardCallsStubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var responses: [String: (Int, String)] = [:]
     nonisolated(unsafe) static var requested: [String] = []
+    /// Keys that are received and then never answered: a connection that hangs.
+    nonisolated(unsafe) static var hanging: Set<String> = []
     private static let lock = NSLock()
 
     static func reset(_ responses: [String: (Int, String)]) {
         lock.lock(); defer { lock.unlock() }
         self.responses = responses
         requested = []
+        hanging = []
+    }
+
+    static func hang(_ keys: String...) {
+        lock.lock(); defer { lock.unlock() }
+        hanging.formUnion(keys)
     }
 
     static func set(_ key: String, _ response: (Int, String)) {
@@ -35,7 +43,9 @@ private final class DashboardCallsStubURLProtocol: URLProtocol {
         Self.lock.lock()
         Self.requested.append(key)
         let canned = Self.responses[key]
+        let hangs = Self.hanging.contains(key)
         Self.lock.unlock()
+        if hangs { return }
 
         let (status, body) = canned ?? (404, #"{"error":"Not Found"}"#)
         let response = HTTPURLResponse(
@@ -91,6 +101,10 @@ final class DashboardCallsTests: XCTestCase {
     }
 
     private var activeKey: String { "GET /api/hubs/\(hubA)/calls/active" }
+    private var myStatusKey: String { "GET /api/hubs/\(hubA)/shifts/my-status" }
+
+    /// The relay the dashboard under test listens to.
+    private var ws: WebSocketService!
 
     private func makeViewModel(_ responses: [String: (Int, String)]) throws -> DashboardViewModel {
         let config = URLSessionConfiguration.ephemeral
@@ -100,10 +114,11 @@ final class DashboardCallsTests: XCTestCase {
         let api = APIService(cryptoService: crypto, hubContext: hubContext, sessionConfiguration: config)
         try api.configure(hubURLString: "https://hub.example.org")
         DashboardCallsStubURLProtocol.reset(responses)
+        ws = WebSocketService(cryptoService: crypto)
         return DashboardViewModel(
             apiService: api,
             cryptoService: crypto,
-            webSocketService: WebSocketService(cryptoService: crypto),
+            webSocketService: ws,
             hubContext: hubContext,
             shiftClockService: ShiftClockService(apiService: api)
         )
@@ -177,6 +192,120 @@ final class DashboardCallsTests: XCTestCase {
         vm.clearCalls()
         XCTAssertNil(vm.endedCall, "locking or logging out forgets the call")
         XCTAssertTrue(vm.heldCalls.isEmpty)
+    }
+
+    // MARK: - The relay says my call ended (#2283)
+
+    /// The decrypted content the server publishes when a call ends — the `/call-status`
+    /// webhook, the hang-up route and the test simulator all send exactly this.
+    private func callCompleted(_ id: String) -> String {
+        #"{"type":"call:update","callId":"\#(id)","status":"completed"}"#
+    }
+
+    /// Start the dashboard's relay listener and wait until it is subscribed.
+    private func listen(_ vm: DashboardViewModel) async throws {
+        vm.startEventListener()
+        try await waitUntil { true }
+    }
+
+    /// The volunteer's call ends while every request after the event hangs. The prompt to
+    /// write the call's note must appear from the event alone: before #2283 it was derived
+    /// only from a later `calls/active` answer, issued after `shifts/my-status` had
+    /// answered, so on a slow connection the volunteer got no prompt and lost the note.
+    func testMyCallEndingOnTheRelayPromptsForANoteEvenIfNoRequestEverAnswers() async throws {
+        let vm = try makeViewModel([
+            activeKey: active(call("mine-1", status: "in-progress", answeredBy: me)),
+        ])
+        await vm.loadDashboard()
+        XCTAssertEqual(vm.currentCall?.id, "mine-1")
+        try await listen(vm)
+        defer { vm.stopEventListener() }
+
+        DashboardCallsStubURLProtocol.hang(activeKey, myStatusKey)
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: callCompleted("mine-1"))
+
+        try await waitUntil(timeout: 3) { vm.endedCall != nil }
+        XCTAssertEqual(vm.endedCall?.id, "mine-1", "the event says the call ended; no fetch is needed to show it")
+        XCTAssertEqual(vm.endedCall?.hubId, hubA)
+        XCTAssertNil(vm.currentCall, "the call card gives way to the Call Ended prompt")
+    }
+
+    /// The reconcile fetches must not wait on each other: `calls/active` is issued even
+    /// while `shifts/my-status` hangs.
+    func testTheCallListIsReconciledWithoutWaitingForShiftStatus() async throws {
+        let vm = try makeViewModel([
+            activeKey: active(call("mine-1", status: "in-progress", answeredBy: me)),
+        ])
+        await vm.loadDashboard()
+        try await listen(vm)
+        defer { vm.stopEventListener() }
+
+        DashboardCallsStubURLProtocol.reset([activeKey: active()])
+        DashboardCallsStubURLProtocol.hang(myStatusKey)
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: callCompleted("mine-1"))
+
+        try await waitUntil(timeout: 3) { DashboardCallsStubURLProtocol.requests().contains(self.activeKey) }
+        XCTAssertTrue(DashboardCallsStubURLProtocol.requests().contains(myStatusKey))
+    }
+
+    /// A `calls/active` answer read before the end still lists the call. It must not put
+    /// the call back, nor re-raise a prompt the volunteer already dismissed.
+    func testAStaleCallListDoesNotResurrectACallTheRelaySaidEnded() async throws {
+        let vm = try makeViewModel([
+            activeKey: active(call("mine-1", status: "in-progress", answeredBy: me)),
+        ])
+        await vm.loadDashboard()
+        try await listen(vm)
+        defer { vm.stopEventListener() }
+
+        // The server still lists the call (a read that raced the end).
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: callCompleted("mine-1"))
+        try await waitUntil(timeout: 3) { vm.endedCall != nil }
+        vm.dismissEndedCall()
+        await vm.refresh()
+
+        XCTAssertNil(vm.currentCall, "an ended call never comes back from a stale list")
+        XCTAssertNil(vm.endedCall, "and a dismissed prompt is not raised again")
+        XCTAssertEqual(vm.activeCallCount, 0)
+    }
+
+    /// A ring that ended (the caller hung up, or it went to voicemail) stops ringing at
+    /// once, even if no request answers.
+    func testARingTheRelaySaidIsOverStopsRingingWithoutAFetch() async throws {
+        let vm = try makeViewModel([
+            activeKey: active(call("ring-1", status: "ringing"), call("ring-2", status: "ringing")),
+        ])
+        await vm.loadDashboard()
+        XCTAssertEqual(vm.ringingCalls.map(\.id), ["ring-1", "ring-2"])
+        try await listen(vm)
+        defer { vm.stopEventListener() }
+
+        DashboardCallsStubURLProtocol.hang(activeKey, myStatusKey)
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: callCompleted("ring-1"))
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: #"{"type":"voicemail:new","callId":"ring-2"}"#)
+
+        try await waitUntil(timeout: 3) { vm.ringingCalls.isEmpty }
+        XCTAssertNil(vm.endedCall, "a ring that was never mine is not a call to write a note about")
+    }
+
+    /// An event for a call on another hub with the same id leaves mine alone.
+    func testAnEndOnAnotherHubDoesNotEndMyCall() async throws {
+        let vm = try makeViewModel([
+            activeKey: active(call("mine-1", status: "in-progress", answeredBy: me)),
+        ])
+        await vm.loadDashboard()
+        try await listen(vm)
+        defer { vm.stopEventListener() }
+
+        DashboardCallsStubURLProtocol.hang(activeKey, myStatusKey)
+        ws.emitDecryptedEventForTesting(hubId: "hub-B", json: callCompleted("mine-1"))
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: #"{"type":"call:update","callId":"mine-1","status":"in-progress"}"#)
+        // Both events have been handled once a third, observable one has.
+        ws.emitDecryptedEventForTesting(hubId: hubA, json: callCompleted("sentinel"))
+        try await waitUntil(timeout: 3) { DashboardCallsStubURLProtocol.requests().filter { $0 == self.activeKey }.count >= 4 }
+
+        XCTAssertEqual(vm.currentCall?.id, "mine-1")
+        XCTAssertNil(vm.endedCall)
     }
 
     func testAHubThatDidNotAnswerDoesNotEndMyCall() async throws {
@@ -260,5 +389,16 @@ final class DashboardCallsTests: XCTestCase {
 
         XCTAssertEqual(vm.currentCall?.id, "ring-1")
         XCTAssertTrue(vm.ringingCalls.isEmpty)
+    }
+
+    // MARK: - Helpers
+
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: @MainActor () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        } while Date() < deadline
+        XCTFail("condition not met within \(timeout)s")
     }
 }

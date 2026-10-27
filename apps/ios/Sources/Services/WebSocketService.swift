@@ -41,6 +41,45 @@ struct AttributedHubEvent: Sendable {
     let hubId: String
     /// The hub event type decoded from the decrypted event content.
     let event: HubEventType
+    /// The call a call event is about (`callId` in the decrypted content), when it names one.
+    let callId: String?
+    /// The status a `call:update` carries (`status` in the decrypted content).
+    let callStatus: SharedActiveCallResponseStatus?
+
+    init(
+        hubId: String,
+        event: HubEventType,
+        callId: String? = nil,
+        callStatus: SharedActiveCallResponseStatus? = nil
+    ) {
+        self.hubId = hubId
+        self.event = event
+        self.callId = callId
+        self.callStatus = callStatus
+    }
+
+    /// The call this event says is over, if it says one is.
+    ///
+    /// The server announces the end of a call as `call:update` with `status: "completed"`
+    /// (the `/call-status` webhook, the in-app hang-up and the test simulator all publish
+    /// exactly that, after the call row is closed), so the event itself is the fact: no
+    /// fetch is needed to know it. `unanswered` is terminal too, and `voicemail:new` means
+    /// the call stopped ringing and went to voicemail. `call:ended` is accepted for the same
+    /// meaning.
+    var endedCallId: String? {
+        guard let callId else { return nil }
+        switch event {
+        case .callEnded, .voicemailNew:
+            return callId
+        case .callUpdate:
+            switch callStatus {
+            case .completed, .unanswered: return callId
+            case .ringing, .inProgress, nil: return nil
+            }
+        default:
+            return nil
+        }
+    }
 }
 
 // MARK: - HubEventType
@@ -514,17 +553,25 @@ final class WebSocketService {
         #else
         json = cryptoService.decryptServerEvent(ciphertextHex: payload, epoch: epoch)
         #endif
-        guard let json, let eventType = parseHubEvent(json) else { return nil }
-        return AttributedHubEvent(hubId: hubId, event: eventType)
+        guard let json else { return nil }
+        return Self.parseHubEvent(json, hubId: hubId)
     }
 
-    private func parseHubEvent(_ json: String) -> HubEventType? {
+    /// Decode decrypted event content. The `type` decides the event; `callId` and `status`
+    /// are kept when present, because a call event's payload is what the dashboard acts on
+    /// (a call that ended is shown as ended from the event alone, #2283).
+    nonisolated static func parseHubEvent(_ json: String, hubId: String) -> AttributedHubEvent? {
         guard
             let data = json.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let type = obj["type"] as? String
         else { return nil }
-        return HubEventType(rawValue: type) ?? .unknown
+        return AttributedHubEvent(
+            hubId: hubId,
+            event: HubEventType(rawValue: type) ?? .unknown,
+            callId: obj["callId"] as? String,
+            callStatus: (obj["status"] as? String).flatMap(SharedActiveCallResponseStatus.init(rawValue:))
+        )
     }
 
     // MARK: - Emission
@@ -579,6 +626,11 @@ final class WebSocketService {
     /// Inject a typed event directly into the attributed stream for unit testing.
     internal func emitAttributedEvent(hubId: String, eventType: HubEventType) {
         emit(AttributedHubEvent(hubId: hubId, event: eventType))
+    }
+
+    /// Inject decrypted event content through the real parser, for unit testing.
+    internal func emitDecryptedEventForTesting(hubId: String, json: String) {
+        if let attributed = Self.parseHubEvent(json, hubId: hubId) { emit(attributed) }
     }
 
     /// Observes every client→server message as it is sent, for unit testing.
