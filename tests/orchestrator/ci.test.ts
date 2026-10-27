@@ -2,8 +2,8 @@ import { describe, it, expect, vi, type Mock } from 'vitest'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, laneIdFromBranch, itemIdFromBranch, fleetBranchFor,
   verdictSummary, ciContextFromEnv,
-  REVIEW_KEY_ENV, GENERAL_REVIEWER, UNSCOPED_LANE,
-  type CiContext, type VerifyCiDeps, type ReviewCiDeps, type ReviewSetDecision,
+  REVIEW_KEY_ENV, GENERAL_REVIEWER, UNSCOPED_LANE, PR_COMMITS_PAGE_SIZE,
+  type CiContext, type VerifyCiDeps, type ReviewCiDeps, type ReviewSetDecision, type ReviewGateDeps, type PrCommitIdentity,
 } from '../../orchestrator/src/ci.js'
 import { cacheArtifactName, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { SecondOpinionResult } from '../../orchestrator/src/review.js'
@@ -864,11 +864,18 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   // is a required context with strict_required_status_checks_policy, so a
   // check that never appears blocks the merge forever — which is the state
   // six Dependabot bumps sat in for a day.
-  const botGate = (author: string | undefined, profiles: string[] = [], branch = 'fleet/ios/123') =>
+  // The two identities a real Dependabot commit carries (measured on #2278):
+  // author `dependabot[bot]`, committer GitHub's `web-flow`.
+  const dependabotCommit = (sha = 'aaaaaaaa11'): PrCommitIdentity =>
+    ({ sha, authorLogin: 'dependabot[bot]', committerLogin: 'web-flow' })
+  const botGate = (
+    author: string | undefined, profiles: string[] = [], branch = 'fleet/ios/123',
+    prCommits: ReviewGateDeps['prCommits'] = async () => [dependabotCommit()],
+  ) =>
     decideReviewGate({
       ctx: ctx({ branch }), headTree, prDiff: async () => diff, changedFiles: async () => ['bun.lock'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
-      requested: false, republishOnly: false, prAuthor: author,
+      requested: false, republishOnly: false, prAuthor: author, prCommits,
       reviewSet: async () => ({ ok: true, profiles, fromLabels: profiles, reasons: [] }),
       log: () => {},
     })
@@ -890,6 +897,72 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   it('a real Dependabot PR on its own branch still skips', async () => {
     const o = await botGate('dependabot[bot]', [], 'dependabot/npm_and_yarn/left-pad-1.3.0')
     expect(o.kind).toBe('bot-authored')
+  })
+
+  // The hole (#2284): the skip keyed on the PR AUTHOR, so commits a human or
+  // an agent pushed onto a bot's branch were never reviewed (#2040, #2254).
+  describe('the skip needs every COMMIT to be a bot\'s, not just the PR author', () => {
+    it('a pure-Dependabot branch (several commits, e.g. after a rebase) still skips', async () => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
+        dependabotCommit('a1'), dependabotCommit('a2'),
+        { sha: 'a3', authorLogin: 'dependabot[bot]', committerLogin: 'dependabot[bot]' },
+      ])
+      expect(o.kind).toBe('bot-authored')
+    })
+
+    it('one non-bot commit on top of a bot commit does NOT skip', async () => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
+        dependabotCommit(),
+        { sha: 'b2', authorLogin: 'llamenos-auto', committerLogin: 'llamenos-auto' },
+      ])
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it('a bot-authored commit COMMITTED by a human is a human change', async () => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
+        { sha: 'c1', authorLogin: 'dependabot[bot]', committerLogin: 'rhonda-rodododo' },
+      ])
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it('a human merge commit (web-flow committer, human author) is not exempted', async () => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
+        dependabotCommit(),
+        { sha: 'd2', authorLogin: 'rhonda-rodododo', committerLogin: 'web-flow' },
+      ])
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it.each([
+      ['unreadable', async () => undefined],
+      ['empty', async () => []],
+      ['an unresolvable author login', async () => [{ sha: 'e1', authorLogin: null, committerLogin: 'web-flow' }]],
+      ['an unresolvable committer login', async () => [{ sha: 'e1', authorLogin: 'dependabot[bot]', committerLogin: undefined }]],
+      ['a lookup that throws', async () => { throw new Error('boom') }],
+      ['a full page (possibly truncated)', async () =>
+        Array.from({ length: PR_COMMITS_PAGE_SIZE }, (_, i) => dependabotCommit(`f${i}`))],
+    ] as [string, ReviewGateDeps['prCommits']][])('fails closed when the commit list is %s', async (_n, prCommits) => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', prCommits)
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it('fails closed when no commit lookup is wired at all', async () => {
+      // `botGate` defaults the argument, so an omitted lookup is built by hand.
+      const o = await decideReviewGate({
+        ctx: ctx({ branch: 'dependabot/x' }), headTree, prDiff: async () => diff, changedFiles: async () => ['bun.lock'],
+        cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
+        requested: false, republishOnly: false, prAuthor: 'dependabot[bot]',
+        reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
+        log: () => {},
+      })
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it('does not read the commits for a PR whose author is not a bot', async () => {
+      let asked = 0
+      await botGate('rhonda-rodododo', [], 'dependabot/x', async () => { asked++; return [dependabotCommit()] })
+      expect(asked).toBe(0)
+    })
   })
 
   it('a named reviewer on a Dependabot PR outranks the skip', async () => {
