@@ -123,6 +123,8 @@ export interface PrCommitIdentity {
   sha: string
   authorLogin: string | null | undefined
   committerLogin: string | null | undefined
+  /** GitHub's `commit.verification.verified` — a signature GitHub checked. */
+  verified: boolean | null | undefined
 }
 
 /**
@@ -155,22 +157,35 @@ export const PR_COMMITS_PAGE_SIZE = 100
  * (bot author, `web-flow` committer), it never creates a merge — and a human
  * "Update branch" click on a bot PR is the one thing that now gets a review.
  *
- * Fails closed: no commits, an unresolvable login, or a possibly-truncated
- * list all answer "not all bot". The reason is for the log.
+ * Every commit must also carry a signature GitHub verified (Dependabot's
+ * do): author and committer are plain git fields any pusher can write, so
+ * without it an unsigned commit claiming to be Dependabot would pass.
  *
- * Limit, stated: git author metadata is client-supplied, so someone able to
- * push could still set the dependabot identity on a commit. This closes the
- * way the hole is actually hit — a commit pushed under its own identity —
- * not forgery of Dependabot's. The PR-author check it sits beside has the
- * same property.
+ * The list must contain `headSha` — the commit this run actually judges. The
+ * list is a live read and a push can land between the gate's checkout and it;
+ * a list that does not end at the judged head describes some other tree, so
+ * it proves nothing about this one.
+ *
+ * Fails closed: no commits, an unresolvable login, an unverified commit, a
+ * list that omits the judged head, or a possibly-truncated list all answer
+ * "not all bot". The reason is for the log.
+ *
+ * Limit, stated: someone able to use GitHub's commit API could still obtain a
+ * verified commit under Dependabot's identity. This closes the way the hole
+ * is actually hit — a commit pushed under its own identity — not that
+ * impersonation. The PR-author check it sits beside has the same property.
  */
 export function commitsAllBotAuthored(
   commits: readonly PrCommitIdentity[] | undefined,
+  headSha: string,
 ): { ok: true } | { ok: false; reason: string } {
   if (commits === undefined) return { ok: false, reason: 'the PR\'s commits could not be read' }
   if (commits.length === 0) return { ok: false, reason: 'the PR\'s commit list is empty' }
   if (commits.length >= PR_COMMITS_PAGE_SIZE) {
     return { ok: false, reason: `the PR has ${commits.length}+ commits, more than one page — cannot show every one is a bot's` }
+  }
+  if (!commits.some((c) => c.sha === headSha)) {
+    return { ok: false, reason: `the commit list does not include the judged head ${headSha.slice(0, 8)} — it was read for a different push` }
   }
   const isBot = (login: string) => REVIEW_SKIP_AUTHORS.some((a) => a.toLowerCase() === login)
   for (const c of commits) {
@@ -180,6 +195,7 @@ export function commitsAllBotAuthored(
     if (author === undefined || committer === undefined) {
       return { ok: false, reason: `commit ${short} has no resolvable ${author === undefined ? 'author' : 'committer'} login` }
     }
+    if (c.verified !== true) return { ok: false, reason: `commit ${short} has no GitHub-verified signature` }
     if (!isBot(author)) return { ok: false, reason: `commit ${short} is authored by ${author}, not a bot` }
     if (!isBot(committer) && committer !== WEB_FLOW_COMMITTER) {
       return { ok: false, reason: `commit ${short} is committed by ${committer}, not a bot` }
@@ -1923,7 +1939,7 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
       deps.log(`reading the commits of pr=${cacheKey.pr} threw (fail closed): ${e instanceof Error ? e.message : String(e)}`)
       commits = undefined
     }
-    const allBot = commitsAllBotAuthored(commits)
+    const allBot = commitsAllBotAuthored(commits, deps.ctx.headSha)
     if (allBot.ok) {
       const reason = `authored by ${skipAuthor} — automated dependency update, every commit a bot's, no model review`
       deps.log(`pr=${cacheKey.pr} ${reason} (a human still merges it)`)

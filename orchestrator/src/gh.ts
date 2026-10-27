@@ -136,7 +136,10 @@ export async function readPrCommits(
     sha: string
     author?: { login?: string | null } | null
     committer?: { login?: string | null } | null
+    commit?: { verification?: { verified?: boolean | null } | null } | null
   }[]>(['api', `repos/${REPO}/pulls/${pr}/commits?per_page=${PR_COMMITS_PAGE_SIZE}`], 30_000, onFailure)
   if (!Array.isArray(data)) return undefined
-  return data.map((c) => ({ sha: c.sha, authorLogin: c.author?.login, committerLogin: c.committer?.login }))
+  return data.map((c) => ({ sha: c.sha, authorLogin: c.author?.login, committerLogin: c.committer?.login,
+    verified: c.commit?.verification?.verified,
+  }))
 }

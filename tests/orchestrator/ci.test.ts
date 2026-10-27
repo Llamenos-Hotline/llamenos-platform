@@ -866,8 +866,9 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   // six Dependabot bumps sat in for a day.
   // The two identities a real Dependabot commit carries (measured on #2278):
   // author `dependabot[bot]`, committer GitHub's `web-flow`.
-  const dependabotCommit = (sha = 'aaaaaaaa11'): PrCommitIdentity =>
-    ({ sha, authorLogin: 'dependabot[bot]', committerLogin: 'web-flow' })
+  // `head222` is `ctx().headSha`: the list must include the judged head.
+  const dependabotCommit = (sha = 'head222'): PrCommitIdentity =>
+    ({ sha, authorLogin: 'dependabot[bot]', committerLogin: 'web-flow', verified: true })
   const botGate = (
     author: string | undefined, profiles: string[] = [], branch = 'fleet/ios/123',
     prCommits: ReviewGateDeps['prCommits'] = async () => [dependabotCommit()],
@@ -905,7 +906,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     it('a pure-Dependabot branch (several commits, e.g. after a rebase) still skips', async () => {
       const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
         dependabotCommit('a1'), dependabotCommit('a2'),
-        { sha: 'a3', authorLogin: 'dependabot[bot]', committerLogin: 'dependabot[bot]' },
+        { sha: 'head222', authorLogin: 'dependabot[bot]', committerLogin: 'dependabot[bot]', verified: true },
       ])
       expect(o.kind).toBe('bot-authored')
     })
@@ -913,14 +914,14 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     it('one non-bot commit on top of a bot commit does NOT skip', async () => {
       const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
         dependabotCommit(),
-        { sha: 'b2', authorLogin: 'llamenos-auto', committerLogin: 'llamenos-auto' },
+        { sha: 'b2', authorLogin: 'llamenos-auto', committerLogin: 'llamenos-auto', verified: true },
       ])
       expect(o.kind).not.toBe('bot-authored')
     })
 
     it('a bot-authored commit COMMITTED by a human is a human change', async () => {
       const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
-        { sha: 'c1', authorLogin: 'dependabot[bot]', committerLogin: 'rhonda-rodododo' },
+        { sha: 'c1', authorLogin: 'dependabot[bot]', committerLogin: 'rhonda-rodododo', verified: true },
       ])
       expect(o.kind).not.toBe('bot-authored')
     })
@@ -928,19 +929,31 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     it('a human merge commit (web-flow committer, human author) is not exempted', async () => {
       const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
         dependabotCommit(),
-        { sha: 'd2', authorLogin: 'rhonda-rodododo', committerLogin: 'web-flow' },
+        { sha: 'd2', authorLogin: 'rhonda-rodododo', committerLogin: 'web-flow', verified: true },
       ])
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it('an UNSIGNED commit claiming to be Dependabot does not skip', async () => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [
+        { ...dependabotCommit(), verified: false },
+      ])
+      expect(o.kind).not.toBe('bot-authored')
+    })
+
+    it('a commit list that omits the judged head (read for another push) does not skip', async () => {
+      const o = await botGate('dependabot[bot]', [], 'dependabot/x', async () => [dependabotCommit('older111')])
       expect(o.kind).not.toBe('bot-authored')
     })
 
     it.each([
       ['unreadable', async () => undefined],
       ['empty', async () => []],
-      ['an unresolvable author login', async () => [{ sha: 'e1', authorLogin: null, committerLogin: 'web-flow' }]],
-      ['an unresolvable committer login', async () => [{ sha: 'e1', authorLogin: 'dependabot[bot]', committerLogin: undefined }]],
+      ['an unresolvable author login', async () => [{ sha: 'e1', authorLogin: null, committerLogin: 'web-flow', verified: true }]],
+      ['an unresolvable committer login', async () => [{ sha: 'e1', authorLogin: 'dependabot[bot]', committerLogin: undefined, verified: true }]],
       ['a lookup that throws', async () => { throw new Error('boom') }],
       ['a full page (possibly truncated)', async () =>
-        Array.from({ length: PR_COMMITS_PAGE_SIZE }, (_, i) => dependabotCommit(`f${i}`))],
+        Array.from({ length: PR_COMMITS_PAGE_SIZE }, (_, i) => dependabotCommit(i === 0 ? 'head222' : `f${i}`))],
     ] as [string, ReviewGateDeps['prCommits']][])('fails closed when the commit list is %s', async (_n, prCommits) => {
       const o = await botGate('dependabot[bot]', [], 'dependabot/x', prCommits)
       expect(o.kind).not.toBe('bot-authored')
