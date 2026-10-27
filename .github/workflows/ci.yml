@@ -2352,11 +2352,15 @@ jobs:
           echo "BUN_TMPDIR=$RUNNER_TEMP/bun-tmp" >> "$GITHUB_ENV"
 
       # TMPDIR pinned on every bun/node step for node's and bun's JS temp
-      # files; it is NOT what `bun install` uses (see the step above).
+      # files; it is NOT what `bun install` uses (see the step above). HOME is
+      # pinned on this step only, so setup-bun's cache restore cannot rewrite
+      # the ~/.bun/bin/bun that the other runner on this Mac is executing (a
+      # SIGKILLed `bun install` — see ios-e2e.yml's `build` copy of this step).
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         env:
           TMPDIR: ${{ runner.temp }}
+          HOME: ${{ runner.temp }}/bun-home
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
