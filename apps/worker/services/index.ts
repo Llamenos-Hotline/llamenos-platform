@@ -90,6 +90,8 @@ export interface ServicesOpts {
   /** Key-encryption key (SERVER_KEK) for server-readable data: provider credentials, reply addresses, queued sends. */
   serverKek?: string
   firehoseSealKey?: string
+  /** Messaging contact hash key (file-only MESSAGING_HASH_KEY): what a subscriber import hashes under, so STOP matches it. */
+  messagingHashKey?: string
   env?: Record<string, string | undefined>
   notifierUrl?: string
   notifierApiKey?: string
@@ -152,7 +154,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     shifts: new ShiftsService(db),
     calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients, serverKek: opts?.serverKek }),
     conversations,
-    blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek),
+    blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek, opts?.messagingHashKey),
     contacts: new ContactsService(db),
     cases: new CasesService(db),
     scheduler: new TaskScheduler(

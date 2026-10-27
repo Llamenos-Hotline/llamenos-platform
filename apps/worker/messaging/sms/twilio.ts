@@ -11,7 +11,6 @@ import type {
 } from '../adapter'
 import type { MessageDeliveryStatus } from '../../types'
 import type { MessagingChannelType } from '@shared/types'
-import { hashPhone } from '../../lib/crypto'
 
 /**
  * TwilioSMSAdapter -- Twilio SMS implementation of MessagingAdapter.
@@ -24,15 +23,12 @@ export class TwilioSMSAdapter implements MessagingAdapter {
   protected accountSid: string
   protected authToken: string
   protected phoneNumber: string
-  protected hmacSecret: string
-
   protected webhookBaseUrl: string
 
-  constructor(accountSid: string, authToken: string, phoneNumber: string, hmacSecret: string, webhookBaseUrl = '') {
+  constructor(accountSid: string, authToken: string, phoneNumber: string, webhookBaseUrl = '') {
     this.accountSid = accountSid
     this.authToken = authToken
     this.phoneNumber = phoneNumber
-    this.hmacSecret = hmacSecret
     this.webhookBaseUrl = webhookBaseUrl
   }
 
@@ -57,7 +53,6 @@ export class TwilioSMSAdapter implements MessagingAdapter {
       channelType: this.channelType,
       externalId: messageSid,
       senderIdentifier: from,
-      senderIdentifierHash: hashPhone(from, this.hmacSecret),
       body,
       mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,

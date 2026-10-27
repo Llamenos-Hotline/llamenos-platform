@@ -1,0 +1,36 @@
+-- Blast subscribers are matched by the messaging contact hash, so the rows keyed
+-- by the old one are discarded (#2261, D2 follow-up to 0064).
+--
+-- Migration 0064 re-keyed the router's contact hash to HMAC(HKDF(MESSAGING_HASH_KEY,
+-- hub), number) and blanked conversations.contact_identifier_hash, but a subscriber
+-- row also carries that hash, in subscribers.identifier_hash, and it was left alone.
+-- Every row there was written before this change by one of two paths, both keyed by
+-- HMAC_SECRET: the webhook keyword handler (hash of the number) and the bulk
+-- importer (the same key under another prefix, which is why an imported subscriber's
+-- STOP never matched even before the re-key). The router now looks a sender up by
+-- the new hash, which can never equal an old one. Left in place, an existing
+-- subscriber's STOP would match nothing, the row would stay 'active', and the next
+-- blast would reach someone who had asked it not to. Their SUBSCRIBE would insert a
+-- second row beside it.
+--
+-- The hash cannot be re-derived in SQL: the number behind a row is sealed with
+-- SERVER_KEK, and the new key is a file the database never sees. Blanking the column
+-- is not possible either, as (hub_id, identifier_hash) is unique and a hub with two
+-- subscribers would collide on ''. The app is pre-production, so every subscriber
+-- row is deleted, which is the same call 0062 made for bans.
+--
+-- What that means for an opt-out recorded before this migration: the record is
+-- gone, not honoured. A deleted subscriber is not in the table blast recipients are
+-- selected from, so nobody who opted out, or was subscribed, is messaged after the
+-- migration; everybody must send the subscribe keyword again. The one way a
+-- pre-migration opt-out can be undone is an admin bulk-importing that number again,
+-- so do not re-import a list that predates this migration without removing the
+-- numbers that sent STOP. Pending blast deliveries to the deleted rows are removed
+-- with them (blast_deliveries.subscriber_id cascades), so an unsent blast is cut
+-- short; delivery history for sent blasts goes too.
+--
+-- No HMAC_SECRET-keyed hash of a phone number is left in subscribers afterwards, and
+-- none is written again: the bulk importer now hashes with the router's own function,
+-- HMAC(HKDF(MESSAGING_HASH_KEY, hub), number) under the single messaging-contact
+-- prefix, so a row it creates is the row a STOP finds.
+DELETE FROM "subscribers";

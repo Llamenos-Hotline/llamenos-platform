@@ -7,7 +7,7 @@ import { RCSAdapter } from './adapter'
  * Create a validated RCSAdapter instance from an RCSConfig.
  * Throws if any required configuration fields are missing.
  */
-export function createRCSAdapter(config: RCSConfig, hmacSecret: string): MessagingAdapter {
+export function createRCSAdapter(config: RCSConfig): MessagingAdapter {
   if (!config.agentId) {
     throw new Error('RCS agent ID is required')
   }
@@ -17,5 +17,5 @@ export function createRCSAdapter(config: RCSConfig, hmacSecret: string): Messagi
   if (!hasWebhookSecret(config.webhookSecret)) {
     throw new Error(missingWebhookSecretMessage('rcs'))
   }
-  return new RCSAdapter(config, hmacSecret)
+  return new RCSAdapter(config)
 }

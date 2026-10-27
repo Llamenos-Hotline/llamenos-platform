@@ -33,6 +33,7 @@ prompt_if_missing() {
     server_secret="$(openssl rand -hex 32)"
     server_kek="$(openssl rand -hex 32)"
     ban_hash_key="$(openssl rand -hex 32)"
+    messaging_hash_key="$(openssl rand -hex 32)"
     storage_key="$(openssl rand -hex 24)"
 
     cat > "$VARS_FILE" <<VARS
@@ -48,6 +49,7 @@ llamenos_hmac_secret: "$hmac_secret"
 llamenos_server_secret: "$server_secret"
 server_kek: "$server_kek"
 ban_hash_key: "$ban_hash_key"
+messaging_hash_key: "$messaging_hash_key"
 llamenos_storage_access_key: "$storage_key"
 VARS
 

@@ -15,39 +15,39 @@ describe('createSignalAdapter', () => {
   }
 
   it('creates adapter with valid config', () => {
-    const adapter = createSignalAdapter(validConfig, 'hmac-secret')
+    const adapter = createSignalAdapter(validConfig)
     expect(adapter).toBeDefined()
     expect(typeof adapter.sendMessage).toBe('function')
   })
 
   it('throws when bridgeUrl is empty', () => {
     expect(() =>
-      createSignalAdapter({ ...validConfig, bridgeUrl: '' }, 'hmac-secret')
+      createSignalAdapter({ ...validConfig, bridgeUrl: '' })
     ).toThrow('Signal bridge configuration is incomplete')
   })
 
   it('throws when bridgeApiKey is empty', () => {
     expect(() =>
-      createSignalAdapter({ ...validConfig, bridgeApiKey: '' }, 'hmac-secret')
+      createSignalAdapter({ ...validConfig, bridgeApiKey: '' })
     ).toThrow('Signal bridge configuration is incomplete')
   })
 
   it('throws when webhookSecret is empty', () => {
     expect(() =>
-      createSignalAdapter({ ...validConfig, webhookSecret: '' }, 'hmac-secret')
+      createSignalAdapter({ ...validConfig, webhookSecret: '' })
     ).toThrow('Signal bridge configuration is incomplete')
   })
 
   it('throws when registeredNumber is empty', () => {
     expect(() =>
-      createSignalAdapter({ ...validConfig, registeredNumber: '' }, 'hmac-secret')
+      createSignalAdapter({ ...validConfig, registeredNumber: '' })
     ).toThrow('Signal bridge configuration is incomplete')
   })
 
   it('throws when bridgeUrl is undefined', () => {
     const broken = { ...validConfig, bridgeUrl: undefined as unknown as string }
     expect(() =>
-      createSignalAdapter(broken, 'hmac-secret')
+      createSignalAdapter(broken)
     ).toThrow('Signal bridge configuration is incomplete')
   })
 })

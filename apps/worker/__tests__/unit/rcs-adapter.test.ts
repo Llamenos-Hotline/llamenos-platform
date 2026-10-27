@@ -3,7 +3,6 @@ import { RCSAdapter } from '@worker/messaging/rcs/adapter'
 import { RBMClient } from '@worker/messaging/rcs/rbm-client'
 import type { RCSConfig } from '@shared/types'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 // Minimal valid-looking service account key (for JSON.parse — never used for real signing)
 const FAKE_SERVICE_ACCOUNT = JSON.stringify({
@@ -41,7 +40,7 @@ describe('RCSAdapter', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    adapter = new RCSAdapter(rcsConfig, HMAC_SECRET)
+    adapter = new RCSAdapter(rcsConfig)
     // Get the mocked instance
     const MockedRBMClient = vi.mocked(RBMClient)
     rbmClientMock = MockedRBMClient.mock.instances[0] as unknown as typeof rbmClientMock
@@ -80,7 +79,7 @@ describe('RCSAdapter', () => {
       expect(result.channelType).toBe('rcs')
       expect(result.externalId).toBe('RCS-MSG-001')
       expect(result.senderIdentifier).toBe('+15559876543')
-      expect(result.senderIdentifierHash).toBeTruthy()
+      expect(result).not.toHaveProperty('senderIdentifierHash')
       expect(result.body).toBe('Hello via RCS')
       expect(result.timestamp).toBe('2024-01-01T12:00:00Z')
       expect(result.metadata?.agentId).toBe('test-agent')
@@ -188,7 +187,6 @@ describe('RCSAdapter', () => {
     it.each([undefined, '', '   '])('fails closed when webhookSecret is %j, even with a Bearer header', async (secret) => {
       const adapterNoSecret = new RCSAdapter(
         { ...rcsConfig, webhookSecret: secret as unknown as string },
-        HMAC_SECRET,
       )
       const unsigned = new Request('https://example.com/webhook', {
         method: 'POST',
@@ -208,7 +206,6 @@ describe('RCSAdapter', () => {
     it('reports the missing secret in channel status instead of probing RBM', async () => {
       const adapterNoSecret = new RCSAdapter(
         { ...rcsConfig, webhookSecret: '' },
-        HMAC_SECRET,
       )
       const status = await adapterNoSecret.getChannelStatus()
       expect(status.connected).toBe(false)

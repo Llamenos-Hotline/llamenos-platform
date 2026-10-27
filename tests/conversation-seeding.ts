@@ -11,15 +11,36 @@
  * vacuous pass that hides both app bugs and infrastructure faults.
  */
 import type { APIRequestContext } from '@playwright/test'
-import { apiPatch, apiPost, enableMessagingViaApi } from './api-helpers'
+import { apiGet, apiPatch, apiPost, enableMessagingViaApi } from './api-helpers'
+import { contactLabel } from '../src/client/lib/contact-label'
 import { simulateIncomingMessage, uniqueCallerNumber } from './simulation-helpers'
 
 export type ConversationStatus = 'waiting' | 'active' | 'closed'
 
 export interface SeededConversation {
   conversationId: string
-  /** Last 4 digits of the unique sender number — the card renders `...XXXX`. */
-  last4: string
+  /** What the conversation card shows for this contact: a prefix of its thread hash. */
+  label: string
+}
+
+/**
+ * The label the conversation list renders for a conversation, derived the way the
+ * client derives it, from the hash the server returns. The server keeps no part of
+ * the sender's number (#2182), so a test finds the card by this, never by digits.
+ */
+export async function conversationLabel(
+  backendRequest: APIRequestContext,
+  workerHub: string,
+  conversationId: string,
+): Promise<string> {
+  const { status, data } = await apiGet<{ channelType: string; contactIdentifierHash: string }>(
+    backendRequest,
+    `/hubs/${workerHub}/conversations/${conversationId}`,
+  )
+  if (status !== 200) throw new Error(`Reading conversation ${conversationId} failed (${status})`)
+  const label = contactLabel(data)
+  if (!label) throw new Error(`Conversation ${conversationId} has no contact hash to label it by`)
+  return label
 }
 
 /**
@@ -61,5 +82,5 @@ export async function seedConversationViaApi(
       throw new Error(`Seeding: closing conversation ${result.conversationId} failed (${closed.status})`)
     }
   }
-  return { conversationId: result.conversationId, last4: senderNumber.slice(-4) }
+  return { conversationId: result.conversationId, label: await conversationLabel(backendRequest, workerHub, result.conversationId) }
 }

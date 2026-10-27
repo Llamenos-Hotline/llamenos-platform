@@ -147,7 +147,6 @@ export async function getMessagingAdapterFromService(
     getMessagingConfig(): Promise<MessagingConfig>
     getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
   },
-  hmacSecret: string,
   webhookBaseUrl = '',
 ): Promise<MessagingAdapter> {
   const config = await settingsService.getMessagingConfig()
@@ -160,23 +159,23 @@ export async function getMessagingAdapterFromService(
       if (!config.sms?.enabled) throw new Error('SMS is not enabled')
       const telConfig = await settingsService.getTelephonyProvider()
       if (!telConfig) throw new Error('SMS requires a configured telephony provider')
-      return createSMSAdapter(telConfig, config.sms, hmacSecret, webhookBaseUrl)
+      return createSMSAdapter(telConfig, config.sms, webhookBaseUrl)
     }
     case 'whatsapp': {
       if (!config.whatsapp) throw new Error('WhatsApp is not configured')
-      return createWhatsAppAdapter(config.whatsapp, hmacSecret, undefined, webhookBaseUrl)
+      return createWhatsAppAdapter(config.whatsapp, undefined, webhookBaseUrl)
     }
     case 'signal': {
       if (!config.signal) throw new Error('Signal is not configured')
-      return createSignalAdapter(config.signal, hmacSecret)
+      return createSignalAdapter(config.signal)
     }
     case 'rcs': {
       if (!config.rcs) throw new Error('RCS is not configured')
-      return createRCSAdapter(config.rcs, hmacSecret)
+      return createRCSAdapter(config.rcs)
     }
     case 'telegram': {
       if (!config.telegram) throw new Error('Telegram is not configured')
-      return createTelegramAdapter(config.telegram, hmacSecret)
+      return createTelegramAdapter(config.telegram)
     }
     default:
       throw new Error(`Unknown channel: ${channel}`)

@@ -181,6 +181,11 @@ spec:
               mountPath: /run/secrets/ban-hash-key
               subPath: ban-hash-key
               readOnly: true
+            {{- /* MESSAGING_HASH_KEY likewise: a file, never an env var. */}}
+            - name: messaging-hash-key
+              mountPath: /run/secrets/messaging-hash-key
+              subPath: messaging-hash-key
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
@@ -189,6 +194,10 @@ spec:
         - name: ban-hash-key
           secret:
             secretName: {{ include "llamenos.banHashKeySecretName" . }}
+            defaultMode: 0444
+        - name: messaging-hash-key
+          secret:
+            secretName: {{ include "llamenos.messagingHashKeySecretName" . }}
             defaultMode: 0444
       {{- with .Values.nodeSelector }}
       nodeSelector:

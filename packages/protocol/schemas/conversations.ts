@@ -7,7 +7,6 @@ export const conversationResponseSchema = z.object({
   id: z.string(),
   channelType: z.string(),
   contactIdentifierHash: z.string(),
-  contactLast4: z.string().optional(),
   assignedTo: z.string().optional(),
   status: z.enum(['active', 'waiting', 'closed']).optional(),
   createdAt: z.string(),
@@ -189,7 +188,6 @@ export const claimConversationBodySchema = z.object({
 export const createConversationBodySchema = z.object({
   channelType: z.enum(['sms', 'whatsapp', 'signal', 'rcs', 'web']).optional().default('web'),
   contactIdentifierHash: z.string().optional().default(''),
-  contactLast4: z.string().max(4).optional(),
   assignedTo: pubkeySchema.optional(),
   status: z.enum(['waiting', 'active', 'closed']).optional().default('waiting'),
   metadata: z.record(z.string(), z.unknown()).optional(),

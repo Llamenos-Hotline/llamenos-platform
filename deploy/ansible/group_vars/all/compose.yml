@@ -28,8 +28,13 @@ llamenos_services_dir: "{{ app_dir }}/services"
 # is refused if it appears as an environment variable. The operator keeps the
 # offline copy (vars.yml's ban_hash_key, vault-encrypted on the control node);
 # roles/backup-config asserts it is not collected by a backup path.
+#
+# messaging-hash-key keys the per-hub messaging-thread hash (MESSAGING_HASH_KEY):
+# same delivery, same exclusions, its own value (vars.yml's messaging_hash_key).
+# Losing it splits every returning contact into a new thread.
 llamenos_secrets_dir: "{{ app_dir }}/secrets"
 llamenos_ban_hash_key_file: "{{ llamenos_secrets_dir }}/ban-hash-key"
+llamenos_messaging_hash_key_file: "{{ llamenos_secrets_dir }}/messaging-hash-key"
 
 llamenos_compose_app: "{{ llamenos_services_dir }}/app/docker-compose.yml"
 llamenos_compose_postgres: "{{ llamenos_services_dir }}/postgres/docker-compose.yml"

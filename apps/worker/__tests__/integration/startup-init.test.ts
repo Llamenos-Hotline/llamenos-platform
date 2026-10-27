@@ -46,6 +46,8 @@ const BOOT_TIMEOUT_MS = 60_000
 const SECRET_DIR = mkdtempSync(path.join(tmpdir(), 'startup-init-secrets-'))
 const BAN_HASH_KEY_FILE = path.join(SECRET_DIR, 'ban-hash-key')
 writeFileSync(BAN_HASH_KEY_FILE, `${'e'.repeat(64)}\n`)
+const MESSAGING_HASH_KEY_FILE = path.join(SECRET_DIR, 'messaging-hash-key')
+writeFileSync(MESSAGING_HASH_KEY_FILE, `${'f'.repeat(64)}\n`)
 afterAll(() => rmSync(SECRET_DIR, { recursive: true, force: true }))
 
 const createdDatabases: string[] = []
@@ -119,6 +121,7 @@ async function bootServer(
     SERVER_SECRET: 'b'.repeat(64),
     SERVER_KEK: 'c'.repeat(64),
     BAN_HASH_KEY_FILE,
+    MESSAGING_HASH_KEY_FILE,
     HOTLINE_NAME: 'Boot Test',
     ENVIRONMENT: 'production',
     WEBHOOK_BASE_URL: 'https://boot-test.invalid',
@@ -226,6 +229,20 @@ describe('server startup: one role per secret', () => {
     await expect(
       bootServer(url, undefined, { extraEnv: { BAN_HASH_KEY_FILE: path.join(SECRET_DIR, 'absent') } }),
     ).rejects.toThrow(/ban-hash-key/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses to boot without the messaging-hash-key secret file', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { MESSAGING_HASH_KEY_FILE: path.join(SECRET_DIR, 'absent') } }),
+    ).rejects.toThrow(/messaging-hash-key/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses MESSAGING_HASH_KEY as an environment variable even with the file present', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { MESSAGING_HASH_KEY: 'e'.repeat(64) } }),
+    ).rejects.toThrow(/must not be set as an environment variable/)
   }, BOOT_TIMEOUT_MS * 2)
 
   it('refuses BAN_HASH_KEY as an environment variable even with the file present', async () => {

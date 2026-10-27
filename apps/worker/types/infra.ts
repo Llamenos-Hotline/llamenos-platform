@@ -77,6 +77,12 @@ export interface Env {
    * never in `.env`, never in a config backup (D6, A16).
    */
   BAN_HASH_KEY: string
+  /**
+   * Messaging-thread hash key: HMAC(HKDF(key, hubId), identifier) names a
+   * conversation's contact. Delivered only as the `messaging-hash-key` secret
+   * file, a key of its own (D2, #2182).
+   */
+  MESSAGING_HASH_KEY: string
   /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
   SIGNAL_QUEUE_RETENTION_DAYS?: string
   METRICS_SCRAPE_TOKEN?: string
@@ -185,7 +191,6 @@ export interface WakePayload {
 
 /** Full-tier payload — decryptable only with volunteer's device key */
 export interface FullPushPayload extends WakePayload {
-  senderLast4?: string
   previewText?: string
   duration?: number
   callerLast4?: string
@@ -361,7 +366,6 @@ export interface Conversation {
   id: string
   channelType: MessagingChannelType | 'web'
   contactIdentifierHash: string   // hashed phone/ID
-  contactLast4?: string           // last 4 digits (admin-only, like callerLast4)
   assignedTo?: string             // volunteer pubkey
   status: ConversationStatus
   createdAt: string

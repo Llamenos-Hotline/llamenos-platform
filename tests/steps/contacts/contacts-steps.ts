@@ -105,8 +105,10 @@ Then('I should see the timeline screen', async ({ page }) => {
 
 Then('I should see the timeline contact identifier', async ({ page }) => {
   await expect(page.getByTestId(TestIds.BACK_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  // The detail title is the masked contact number, or "Contact" when none is known.
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toHaveText(/\*\*\*-\d{4}|Contact/)
+  // The server keeps no part of the contact's number (#2182), so the detail title
+  // is the 12-char hash prefix the list row shows, or "Contact" when the contact
+  // is not on the loaded page.
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toHaveText(/^(?:[0-9a-f]{12}\.\.\.|Contact)$/)
 })
 
 Then('I should see timeline events or the empty state', async ({ page }) => {

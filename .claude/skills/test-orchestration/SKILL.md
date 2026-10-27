@@ -353,11 +353,11 @@ CI uses the production compose with test overlay:
 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build app
 ```
 
-The app mounts the ban-list hash key from `deploy/docker/secrets/ban-hash-key` (a gitignored
-file, never an env var) and refuses to start without it. `bun run test:docker:up`,
-`scripts/ios-build.sh uitest` and `scripts/test-integration-full.sh` create a development key
-if it is absent; a hand-typed `docker compose up` needs
-`source scripts/lib/ban-hash-key.sh && ensure_ban_hash_key_file deploy/docker/secrets/ban-hash-key 0444` first.
+The app mounts the ban-list and messaging-thread hash keys from `deploy/docker/secrets/ban-hash-key` and `deploy/docker/secrets/messaging-hash-key` (gitignored
+files, never env vars) and refuses to start without them. `bun run test:docker:up`,
+`scripts/ios-build.sh uitest` and `scripts/test-integration-full.sh` create development keys
+if they are absent; a hand-typed `docker compose up` needs
+`source scripts/lib/server-hash-keys.sh && ensure_hash_key_files deploy/docker/secrets 0444` first.
 
 ### Environment Variables
 

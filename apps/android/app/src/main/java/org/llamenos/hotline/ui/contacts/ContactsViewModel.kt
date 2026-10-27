@@ -29,7 +29,7 @@ data class ContactsUiState(
     val selectedContactType: String? = null,
 ) {
     /**
-     * The loaded contacts that match [searchQuery] by contact hash or last four digits.
+     * The loaded contacts that match [searchQuery] by contact hash. The server keeps no part of the contact's number (#2182), so the hash prefix is all there is to match.
      *
      * Search is local, over what has been loaded. The server has no contact search:
      * `GET /contacts/search` is shadowed by `GET /contacts/:hash` and answered 200 with a
@@ -41,8 +41,7 @@ data class ContactsUiState(
             val needle = searchQuery.trim()
             if (needle.isEmpty()) return contacts
             return contacts.filter { contact ->
-                contact.contactHash.contains(needle, ignoreCase = true) ||
-                    contact.last4?.contains(needle) == true
+                contact.contactHash.startsWith(needle, ignoreCase = true)
             }
         }
 }

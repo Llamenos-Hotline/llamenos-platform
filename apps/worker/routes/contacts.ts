@@ -45,7 +45,7 @@ contacts.get('/',
 
     // Merge data
     const merged = new Map<string, {
-      contactHash: string; last4?: string; firstSeen: string; lastSeen: string
+      contactHash: string; firstSeen: string; lastSeen: string
       callCount: number; conversationCount: number; noteCount: number; reportCount: number
     }>()
 
@@ -67,14 +67,12 @@ contacts.get('/',
       const csLastSeen = cs.lastSeen.toISOString()
       const existing = merged.get(hash)
       if (existing) {
-        existing.last4 = cs.last4 ?? undefined
         existing.conversationCount = cs.conversationCount
         if (csFirstSeen < existing.firstSeen) existing.firstSeen = csFirstSeen
         if (csLastSeen > existing.lastSeen) existing.lastSeen = csLastSeen
       } else {
         merged.set(hash, {
           contactHash: hash,
-          last4: cs.last4 ?? undefined,
           firstSeen: csFirstSeen,
           lastSeen: csLastSeen,
           callCount: 0,

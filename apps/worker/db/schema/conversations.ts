@@ -29,7 +29,6 @@ export const conversations = pgTable(
     contactIdentifierHash: text('contact_identifier_hash')
       .notNull()
       .default(''),
-    contactLast4: text('contact_last4'),
     assignedTo: text('assigned_to'),
     status: text('status').notNull().default('waiting'),
     createdAt: timestamp('created_at', { withTimezone: true })

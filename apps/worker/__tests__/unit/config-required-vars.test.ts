@@ -18,7 +18,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { validateConfig as validateConfigWithFiles } from '@worker/lib/config'
-import { secretFiles, TEST_BAN_HASH_KEY } from '../helpers/secret-files'
+import { secretFiles, TEST_BAN_HASH_KEY, TEST_MESSAGING_HASH_KEY } from '../helpers/secret-files'
 
 const validateConfig = (env: Parameters<typeof validateConfigWithFiles>[0]) =>
   validateConfigWithFiles(env, secretFiles())
@@ -108,9 +108,43 @@ describe('validateConfig: one role per secret (D6, #2171)', () => {
     },
   )
 
+  it.each(['HMAC_SECRET', 'SERVER_SECRET', 'SERVER_KEK'] as const)(
+    'refuses the messaging-hash-key file sharing a value with %s',
+    (key) => {
+      const env = completeEnv()
+      env[key] = TEST_MESSAGING_HASH_KEY
+      expect(() => validateConfig(env)).toThrow(/messaging-hash-key.*identical|identical/)
+    },
+  )
+
+  it('refuses the ban-hash-key and messaging-hash-key files sharing a value', () => {
+    expect(() => validateConfigWithFiles(
+      completeEnv(),
+      secretFiles({ 'ban-hash-key': TEST_BAN_HASH_KEY, 'messaging-hash-key': TEST_BAN_HASH_KEY }),
+    )).toThrow(/ban-hash-key and messaging-hash-key are identical/)
+  })
+
   it('refuses SERVER_KEK that is not 64 lowercase hex characters', () => {
     expect(() => validateConfig({ ...completeEnv(), SERVER_KEK: 'c'.repeat(32) })).toThrow(/SERVER_KEK/)
     expect(() => validateConfig({ ...completeEnv(), SERVER_KEK: 'Z'.repeat(64) })).toThrow(/SERVER_KEK/)
+  })
+})
+
+describe('validateConfig: MESSAGING_HASH_KEY is a secret file, never an env var', () => {
+  it('refuses to start without the messaging-hash-key file, and names it', () => {
+    expect(() => validateConfigWithFiles(completeEnv(), secretFiles({ 'ban-hash-key': TEST_BAN_HASH_KEY })))
+      .toThrow(/messaging-hash-key/)
+  })
+
+  it('refuses an empty or malformed messaging-hash-key file', () => {
+    const files = (v: string) => secretFiles({ 'ban-hash-key': TEST_BAN_HASH_KEY, 'messaging-hash-key': v })
+    expect(() => validateConfigWithFiles(completeEnv(), files(''))).toThrow(/messaging-hash-key/)
+    expect(() => validateConfigWithFiles(completeEnv(), files('abc'))).toThrow(/messaging-hash-key must be exactly 64 lowercase hex/)
+  })
+
+  it('refuses MESSAGING_HASH_KEY supplied as an environment variable, even alongside a valid file', () => {
+    const env = { ...completeEnv(), MESSAGING_HASH_KEY: TEST_MESSAGING_HASH_KEY }
+    expect(() => validateConfig(env)).toThrow(/MESSAGING_HASH_KEY must not be set as an environment variable/)
   })
 })
 

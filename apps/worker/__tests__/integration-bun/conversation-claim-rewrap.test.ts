@@ -133,10 +133,10 @@ async function inbound(body: string, sender: string): Promise<{ conversationId: 
       channelType: 'sms',
       externalId: `ext-${suite}-${crypto.randomUUID()}`,
       senderIdentifier: '+15550001234',
-      senderIdentifierHash: `hash-${suite}-${sender}`,
       body,
       timestamp: new Date().toISOString(),
     },
+    `hash-${suite}-${sender}`,
     admin.recipient as HpkeRecipientPubkey,
   )
   if (!createdConversations.includes(r.conversationId)) createdConversations.push(r.conversationId)

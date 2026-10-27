@@ -624,12 +624,10 @@ settings.post('/messaging/test',
   async (c) => {
     const { channel } = c.req.valid('json')
     const services = c.get('services')
-    const hmacSecret = c.env.HMAC_SECRET
     try {
       const adapter = await getMessagingAdapterFromService(
         channel as import('@shared/types').MessagingChannelType,
         services.settings,
-        hmacSecret,
       )
       const status = await adapter.getChannelStatus()
       return c.json({ connected: status.connected, error: status.error })
@@ -674,7 +672,6 @@ settings.post('/messaging/telegram/register-webhook',
       adapter = await getMessagingAdapterFromService(
         'telegram',
         services.settings,
-        c.env.HMAC_SECRET,
         c.env.WEBHOOK_BASE_URL ?? '',
       )
     } catch (err) {

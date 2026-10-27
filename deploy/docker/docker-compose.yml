@@ -138,12 +138,16 @@ services:
     volumes:
       # Read-only: the app publishes the anchor, it never writes one.
       - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
-    # BAN_HASH_KEY reaches the app ONLY as this file (/run/secrets/ban-hash-key),
-    # never as an environment variable: the app refuses it there. The source is
-    # ./secrets/ban-hash-key (first-run.sh creates it), outside .env, so the key
-    # is in no env_file, no `docker compose config` output and no config backup.
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY reach the app ONLY as these files
+    # (/run/secrets/ban-hash-key, /run/secrets/messaging-hash-key), never as
+    # environment variables: the app refuses them there. The sources are
+    # ./secrets/<name> (first-run.sh creates them), outside .env, so the keys are
+    # in no env_file, no `docker compose config` output and no config backup.
+    # Append new file-only secrets: deploy/ansible/scripts/check-required-env.py
+    # reads this list in order.
     secrets:
       - ban-hash-key
+      - messaging-hash-key
     networks:
       - web
       - internal
@@ -728,6 +732,8 @@ services:
 secrets:
   ban-hash-key:
     file: ./secrets/ban-hash-key
+  messaging-hash-key:
+    file: ./secrets/messaging-hash-key
 
 configs:
   # Rendered from ARI_PASSWORD so asterisk and sip-bridge share one credential.

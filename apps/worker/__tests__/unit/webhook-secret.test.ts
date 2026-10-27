@@ -45,11 +45,11 @@ describe('webhookSecretProblem (configure-time)', () => {
 
 describe('adapter factories refuse a missing secret', () => {
   it('RCS', () => {
-    expect(() => createRCSAdapter({ ...rcs, webhookSecret: '' }, 'hmac')).toThrow('RCS webhook secret is required')
-    expect(createRCSAdapter(rcs, 'hmac').channelType).toBe('rcs')
+    expect(() => createRCSAdapter({ ...rcs, webhookSecret: '' })).toThrow('RCS webhook secret is required')
+    expect(createRCSAdapter(rcs).channelType).toBe('rcs')
   })
   it('Telegram', () => {
-    expect(() => createTelegramAdapter({ ...telegram, webhookSecret: '' }, 'hmac')).toThrow('Telegram webhook secret is required')
-    expect(createTelegramAdapter(telegram, 'hmac').channelType).toBe('telegram')
+    expect(() => createTelegramAdapter({ ...telegram, webhookSecret: '' })).toThrow('Telegram webhook secret is required')
+    expect(createTelegramAdapter(telegram).channelType).toBe('telegram')
   })
 })

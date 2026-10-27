@@ -425,7 +425,6 @@ conversations.post('/:id/messages',
             () => routeOutboundMessage(
               {
                 settingsService: services.settings,
-                hmacSecret: c.env.HMAC_SECRET,
                 notifierUrl: c.env.NOTIFIER_URL,
                 notifierApiKey: c.env.NOTIFIER_API_KEY,
               },

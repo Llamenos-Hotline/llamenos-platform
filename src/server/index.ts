@@ -57,11 +57,13 @@ console.log('[llamenos] Database initialized')
 
 // --- Read secrets ---
 // One role per secret (D6): hmacSecret only hashes, serverKek only encrypts data
-// the server must read back, and banHashKey (file-only — validateConfig refuses
-// it in the environment) keys the ban-list hash.
+// the server must read back, and banHashKey / messagingHashKey (file-only —
+// validateConfig refuses them in the environment) key the ban-list and the
+// messaging-thread hashes, each its own key.
 const hmacSecret = readSecret('hmac-secret', 'HMAC_SECRET')
 const serverKek = readSecret('server-kek', 'SERVER_KEK')
 const banHashKey = readSecretFile('ban-hash-key') ?? ''
+const messagingHashKey = readSecretFile('messaging-hash-key') ?? ''
 const serverSecret = readSecret('server-secret', 'SERVER_SECRET')
 const firehoseSealKey = readSecret('firehose-agent-seal-key', 'FIREHOSE_AGENT_SEAL_KEY') || undefined
 
@@ -77,6 +79,7 @@ const services: Services = createServices(db, {
   hmacSecret,
   serverKek,
   firehoseSealKey,
+  messagingHashKey,
   notifierUrl,
   notifierApiKey,
   notifierTokenSecret,
@@ -146,6 +149,7 @@ const env: Record<string, unknown> = {
   HMAC_SECRET: hmacSecret,
   SERVER_KEK: serverKek,
   BAN_HASH_KEY: banHashKey,
+  MESSAGING_HASH_KEY: messagingHashKey,
   HOTLINE_NAME: process.env.HOTLINE_NAME || 'Hotline',
   ENVIRONMENT: process.env.ENVIRONMENT || 'production',
   TWILIO_ACCOUNT_SID: readSecret('twilio-account-sid', 'TWILIO_ACCOUNT_SID'),
@@ -254,7 +258,7 @@ services.scheduler.start({
   ...schedulerServiceDeps(services),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
-      return await getMessagingAdapterFromService(channel, services.settings, hmacSecret)
+      return await getMessagingAdapterFromService(channel, services.settings)
     } catch {
       return null
     }

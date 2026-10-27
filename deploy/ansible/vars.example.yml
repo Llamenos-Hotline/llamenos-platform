@@ -211,6 +211,13 @@ server_kek: ""
 # Generate with: openssl rand -hex 32
 ban_hash_key: ""
 
+# Keys the per-hub messaging-thread hash (which conversation a returning contact
+# belongs to). Same delivery and same warning as ban_hash_key: a SECRET FILE
+# outside the services directory, in no backup; losing it splits every returning
+# contact into a new thread. Its own value (preflight refuses a repeat).
+# Generate with: openssl rand -hex 32
+messaging_hash_key: ""
+
 # ─── PostgreSQL ──────────────────────────────────────────────────
 # Database password (generate with: openssl rand -hex 24). Any value works --
 # templates URL-encode it into DATABASE_URL (filter_plugins/url_userinfo.py) --

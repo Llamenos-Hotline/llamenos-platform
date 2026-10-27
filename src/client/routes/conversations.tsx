@@ -23,6 +23,7 @@ import { ConversationList } from '@/components/ConversationList'
 import { ConversationThread } from '@/components/ConversationThread'
 import { MessageComposer } from '@/components/MessageComposer'
 import { ChannelBadge } from '@/components/ChannelBadge'
+import { contactLabel } from '@/lib/contact-label'
 import { MessageSquare, X, UserCheck, Lock, UserCog, StickyNote, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -219,7 +220,7 @@ function ConversationsPage() {
                 <ChannelBadge channelType={selectedConv.channelType} />
                 <div>
                   <p className="font-medium">
-                    {selectedConv.contactLast4 ? `...${selectedConv.contactLast4}` : t('conversations.unknownContact', { defaultValue: 'Unknown' })}
+                    {contactLabel(selectedConv) ?? t('conversations.unknownContact', { defaultValue: 'Unknown' })}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Lock className="h-3 w-3" />

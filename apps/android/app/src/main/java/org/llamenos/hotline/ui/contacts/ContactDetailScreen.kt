@@ -71,8 +71,7 @@ fun ContactDetailScreen(
             TopAppBar(
                 title = {
                     val displayId = uiState.contact?.let { contact ->
-                        if (contact.last4 != null) "***${contact.last4}"
-                        else contact.contactHash.take(8) + "\u2026"
+                        contact.contactHash.take(8) + "\u2026"
                     } ?: stringResource(R.string.contact_directory_detail_title)
                     Text(
                         text = displayId,

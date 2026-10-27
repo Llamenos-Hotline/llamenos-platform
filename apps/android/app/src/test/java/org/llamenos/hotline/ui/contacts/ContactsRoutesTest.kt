@@ -44,7 +44,7 @@ class ContactsRoutesTest {
             Route("GET", "/api/hubs/:hubId/contacts") {
                 json(
                     """{"contacts":[
-                    |{"contactHash":"$hash","last4":"4567","firstSeen":"2026-10-01T09:00:00.000Z",
+                    |{"contactHash":"$hash","firstSeen":"2026-10-01T09:00:00.000Z",
                     |"lastSeen":"2026-10-20T10:05:00.000Z","callCount":0,"conversationCount":1,"noteCount":2,"reportCount":0},
                     |{"contactHash":"${"cd".repeat(32)}","firstSeen":"2026-10-02T09:00:00.000Z",
                     |"lastSeen":"2026-10-19T10:05:00.000Z","callCount":0,"conversationCount":0,"noteCount":1,"reportCount":0}
@@ -144,10 +144,15 @@ class ContactsRoutesTest {
             assertEquals(2, vm.uiState.value.visibleContacts.size)
             routes.requests.clear()
 
-            vm.setSearchQuery("4567")
+            vm.setSearchQuery(hash.take(6))
             advanceUntilIdle()
 
             assertEquals(listOf(hash), vm.uiState.value.visibleContacts.map { it.contactHash })
+
+            // Prefix only: a fragment from inside the hash names no contact.
+            vm.setSearchQuery(hash.substring(1, 7))
+            advanceUntilIdle()
+            assertEquals(emptyList<String>(), vm.uiState.value.visibleContacts.map { it.contactHash })
             assertTrue(
                 "GET /contacts/search is answered 200 by GET /contacts/:hash — it must not be called: ${routes.seen()}",
                 routes.seen().none { it.contains("/search") },

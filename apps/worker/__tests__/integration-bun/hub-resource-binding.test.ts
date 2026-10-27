@@ -178,7 +178,7 @@ const ENVELOPE = { pubkey: hex('e1'), enc: 'b'.repeat(64), ct: 'c'.repeat(32) }
 
 async function seedHub(hubId: string, owner: Actor): Promise<HubData> {
   const [conv] = await db.insert(conversations).values({
-    hubId, channelType: 'sms', contactIdentifierHash: contactHash, contactLast4: '4242',
+    hubId, channelType: 'sms', contactIdentifierHash: contactHash,
   }).returning()
   const [report] = await db.insert(conversations).values({
     hubId, channelType: 'web', contactIdentifierHash: hex('f1'), metadata: { type: 'report' },

@@ -9,7 +9,6 @@ import { TelegramAdapter } from './adapter'
  */
 export function createTelegramAdapter(
   config: TelegramConfig,
-  hmacSecret: string,
 ): MessagingAdapter {
   if (!config.botToken) {
     throw new Error('Telegram bot token is required')
@@ -20,5 +19,5 @@ export function createTelegramAdapter(
   if (!config.enabled) {
     throw new Error('Telegram channel is not enabled')
   }
-  return new TelegramAdapter(config, hmacSecret)
+  return new TelegramAdapter(config)
 }

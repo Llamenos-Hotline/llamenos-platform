@@ -23,7 +23,7 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 
 source "$PROJECT_DIR/scripts/lib/worktree-db.sh"
-source "$PROJECT_DIR/scripts/lib/ban-hash-key.sh"
+source "$PROJECT_DIR/scripts/lib/server-hash-keys.sh"
 
 # One shared dev stack, addressed by a fixed project name — never inherited.
 # The stack publishes fixed host ports (5432, 9000) and holds every worktree's own
@@ -121,10 +121,9 @@ cmd_start() {
   # persists across restarts: a per-session value would make everything sealed
   # last session unreadable. Dev-only constant; distinct from SERVER_SECRET.
   export SERVER_KEK="${SERVER_KEK:-0000000000000000000000000000000000000000000000000000000000000002}" # gitleaks:allow (dev-only test value)
-  # BAN_HASH_KEY is a secret FILE, never an environment variable. Persistent for
-  # the same reason; .dev-secrets/ is gitignored.
-  export BAN_HASH_KEY_FILE="${BAN_HASH_KEY_FILE:-$PROJECT_DIR/.dev-secrets/ban-hash-key}"
-  ensure_ban_hash_key_file "$BAN_HASH_KEY_FILE"
+  # BAN_HASH_KEY and MESSAGING_HASH_KEY are secret FILES, never environment
+  # variables. Persistent for the same reason; .dev-secrets/ is gitignored.
+  export_hash_key_files "$PROJECT_DIR/.dev-secrets"
   export STORAGE_ENDPOINT=http://localhost:9000
   # Must match the RustFS container's actual credentials — docker-compose.dev.yml
   # takes these from the same root .env (RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-rustfsadmin}),

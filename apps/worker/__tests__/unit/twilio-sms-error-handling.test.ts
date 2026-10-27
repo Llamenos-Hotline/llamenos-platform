@@ -6,7 +6,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TwilioSMSAdapter } from '@worker/messaging/sms/twilio'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 describe('TwilioSMSAdapter — error handling (bug fixes)', () => {
   let adapter: TwilioSMSAdapter
@@ -14,7 +13,7 @@ describe('TwilioSMSAdapter — error handling (bug fixes)', () => {
   const originalFetch = globalThis.fetch
 
   beforeEach(() => {
-    adapter = new TwilioSMSAdapter('AC-account-123', 'auth-token-abc', '+15551234567', HMAC_SECRET)
+    adapter = new TwilioSMSAdapter('AC-account-123', 'auth-token-abc', '+15551234567')
     fetchMock = vi.fn()
     globalThis.fetch = fetchMock as unknown as typeof fetch
   })

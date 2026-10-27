@@ -73,13 +73,15 @@ jobs:
             --set secrets.serverSecret=1111111111111111111111111111111111111111111111111111111111111111 \
             --set secrets.serverKek=2222222222222222222222222222222222222222222222222222222222222222 \
             --set secrets.banHashKey=3333333333333333333333333333333333333333333333333333333333333333 \
+            --set secrets.messagingHashKey=4444444444444444444444444444444444444444444444444444444444444444 \
             --set rustfs.credentials.accessKey=ci-placeholder \
             --set rustfs.credentials.secretKey=ci-placeholder \
             > /dev/null
 
       # D6 (#2171): each key has one role and the chart must never render an
-      # empty one. serverKek lands in the "-secrets" Secret, banHashKey in its
-      # own Secret mounted as a file — assert both refuse to render when unset.
+      # empty one. serverKek lands in the "-secrets" Secret, banHashKey and
+      # messagingHashKey each in their own Secret mounted as a file — assert all three
+      # refuse to render when unset.
       - name: Verify the chart refuses a blank secrets.serverKek
         run: |
           if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
@@ -99,6 +101,16 @@ jobs:
             exit 1
           fi
           grep -q "secrets.banHashKey is required" /tmp/should-have-failed-4.log
+
+      - name: Verify the chart refuses a blank secrets.messagingHashKey
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set secrets.messagingHashKey= > /tmp/should-have-failed-5.yaml 2>/tmp/should-have-failed-5.log; then
+            echo "::error::helm template succeeded with an empty secrets.messagingHashKey — the required guard in templates/secret-messaging-hash-key.yaml regressed (#2182)."
+            cat /tmp/should-have-failed-5.log
+            exit 1
+          fi
+          grep -q "secrets.messagingHashKey is required" /tmp/should-have-failed-5.log
 
       # Verify-by-breaking: these two guards exist specifically to stop a
       # `helm install` from ever again starting more than one app replica

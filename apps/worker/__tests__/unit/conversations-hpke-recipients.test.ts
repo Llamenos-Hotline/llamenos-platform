@@ -95,7 +95,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
     // identity pubkey that `POST /conversations/:id/claim` stores.
     const conv = {
       id: 'conv-1', hubId: 'hub-1', channelType: 'sms',
-      contactIdentifierHash: 'hash1', contactLast4: '4567',
+      contactIdentifierHash: 'hash1',
       assignedTo: VOL.identityPubkey, status: 'active',
       metadata: null, messageCount: 1,
       lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
@@ -109,10 +109,9 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       channelType: 'sms',
       externalId: 'SM-1',
       senderIdentifier: '+15551110000',
-      senderIdentifierHash: 'hash1',
       body: 'inbound body',
       timestamp: new Date().toISOString(),
-    }, ADMIN_X25519, 'hub-1')
+    }, 'hash1', ADMIN_X25519, 'hub-1')
 
     const msg = insertedValues.find(v => v.direction === 'inbound')
     expect(msg).toBeDefined()
@@ -151,7 +150,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
     const service = new ConversationsService(db as any, 'hmac-secret', 'admin-pubkey')
     const conv = {
       id: 'conv-2', hubId: 'hub-1', channelType: 'sms',
-      contactIdentifierHash: 'hash2', contactLast4: '4567',
+      contactIdentifierHash: 'hash2',
       assignedTo: VOL.identityPubkey, status: 'active',
       metadata: null, messageCount: 1,
       lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
@@ -164,10 +163,9 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       channelType: 'sms',
       externalId: 'SM-2',
       senderIdentifier: '+15551110000',
-      senderIdentifierHash: 'hash2',
       body: 'inbound body',
       timestamp: new Date().toISOString(),
-    }, ADMIN_X25519, 'hub-1')
+    }, 'hash2', ADMIN_X25519, 'hub-1')
 
     const msg = insertedValues.find(v => v.direction === 'inbound')
     const recipients = (msg!.readerEnvelopes as Array<{ pubkey: string }>).map(e => e.pubkey)
@@ -198,7 +196,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
     // this test passes NO admin recipient — the reader list is empty.
     const conv = {
       id: 'conv-3', hubId: 'hub-1', channelType: 'sms',
-      contactIdentifierHash: 'hash3', contactLast4: '4567',
+      contactIdentifierHash: 'hash3',
       assignedTo: null, status: 'waiting',
       metadata: null, messageCount: 0,
       lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
@@ -215,10 +213,9 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       channelType: 'sms',
       externalId: 'SM-3',
       senderIdentifier: '+15551110000',
-      senderIdentifierHash: 'hash3',
       body: 'crisis inbound body',
       timestamp: new Date().toISOString(),
-    }, undefined, 'hub-1')
+    }, 'hash3', undefined, 'hub-1')
 
     expect(result.messageId).toBe('msg-3')
     const msg = insertedValues.find(v => v.direction === 'inbound')

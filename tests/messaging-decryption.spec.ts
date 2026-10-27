@@ -44,6 +44,7 @@ import {
   uniquePhone,
 } from './api-helpers'
 import { simulateIncomingMessage, uniqueCallerNumber } from './simulation-helpers'
+import { conversationLabel } from './conversation-seeding'
 
 interface DeviceRow {
   platform: string
@@ -122,16 +123,16 @@ async function expectBrowsingHub(page: Page, hubId: string): Promise<void> {
 }
 
 /**
- * Open the conversation whose contact ends in `last4`, navigating in-app.
+ * Open the conversation whose card shows `label`, navigating in-app.
  *
  * Never `page.goto()`: a hard navigation re-locks the Rust/mock CryptoState and
  * drops the client back to the PIN screen, so a full-page navigation cannot
  * test anything that needs the device key.
  */
-async function openConversation(page: Page, last4: string) {
+async function openConversation(page: Page, label: string) {
   await page.getByTestId(TestIds.NAV_CONVERSATIONS).click()
   await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible()
-  const card = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: last4 })
+  const card = page.getByTestId(TestIds.CONVERSATION_ITEM).filter({ hasText: label })
   await expect(card.first()).toBeVisible()
   await card.first().click()
   await expect(page.getByTestId(TestIds.CONVERSATION_THREAD)).toBeVisible()
@@ -198,7 +199,7 @@ async function volunteerWithUnclaimedMessage(
     hubId,
   })
   expect(inbound.conversationId, 'inbound message produced no conversation').toBeTruthy()
-  return { senderNumber, last4: senderNumber.slice(-4), preClaimBody }
+  return { senderNumber, label: await conversationLabel(request, hubId, inbound.conversationId), preClaimBody }
 }
 
 /** Claim the open conversation from the volunteer's client. */
@@ -241,7 +242,7 @@ test.describe('server-written messages decrypt in the real client', () => {
     // --- An admin client is online for the whole exchange ----------------
     const admin = await openAdminClient(browser, hubId)
     try {
-      const { senderNumber, last4, preClaimBody } =
+      const { senderNumber, label, preClaimBody } =
         await volunteerWithUnclaimedMessage(page, admin.page, request, hubId)
 
       // --- The volunteer claims ------------------------------------------
@@ -249,7 +250,7 @@ test.describe('server-written messages decrypt in the real client', () => {
       // answers it by re-wrapping the pre-claim message's content key for the
       // volunteer's device, and the server's `conversation:envelopes-added`
       // makes the volunteer's open thread re-read its messages.
-      await openConversation(page, last4)
+      await openConversation(page, label)
       await claimOpenConversation(page)
 
       // A message after the claim is sealed to the volunteer at write time.
@@ -262,7 +263,7 @@ test.describe('server-written messages decrypt in the real client', () => {
 
       // --- Proof 2: the admin is still a reader of both -------------------
       // The re-wrap appends envelopes; it must never cost an existing reader.
-      const adminThread = await openConversation(admin.page, last4)
+      const adminThread = await openConversation(admin.page, label)
       await expect(adminThread.getByTestId(TestIds.MESSAGE_PLAINTEXT).filter({ hasText: preClaimBody })).toHaveCount(1, { timeout: 20_000 })
       await expect(adminThread.getByTestId(TestIds.MESSAGE_PLAINTEXT).filter({ hasText: postClaimBody })).toHaveCount(1)
       await expect(adminThread.getByTestId(TestIds.MESSAGE_ENCRYPTED)).toHaveCount(0)
@@ -289,9 +290,9 @@ test.describe('server-written messages decrypt in the real client', () => {
     } finally {
       await setupAdmin.context.close()
     }
-    const { last4, preClaimBody } = fixture
+    const { label, preClaimBody } = fixture
 
-    await openConversation(page, last4)
+    await openConversation(page, label)
     await claimOpenConversation(page)
 
     // --- An admin client connects AFTER the claim -------------------------

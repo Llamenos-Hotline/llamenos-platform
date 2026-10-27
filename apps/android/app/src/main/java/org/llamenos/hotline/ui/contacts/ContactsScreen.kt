@@ -58,7 +58,7 @@ import org.llamenos.hotline.util.DateFormatUtils
  * aggregated interaction counts (calls, messages, notes, reports).
  *
  * Each contact is identified by their hashed phone number. Only admins
- * can see the last 4 digits. Tapping a contact navigates to the detail view.
+ * can see a prefix of the contact hash. Tapping a contact navigates to the detail view.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -258,11 +258,7 @@ private fun ContactCard(
         ) {
             // Contact identifier
             Text(
-                text = if (contact.last4 != null) {
-                    "***${contact.last4}"
-                } else {
-                    contact.contactHash.take(12) + "\u2026"
-                },
+                text = contact.contactHash.take(12) + "\u2026",
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.testTag("contact-identifier"),

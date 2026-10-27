@@ -80,8 +80,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-# shellcheck source=../../../scripts/lib/ban-hash-key.sh
-source "$ROOT/scripts/lib/ban-hash-key.sh"
+# shellcheck source=../../../scripts/lib/server-hash-keys.sh
+source "$ROOT/scripts/lib/server-hash-keys.sh"
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # Recorded BEFORE defaulting: everything that kills a process keys off this.
 # Unset ports mean a developer running the script by hand, where 3000/5432 are
@@ -98,7 +98,6 @@ SERVER_LOG="$STATE_DIR/server.log"
 SERVER_PID="$STATE_DIR/server.pid"
 WATCHDOG_LOG="$STATE_DIR/watchdog.log"
 WATCHDOG_PID="$STATE_DIR/watchdog.pid"
-BAN_HASH_KEY_FILE="$STATE_DIR/ban-hash-key"
 PG_FORMULA="postgresql@17"
 CRYPTO_LIB="$ROOT/packages/crypto/dist/server/libllamenos_core.dylib"
 DATABASE_URL="postgresql://llamenos@127.0.0.1:${PGPORT}/llamenos"
@@ -453,8 +452,8 @@ cmd_start() {
     export HMAC_SECRET
     SERVER_KEK="$(openssl rand -hex 32)"
     export SERVER_KEK
-    export BAN_HASH_KEY_FILE
-    ensure_ban_hash_key_file "$BAN_HASH_KEY_FILE"
+    # BAN_HASH_KEY_FILE and MESSAGING_HASH_KEY_FILE, under the state dir.
+    export_hash_key_files "$STATE_DIR"
     export SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
     export LLAMENOS_CRYPTO_LIB="$CRYPTO_LIB"
     export STORAGE_ENDPOINT=http://127.0.0.1:9

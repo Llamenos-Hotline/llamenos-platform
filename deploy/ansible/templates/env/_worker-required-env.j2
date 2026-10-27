@@ -177,9 +177,10 @@ HMAC_SECRET={{ hmac_secret }}
   SERVER_SECRET only derives relay/server identity keys. preflight.yml refuses a
   vars.yml where any two of them are equal.
 
-  BAN_HASH_KEY is deliberately NOT rendered here. It is a secret FILE
-  (roles/llamenos-app, `llamenos_ban_hash_key_file`), kept outside .env so no
-  config backup, rollback snapshot or env_file ever holds it.
+  BAN_HASH_KEY and MESSAGING_HASH_KEY are deliberately NOT rendered here. They are
+  secret FILES (roles/llamenos-app, `llamenos_ban_hash_key_file` and
+  `llamenos_messaging_hash_key_file`), kept outside .env so no config backup,
+  rollback snapshot or env_file ever holds them.
 #}
 SERVER_KEK={{ server_kek }}
 STORAGE_ENDPOINT=http://rustfs:9000

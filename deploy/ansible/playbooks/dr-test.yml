@@ -70,13 +70,17 @@
         dr_backup_encrypted: "{{ dr_backup_file.endswith('.age') }}"
       tags: provision
 
-    # The app refuses to boot without the ban-hash-key secret file (BAN_HASH_KEY
-    # is file-only). A throwaway value: this environment holds no real data key.
-    - name: Write the DR ban-hash-key secret file
+    # The app refuses to boot without the ban-hash-key and messaging-hash-key secret
+    # files (BAN_HASH_KEY and MESSAGING_HASH_KEY are file-only). Throwaway values:
+    # this environment holds no real data key.
+    - name: Write the DR hash key secret files
       ansible.builtin.copy:
-        dest: "{{ dr_compose_dir }}/ban-hash-key"
+        dest: "{{ dr_compose_dir }}/{{ item }}"
         mode: "0444"
-        content: "{{ 'dr-test-ban-hash-key-for-validation-only' | hash('sha256') }}\n"
+        content: "{{ ('dr-test-' ~ item ~ '-for-validation-only') | hash('sha256') }}\n"
+      loop:
+        - ban-hash-key
+        - messaging-hash-key
       tags: provision
 
     - name: Generate DR Docker Compose file
@@ -146,6 +150,7 @@
                 PORT: "3000"
               secrets:
                 - ban-hash-key
+                - messaging-hash-key
               ports:
                 - "{{ dr_port }}:3000"
               healthcheck:
@@ -158,6 +163,8 @@
           secrets:
             ban-hash-key:
               file: ./ban-hash-key
+            messaging-hash-key:
+              file: ./messaging-hash-key
 
           volumes:
             dr-pgdata:

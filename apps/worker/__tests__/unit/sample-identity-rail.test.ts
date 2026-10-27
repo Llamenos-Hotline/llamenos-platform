@@ -119,7 +119,7 @@ describe('sample identities where the /api/test-* surface is closed', () => {
 
   it.each(CLOSED.map(env => [label(env), env]))('%s: the seeder refuses before touching any service', async (_label, env) => {
     const seeded = untouchableServices()
-    await expect(seedSampleDataset(seeded.services, { ...env, ENVIRONMENT: env.ENVIRONMENT ?? '', HMAC_SECRET: 'x', SERVER_KEK: 'y' }))
+    await expect(seedSampleDataset(seeded.services, { ...env, ENVIRONMENT: env.ENVIRONMENT ?? '', MESSAGING_HASH_KEY: 'a'.repeat(64), SERVER_KEK: 'y' }))
       .rejects.toThrow(SampleIdentitiesUnavailableError)
     expect(seeded.touched).toEqual([])
   })

@@ -76,6 +76,7 @@ async function createApp(services: Services) {
       ADMIN_PUBKEY: 'a'.repeat(64),
       ADMIN_DECRYPTION_PUBKEY: 'c'.repeat(64),
       HMAC_SECRET: 'b'.repeat(64),
+      MESSAGING_HASH_KEY: 'f'.repeat(64),
     } as unknown as AppEnv['Bindings']
     await next()
   })

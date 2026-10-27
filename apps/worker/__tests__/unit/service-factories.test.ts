@@ -268,7 +268,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', accountSid: 'AC', authToken: 't', phoneNumber: '+1' } as TelephonyProviderConfig),
       }
-      const adapter = await getMessagingAdapterFromService('sms', settingsService, 'secret')
+      const adapter = await getMessagingAdapterFromService('sms', settingsService)
       expect(adapter).toEqual({ channel: 'sms' })
     })
 
@@ -277,7 +277,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('whatsapp', settingsService, 'secret')
+      const adapter = await getMessagingAdapterFromService('whatsapp', settingsService)
       expect(adapter).toEqual({ channel: 'whatsapp' })
     })
 
@@ -286,7 +286,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('signal', settingsService, 'secret')
+      const adapter = await getMessagingAdapterFromService('signal', settingsService)
       expect(adapter).toEqual({ channel: 'signal' })
     })
 
@@ -295,7 +295,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('rcs', settingsService, 'secret')
+      const adapter = await getMessagingAdapterFromService('rcs', settingsService)
       expect(adapter).toEqual({ channel: 'rcs' })
     })
 
@@ -304,7 +304,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('telegram', settingsService, 'secret')
+      const adapter = await getMessagingAdapterFromService('telegram', settingsService)
       expect(adapter).toEqual({ channel: 'telegram' })
     })
 
@@ -317,7 +317,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn(),
       }
-      await expect(getMessagingAdapterFromService('whatsapp', settingsService, 'secret')).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('whatsapp', settingsService)).rejects.toThrow(
         'whatsapp channel is not enabled'
       )
     })
@@ -332,7 +332,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn(),
       }
-      await expect(getMessagingAdapterFromService('sms', settingsService, 'secret')).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('sms', settingsService)).rejects.toThrow(
         'SMS is not enabled'
       )
     })
@@ -346,7 +346,7 @@ describe('service-factories', () => {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn().mockResolvedValue(null),
       }
-      await expect(getMessagingAdapterFromService('sms', settingsService, 'secret')).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('sms', settingsService)).rejects.toThrow(
         'SMS requires a configured telephony provider'
       )
     })

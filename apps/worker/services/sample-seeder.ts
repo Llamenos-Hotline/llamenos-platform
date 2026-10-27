@@ -34,7 +34,8 @@ import {
 import { sampleReader, sealForReaders, type SampleReader } from '../lib/sample-crypto'
 import { sampleIdentities, type SampleIdentity } from '../lib/sample-identities'
 import type { DevSurfacesEnv } from '../lib/dev-surfaces'
-import { encryptContactIdentifier, hashPhone } from '../lib/crypto'
+import { encryptContactIdentifier } from '../lib/crypto'
+import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import type { Hub } from '@shared/types'
 import type { MessagingChannelType } from '@protocol/schemas/settings'
@@ -43,7 +44,7 @@ const HOUR_MS = 3_600_000
 
 export interface SampleSeedEnv extends DevSurfacesEnv {
   ENVIRONMENT: string
-  HMAC_SECRET: string
+  MESSAGING_HASH_KEY: string
   SERVER_KEK: string
   TWILIO_ACCOUNT_SID?: string
   TWILIO_AUTH_TOKEN?: string
@@ -304,8 +305,7 @@ export async function seedSampleDataset(
     const conversation = await services.conversations.create({
       hubId,
       channelType: channel,
-      contactIdentifierHash: hashPhone(sample.sender, env.HMAC_SECRET),
-      contactLast4: sample.last4,
+      contactIdentifierHash: messagingContactHash(sample.sender, hubId, env.MESSAGING_HASH_KEY),
       assignedTo: assignee.pubkey,
       status: 'active',
     })

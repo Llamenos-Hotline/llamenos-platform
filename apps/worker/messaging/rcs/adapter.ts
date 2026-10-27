@@ -9,7 +9,6 @@
  */
 
 import type { RCSConfig } from '@shared/types'
-import { hashPhone } from '../../lib/crypto'
 import type {
   MessagingAdapter,
   IncomingMessage,
@@ -33,11 +32,9 @@ export class RCSAdapter implements MessagingAdapter {
   readonly channelType = 'rcs' as const
   private client: RBMClient
   private config: RCSConfig
-  private hmacSecret: string
 
-  constructor(config: RCSConfig, hmacSecret: string) {
+  constructor(config: RCSConfig) {
     this.config = config
-    this.hmacSecret = hmacSecret
 
     const serviceAccountKey = JSON.parse(config.serviceAccountKey) as GoogleServiceAccountKey
 
@@ -57,7 +54,6 @@ export class RCSAdapter implements MessagingAdapter {
     }
 
     const senderIdentifier = payload.senderId
-    const identifierHash = hashPhone(senderIdentifier, this.hmacSecret)
 
     const mediaUrls: string[] = []
     const mediaTypes: string[] = []
@@ -87,7 +83,6 @@ export class RCSAdapter implements MessagingAdapter {
       channelType: 'rcs',
       externalId: payload.message.messageId,
       senderIdentifier,
-      senderIdentifierHash: identifierHash,
       body: payload.message.text || payload.message.suggestionResponse?.text,
       mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,

@@ -9,6 +9,7 @@ import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService } from '../lib/push-dispatch'
 import { createLogger } from '../lib/logger'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
@@ -94,7 +95,7 @@ messaging.post('/:channel/webhook',
 
   let adapter: MessagingAdapter
   try {
-    adapter = await getMessagingAdapterFromService(channel, services.settings, c.env.HMAC_SECRET, c.env.WEBHOOK_BASE_URL ?? '')
+    adapter = await getMessagingAdapterFromService(channel, services.settings, c.env.WEBHOOK_BASE_URL ?? '')
   } catch {
     return c.json({ error: `${channel} channel is not configured` }, 404)
   }
@@ -217,6 +218,12 @@ messaging.post('/:channel/webhook',
     return c.json({ error: 'Failed to parse message' }, 400)
   }
 
+  // The one place a messaging contact is hashed: per-hub keyed, from the same
+  // identifier the sealed reply address holds. The hash names the thread and
+  // feeds blast keywords, the firehose observer and the audit entry below; no
+  // adapter hashes, so there is no second value that could disagree with it.
+  const senderHash = messagingContactHash(incoming.senderIdentifier, hubId, c.env.MESSAGING_HASH_KEY)
+
   // Identity trust tracking: record/refresh the sender's Signal identity on
   // first (and every subsequent) contact. SignalIdentityService.recordIdentity
   // already existed with full trust-level logic (TOFU/auto/manual) and a
@@ -251,8 +258,8 @@ messaging.post('/:channel/webhook',
       observeFirehoseMessage(services.firehose, {
         signalGroupId: incoming.metadata.groupId,
         senderIdentifier: incoming.senderIdentifier,
-        senderIdentifierHash: incoming.senderIdentifierHash,
-        senderUsername: incoming.metadata?.sourceName ?? incoming.senderIdentifier.slice(-4),
+        senderIdentifierHash: senderHash,
+        senderUsername: incoming.metadata?.sourceName ?? senderHash.slice(0, 8),
         content: incoming.body,
         timestamp: new Date(incoming.timestamp),
         hubId,
@@ -268,7 +275,7 @@ messaging.post('/:channel/webhook',
     if (normalizedBody === 'STOP') {
       await services.blasts.handleSubscriberKeyword(effectiveHubId, {
         identifier: incoming.senderIdentifier,
-        identifierHash: incoming.senderIdentifierHash,
+        identifierHash: senderHash,
         keyword: 'STOP',
         channel: incoming.channelType,
       })
@@ -280,7 +287,7 @@ messaging.post('/:channel/webhook',
         if (normalizedBody === settings.subscribeKeyword.toUpperCase()) {
           await services.blasts.handleSubscriberKeyword(effectiveHubId, {
             identifier: incoming.senderIdentifier,
-            identifierHash: incoming.senderIdentifierHash,
+            identifierHash: senderHash,
             keyword: normalizedBody,
             channel: incoming.channelType,
           })
@@ -303,7 +310,7 @@ messaging.post('/:channel/webhook',
   // The desktop client only ever calls that hub-scoped path, so inbound messages
   // were invisible on desktop. The dev simulation route forwards a hubId from its
   // request body, which is why every backend BDD messaging scenario passed.
-  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env), hubId)
+  const convResult = await services.conversations.handleIncoming(incoming, senderHash, adminHpkeRecipient(c.env), hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -350,7 +357,7 @@ messaging.post('/:channel/webhook',
   backgroundTask(c,
     audit(services.audit, 'messageReceived', 'system', {
       channel,
-      senderHash: incoming.senderIdentifierHash,
+      senderHash,
     }, undefined, hubId ?? null)
   )
 

@@ -6,7 +6,6 @@ import { z } from 'zod'
 
 export const contactTimelineSummarySchema = z.object({
   contactHash: z.string(),
-  last4: z.string().optional(),
   firstSeen: z.string(),
   lastSeen: z.string(),
   callCount: z.number(),
