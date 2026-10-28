@@ -44,7 +44,7 @@ final class RecoveryGroupUITests: BaseUITest {
         app.launchArguments.append(contentsOf: [
             "--reset-keychain",
         ])
-        app.launchAnsweringSystemPrompts()
+        app.launchToFirstScreen()
 
         // Navigate to recovery from the login screen
         let recoveryLink = scrollToFind("login-recover-account")

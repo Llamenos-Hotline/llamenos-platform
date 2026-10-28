@@ -37,6 +37,7 @@ class BaseUITest: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        failOnSystemAlert()
         app = XCUIApplication()
         // Tab titles and system labels ("More") are matched by text; pin the language.
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
@@ -137,13 +138,13 @@ class BaseUITest: XCTestCase {
     /// Launch the app with a clean keychain (login screen).
     func launchClean() {
         app.launchArguments.append("--reset-keychain")
-        app.launchAnsweringSystemPrompts()
+        app.launchToFirstScreen()
     }
 
     /// Launch the app in a pre-authenticated volunteer state (no API connection).
     func launchAuthenticated() {
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launchAnsweringSystemPrompts()
+        app.launchToFirstScreen()
         waitForMainScreen()
     }
 
@@ -183,7 +184,7 @@ class BaseUITest: XCTestCase {
             "--test-hub-id", hubId,
             "--test-register",
         ])
-        app.launchAnsweringSystemPrompts()
+        app.launchToFirstScreen()
         waitForMainScreen()
     }
 

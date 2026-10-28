@@ -33,7 +33,7 @@ final class HubSessionRestoreUITests: BaseUITest {
             "--test-register",
             "--test-no-active-hub",
         ])
-        app.launchAnsweringSystemPrompts()
+        app.launchToFirstScreen()
         XCTAssertTrue(
             find("main-tab-view").waitForExistence(timeout: 60),
             "The app should reach its main screen after an authenticated launch"
