@@ -5,9 +5,9 @@ import type { TFunction } from 'i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { validateInvite, redeemInvite } from '@/lib/api'
-import { getApiBase, isAbsoluteUrl, isPackagedTauri } from '@/lib/api-config'
+import { getApiBase, getHubOrigin, isAbsoluteUrl, isPackagedTauri } from '@/lib/api-config'
 import { leaveServer } from '@/lib/server-switch'
-import { INVITE_CODE_LENGTH, normalizeInviteCode } from '@/lib/invite-code'
+import { INVITE_CODE_LENGTH, normalizeInviteCode, parseInvite } from '@/lib/invite-code'
 import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin, markUnlocked } from '@/lib/key-manager'
 import { initializeUserIdentity } from '@/lib/user-identity'
@@ -25,6 +25,11 @@ import { LogoMark } from '@/components/logo-mark'
 
 export const Route = createFileRoute('/onboarding')({
   component: OnboardingRoute,
+  // `?code=` comes from an invite link opened in the app — a `llamenos://hub-invite`
+  // deep link (__root.tsx) or a link pasted straight into the address. Typed, so a
+  // second link arriving while this screen is open re-runs validation.
+  validateSearch: (search: Record<string, unknown>): { code?: string } =>
+    typeof search.code === 'string' && search.code ? { code: search.code } : {},
 })
 
 /**
@@ -57,8 +62,12 @@ type InviteCheck =
   | { ok: true; name: string }
   | ({ ok: false } & InviteRefusal)
 
-/** Why the entry screen is not moving on: a refusal, or `malformed` — never sent anywhere. */
-type CodeIssue = InviteRefusal | { reason: 'malformed' }
+/**
+ * Why the entry screen is not moving on: a refusal, or one of the two outcomes
+ * that are never sent anywhere — `malformed`, or a link naming `otherServer`
+ * (the code is a bearer token for that hub, not for the one configured here).
+ */
+type CodeIssue = InviteRefusal | { reason: 'malformed' } | { reason: 'otherServer'; server: string }
 
 /** Ask the configured server about an already-normalized code. */
 async function checkInvite(code: string): Promise<InviteCheck> {
@@ -80,6 +89,7 @@ function inviteErrorMessage(t: TFunction, issue: CodeIssue): string {
     case 'already_used': return t('onboarding.alreadyUsed')
     case 'invalid': return t('onboarding.invalidCode')
     case 'malformed': return t('onboarding.malformedCode')
+    case 'otherServer': return t('onboarding.otherServer', { server: issue.server })
     case 'retryable':
       return issue.retryAfterSeconds
         ? t('onboarding.rateLimitedRetry', { seconds: issue.retryAfterSeconds })
@@ -94,9 +104,9 @@ function OnboardingPage() {
   const { toast } = useToast()
   const navigate = useNavigate()
 
-  // A `?code=` link still works; reached from the login screen there is none,
-  // and the volunteer pastes the code they were sent instead.
-  const [urlCode] = useState(() => new URLSearchParams(window.location.search).get('code'))
+  // Opened from an invite link there is a `?code=`; reached from the login
+  // screen there is none, and the volunteer pastes the link or code instead.
+  const { code: urlCode } = Route.useSearch()
   const [inviteCode, setInviteCode] = useState('')
   const [codeInput, setCodeInput] = useState('')
   const [codeIssue, setCodeIssue] = useState<CodeIssue | null>(null)
@@ -148,6 +158,13 @@ function OnboardingPage() {
   const [errorRetryable, setErrorRetryable] = useState(false)
   const validatingRef = useRef(false)
 
+  // A new link (a deep link opened while this screen is up) starts over.
+  useEffect(() => {
+    if (!urlCode) return
+    validatingRef.current = false
+    setStep('loading')
+  }, [urlCode])
+
   const runValidation = useCallback(() => {
     const code = urlCode ? normalizeInviteCode(urlCode) : null
     if (!code) {
@@ -186,12 +203,18 @@ function OnboardingPage() {
     if (checkingCode) return
     setCodeIssue(null)
     // Trimmed and lowercased before anything else: a trailing newline from a
-    // Signal copy must never surface as "invalid code".
-    const code = normalizeInviteCode(codeInput)
-    if (!code) {
+    // Signal copy must never surface as "invalid code". A pasted invite link
+    // gives up its code, and the hub it names must be the one configured here.
+    const invite = parseInvite(codeInput)
+    if (!invite) {
       setCodeIssue({ reason: 'malformed' })
       return
     }
+    if (invite.hubOrigin && invite.hubOrigin !== getHubOrigin()) {
+      setCodeIssue({ reason: 'otherServer', server: invite.hubOrigin })
+      return
+    }
+    const { code } = invite
     setCheckingCode(true)
     const result = await checkInvite(code)
     setCheckingCode(false)

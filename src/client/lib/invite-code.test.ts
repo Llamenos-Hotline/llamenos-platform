@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INVITE_CODE_LENGTH, normalizeInviteCode } from './invite-code'
+import { INVITE_CODE_LENGTH, buildInviteLink, normalizeInviteCode, parseInvite } from './invite-code'
 
 const CODE = '3f2b8c1e-9a4d-4e6f-b1c2-7d8e9f0a1b2c'
 
@@ -41,5 +41,43 @@ describe('normalizeInviteCode', () => {
   it('never extracts a code from a link or surrounding text', () => {
     expect(normalizeInviteCode(`https://example.org/onboarding?code=${CODE}`)).toBeNull()
     expect(normalizeInviteCode(`Your invite code: ${CODE}`)).toBeNull()
+  })
+})
+
+describe('parseInvite', () => {
+  it('reads a bare code, with no hub', () => {
+    expect(parseInvite(` ${CODE.toUpperCase()}\n`)).toEqual({ code: CODE, hubOrigin: null })
+  })
+
+  it('reads the code and the hub out of an invite link', () => {
+    expect(parseInvite(`https://hub.example.org/onboarding?code=${CODE}`))
+      .toEqual({ code: CODE, hubOrigin: 'https://hub.example.org' })
+    expect(parseInvite(`\nhttps://hub.example.org:8443/onboarding?code=${CODE.toUpperCase()}​`))
+      .toEqual({ code: CODE, hubOrigin: 'https://hub.example.org:8443' })
+  })
+
+  it('reads a llamenos://hub-invite deep link, which names no hub', () => {
+    expect(parseInvite(`llamenos://hub-invite?code=${CODE}`)).toEqual({ code: CODE, hubOrigin: null })
+    expect(parseInvite(`llamenos://hub-invite?token=${CODE}`)).toEqual({ code: CODE, hubOrigin: null })
+  })
+
+  it('refuses links that carry no well-formed code, and other schemes', () => {
+    expect(parseInvite('https://hub.example.org/onboarding')).toBeNull()
+    expect(parseInvite('https://hub.example.org/onboarding?code=nope')).toBeNull()
+    expect(parseInvite(`llamenos://oauth/callback?code=${CODE}`)).toBeNull()
+    expect(parseInvite(`llamenos://hub-invite/extra?code=${CODE}`)).toBeNull()
+    expect(parseInvite(`javascript:alert(1)//?code=${CODE}`)).toBeNull()
+    expect(parseInvite(`Your invite code: ${CODE}`)).toBeNull()
+  })
+})
+
+describe('buildInviteLink', () => {
+  it('points at the hub, not the webview origin', () => {
+    expect(buildInviteLink(CODE, 'https://hub.example.org')).toBe(`https://hub.example.org/onboarding?code=${CODE}`)
+  })
+
+  it('round-trips through parseInvite', () => {
+    expect(parseInvite(buildInviteLink(CODE, 'https://hub.example.org:8443')))
+      .toEqual({ code: CODE, hubOrigin: 'https://hub.example.org:8443' })
   })
 })

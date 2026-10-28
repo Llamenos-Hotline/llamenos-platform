@@ -85,6 +85,8 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'net_ws_connect',
     'net_ws_send',
     'net_ws_close',
+    // Invite deep link (#1128) — the code a llamenos://hub-invite link delivered
+    'take_pending_invite',
     // Shamir verification (split/combine are internal-only — secrets never enter JS)
     'shamir_commit',
     'shamir_verify',
@@ -143,7 +145,8 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
 
   // Event-plugin commands are allowed ONLY for the native→webview events the app
   // actually subscribes to — `net-ws:<id>` (the relay WebSocket proxy frames,
-  // emitted by apps/desktop/src/net.rs) and `check-for-updates` (tray menu). The
+  // emitted by apps/desktop/src/net.rs), `check-for-updates` (tray menu) and
+  // `invite-deep-link` (apps/desktop/src/deep_link.rs, payload-free). The
   // allowlist cannot be a flat entry: `plugin:event|listen` with an arbitrary
   // event name would let injected script eavesdrop on any native event, so the
   // event name in the payload is inspected. `plugin:event|emit` and `emit_to`
@@ -159,7 +162,7 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
   // must be an integer, so a call that is not the stock unlisten shape is refused.
   // src/client/lib/desktop-ipc-boundary.test.ts drives the real `listen()` →
   // unlisten function through this hook, so a change to that shape fails there.
-  const ALLOWED_EVENT_NAME = /^(net-ws:[A-Za-z0-9_-]+|check-for-updates)$/;
+  const ALLOWED_EVENT_NAME = /^(net-ws:[A-Za-z0-9_-]+|check-for-updates|invite-deep-link)$/;
   const SCOPED_EVENT_COMMANDS = new Set([
     'plugin:event|listen',
     'plugin:event|unlisten',

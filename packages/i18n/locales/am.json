@@ -898,7 +898,9 @@
     "codePlaceholder": "የግብዣ ኮድዎን እዚህ ይለጥፉ",
     "codeSentTo": "የግብዣ ኮድዎ ወደዚህ አገልጋይ ይላካል፦",
     "useDifferentServer": "ሌላ አገልጋይ ይጠቀሙ",
-    "malformedCode": "ይህ የግብዣ ኮድ አይመስልም። ሙሉውን ኮድ ከSignal መልእክትዎ ቀድተው እንደገና ይለጥፉ።"
+    "malformedCode": "ይህ የግብዣ ኮድ አይመስልም። ሙሉውን ኮድ ከSignal መልእክትዎ ቀድተው እንደገና ይለጥፉ።",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "ሁሉንም ውሂብ አጥፋ",
@@ -1303,7 +1305,7 @@
     "identityDescription": "ለቀውስ ስልክ መስመርዎ ስምና ቋንቋ ይምረጡ።",
     "identityTitle": "ስልክ መስመርዎን ይሰይሙ",
     "inactivityTimeout": "የቸልተኝነት ጊዜ ገደብ (ደቂቃዎች)",
-    "inviteCopied": "የግብዣ ኮድ ወደ ቅንጥብ ሰሌዳ ተቀድቷል",
+    "inviteCopied": "የግብዣ ማገናኛ ወደ ቅንጥብ ሰሌዳ ተቀድቷል",
     "inviteCreated": "ግብዣ በተሳካ ሁኔታ ተፈጥሯል",
     "inviteDescription": "ለቡድንዎ የግብዣ ኮዶች ይፍጠሩ። እያንዳንዱ ኮድ ለአንድ ጊዜ ብቻ ሲሆን በ7 ቀናት ያልቃል።",
     "inviteNew": "አዲስ ግብዣ",
@@ -1843,7 +1845,7 @@
     "inviteCreated": "ግብዣ ተፈጥሯል",
     "inviteExpires": "ያልቃል {{date}}",
     "inviteGenerated": "ግብዣ ተፈጥሯል! ሚስጥራዊ ቁልፉን በደህንነት ያጋሩ።",
-    "inviteCodeLabel": "ይህን የግብዣ ኮድ ለበጎ ፈቃደኛው በSignal ይላኩ",
+    "inviteLinkLabel": "የግብዣ ማገናኛ",
     "inviteRevoked": "ግብዣ ተሰርዟል",
     "inviteVolunteer": "ተጠቃሚ ግብዣ",
     "joined": "ተቀላቅሏል",

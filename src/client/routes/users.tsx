@@ -17,6 +17,8 @@ import {
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
 import { generateEphemeralKeypair } from '@/lib/platform'
+import { getHubOrigin } from '@/lib/api-config'
+import { buildInviteLink } from '@/lib/invite-code'
 import { useToast } from '@/lib/toast'
 import { UserPlus, Shield, ShieldCheck, Trash2, Key, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -49,7 +51,7 @@ function UsersPage() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [showInviteForm, setShowInviteForm] = useState(false)
   const [generatedDeviceKey, setGeneratedDeviceKey] = useState<string | null>(null)
-  const [inviteCode, setInviteCode] = useState<string | null>(null)
+  const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -81,7 +83,7 @@ function UsersPage() {
           <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t('users.title')}</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" data-testid="invite-btn" onClick={() => { setShowInviteForm(true); setInviteCode(null) }}>
+          <Button variant="outline" data-testid="invite-btn" onClick={() => { setShowInviteForm(true); setInviteLink(null) }}>
             <Mail className="h-4 w-4" />
             {t('users.inviteVolunteer')}
           </Button>
@@ -121,30 +123,30 @@ function UsersPage() {
         </Card>
       )}
 
-      {/* Invite code display — the admin sends the bare code over Signal */}
-      {inviteCode && (
+      {/* Invite link display — on the hub's own address, never the webview origin (#1128) */}
+      {inviteLink && (
         <Card className="border-green-400/50 bg-green-50 dark:border-green-600/50 dark:bg-green-950/10">
           <CardContent className="space-y-3">
             <div className="flex items-start gap-2">
               <Mail className="mt-0.5 h-4 w-4 text-green-600 dark:text-green-400" />
               <div>
                 <p className="text-sm font-medium text-green-800 dark:text-green-300">{t('users.inviteCreated')}</p>
-                <p className="mt-0.5 text-xs text-green-600 dark:text-green-400/80">{t('users.inviteCodeLabel')}</p>
+                <p className="mt-0.5 text-xs text-green-600 dark:text-green-400/80">{t('users.inviteLinkLabel')}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <code data-testid="invite-link-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 font-mono text-xs">{inviteCode}</code>
+              <code data-testid="invite-link-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 font-mono text-xs">{inviteLink}</code>
               <Button
                 variant="outline"
                 size="icon"
-                data-testid="copy-invite-code-btn"
-                onClick={() => { navigator.clipboard.writeText(inviteCode); toast(t('setup.inviteCopied'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
+                data-testid="copy-invite-link-btn"
+                onClick={() => { navigator.clipboard.writeText(inviteLink); toast(t('setup.inviteCopied'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
                 aria-label={t('a11y.copyToClipboard')}
               >
                 <Copy className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <Button variant="ghost" size="sm" data-testid="dismiss-invite" onClick={() => setInviteCode(null)}>
+            <Button variant="ghost" size="sm" data-testid="dismiss-invite" onClick={() => setInviteLink(null)}>
               {t('common.close')}
             </Button>
           </CardContent>
@@ -157,7 +159,7 @@ function UsersPage() {
           roles={roles}
           onCreated={(invite) => {
             setInvites(prev => [...prev, invite])
-            setInviteCode(invite.code)
+            setInviteLink(buildInviteLink(invite.code, getHubOrigin()))
             setShowInviteForm(false)
           }}
           onCancel={() => setShowInviteForm(false)}

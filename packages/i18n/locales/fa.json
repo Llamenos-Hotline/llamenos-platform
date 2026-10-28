@@ -898,7 +898,9 @@
     "codePlaceholder": "کد دعوت خود را اینجا جای‌گذاری کنید",
     "codeSentTo": "کد دعوت شما به این سرور فرستاده می‌شود:",
     "useDifferentServer": "استفاده از سرور دیگر",
-    "malformedCode": "این به نظر کد دعوت نیست. کل کد را از پیام Signal خود کپی کنید و دوباره جای‌گذاری کنید."
+    "malformedCode": "این به نظر کد دعوت نیست. کل کد را از پیام Signal خود کپی کنید و دوباره جای‌گذاری کنید.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "پاک کردن تمام داده‌ها",
@@ -1303,7 +1305,7 @@
     "identityDescription": "نام و زبانی برای خط اضطراری بحران خود انتخاب کنید.",
     "identityTitle": "نام‌گذاری خط اضطراری",
     "inactivityTimeout": "مهلت عدم فعالیت (دقیقه)",
-    "inviteCopied": "کد دعوت در کلیپ‌بورد کپی شد",
+    "inviteCopied": "لینک دعوت در کلیپ‌بورد کپی شد",
     "inviteCreated": "دعوتنامه با موفقیت ایجاد شد",
     "inviteDescription": "کدهای دعوت برای تیم خود ایجاد کنید. هر کد یکبار مصرف است و پس از ۷ روز منقضی می‌شود.",
     "inviteNew": "دعوت جدید",
@@ -1843,7 +1845,7 @@
     "inviteCreated": "دعوتنامه ایجاد شد",
     "inviteExpires": "منقضی می‌شود {{date}}",
     "inviteGenerated": "دعوتنامه تولید شد! کلید محرمانه را به صورت امن به اشتراک بگذارید.",
-    "inviteCodeLabel": "این کد دعوت را از طریق Signal برای داوطلب بفرستید",
+    "inviteLinkLabel": "لینک دعوت",
     "inviteRevoked": "دعوتنامه لغو شد",
     "inviteVolunteer": "دعوت از کاربر",
     "joined": "عضویت",

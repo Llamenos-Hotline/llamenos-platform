@@ -1602,6 +1602,63 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       mockWsConnections.delete(id)
     }
   },
+
+  // --- Invite deep link (#1128) — mirrors apps/desktop/src/deep_link.rs ---
+
+  take_pending_invite: async () => {
+    const code = mockPendingInvite
+    mockPendingInvite = null
+    return code
+  },
+}
+
+// ── Invite deep links (#1128) — mirrors apps/desktop/src/deep_link.rs ──
+//
+// A test plays the OS: `window.__TEST_OPEN_DEEP_LINK__(url)` is a link clicked
+// while the app runs (Rust's `on_open_url`), and `__TEST_LAUNCH_DEEP_LINK__`,
+// set by an init script before the app loads, is the link that launched it
+// (`get_current`). Either way the URL goes through the same allowlist Rust
+// applies, and only a parsed code is ever handed to the webview.
+
+let mockPendingInvite: string | null = null
+
+const MOCK_INVITE_CODE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+function mockParseInviteUrl(raw: string): string | null {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  // A non-special scheme puts the "host" in `host` and leaves `pathname` empty
+  // (or "/"), exactly as the url crate does for `llamenos://hub-invite?...`.
+  if (url.protocol !== 'llamenos:' || url.host !== 'hub-invite') return null
+  if (url.pathname !== '' && url.pathname !== '/') return null
+  for (const [name, value] of url.searchParams) {
+    if (name !== 'code' && name !== 'token') continue
+    const code = value.toLowerCase()
+    return MOCK_INVITE_CODE.test(code) ? code : null
+  }
+  return null
+}
+
+function mockDeliverDeepLink(raw: string): boolean {
+  const code = mockParseInviteUrl(raw)
+  if (!code) return false
+  mockPendingInvite = code
+  // platformListen's test-build registry (src/client/lib/platform.ts)
+  const listeners = (window as unknown as { __TAURI_EVENT_LISTENERS__?: Record<string, Array<() => void>> })
+    .__TAURI_EVENT_LISTENERS__?.['invite-deep-link'] ?? []
+  listeners.forEach(handler => handler())
+  return true
+}
+
+if (typeof window !== 'undefined' && import.meta.env.PLAYWRIGHT_TEST) {
+  const testWindow = window as unknown as Record<string, unknown>
+  testWindow.__TEST_OPEN_DEEP_LINK__ = mockDeliverDeepLink
+  const launchedWith = testWindow.__TEST_LAUNCH_DEEP_LINK__
+  if (typeof launchedWith === 'string') mockDeliverDeepLink(launchedWith)
 }
 
 // ── Public API ────────────────────────────────────────────────────────

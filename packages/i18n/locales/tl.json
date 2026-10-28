@@ -2811,7 +2811,9 @@
     "codePlaceholder": "I-paste dito ang iyong invite code",
     "codeSentTo": "Ipapadala ang iyong invite code sa server na ito:",
     "useDifferentServer": "Gumamit ng ibang server",
-    "malformedCode": "Mukhang hindi ito invite code. Kopyahin ang buong code mula sa iyong mensahe sa Signal at i-paste itong muli."
+    "malformedCode": "Mukhang hindi ito invite code. Kopyahin ang buong code mula sa iyong mensahe sa Signal at i-paste itong muli.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
@@ -3840,7 +3842,7 @@
     "identityDescription": "Choose a name and language for your crisis hotline.",
     "identityTitle": "Name Your Hotline",
     "inactivityTimeout": "Inactivity Timeout (minutes)",
-    "inviteCopied": "Nakopya ang invite code sa clipboard",
+    "inviteCopied": "Invite link copied to clipboard",
     "inviteCreated": "Invite created successfully",
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
@@ -4582,7 +4584,7 @@
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
     "inviteGenerated": "Na-generate na ang imbitasyon! Ibahagi ang secret key nang ligtas.",
-    "inviteCodeLabel": "Ipadala ang invite code na ito sa boluntaryo sa Signal",
+    "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
     "joined": "Joined",

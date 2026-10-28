@@ -8,6 +8,7 @@ import { useTheme } from '@/lib/theme'
 import { useEffect, useState, type ReactNode } from 'react'
 import { setServerEventKeys } from '@/lib/platform'
 import { needsServerAddress } from '@/lib/api-config'
+import { useInviteDeepLink } from '@/lib/use-invite-deep-link'
 import { ServerAddressScreen } from '@/components/setup/ServerAddressScreen'
 import { RelayProvider } from '@/lib/relay/context'
 import { useShiftStatus } from '@/lib/hooks'
@@ -109,6 +110,9 @@ function RootLayout() {
   // the newly-configured backend instead of staying stuck on stale defaults
   // fetched (and failed) before any address was known.
   const serverAddressConfigured = !needsServerAddress()
+
+  // A clicked llamenos://hub-invite link opens the redemption screen (#1128).
+  useInviteDeepLink()
 
   // Nostr relay connection is handled by NostrProvider in AuthenticatedLayout
 

@@ -898,7 +898,9 @@
     "codePlaceholder": "Pega aquí tu código de invitación",
     "codeSentTo": "Tu código de invitación se enviará a este servidor:",
     "useDifferentServer": "Usar otro servidor",
-    "malformedCode": "Eso no parece un código de invitación. Copia el código completo de tu mensaje de Signal y vuelve a pegarlo."
+    "malformedCode": "Eso no parece un código de invitación. Copia el código completo de tu mensaje de Signal y vuelve a pegarlo.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Xíta Ndiꞌi Datos",
@@ -1303,7 +1305,7 @@
     "identityDescription": "Kaji iin sivi ji tu̱ꞌun ña línea de ayuda de crisis miíún.",
     "identityTitle": "Chikaa Sivi Línea de Ayuda Miíún",
     "inactivityTimeout": "Tiempo de Inactividad (minuto)",
-    "inviteCopied": "Código de invitación copiado al portapapeles",
+    "inviteCopied": "Ni̱ ndasa enlace de invitación nu̱ú portapapeles",
     "inviteCreated": "Ni̱ savaꞌa invitación va̱ꞌa",
     "inviteDescription": "Savaꞌa código de invitación ña equipo miíún. Iin iin código kúu iin vuelta kuiti ta ndíꞌi nu̱ú 7 ki̱vi̱.",
     "inviteNew": "Invitación Saa̱",
@@ -1843,7 +1845,7 @@
     "inviteCreated": "Ni̱ savaꞌa invitación",
     "inviteExpires": "Ndíꞌi {{date}}",
     "inviteGenerated": "¡Ni̱ savaꞌa invitación! Tají llave secreta de modo seguro.",
-    "inviteCodeLabel": "Envía este código de invitación al voluntario por Signal",
+    "inviteLinkLabel": "Enlace de invitación",
     "inviteRevoked": "Ni̱ revocar invitación",
     "inviteVolunteer": "Invitar Ña̱yivi",
     "joined": "Ni̱ kivi",

@@ -1,6 +1,7 @@
 mod api_config;
 mod cert_pin;
 mod crypto;
+mod deep_link;
 mod net;
 
 use tauri::{Emitter, Manager};
@@ -29,6 +30,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
+        // Registered before deep-link: with its `deep-link` feature it forwards
+        // a second instance's `llamenos://` argument to this one (#1128).
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Focus existing window when second instance launched
             if let Some(window) = app.get_webview_window("main") {
@@ -38,6 +41,7 @@ pub fn run() {
                 let _ = window.unminimize();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -62,12 +66,33 @@ pub fn run() {
         .manage(PinnedNet::default())
         // One-time confirmation token for api_config_clear (#788)
         .manage(api_config::ClearConfirmState::default())
+        // Invite code delivered by a `llamenos://hub-invite` link (#1128)
+        .manage(deep_link::PendingInvite::default())
         .setup(|app| {
             // Rehydrate the pinned TLS client/connector from whatever backend
             // was already configured on a previous run (#775). Must happen
             // before the webview can call `net_fetch`/`net_ws_connect`.
             if let Err(e) = net::load_or_reset_pinned_net(app.handle()) {
                 tauri_plugin_log::log::warn!("could not load pinned backend config: {e}");
+            }
+
+            // Invite deep links (#1128). Linux has no install-time scheme
+            // registration for every bundle format (AppImage), so register at
+            // runtime; Windows only needs it for unbundled dev builds.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+                if let Err(e) = app.deep_link().register_all() {
+                    tauri_plugin_log::log::warn!("could not register the llamenos:// scheme: {e}");
+                }
+                // Cold start: the app was launched by the link itself.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::handle_urls(app.handle(), &urls);
+                }
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::handle_urls(&handle, &event.urls());
+                });
             }
 
             // System tray setup
@@ -244,6 +269,8 @@ pub fn run() {
             net::net_ws_connect,
             net::net_ws_send,
             net::net_ws_close,
+            // Invite deep link (#1128) — the code, handed over once
+            deep_link::take_pending_invite,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

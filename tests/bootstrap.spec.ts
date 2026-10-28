@@ -256,12 +256,12 @@ async function createRoleAccount(
   // Create invite
   await adminPage.getByTestId('create-invite-btn').click()
 
-  // Wait for the invite card — it shows the bare code the admin sends over Signal (#1128)
-  const inviteCodeCard = adminPage.getByTestId('invite-link-code')
-  await expect(inviteCodeCard).toBeVisible({ timeout: 15000 })
-  const inviteCode = (await inviteCodeCard.textContent())?.trim()
-  if (!inviteCode) throw new Error(`Failed to get invite code for ${opts.name}`)
-  console.log(`[SETUP] ${opts.name}: invite code = ${inviteCode}`)
+  // Wait for invite link to appear (green card with the link)
+  const inviteLinkCard = adminPage.getByTestId('invite-link-code')
+  await expect(inviteLinkCard).toBeVisible({ timeout: 15000 })
+  const inviteLink = await inviteLinkCard.textContent()
+  if (!inviteLink) throw new Error(`Failed to get invite link for ${opts.name}`)
+  console.log(`[SETUP] ${opts.name}: invite link = ${inviteLink}`)
 
   // Dismiss invite link card
   const dismissBtn = adminPage.getByTestId('dismiss-invite')
@@ -275,8 +275,7 @@ async function createRoleAccount(
   const userPage = await userContext.newPage()
 
   try {
-    // A `?code=` link still redeems directly; it skips the paste-your-code screen.
-    await userPage.goto(`/onboarding?code=${encodeURIComponent(inviteCode)}`, { waitUntil: 'domcontentloaded' })
+    await userPage.goto(inviteLink, { waitUntil: 'domcontentloaded' })
     console.log(`[SETUP] ${opts.name}: landed on ${userPage.url()}`)
 
     // Wait for welcome page
@@ -286,7 +285,7 @@ async function createRoleAccount(
       userPage.getByText(/expired/i).waitFor({ state: 'visible', timeout: 20000 }).then(() => 'expired' as const),
     ])
     if (welcomeOrError !== 'welcome') {
-      throw new Error(`Invite for ${opts.name} failed: ${welcomeOrError} (code: ${inviteCode})`)
+      throw new Error(`Invite for ${opts.name} failed: ${welcomeOrError} (link: ${inviteLink})`)
     }
 
     // Click "Get Started"

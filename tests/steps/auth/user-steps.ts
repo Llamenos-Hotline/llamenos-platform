@@ -104,8 +104,7 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   const createInviteBtn = page.getByTestId('create-invite-btn')
   await expect(createInviteBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
   await createInviteBtn.click()
-  // Wait for the invite card to appear. It now shows the bare invite code (#1128),
-  // not an onboarding URL, so assert on the card rather than on its contents here.
+  // Wait for the invite card to appear; its link is asserted where it matters.
   await expect(page.getByTestId('invite-link-code')).toBeVisible({ timeout: Timeouts.API })
   await page.getByTestId('dismiss-invite').waitFor({ state: 'visible', timeout: Timeouts.API })
   // Persist the vol name in localStorage so it survives page.reload()
@@ -115,28 +114,36 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   }, name)
 })
 
-When('I copy the new invite code', async ({ page }) => {
+When('I copy the new invite link', async ({ page }) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
-  await page.getByTestId('copy-invite-code-btn').click()
+  await page.getByTestId('copy-invite-link-btn').click()
 })
 
-Then('the clipboard should hold only the invite code', async ({ page, backendRequest }) => {
+Then("the clipboard should hold the invite link on the configured server's address", async ({ page, backendRequest }) => {
   const volName = (await page.evaluate(() => localStorage.getItem('__test_invite_vol_name'))) as string
   const { data } = await apiGet<{ invites: Array<{ code: string; name: string }> }>(backendRequest, '/invites')
   const invite = data.invites.find(i => i.name === volName)
   expect(invite, `no pending invite named ${volName}`).toBeTruthy()
-  // The bare code — no URL, no prose — because it is pasted straight into a
-  // Signal message, and the volunteer pastes it straight into the app.
+  const server = await page.evaluate(() =>
+    (window as unknown as { __TEST_API_CONFIG: { getApiBase: () => string } }).__TEST_API_CONFIG.getApiBase(),
+  )
+  // The configured server differs from the page's own origin here, exactly as a
+  // packaged build's does (tauri://localhost) — so a link built from the webview
+  // origin (#1128) cannot pass.
+  expect(new URL(server).origin).not.toBe(new URL(page.url()).origin)
+  const expected = `${new URL(server).origin}/onboarding?code=${invite!.code}`
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: Timeouts.ELEMENT })
-    .toBe(invite!.code)
-  await expect(page.getByTestId('invite-link-code')).toHaveText(invite!.code)
+    .toBe(expected)
+  await expect(page.getByTestId('invite-link-code')).toHaveText(expected)
 })
 
-// The three steps below drive the invite-LINK flow. Desktop no longer has one —
-// its invite card shows a bare code the volunteer pastes (#1128), covered by
-// platform/desktop/auth/invite-redemption.feature — so the scenario that uses
-// them in core/auth-login.feature is tagged @ios @android only. They are kept so
-// that re-tagging it @desktop fails loudly rather than reporting a missing step.
+// The three steps below open the invite link in the ADMIN's own, signed-in page.
+// Desktop refuses that by design — /onboarding is for a device no one is signed
+// in on (__root.tsx, #1166) — so the scenario that uses them in
+// core/auth-login.feature is tagged @ios @android only; desktop's link, paste and
+// deep-link redemption is covered from a fresh install in
+// platform/desktop/auth/invite-redemption.feature. They are kept so that
+// re-tagging it @desktop fails loudly rather than reporting a missing step.
 Then('an invite link should be generated', async ({ page }) => {
   // The invite card shows the full onboarding URL (`${origin}/onboarding?code=…`).
   await expect(page.getByTestId('invite-link-code')).toHaveText(/\/onboarding\?code=\S+/, { timeout: Timeouts.ELEMENT })

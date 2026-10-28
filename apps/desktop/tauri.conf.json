@@ -72,6 +72,13 @@
         "https://updates.llamenos-hotline.org/desktop/latest.json",
         "https://releases.llamenos-hotline.org/desktop/latest.json"
       ]
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "llamenos"
+        ]
+      }
     }
   }
 }

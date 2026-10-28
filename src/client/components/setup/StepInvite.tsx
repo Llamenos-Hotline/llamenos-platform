@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { createInvite, type InviteCode } from '@/lib/api'
+import { getHubOrigin } from '@/lib/api-config'
+import { buildInviteLink } from '@/lib/invite-code'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -45,10 +47,10 @@ export function StepInvite({ headingRef }: Props = {}) {
     }
   }
 
-  // The bare code only — it is pasted straight into a Signal message, and the
-  // volunteer pastes it into the app's "I have an invite code" screen.
-  function copyInviteCode(code: string) {
-    navigator.clipboard.writeText(code)
+  // A link on the hub's own address (#1128) — the volunteer pastes it into the
+  // app's invite screen, which reads the code and checks the hub it names.
+  function copyInviteLink(code: string) {
+    navigator.clipboard.writeText(buildInviteLink(code, getHubOrigin()))
     setCopiedCode(code)
     toast(t('setup.inviteCopied'), 'success')
     setTimeout(() => setCopiedCode(null), 2000)
@@ -135,9 +137,9 @@ export function StepInvite({ headingRef }: Props = {}) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  data-testid="copy-invite-code-btn"
+                  data-testid="copy-invite-link-btn"
                   aria-label={t('a11y.copyToClipboard')}
-                  onClick={() => copyInviteCode(invite.code)}
+                  onClick={() => copyInviteLink(invite.code)}
                 >
                   {copiedCode === invite.code ? (
                     <Check className="h-3.5 w-3.5 text-green-500" />

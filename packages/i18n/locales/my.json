@@ -898,7 +898,9 @@
     "codePlaceholder": "သင့်ဖိတ်ကြားကုဒ်ကို ဤနေရာတွင် ကူးထည့်ပါ",
     "codeSentTo": "သင့်ဖိတ်ကြားကုဒ်ကို ဤဆာဗာသို့ ပို့ပါမည်-",
     "useDifferentServer": "အခြားဆာဗာ သုံးမည်",
-    "malformedCode": "၎င်းသည် ဖိတ်ကြားကုဒ်နှင့် မတူပါ။ သင့် Signal မက်ဆေ့ချ်မှ ကုဒ်တစ်ခုလုံးကို ကူးယူပြီး ထပ်မံ ကူးထည့်ပါ။"
+    "malformedCode": "၎င်းသည် ဖိတ်ကြားကုဒ်နှင့် မတူပါ။ သင့် Signal မက်ဆေ့ချ်မှ ကုဒ်တစ်ခုလုံးကို ကူးယူပြီး ထပ်မံ ကူးထည့်ပါ။",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "ဒေတာအားလုံး ဖျက်မည်",
@@ -1303,7 +1305,7 @@
     "identityDescription": "သင့်အရေးပေါ်ဟော့လိုင်းအတွက် အမည်နှင့် ဘာသာစကား ရွေးချယ်ပါ။",
     "identityTitle": "သင့်ဟော့လိုင်းကို အမည်ပေးပါ",
     "inactivityTimeout": "မလှုပ်ရှားမှုချိန်ကုန်ဆုံးချိန် (မိနစ်)",
-    "inviteCopied": "ဖိတ်ကြားကုဒ်ကို ကလစ်ဘုတ်သို့ ကူးပြီး",
+    "inviteCopied": "ဖိတ်ကြားလင့်ခ် ကလစ်ဘုတ်သို့ ကူးပြီး",
     "inviteCreated": "ဖိတ်ကြားချက် ဖန်တီးပြီးပါပြီ",
     "inviteDescription": "သင့်အဖွဲ့အတွက် ဖိတ်ကြားကုဒ်များ ဖန်တီးပါ။ ကုဒ်တစ်ခုလျှင် တစ်ကြိမ်သာ အသုံးပြုနိုင်ပြီး ၇ ရက်အတွင်း ကုန်ဆုံးမည်။",
     "inviteNew": "ဖိတ်ကြားချက်အသစ်",
@@ -1843,7 +1845,7 @@
     "inviteCreated": "ဖိတ်ကြားချက် ဖန်တီးပြီး",
     "inviteExpires": "{{date}} တွင် ကုန်ဆုံးမည်",
     "inviteGenerated": "ဖိတ်ကြားချက် ဖန်တီးပြီး! လျှို့ဝှက်သော့ကို လုံခြုံစွာ မျှဝေပါ။",
-    "inviteCodeLabel": "ဤဖိတ်ကြားကုဒ်ကို စေတနာ့ဝန်ထမ်းထံ Signal ဖြင့် ပို့ပါ",
+    "inviteLinkLabel": "ဖိတ်ကြားလင့်ခ်",
     "inviteRevoked": "ဖိတ်ကြားချက် ရုပ်သိမ်းပြီး",
     "inviteVolunteer": "အသုံးပြုသူ ဖိတ်ကြားမည်",
     "joined": "ပါဝင်ခဲ့သည့်ရက်",

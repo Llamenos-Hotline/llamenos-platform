@@ -2811,7 +2811,9 @@
     "codePlaceholder": "Вставьте сюда код приглашения",
     "codeSentTo": "Код приглашения будет отправлен на этот сервер:",
     "useDifferentServer": "Использовать другой сервер",
-    "malformedCode": "Это не похоже на код приглашения. Скопируйте код целиком из сообщения в Signal и вставьте его снова."
+    "malformedCode": "Это не похоже на код приглашения. Скопируйте код целиком из сообщения в Signal и вставьте его снова.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
@@ -3840,7 +3842,7 @@
     "identityDescription": "Choose a name and language for your crisis hotline.",
     "identityTitle": "Name Your Hotline",
     "inactivityTimeout": "Inactivity Timeout (minutes)",
-    "inviteCopied": "Код приглашения скопирован в буфер обмена",
+    "inviteCopied": "Invite link copied to clipboard",
     "inviteCreated": "Invite created successfully",
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
@@ -4582,7 +4584,7 @@
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
     "inviteGenerated": "Приглашение создано! Передайте секретный ключ безопасно.",
-    "inviteCodeLabel": "Отправьте этот код приглашения волонтёру через Signal",
+    "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
     "joined": "Joined",

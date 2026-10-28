@@ -2811,7 +2811,9 @@
     "codePlaceholder": "Kole kòd envitasyon ou isit la",
     "codeSentTo": "Kòd envitasyon ou a pral voye bay sèvè sa a:",
     "useDifferentServer": "Sèvi ak yon lòt sèvè",
-    "malformedCode": "Sa pa sanble ak yon kòd envitasyon. Kopye tout kòd la nan mesaj Signal ou a epi kole l ankò."
+    "malformedCode": "Sa pa sanble ak yon kòd envitasyon. Kopye tout kòd la nan mesaj Signal ou a epi kole l ankò.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
@@ -3840,7 +3842,7 @@
     "identityDescription": "Choose a name and language for your crisis hotline.",
     "identityTitle": "Name Your Hotline",
     "inactivityTimeout": "Inactivity Timeout (minutes)",
-    "inviteCopied": "Kòd envitasyon an kopye nan klipbòd la",
+    "inviteCopied": "Invite link copied to clipboard",
     "inviteCreated": "Invite created successfully",
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
@@ -4582,7 +4584,7 @@
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
     "inviteGenerated": "Envitasyon kreye! Pataje kle sekrè a an sekirite.",
-    "inviteCodeLabel": "Voye kòd envitasyon sa a bay volontè a sou Signal",
+    "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
     "joined": "Joined",

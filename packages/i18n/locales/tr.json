@@ -898,7 +898,9 @@
     "codePlaceholder": "Davet kodunuzu buraya yapıştırın",
     "codeSentTo": "Davet kodunuz bu sunucuya gönderilecek:",
     "useDifferentServer": "Farklı bir sunucu kullan",
-    "malformedCode": "Bu bir davet koduna benzemiyor. Kodun tamamını Signal mesajınızdan kopyalayıp yeniden yapıştırın."
+    "malformedCode": "Bu bir davet koduna benzemiyor. Kodun tamamını Signal mesajınızdan kopyalayıp yeniden yapıştırın.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Tüm Verileri Sil",
@@ -1303,7 +1305,7 @@
     "identityDescription": "Kriz hattınız için bir ad ve dil seçin.",
     "identityTitle": "Hat Hattınızı Adlandırın",
     "inactivityTimeout": "İnaktivite Zaman Aşımı (dakika)",
-    "inviteCopied": "Davet kodu panoya kopyalandı",
+    "inviteCopied": "Davet bağlantısı panoya kopyalandı",
     "inviteCreated": "Davet başarıyla oluşturuldu",
     "inviteDescription": "Ekibiniz için davet kodları oluşturun. Her kod tek kullanımlıktır ve 7 gün sonra sona erer.",
     "inviteNew": "Yeni Davet",
@@ -1843,7 +1845,7 @@
     "inviteCreated": "Davet oluşturuldu",
     "inviteExpires": "{{date}} tarihinde sona erer",
     "inviteGenerated": "Davet oluşturuldu! Gizli anahtarı güvenli bir şekilde paylaşın.",
-    "inviteCodeLabel": "Bu davet kodunu gönüllüye Signal üzerinden gönderin",
+    "inviteLinkLabel": "Davet bağlantısı",
     "inviteRevoked": "Davet iptal edildi",
     "inviteVolunteer": "Kullanıcı Davet Et",
     "joined": "Katılım",

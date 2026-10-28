@@ -898,7 +898,9 @@
     "codePlaceholder": "Halkan ku dheji koodhkaaga martiqaadda",
     "codeSentTo": "Koodhkaaga martiqaadda waxaa loo diri doonaa server-kan:",
     "useDifferentServer": "Isticmaal server kale",
-    "malformedCode": "Taasi uma eka koodh martiqaad. Koobiyee koodhka oo dhan oo ka yimid fariintaada Signal, kadibna mar kale dheji."
+    "malformedCode": "Taasi uma eka koodh martiqaad. Koobiyee koodhka oo dhan oo ka yimid fariintaada Signal, kadibna mar kale dheji.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Tirtir Dhammaan Xogta",
@@ -1303,7 +1305,7 @@
     "identityDescription": "Dooro magac iyo luqad khadka taleefankaaga xiisadda.",
     "identityTitle": "Magacaw Khadkaaga Taleefanka",
     "inactivityTimeout": "Wakhtiga Dhaqdhaqaaq La'aanta (daqiiqo)",
-    "inviteCopied": "Koodhka martiqaadda waa la koobiyeeyay",
+    "inviteCopied": "Isku xirka martiqaadda waa loo koobiyeeyay sanduuqa wax la dhejiyay",
     "inviteCreated": "Martiqaaddii si guul leh ayaa loo sameeyay",
     "inviteDescription": "Samee koodyo martiqaad ah kooxdaada. Kood kasta waa hal mar oo wuxuu dhammaadaa 7 maalmood.",
     "inviteNew": "Martiqaad Cusub",
@@ -1843,7 +1845,7 @@
     "inviteCreated": "Martiqaaddii waa la sameeyay",
     "inviteExpires": "Waxay dhammaataa {{date}}",
     "inviteGenerated": "Martiqaaddii waa la sameeyay! Furaha sirta ah si amaan ah u la wadaag.",
-    "inviteCodeLabel": "U dir koodhkan martiqaadda mutadawaca adigoo isticmaalaya Signal",
+    "inviteLinkLabel": "Isku xirka martiqaadda",
     "inviteRevoked": "Martiqaaddii waa laga noqday",
     "inviteVolunteer": "Kumartibi Isticmaale",
     "joined": "Ku biirtay",

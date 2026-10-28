@@ -80,6 +80,18 @@ export function isAbsoluteUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
 }
 
+/**
+ * The hub's public origin, for anything handed to people outside this app (an
+ * invite link). In a packaged build the webview's own origin is the Tauri asset
+ * protocol (`tauri://localhost`), which no one else can open, so this is the
+ * configured backend address. Dev and test builds reach the backend same-origin
+ * through Vite's proxy, so there the page's origin is the server.
+ */
+export function getHubOrigin(): string {
+  const base = getApiBase()
+  return isAbsoluteUrl(base) ? new URL(base).origin : window.location.origin
+}
+
 export async function initApiBase(): Promise<void> {
   if (initialized) return
   if (!useTauri) {
