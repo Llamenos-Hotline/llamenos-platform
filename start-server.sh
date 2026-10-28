@@ -17,6 +17,10 @@ export STORAGE_ACCESS_KEY=rustfsadmin
 export STORAGE_SECRET_KEY=rustfsadmin
 export STORAGE_BUCKET=llamenos-files
 export SERVER_SECRET="0000000000000000000000000000000000000000000000000000000000000001"
+export SERVER_KEK="0000000000000000000000000000000000000000000000000000000000000002" # gitleaks:allow (dev-only test value)
+# BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files, never env vars (scripts/lib/server-hash-keys.sh).
+source "$(dirname "$0")/scripts/lib/server-hash-keys.sh"
+export_hash_key_files "$(cd "$(dirname "$0")" && pwd)/.dev-secrets"
 # Allow 1-hour token age in dev/test to tolerate clock skew between test client and server
 export TOKEN_MAX_AGE_MS=3600000
 

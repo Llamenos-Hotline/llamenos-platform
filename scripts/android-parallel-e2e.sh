@@ -25,6 +25,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ANDROID_DIR="$PROJECT_ROOT/apps/android"
 DOCKER_DIR="$PROJECT_ROOT/deploy/docker"
 FEATURE_DIR="$PROJECT_ROOT/packages/test-specs/features"
+source "$PROJECT_ROOT/scripts/lib/server-hash-keys.sh"
 
 ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 # Auto-detect Java on Mac
@@ -129,6 +130,11 @@ start_docker_backend() {
 
     cd "$DOCKER_DIR"
 
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files the app mounts from
+    # ./secrets/ (never .env entries). Shards share the compose directory, so they
+    # share them.
+    ensure_hash_key_files "$DOCKER_DIR/secrets" 0444
+
     # Create per-shard .env
     local env_file=".env.shard-${shard_idx}"
     cat > "$env_file" << ENV
@@ -143,6 +149,7 @@ HOTLINE_NAME=Llamenos-Shard-${shard_idx}
 BRIDGE_SECRET=test-bridge-${shard_idx}
 ARI_PASSWORD=test-ari-${shard_idx}
 SERVER_SECRET=$(openssl rand -hex 32)
+SERVER_KEK=$(openssl rand -hex 32)
 APP_PORT=${port}
 ENV
 

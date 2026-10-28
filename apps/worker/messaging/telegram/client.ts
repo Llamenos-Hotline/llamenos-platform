@@ -140,11 +140,11 @@ export class TelegramBotClient {
    * https://core.telegram.org/bots/api#setwebhook
    *
    * @param url - HTTPS URL to send updates to
-   * @param secret - Secret token for X-Telegram-Bot-Api-Secret-Token header verification
+   * @param secret - Secret token for X-Telegram-Bot-Api-Secret-Token header verification.
+   *   Required: a webhook registered without one is never authenticated by Telegram's header.
    */
-  async setWebhook(url: string, secret?: string): Promise<{ ok: boolean; error?: string }> {
-    const body: Record<string, unknown> = { url }
-    if (secret) body.secret_token = secret
+  async setWebhook(url: string, secret: string): Promise<{ ok: boolean; error?: string }> {
+    const body: Record<string, unknown> = { url, secret_token: secret }
 
     const res = await safeFetch(`${this.baseUrl}/setWebhook`, {
       method: 'POST',

@@ -30,7 +30,7 @@ function createTestApp(opts: {
       updateSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false }),
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90 }),
       updateCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90 }),
-      getIvrLanguages: vi.fn().mockResolvedValue({ languages: ['en'] }),
+      getIvrLanguageSettings: vi.fn().mockResolvedValue({ enabledLanguages: ['en'], uncoveredLanguageCount: 0 }),
       updateIvrLanguages: vi.fn().mockResolvedValue({ languages: ['en'] }),
       getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
       updateTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
@@ -38,7 +38,7 @@ function createTestApp(opts: {
       updateMessagingConfig: vi.fn().mockResolvedValue({ channels: ['sms'] }),
       getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
       updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
-      getIvrAudioList: vi.fn().mockResolvedValue({ prompts: [] }),
+      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
       uploadIvrAudio: vi.fn().mockResolvedValue({ ok: true }),
       deleteIvrAudio: vi.fn().mockResolvedValue({ ok: true }),
       getReportTypes: vi.fn().mockResolvedValue([{ id: 'rt-1', name: 'Type 1' }]),
@@ -305,11 +305,23 @@ describe('settings route', () => {
       expect(res.status).toBe(403)
     })
 
-    it('PATCH /ivr-languages updates with permission', async () => {
-      const updateSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] })
+    it('GET /ivr-languages returns the enabled list with the uncovered count', async () => {
+      const getSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
       const app = createTestApp({
         permissions: ['settings:manage-ivr'],
-        services: { settings: { updateIvrLanguages: updateSpy } },
+        services: { settings: { getIvrLanguageSettings: getSpy } },
+      })
+      const res = await app.request('/ivr-languages')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
+    })
+
+    it('PATCH /ivr-languages saves, then answers with the refreshed count', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] })
+      const getSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
+      const app = createTestApp({
+        permissions: ['settings:manage-ivr'],
+        services: { settings: { updateIvrLanguages: updateSpy, getIvrLanguageSettings: getSpy } },
       })
       const res = await app.request('/ivr-languages', {
         method: 'PATCH',
@@ -317,6 +329,8 @@ describe('settings route', () => {
         body: JSON.stringify({ enabledLanguages: ['en', 'es'] }),
       })
       expect(res.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith({ enabledLanguages: ['en', 'es'] }, undefined)
+      expect(await res.json()).toEqual({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
     })
   })
 
@@ -451,6 +465,82 @@ describe('settings route', () => {
       expect(res.status).toBe(200)
       expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ enabledChannels: ['sms', 'whatsapp'] }))
     })
+
+    describe('POST /messaging/telegram/register-webhook (#2154)', () => {
+      const env = { HMAC_SECRET: 'h'.repeat(64), DOMAIN: 'hotline.example' }
+      const register = (app: ReturnType<typeof createTestApp>) =>
+        app.request('/messaging/telegram/register-webhook', { method: 'POST' }, env)
+
+      it('requires manage-messaging permission', async () => {
+        const res = await register(createTestApp({ permissions: ['settings:read'] }))
+        expect(res.status).toBe(403)
+      })
+
+      it('registers our webhook URL with the configured secret_token', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+              }),
+            },
+          },
+        })
+        const res = await register(app)
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({ ok: true })
+        const [url, init] = fetchMock.mock.calls[0]
+        expect(String(url)).toBe('https://api.telegram.org/bot1:abc/setWebhook')
+        expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+          url: 'https://hotline.example/api/messaging/telegram/webhook',
+          secret_token: 'tg-secret',
+        })
+        vi.unstubAllGlobals()
+      })
+
+      it('refuses with 400 when Telegram has no secret, without calling Telegram', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc' },
+              }),
+            },
+          },
+        })
+        const res = await register(app)
+        expect(res.status).toBe(400)
+        expect(fetchMock).not.toHaveBeenCalled()
+        vi.unstubAllGlobals()
+      })
+
+      it('reports a Telegram rejection as 502', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, description: 'Unauthorized' }), { status: 401 })))
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+              }),
+            },
+          },
+        })
+        const res = await register(app)
+        expect(res.status).toBe(502)
+        expect(await res.json()).toEqual({ error: 'Unauthorized' })
+        vi.unstubAllGlobals()
+      })
+    })
   })
 
   describe('setup', () => {
@@ -482,32 +572,65 @@ describe('settings route', () => {
       expect(res.status).toBe(403)
     })
 
-    it('PUT /ivr-audio/:promptType/:language uploads audio with permission', async () => {
+    // 10 ms of 8 kHz mono PCM: the only format the route accepts (see
+    // deploy/docker/tests/telephony/ivr-audio.test.ts for the rejections)
+    const audioData = encodePcm16Wav(new Float32Array(80), 8000)
+    const put = (app: ReturnType<typeof createTestApp>, query = '') =>
+      app.request(`/ivr-audio/greeting/en${query}`, { method: 'PUT', body: audioData })
+
+    it('a hub-scoped PUT writes that hub\'s recording', async () => {
       const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
       const app = createTestApp({
+        hubId: 'hub-a',
         permissions: ['settings:manage-ivr'],
         services: { settings: { uploadIvrAudio: uploadSpy } },
       })
-      // 10 ms of 8 kHz mono PCM: the only format the route accepts (see
-      // deploy/docker/tests/telephony/ivr-audio.test.ts for the rejections)
-      const audioData = encodePcm16Wav(new Float32Array(80), 8000)
-      const res = await app.request('/ivr-audio/greeting/en', {
-        method: 'PUT',
-        body: audioData,
-      })
+      const res = await put(app)
       expect(res.status).toBe(200)
-      expect(uploadSpy).toHaveBeenCalledWith('greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
+      expect(uploadSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
     })
 
-    it('DELETE /ivr-audio/:promptType/:language removes audio with permission', async () => {
+    it('a hub-scoped DELETE, GET and listing reach only that hub\'s recordings', async () => {
       const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
+      const getSpy = vi.fn().mockResolvedValue({ audio: Buffer.from(audioData).toString('base64'), size: audioData.byteLength })
+      const listSpy = vi.fn().mockResolvedValue({ recordings: [] })
       const app = createTestApp({
+        hubId: 'hub-a',
         permissions: ['settings:manage-ivr'],
-        services: { settings: { deleteIvrAudio: deleteSpy } },
+        services: { settings: { deleteIvrAudio: deleteSpy, getIvrAudio: getSpy, getIvrAudioList: listSpy } },
       })
-      const res = await app.request('/ivr-audio/greeting/en', { method: 'DELETE' })
-      expect(res.status).toBe(200)
-      expect(deleteSpy).toHaveBeenCalledWith('greeting', 'en')
+      expect((await app.request('/ivr-audio/greeting/en', { method: 'DELETE' })).status).toBe(200)
+      expect(deleteSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en')
+      expect((await app.request('/ivr-audio/greeting/en')).status).toBe(200)
+      expect(getSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en')
+      expect((await app.request('/ivr-audio')).status).toBe(200)
+      expect(listSpy).toHaveBeenCalledWith('hub-a')
+    })
+
+    it('the global mount manages the platform defaults, and only with the instance permission', async () => {
+      const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
+      const services = { settings: { uploadIvrAudio: uploadSpy, deleteIvrAudio: vi.fn(), getIvrAudio: vi.fn(), getIvrAudioList: vi.fn() } }
+
+      const hubAdmin = createTestApp({ permissions: ['settings:manage-ivr'], services })
+      expect((await put(hubAdmin)).status).toBe(403)
+      expect((await hubAdmin.request('/ivr-audio/greeting/en', { method: 'DELETE' })).status).toBe(403)
+      expect((await hubAdmin.request('/ivr-audio/greeting/en')).status).toBe(403)
+      expect((await hubAdmin.request('/ivr-audio')).status).toBe(403)
+      expect(uploadSpy).not.toHaveBeenCalled()
+
+      const instance = createTestApp({ permissions: ['settings:manage-ivr', 'system:manage-instance'], services })
+      expect((await put(instance)).status).toBe(200)
+      expect(uploadSpy).toHaveBeenCalledWith(undefined, 'greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
+    })
+
+    it('?hubId= does not redirect the global mount at a hub', async () => {
+      const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
+      const app = createTestApp({
+        permissions: ['settings:manage-ivr', 'system:manage-instance'],
+        services: { settings: { uploadIvrAudio: uploadSpy } },
+      })
+      expect((await put(app, '?hubId=hub-b')).status).toBe(200)
+      expect(uploadSpy.mock.calls[0][0]).toBeUndefined()
     })
   })
 

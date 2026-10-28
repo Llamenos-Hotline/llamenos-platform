@@ -40,6 +40,7 @@ import '../mocks/llamenos-crypto-ffi'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import { Hono } from 'hono'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
@@ -90,7 +91,7 @@ async function createHub(): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(db))
   return id
 }
 
@@ -214,7 +215,7 @@ beforeAll(async () => {
 
   // THE point of this suite: the production service registry, built exactly as
   // src/server/index.ts builds it. No service is constructed by hand below.
-  services = createServices(db, { hmacSecret: HMAC_SECRET, env: { ENVIRONMENT: 'test' } })
+  services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
 
   // Roles must exist before permissions resolve, same as at boot.
   await services.settings.ensureInit()
@@ -272,7 +273,7 @@ describe('GET /calls/presence against the production service registry', () => {
     await clockIn(hubId, [onCall, free])
 
     const callId = `call-${nextId()}`
-    await services.calls.addCall(hubId, { callId, callerNumber: 'hashed-number', callerLast4: '1234' })
+    await services.calls.addCall(hubId, { callId, callerNumberSealed: null, callerLast4: '1234' })
     await services.calls.answerCall(hubId, callId, onCall)
 
     const presence = await getHubPresence(services, hubId)
@@ -388,7 +389,7 @@ describe('hubRoutingReadiness against the production service registry', () => {
  * The ring decision, measurable on a deployment.
  *
  * It was not: nothing reported what `resolveRingableVolunteers` resolves to,
- * and its only non-provider caller is demo-gated, so with `DEMO_MODE=false` —
+ * and its only non-provider caller needs the mock provider selectable, so without it —
  * what a real VM runs — the live suite's ring-eligibility checks skipped
  * entirely. These drive the oracle against the production registry and real
  * PostgreSQL, through the HTTP route an operator and the live suite call.

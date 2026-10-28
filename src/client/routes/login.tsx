@@ -9,7 +9,6 @@ import { isSafeRelativePath } from '@/lib/redirect-guard'
 import { readBackupFile } from '@/lib/backup'
 import * as keyManager from '@/lib/key-manager'
 import { isWebAuthnAvailable } from '@/lib/webauthn'
-import { DemoAccountPicker } from '@/components/demo-account-picker'
 import { AccountRecoveryFlow } from '@/components/account-recovery-flow'
 import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Upload, ArrowRight, Ticket } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
@@ -29,7 +28,7 @@ export const Route = createFileRoute('/login')({
 function LoginPage() {
   const { t } = useTranslation()
   const { signIn, loginAfterKeyLoaded, signInWithPasskey, unlockWithPin, error, isLoading } = useAuth()
-  const { hotlineName, demoMode, needsBootstrap } = useConfig()
+  const { hotlineName, needsBootstrap } = useConfig()
   const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [validationError, setValidationError] = useState('')
@@ -61,7 +60,15 @@ function LoginPage() {
   const [newPinStep, setNewPinStep] = useState<'create' | 'confirm'>('create')
   const [pinError, setPinError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const recoveryKeyRef = useRef<HTMLInputElement>(null)
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null)
+
+  // The file button unmounts when a backup is accepted. Without this, focus
+  // falls back to <body> and a keyboard or screen-reader user is stranded;
+  // landing on the first field announces the group and the field together.
+  useEffect(() => {
+    if (recoveryStep === 'decrypt') recoveryKeyRef.current?.focus()
+  }, [recoveryStep])
 
   // --- PIN unlock (primary flow when key exists) ---
   async function handlePinUnlock(pin: string): Promise<boolean> {
@@ -321,7 +328,6 @@ function LoginPage() {
               {t('recoveryGroup.initiate.title')}
             </Button>
 
-            {demoMode && <DemoAccountPicker />}
           </CardContent>
 
           <CardFooter className="justify-center">
@@ -425,34 +431,46 @@ function LoginPage() {
           {recoveryMode !== 'key' && (
             <div className="space-y-3">
               {recoveryStep === 'upload' && (
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">{t('auth.selectBackupFile')}</p>
-                  <div
-                    className="flex cursor-pointer items-center gap-3 rounded-lg border-2 border-dashed border-border p-4 transition-colors hover:border-primary/50"
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('border-primary') }}
-                    onDragLeave={e => e.currentTarget.classList.remove('border-primary')}
-                    onDrop={handleDrop}
-                  >
-                    <Upload className="h-5 w-5 shrink-0 text-muted-foreground" />
-                    <span className="text-sm">
+                <div
+                  className="flex items-center gap-3 rounded-lg border-2 border-dashed border-border p-4 transition-colors hover:border-primary/50"
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('border-primary') }}
+                  onDragLeave={e => e.currentTarget.classList.remove('border-primary')}
+                  onDrop={handleDrop}
+                >
+                  <Upload className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <div className="flex flex-col items-start gap-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      data-testid="backup-file-btn"
+                      aria-describedby="backup-file-hint"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      {t('auth.selectBackupFile')}
+                    </Button>
+                    <span id="backup-file-hint" className="text-sm">
                       {selectedFileName ? (
                         <span className="font-medium text-foreground">{selectedFileName}</span>
                       ) : (
                         <span className="text-muted-foreground">{t('auth.dropOrChoose', { defaultValue: 'Drop a backup file or click to browse' })}</span>
                       )}
                     </span>
-                    <input data-testid="backup-file-input" ref={fileInputRef} type="file" accept=".json" onChange={handleFileSelect} className="hidden" />
                   </div>
+                  {/* Kept out of the tab order on purpose: the button above is
+                      the keyboard and screen-reader entry point and opens it. */}
+                  <input data-testid="backup-file-input" ref={fileInputRef} type="file" accept=".json" onChange={handleFileSelect} className="hidden" tabIndex={-1} aria-hidden="true" />
                 </div>
               )}
 
               {recoveryStep === 'decrypt' && backupFile && (
-                <div className="space-y-3">
-                  <p className="text-sm font-medium">{t('recovery.decryptBackup', { defaultValue: 'Decrypt your backup' })}</p>
+                <fieldset className="space-y-3">
+                  <legend className="mb-3 text-sm font-medium">{t('recovery.decryptBackup', { defaultValue: 'Decrypt your backup' })}</legend>
                   <div className="space-y-2">
-                    <Label>{t('recovery.enterRecoveryKey', { defaultValue: 'Recovery Key' })}</Label>
+                    <Label htmlFor="recovery-key">{t('recovery.enterRecoveryKey', { defaultValue: 'Recovery Key' })}</Label>
                     <Input
+                      id="recovery-key"
+                      ref={recoveryKeyRef}
                       data-testid="recovery-key-input"
                       value={recoveryKey}
                       onChange={e => setRecoveryKey(e.target.value)}
@@ -469,7 +487,7 @@ function LoginPage() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label>{t('pin.enterPin', { defaultValue: 'PIN' })}</Label>
+                    <Label htmlFor="recovery-pin">{t('pin.enterPin', { defaultValue: 'PIN' })}</Label>
                     {/* No maxLength and no numeric inputMode: a credential is a
                         PIN of 8+ digits OR a passphrase of 8+ characters
                         (keyManager.isValidPin), so capping at 8 silently
@@ -477,6 +495,7 @@ function LoginPage() {
                         never open the backup, and a numeric keypad is the wrong
                         keyboard for half the credentials this field accepts. */}
                     <Input
+                      id="recovery-pin"
                       data-testid="recovery-pin-input"
                       type="password"
                       value={recoveryPin}
@@ -488,17 +507,17 @@ function LoginPage() {
                   <Button data-testid="decrypt-backup-btn" onClick={handleBackupDecrypt} className="w-full" disabled={!recoveryKey.trim() && !recoveryPin.trim()}>
                     {t('recovery.decrypt', { defaultValue: 'Decrypt' })}
                   </Button>
-                </div>
+                </fieldset>
               )}
 
               {recoveryStep === 'newpin' && (
                 <div className="space-y-3">
-                  <p className="text-sm font-medium">
+                  <p id="recovery-newpin-title" role="status" className="text-sm font-medium">
                     {newPinStep === 'create'
                       ? t('pin.createTitle', { defaultValue: 'Create a PIN' })
                       : t('pin.confirmTitle', { defaultValue: 'Confirm your PIN' })}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p id="recovery-newpin-description" className="text-xs text-muted-foreground">
                     {newPinStep === 'create'
                       ? t('pin.createDescription', { defaultValue: 'Choose a PIN (8+ digits) or passphrase (8+ characters) to protect your key.' })
                       : t('pin.confirmDescription', { defaultValue: 'Enter the same PIN again to confirm.' })}
@@ -508,6 +527,7 @@ function LoginPage() {
                     onChange={newPinStep === 'create' ? setNewPin1 : setNewPin2}
                     onComplete={handleNewPinComplete}
                     error={!!pinError}
+                    describedBy="recovery-newpin-title recovery-newpin-description"
                     autoFocus
                   />
                   {pinError && <p role="alert" className="text-center text-sm text-destructive">{pinError}</p>}
@@ -606,7 +626,6 @@ function LoginPage() {
             </Button>
           )}
 
-          {demoMode && <DemoAccountPicker />}
         </CardContent>
 
         <CardFooter className="justify-center">

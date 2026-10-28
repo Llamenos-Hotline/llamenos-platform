@@ -11,6 +11,7 @@ import { expect } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts, fillCallId } from '../../helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import { Navigation } from '../../pages/index'
 import { getCustomFieldsViaApi, updateCustomFieldsViaApi, listNotesViaApi } from '../../api-helpers'
 
@@ -39,11 +40,11 @@ Then('I should see a {string} input in the form', async ({ page }, fieldLabel: s
   await expect(input).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I create a note with {string} set to {string}', async ({ page }, fieldLabel: string, value: string) => {
+When('I create a note with {string} set to {string}', async ({ page, backendRequest: request, workerHub }, fieldLabel: string, value: string) => {
   await Navigation.goToNotes(page)
   await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
   await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await fillCallId(page, `CALL-${Date.now()}`)
+  await fillCallId(page, await simulateCallForNote(request, workerHub))
   await page.getByTestId(TestIds.NOTE_CONTENT).fill('Test note with custom field')
   const customInput = page.getByLabel(fieldLabel)
   await expect(customInput).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -58,11 +59,11 @@ Then('I should see {string} as a badge', async ({ page }, text: string) => {
   await expect(noteCard.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('a note exists with {string} set to {string}', async ({ page }, fieldLabel: string, value: string) => {
+Given('a note exists with {string} set to {string}', async ({ page, backendRequest: request, workerHub }, fieldLabel: string, value: string) => {
   await Navigation.goToNotes(page)
   await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
   await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await fillCallId(page, `CALL-${Date.now()}`)
+  await fillCallId(page, await simulateCallForNote(request, workerHub))
   await page.getByTestId(TestIds.NOTE_CONTENT).fill('Note with custom field')
   const customInput = page.getByLabel(fieldLabel)
   await expect(customInput).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -72,11 +73,11 @@ Given('a note exists with {string} set to {string}', async ({ page }, fieldLabel
   await expect(page.getByTestId(TestIds.NOTE_CARD).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('a note exists with text {string} and {string} set to {string}', async ({ page }, noteText: string, fieldLabel: string, value: string) => {
+Given('a note exists with text {string} and {string} set to {string}', async ({ page, backendRequest: request, workerHub }, noteText: string, fieldLabel: string, value: string) => {
   await Navigation.goToNotes(page)
   await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
   await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await fillCallId(page, `CALL-${Date.now()}`)
+  await fillCallId(page, await simulateCallForNote(request, workerHub))
   await page.getByTestId(TestIds.NOTE_CONTENT).fill(noteText)
   const customInput = page.getByLabel(fieldLabel)
   await expect(customInput).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -132,11 +133,11 @@ Then('I should not see the original text', async ({ page }) => {
   expect(cardCount).toBeGreaterThan(0)
 })
 
-When('I create a note with a specific call ID', async ({ page }) => {
+When('I create a note with a specific call ID', async ({ page, backendRequest: request, workerHub }) => {
   await Navigation.goToNotes(page)
   await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
   await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  const callId = `CALL-${Date.now()}`
+  const callId = await simulateCallForNote(request, workerHub)
   await fillCallId(page, callId)
   await page.getByTestId(TestIds.NOTE_CONTENT).fill('Note with call ID')
   const saveBtn = page.getByTestId(TestIds.FORM_SAVE_BTN)
@@ -158,8 +159,8 @@ Then('the note card header should show a truncated call ID', async ({ page }) =>
   await expect(noteGroup.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I create two notes with the same call ID', async ({ page }) => {
-  const callId = `SHARED-${Date.now()}`
+When('I create two notes with the same call ID', async ({ page, backendRequest: request, workerHub }) => {
+  const callId = await simulateCallForNote(request, workerHub)
   await Navigation.goToNotes(page)
 
   await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
@@ -202,7 +203,7 @@ Given('a note exists', async ({ page, backendRequest: request, workerHub }) => {
     await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
     await newBtn.click()
     await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
-    await fillCallId(page, `CALL-${Date.now()}`)
+    await fillCallId(page, await simulateCallForNote(request, workerHub))
     await page.getByTestId(TestIds.NOTE_CONTENT).fill('Existing note for testing')
     await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
     await expect(page.getByTestId(TestIds.NOTE_FORM)).not.toBeVisible({ timeout: Timeouts.ELEMENT })

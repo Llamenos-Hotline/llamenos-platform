@@ -3,7 +3,6 @@ import { WhatsAppAdapter } from '@worker/messaging/whatsapp/adapter'
 import { TwilioWhatsAppClient } from '@worker/messaging/whatsapp/twilio-client'
 import type { WhatsAppConfig } from '@shared/types'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 // --- Test fixtures ---
 
@@ -33,14 +32,14 @@ describe('WhatsAppAdapter', () => {
 
   describe('channelType', () => {
     it('is whatsapp', () => {
-      const adapter = new WhatsAppAdapter(directConfig, HMAC_SECRET)
+      const adapter = new WhatsAppAdapter(directConfig)
       expect(adapter.channelType).toBe('whatsapp')
     })
   })
 
   describe('constructor', () => {
     it('throws for twilio mode without factory', () => {
-      expect(() => new WhatsAppAdapter(twilioConfig, HMAC_SECRET)).toThrow(
+      expect(() => new WhatsAppAdapter(twilioConfig)).toThrow(
         'Twilio WhatsApp mode must be constructed via createWhatsAppAdapter factory',
       )
     })
@@ -51,7 +50,7 @@ describe('WhatsAppAdapter', () => {
         phoneNumberId: 'id',
         // missing businessAccountId, accessToken, appSecret
       }
-      expect(() => new WhatsAppAdapter(badConfig, HMAC_SECRET)).toThrow(
+      expect(() => new WhatsAppAdapter(badConfig)).toThrow(
         'WhatsApp direct mode requires',
       )
     })
@@ -65,7 +64,7 @@ describe('WhatsAppAdapter', () => {
     let adapter: WhatsAppAdapter
 
     beforeEach(() => {
-      adapter = new WhatsAppAdapter(directConfig, HMAC_SECRET)
+      adapter = new WhatsAppAdapter(directConfig)
     })
 
     // --- parseIncomingMessage ---
@@ -102,7 +101,7 @@ describe('WhatsAppAdapter', () => {
         expect(result.channelType).toBe('whatsapp')
         expect(result.externalId).toBe('wamid-001')
         expect(result.senderIdentifier).toBe('15559876543')
-        expect(result.senderIdentifierHash).toBeTruthy()
+        expect(result).not.toHaveProperty('senderIdentifierHash')
         expect(result.body).toBe('Hello from WhatsApp')
         expect(result.metadata?.profileName).toBe('Test User')
         expect(result.metadata?.phoneNumberId).toBe('phone-id-123')
@@ -456,7 +455,7 @@ describe('WhatsAppAdapter', () => {
 
     beforeEach(() => {
       twilioClient = new TwilioWhatsAppClient('AC-acct-123', 'auth-token-abc', '+15551234567')
-      adapter = WhatsAppAdapter.createWithTwilioClient(twilioConfig, twilioClient, HMAC_SECRET)
+      adapter = WhatsAppAdapter.createWithTwilioClient(twilioConfig, twilioClient)
     })
 
     describe('parseIncomingMessage', () => {

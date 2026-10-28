@@ -126,12 +126,12 @@ describe('CallsService', () => {
       const { svc } = createServiceWithData()
       const result = await svc.addCall('hub-1', {
         callId: 'call-123',
-        callerNumber: '+15551234567',
+        callerNumberSealed: 'sealed-1',
         callerLast4: '4567',
       })
       expect(result.callId).toBe('call-123')
       expect(result.hubId).toBe('hub-1')
-      expect(result.callerNumber).toBe('+15551234567')
+      expect(result.callerNumberSealed).toBe('sealed-1')
       expect(result.status).toBe('ringing')
     })
 
@@ -139,7 +139,7 @@ describe('CallsService', () => {
       const { svc } = createServiceWithData()
       const result = await svc.addCall('hub-1', {
         callId: 'call-456',
-        callerNumber: '+15559999999',
+        callerNumberSealed: null,
       })
       expect(result.status).toBe('ringing')
       expect(result.callerLast4).toBeNull()
@@ -149,7 +149,7 @@ describe('CallsService', () => {
       const { svc } = createServiceWithData()
       const result = await svc.addCall('hub-1', {
         callId: 'call-789',
-        callerNumber: '+15551111111',
+        callerNumberSealed: null,
         status: 'in-progress',
       })
       expect(result.status).toBe('in-progress')
@@ -163,7 +163,7 @@ describe('CallsService', () => {
           callId: 'call-1',
           hubId: 'hub-1',
           status: 'ringing',
-          callerNumber: '+15551234567',
+          callerNumberSealed: null,
           startedAt: new Date(),
           answeredBy: null,
         }],
@@ -213,7 +213,7 @@ describe('CallsService', () => {
           callId: 'call-end-1',
           hubId: 'hub-1',
           status: 'in-progress',
-          callerNumber: '+15551234567',
+          callerNumberSealed: null,
           callerLast4: '4567',
           startedAt: new Date(Date.now() - 60000), // Started 1 min ago
           answeredBy: 'pk1',
@@ -225,10 +225,7 @@ describe('CallsService', () => {
         }],
       })
 
-      const result = await svc.endCall('hub-1', 'call-end-1', {
-        encryptedContent: 'enc-data',
-        adminEnvelopes: [{ admin: 'a1', envelope: 'e1' }],
-      })
+      const result = await svc.endCall('hub-1', 'call-end-1')
 
       expect(result).toBeDefined()
       // Active call should be removed
@@ -248,7 +245,7 @@ describe('CallsService', () => {
           callId: 'call-unanswered',
           hubId: 'hub-1',
           status: 'ringing',
-          callerNumber: '+15551234567',
+          callerNumberSealed: null,
           callerLast4: '4567',
           startedAt: new Date(Date.now() - 60000),
           answeredBy: null,
@@ -411,6 +408,83 @@ describe('CallsService', () => {
       expect(result).toHaveLength(1)
       expect(result[0].callId).toBe('fresh-progress')
       // Transaction should NOT be called (no stale calls)
+      expect(db.transaction).not.toHaveBeenCalled()
+    })
+  })
+
+  // #1136: getActiveCalls(hubId) only reaps the hub it is called with — a hub nobody
+  // has an open dashboard for would otherwise accumulate stale rows forever.
+  // reapStaleCalls() scans every hub and is driven by a scheduled worker instead.
+  describe('reapStaleCalls — instance-wide reap (#1136)', () => {
+    it('archives stale rows across every hub in one pass, leaving fresh ones alone', async () => {
+      const staleRingTime = new Date(Date.now() - 4 * 60 * 1000) // 4 min ago
+      const staleProgressTime = new Date(Date.now() - 3 * 60 * 60 * 1000) // 3 hours ago
+      const freshTime = new Date(Date.now() - 60 * 1000) // 1 min ago
+
+      const selectResults = [
+        {
+          callId: 'stale-ring-hubA', hubId: 'hub-A', status: 'ringing', startedAt: staleRingTime,
+          answeredBy: null, callerLast4: '1111', endedAt: null, duration: null,
+          hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
+        },
+        {
+          callId: 'stale-progress-hubB', hubId: 'hub-B', status: 'in-progress', startedAt: staleProgressTime,
+          answeredBy: 'pk1', callerLast4: '2222', endedAt: null, duration: null,
+          hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
+        },
+        {
+          callId: 'fresh-hubC', hubId: 'hub-C', status: 'ringing', startedAt: freshTime,
+          answeredBy: null, callerLast4: '3333', endedAt: null, duration: null,
+          hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
+        },
+      ]
+
+      const txInsert = vi.fn().mockReturnValue({
+        values: vi.fn().mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) }),
+      })
+      const txDelete = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) })
+
+      const db = {
+        // No .where() in reapStaleCalls — it queries every hub, not one.
+        select: vi.fn().mockReturnValue({ from: vi.fn().mockResolvedValue(selectResults) }),
+        transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => fn({ insert: txInsert, delete: txDelete })),
+      }
+
+      const svc = new CallsService(db as never)
+      const reaped = await svc.reapStaleCalls()
+
+      // Both stale rows (hub-A ringing, hub-B in-progress) reaped; hub-C's fresh row untouched.
+      expect(reaped).toBe(2)
+      expect(db.transaction).toHaveBeenCalled()
+      expect(txInsert).toHaveBeenCalledTimes(2)
+    })
+
+    it('does nothing when no calls are stale, across any hub', async () => {
+      const freshTime = new Date(Date.now() - 60 * 1000)
+      const db = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockResolvedValue([
+            { callId: 'fresh', hubId: 'hub-1', status: 'ringing', startedAt: freshTime },
+          ]),
+        }),
+        transaction: vi.fn(),
+      }
+
+      const svc = new CallsService(db as never)
+      const reaped = await svc.reapStaleCalls()
+
+      expect(reaped).toBe(0)
+      expect(db.transaction).not.toHaveBeenCalled()
+    })
+
+    it('returns 0 and never opens a transaction when there are no active calls at all', async () => {
+      const db = {
+        select: vi.fn().mockReturnValue({ from: vi.fn().mockResolvedValue([]) }),
+        transaction: vi.fn(),
+      }
+
+      const svc = new CallsService(db as never)
+      expect(await svc.reapStaleCalls()).toBe(0)
       expect(db.transaction).not.toHaveBeenCalled()
     })
   })

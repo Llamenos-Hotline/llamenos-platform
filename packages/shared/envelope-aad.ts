@@ -22,7 +22,7 @@
  * Which convention a given ciphertext carries is decided by its WRITER, never
  * by its label. LABEL_MESSAGE and LABEL_CALL_META appear on both sides of the
  * line: `apps/worker/lib/crypto.ts` writes them as stored records, while
- * `apps/worker/lib/demo-crypto.ts` writes the same labels canonically. (The
+ * `apps/worker/lib/sample-crypto.ts` writes the same labels canonically. (The
  * Rust interop vectors used to as well; they now seal stored records, #1927.)
  * So a reader must be told which convention to use — a
  * reader that infers one from the label is the #1393-family defect, and
@@ -54,7 +54,7 @@ export const KEY_WRAP_AAD_SUFFIX = ':key-wrap'
  *
  * Which of the two conventions applies is a property of the **writer**, not of
  * the label. `apps/worker/lib/crypto.ts` seals LABEL_CALL_META as a stored
- * record, while `apps/worker/lib/demo-crypto.ts` seals that same label
+ * record, while `apps/worker/lib/sample-crypto.ts` seals that same label
  * canonically. So never branch on a label to pick an
  * AAD — take the convention from whoever wrote the record, and say which one
  * you mean at the call site.

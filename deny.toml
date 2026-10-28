@@ -36,12 +36,19 @@ yanked = "warn"
 #     advisory ignored in one place must carry the same dated reason in both.
 #
 # Vulnerabilities (rustls, quick-xml, rkyv) are deliberately NOT listed: they
-# are fixed by upgrading, not by ignoring.
+# are fixed by upgrading, not by ignoring. The one exception is RUSTSEC-2026-0387
+# (crypto-bigint) below, for which no patched version is reachable.
 #
-# All entries below are UNMAINTAINED (not vulnerable) crates in apps/desktop's
+# All entries below except RUSTSEC-2026-0387 are UNMAINTAINED (not vulnerable) crates in apps/desktop's
 # Tauri-side dependency graph. Removing them needs an upstream release of
 # Tauri / tauri-plugin-stronghold; we do not control it. Track re-triage in #646.
 ignore = [
+  # tauri-plugin-stronghold -> iota-crypto 0.23.2 -> k256 0.13.4 -> elliptic-curve
+  # 0.13.8 -> crypto-bigint 0.5.5. Fixed only in >=0.7.6, which elliptic-curve 0.13
+  # excludes; iota-crypto/iota_stronghold/tauri-plugin-stronghold have no release
+  # on k256 0.14. A VULNERABILITY, kept only because no upgrade is reachable (see
+  # apps/desktop/.cargo/audit.toml for the full analysis). Re-triage by the date.
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 timing variability; no release reaches >=0.7.6 (iota-crypto -> k256 0.13 pin), Stronghold is used only as a key/value vault and its secp256k1 procedures are never invoked, tracked with #1956 [expires 2026-12-01]" },
   # tauri-plugin-stronghold -> iota_stronghold -> bincode 1.3.3. Serialises the
   # local Stronghold snapshot only; maintainer stepped down, no vulnerability.
   { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 unmaintained; only via tauri-plugin-stronghold/iota_stronghold snapshot (de)serialisation of local data, no known vulnerability, needs upstream migration [expires 2026-12-31]" },

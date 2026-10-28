@@ -534,7 +534,7 @@ export async function listReachableVolunteerEndpoints(
 /** The slice of the service registry the registrar hooks need. */
 export interface RegistrarServices {
   settings: {
-    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   }
   identity?: {
     getUserInternal(pubkey: string): Promise<{ roles: string[]; hubRoles?: { hubId: string; roleIds: string[] }[] } | null>
@@ -579,12 +579,12 @@ export async function sipCredentialEpoch(services: RegistrarServices, pubkey: st
  */
 export async function revokeVolunteerSipIdentity(
   services: RegistrarServices,
-  hmacSecret: string,
+  serverKek: string,
   pubkey: string,
 ): Promise<void> {
   let config: TelephonyProviderConfig | null = null
   try {
-    config = await services.settings.getTelephonyProvider(hmacSecret)
+    config = await services.settings.getTelephonyProvider(serverKek)
   } catch (err) {
     logger.error('SIP revocation: could not read telephony provider config', { pubkey, err })
     return
@@ -640,7 +640,7 @@ async function recordSipRevocation(
  */
 export async function revokeSipIdentityIfRoleless(
   services: RegistrarServices,
-  hmacSecret: string,
+  serverKek: string,
   pubkey: string,
   allRoles: Role[],
 ): Promise<void> {
@@ -654,7 +654,7 @@ export async function revokeSipIdentityIfRoleless(
     logger.warn('SIP revocation: remaining roles unreadable — revoking', { pubkey, err })
   }
   if (stillHasAccess) return
-  await revokeVolunteerSipIdentity(services, hmacSecret, pubkey)
+  await revokeVolunteerSipIdentity(services, serverKek, pubkey)
 }
 
 /**

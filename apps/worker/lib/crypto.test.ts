@@ -10,10 +10,16 @@ import { describe, it, expect } from 'vitest'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_CALL_META, LABEL_MESSAGE } from '@shared/crypto-labels'
+import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import {
   hashPhone,
+  banHash,
+  banHashes,
+  PLATFORM_BAN_SCOPE,
+  callerRateLimitDigest,
+  sealCallerNumber,
+  openCallerNumber,
   hashIP,
   encryptMessageForStorage,
   encryptCallRecordForStorage,
@@ -23,6 +29,12 @@ import {
   hashAuditEntry,
   encryptStorageCredential,
   decryptStorageCredential,
+  wrapAuditKeyForAdmins,
+  encryptAuditDetails,
+  decryptAuditDetails,
+  sealAuditKeyForServer,
+  openServerSealedAuditKey,
+  serverEncrypt,
 } from './crypto'
 
 const SECRET = 'a'.repeat(64) // 32 hex bytes = valid HMAC secret
@@ -154,7 +166,15 @@ describe('encryptCallRecordForStorage', () => {
 
   it('encrypts JSON-serializable metadata', () => {
     const meta = { nested: { value: [1, 2, 3] }, flag: true }
-    expect(() => encryptCallRecordForStorage(meta, [])).not.toThrow()
+    const result = encryptCallRecordForStorage(meta, [validPubkeyHex])
+    expect(result.encryptedContent).toMatch(/^[0-9a-f]+$/)
+  })
+
+  it('refuses an empty reader list, like encryptMessageForStorage (#1684)', () => {
+    // A call record with no envelopes is ciphertext nobody will ever open.
+    // The guard exists on encryptMessageForStorage; its twin pinned the
+    // absence of it here. The asymmetry is gone: both throw.
+    expect(() => encryptCallRecordForStorage({ x: 1 }, [])).toThrow(/empty reader list/)
   })
 })
 
@@ -230,9 +250,13 @@ describe('encryptContactIdentifier / decryptContactIdentifier', () => {
     expect(enc1).not.toBe(enc2)
   })
 
-  it('decrypting legacy plaintext returns it as-is', () => {
-    const plain = '+15551234567'
-    expect(decryptContactIdentifier(plain, SECRET)).toBe(plain)
+  it('refuses a value that was never sealed (no legacy plaintext path)', () => {
+    expect(() => decryptContactIdentifier('+15551234567', SECRET)).toThrow(/not sealed/)
+  })
+
+  it('cannot be opened under a different key', () => {
+    const enc = encryptContactIdentifier('+15551234567', SECRET)
+    expect(() => decryptContactIdentifier(enc, 'b'.repeat(64))).toThrow()
   })
 
   it('throws on corrupted ciphertext', () => {
@@ -384,5 +408,201 @@ describe('encryptStorageCredential / decryptStorageCredential', () => {
     const enc = encryptStorageCredential('x', SECRET)
     // hex: 12B nonce = 24 chars, + ct+tag (17+ B) = 58+ chars
     expect(enc.length).toBeGreaterThanOrEqual(58)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-user audit keys: wrapAuditKeyForAdmins / encryptAuditDetails /
+// decryptAuditDetails — byte-compatible with packages/crypto/src/audit_key.rs
+// ---------------------------------------------------------------------------
+
+describe('wrapAuditKeyForAdmins', () => {
+  const userPubkey = 'a'.repeat(64)
+  const auditKey = new Uint8Array(32).fill(7)
+
+  it('produces one openable envelope per admin', () => {
+    const adminSecret = new Uint8Array(32)
+    crypto.getRandomValues(adminSecret)
+    const adminPubkey = bytesToHex(x25519.getPublicKey(adminSecret))
+
+    const envelopes = wrapAuditKeyForAdmins(auditKey, [adminPubkey], userPubkey)
+    expect(envelopes).toHaveLength(1)
+    expect(envelopes[0]!.pubkey).toBe(adminPubkey)
+
+    // Open with the audit_key.rs AAD convention: `${label}:${userPubkey}`
+    const bytes = new Uint8Array([...hexToBytes(envelopes[0]!.enc), ...hexToBytes(envelopes[0]!.ct)])
+    const opened = hpkeOpen(
+      adminSecret,
+      bytes,
+      utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP),
+      utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${userPubkey}`),
+    )
+    expect(bytesToHex(opened)).toBe(bytesToHex(auditKey))
+  })
+
+  it('refuses an empty admin list, matching wrap_audit_key_to_admins', () => {
+    expect(() => wrapAuditKeyForAdmins(auditKey, [], userPubkey)).toThrow(/at least one admin/)
+  })
+
+  it('a wrap bound to one user cannot be opened as another (AAD binding)', () => {
+    const adminSecret = new Uint8Array(32)
+    crypto.getRandomValues(adminSecret)
+    const adminPubkey = bytesToHex(x25519.getPublicKey(adminSecret))
+
+    const envelopes = wrapAuditKeyForAdmins(auditKey, [adminPubkey], userPubkey)
+    const bytes = new Uint8Array([...hexToBytes(envelopes[0]!.enc), ...hexToBytes(envelopes[0]!.ct)])
+    expect(() =>
+      hpkeOpen(adminSecret, bytes, utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP), utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${'b'.repeat(64)}`)),
+    ).toThrow()
+  })
+})
+
+describe('encryptAuditDetails / decryptAuditDetails', () => {
+  const userPubkey = 'c'.repeat(64)
+  const entryId = '00000000-0000-0000-0000-0000000000aa'
+  const auditKey = new Uint8Array(32).fill(9)
+
+  it('round-trips details JSON in nonce_hex:ciphertext_hex format', () => {
+    const json = '{"callId":"c-1"}'
+    const encrypted = encryptAuditDetails(auditKey, json, userPubkey, entryId)
+
+    const parts = encrypted.split(':')
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toMatch(/^[0-9a-f]{24}$/) // 12-byte nonce
+    expect(encrypted).not.toContain('c-1')
+
+    expect(decryptAuditDetails(auditKey, encrypted, userPubkey, entryId)).toBe(json)
+  })
+
+  it('fails with a wrong key (crypto-shredding property)', () => {
+    const encrypted = encryptAuditDetails(auditKey, '{"x":1}', userPubkey, entryId)
+    const wrongKey = new Uint8Array(32).fill(1)
+    expect(() => decryptAuditDetails(wrongKey, encrypted, userPubkey, entryId)).toThrow()
+  })
+
+  it('fails for a different entry id (AAD binds ciphertext to the entry)', () => {
+    const encrypted = encryptAuditDetails(auditKey, '{"x":1}', userPubkey, entryId)
+    expect(() => decryptAuditDetails(auditKey, encrypted, userPubkey, '00000000-0000-0000-0000-0000000000bb')).toThrow()
+  })
+
+  it('fails for a different user pubkey (AAD binds ciphertext to the user)', () => {
+    const encrypted = encryptAuditDetails(auditKey, '{"x":1}', userPubkey, entryId)
+    expect(() => decryptAuditDetails(auditKey, encrypted, 'd'.repeat(64), entryId)).toThrow()
+  })
+
+  it('rejects malformed input', () => {
+    expect(() => decryptAuditDetails(auditKey, 'no-colon', userPubkey, entryId)).toThrow()
+  })
+})
+
+describe('sealAuditKeyForServer / openServerSealedAuditKey', () => {
+  const auditKey = new Uint8Array(32).fill(7)
+  const serverSecret = new Uint8Array(32).fill(3)
+  const userPubkey = 'a'.repeat(64)
+
+  it('round-trips the key and never stores it legibly', () => {
+    const sealed = sealAuditKeyForServer(auditKey, userPubkey, serverSecret)
+    expect(sealed).toMatch(/^[0-9a-f]+$/)
+    expect(sealed).not.toContain(bytesToHex(auditKey))
+    expect(openServerSealedAuditKey(sealed, userPubkey, serverSecret)).toEqual(auditKey)
+  })
+
+  it('refuses a different server secret', () => {
+    const sealed = sealAuditKeyForServer(auditKey, userPubkey, serverSecret)
+    expect(() => openServerSealedAuditKey(sealed, userPubkey, new Uint8Array(32).fill(4))).toThrow()
+  })
+
+  it("refuses another user's pubkey — a row copied onto a different user's slot does not open", () => {
+    const sealed = sealAuditKeyForServer(auditKey, userPubkey, serverSecret)
+    expect(() => openServerSealedAuditKey(sealed, 'b'.repeat(64), serverSecret)).toThrow()
+  })
+
+  it('is sealed under its own label, not the admin HPKE wrap label (domain separation)', () => {
+    expect(LABEL_AUDIT_USER_KEY_SERVER_SEAL).not.toBe(LABEL_AUDIT_USER_KEY_WRAP)
+    // A blob sealed under the wrap label with the same context must not open as the server seal.
+    const underWrapLabel = bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_WRAP, serverSecret, userPubkey))
+    expect(() => openServerSealedAuditKey(underWrapLabel, userPubkey, serverSecret)).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ban hashes — only banned numbers are ever stored, one key per scope
+// ---------------------------------------------------------------------------
+
+describe('banHash', () => {
+  const KEY = 'b'.repeat(64) // gitleaks:allow
+  const NUMBER = '+15551234567'
+
+  it('is deterministic for one number, scope and key', () => {
+    expect(banHash(NUMBER, 'hub-1', KEY)).toBe(banHash(NUMBER, 'hub-1', KEY))
+    expect(banHash(NUMBER, 'hub-1', KEY)).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('differs per scope, so one hub, another hub and the platform cannot be compared', () => {
+    const hashes = new Set([
+      banHash(NUMBER, 'hub-1', KEY),
+      banHash(NUMBER, 'hub-2', KEY),
+      banHash(NUMBER, PLATFORM_BAN_SCOPE, KEY),
+    ])
+    expect(hashes.size).toBe(3)
+  })
+
+  it('differs per number and per key', () => {
+    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(banHash('+15559876543', 'hub-1', KEY))
+    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(banHash(NUMBER, 'hub-1', 'c'.repeat(64)))
+  })
+
+  it('shares nothing with hashPhone, the hash conversations and threads use', () => {
+    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(hashPhone(NUMBER, KEY))
+  })
+
+  it('banHashes gives the platform hash always and the hub hash only for a call that has a hub', () => {
+    expect(banHashes(NUMBER, 'hub-1', KEY)).toEqual({
+      hub: banHash(NUMBER, 'hub-1', KEY),
+      platform: banHash(NUMBER, PLATFORM_BAN_SCOPE, KEY),
+    })
+    expect(banHashes(NUMBER, undefined, KEY).hub).toBeUndefined()
+  })
+})
+
+describe('callerRateLimitDigest', () => {
+  const NUMBER = '+15551234567'
+  const T0 = Date.UTC(2026, 9, 25, 12, 0, 0)
+
+  it('links calls from one number inside a window', () => {
+    expect(callerRateLimitDigest(NUMBER, T0)).toBe(callerRateLimitDigest(NUMBER, T0 + 30_000))
+  })
+
+  it('cannot link a number across windows: the key is replaced each window', () => {
+    expect(callerRateLimitDigest(NUMBER, T0)).not.toBe(callerRateLimitDigest(NUMBER, T0 + 60_000))
+  })
+
+  it('does not equal a hash of the number under any server secret', () => {
+    const digest = callerRateLimitDigest(NUMBER, T0)
+    expect(digest).not.toBe(hashPhone(NUMBER, SECRET).slice(0, digest.length))
+  })
+})
+
+describe('sealCallerNumber / openCallerNumber', () => {
+  const KEK = 'a'.repeat(64) // gitleaks:allow
+
+  it('round-trips for the call it was sealed for', () => {
+    const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
+    expect(openCallerNumber(sealed, 'call-1', KEK)).toBe('+15551234567')
+  })
+
+  it('does not contain the number', () => {
+    expect(sealCallerNumber('+15551234567', 'call-1', KEK)).not.toContain('1234567')
+  })
+
+  it('refuses a sealed value copied onto another call, or opened with another key', () => {
+    const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
+    expect(() => openCallerNumber(sealed, 'call-2', KEK)).toThrow()
+    expect(() => openCallerNumber(sealed, 'call-1', 'c'.repeat(64))).toThrow()
+  })
+
+  it('is not openable as a contact identifier: it has its own derived key', () => {
+    const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
+    expect(() => decryptContactIdentifier(`enc:${sealed}`, KEK)).toThrow()
   })
 })

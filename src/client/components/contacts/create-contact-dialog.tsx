@@ -126,27 +126,10 @@ export function CreateContactDialog({ open, onOpenChange, onCreated }: CreateCon
       }
       const encryptedSummary = await encryptMessage(JSON.stringify(summary), readerPubkeys)
 
-      // Build identifier hashes (simple hash for blind index)
       const validIdentifiers = identifiers.filter(i => i.value.trim())
-      const identifierHashes = validIdentifiers.length > 0
-        ? validIdentifiers.map(i => `${i.type}:${btoa(i.value.trim()).slice(0, 16)}`)
-        : [`name:${btoa(displayName.trim()).slice(0, 16)}`]
-
-      // Name hash for blind index search
-      const nameHash = btoa(displayName.trim().toLowerCase()).slice(0, 32)
-
-      // Trigram tokens for search
-      const normalized = displayName.trim().toLowerCase()
-      const trigrams: string[] = []
-      for (let i = 0; i <= normalized.length - 3; i++) {
-        trigrams.push(normalized.slice(i, i + 3))
-      }
 
       const raw = await createRawContact({
         hubId: '',
-        identifierHashes,
-        nameHash,
-        trigramTokens: trigrams,
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
         contactTypeHash: contactType,

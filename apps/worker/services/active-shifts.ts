@@ -73,6 +73,20 @@ export class ActiveShiftsService {
     return { ok: true }
   }
 
+  /**
+   * Clock a volunteer out of every hub at once, returning the hubs they left.
+   * An empty list is not an error: someone who was never clocked in has nothing
+   * to leave, which is what a logout from an off-shift account looks like.
+   * Used when the user has no session left to be rung through.
+   */
+  async clockOutEverywhere(pubkey: string): Promise<string[]> {
+    const rows = await this.db
+      .delete(activeShifts)
+      .where(eq(activeShifts.pubkey, pubkey))
+      .returning({ hubId: activeShifts.hubId })
+    return rows.map(r => r.hubId)
+  }
+
   // =========================================================================
   // Heartbeat
   // =========================================================================

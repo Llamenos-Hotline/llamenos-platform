@@ -221,19 +221,22 @@ else
   reporter_record_suite "backend-bdd-global-setting" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
 fi
 
-# Step 8: Run @demo-mode scenarios (#723) — opt-in. They need a server started with
-# DEMO_MODE=true + DEMO_MODE_CONFIRM=DESTROY_ALL_DATA (the MockTelephonyAdapter refuses to be
-# constructed otherwise), so they are excluded from the default project and only run when the
-# caller says the server is in demo mode. They fail loudly if that claim is wrong.
-if [[ "${BDD_DEMO_MODE:-false}" == "true" ]]; then
-  if reporter_run_step "backend-bdd-demo-mode" bunx playwright test --project=backend-bdd-demo-mode --no-deps; then
-    parse_playwright_results "$REPORTER_LOG_FILE"
-    reporter_record_suite "backend-bdd-demo-mode" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-  else
-    overall_result="fail"
-    parse_playwright_results "$REPORTER_LOG_FILE"
-    reporter_record_suite "backend-bdd-demo-mode" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-  fi
+# Step 8: Run @simulated-telephony scenarios. Serial, and NOT opt-in.
+#
+# These exercise the MockTelephonyAdapter, which until #1604 required a server started with
+# DEMO_MODE=true + DEMO_MODE_CONFIRM=DESTROY_ALL_DATA — a demo-product mode the default BDD
+# server never set, so the project sat behind a BDD_DEMO_MODE flag and nothing ran it. The
+# mock is now gated on `devSurfacesEnabled` (apps/worker/lib/dev-surfaces.ts), which every
+# server this script talks to already satisfies — it is the same condition that lets the
+# suite call POST /api/test-reset-no-admin at all. So they run every time, and they fail
+# loudly (never skip) if the mock turns out not to be selectable.
+if reporter_run_step "backend-bdd-simulated-telephony" bunx playwright test --project=backend-bdd-simulated-telephony --no-deps; then
+  parse_playwright_results "$REPORTER_LOG_FILE"
+  reporter_record_suite "backend-bdd-simulated-telephony" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
+else
+  overall_result="fail"
+  parse_playwright_results "$REPORTER_LOG_FILE"
+  reporter_record_suite "backend-bdd-simulated-telephony" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
 fi
 
 # Step 9: Run @signed-webhooks scenarios (#1036) — opt-in. They need a server started with the

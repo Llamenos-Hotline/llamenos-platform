@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CustomFieldDefinition, CallRecord } from '@/lib/api'
-import { useCalls } from '@/lib/hooks'
+import { useCalls } from '@/lib/calls-context'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'

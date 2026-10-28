@@ -35,11 +35,25 @@ Feature: In-Call Quick Actions
     When volunteer 0 creates a note for the active call
     Then a note should exist linked to that call ID
 
+  # The "Call Ended / Add Note" prompt (desktop, iOS, Android): the note is filed AFTER the
+  # call is over, by a user who cannot read call history. The server already allows it
+  # (routes/notes.ts accepts an active call or a call record in the hub); this holds it.
+  @backend @calls @notes
+  Scenario: A volunteer without call-history access notes the call they answered after it ended
+    And 1 volunteers are on shift
+    And an incoming call is ringing for the hub
+    And volunteer 0 answers the ringing call on their phone
+    And the call ends
+    Then volunteer 0 cannot read the hub call history
+    When volunteer 0 creates a note for the call that ended
+    Then the response status should be 201
+    And a note should exist linked to that call ID
+
   @backend @calls @notes @audit
   Scenario: Answering, noting and banning a call is recorded in the hub's audit log
     And 1 volunteers are on shift
     And an incoming call is ringing for the hub
-    When volunteer 0 answers the call through the hub API
+    When volunteer 0 answers the ringing call on their phone
     And volunteer 0 creates a note for the active call
     And volunteer 0 bans and hangs up the call
     Then the hub audit log should contain a "callAnswered" entry

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CommandHandler, legStatusFromCause } from './command-handler'
+import { AllRingLegsFailedError, CommandHandler, RING_ALL_DIALS_FAILED, legStatusFromCause, ringResponse } from './command-handler'
 import type { BridgeClient, BridgeEvent } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
 import type { BridgeCommand, BridgeConfig, WebhookPayload } from './types'
@@ -428,6 +428,92 @@ describe('CommandHandler', () => {
     it('rings nobody for a caller who already hung up', async () => {
       expect(await handler.ringVolunteers({ parentCallSid: 'gone', callerNumber: '+1', volunteers: [{ pubkey: 't', phone: '+2' }] })).toEqual([])
       expect(pbx.of('originate')).toEqual([])
+    })
+
+    it('rejects when every volunteer leg fails to originate (total trunk outage, #1136)', async () => {
+      await queuedCaller()
+      pbx.client.originate = async () => { throw new Error('trunk unreachable') }
+
+      const err = await handler
+        .ringVolunteers({
+          parentCallSid: CALLER,
+          callerNumber: '+15557770001',
+          volunteers: [
+            { pubkey: 'tok-a', phone: '+15550200' },
+            { pubkey: 'tok-b', phone: '+15550201' },
+          ],
+        })
+        .catch((e: unknown) => e)
+
+      // The typed error is what index.ts's /ring maps to the machine-readable 502.
+      expect(err).toBeInstanceOf(AllRingLegsFailedError)
+      expect((err as AllRingLegsFailedError).attempted).toBe(2)
+    })
+
+    it('does not reject when only some volunteer legs fail (partial outage, #1136)', async () => {
+      await queuedCaller()
+      let calls = 0
+      pbx.client.originate = (async () => {
+        calls++
+        if (calls === 1) throw new Error('trunk unreachable')
+        return { id: 'leg-ok' }
+      }) as BridgeClient['originate']
+
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+
+      expect(legs).toEqual(['leg-ok'])
+    })
+
+    describe('/ring response (#1136)', () => {
+      const request = { parentCallSid: CALLER, callerNumber: '+15557770001', volunteers: [{ pubkey: 'tok-a', phone: '+15550200' }] }
+
+      it('answers a total outage with a machine-readable 502, so the worker can tell it from any other failure', async () => {
+        await queuedCaller()
+        pbx.client.originate = async () => { throw new Error('trunk unreachable') }
+
+        const response = await ringResponse(handler, request)
+
+        expect(response.status).toBe(502)
+        expect(await response.json()).toEqual({ ok: false, error: RING_ALL_DIALS_FAILED, attempted: 1 })
+      })
+
+      it('answers a caller who already hung up with an empty 200, which is not an outage', async () => {
+        const response = await ringResponse(handler, { ...request, parentCallSid: 'gone' })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ ok: true, channelIds: [] })
+      })
+
+      it('answers a partial failure with the legs that were placed', async () => {
+        await queuedCaller()
+        let calls = 0
+        pbx.client.originate = (async () => {
+          if (++calls === 1) throw new Error('trunk unreachable')
+          return { id: 'leg-ok' }
+        }) as BridgeClient['originate']
+
+        const response = await ringResponse(handler, {
+          ...request,
+          volunteers: [...request.volunteers, { pubkey: 'tok-b', phone: '+15550201' }],
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ ok: true, channelIds: ['leg-ok'] })
+      })
+
+      it('answers any other failure with an uncoded 500', async () => {
+        const response = await ringResponse({ ringVolunteers: async () => { throw new Error('boom') } }, request)
+
+        expect(response.status).toBe(500)
+        expect(await response.json()).toEqual({ ok: false, error: 'Command failed' })
+      })
     })
 
     it('reports an unanswered leg with the status its hangup cause means', async () => {

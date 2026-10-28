@@ -93,8 +93,9 @@ llamenos_app_image: ""           # REQUIRED e.g. llamenos:0.19.16 (docker load) 
 # The sip-bridge sidecar's image. The bridge is obtained by WHICHEVER ROUTE
 # this deployment uses for the app image — never a different one (issue #1697):
 #   * Docker Hub release path: leave empty. Derived from llamenos_app_image by
-#     putting `-sip-bridge` on the REPOSITORY, which is how
-#     .github/workflows/docker.yml publishes it.
+#     putting `-sip-bridge` on the REPOSITORY, which is how the image is named
+#     when it is published (images are published from a local machine, never
+#     by CI).
 #   * docker save | docker load: build and side-load it next to the app image —
 #         docker build -t llamenos-sip-bridge:<version> ./sip-bridge
 #         docker save llamenos-sip-bridge:<version> | ssh <host> sudo docker load
@@ -120,6 +121,9 @@ llamenos_caddy_image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7
 # ─── Secrets — generate each on your workstation ─────────────────
 hmac_secret: ""                  # openssl rand -hex 32   (exactly 64 lowercase hex)
 server_secret: ""                # openssl rand -hex 32   (exactly 64 hex chars)
+server_kek: ""                   # openssl rand -hex 32   (own value: encrypts server-readable data)
+ban_hash_key: ""                 # openssl rand -hex 32   (own value: secret FILE, never in .env or backups)
+messaging_hash_key: ""           # openssl rand -hex 32   (own value: secret FILE, never in .env or backups)
 pg_password: ""                  # openssl rand -hex 24   (>= 16 chars)
 storage_access_key: ""           # openssl rand -hex 16
 storage_secret_key: ""           # openssl rand -hex 24   (>= 16 chars)

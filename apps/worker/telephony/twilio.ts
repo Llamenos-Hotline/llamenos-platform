@@ -1,6 +1,7 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -20,6 +21,18 @@ import type {
 } from './adapter'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+
+/**
+ * Whether Twilio's `AnsweredBy` (sent on the answer URL because legs are
+ * dialled with `MachineDetection`) says an automated answerer picked up.
+ * `human` and `unknown` are answers: `unknown` is Twilio's "could not decide
+ * in time", and refusing it would drop a real pickup. Everything else —
+ * `machine_start`, `machine_end_beep`, `machine_end_silence`,
+ * `machine_end_other`, `fax` — is a machine. A missing value is not a machine.
+ */
+export function isMachineAnsweredBy(answeredBy: string | null | undefined): boolean {
+  return !!answeredBy && answeredBy !== 'human' && answeredBy !== 'unknown'
+}
 
 /**
  * Twilio TwiML `<Say language>` codes — the explicit, ordered list of locales
@@ -66,6 +79,8 @@ function sayOrPlay(promptKey: string, lang: string, audioUrls?: AudioUrlMap, tex
 function hubXmlParam(hubId?: string): string {
   return hubId ? `&amp;hub=${escapeXml(encodeURIComponent(hubId))}` : ''
 }
+
+const logger = createLogger('telephony.twilio')
 
 /**
  * TwilioAdapter — Twilio implementation of TelephonyAdapter.
@@ -116,6 +131,12 @@ export class TwilioAdapter implements TelephonyAdapter {
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingTwiml = sayOrPlay('greeting', lang, params.audioUrls, greetingText)
+    // #1505: if this hub records answered calls, the caller is told before they
+    // can be connected. Omitted on the rate-limited path below — that call is
+    // hung up and never recorded.
+    const noticeTwiml = params.callRecordingEnabled
+      ? sayOrPlay('recordingNotice', lang, params.audioUrls)
+      : ''
 
     if (params.rateLimited) {
       const rateLimitTwiml = sayOrPlay('rateLimited', lang, params.audioUrls)
@@ -135,6 +156,7 @@ export class TwilioAdapter implements TelephonyAdapter {
         <Response>
           <Gather numDigits="4" action="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" timeout="10">
             ${greetingTwiml}
+            ${noticeTwiml}
             ${captchaTwiml}
             <Say language="${tLang}">${escapeXml(digits.split('').join(', '))}.</Say>
           </Gather>
@@ -148,6 +170,7 @@ export class TwilioAdapter implements TelephonyAdapter {
     return this.twiml(`
       <Response>
         ${greetingTwiml}
+        ${noticeTwiml}
         ${holdTwiml}
         <Enqueue waitUrl="/api/telephony/wait-music?lang=${lang}${hp}" action="/api/telephony/queue-exit?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST">${params.callSid}</Enqueue>
       </Response>
@@ -177,9 +200,15 @@ export class TwilioAdapter implements TelephonyAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     // CRIT-W1: Hub and pubkey are resolved from DB in /call-recording — no URL params needed
+    // #1505: no recording attributes at all unless this hub opted in. An absent
+    // `record` attribute means Twilio never writes the audio to disk, so there
+    // is nothing at the provider to leak, fetch, or forget to delete.
+    const recordAttrs = params.recordCall
+      ? ` record="record-from-answer" recordingStatusCallback="${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" recordingStatusCallbackEvent="completed"`
+      : ''
     return this.twiml(`
       <Response>
-        <Dial record="record-from-answer" recordingStatusCallback="${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" recordingStatusCallbackEvent="completed">
+        <Dial${recordAttrs}>
           <Queue>${params.parentCallSid}</Queue>
         </Dial>
       </Response>
@@ -233,8 +262,6 @@ export class TwilioAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callSids: string[] = []
-
     const calls = await Promise.allSettled(
       params.volunteers.map(async (vol) => {
         // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs
@@ -262,17 +289,13 @@ export class TwilioAdapter implements TelephonyAdapter {
           const data = await res.json() as { sid: string }
           return data.sid
         }
-        throw new Error(`Failed to call volunteer`)
+        throw new Error(`Failed to call volunteer: ${res.status}`)
       })
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callSids.push(result.value)
-      }
-    }
-
-    return callSids
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Twilio', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {
@@ -370,6 +393,7 @@ export class TwilioAdapter implements TelephonyAdapter {
       callSid: form.get('CallSid') as string,
       callerNumber: form.get('From') as string,
       calledNumber: (form.get('To') as string) || undefined,
+      answeredByMachine: isMachineAnsweredBy(form.get('AnsweredBy') as string | null),
     }
   }
 

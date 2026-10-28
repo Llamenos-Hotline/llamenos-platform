@@ -179,6 +179,22 @@ turn_port: 3478
 turn_relay_min_port: 49160
 turn_relay_max_port: 49200
 turn_realm: "{{ domain }}"
+# The docker network the PBX, the app and the SIP bridge share, and the address
+# Asterisk is pinned to on it. Declared, not left to the daemon, because a
+# relayed call's media goes volunteer -> CoTURN -> Asterisk's address on this
+# network, and CoTURN denies every private range except exactly that one
+# address (#2136). Inside the daemon's 172.30.0.0/16 pool (roles/docker), at its
+# far end so it does not collide with the networks the daemon hands out in order.
+# Containers that are NOT pinned are handed addresses only from the upper half
+# (llamenos_internal_ip_range), so none of them can ever land on Asterisk's
+# address and inherit the relay's allowance. Change them TOGETHER: the address
+# must sit inside the subnet and OUTSIDE the range. An existing llamenos-internal
+# keeps its old addressing until recreated — roles/docker says how.
+llamenos_internal_subnet: "172.30.255.0/24"
+llamenos_internal_ip_range: "172.30.255.128/25"
+asterisk_internal_ip: "172.30.255.10"
+# The one address a TURN relay may send to. Leave it at Asterisk's.
+turn_media_peer_ip: "{{ asterisk_internal_ip }}"
 
 # Master secret every volunteer's PJSIP endpoint password is derived from.
 # REQUIRED when llamenos_asterisk_enabled is true. Rotating it rotates every
@@ -225,21 +241,12 @@ glitchtip_dsn: ""
 # Generate with: openssl rand -hex 32
 signal_notifier_bearer_token: ""
 
-# ─── Demo / Staging Mode ──────────────────────────────────────────
-# NEVER set demo_mode: true when app_environment is 'production' — both the
-# app (apps/worker/lib/config.ts) and the Ansible preflight guard
-# (playbooks/tasks/guard-demo-mode.yml) hard-fail if you do.
-# When demo_mode is true, demo_mode_confirm must be exactly "DESTROY_ALL_DATA"
-# (two-factor confirmation the app requires at startup before it will run
-# scheduled data resets).
-demo_mode: false
-demo_mode_confirm: ""
-
 # ─── Developer/Test Routes ────────────────────────────────────────
 # NEVER set dev_routes_enabled: true or a non-empty dev_reset_secret in
-# production — same guard as demo_mode above applies. Currently these only
-# take effect when app_environment is 'development' (widening that to
-# staging/demo is tracked separately — #723).
+# production: playbooks/tasks/guard-dev-routes.yml hard-fails the play, the
+# env templates omit both vars, and apps/worker/lib/config.ts refuses to start.
+# They take effect on app_environment 'development' and 'staging' — see
+# docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
 dev_routes_enabled: false
 dev_reset_secret: ""
 

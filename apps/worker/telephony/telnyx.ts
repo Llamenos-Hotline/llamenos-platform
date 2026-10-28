@@ -1,4 +1,5 @@
 import { safeFetch } from '../lib/safe-fetch'
+import { createLogger } from '../lib/logger'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -16,6 +17,7 @@ import type {
   WebhookQueueWait,
   WebhookRecordingStatus,
 } from './adapter'
+import { collectRingResults } from './adapter'
 import { DEFAULT_LANGUAGE } from '@shared/languages'
 import { getPrompt } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
@@ -198,6 +200,8 @@ function hubQP(hubId?: string): string {
   return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
 }
 
+const logger = createLogger('telephony.telnyx')
+
 /**
  * TelnyxAdapter — Telnyx Call Control API implementation.
  *
@@ -268,6 +272,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
     const lang = params.callerLanguage
     const { voice, language } = getTelnyxVoice(lang)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    // Not spoken on the rate-limited path below — that call is hung up, never recorded.
+    const noticeText = params.callRecordingEnabled ? getPrompt('recordingNotice', lang) : ''
 
     if (params.rateLimited) {
       const rateLimitText = getPrompt('rateLimited', lang)
@@ -292,7 +299,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
       })
 
       await this.client.command(params.callSid, 'speak', {
-        payload: greetingText,
+        payload: [greetingText, noticeText].filter(Boolean).join(' '),
         voice,
         language,
       })
@@ -319,7 +326,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
     })
 
     await this.client.command(params.callSid, 'speak', {
-      payload: `${greetingText} ${holdText}`,
+      payload: [greetingText, noticeText, holdText].filter(Boolean).join(' '),
       voice,
       language,
       client_state: queueState,
@@ -379,15 +386,19 @@ export class TelnyxAdapter implements TelephonyAdapter {
       call_control_id: params.parentCallSid,
     })
 
-    await this.client.command(params.parentCallSid, 'record_start', {
-      format: 'mp3',
-      channels: 'single',
-      client_state: encodeClientState({
-        lang: 'en',
-        callSid: params.parentCallSid,
-        hubId: params.hubId,
-      }),
-    })
+    // #1505: only ask Telnyx to record when this hub opted in. Without this
+    // command Telnyx never writes the call audio to disk.
+    if (params.recordCall) {
+      await this.client.command(params.parentCallSid, 'record_start', {
+        format: 'mp3',
+        channels: 'single',
+        client_state: encodeClientState({
+          lang: 'en',
+          callSid: params.parentCallSid,
+          hubId: params.hubId,
+        }),
+      })
+    }
 
     return this.emptyResponse()
   }
@@ -466,7 +477,6 @@ export class TelnyxAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callControlIds: string[] = []
     const hubParam = hubQP(params.hubId)
 
     const calls = await Promise.allSettled(
@@ -491,13 +501,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
       }),
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callControlIds.push(result.value)
-      }
-    }
-
-    return callControlIds
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Telnyx', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

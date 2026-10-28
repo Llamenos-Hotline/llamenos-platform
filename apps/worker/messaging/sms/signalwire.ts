@@ -11,8 +11,8 @@ import { buildWebhookUrl } from '../../lib/webhook-url'
 export class SignalWireSMSAdapter extends TwilioSMSAdapter {
   private space: string
 
-  constructor(accountSid: string, authToken: string, phoneNumber: string, space: string, hmacSecret: string, webhookBaseUrl = '') {
-    super(accountSid, authToken, phoneNumber, hmacSecret, webhookBaseUrl)
+  constructor(accountSid: string, authToken: string, phoneNumber: string, space: string, webhookBaseUrl = '') {
+    super(accountSid, authToken, phoneNumber, webhookBaseUrl)
     this.space = space
   }
 

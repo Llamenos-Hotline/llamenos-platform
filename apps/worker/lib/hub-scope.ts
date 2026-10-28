@@ -7,8 +7,11 @@
  * body may widen the request to a different hub.
  */
 import type { Context } from 'hono'
+import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
-import { findRole, hasAnyHubAccess, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
+import type { Services } from '../services'
+import { ServiceError } from '../services/settings'
+import { findRole, hasAnyHubAccess, hasHubPermission, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
 
 export type TargetHub =
   | { ok: true; hubId: string | undefined }
@@ -110,4 +113,78 @@ export function callerHasHubAccess(c: Context<AppEnv>, hubId: string): boolean {
 export function callerHasAnyHubAccess(c: Context<AppEnv>): boolean {
   const user = c.get('user')
   return hasAnyHubAccess(user.roles, user.hubRoles ?? [], c.get('allRoles'))
+}
+
+/**
+ * The hubs in which the caller holds `permission`, for a route mounted outside
+ * `/hubs/:hubId` whose rows each belong to a hub: `null` means every hub (a
+ * super-admin), otherwise exactly the hubs their own `hubRoles` grant it in —
+ * possibly none. Global roles other than super-admin contribute nothing, as
+ * they do inside a hub, so an unscoped list or write is bounded to the caller's
+ * hubs instead of defaulting to all of them (#1099).
+ */
+export function hubsWithPermission(c: Context<AppEnv>, permission: string): string[] | null {
+  const user = c.get('user')
+  const allRoles = c.get('allRoles')
+  if (isSuperAdmin(user.roles, allRoles)) return null
+  const hubRoles = user.hubRoles ?? []
+  return [...new Set(hubRoles.map(hr => hr.hubId))]
+    .filter(hubId => hasHubPermission(user.roles, hubRoles, allRoles, hubId, permission))
+}
+
+/**
+ * Refuse a row that belongs to another hub, as a 404.
+ *
+ * A row of another hub and a row that does not exist must be indistinguishable
+ * from outside: a 403 would confirm the id is real and lives in a hub the caller
+ * cannot see, which is itself a disclosure. `notFound` is therefore the SAME
+ * message the service throws for a missing row. A row with no hub (`null`) is
+ * not in any hub, so it is not in this one either.
+ */
+export function assertInHub<T extends { hubId?: string | null }>(row: T, hubId: string, notFound: string): T {
+  if (row.hubId !== hubId) throw new ServiceError(404, notFound)
+  return row
+}
+
+/**
+ * Bind every `/:id` route of a router to the hub in the URL.
+ *
+ * Routers are mounted twice, unscoped (`/api/<x>`) and under `/api/hubs/:hubId/<x>`,
+ * and a handler written for the unscoped case fetches `getById(id)` without ever
+ * asking whose row it is. `hubContext` proves the caller belongs to the hub in
+ * the URL; it says nothing about the resource. Registering this once on the
+ * router, before its handlers, makes the check a property of the router rather
+ * than of each handler, so a route added later cannot forget it:
+ *
+ *     router.use('/:id/*', resourceInPathHub({ param: 'id', load }))
+ *
+ * (`/:id/*` also matches the bare `/:id`, and being a `use` it covers every
+ * HTTP method.)
+ *
+ * Outside a hub (no path hub) it does nothing: the unscoped mount has no hub to
+ * bind to. `skip` lists literal segments that sit where the id would
+ * (`/stats`, `/types`) and are not resources.
+ *
+ * `load` must throw the service's own 404 when the row is missing and
+ * {@link assertInHub}'s when it is in another hub — the two share one message.
+ */
+export function resourceInPathHub(opts: {
+  param: string
+  skip?: ReadonlySet<string>
+  load: (services: Services, id: string, hubId: string) => Promise<unknown>
+}) {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const hubId = c.get('hubId')
+    const id = c.req.param(opts.param)
+    if (!hubId || !id || opts.skip?.has(id)) return next()
+    try {
+      await opts.load(c.get('services'), id, hubId)
+    } catch (err) {
+      // Answered here rather than left to the app's error handler, so the 404 is
+      // the same wherever the router is mounted.
+      if (err instanceof ServiceError && err.status === 404) return c.json({ error: err.message }, 404)
+      throw err
+    }
+    return next()
+  })
 }

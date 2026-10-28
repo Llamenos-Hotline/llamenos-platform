@@ -2,7 +2,7 @@
 # Shared ntfy provisioning: publish account, bearer token, access control.
 #
 # Included by roles/llamenos-ntfy/tasks/main.yml (per-service path) and by
-# roles/llamenos/tasks/main.yml (monolithic demo/staging path). The caller
+# roles/llamenos/tasks/main.yml (deprecated monolithic path). The caller
 # must already have a RUNNING, healthy ntfy container and must have set:
 #   ntfy_container_name  — container to `docker exec` into
 #   ntfy_state_dir       — host dir that holds the persisted .publish-token

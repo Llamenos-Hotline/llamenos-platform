@@ -905,6 +905,9 @@ final class AdminViewModel {
                 path: "/api/settings/call",
                 body: CallSettings(
                     queueTimeoutSeconds: queueTimeoutSeconds,
+                    // nil is omitted from the PATCH body: this screen edits the two
+                    // timeouts only and must leave the hub's recording opt-in as it is.
+                    recordCalls: nil,
                     voicemailMaxSeconds: voicemailMaxSeconds
                 )
             )
@@ -1413,17 +1416,15 @@ final class AdminViewModel {
 
     /// Promote a hub-scoped ban to platform scope.
     ///
-    /// `POST /api/bans/platform/promote` resolves the source ban by its primary
-    /// key server-side and copies the already-hashed phone onto the platform
-    /// list (`apps/worker/routes/platform-bans.ts`); the client never needs — and
-    /// never has — the plaintext number. Body is the generated `PromoteBanBody`.
+    /// `POST /api/bans/platform/promote` needs the number again: a hub's ban hash is
+    /// keyed to that hub (`apps/worker/lib/crypto.ts` `banHash`), so the server cannot
+    /// re-key it to the platform list on its own. It checks the number against the
+    /// hub ban before adding the platform ban. Body is the generated `PromoteBanBody`.
     ///
-    /// Note: `GET /api/bans` does not currently return the ban `id`
-    /// (`records.listBans`), so no list row can supply `banId` yet. The
-    /// capability is reachable from any caller that holds an id (deep link,
-    /// search result, future list response) and is covered by
-    /// `AdminViewModelPromoteBanTests`.
-    func promoteBanToPlatform(banId: String) async {
+    /// `GET /api/bans` does not return a ban `id`, so the id comes from a platform
+    /// search result for the number the caller just typed (`SearchBansResponseBan`),
+    /// and the same number is passed here. Covered by `AdminViewModelPromoteBanTests`.
+    func promoteBanToPlatform(banId: String, phone: String) async {
         errorMessage = nil
         successMessage = nil
 
@@ -1431,7 +1432,7 @@ final class AdminViewModel {
             try await apiService.request(
                 method: "POST",
                 path: "/api/bans/platform/promote",
-                wireBody: PromoteBanBody(banID: banId)
+                wireBody: PromoteBanBody(banID: banId, phone: phone)
             )
 
             let generator = UINotificationFeedbackGenerator()

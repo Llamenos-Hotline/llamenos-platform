@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "حظر وإنهاء المكالمة",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "حظر المتصل وإنهاء المكالمة؟",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "مكالمة نشطة",
-    "addNote": "Add Note",
+    "addNote": "إضافة ملاحظة",
     "answer": "رد",
+    "answerFailed": "تعذّر الرد على المكالمة. ربما رد عليها شخص آخر أولاً.",
+    "answerOnPhone": "رد من هاتفك",
     "banned": "هذا الرقم محظور",
     "caller": "المتصل",
     "duration": "المدة",
     "ended": "انتهت المكالمة",
     "hangUp": "إنهاء",
+    "hangupFailed": "تعذّر إنهاء المكالمة. حاول مرة أخرى.",
     "hold": "انتظار",
     "incoming": "مكالمة واردة",
     "mute": "كتم الصوت",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "تحويل إلى البريد الصوتي",
     "unknown": "رقم مجهول",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "متصل مجهول",
     "unmute": "إلغاء كتم الصوت",
     "voicemail": "Voicemail"
   },
@@ -1781,8 +1784,10 @@
     "calls": "Calls",
     "callsToday": "مكالمات اليوم",
     "cases": "القضايا",
-    "clockIn": "Clock In",
-    "clockOut": "Clock Out",
+    "clockIn": "بدء الوردية",
+    "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
+    "clockOut": "إنهاء الوردية",
+    "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
     "contactsSubtitle": "View caller interaction history",
@@ -1802,6 +1807,7 @@
     "noRecentNotes": "No Recent Notes",
     "noShift": "لا توجد مناوبة مجدولة",
     "noUsersOnline": "لا يوجد متطوعون متصلون",
+    "notClockedIn": "Not clocked in",
     "notes": "Notes",
     "offShift": "Off Shift",
     "offline": "غير متصل",
@@ -1824,18 +1830,6 @@
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
     "title": "Delete role"
-  },
-  "demo": {
-    "admin": "Admin",
-    "banner": "Demo Mode",
-    "bannerText": "بيئة اختبار — لا تدخل معلومات حقيقية عن المتصلين. البيانات هنا غير سرية وقد تُحذف في أي وقت.",
-    "bannerTextSchedule": "بيئة اختبار — لا تدخل معلومات حقيقية عن المتصلين. تتم إعادة تعيين البيانات {{schedule}} وهي غير سرية.",
-    "dismiss": "Dismiss",
-    "getStarted": "Deploy your own",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo",
-    "volunteer": "Volunteer"
   },
   "deviceWipe": {
     "contactAdmin": "Contact your hub administrator for assistance.",
@@ -2073,6 +2067,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "تم قفل فتح القفل البيومتري بعد محاولات فاشلة كثيرة. أدخل رقم PIN.",
     "biometricNotEnrolled": "تغيّرت بيانات القياسات الحيوية على جهازك، لذا تم إيقاف فتح القفل البيومتري. أدخل رقم PIN.",
@@ -2080,6 +2076,12 @@
     "httpNotAllowed": "اتصالات HTTP غير الآمنة غير مسموح بها. استخدم عنوان HTTPS.",
     "pinLockoutDuration": "محاولات فاشلة كثيرة جدًا. حاول مرة أخرى بعد {{seconds}} ثانية.",
     "pinWiped": "محاولات PIN فاشلة كثيرة جدًا. حفاظًا على أمانك، تم مسح جميع المفاتيح من هذا الجهاز."
+  },
+  "errors": {
+    "deviceNotRegistered": "هذا الجهاز غير مسجّل في مركزك بعد. اطلب من شخص يدير مركزك إضافته.",
+    "forbidden": "ليست لديك صلاحية للقيام بذلك. اطلب ذلك من شخص يدير مركزك.",
+    "notFound": "لم يعد هذا موجودًا. ربما تمت إزالته.",
+    "serverUnavailable": "تعذّر الوصول إلى الخادم حاليًا. حاول مرة أخرى بعد قليل."
   },
   "eventType": {
     "call": "مكالمة",
@@ -2500,9 +2502,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "شخص ما يتصل بالخط الساخن",
+  "incomingCallAnswer": "رد",
+  "incomingCallDecline": "رفض",
   "incomingCallMicrophoneRequired": "يلزم الوصول إلى الميكروفون للرد على المكالمات في التطبيق.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2517,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "للعربية، اضغط [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "اللغات المفعّلة التي لا يتحدثها أحد في هذا الـ hub: {{count}}",
+    "uncoveredHint": "قد لا يصل المتصل الذي يختار إحداها إلى أي شخص يتحدثها. أضف اللغات المحكية إلى ملفات الأعضاء أو عطّل اللغة.",
+    "maxLanguagesReached": "تتسع قائمة لوحة المفاتيح لـ {{max}} لغات. يتم التعرّف على المتصلين بلغات أخرى من خلال بادئة رقم الهاتف."
   },
   "ivrAudio": {
     "delete": "حذف",
@@ -2535,6 +2538,7 @@
       "greeting": "ترحيب",
       "pleaseHold": "انتظر من فضلك",
       "rateLimited": "حجم مكالمات مرتفع",
+      "recordingNotice": "إشعار التسجيل",
       "voicemailPrompt": "رسالة البريد الصوتي",
       "waitMessage": "رسالة الانتظار"
     },
@@ -2555,8 +2559,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "تم مسح المفتاح بسبب كثرة المحاولات الفاشلة",
+    "wrongPin": "رمز PIN خاطئ"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2751,6 +2755,7 @@
     "pendingCountOne": "{{count}} قيد الانتظار",
     "pendingSyncMessage": "{{count}} عمليات في انتظار المزامنة",
     "pendingSyncMessageOne": "{{count}} عملية في انتظار المزامنة",
+    "rejected": "لم يُحفظ: رفض الخادم ذلك",
     "relayReconnected": "تمت إعادة الاتصال — جارٍ استرداد الأحداث الفائتة",
     "relayReconnecting": "جارٍ إعادة الاتصال بالخادم...",
     "syncComplete": "تمت مزامنة جميع العمليات بنجاح",
@@ -2895,6 +2900,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "رموز PIN غير متطابقة. حاول مرة أخرى.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} من {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2908,7 +2914,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "رمز PIN غير صحيح."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",
@@ -3825,9 +3831,6 @@
     "complete": "Setup complete! Welcome to your hotline.",
     "completeFailed": "Failed to complete setup",
     "configured": "Configured",
-    "demoMode": "Populate with sample data",
-    "demoModeDescription": "Creates sample volunteer accounts, shifts, and ban entries for testing and demos. Demo account credentials will be shown on the login page.",
-    "demoSeedFailed": "Sample data partially created",
     "generateInvite": "Generate Invite",
     "generatedInvites": "Generated Invites",
     "goToDashboard": "Go to Dashboard",
@@ -4597,6 +4600,7 @@
     "role": "الدور",
     "roleAdmin": "مسؤول",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "الافتراضي للمركز",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "متطوع",
@@ -4689,6 +4693,7 @@
   },
   "voice": {
     "greeting": "شكراً لاتصالك بـ {name}.",
+    "recordingNotice": "يُرجى العلم بأن هذه المكالمة سيتم تسجيلها.",
     "rateLimited": "نحن نواجه حاليا حجم مكالمات كبير. يرجى المحاولة مرة أخرى لاحقا.",
     "captchaPrompt": "يرجى إدخال الأرقام التالية:",
     "captchaTimeout": "لم نتلق مدخلاتك. مع السلامة.",

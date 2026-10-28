@@ -18,9 +18,11 @@
  * `decryptNote` (src/client/lib/platform.ts) catches and returns null, so the
  * UI shows an unreadable note and no error.
  *
- * Non-destructive: one note per run, against a synthetic `callId` carrying an
- * `r1-live-...` marker so it is filterable and obviously a check rather than
- * a real call's record. Nothing is deleted or reset.
+ * Non-destructive: one note per run, filed under an EXISTING call of the hub
+ * (the newest in its history). The server refuses a note whose `callId` is not
+ * a call of that hub (#2112), so it can no longer be a synthetic id; the note's
+ * own `r1-live-...` marker is what keeps it filterable and obviously a check.
+ * Nothing is deleted or reset.
  *
  * Run: `bun run test:live -- notes`
  *   LIVE_BASE_URL       the deployment to check
@@ -115,8 +117,8 @@ test.describe('R1 — a volunteer writes a note and the admin reads it', () => {
   test.describe.configure({ mode: 'serial', timeout: 180_000 })
 
   const marker = liveMarker('note')
-  /** Synthetic: a live run must not depend on a real caller having phoned in. */
-  const callId = `r1-live-call-${marker}`
+  /** A real call of the hub, found in the test below — #2112 refuses any other id. */
+  let callId: string
   const plaintext = JSON.stringify({ text: `R1 live acceptance check ${marker} — safe to delete` })
   const volunteer = freshIdentity()
 
@@ -135,6 +137,15 @@ test.describe('R1 — a volunteer writes a note and the admin reads it', () => {
   test('a volunteer is onboarded who can create notes', async ({ request }) => {
     hubId = await resolveHubId(request)
     adminIdentity = seedHexToPubkey(seed)
+
+    // A note hangs off a call that exists in this hub. Take the newest one the
+    // admin can see; a hub that has never taken a call has nothing a note could
+    // be about, and that is the answer, not something to paper over with an id.
+    const history = await apiGet<{ calls?: Array<{ id: string }> }>(
+      request, `/hubs/${hubId}/calls/history?limit=1`, seed,
+    )
+    expect(history.status, 'GET /api/hubs/:id/calls/history as the admin').toBe(200)
+    callId = present(history.data.calls?.[0], 'a call in this hub\'s history to file the note under — place one first').id
 
     const invite = await pacedStrict('POST /api/invites', () =>
       apiPost<{ invite?: { code: string } }>(request, '/invites', {

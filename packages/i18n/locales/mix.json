@@ -369,11 +369,14 @@
     "active": "Llamada Activa",
     "addNote": "Chikaa Nota",
     "answer": "Nakuiin",
+    "answerFailed": "Couldn't answer the call. Someone else may have picked up first.",
+    "answerOnPhone": "Answer on your phone",
     "banned": "Número yóꞌo íyo bloqueado",
     "caller": "Ña̱yivi kána",
     "duration": "Sava̱ tiempo",
     "ended": "Ni̱ ndíꞌi Llamada",
     "hangUp": "Sandíꞌi",
+    "hangupFailed": "Couldn't end the call. Try again.",
     "hold": "Sandátu̱",
     "incoming": "Llamada Kíkii",
     "mute": "Kasí sonido",
@@ -613,6 +616,8 @@
     "breakDescription": "Ña kúni̱ñúꞌú llamada tá íyo nu̱ú descanso",
     "calls": "Llamada",
     "callsToday": "Llamada Víchi",
+    "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
+    "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Conexión",
     "contacts": "Contacto",
     "contactsSubtitle": "Kundeꞌé historial de ña̱yivi kána",
@@ -632,6 +637,7 @@
     "noRecentNotes": "Ñá íyo Nota Saa̱",
     "noShift": "Ñá íyo turno programado",
     "noUsersOnline": "Ñá íyo ña̱yivi nu̱ú línea",
+    "notClockedIn": "Not clocked in",
     "notes": "Nota",
     "offShift": "Kéta nu̱ú Turno",
     "offline": "Ñá íyo nu̱ú",
@@ -652,6 +658,12 @@
     "clockIn": "Registrar Entrada",
     "cases": "Cases",
     "triage": "Triage"
+  },
+  "errors": {
+    "deviceNotRegistered": "This device isn't registered with your hub yet. Ask someone who manages your hub to add it.",
+    "forbidden": "You don't have permission to do this. Ask someone who manages your hub.",
+    "notFound": "This no longer exists. It may have been removed.",
+    "serverUnavailable": "Can't reach the server right now. Try again in a moment."
   },
   "hubs": {
     "accessDenied": "Acceso denegado",
@@ -706,15 +718,16 @@
   },
   "ivr": {
     "selfAnnouncement": "Tu'un savi ndáto, chu̱ʼun [N].",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Enabled languages nobody in this hub speaks: {{count}}",
+    "uncoveredHint": "A caller who picks one of these may reach no one who speaks it. Add spoken languages to member profiles, or turn the language off.",
+    "maxLanguagesReached": "The keypad menu holds {{max}} languages. Callers in other languages are matched by phone-number prefix."
   },
   "ivrAudio": {
     "delete": "Xíta",
@@ -724,6 +737,7 @@
       "greeting": "Saludo",
       "pleaseHold": "Ndátu̱ Tá Kúni",
       "rateLimited": "Mensaje Kuáꞌa̱ Llamada",
+      "recordingNotice": "Tu̱ʼun nakundaá",
       "voicemailPrompt": "Tu̱ꞌun Voicemail",
       "waitMessage": "Mensaje de Espera"
     },
@@ -918,6 +932,7 @@
     "keyLocked": "Llave íyo bloqueada",
     "lockoutRemaining": "Bloqueado. Náku̱ún nu̱ú {{seconds}} segundo.",
     "mismatch": "PIN ña iin kuiti. Náku̱ún inka vuelta.",
+    "progress": "{{count}}/{{total}}",
     "setEncrypting": "Kúu cifrar llave miíún...",
     "setSubtitle": "Kaji iin PIN de 6-8 número ña proteger llave miíún",
     "setTitle": "Savaꞌa iin PIN",
@@ -1279,9 +1294,6 @@
     "complete": "¡Ni̱ ndíꞌi configuración! Nda̱kú kivi nu̱ú línea de ayuda miíún.",
     "completeFailed": "Ñá ni̱ kúu sandíꞌi configuración",
     "configured": "Configurado",
-    "demoMode": "Chikaa datos de ejemplo",
-    "demoModeDescription": "Savaꞌa cuenta de voluntario de ejemplo, turno, ji entrada de bloqueo ña prueba ji demo. Credencial de cuenta demo naꞌa nu̱ú página de kivi.",
-    "demoSeedFailed": "Datos de ejemplo ni̱ savaꞌa parcial",
     "generateInvite": "Savaꞌa Invitación",
     "generatedInvites": "Invitación Ni̱ Savaꞌa",
     "goToDashboard": "Kuaꞌan nu̱ú Panel",
@@ -1849,6 +1861,7 @@
     "role": "Rol",
     "roleAdmin": "Admin",
     "roleHubAdmin": "Admin de Hub",
+    "roleHubDefault": "Hub default",
     "roleReporter": "Reportero",
     "roleReviewer": "Revisor",
     "roleVolunteer": "Voluntario",
@@ -2303,18 +2316,6 @@
     "webhook": {
       "errorTitle": "Webhook Error"
     }
-  },
-  "demo": {
-    "volunteer": "Voluntario",
-    "admin": "Admin",
-    "dismiss": "Sandákua",
-    "getStarted": "Deploy your own",
-    "banner": "Demo Mode",
-    "bannerText": "Yóʼo ña kuenta prueba — mákunda información yaʼa ndaa xaʼa persona na cha̱xin. Datos yaʼa vá kúu iin secreto ta kunda̱a̱ tuku iora.",
-    "bannerTextSchedule": "Yóʼo ña kuenta prueba — mákunda información yaʼa ndaa xaʼa persona na cha̱xin. Datos kunda̱a̱ tuku {{schedule}} ta kúu iin secreto.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "volunteer": "Voluntario",
@@ -3109,6 +3110,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "Not saved: the server refused it",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4389,6 +4391,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "Biometric unlock is locked after too many failed attempts. Enter your PIN.",
     "biometricNotEnrolled": "Your device's biometrics changed, so biometric unlock was turned off. Enter your PIN.",
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
@@ -4581,7 +4585,7 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
+  "incomingCallAnswer": "Nakuiin",
   "incomingCallDecline": "Decline",
   "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
@@ -4694,6 +4698,7 @@
   },
   "voice": {
     "greeting": "Tàsi̱kó nuu̱ ni̱ ni̱ka̱ʼa̱n nuu̱ {name}.",
+    "recordingNotice": "Koto kunini: tu̱ʼun ni̱ka̱ʼa̱n yóʼo kundaá saá.",
     "rateLimited": "Vi̱ʼi̱ kua̱ʼa̱ nuu̱ ni̱ka̱ʼa̱n. Koto naní inka̱ʼa̱n inka tuku.",
     "captchaPrompt": "Koto chu̱ʼun número yóʼo:",
     "captchaTimeout": "Ña kúu ni̱kiʼin nuu̱ ni̱chu̱ʼun. Saá va̱ʼa.",

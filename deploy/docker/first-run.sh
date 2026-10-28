@@ -47,6 +47,9 @@ else
   STORAGE_AK="$(openssl rand -base64 16 | tr -d '=/+')"
   STORAGE_SK="$(openssl rand -base64 24)"
   SERVER_SECRET_VAL="$(openssl rand -hex 32)"
+  # One role per secret: HMAC_SECRET hashes, SERVER_KEK encrypts what the server
+  # must read back, SERVER_SECRET derives relay/server identity keys. Never reuse one.
+  SERVER_KEK_VAL="$(openssl rand -hex 32)"
 
   # Use sed to fill in generated values
   sed -i "s|^PG_PASSWORD=.*|PG_PASSWORD=${PG_PASS}|" .env
@@ -54,6 +57,7 @@ else
   sed -i "s|^STORAGE_ACCESS_KEY=.*|STORAGE_ACCESS_KEY=${STORAGE_AK}|" .env
   sed -i "s|^STORAGE_SECRET_KEY=.*|STORAGE_SECRET_KEY=${STORAGE_SK}|" .env
   sed -i "s|^SERVER_SECRET=.*|SERVER_SECRET=${SERVER_SECRET_VAL}|" .env
+  sed -i "s|^SERVER_KEK=.*|SERVER_KEK=${SERVER_KEK_VAL}|" .env
 
   echo "Generated .env with random secrets."
   echo ""
@@ -68,6 +72,24 @@ else
   echo "Edit .env now, then press Enter to continue (or Ctrl-C to abort)."
   read -r
 fi
+
+# The ban-list and messaging-thread hash keys are secret FILES, never .env entries
+# (the app refuses them in the environment). Each is created once and never
+# overwritten: they are in no backup, so regenerating one silently drops every ban
+# (ban-hash-key) or splits every returning contact into a new thread
+# (messaging-hash-key). Keep an offline copy of both.
+source ../../scripts/lib/server-hash-keys.sh
+for key in "${HASH_KEY_NAMES[@]}"; do
+  if [ -s "secrets/$key" ]; then
+    echo "secrets/$key already exists — keeping it."
+  else
+    ensure_hash_key_file "secrets/$key" 0444
+    echo "Generated secrets/$key."
+    echo "  It is deliberately NOT in .env and NOT in config backups. Keep an offline"
+    echo "  copy: a rebuilt host without it loses what it keys, with no recovery."
+    echo ""
+  fi
+done
 
 # Validate required fields
 source .env 2>/dev/null || true

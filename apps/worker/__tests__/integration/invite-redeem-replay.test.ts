@@ -172,11 +172,16 @@ function redeem(app: App, body: Record<string, unknown>) {
 
 async function seedInvite(): Promise<string> {
   const code = crypto.randomUUID()
+  // An invite names the hub it admits into: with no hub to grant, redemption is
+  // refused rather than falling back to a global role (#2153). Replay protection
+  // is about the credential, so the invite is a well-formed one.
+  await testSql`INSERT INTO hubs (id) VALUES ('hub-replay') ON CONFLICT DO NOTHING`
   await db.insert(schema.inviteCodes).values({
     code,
     name: 'Invitee',
     phone: '',
     roleIds: ['role-volunteer'],
+    hubId: 'hub-replay',
     createdBy: 'admin',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   })
@@ -208,7 +213,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE users, invite_codes, auth_nonces`
+  await testSql`TRUNCATE TABLE users, invite_codes, auth_nonces, hubs CASCADE`
 })
 
 describe('POST /api/invites/redeem — replay protection (#1367)', () => {

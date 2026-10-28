@@ -16,9 +16,10 @@
 #
 # Deliberately its OWN task file rather than a clause inside
 # tasks/guard-demo-mode.yml, where this assertion used to live alongside the
-# demo_mode checks: demo mode is being removed, and this control must outlive
-# it. Nothing here references demo_mode, so deleting that file takes nothing
-# from this one.
+# demo_mode checks: demo mode was being removed, and this control had to outlive
+# it. #1604 removed the mode and deleted that file; nothing here referenced
+# demo_mode, so this guard was untouched by it — which is what the split was
+# for.
 #
 # This is the FIRST of four independent layers, and the only one that acts
 # before a single file reaches the target host:

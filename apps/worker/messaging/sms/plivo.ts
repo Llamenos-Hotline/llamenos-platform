@@ -9,7 +9,6 @@ import type {
   ChannelStatus,
 } from '../adapter'
 import type { MessagingChannelType } from '@shared/types'
-import { hashPhone } from '../../lib/crypto'
 
 /**
  * PlivoSMSAdapter -- Plivo SMS implementation of MessagingAdapter.
@@ -22,14 +21,12 @@ export class PlivoSMSAdapter implements MessagingAdapter {
   private authId: string
   private authToken: string
   private phoneNumber: string
-  private hmacSecret: string
   private webhookBaseUrl: string
 
-  constructor(authId: string, authToken: string, phoneNumber: string, hmacSecret: string, webhookBaseUrl = '') {
+  constructor(authId: string, authToken: string, phoneNumber: string, webhookBaseUrl = '') {
     this.authId = authId
     this.authToken = authToken
     this.phoneNumber = phoneNumber
-    this.hmacSecret = hmacSecret
     this.webhookBaseUrl = webhookBaseUrl
   }
 
@@ -53,7 +50,6 @@ export class PlivoSMSAdapter implements MessagingAdapter {
       channelType: this.channelType,
       externalId: messageUUID,
       senderIdentifier: from,
-      senderIdentifierHash: hashPhone(from, this.hmacSecret),
       body: text,
       mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
       timestamp: new Date().toISOString(),

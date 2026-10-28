@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import reportsRouter from '../../routes/reports'
+import { ServiceError } from '../../services/settings'
 
 // ---------------------------------------------------------------------------
 // Schema-valid test data helpers
@@ -64,6 +65,9 @@ function makeApp(opts: {
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
     list: vi.fn().mockResolvedValue({ conversations, total: conversations.length }),
+    // The hub guard (#2011) is its own fetch; the handler's getById stays the
+    // mock these tests override per case.
+    getByIdForHub: vi.fn().mockResolvedValue(conversation),
     getById: vi.fn().mockResolvedValue(conversation),
     create: vi.fn().mockResolvedValue(conversation),
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
@@ -89,16 +93,26 @@ function makeApp(opts: {
   }
 
   const app = new Hono<AppEnv>()
+  // Same mapping as the app's global handler: a ServiceError carries its own status.
+  app.onError((err, c) => (
+    err instanceof ServiceError
+      ? c.json({ error: err.message }, err.status as 400 | 403 | 404 | 422)
+      : c.json({ error: 'Internal server error' }, 500)
+  ))
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('hubId', hubId)
+    // No ADMIN_DECRYPTION_PUBKEY: the admin recipients come from the identity mock below.
+    Object.defineProperty(c, 'env', { value: {}, configurable: true })
     c.set('requestId', 'req-test')
     c.set('services', {
       audit: mockAudit,
       conversations: mockConversations,
       cases: mockCases,
       settings: mockSettings,
+      // HEX64 — the admin key `testEnvelope` is addressed to (#2113).
+      identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([HEX64]) },
     } as unknown as AppEnv['Variables']['services'])
     await next()
   })
@@ -459,6 +473,21 @@ describe('POST /reports', () => {
       body: JSON.stringify({ title: 'Test', encryptedContent: 'enc', readerEnvelopes: [testEnvelope] }),
     })
     expect(res.status).toBe(403)
+  })
+
+  it('refuses (422) a report no admin can open and creates no conversation', async () => {
+    const { app, mockConversations } = makeApp({ permissions: ['reports:create'] })
+    // A non-empty set that no admin holds a key for: shape-valid, so only the
+    // server's admin check stands between it and storage. (An EMPTY set never
+    // gets that far — the schema's own min(1) answers 400.)
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Test', encryptedContent: 'enc', readerEnvelopes: [{ ...testEnvelope, pubkey: 'c'.repeat(64) }] }),
+    })
+    expect(res.status).toBe(422)
+    expect(mockConversations.create).not.toHaveBeenCalled()
+    expect(mockConversations.addMessage).not.toHaveBeenCalled()
   })
 
   it('sets contactIdentifierHash to reporter pubkey', async () => {

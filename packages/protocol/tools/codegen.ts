@@ -169,6 +169,7 @@ function defNameFromPath(propertyName: string, isArrayItem: boolean): string {
 const REFERENCED_BY_NAME = new Set([
   // #2046 — assignee re-wrap: `messages` / `envelopes` items
   'AssigneeEnvelopeGap',
+  'AssigneeRecipient',
   'AssigneeEnvelopeEntry',
 ])
 

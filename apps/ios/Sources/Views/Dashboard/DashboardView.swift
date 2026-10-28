@@ -9,6 +9,8 @@ struct DashboardView: View {
     @Environment(HubContext.self) private var hubContext
     @State private var viewModelBox = ViewModelBox<DashboardViewModel>()
     @State private var quickActionDestination: QuickActionDestination?
+    /// The call a note is being written for, while the note editor is open.
+    @State private var noteCall: CallReference?
 
     var body: some View {
         let vm = resolvedViewModel
@@ -28,17 +30,31 @@ struct DashboardView: View {
                             .clipped()
                     }
 
-                    // 0. Active call panel (shown above everything when on a call)
+                    // 0. Calls that concern this volunteer (shown above everything): rings on
+                    //    any member hub, the call they answered, and their call just ended.
+                    ForEach(vm.ringingCalls) { call in
+                        IncomingCallView(
+                            call: call,
+                            answerOnPhone: vm.answerOnPhoneCallIds.contains(call.id),
+                            isAnswering: vm.answeringCallIds.contains(call.id),
+                            onAnswer: { await vm.answerCall(call) }
+                        )
+                    }
+
                     if let call = vm.currentCall {
                         ActiveCallView(
                             call: call,
                             onHangup: { await vm.hangupCall() },
                             onReportSpam: { await vm.reportSpam() },
                             onBanAndHangup: { reason in await vm.banAndHangup(reason: reason) },
-                            onQuickNote: {
-                                // Navigate to note creation — could be handled via
-                                // a sheet or navigation destination in the future
-                            }
+                            onQuickNote: { noteCall = call.reference }
+                        )
+                    }
+
+                    if let ended = vm.endedCall {
+                        EndedCallView(
+                            onAddNote: { noteCall = ended },
+                            onDismiss: { vm.dismissEndedCall() }
                         )
                     }
 
@@ -108,12 +124,23 @@ struct DashboardView: View {
                     CallHistoryView()
                 }
             }
-            .task(id: hubContext.activeHubId) {
+            // Keyed on the hubs the dashboard reads, not only the active one: shift state and
+            // calls come from every member hub, and the member list arrives after launch.
+            .task(id: vm.callHubIds) {
                 await vm.loadDashboard()
                 vm.startEventListener()
             }
             .onDisappear {
                 vm.stopEventListener()
+            }
+            // The ended call's id is held in memory only: locking or logging out forgets it.
+            .onChange(of: appState.authStatus) { _, status in
+                if status != .unlocked { vm.clearCalls() }
+            }
+            .sheet(item: $noteCall) { call in
+                NoteCreateSheet(initialCall: call, heldCalls: vm.heldCalls) { saved in
+                    vm.noteSaved(for: saved)
+                }
             }
         }
     }
@@ -127,16 +154,21 @@ struct DashboardView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
-                            StatusDot(status: vm.isOnShift ? .active : .inactive, animated: vm.isOnShift)
-                            Text(vm.isOnShift
-                                ? NSLocalizedString("dashboard_on_shift", comment: "On Shift")
-                                : NSLocalizedString("dashboard_off_shift", comment: "Off Shift"))
+                            StatusDot(status: vm.readiness?.isRingTarget == true ? .active : .inactive, animated: vm.readiness?.isRingTarget == true)
+                            Text(vm.readiness?.title ?? NSLocalizedString("dashboard_off_shift", comment: "Off Shift"))
                                 .font(.brand(.headline))
                                 .foregroundStyle(Color.brandForeground)
                         }
                         .accessibilityIdentifier("shift-status-text")
 
-                        if vm.isOnShift {
+                        if let explanation = vm.readiness?.explanation {
+                            Text(explanation)
+                                .font(.brand(.footnote))
+                                .foregroundStyle(Color.brandMutedForeground)
+                                .accessibilityIdentifier("shift-readiness-explanation")
+                        }
+
+                        if vm.readiness?.isRingTarget == true {
                             Text(vm.elapsedTimeDisplay)
                                 .font(.brandMono(.title2))
                                 .foregroundStyle(Color.statusActive)
@@ -147,7 +179,7 @@ struct DashboardView: View {
 
                     Spacer()
 
-                    shiftStatusBadge(vm.shiftStatus)
+                    shiftStatusBadge(vm)
                 }
             }
             .padding(16)
@@ -217,23 +249,7 @@ struct DashboardView: View {
                 )
             }
 
-            GridRow {
-                quickActionCard(
-                    title: NSLocalizedString("dashboard_call_history", comment: "Call History"),
-                    icon: "clock.arrow.circlepath",
-                    destination: .callHistory,
-                    accessibilityID: "dashboard-call-history-action"
-                )
-
-                quickActionCard(
-                    title: NSLocalizedString("dashboard_help", comment: "Help"),
-                    icon: "questionmark.circle.fill",
-                    destination: .help,
-                    accessibilityID: "dashboard-help-action"
-                )
-            }
-
-            // Two per row, whichever of the restricted screens this user may open.
+            // Two per row, whichever of the remaining screens this user may open.
             let restricted = restrictedQuickActions
             ForEach(Array(stride(from: 0, to: restricted.count, by: 2)), id: \.self) { start in
                 GridRow {
@@ -259,12 +275,19 @@ struct DashboardView: View {
     }
 
     /// Quick actions for screens only some roles can use, each shown only with the
-    /// permission its screen's API requires (apps/worker/routes: contacts-v2 →
-    /// contacts:view, blasts → blasts:read, records triage → reports:triage).
-    /// They were all gated on settings:read, which every volunteer holds, so
-    /// volunteers were offered three screens the server then refused.
+    /// permission its screen's API requires (apps/worker/routes: calls history →
+    /// calls:read-history, contacts-v2 → contacts:view, blasts → blasts:read, records
+    /// triage → reports:triage). They were all gated on settings:read, which every
+    /// volunteer holds, so volunteers were offered screens the server then refused with
+    /// a 403. Help has no permission and is always shown.
     private var restrictedQuickActions: [QuickAction] {
-        [
+        let actions: [(permission: String?, action: QuickAction)] = [
+            ("calls:read-history", QuickAction(
+                title: NSLocalizedString("dashboard_call_history", comment: "Call History"),
+                icon: "clock.arrow.circlepath",
+                destination: .callHistory,
+                accessibilityID: "dashboard-call-history-action"
+            )),
             ("contacts:view", QuickAction(
                 title: NSLocalizedString("dashboard_contacts", comment: "Contacts"),
                 icon: "person.crop.circle.badge.clock",
@@ -283,9 +306,16 @@ struct DashboardView: View {
                 destination: .triage,
                 accessibilityID: "dashboard-triage-action"
             )),
+            (nil, QuickAction(
+                title: NSLocalizedString("dashboard_help", comment: "Help"),
+                icon: "questionmark.circle.fill",
+                destination: .help,
+                accessibilityID: "dashboard-help-action"
+            )),
         ]
-        .filter { appState.hasPermission($0.0) }
-        .map { $0.1 }
+        return actions
+            .filter { $0.permission.map(appState.hasPermission) ?? true }
+            .map { $0.action }
     }
 
     private func quickActionCard(title: String, icon: String, destination: QuickActionDestination, accessibilityID: String) -> some View {
@@ -438,36 +468,38 @@ struct DashboardView: View {
     // MARK: - Shift Status Badge
 
     @ViewBuilder
-    private func shiftStatusBadge(_ status: ShiftStatus) -> some View {
-        switch status {
-        case .onShift:
-            Text(NSLocalizedString("badge_on_shift", comment: "On Shift"))
-                .font(.brand(.caption))
-                .fontWeight(.semibold)
-                .foregroundStyle(.green)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color.green.opacity(0.15)))
-        case .onCall:
-            Text(NSLocalizedString("badge_on_call", comment: "On Call"))
-                .font(.brand(.caption))
-                .fontWeight(.semibold)
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color.blue.opacity(0.15)))
-        case .offShift:
-            Text(NSLocalizedString("badge_off_shift", comment: "Off Shift"))
-                .font(.brand(.caption))
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color(.systemGray5)))
-        case .loading:
+    private func shiftStatusBadge(_ vm: DashboardViewModel) -> some View {
+        if let readiness = vm.readiness {
+            if readiness.isRingTarget, vm.currentCall != nil {
+                Text(NSLocalizedString("badge_on_call", comment: "On Call"))
+                    .font(.brand(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.blue.opacity(0.15)))
+            } else if readiness.isRingTarget {
+                Text(NSLocalizedString("badge_on_shift", comment: "On Shift"))
+                    .font(.brand(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.green.opacity(0.15)))
+            } else {
+                // Not a ring target: say so, whatever else is true (scheduled, clocked in).
+                Text(NSLocalizedString("badge_off_shift", comment: "Off Shift"))
+                    .font(.brand(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color(.systemGray5)))
+            }
+        } else if vm.isLoading {
             ProgressView()
                 .scaleEffect(0.7)
-        case .error:
+        } else {
             Image(systemName: "exclamationmark.circle.fill")
                 .foregroundStyle(.red)
         }
@@ -483,7 +515,8 @@ struct DashboardView: View {
             apiService: appState.apiService,
             cryptoService: appState.cryptoService,
             webSocketService: appState.webSocketService,
-            hubContext: hubContext
+            hubContext: hubContext,
+            shiftClockService: appState.shiftClockService
         )
         viewModelBox.value = vm
         return vm

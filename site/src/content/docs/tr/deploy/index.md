@@ -35,14 +35,6 @@ Bu, tüm gerekli gizli anahtarları oluşturur, uygulamayı derler ve hizmetleri
 4. **Sağlayıcıları yapılandırın** — her etkin kanal için kimlik bilgilerini girin
 5. **Gözden geçirin ve bitirin**
 
-### Demo modunu deneyin
-
-Önceden doldurulmuş örnek verilerle keşfetmek için:
-
-```bash
-./scripts/docker-setup.sh --demo
-```
-
 ## Üretim dağıtımı
 
 Gerçek bir alan adı ve otomatik TLS ile bir sunucu için:

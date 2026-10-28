@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # အားလုံးကိုဖြန့်ကျက်ရန် (အက်ပ် + မားကတ်တင်းဆိုဒ်)
-bun run deploy:demo     # အက်ပ် Worker ကိုသာဖြန့်ကျက်ရန်
 bun run deploy:site     # မားကတ်တင်းဆိုဒ်ကိုသာဖြန့်ကျက်ရန်
 ```
 

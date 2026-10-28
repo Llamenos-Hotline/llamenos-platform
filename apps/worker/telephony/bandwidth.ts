@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -68,6 +69,8 @@ function hubXmlParam(hubId?: string): string {
 function hubQP(hubId?: string): string {
   return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
 }
+
+const logger = createLogger('telephony.bandwidth')
 
 /**
  * BandwidthAdapter — Bandwidth Voice API v2 implementation.
@@ -142,6 +145,10 @@ export class BandwidthAdapter implements TelephonyAdapter {
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingBxml = speakOrPlay('greeting', lang, params.audioUrls, greetingText)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    const noticeBxml = params.callRecordingEnabled
+      ? speakOrPlay('recordingNotice', lang, params.audioUrls)
+      : ''
 
     if (params.rateLimited) {
       const rateLimitBxml = speakOrPlay('rateLimited', lang, params.audioUrls)
@@ -158,6 +165,7 @@ export class BandwidthAdapter implements TelephonyAdapter {
       return this.bxml(`
         <Gather maxDigits="4" gatherUrl="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" firstDigitTimeout="10" repeatCount="1">
           ${greetingBxml}
+          ${noticeBxml}
           ${captchaBxml}
           <SpeakSentence locale="${locale}" gender="${gender}">${escapeXml(digits.split('').join(', '))}.</SpeakSentence>
         </Gather>
@@ -169,6 +177,7 @@ export class BandwidthAdapter implements TelephonyAdapter {
     const holdBxml = speakOrPlay('pleaseHold', lang, params.audioUrls)
     return this.bxml(`
       ${greetingBxml}
+      ${noticeBxml}
       ${holdBxml}
       <Redirect redirectUrl="/api/telephony/wait-music?lang=${lang}&amp;callSid=${params.callSid}${hp}"/>
     `)
@@ -193,9 +202,14 @@ export class BandwidthAdapter implements TelephonyAdapter {
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
+    // #1505: emit no <StartRecording> at all unless this hub opted in, so
+    // Bandwidth never writes the bridged audio to disk.
+    const startRecording = params.recordCall
+      ? `<StartRecording recordingAvailableUrl="${escapeXml(params.callbackUrl)}/api/telephony/call-recording?parentCallSid=${escapeXml(params.parentCallSid)}"/>
+      `
+      : ''
     return this.bxml(`
-      <StartRecording recordingAvailableUrl="${escapeXml(params.callbackUrl)}/api/telephony/call-recording?parentCallSid=${escapeXml(params.parentCallSid)}"/>
-      <Bridge targetCall="${escapeXml(params.parentCallSid)}"/>
+      ${startRecording}<Bridge targetCall="${escapeXml(params.parentCallSid)}"/>
     `)
   }
 
@@ -260,7 +274,6 @@ export class BandwidthAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callIds: string[] = []
     const hubParam = hubQP(params.hubId)
 
     const calls = await Promise.allSettled(
@@ -291,13 +304,9 @@ export class BandwidthAdapter implements TelephonyAdapter {
       }),
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callIds.push(result.value)
-      }
-    }
-
-    return callIds
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Bandwidth', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

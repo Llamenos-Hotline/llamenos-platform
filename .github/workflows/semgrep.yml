@@ -19,13 +19,18 @@ on:
   schedule:
     - cron: '16 16 * * 3'
 
+concurrency:
+  # A superseded push cancels its own PR run (#2094); every other event gets a per-SHA group that nothing can cancel.
+  group: ${{ github.event_name == 'pull_request' && format('semgrep-pr-{0}', github.ref) || format('semgrep-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   semgrep:
-    # Release-PR exemption (#1817) — the SAME predicate codeql.yml,
-    # desktop-e2e.yml and security-audit.yml carry; keep them byte-identical.
+    # Release-PR exemption (#1817) — the SAME predicate codeql.yml
+    # and security-audit.yml carry; keep them byte-identical.
     # The knope release PR (head branch `release`) diffs version strings and
     # a changelog — no code — so a full Semgrep scan per regeneration (6 on
     # 2026-10-11) measures nothing. The scan still runs on the push to main
@@ -40,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout project source
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Scan code using project's configuration on https://semgrep.dev/manage
       - uses: returntocorp/semgrep-action@fcd5ab7459e8d91cb1777481980d1b18b4fc6735

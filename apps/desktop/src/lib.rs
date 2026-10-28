@@ -180,8 +180,8 @@ pub fn run() {
             // Auth (Ed25519)
             crypto::create_auth_token_from_state,
             crypto::create_nonceless_auth_token_from_state,
-            // Ed25519 signing/verification
-            crypto::ed25519_sign_from_state,
+            // Ed25519 signing (purpose-bound only) / verification
+            crypto::sign_ws_challenge_from_state,
             crypto::ed25519_verify,
             // HPKE envelope encryption
             crypto::hpke_seal,
@@ -214,6 +214,7 @@ pub fn run() {
             crypto::shamir_verify,
             // H16: Recovery group key isolation (combine+decrypt in Rust only)
             crypto::recovery_group_create,
+            crypto::recovery_share_contribute_from_state,
             crypto::recovery_group_reconstruct_from_shares,
             crypto::recovery_group_decrypt,
             // C06: Missing IPC commands
@@ -226,7 +227,6 @@ pub fn run() {
             // H17: Stronghold vault file wipe
             crypto::wipe_keys,
             // Device provisioning (seed NEVER enters the webview)
-            crypto::provision_encrypt_for_device,
             crypto::provision_create_session,
             crypto::provision_compute_sas,
             crypto::provision_decrypt_and_import,

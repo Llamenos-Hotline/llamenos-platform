@@ -81,6 +81,10 @@ export ARI_PASSWORD="${ARI_PASSWORD:-ari-$(openssl rand -hex 8)}"
 export BRIDGE_SECRET="${BRIDGE_SECRET:-$(openssl rand -hex 32)}"
 export HMAC_SECRET="$(openssl rand -hex 32)"
 export SERVER_SECRET="$(openssl rand -hex 32)"
+export SERVER_KEK="$(openssl rand -hex 32)"
+# BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files the app mounts, never env vars.
+source "$ROOT/scripts/lib/server-hash-keys.sh"
+ensure_hash_key_files "$ROOT/deploy/docker/secrets" 0444
 export STORAGE_ACCESS_KEY="${STORAGE_ACCESS_KEY:-rustfsadmin}"
 export STORAGE_SECRET_KEY="${STORAGE_SECRET_KEY:-rustfsadmin}"
 export ADMIN_PUBKEY="$(bun -e "import { seedHexToPubkey, ADMIN_SEED } from './tests/api-helpers'; console.log(seedHexToPubkey(ADMIN_SEED))")"

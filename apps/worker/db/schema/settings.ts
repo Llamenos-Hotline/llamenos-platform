@@ -311,12 +311,18 @@ export const reportTypeDefinitions = pgTable('report_type_definitions', {
 })
 
 // ---------------------------------------------------------------------------
-// ivr_audio (composite PK: prompt_type + language)
+// ivr_audio (composite PK: hub_id + prompt_type + language)
+//
+// hub_id '' is the platform default recording; any other value is that hub's
+// own. A call in hub H hears H's recording, then the platform default, then
+// generated speech. '' rather than NULL because a primary key column cannot be
+// NULL (the same sentinel entity_type_definitions.hub_id uses).
 // ---------------------------------------------------------------------------
 
 export const ivrAudio = pgTable(
   'ivr_audio',
   {
+    hubId: text('hub_id').notNull().default(''),
     promptType: text('prompt_type').notNull(),
     language: text('language').notNull(),
     audio: text('audio').notNull(),
@@ -325,7 +331,7 @@ export const ivrAudio = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.promptType, t.language] })],
+  (t) => [primaryKey({ columns: [t.hubId, t.promptType, t.language] })],
 )
 
 // ---------------------------------------------------------------------------

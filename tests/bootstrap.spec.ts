@@ -246,21 +246,12 @@ async function createRoleAccount(
   await phoneInput.blur()
   await adminPage.waitForTimeout(500)
 
-  // Select role from dropdown if not default (role-volunteer)
-  if (opts.roleId !== 'role-volunteer') {
-    const roleTrigger = adminPage.locator('#invite-role')
-    if (await roleTrigger.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await roleTrigger.click()
-      await adminPage.waitForTimeout(300)
-      // Role names are human-readable (e.g., "Hub Admin", "Reviewer", "Reporter")
-      const roleName = opts.roleId
-        .replace('role-', '')
-        .split('-')
-        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ')
-      await adminPage.locator(`[role="option"]`).filter({ hasText: roleName }).click()
-    }
-  }
+  // Pick the role explicitly: the form preselects none, and an invite that names
+  // no role grants whatever the hub template defaults to — nothing, today (#2233).
+  const roleTrigger = adminPage.locator('#invite-role')
+  await roleTrigger.waitFor({ state: 'visible', timeout: 5000 })
+  await roleTrigger.click()
+  await adminPage.locator(`[data-testid="user-form-role-option"][data-role-id="${opts.roleId}"]`).click()
 
   // Create invite
   await adminPage.getByTestId('create-invite-btn').click()

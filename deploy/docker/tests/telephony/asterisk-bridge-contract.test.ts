@@ -17,9 +17,9 @@ import '@worker/__tests__/mocks/llamenos-crypto-ffi'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
-import type { TelephonyResponse } from '@worker/telephony/adapter'
+import { AllDialsFailedError, type TelephonyResponse } from '@worker/telephony/adapter'
 import { fakeSpeech, spoken } from '@worker/__tests__/helpers/fake-speech'
-import { CommandHandler } from '../../../../sip-bridge/src/command-handler'
+import { CommandHandler, ringResponse } from '../../../../sip-bridge/src/command-handler'
 import type { BridgeClient, BridgeEvent } from '../../../../sip-bridge/src/bridge-client'
 import type { WebhookSender } from '../../../../sip-bridge/src/webhook-sender'
 import { CALLBACK_PATHS, WORKER_PATHS, type BridgeCommand, type BridgeConfig, type WebhookPayload } from '../../../../sip-bridge/src/types'
@@ -36,7 +36,7 @@ const adapter = new AsteriskAdapter('http://asterisk:8088', 'llamenos', 'pw', '+
 
 // ---- a PBX that just records what the bridge asked of it ----
 
-function fakePbx() {
+function fakePbx(overrides: Partial<BridgeClient> = {}) {
   const calls: Array<{ method: string; args: unknown[] }> = []
   let seq = 0
   const record = (method: string, result?: () => unknown) =>
@@ -46,6 +46,7 @@ function fakePbx() {
     }
   const client = new Proxy({} as BridgeClient, {
     get: (_, method: string) => {
+      if (method in overrides) return overrides[method as keyof BridgeClient]
       if (method === 'originate') return record(method, () => ({ id: `leg-${++seq}` }))
       if (method === 'playMedia') return record(method, () => `pb-${++seq}`)
       if (method === 'bridge') return record(method, () => 'bridge-1')
@@ -81,6 +82,11 @@ interface WorkerScript {
   enabledLanguages: string[]
   captchaDigits?: string
   queueTimeoutSeconds?: number
+  /**
+   * #1505 — the hub's `callSettings.recordCalls`. Defaults to off, like a real
+   * hub that never touched the setting.
+   */
+  recordCalls?: boolean
 }
 
 function fakeWorker(script: WorkerScript) {
@@ -109,6 +115,7 @@ function fakeWorker(script: WorkerScript) {
         rateLimited: false,
         callerLanguage,
         hotlineName: 'Llámenos',
+        callRecordingEnabled: script.recordCalls === true,
         hubId: q.hub,
         speechUrl: fakeSpeech,
       })
@@ -132,7 +139,7 @@ function fakeWorker(script: WorkerScript) {
     [WORKER_PATHS.userAnswer]: async (_req, q) => {
       note('user-answer', q.callToken)
       // The worker resolves the token to the parent call it was minted for.
-      return adapter.handleCallAnswered({ parentCallSid: CALLER, callbackUrl: 'http://worker:3000', userPubkey: 'pk', hubId: HUB })
+      return adapter.handleCallAnswered({ parentCallSid: CALLER, callbackUrl: 'http://worker:3000', userPubkey: 'pk', hubId: HUB, recordCall: script.recordCalls === true })
     },
     [WORKER_PATHS.callStatus]: async (req, q) => {
       note('call-status', { ...(await adapter.parseCallStatusWebhook(req)), callToken: q.callToken })
@@ -221,7 +228,7 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
   })
 
   it('an answered call: menu, captcha, queue, ring, answer, bridge, hang up, recording', async () => {
-    const worker = fakeWorker({ enabledLanguages: ['en', 'es'], captchaDigits: '4837' })
+    const worker = fakeWorker({ enabledLanguages: ['en', 'es'], captchaDigits: '4837', recordCalls: true })
     handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
 
     await handler.handleEvent(incoming)
@@ -259,6 +266,7 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
     expect(worker.parsed['user-answer']).toEqual(['token-a'])
     expect(pbx.of('bridge')).toEqual([[CALLER, legs[0], { type: 'mixing', record: false }]])
     expect(pbx.of('hangup')).toEqual([[legs[1]]])
+    // This hub opted in (recordCalls: true), so the bridge is recorded.
     expect(pbx.of('recordBridge')).toHaveLength(1)
 
     // Volunteer A hangs up: the worker reads a completed leg for A's token…
@@ -270,6 +278,57 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
     expect(worker.parsed['call-recording']).toEqual([
       { status: 'completed', recordingSid: `call-${CALLER}`, callSid: CALLER, parentCallSid: CALLER },
     ])
+  })
+
+  // #1505 — the same path, end to end, for a hub that has NOT opted in. The
+  // bridge is the component that would write the file, so this asserts against
+  // the real CommandHandler rather than the adapter's markup alone.
+  it('a hub that does not record calls: the caller is bridged, but no recording is ever started', async () => {
+    const worker = fakeWorker({ enabledLanguages: ['en'], recordCalls: false })
+    handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+
+    await handler.handleEvent(incoming)
+    await handler.handleEvent(dtmf('1'))
+
+    const ringBody = await captureRingRequest()
+    const legs = await handler.ringVolunteers(ringBody)
+    await handler.handleEvent({ type: 'channel_create', channelId: legs[0], callerNumber: '', calledNumber: 's', args: ['dialed', CALLER, 'token-a'], timestamp: ts })
+
+    // The call still connects: the fix must not break answering.
+    expect(pbx.of('bridge')).toEqual([[CALLER, legs[0], { type: 'mixing', record: false }]])
+    expect(worker.parsed['user-answer']).toEqual(['token-a'])
+
+    // Nothing is recorded anywhere: not the bridge, not a channel.
+    expect(pbx.of('recordBridge')).toEqual([])
+    expect(pbx.of('recordChannel')).toEqual([])
+
+    // And the volunteer hanging up still ends the call cleanly.
+    await handler.handleEvent(hangup(legs[0]))
+    expect(worker.parsed['call-status']).toEqual([{ status: 'completed', callToken: 'token-a' }])
+  })
+
+  // #1505 — voicemail is caller-initiated and must keep working with recording
+  // off: a caller who chose to leave a message still gets recorded.
+  it('voicemail still records when call recording is off', async () => {
+    // Single-language hotline, recording OFF: straight to the queue, then timeout.
+    const worker = fakeWorker({ enabledLanguages: ['es'], recordCalls: false, queueTimeoutSeconds: 30 })
+    handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+
+    await handler.handleEvent(incoming)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(worker.parsed['queue-exit']).toEqual(['leave'])
+
+    // The caller's own message IS recorded: voicemail is caller-initiated and is
+    // deliberately NOT gated on callSettings.recordCalls.
+    expect(pbx.of('recordChannel')).toEqual([
+      [CALLER, { name: `voicemail-${CALLER}`, format: 'wav', maxDurationSeconds: 120, beep: true, terminateOn: '#' }],
+    ])
+    // ...while the call itself was never recorded.
+    expect(pbx.of('recordBridge')).toEqual([])
+
+    // And the voicemail still completes end to end.
+    await handler.handleEvent({ type: 'recording_complete', channelId: CALLER, recordingName: `voicemail-${CALLER}`, timestamp: ts })
+    expect(worker.parsed['voicemail-recording']).toEqual([{ status: 'completed', recordingSid: `voicemail-${CALLER}`, callSid: CALLER }])
   })
 
   it('an unanswered leg is read by the worker with the status its hangup cause means', async () => {
@@ -285,6 +344,68 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
       { status: 'busy', callToken: 'token-a' },
       { status: 'no-answer', callToken: 'token-b' },
     ])
+  })
+
+  // #1136: the adapter and the bridge must agree on what a failed /ring looks like. These
+  // run the adapter's real request through the bridge's real /ring answer (ringResponse)
+  // rather than a hand-written body, so the two cannot drift apart.
+  describe('/ring failure protocol', () => {
+    const ringParams = {
+      callSid: CALLER,
+      callerNumber: '+15557770001',
+      volunteers: [
+        { phone: '+15550200', callToken: 'token-a' },
+        { phone: '+15550201', callToken: 'token-b' },
+      ],
+      callbackUrl: 'http://worker:3000',
+      hubId: HUB,
+    }
+
+    function bridgeAnswersRing(ringing: CommandHandler) {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) =>
+        ringResponse(ringing, JSON.parse(String(init?.body))),
+      )
+    }
+
+    it('a total trunk outage reaches the worker as AllDialsFailedError, not a generic error', async () => {
+      pbx = fakePbx({ originate: async () => { throw new Error('trunk unreachable') } })
+      const worker = fakeWorker({ enabledLanguages: ['en'] })
+      handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+      await handler.handleEvent(incoming)
+      bridgeAnswersRing(handler)
+
+      const err = await adapter.ringVolunteers(ringParams).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(AllDialsFailedError)
+      expect((err as AllDialsFailedError).attempted).toBe(2)
+    })
+
+    it('a caller who hung up before ringing is not an outage', async () => {
+      const worker = fakeWorker({ enabledLanguages: ['en'] })
+      handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+      await handler.handleEvent(incoming)
+      await handler.handleEvent(hangup(CALLER))
+      bridgeAnswersRing(handler)
+
+      await expect(adapter.ringVolunteers(ringParams)).resolves.toEqual([])
+      expect(pbx.of('originate')).toEqual([])
+    })
+
+    it('a partial failure returns the legs that were placed', async () => {
+      let attempts = 0
+      pbx = fakePbx({
+        originate: (async () => {
+          if (++attempts === 1) throw new Error('trunk unreachable')
+          return { id: 'leg-ok' }
+        }) as BridgeClient['originate'],
+      })
+      const worker = fakeWorker({ enabledLanguages: ['en'] })
+      handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+      await handler.handleEvent(incoming)
+      bridgeAnswersRing(handler)
+
+      await expect(adapter.ringVolunteers(ringParams)).resolves.toEqual(['leg-ok'])
+    })
   })
 
   it('nobody answers: the queue times out to voicemail, which is reported and closed', async () => {
@@ -332,7 +453,10 @@ async function captureRingRequest() {
   const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     expect(String(input)).toBe(`${BRIDGE_URL}/ring`)
     body = JSON.parse(String(init?.body))
-    return new Response(JSON.stringify({ ok: true, channelIds: [] }), { headers: { 'Content-Type': 'application/json' } })
+    // A healthy bridge returns one channel per leg it placed. An empty list for a
+    // non-empty ring is a total outage, which the adapter rejects (#1136).
+    const placed = (body as { volunteers: unknown[] }).volunteers.map((_, i) => `captured-leg-${i}`)
+    return new Response(JSON.stringify({ ok: true, channelIds: placed }), { headers: { 'Content-Type': 'application/json' } })
   })
   await adapter.ringVolunteers({
     callSid: CALLER,

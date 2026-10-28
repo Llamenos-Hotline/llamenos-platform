@@ -361,9 +361,16 @@ class ApiService @Inject constructor(
      * Returns the path prefixed with /hubs/{activeHubId}.
      * Falls back to the bare path if no hub is currently active.
      */
-    fun hp(path: String): String {
-        require(path.startsWith("/")) { "hp() path must start with '/': $path" }
-        val hubId = activeHubState.activeHubId.value ?: return path
+    fun hp(path: String): String = hubPath(activeHubState.activeHubId.value, path)
+
+    /**
+     * Returns the path prefixed with /hubs/{hubId} — for acting on a call or
+     * conversation that belongs to a specific hub, which need not be the one being
+     * browsed. Falls back to the bare path when [hubId] is null.
+     */
+    fun hubPath(hubId: String?, path: String): String {
+        require(path.startsWith("/")) { "hubPath() path must start with '/': $path" }
+        if (hubId == null) return path
         return if (path.startsWith("/api/")) {
             "/api/hubs/$hubId${path.removePrefix("/api")}"
         } else {

@@ -1,12 +1,8 @@
-import { useState, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import {
-  searchRawContacts,
-  mergeContacts,
-  type DirectoryContact,
-  type RawContact,
-} from '@/lib/api'
+import { mergeContacts, type DirectoryContact } from '@/lib/api'
+import { loadDecryptedContacts, matchesContactQuery } from '@/lib/contact-directory'
 import { encryptMessage } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import {
@@ -37,24 +33,31 @@ export function ContactMergeDialog({
   const { t } = useTranslation()
   const { toast } = useToast()
 
+  // The query is matched on this device against the contacts it has decrypted. It is
+  // never sent to the server: it is a caller's name or number (#2224).
   const [query, setQuery] = useState('')
-  const [candidates, setCandidates] = useState<RawContact[]>([])
-  const [selected, setSelected] = useState<RawContact | null>(null)
-  const [searching, setSearching] = useState(false)
+  const [directory, setDirectory] = useState<DirectoryContact[]>([])
+  const [selected, setSelected] = useState<DirectoryContact | null>(null)
+  const [loading, setLoading] = useState(false)
   const [merging, setMerging] = useState(false)
 
-  const search = useCallback(async () => {
-    if (!query.trim()) return
-    setSearching(true)
-    try {
-      const results = await searchRawContacts(query)
-      setCandidates(results.contacts.filter((c) => c.id !== primaryContact.id))
-    } catch {
-      toast(t('common.error'), 'error')
-    } finally {
-      setSearching(false)
-    }
-  }, [query, primaryContact.id, toast, t])
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoading(true)
+    loadDecryptedContacts()
+      .then((res) => { if (!cancelled) setDirectory(res.contacts) })
+      .catch(() => { if (!cancelled) toast(t('common.error'), 'error') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [open, toast, t])
+
+  const candidates = useMemo(
+    () => query.trim()
+      ? directory.filter((c) => c.id !== primaryContact.id && matchesContactQuery(c, query))
+      : [],
+    [directory, primaryContact.id, query],
+  )
 
   const handleMerge = async () => {
     if (!selected) return
@@ -119,20 +122,18 @@ export function ContactMergeDialog({
             </div>
           </div>
 
-          <div className="flex gap-2">
+          <div className="relative">
+            {loading ? (
+              <Loader2 className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+            ) : (
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            )}
             <Input
+              className="pl-9"
               placeholder={t('cms.mergeSearchPlaceholder')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') search() }}
             />
-            <Button variant="outline" onClick={search} disabled={searching}>
-              {searching ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Search className="h-4 w-4" />
-              )}
-            </Button>
           </div>
 
           {candidates.length > 0 && (
@@ -148,9 +149,7 @@ export function ContactMergeDialog({
                       : 'border-transparent hover:bg-muted'
                   }`}
                 >
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {c.id.slice(0, 8)}
-                  </span>
+                  <span>{c.displayName}</span>
                   {selected?.id === c.id && (
                     <Badge variant="secondary" className="ml-2 text-xs">
                       {t('cms.mergeSelected')}

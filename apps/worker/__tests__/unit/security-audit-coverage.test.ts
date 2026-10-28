@@ -9,10 +9,11 @@
  * - R5: TwiML XML injection, CAPTCHA CSPRNG, invite Schnorr proof, upload ownership
  * - R6: DEV_RESET_SECRET gate, backup filename randomization, CORS Vary header
  * - R7: Invite role authorization (privilege escalation), contact identifier encryption
- * - R8: serverEventKeyHex behind auth, DEMO_MODE production gate, webhook hostname bypass,
+ * - R8: serverEventKeyHex behind auth, the destructive-reset production gate, webhook hostname bypass,
  *        NotePayload maxLength, hub slug validation, blast mediaUrl HTTPS enforcement
  */
 import { describe, it, expect } from 'vitest'
+import { destructiveResetRefusal, MIN_DEPLOYED_SECRET_LENGTH } from '@worker/lib/dev-surfaces'
 
 // ─── Round 4: Mass assignment field allowlist ─────────────────────────────────
 
@@ -376,7 +377,6 @@ describe('R8 Epic 258 C2: event keys behind auth', () => {
     const publicConfig = {
       hubName: 'Test Hub',
       setupCompleted: true,
-      demoMode: false,
       wsRelayUrl: 'wss://relay.example.com',
     }
     expect(publicConfig).not.toHaveProperty('serverEventKeyHex')
@@ -403,54 +403,45 @@ describe('R8 Epic 258 C2: event keys behind auth', () => {
   })
 })
 
-// ─── Round 8 Epic 258 C3: DEMO_MODE=false in production ──────────────────────
+// ─── Round 8 Epic 258 C3: the destructive reset is never reachable in production ───
 
-describe('R8 Epic 258 C3: DEMO_MODE production gate', () => {
-  it('reset handler rejects when DEMO_MODE is not true', () => {
-    function canReset(demoMode: string | undefined): boolean {
-      return demoMode === 'true'
-    }
-    expect(canReset('false')).toBe(false)
-    expect(canReset(undefined)).toBe(false)
-    expect(canReset('')).toBe(false)
-    expect(canReset('true')).toBe(true)
+/**
+ * This block used to be four tests, each declaring a LOCAL copy of the gate
+ * (`function canDemoReset(env) { ... }`) and then asserting the copy. None of
+ * them imported anything from the app, so all four would have stayed green if
+ * `IdentityService.reset` had been deleted outright — and three of them described
+ * a gate (DEMO_MODE + DEMO_MODE_CONFIRM, seven Durable Objects) that no longer
+ * exists after #1604 removed demo mode and the DO backend was replaced long
+ * before that.
+ *
+ * Rewritten to call the real predicate. The finding this covers — "the
+ * destructive reset must be unreachable in production" — is unchanged and is
+ * now actually asserted.
+ */
+describe('R8 Epic 258 C3: the destructive reset is never reachable in production', () => {
+  const SECRET = 'a'.repeat(MIN_DEPLOYED_SECRET_LENGTH)
+
+  it('refuses production even with every flag set and the secret presented', () => {
+    expect(destructiveResetRefusal(
+      { ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET },
+      SECRET,
+    )).toMatch(/production/)
   })
 
-  it('each DO should check DEMO_MODE before reset', () => {
-    const DOS_WITH_RESET = [
-      'IdentityDO', 'SettingsDO', 'RecordsDO', 'ShiftManagerDO',
-      'CallRouterDO', 'ConversationDO', 'BlastDO',
-    ]
-    // Verify all 7 DOs are accounted for
-    expect(DOS_WITH_RESET).toHaveLength(7)
+  it('refuses a configured non-production host unless the REQUEST carries the secret', () => {
+    const staging = { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }
+    expect(destructiveResetRefusal(staging, undefined)).not.toBeNull()
+    expect(destructiveResetRefusal(staging, 'b'.repeat(MIN_DEPLOYED_SECRET_LENGTH))).not.toBeNull()
+    expect(destructiveResetRefusal(staging, SECRET)).toBeNull()
   })
 
-  it('DEMO_MODE=true is blocked at startup in production environment', () => {
-    // validateConfig should throw when DEMO_MODE=true + ENVIRONMENT=production
-    function isBlockedInProduction(env: Record<string, string | undefined>): boolean {
-      return env.DEMO_MODE === 'true' && env.ENVIRONMENT === 'production'
+  it('refuses every environment outside the allowlist, flags and secret notwithstanding', () => {
+    for (const ENVIRONMENT of ['demo', 'prod', 'test', 'Production', '', undefined]) {
+      expect(destructiveResetRefusal(
+        { ENVIRONMENT, DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET },
+        SECRET,
+      ), `ENVIRONMENT=${JSON.stringify(ENVIRONMENT)}`).not.toBeNull()
     }
-    expect(isBlockedInProduction({ DEMO_MODE: 'true', ENVIRONMENT: 'production' })).toBe(true)
-    expect(isBlockedInProduction({ DEMO_MODE: 'true', ENVIRONMENT: 'development' })).toBe(false)
-    expect(isBlockedInProduction({ DEMO_MODE: 'true', ENVIRONMENT: 'staging' })).toBe(false)
-    expect(isBlockedInProduction({ DEMO_MODE: 'false', ENVIRONMENT: 'production' })).toBe(false)
-  })
-
-  it('DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA', () => {
-    function canDemoReset(env: { DEMO_MODE?: string; DEMO_MODE_CONFIRM?: string; ENVIRONMENT?: string }): boolean {
-      const isDemoMode = env.DEMO_MODE === 'true'
-      const isDev = env.ENVIRONMENT === 'development'
-      if (!isDemoMode && !isDev) return false
-      if (isDemoMode && !isDev && env.DEMO_MODE_CONFIRM !== 'DESTROY_ALL_DATA') return false
-      return true
-    }
-    // Dev environment allowed without confirm
-    expect(canDemoReset({ DEMO_MODE: 'false', ENVIRONMENT: 'development' })).toBe(true)
-    // DEMO_MODE requires confirm
-    expect(canDemoReset({ DEMO_MODE: 'true', ENVIRONMENT: 'staging' })).toBe(false)
-    expect(canDemoReset({ DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA', ENVIRONMENT: 'staging' })).toBe(true)
-    // Wrong confirm value
-    expect(canDemoReset({ DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'yes', ENVIRONMENT: 'staging' })).toBe(false)
   })
 })
 
@@ -536,18 +527,15 @@ describe('R8 Epic 262: Worker medium security fixes', () => {
       timezone: 'America/New_York',
       __proto__: 'injection',
       adminPubkey: 'attacker',
-      demoMode: 'true',
     }
     const result = filterHubSettings(input)
     expect(result).toEqual({ hubName: 'Test Hub', timezone: 'America/New_York' })
     expect(result).not.toHaveProperty('adminPubkey')
-    expect(result).not.toHaveProperty('demoMode')
   })
 
   it('M14: CORS explicit allowlist', () => {
     const ALLOWED_ORIGINS = new Set([
       'https://app.llamenos.org',
-      'https://demo.llamenos-platform.com',
       'tauri://localhost',
     ])
 

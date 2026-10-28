@@ -67,6 +67,12 @@ teardown() {
 # ── Main ──────────────────────────────────────────────────────
 cd "${REPO_ROOT}"
 
+# The base compose's `app` service mounts the ban-list and messaging-thread hash
+# keys from these files and refuses to start without them; create development keys
+# if absent (gitignored, never printed).
+source "${SCRIPT_DIR}/lib/server-hash-keys.sh"
+ensure_hash_key_files "${REPO_ROOT}/deploy/docker/secrets" 0444
+
 log "Starting ALL services (signal + telephony + inference profiles)..."
 docker compose \
   -f "${COMPOSE_BASE}" \

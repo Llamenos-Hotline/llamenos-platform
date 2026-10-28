@@ -7,13 +7,18 @@
  */
 import '../../db/pg-array-patch'
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { CallsService } from '../../services/calls'
 import { ServiceError } from '../../services/settings'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
+
+// CallsService seals §2.5 metadata via lib/crypto (#1684), which loads the
+// Rust library through bun:ffi — unavailable under Vitest's Node runtime.
+// Same mock the other integration suites use.
+vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -25,7 +30,7 @@ const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.active_calls (
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
-    caller_number_hash TEXT NOT NULL,
+    caller_number_sealed TEXT,
     caller_last4 TEXT,
     answered_by TEXT,
     status TEXT NOT NULL DEFAULT 'ringing',
@@ -118,7 +123,7 @@ const HUB = 'hub-vm'
 
 describe('voicemail on a call nobody could be rung for', () => {
   it('flags the active call, and ending it lands in history as unanswered with hasVoicemail', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-1', callerNumber: 'hash', callerLast4: '4567' })
+    await calls.addCall(HUB, { callId: 'CA-vm-1', callerNumberSealed: null, callerLast4: '4567' })
 
     await calls.markVoicemail(HUB, 'CA-vm-1')
     const active = await calls.getActiveCallById(HUB, 'CA-vm-1')
@@ -137,12 +142,12 @@ describe('voicemail on a call nobody could be rung for', () => {
   })
 
   it('sets the flag on the history record when the call already ended', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-2', callerNumber: 'hash' })
+    await calls.addCall(HUB, { callId: 'CA-vm-2', callerNumberSealed: null })
     await calls.endCall(HUB, 'CA-vm-2')
 
     await calls.markVoicemail(HUB, 'CA-vm-2')
 
-    const record = await calls.getCallRecord('CA-vm-2')
+    const record = await calls.getCallRecord(HUB, 'CA-vm-2')
     expect(record?.hasVoicemail).toBe(true)
   })
 
@@ -153,7 +158,7 @@ describe('voicemail on a call nobody could be rung for', () => {
   })
 
   it('does not touch a call in another hub', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-3', callerNumber: 'hash' })
+    await calls.addCall(HUB, { callId: 'CA-vm-3', callerNumberSealed: null })
 
     await expect(calls.markVoicemail('other-hub', 'CA-vm-3')).rejects.toBeInstanceOf(ServiceError)
     expect((await calls.getActiveCallById(HUB, 'CA-vm-3'))?.hasVoicemail).toBe(false)

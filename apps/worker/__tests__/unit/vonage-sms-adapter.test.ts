@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { VonageSMSAdapter } from '@worker/messaging/sms/vonage'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 describe('VonageSMSAdapter', () => {
   let adapter: VonageSMSAdapter
@@ -12,7 +11,7 @@ describe('VonageSMSAdapter', () => {
   const phoneNumber = '+15551234567'
 
   beforeEach(() => {
-    adapter = new VonageSMSAdapter(apiKey, apiSecret, phoneNumber, HMAC_SECRET)
+    adapter = new VonageSMSAdapter(apiKey, apiSecret, phoneNumber)
     fetchMock = vi.fn()
     globalThis.fetch = fetchMock as unknown as typeof fetch
   })
@@ -49,7 +48,7 @@ describe('VonageSMSAdapter', () => {
       expect(result.channelType).toBe('sms')
       expect(result.externalId).toBe('VON-MSG-001')
       expect(result.senderIdentifier).toBe('+15559876543')
-      expect(result.senderIdentifierHash).toBeTruthy()
+      expect(result).not.toHaveProperty('senderIdentifierHash')
       expect(result.body).toBe('Hello from Vonage')
       expect(result.metadata?.to).toBe('15551234567')
       expect(result.timestamp).toBe('2024-01-01 12:00:00')
@@ -106,7 +105,7 @@ describe('VonageSMSAdapter', () => {
       expect(result.body).toBeUndefined()
     })
 
-    it('produces consistent senderIdentifierHash for same number', async () => {
+    it('leaves hashing to the router: same same number, same senderIdentifier, no hash', async () => {
       const makeRequest = () =>
         new Request('https://example.com/webhook', {
           method: 'POST',
@@ -115,7 +114,8 @@ describe('VonageSMSAdapter', () => {
         })
       const r1 = await adapter.parseIncomingMessage(makeRequest())
       const r2 = await adapter.parseIncomingMessage(makeRequest())
-      expect(r1.senderIdentifierHash).toBe(r2.senderIdentifierHash)
+      expect(r1.senderIdentifier).toBe(r2.senderIdentifier)
+      expect(r1).not.toHaveProperty('senderIdentifierHash')
     })
   })
 

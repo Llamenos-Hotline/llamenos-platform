@@ -12,6 +12,7 @@
  * rather than create a second, conflicting definition of the same step text.
  */
 import { expect, type APIRequestContext } from '@playwright/test'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import {
   getSharedState,
@@ -22,6 +23,8 @@ import {
 } from './shared-state'
 import {
   ADMIN_SEED,
+  devPost,
+  apiGet,
   apiPost,
   apiPut,
   apiDelete,
@@ -49,6 +52,10 @@ interface ShiftsEP07State {
   pubkeyLabels: Record<string, string>
   /** Label -> full registered-user credentials, for labels that need to act (clock in, etc.), not just exist as an opaque pubkey. */
   registeredVolunteers: Record<string, { pubkey: string; seedHex: string }>
+  /** The volunteer the ring-target scenarios put on the schedule (and whose clock-in they drive). */
+  scheduledVolunteer?: { pubkey: string; seedHex: string }
+  /** Session tokens minted for the scheduled volunteer, in the order the scenario signed them in. */
+  scheduledVolunteerSessions: string[]
 }
 
 const EP07_KEY = 'shiftsEP07'
@@ -62,6 +69,7 @@ Before({ tags: '@backend' }, async ({ world }) => {
     shiftLabels: {},
     pubkeyLabels: {},
     registeredVolunteers: {},
+    scheduledVolunteerSessions: [],
   })
 })
 
@@ -429,4 +437,142 @@ Then('the response body {string} should contain an entry with pubkey {string}', 
   const arr = data?.[field]
   expect(Array.isArray(arr)).toBe(true)
   expect((arr as Array<{ pubkey: string }>).some((e) => e.pubkey === pubkey)).toBe(true)
+})
+
+// ── Ring target (scheduled AND clocked in) ────────────────────────────────────
+
+function scheduledVolunteer(world: Record<string, unknown>): { pubkey: string; seedHex: string } {
+  const vol = getEP07State(world).scheduledVolunteer
+  if (!vol) throw new Error('no scheduled volunteer — the Background step "a volunteer is scheduled on shift now" did not run')
+  return vol
+}
+
+Given('a volunteer is scheduled on shift now', async ({ request, world, workerHub }) => {
+  const vol = await createUserViaApi(request, { roleIds: ['role-volunteer'], hubId: workerHub })
+  await createShiftViaApi(request, { ...ALWAYS_ON_SHIFT, userPubkeys: [vol.pubkey], hubId: workerHub })
+  getEP07State(world).scheduledVolunteer = { pubkey: vol.pubkey, seedHex: vol.seedHex }
+})
+
+Given('the scheduled volunteer clocks in', async ({ request, world, workerHub }) => {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/shifts/clock-in`, {}, scheduledVolunteer(world).seedHex)
+  expect(status, 'POST /shifts/clock-in').toBe(200)
+})
+
+Given('the scheduled volunteer clocks out', async ({ request, world, workerHub }) => {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/shifts/clock-out`, {}, scheduledVolunteer(world).seedHex)
+  expect(status, 'POST /shifts/clock-out').toBe(200)
+})
+
+When('the scheduled volunteer reads their shift status', async ({ request, world, workerHub }) => {
+  const res = await apiGet(request, `/hubs/${workerHub}/shifts/my-status`, scheduledVolunteer(world).seedHex)
+  expect(res.status, 'GET /shifts/my-status').toBe(200)
+  setLastResponse(world, res)
+})
+
+Then('the shift status says they are on shift', async ({ world }) => {
+  const data = getSharedState(world).lastResponse?.data as Record<string, unknown> | undefined
+  expect(data?.onShift, `my-status: ${JSON.stringify(data)}`).toBe(true)
+})
+
+Then('the shift status says they are clocked in', async ({ world }) => {
+  const data = getSharedState(world).lastResponse?.data as Record<string, unknown> | undefined
+  expect(data?.clockedIn, `my-status: ${JSON.stringify(data)}`).toBe(true)
+  expect(typeof data?.clockedInAt, 'a clocked-in volunteer must report when').toBe('string')
+})
+
+Then('the shift status says they are not clocked in', async ({ world }) => {
+  const data = getSharedState(world).lastResponse?.data as Record<string, unknown> | undefined
+  expect(data?.clockedIn, `my-status: ${JSON.stringify(data)}`).toBe(false)
+  expect(data?.clockedInAt, 'a volunteer who is not clocked in has no clock-in time').toBeNull()
+})
+
+/**
+ * Whether a call arriving now would ring THIS volunteer. Asked of `/calls/presence`,
+ * which is derived from `resolveRingableVolunteers` — the resolver the ring path
+ * itself uses (see services/presence.ts) — and asked per volunteer rather than
+ * "would the hub ring anybody": the hub is shared with other scenarios running in
+ * parallel, and their volunteers must not decide this one's outcome.
+ */
+async function ringTargets(request: APIRequestContext, hubId: string): Promise<string[]> {
+  const res = await apiGet<{ users: Array<{ pubkey: string }> }>(request, `/hubs/${hubId}/calls/presence`, ADMIN_SEED)
+  expect(res.status, 'GET /calls/presence as admin').toBe(200)
+  return res.data.users.map(u => u.pubkey)
+}
+
+Then('the scheduled volunteer is a ring target', async ({ request, world, workerHub }) => {
+  expect(await ringTargets(request, workerHub)).toContain(scheduledVolunteer(world).pubkey)
+})
+
+Then('the scheduled volunteer is not a ring target', async ({ request, world, workerHub }) => {
+  expect(await ringTargets(request, workerHub)).not.toContain(scheduledVolunteer(world).pubkey)
+})
+
+// ── Logout and the shift (#2205) ──────────────────────────────────────────────
+// A logout takes a user off shift only when it ends their LAST live session. A
+// "session" here is a real server session (the kind the auth middleware
+// validates), minted the way the WebAuthn login would; the user's own signing
+// key — which authenticates without one — is never revoked by a logout.
+
+Given('the scheduled volunteer is signed in on {int} device(s)', async ({ request, world }, count: number) => {
+  const s = getEP07State(world)
+  const vol = scheduledVolunteer(world)
+  for (let i = 0; i < count; i++) {
+    const { status, data } = await devPost<{ token: string }>(request, '/test-create-session', { pubkey: vol.pubkey })
+    expect(status, 'POST /test-create-session').toBe(200)
+    s.scheduledVolunteerSessions.push(data.token)
+  }
+})
+
+async function sessionRequest(
+  request: APIRequestContext,
+  method: 'GET' | 'POST',
+  path: string,
+  token: string,
+): Promise<number> {
+  const headers = { Authorization: `Session ${token}`, 'Content-Type': 'application/json' }
+  const res = method === 'GET'
+    ? await request.get(`/api${path}`, { headers })
+    : await request.post(`/api${path}`, { headers, data: {} })
+  return res.status()
+}
+
+When('the scheduled volunteer logs out of their first device', async ({ request, world }) => {
+  const [first] = getEP07State(world).scheduledVolunteerSessions
+  expect(first, 'the scenario signed the volunteer in before logging out').toBeDefined()
+  expect(await sessionRequest(request, 'POST', '/auth/me/logout', first), 'POST /auth/me/logout').toBe(200)
+})
+
+When('the scheduled volunteer logs out with a signed request', async ({ request, world }) => {
+  const { status } = await apiPost(request, '/auth/me/logout', {}, scheduledVolunteer(world).seedHex)
+  expect(status, 'POST /auth/me/logout').toBe(200)
+})
+
+Then('the scheduled volunteer is still clocked in on the hub', async ({ request, world, workerHub }) => {
+  const { activeShifts } = (await apiGet<{ activeShifts: Array<{ pubkey: string }> }>(
+    request, `/hubs/${workerHub}/shifts/active`, ADMIN_SEED,
+  )).data
+  expect(activeShifts.map(a => a.pubkey)).toContain(scheduledVolunteer(world).pubkey)
+})
+
+Then('the scheduled volunteer is no longer clocked in on the hub', async ({ request, world, workerHub }) => {
+  const { activeShifts } = (await apiGet<{ activeShifts: Array<{ pubkey: string }> }>(
+    request, `/hubs/${workerHub}/shifts/active`, ADMIN_SEED,
+  )).data
+  expect(activeShifts.map(a => a.pubkey)).not.toContain(scheduledVolunteer(world).pubkey)
+})
+
+Then('the volunteer\'s first device session is revoked', async ({ request, world }) => {
+  const [first] = getEP07State(world).scheduledVolunteerSessions
+  expect(await sessionRequest(request, 'GET', '/auth/me', first)).toBe(401)
+})
+
+Then('the volunteer\'s second device session is still valid', async ({ request, world }) => {
+  const second = getEP07State(world).scheduledVolunteerSessions[1]
+  expect(second, 'the scenario signed in on a second device').toBeDefined()
+  expect(await sessionRequest(request, 'GET', '/auth/me', second)).toBe(200)
+})
+
+Then('the volunteer\'s signing key still authenticates', async ({ request, world }) => {
+  const { status } = await apiGet(request, '/auth/me', scheduledVolunteer(world).seedHex)
+  expect(status, 'a logout revokes sessions, never keys').toBe(200)
 })

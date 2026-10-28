@@ -13,6 +13,8 @@ import { KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED } from '@shared/event-kind
 import { publishEvent } from '../lib/ws-events'
 import { verifyReportAccess, isReport } from '../lib/report-access'
 import { linkCaseToReportBodySchema } from '@protocol/schemas/report-links'
+import { resourceInPathHub } from '../lib/hub-scope'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
 
 /**
  * Normalize conversation metadata — Drizzle bun-sql may double-serialize JSONB
@@ -29,6 +31,16 @@ function normalizeMetadata(metadata: unknown): Record<string, unknown> | null {
 }
 
 const reports = new Hono<AppEnv>()
+
+// A report is a conversation row. Inside /hubs/:hubId every /:id route may only
+// touch a report of that hub (#2011); another hub's report is a 404, the same as
+// a missing one.
+const reportInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['categories', 'types']),
+  load: (services, id, hubId) => services.conversations.getByIdForHub(id, hubId),
+})
+reports.use('/:id/*', reportInPathHub)
 
 // List reports — reporters see only their own, users with reports:read-all see everything
 reports.get('/',
@@ -130,6 +142,10 @@ reports.post('/',
     const services = c.get('services')
     const hubId = c.get('hubId')
     const body = c.req.valid('json')
+
+    // Checked before the conversation exists, so a refused report leaves no
+    // empty shell behind.
+    await assertAdminCanRead(services, c.env, hubId, body.readerEnvelopes, 'A report', { authorPubkey: pubkey })
 
     // Create the conversation with report metadata
     const conversation = await services.conversations.create({
@@ -371,6 +387,7 @@ reports.post('/:id/messages',
     }
 
     const body = c.req.valid('json')
+    await assertAdminCanRead(services, c.env, report.hubId ?? undefined, body.readerEnvelopes, 'A report message', { reportId: id, authorPubkey: pubkey })
 
     const isReporter = report.contactIdentifierHash === pubkey
     const direction = isReporter ? 'inbound' as const : 'outbound' as const

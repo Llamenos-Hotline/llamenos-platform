@@ -55,6 +55,7 @@ import {
   users,
 } from '../db/schema'
 import type { SpamSettings, CallSettings } from '../types'
+import { isHubMember } from '../lib/hub-membership'
 import type {
   CustomFieldDefinition,
   TelephonyProviderConfig,
@@ -87,11 +88,12 @@ import type {
   EntityFieldDefinition,
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
+import type { IvrLanguageSettings } from '@protocol/schemas/settings'
 import type {
   ReportTypeDefinition,
   ReportFieldDefinition,
 } from '@protocol/schemas/report-types'
-import { IVR_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
+import { IVR_LANGUAGES, IVR_MENU_MAX_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
 import { speechLanguageFor } from './ivr-speech/voices'
@@ -106,8 +108,19 @@ import {
   resolveTTL,
 } from '../lib/ttl'
 import { createLogger } from '../lib/logger'
+import { webhookSecretProblem } from '../messaging/webhook-secret'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import {
+  assertRoleChangeKeepsAdmins,
+  hubFounderRoleIds,
+  loadRoleCatalog,
+  lockHubAdminSets,
+  mergeHubRole,
+  rolesConferHubAdmin,
+  type HubRoleAssignment,
+} from '../lib/hub-admin'
 
 const log = createLogger('services.settings')
 
@@ -154,6 +167,10 @@ const DEFAULT_SPAM_SETTINGS: SpamSettings = {
 const DEFAULT_CALL_SETTINGS: CallSettings = {
   queueTimeoutSeconds: 90,
   voicemailMaxSeconds: 120,
+  // Provider-side call recording is OFF unless a hub deliberately turns it on
+  // (#1505). Do not flip this: every answered call would be written to a third
+  // party's disk, and the caller-facing recording notice is driven off it.
+  recordCalls: false,
 }
 
 /**
@@ -170,6 +187,10 @@ function generatedSpeechGap(provider: string, unspeakable: string[]): string {
 
 const VALID_PROMPT_TYPES = [
   'greeting',
+  // #1505: the caller-facing "this call will be recorded" disclosure. Uploadable
+  // like any other prompt so a hub can record the legal notice in a human voice
+  // rather than relying on generated speech; falls back to TTS when not uploaded.
+  'recordingNotice',
   'pleaseHold',
   'waitMessage',
   'rateLimited',
@@ -177,6 +198,10 @@ const VALID_PROMPT_TYPES = [
 ] as const
 
 const MAX_AUDIO_SIZE = 1_048_576 // 1 MB
+
+/** `ivr_audio.hub_id` of a platform default recording (db/schema/settings.ts) */
+const PLATFORM_IVR_SCOPE = ''
+const ivrAudioScope = (hubId: string | undefined): string => hubId || PLATFORM_IVR_SCOPE
 
 const ALLOWED_HUB_SETTINGS = new Set([
   'hubName',
@@ -260,16 +285,29 @@ export function invalidateRolesCache(): void {
 
 /**
  * What an `ensureInit` call seeds: the defaults every deployment needs, plus —
- * in demo or development mode — a completed setup state and enabled messaging.
+ * on a development server — a completed setup state and enabled messaging.
  */
-type InitMode = 'default' | 'development' | 'demo'
+type InitMode = 'default' | 'development'
+
+/**
+ * Serialise the writers of a "DELETE all rows, INSERT the new list" replacement.
+ * Under READ COMMITTED a second writer's DELETE blocks on the first's row locks,
+ * then skips the rows the first deleted and cannot see the rows it inserted, so
+ * re-inserting a row that is kept (same id) fails on the primary key — a 500 for
+ * two concurrent template applications — and rows with new ids survive as a
+ * union (#686). Holding a transaction-scoped advisory lock makes each
+ * replacement see the previous one's committed state: last writer wins.
+ */
+async function lockReplaceAll(tx: Pick<Database, 'execute'>, table: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${table}:replace`}))`)
+}
 
 export class SettingsService {
   /**
    * Modes already initialised by this process (cleared by `reset`). Tracked per
    * mode, not as one flag: the server initialises defaults at boot, and a later
-   * demo/development call must still apply its mode-specific seeding rather than
-   * being swallowed as a repeat.
+   * development-mode call must still apply its mode-specific seeding rather
+   * than being swallowed as a repeat.
    */
   private initializedModes = new Set<InitMode>()
 
@@ -284,12 +322,8 @@ export class SettingsService {
    * ever fills what is empty, so it is safe on every server boot: values an
    * operator has set, and roles that exist, are never overwritten.
    */
-  async ensureInit(env?: {
-    DEMO_MODE?: string
-    ENVIRONMENT?: string
-  }): Promise<void> {
-    const mode: InitMode =
-      env?.DEMO_MODE === 'true' ? 'demo' : env?.ENVIRONMENT === 'development' ? 'development' : 'default'
+  async ensureInit(env?: { ENVIRONMENT?: string }): Promise<void> {
+    const mode: InitMode = env?.ENVIRONMENT === 'development' ? 'development' : 'default'
     if (this.initializedModes.has(mode)) return
     this.initializedModes.add(mode)
 
@@ -345,9 +379,8 @@ export class SettingsService {
       }
     }
 
-    // Demo/development mode: mark setup complete, enable messaging
+    // Development mode: mark setup complete, enable messaging
     if (mode !== 'default') {
-      const isDemoMode = mode === 'demo'
       const setupState = row.setupState as SetupState | null
       if (!setupState || !setupState.setupCompleted) {
         await this.db
@@ -358,7 +391,6 @@ export class SettingsService {
               completedSteps: ['welcome', 'telephony', 'channels'],
               pendingChannels: [],
               selectedChannels: ['voice', 'sms', 'signal', 'reports'],
-              demoMode: isDemoMode,
             },
           })
           .where(eq(systemSettings.id, SINGLETON_ID))
@@ -494,6 +526,7 @@ export class SettingsService {
       clamped.queueTimeoutSeconds = clamp(data.queueTimeoutSeconds)
     if (data.voicemailMaxSeconds !== undefined)
       clamped.voicemailMaxSeconds = clamp(data.voicemailMaxSeconds)
+    if (data.recordCalls !== undefined) clamped.recordCalls = data.recordCalls
 
     if (hubId) {
       const existing =
@@ -521,6 +554,28 @@ export class SettingsService {
     const row = await getSettings(this.db)
     return {
       enabledLanguages: row.ivrLanguages ?? [...IVR_LANGUAGES],
+    }
+  }
+
+  /**
+   * The IVR language settings screen's view: the enabled list plus how many of
+   * those languages nobody in the hub speaks. A COUNT only — the distinct set of
+   * spoken languages is computed in SQL and never leaves this method, so the
+   * response cannot be used to learn who speaks what.
+   *
+   * Kept apart from `getIvrLanguages`, which runs on every inbound call and has
+   * no use for a roster query.
+   */
+  async getIvrLanguageSettings(hubId?: string): Promise<IvrLanguageSettings> {
+    const { enabledLanguages } = await this.getIvrLanguages(hubId)
+    const spoken = await this.db
+      .selectDistinct({ code: sql<string>`unnest(${users.spokenLanguages})` })
+      .from(users)
+      .where(and(eq(users.active, true), eq(users.status, 'active'), hubId ? isHubMember(hubId) : undefined))
+    const covered = new Set(spoken.map((row) => row.code))
+    return {
+      enabledLanguages,
+      uncoveredLanguageCount: enabledLanguages.filter((code) => !covered.has(code)).length,
     }
   }
 
@@ -580,6 +635,15 @@ export class SettingsService {
     )
     if (valid.length === 0) {
       throw new ServiceError(400, 'No valid IVR language codes provided')
+    }
+    // The keypad has ten digits. A language beyond the tenth would get no digit
+    // from `ivrIndexToDigit` and be dropped from the menu the caller hears, so a
+    // longer list is refused here rather than saved and silently truncated.
+    if (valid.length > IVR_MENU_MAX_LANGUAGES) {
+      throw new ServiceError(
+        400,
+        `The IVR menu holds at most ${IVR_MENU_MAX_LANGUAGES} languages — other languages are reached by phone-prefix detection`,
+      )
     }
     // Constrain to what the active provider can actually speak (#732) —
     // reuses the catalog resolution built for #679 / PR #673 rather than
@@ -1000,6 +1064,12 @@ export class SettingsService {
   async updateMessagingConfig(
     data: Partial<MessagingConfig>,
   ): Promise<MessagingConfig> {
+    // Judge only what this request writes: a stored config that predates the
+    // requirement must not block an unrelated edit, and it stays fail-closed
+    // anyway (its adapter refuses to build and its webhook is rejected).
+    const secretProblem = webhookSecretProblem(data)
+    if (secretProblem) throw new ServiceError(400, secretProblem)
+
     const current = await this.getMessagingConfig()
     const updated = { ...current, ...data }
 
@@ -1416,7 +1486,7 @@ export class SettingsService {
     return { ok: true }
   }
 
-  async getTelephonyProvider(hmacSecret?: string, hubId?: string): Promise<TelephonyProviderConfig | null> {
+  async getTelephonyProvider(serverKek?: string, hubId?: string): Promise<TelephonyProviderConfig | null> {
     // When a hubId is provided, read the hub-scoped config instead of the global one.
     const hubCondition = hubId
       ? eq(providerConfigs.hubId, hubId)
@@ -1435,11 +1505,11 @@ export class SettingsService {
       phoneNumber: (row.phoneNumbers as string[])?.[0] ?? '',
     }
 
-    // Decrypt credentials if hmacSecret is provided and credentials exist
-    if (row.credentials && hmacSecret) {
+    // Decrypt credentials if the server KEK is provided and credentials exist
+    if (row.credentials && serverKek) {
       try {
         const { decryptCredentials } = await import('./provider-setup/crypto')
-        const creds = decryptCredentials(row.credentials, hmacSecret)
+        const creds = decryptCredentials(row.credentials, serverKek)
         Object.assign(config, creds)
       } catch {
         // Credentials may be plain JSON (legacy) — try parsing directly
@@ -1448,7 +1518,7 @@ export class SettingsService {
         } catch { /* ignore */ }
       }
     } else if (row.credentials) {
-      // No hmacSecret — try plain JSON parse (legacy path)
+      // No KEK — try plain JSON parse (legacy path)
       try {
         Object.assign(config, JSON.parse(row.credentials))
       } catch { /* encrypted, can't decrypt without secret */ }
@@ -1474,7 +1544,13 @@ export class SettingsService {
   // IVR Audio
   // =========================================================================
 
-  async getIvrAudioList(): Promise<{
+  /**
+   * The recordings held in ONE scope: a hub's own, or (hubId undefined) the
+   * platform defaults. This is what that scope's admin manages, so it never
+   * lists another scope's rows. What a call actually plays is
+   * {@link resolveIvrAudioList}.
+   */
+  async getIvrAudioList(hubId: string | undefined): Promise<{
     recordings: Array<{
       promptType: string
       language: string
@@ -1482,7 +1558,10 @@ export class SettingsService {
       uploadedAt: string
     }>
   }> {
-    const rows = await this.db.select().from(ivrAudio)
+    const rows = await this.db
+      .select()
+      .from(ivrAudio)
+      .where(eq(ivrAudio.hubId, ivrAudioScope(hubId)))
     return {
       recordings: rows.map((r) => ({
         promptType: r.promptType,
@@ -1493,7 +1572,26 @@ export class SettingsService {
     }
   }
 
+  /**
+   * The recordings a call in `hubId` plays: the hub's own, and for every prompt
+   * it has not recorded the platform default. A hub's recording always wins.
+   * With no hub, the platform defaults alone.
+   */
+  async resolveIvrAudioList(hubId: string | undefined): Promise<{
+    recordings: Array<{ promptType: string; language: string }>
+  }> {
+    const scopes = hubId ? [PLATFORM_IVR_SCOPE, hubId] : [PLATFORM_IVR_SCOPE]
+    const rows = await this.db
+      .select({ promptType: ivrAudio.promptType, language: ivrAudio.language })
+      .from(ivrAudio)
+      .where(inArray(ivrAudio.hubId, scopes))
+    const unique = new Map<string, { promptType: string; language: string }>()
+    for (const r of rows) unique.set(`${r.promptType}:${r.language}`, r)
+    return { recordings: [...unique.values()] }
+  }
+
   async uploadIvrAudio(
+    hubId: string | undefined,
     promptType: string,
     language: string,
     audioBase64: string,
@@ -1520,6 +1618,7 @@ export class SettingsService {
     await this.db
       .insert(ivrAudio)
       .values({
+        hubId: ivrAudioScope(hubId),
         promptType,
         language,
         audio: audioBase64,
@@ -1527,7 +1626,7 @@ export class SettingsService {
         uploadedAt: now,
       })
       .onConflictDoUpdate({
-        target: [ivrAudio.promptType, ivrAudio.language],
+        target: [ivrAudio.hubId, ivrAudio.promptType, ivrAudio.language],
         set: {
           audio: audioBase64,
           size,
@@ -1544,7 +1643,12 @@ export class SettingsService {
     }
   }
 
+  /**
+   * One scope's own recording, exactly: the operator listening back to what
+   * they uploaded must never be handed another scope's audio.
+   */
   async getIvrAudio(
+    hubId: string | undefined,
     promptType: string,
     language: string,
   ): Promise<{ audio: string; size: number } | null> {
@@ -1553,6 +1657,7 @@ export class SettingsService {
       .from(ivrAudio)
       .where(
         and(
+          eq(ivrAudio.hubId, ivrAudioScope(hubId)),
           eq(ivrAudio.promptType, promptType),
           eq(ivrAudio.language, language),
         ),
@@ -1561,7 +1666,23 @@ export class SettingsService {
     return { audio: row.audio, size: row.size }
   }
 
+  /**
+   * The recording a caller in `hubId` hears: the hub's own, else the platform
+   * default. Resolved when the provider fetches, not only when the URL was
+   * minted, so a hub that deletes its recording mid-day falls back to the
+   * default rather than to a 404 and silence on the line.
+   */
+  async getEffectiveIvrAudio(
+    hubId: string | undefined,
+    promptType: string,
+    language: string,
+  ): Promise<{ audio: string; size: number } | null> {
+    const own = hubId ? await this.getIvrAudio(hubId, promptType, language) : null
+    return own ?? this.getIvrAudio(undefined, promptType, language)
+  }
+
   async deleteIvrAudio(
+    hubId: string | undefined,
     promptType: string,
     language: string,
   ): Promise<{ ok: true }> {
@@ -1569,6 +1690,7 @@ export class SettingsService {
       .delete(ivrAudio)
       .where(
         and(
+          eq(ivrAudio.hubId, ivrAudioScope(hubId)),
           eq(ivrAudio.promptType, promptType),
           eq(ivrAudio.language, language),
         ),
@@ -1723,10 +1845,15 @@ export class SettingsService {
     if (data.description) updates.description = data.description
     if (data.permissions) updates.permissions = data.permissions as string[]
 
-    await this.db
-      .update(rolesTable)
-      .set(updates)
-      .where(eq(rolesTable.id, id))
+    await this.db.transaction(async (tx) => {
+      // Roles are shared: an edit can strip admin authority from every hub that
+      // assigns this role, so it runs under the hub-admin invariant (#2126).
+      if (data.permissions) await assertRoleChangeKeepsAdmins(tx, id, data.permissions)
+      await tx
+        .update(rolesTable)
+        .set(updates)
+        .where(eq(rolesTable.id, id))
+    })
 
     // Invalidate the roles cache so subsequent requests pick up the updated
     // permissions immediately. Without this, the 30-second cache TTL causes
@@ -1764,7 +1891,11 @@ export class SettingsService {
       throw new ServiceError(403, 'Cannot delete default roles')
     }
 
-    await this.db.delete(rolesTable).where(eq(rolesTable.id, id))
+    await this.db.transaction(async (tx) => {
+      await assertRoleChangeKeepsAdmins(tx, id, null)
+      await tx.delete(rolesTable).where(eq(rolesTable.id, id))
+    })
+    invalidateRolesCache()
     return { ok: true }
   }
 
@@ -1944,34 +2075,81 @@ export class SettingsService {
     return { hubs: hubList }
   }
 
-  async createHub(hub: Hub): Promise<{ hub: Hub }> {
-    // Check slug uniqueness
-    const [existing] = await this.db
-      .select()
-      .from(hubsTable)
-      .where(eq(hubsTable.slug, hub.slug))
-    if (existing) {
-      throw new ServiceError(409, 'Hub slug already exists')
-    }
+  /**
+   * Create a hub together with its first admin, atomically (#2126).
+   *
+   * A hub is never observable without an admin: the founder's admin assignment
+   * is written in the same transaction as the hub row, and the transaction
+   * fails — leaving no hub behind — if the founder does not exist, cannot act,
+   * or the roles named would not make them an admin. The previous shape created
+   * the hub and then granted the creator's role in a separate step whose
+   * failure was only logged, which left a hub nobody could administer.
+   *
+   * `founder.roleIds` names the roles to grant; omitted, the founder gets the
+   * role the live catalog designates for it BY PERMISSION ({@link hubFounderRoleIds}),
+   * resolved inside the transaction so a concurrent role edit cannot change it
+   * between the choice and the grant.
+   */
+  async createHub(
+    hub: Hub,
+    founder: { pubkey: string; roleIds?: readonly string[] },
+  ): Promise<{ hub: Hub }> {
+    await this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: hubsTable.id })
+        .from(hubsTable)
+        .where(eq(hubsTable.slug, hub.slug))
+      if (existing) {
+        throw new ServiceError(409, 'Hub slug already exists')
+      }
 
-    const now = new Date()
-    await this.db.insert(hubsTable).values({
-      id: hub.id,
-      name: hub.name,
-      slug: hub.slug,
-      description: hub.description,
-      status: hub.status ?? 'active',
-      phoneNumber: hub.phoneNumber,
-      createdBy: hub.createdBy,
-      createdAt: now,
-      updatedAt: now,
+      const [founderRow] = await tx
+        .select({ active: users.active, status: users.status, hubRoles: users.hubRoles })
+        .from(users)
+        .where(eq(users.pubkey, founder.pubkey))
+        .for('update')
+        .limit(1)
+      if (!founderRow) throw new ServiceError(404, 'Hub founder not found')
+      if (!founderRow.active || founderRow.status !== 'active') {
+        throw new ServiceError(409, 'Hub founder is not an active user')
+      }
+      // Lock before reading the catalog: a role edit that strips the founder's
+      // role must either finish first (and fail this check) or wait until the
+      // hub's admin is committed (and be counted by its own guard).
+      await lockHubAdminSets(tx, [hub.id])
+      const catalog = await loadRoleCatalog(tx)
+      const founderRoleIds = founder.roleIds ?? hubFounderRoleIds(catalog)
+      if (!rolesConferHubAdmin(founderRoleIds, catalog)) {
+        throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
+      }
+
+      const now = new Date()
+      await tx.insert(hubsTable).values({
+        id: hub.id,
+        name: hub.name,
+        slug: hub.slug,
+        description: hub.description,
+        status: hub.status ?? 'active',
+        phoneNumber: hub.phoneNumber,
+        createdBy: hub.createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      // Create hub_settings row
+      await tx
+        .insert(hubSettingsTable)
+        .values({ hubId: hub.id, settings: {} })
+        .onConflictDoNothing()
+
+      await tx
+        .update(users)
+        .set({
+          hubRoles: mergeHubRole((founderRow.hubRoles as HubRoleAssignment[] | null) ?? [], hub.id, founderRoleIds),
+          updatedAt: now,
+        })
+        .where(eq(users.pubkey, founder.pubkey))
     })
-
-    // Create hub_settings row
-    await this.db
-      .insert(hubSettingsTable)
-      .values({ hubId: hub.id, settings: {} })
-      .onConflictDoNothing()
 
     return { hub }
   }
@@ -2186,7 +2364,10 @@ export class SettingsService {
       await tx.delete(subscribers).where(eq(subscribers.hubId, id))
       await tx.delete(blastSettings).where(eq(blastSettings.hubId, id))
 
-      // 11. CMS definitions
+      // 11. IVR recordings the hub uploaded (the platform defaults stay)
+      await tx.delete(ivrAudio).where(eq(ivrAudio.hubId, id))
+
+      // 11b. CMS definitions
       await tx.delete(entityTypeDefinitions).where(eq(entityTypeDefinitions.hubId, id))
       await tx.delete(relationshipTypeDefinitions).where(eq(relationshipTypeDefinitions.hubId, id))
       await tx.delete(reportTypeDefinitions).where(eq(reportTypeDefinitions.hubId, id))
@@ -2486,9 +2667,9 @@ export class SettingsService {
    */
   async getHubTelephonyProvider(
     hubId: string,
-    hmacSecret?: string,
+    serverKek?: string,
   ): Promise<TelephonyProviderConfig | null> {
-    return this.getTelephonyProvider(hmacSecret, hubId)
+    return this.getTelephonyProvider(serverKek, hubId)
   }
 
   async setHubTelephonyProvider(
@@ -2553,7 +2734,7 @@ export class SettingsService {
   }
 
   /**
-   * Select the demo-only mock telephony provider (type `mock`) for a hub.
+   * Select the test-only mock telephony provider (type `mock`) for a hub.
    *
    * Callers MUST have already checked `assertMockTelephonyAllowed` — this only
    * persists the selection. Refuses to overwrite a real provider's credentials.
@@ -2975,6 +3156,7 @@ export class SettingsService {
     hubId?: string
   }): Promise<{ entityTypes: EntityTypeDefinition[] }> {
     await this.db.transaction(async (tx) => {
+      await lockReplaceAll(tx, 'entity_type_definitions')
       if (data.hubId !== undefined) {
         await tx.delete(entityTypeDefinitions).where(eq(entityTypeDefinitions.hubId, data.hubId))
       } else {
@@ -3151,6 +3333,7 @@ export class SettingsService {
     hubId?: string
   }): Promise<{ relationshipTypes: RelationshipTypeDefinition[] }> {
     await this.db.transaction(async (tx) => {
+      await lockReplaceAll(tx, 'relationship_type_definitions')
       if (data.hubId !== undefined) {
         await tx.delete(relationshipTypeDefinitions).where(eq(relationshipTypeDefinitions.hubId, data.hubId))
       } else {
@@ -3419,6 +3602,7 @@ export class SettingsService {
     hubId?: string
   }): Promise<{ reportTypes: ReportTypeDefinition[] }> {
     await this.db.transaction(async (tx) => {
+      await lockReplaceAll(tx, 'report_type_definitions')
       if (data.hubId !== undefined) {
         await tx.delete(reportTypeDefinitions).where(eq(reportTypeDefinitions.hubId, data.hubId))
       } else {
@@ -3579,7 +3763,7 @@ export class SettingsService {
   }
 
   // =========================================================================
-  // Test Reset (demo/development only)
+  // Test Reset (the secret-gated dev surface only)
   // =========================================================================
 
   /** Clear rate limit counters — used in BDD tests to prevent cross-scenario bleed.
@@ -3592,23 +3776,16 @@ export class SettingsService {
     }
   }
 
-  async reset(env: {
-    DEMO_MODE?: string
-    DEMO_MODE_CONFIRM?: string
-    ENVIRONMENT?: string
-  }): Promise<{ ok: true }> {
-    const isDemoMode = env.DEMO_MODE === 'true'
-    const isDev = env.ENVIRONMENT === 'development'
-    if (!isDemoMode && !isDev) {
-      throw new ServiceError(403, 'Reset not allowed outside demo/development mode')
-    }
-    // When resetting via DEMO_MODE (not a development env), require explicit two-factor confirmation.
-    if (isDemoMode && !isDev && env.DEMO_MODE_CONFIRM !== 'DESTROY_ALL_DATA') {
-      throw new ServiceError(
-        403,
-        'DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA',
-      )
-    }
+  /**
+   * Wipe every settings table and re-seed the defaults.
+   *
+   * Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts) — see
+   * `IdentityService.reset` for why that predicate and not the demo flags this
+   * used to read.
+   */
+  async reset(env: DevSurfacesEnv, presentedSecret?: string): Promise<{ ok: true }> {
+    const refusal = destructiveResetRefusal(env, presentedSecret)
+    if (refusal) throw new ServiceError(403, refusal)
 
     await this.db.transaction(async (tx) => {
       // Clear all settings tables

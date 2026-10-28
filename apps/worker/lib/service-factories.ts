@@ -17,6 +17,7 @@ import { createWhatsAppAdapter } from '../messaging/whatsapp/factory'
 import { createSignalAdapter } from '../messaging/signal/factory'
 import { createRCSAdapter } from '../messaging/rcs/factory'
 import { createTelegramAdapter } from '../messaging/telegram/factory'
+import { guardOutbound, type OutboundSuppression } from '../messaging/suppression-guard'
 import { createLogger } from './logger'
 
 const logger = createLogger('service-factories')
@@ -28,16 +29,16 @@ const logger = createLogger('service-factories')
 export async function getTelephonyFromService(
   env: Env,
   settingsService: {
-    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
 ): Promise<TelephonyAdapter | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
   try {
-    // Without the secret the stored credentials are never decrypted, so the
+    // Without the KEK the stored credentials are never decrypted, so the
     // adapter is built from ciphertext and every provider call fails. The
     // structural type used to omit this parameter entirely, which made the
     // omission unrepresentable at the call site rather than merely missed.
-    const config = await settingsService.getTelephonyProvider(env.HMAC_SECRET)
+    const config = await settingsService.getTelephonyProvider(env.SERVER_KEK)
     if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
@@ -58,8 +59,8 @@ export async function getTelephonyFromService(
 
 /** The settings reads a hub's telephony configuration is resolved from. */
 interface TelephonySettingsReader {
-  getHubTelephonyProvider(hubId: string, hmacSecret?: string): Promise<TelephonyProviderConfig | null>
-  getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+  getHubTelephonyProvider(hubId: string, serverKek?: string): Promise<TelephonyProviderConfig | null>
+  getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
 }
 
 /**
@@ -86,7 +87,7 @@ export async function resolveHubTelephonyConfig(
 ): Promise<TelephonyProviderConfig | null> {
   if (hubId !== '') {
     try {
-      const config = await settingsService.getHubTelephonyProvider(hubId, env.HMAC_SECRET)
+      const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
       if (config) return config
     } catch (e) {
       if (e instanceof MockTelephonyRefusedError) {
@@ -97,7 +98,7 @@ export async function resolveHubTelephonyConfig(
     }
   }
   try {
-    return await settingsService.getTelephonyProvider(env.HMAC_SECRET)
+    return await settingsService.getTelephonyProvider(env.SERVER_KEK)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
       logger.error('Mock telephony provider refused', { reason: e.reason })
@@ -115,8 +116,8 @@ export async function resolveHubTelephonyConfig(
 export async function getHubTelephonyFromService(
   env: Env,
   settingsService: {
-    getHubTelephonyProvider(hubId: string, hmacSecret?: string): Promise<TelephonyProviderConfig | null>
-    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+    getHubTelephonyProvider(hubId: string, serverKek?: string): Promise<TelephonyProviderConfig | null>
+    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
   hubId: string,
 ): Promise<TelephonyAdapter | null> {
@@ -125,7 +126,7 @@ export async function getHubTelephonyFromService(
     // This is the path real call handling uses (services/ringing.ts:172),
     // so a per-hub provider that resolves but never decrypts is the same
     // silent fallback as not resolving at all.
-    const config = await settingsService.getHubTelephonyProvider(hubId, env.HMAC_SECRET)
+    const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
     if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
@@ -137,18 +138,33 @@ export async function getHubTelephonyFromService(
   return getTelephonyFromService(env, settingsService)
 }
 
+type MessagingSettingsSource = {
+  getMessagingConfig(): Promise<MessagingConfig>
+  getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
+}
+
 /**
  * Get a MessagingAdapter for the specified channel (service-based version).
  * Uses SettingsService instead of DO stubs.
+ *
+ * `suppression` is required, not optional: this is the one place adapters are
+ * built, and every adapter it returns refuses to send to an identifier that opted
+ * out (`messaging/suppression-guard.ts`). An outbound path cannot get an adapter
+ * that skips the check.
  */
 export async function getMessagingAdapterFromService(
   channel: MessagingChannelType,
-  settingsService: {
-    getMessagingConfig(): Promise<MessagingConfig>
-    getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
-  },
-  hmacSecret: string,
+  settingsService: MessagingSettingsSource,
+  suppression: OutboundSuppression,
   webhookBaseUrl = '',
+): Promise<MessagingAdapter> {
+  return guardOutbound(await createMessagingAdapter(channel, settingsService, webhookBaseUrl), suppression)
+}
+
+async function createMessagingAdapter(
+  channel: MessagingChannelType,
+  settingsService: MessagingSettingsSource,
+  webhookBaseUrl: string,
 ): Promise<MessagingAdapter> {
   const config = await settingsService.getMessagingConfig()
   if (!config || !config.enabledChannels.includes(channel)) {
@@ -160,23 +176,23 @@ export async function getMessagingAdapterFromService(
       if (!config.sms?.enabled) throw new Error('SMS is not enabled')
       const telConfig = await settingsService.getTelephonyProvider()
       if (!telConfig) throw new Error('SMS requires a configured telephony provider')
-      return createSMSAdapter(telConfig, config.sms, hmacSecret, webhookBaseUrl)
+      return createSMSAdapter(telConfig, config.sms, webhookBaseUrl)
     }
     case 'whatsapp': {
       if (!config.whatsapp) throw new Error('WhatsApp is not configured')
-      return createWhatsAppAdapter(config.whatsapp, hmacSecret, undefined, webhookBaseUrl)
+      return createWhatsAppAdapter(config.whatsapp, undefined, webhookBaseUrl)
     }
     case 'signal': {
       if (!config.signal) throw new Error('Signal is not configured')
-      return createSignalAdapter(config.signal, hmacSecret)
+      return createSignalAdapter(config.signal)
     }
     case 'rcs': {
       if (!config.rcs) throw new Error('RCS is not configured')
-      return createRCSAdapter(config.rcs, hmacSecret)
+      return createRCSAdapter(config.rcs)
     }
     case 'telegram': {
       if (!config.telegram) throw new Error('Telegram is not configured')
-      return createTelegramAdapter(config.telegram, hmacSecret)
+      return createTelegramAdapter(config.telegram)
     }
     default:
       throw new Error(`Unknown channel: ${channel}`)
@@ -186,11 +202,12 @@ export async function getMessagingAdapterFromService(
 /**
  * Create adapter from saved config.
  * Supports Twilio, SignalWire, Vonage, Plivo, Asterisk, Telnyx, Bandwidth, and FreeSWITCH,
- * plus the demo-only MockTelephonyAdapter (type `mock`, which throws
- * MockTelephonyRefusedError unless DEMO_MODE is confirmed and ENVIRONMENT permits it).
+ * plus the test-only MockTelephonyAdapter (type `mock`, which throws
+ * MockTelephonyRefusedError unless this host may serve the dev surface — see
+ * lib/dev-surfaces.ts).
  */
 function createAdapterFromConfig(config: TelephonyProviderConfig, webhookBaseUrl: string, env: Env): TelephonyAdapter {
-  // `mock` is a worker-side demo type, deliberately not part of the wire-level
+  // `mock` is a worker-side test type, deliberately not part of the wire-level
   // TelephonyProviderType enum — compare on the raw string.
   if (isMockProviderConfig(config)) {
     return new MockTelephonyAdapter(env, config.phoneNumber)

@@ -1,6 +1,6 @@
 [package]
 name = "llamenos-desktop"
-version = "0.19.21"
+version = "0.20.1"
 edition = "2024"
 rust-version = "1.88.0"
 license = "AGPL-3.0-or-later"
@@ -63,6 +63,10 @@ tauri-plugin-dialog = "2"
 # own default), which would add a cmake/nasm build dependency for nothing.
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "tls12", "std"] }
 rustls-webpki = "0.103"
+# Trust anchors for the pinning verifier's WebPKI chain validation (#2157): the
+# Mozilla root program, which includes ISRG Root X1/X2. Already in the lockfile
+# via rustls-platform-verifier; no new crate enters the build.
+webpki-root-certs = "1"
 
 [dev-dependencies]
 # Test-only self-signed certificate generation + TLS server acceptor for

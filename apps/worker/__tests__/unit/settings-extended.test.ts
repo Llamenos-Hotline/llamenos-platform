@@ -119,13 +119,13 @@ describe('SettingsService.ensureInit', () => {
     expect(insertCalls).toBe(0)
   })
 
-  it('marks setup complete in demo mode when not already completed', async () => {
+  it('marks setup complete in development mode when not already completed', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow({ setupState: null, messagingConfig: null })],
       [makeRole()],
     ])
-    await service.ensureInit({ DEMO_MODE: 'true' })
+    await service.ensureInit({ ENVIRONMENT: 'development' })
     expect(db.update).toHaveBeenCalled()
   })
 
@@ -142,7 +142,7 @@ describe('SettingsService.ensureInit', () => {
     expect(secondInsertCount).toBe(firstInsertCount) // no additional calls
   })
 
-  it('still applies demo seeding after a default-mode init (server boot, then demo seeder)', async () => {
+  it('still applies development seeding after a default-mode init (server boot, then a dev-mode call)', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow()],
@@ -152,7 +152,7 @@ describe('SettingsService.ensureInit', () => {
     ])
     await service.ensureInit() // boot
     const updatesAfterBoot = (db.update as ReturnType<typeof vi.fn>).mock.calls.length
-    await service.ensureInit({ DEMO_MODE: 'true' })
+    await service.ensureInit({ ENVIRONMENT: 'development' })
     expect((db.update as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(updatesAfterBoot)
   })
 })
@@ -233,6 +233,39 @@ describe('SettingsService.getCallSettings', () => {
     expect(result.queueTimeoutSeconds).toBe(90)
     expect(result.voicemailMaxSeconds).toBe(120)
   })
+
+  // #1505 — a crisis call must not be written to a third party's disk unless a
+  // hub deliberately opted in, so the default has to be off.
+  it('defaults recordCalls to false when callSettings is null', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ callSettings: null })])
+
+    expect((await service.getCallSettings()).recordCalls).toBe(false)
+  })
+
+  it('defaults recordCalls to false for settings that predate the field', async () => {
+    const { db, service } = setup()
+    // The shape every existing hub has today: call settings, no recordCalls.
+    db.$setSelectResult([makeSettingsRow({ callSettings: { queueTimeoutSeconds: 60, voicemailMaxSeconds: 90 } })])
+
+    expect((await service.getCallSettings()).recordCalls).toBe(false)
+  })
+
+  it('a hub that opted in reads back recordCalls true, and its neighbour does not', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow({ callSettings: { queueTimeoutSeconds: 90 } })],
+      [{ hubId: 'hub-a', settings: { callSettings: { recordCalls: true } } }],
+    ])
+    expect((await service.getCallSettings('hub-a')).recordCalls).toBe(true)
+
+    const second = setup()
+    second.db.$setSelectResults([
+      [makeSettingsRow({ callSettings: { queueTimeoutSeconds: 90 } })],
+      [{ hubId: 'hub-b', settings: { callSettings: {} } }],
+    ])
+    expect((await second.service.getCallSettings('hub-b')).recordCalls).toBe(false)
+  })
 })
 
 describe('SettingsService.updateCallSettings', () => {
@@ -275,6 +308,28 @@ describe('SettingsService.updateCallSettings', () => {
 
     await service.updateCallSettings({ queueTimeoutSeconds: 100 })
     expect(db.update).toHaveBeenCalled()
+  })
+
+  // #1505 — updateCallSettings copies fields explicitly and silently drops any it
+  // does not know, so an unhandled recordCalls would be unsettable (and, worse,
+  // un-unsettable once on).
+  it('round-trips recordCalls on and back off again', async () => {
+    const on = setup()
+    on.db.$setSelectResult([makeSettingsRow()])
+    expect((await on.service.updateCallSettings({ recordCalls: true })).recordCalls).toBe(true)
+
+    const off = setup()
+    off.db.$setSelectResult([makeSettingsRow({ callSettings: { recordCalls: true } })])
+    expect((await off.service.updateCallSettings({ recordCalls: false })).recordCalls).toBe(false)
+  })
+
+  it('leaves recordCalls alone when an unrelated field is updated', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ callSettings: { recordCalls: true, queueTimeoutSeconds: 60 } })])
+
+    const result = await service.updateCallSettings({ queueTimeoutSeconds: 120 })
+    expect(result.recordCalls).toBe(true)
+    expect(result.queueTimeoutSeconds).toBe(120)
   })
 })
 
@@ -359,6 +414,24 @@ describe('SettingsService.updateIvrLanguages', () => {
     const result = await service.updateIvrLanguages({ enabledLanguages: ['en', 'es'] })
     expect(result.enabledLanguages).toContain('en')
     expect(result.enabledLanguages).toContain('es')
+  })
+
+  it('fills the keypad exactly: ten languages are accepted in the order given', async () => {
+    const { service } = setup()
+    const ten = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru']
+
+    const result = await service.updateIvrLanguages({ enabledLanguages: ten })
+    expect(result.enabledLanguages).toEqual(ten)
+  })
+
+  it('refuses an 11th language rather than saving a menu with an unreachable entry', async () => {
+    const { db, service } = setup()
+    const eleven = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru', 'hi']
+
+    await expect(
+      service.updateIvrLanguages({ enabledLanguages: eleven }),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('at most 10 languages') })
+    expect(db.update).not.toHaveBeenCalled()
   })
 })
 
@@ -705,6 +778,50 @@ describe('SettingsService.updateMessagingConfig', () => {
     await expect(
       service.updateMessagingConfig({ maxConcurrentPerUser: 25 }),
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  const savedConfig = { inactivityTimeout: 60, maxConcurrentPerUser: 5, enabledChannels: [], requireAssignment: false }
+
+  it('refuses an enabled Telegram channel without a webhook secret (#2154)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
+
+    await expect(
+      service.updateMessagingConfig({ telegram: { enabled: true, botToken: '1:abc' } as never }),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Telegram webhook secret is required') })
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('refuses an RCS channel without a webhook secret (#2154)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
+
+    await expect(
+      service.updateMessagingConfig({ rcs: { agentId: 'a', serviceAccountKey: '{}', fallbackToSms: false } as never }),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('RCS webhook secret is required') })
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('saves Telegram and RCS once they carry a webhook secret', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
+
+    const result = await service.updateMessagingConfig({
+      telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+      rcs: { agentId: 'a', serviceAccountKey: '{}', webhookSecret: 'rcs-secret', fallbackToSms: false },
+    })
+    expect(result.enabledChannels).toEqual(expect.arrayContaining(['telegram', 'rcs']))
+    expect(db.update).toHaveBeenCalled()
+  })
+
+  it('does not let a stored config without a secret block an unrelated edit', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeSettingsRow({
+      messagingConfig: { ...savedConfig, telegram: { enabled: true, botToken: '1:abc' } },
+    })])
+
+    const result = await service.updateMessagingConfig({ inactivityTimeout: 30 })
+    expect(result.inactivityTimeout).toBe(30)
   })
 
   it('merges partial update and persists', async () => {
@@ -1071,7 +1188,7 @@ describe('SettingsService.getIvrAudioList', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getIvrAudioList()
+    const result = await service.getIvrAudioList(undefined)
     expect(result.recordings).toEqual([])
   })
 
@@ -1082,7 +1199,7 @@ describe('SettingsService.getIvrAudioList', () => {
       { promptType: 'greeting', language: 'en', size: 4096, uploadedAt: now },
     ])
 
-    const result = await service.getIvrAudioList()
+    const result = await service.getIvrAudioList(undefined)
     expect(result.recordings).toHaveLength(1)
     expect(result.recordings[0].promptType).toBe('greeting')
     expect(typeof result.recordings[0].uploadedAt).toBe('string')
@@ -1093,28 +1210,28 @@ describe('SettingsService.uploadIvrAudio', () => {
   it('throws 400 for invalid prompt type', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio('invalid_type', 'en', 'base64data', 100),
+      service.uploadIvrAudio(undefined, 'invalid_type', 'en', 'base64data', 100),
     ).rejects.toMatchObject({ status: 400, message: 'Invalid prompt type' })
   })
 
   it('throws 400 for empty file (size = 0)', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio('greeting', 'en', 'base64data', 0),
+      service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 0),
     ).rejects.toMatchObject({ status: 400, message: 'Empty file' })
   })
 
   it('throws 400 for file exceeding 1MB', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio('greeting', 'en', 'base64data', 2_000_000),
+      service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 2_000_000),
     ).rejects.toMatchObject({ status: 400, message: 'File too large (max 1MB)' })
   })
 
   it('upserts valid audio and returns metadata', async () => {
     const { db, service } = setup()
 
-    const result = await service.uploadIvrAudio('greeting', 'en', 'base64data', 1024)
+    const result = await service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 1024)
     expect(result.ok).toBe(true)
     expect(result.promptType).toBe('greeting')
     expect(result.language).toBe('en')
@@ -1128,7 +1245,7 @@ describe('SettingsService.getIvrAudio', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getIvrAudio('greeting', 'en')
+    const result = await service.getIvrAudio(undefined, 'greeting', 'en')
     expect(result).toBeNull()
   })
 
@@ -1136,7 +1253,7 @@ describe('SettingsService.getIvrAudio', () => {
     const { db, service } = setup()
     db.$setSelectResult([{ promptType: 'greeting', language: 'en', audio: 'base64data', size: 1024, uploadedAt: new Date() }])
 
-    const result = await service.getIvrAudio('greeting', 'en')
+    const result = await service.getIvrAudio(undefined, 'greeting', 'en')
     expect(result?.audio).toBe('base64data')
     expect(result?.size).toBe(1024)
   })
@@ -1146,7 +1263,7 @@ describe('SettingsService.deleteIvrAudio', () => {
   it('deletes and returns ok', async () => {
     const { db, service } = setup()
 
-    const result = await service.deleteIvrAudio('greeting', 'en')
+    const result = await service.deleteIvrAudio(undefined, 'greeting', 'en')
     expect(result).toEqual({ ok: true })
     expect(db.delete).toHaveBeenCalled()
   })

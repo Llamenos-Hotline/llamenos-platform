@@ -73,24 +73,25 @@ export function parseSignalQueueRetentionDays(value?: string): number {
   return days
 }
 
-/** HMAC-SHA-256 keyed by the server secret and domain-separated for contact identifiers. */
+/** HMAC-SHA-256 keyed by HMAC_SECRET and domain-separated for contact identifiers. */
 export function hashSignalQueueRecipientIdentifier(recipientIdentifier: string, hmacSecret: string): string {
   const key = hexToBytes(hmacSecret)
   return bytesToHex(hmac(sha256, key, utf8ToBytes(`${LABEL_CONTACT_ID}${recipientIdentifier}`)))
 }
 
-function encryptQueueValue(value: string, label: string, hmacSecret: string): string {
-  return bytesToHex(serverEncrypt(utf8ToBytes(value), label, hexToBytes(hmacSecret)))
+function encryptQueueValue(value: string, label: string, serverKek: string): string {
+  return bytesToHex(serverEncrypt(utf8ToBytes(value), label, hexToBytes(serverKek)))
 }
 
-function decryptQueueValue(value: string, label: string, hmacSecret: string): string {
-  return new TextDecoder().decode(serverDecrypt(hexToBytes(value), label, hexToBytes(hmacSecret)))
+function decryptQueueValue(value: string, label: string, serverKek: string): string {
+  return new TextDecoder().decode(serverDecrypt(hexToBytes(value), label, hexToBytes(serverKek)))
 }
 
 export class SignalMessageQueue {
   constructor(
     private readonly db: Database,
     private readonly hmacSecret: string,
+    private readonly serverKek: string,
     private readonly maxRetries: number = DEFAULT_MAX_RETRIES,
     private readonly rateLimitPerMinute: number = DEFAULT_RATE_LIMIT_PER_MINUTE,
   ) {}
@@ -111,9 +112,9 @@ export class SignalMessageQueue {
       recipientIdentifierCiphertext: encryptQueueValue(
         params.recipientIdentifier,
         LABEL_CONTACT_ID,
-        this.hmacSecret,
+        this.serverKek,
       ),
-      encryptedBody: encryptQueueValue(params.body, LABEL_MESSAGE, this.hmacSecret),
+      encryptedBody: encryptQueueValue(params.body, LABEL_MESSAGE, this.serverKek),
       mediaUrl: params.mediaUrl ?? null,
       mediaType: params.mediaType ?? null,
       idempotencyKey: params.idempotencyKey ?? null,
@@ -180,9 +181,9 @@ export class SignalMessageQueue {
       recipientIdentifier: decryptQueueValue(
         row.recipient_identifier_ciphertext,
         LABEL_CONTACT_ID,
-        this.hmacSecret,
+        this.serverKek,
       ),
-      body: decryptQueueValue(row.encrypted_body, LABEL_MESSAGE, this.hmacSecret),
+      body: decryptQueueValue(row.encrypted_body, LABEL_MESSAGE, this.serverKek),
       mediaUrl: row.media_url,
       mediaType: row.media_type,
       retryCount: row.retry_count,
@@ -201,6 +202,18 @@ export class SignalMessageQueue {
         updatedAt: new Date(),
       })
       .where(eq(signalMessageQueue.id, messageId))
+  }
+
+  /**
+   * Dead-letter a message at once, for a failure no retry can fix (the recipient
+   * opted out). The reason stays on the row for the dead-letter view.
+   */
+  async markDead(messageId: string, error: string): Promise<void> {
+    await this.db
+      .update(signalMessageQueue)
+      .set({ status: 'dead', lastError: error, updatedAt: new Date() })
+      .where(eq(signalMessageQueue.id, messageId))
+    logger.warn('Message moved to dead-letter queue without retry', { messageId, error })
   }
 
   /**
@@ -328,8 +341,8 @@ export class SignalMessageQueue {
     return rows.map((row) => ({
       id: row.id,
       conversationId: row.conversationId,
-      recipientIdentifier: decryptQueueValue(row.recipientIdentifierCiphertext, LABEL_CONTACT_ID, this.hmacSecret),
-      body: decryptQueueValue(row.encryptedBody, LABEL_MESSAGE, this.hmacSecret),
+      recipientIdentifier: decryptQueueValue(row.recipientIdentifierCiphertext, LABEL_CONTACT_ID, this.serverKek),
+      body: decryptQueueValue(row.encryptedBody, LABEL_MESSAGE, this.serverKek),
       lastError: row.lastError,
       retryCount: row.retryCount,
       createdAt: row.createdAt,

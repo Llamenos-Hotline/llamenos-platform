@@ -13,7 +13,7 @@
 #      mobile-release.yml — called as reusable workflows, not dispatched)
 #   6. `release`: checksum EVERYTHING now attached, SBOM, provenance, cosign,
 #      GPG; assert the release is complete; only then publish it
-#   7. `docker-stable` / `dispatch`: container image, demo deploy, iOS build
+#   7. `docker-stable` / `dispatch`: container image, iOS build
 #
 # Why the release is held as a draft until step 6: the repo has immutable
 # releases, so assets cannot be added to a PUBLISHED release. Publishing
@@ -35,12 +35,13 @@
 # REQUIRED list below, because aliases carry no version in their names.
 #
 # This workflow calls (not dispatches) the desktop and Android builds so that
-# `release` can wait for them. It still dispatches the iOS build and the demo
-# deploy, which nothing here depends on: GitHub Releases created by
+# `release` can wait for them. It still dispatches the iOS build, which
+# nothing here depends on: GitHub Releases created by
 # GITHUB_TOKEN do NOT fire `release: published` for downstream workflows
 # (anti-recursion rule), so `gh workflow run` is the only way to start them —
 # see #712. Dispatching via `POST /actions/workflows/{id}/dispatches` requires
-# `actions: write` on the job token (#711).
+# `actions: write` on the job token (#711). (A dispatch to deploy-demo.yml went
+# with demo mode in #1604: there is no demo deployment to push a release to.)
 
 name: Release
 
@@ -73,7 +74,7 @@ jobs:
       version: ${{ steps.read.outputs.version }}
     steps:
       - name: Checkout merge commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
@@ -93,12 +94,12 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -152,7 +153,7 @@ jobs:
 
     steps:
       - name: Checkout merge commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
@@ -295,7 +296,7 @@ jobs:
 
     steps:
       - name: Checkout merge commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
@@ -547,7 +548,10 @@ jobs:
             listed=$(awk '{print $2}' CHECKSUMS.txt)
             for f in *; do
               case " $SEALS " in *" $f "*) continue ;; esac
-              printf '%s\n' "$listed" | grep -qxF -- "$f" || fail "${f} is published but not covered by CHECKSUMS.txt"
+              # A here-string, not `printf | grep -q`: grep -q exits on the first match,
+              # printf then dies of SIGPIPE on the unwritten rest, and pipefail reports a
+              # SUCCESSFUL match as a failed pipeline — a false "not covered" on the release path.
+              grep -qxF -- "$f" <<<"$listed" || fail "${f} is published but not covered by CHECKSUMS.txt"
             done
           else
             fail "CHECKSUMS.txt is missing or empty"
@@ -574,8 +578,12 @@ jobs:
             echo "::error::releases/latest is ${LATEST}, not v${NEW_VERSION} — the stable download links do not serve this release."
             exit 1
           fi
+          # Captured first, then matched with a here-string: `gh api | grep -q` under
+          # pipefail turns a successful early match into a SIGPIPE failure (a false 404),
+          # and would let a failed `gh api` read as "alias absent" instead of aborting.
+          ASSETS=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.assets[].name')
           for alias in llamenos-linux-x86_64.AppImage llamenos-windows-x64.msi llamenos-android.apk CHECKSUMS.txt; do
-            gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.assets[].name' | grep -qxF -- "$alias" \
+            grep -qxF -- "$alias" <<<"$ASSETS" \
               || { echo "::error::releases/latest/download/${alias} would 404."; exit 1; }
             echo "OK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${alias}"
           done
@@ -614,7 +622,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
@@ -780,7 +788,7 @@ jobs:
   # are called (`desktop` / `android` above) so the release can wait for the
   # installers it publishes. What remains is the iOS build — its IPA is store-
   # only, not installable, and the macOS runners are scarce, so it must never
-  # hold a release up — and the demo deploy.
+  # hold a release up.
   #
   # No continue-on-error here (#711): a rejected or failed `gh workflow run`
   # must turn this job red, not green. Each step also polls `gh run list`
@@ -828,55 +836,3 @@ jobs:
             exit 1
           fi
           echo "iOS Release run: $RUN_URL"
-
-      - name: Dispatch Demo deploy
-        # #712 decision: option (a), explicit dispatch from this job rather
-        # than relying on `release: [published]` (which never fires for
-        # GITHUB_TOKEN-created releases). Targets deploy-demo.yml, not
-        # auto-deploy-demo.yml — deploy-demo.yml already declares
-        # `workflow_dispatch` and needs no trigger changes; auto-deploy-demo.yml
-        # only has the dead `release: [published]` trigger and is outside this
-        # workflow's file ownership, so it is not wired up here (flagged
-        # separately for retirement/follow-up).
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          set -euo pipefail
-          WORKFLOW="deploy-demo.yml"
-          gh workflow run "$WORKFLOW" \
-            --repo "${{ github.repository }}" \
-            --ref "v${NEW_VERSION}"
-          echo "Dispatched $WORKFLOW for v${NEW_VERSION}"
-
-          RUN_URL=""
-          for _ in $(seq 1 15); do
-            sleep 2
-            RUN_URL=$(gh run list --repo "${{ github.repository }}" \
-              --workflow="$WORKFLOW" --limit 5 \
-              --json url,createdAt,event \
-              --jq '[.[] | select(.event=="workflow_dispatch")] | sort_by(.createdAt) | reverse | .[0].url // empty')
-            [ -n "$RUN_URL" ] && break
-          done
-          if [ -z "$RUN_URL" ]; then
-            echo "::error::$WORKFLOW dispatch did not produce a workflow run within 30s"
-            exit 1
-          fi
-          echo "Demo Deploy run: $RUN_URL"
-
-  # --- Redeploy the marketing site ---
-  #
-  # The site bakes release data in at build time (changelog, latest installer links), so it goes
-  # stale the moment a release lands unless it is rebuilt. This is a sibling of `dispatch`, not a
-  # step inside it: a failed desktop/mobile dispatch must not skip the site, and a failed site
-  # deploy must not mask which dispatch broke. It calls the workflow directly instead of
-  # `gh workflow run`, so its result is this job's result — a missing Cloudflare secret turns
-  # this release run red, naming the secret, instead of being a separate run nobody opens.
-  # The desktop/Android installers attach later; tauri-release.yml and mobile-release.yml
-  # redeploy the site again once they have, so the download links catch up.
-  deploy-site:
-    needs: [check, release]
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy-site.yml
-    secrets: inherit

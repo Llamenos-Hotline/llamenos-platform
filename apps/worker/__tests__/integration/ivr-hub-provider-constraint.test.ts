@@ -34,6 +34,7 @@ import '../../db/pg-array-patch'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
@@ -82,7 +83,7 @@ async function createHub(id: string): Promise<void> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(db))
 }
 
 beforeAll(async () => {
@@ -172,5 +173,58 @@ describe('updateIvrLanguages constrains by the HUB provider, not the global one'
     // Twilio speaks 'vi', so the same list the telnyx hub rejects is accepted here.
     const result = await settings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId)
     expect(result.enabledLanguages).toEqual(['en', 'vi'])
+  })
+})
+
+describe('getIvrLanguageSettings flags languages nobody in the hub speaks', () => {
+  async function addUser(pubkey: string, opts: { hubId?: string; spoken: string[]; active?: boolean }): Promise<void> {
+    await db.insert(schema.users).values({
+      pubkey,
+      spokenLanguages: opts.spoken,
+      hubRoles: opts.hubId ? [{ hubId: opts.hubId, roleIds: ['role-volunteer'] }] : [],
+      active: opts.active ?? true,
+      status: opts.active === false ? 'inactive' : 'active',
+    })
+  }
+
+  it('counts enabled languages with no speaker among the hub members, and nothing else', async () => {
+    const hubId = 'hub-coverage'
+    await createHub(hubId)
+    await settings.updateIvrLanguages({ enabledLanguages: ['en', 'es', 'ar'] }, hubId)
+
+    // Only 'en' is spoken by an active member of THIS hub. 'es' is spoken by a
+    // member of another hub and 'ar' by a deactivated member of this one —
+    // neither can answer a caller here.
+    await addUser('cov-member', { hubId, spoken: ['en'] })
+    await addUser('cov-other-hub', { hubId: 'hub-elsewhere', spoken: ['es'] })
+    await addUser('cov-inactive', { hubId, spoken: ['ar'], active: false })
+
+    const result = await settings.getIvrLanguageSettings(hubId)
+
+    expect(result).toEqual({ enabledLanguages: ['en', 'es', 'ar'], uncoveredLanguageCount: 2 })
+  })
+
+  it('drops the count as members start speaking the language', async () => {
+    const hubId = 'hub-coverage-fills'
+    await createHub(hubId)
+    await settings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId)
+    await addUser('fill-en', { hubId, spoken: ['en'] })
+    expect((await settings.getIvrLanguageSettings(hubId)).uncoveredLanguageCount).toBe(1)
+
+    await addUser('fill-vi', { hubId, spoken: ['en', 'vi'] })
+    expect((await settings.getIvrLanguageSettings(hubId)).uncoveredLanguageCount).toBe(0)
+  })
+})
+
+describe('updateIvrLanguages refuses a menu longer than the keypad', () => {
+  it('rejects an 11th language with its own message instead of truncating', async () => {
+    const hubId = 'hub-cap'
+    await createHub(hubId)
+    const eleven = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru', 'hi']
+
+    await expect(settings.updateIvrLanguages({ enabledLanguages: eleven }, hubId)).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining('at most 10 languages'),
+    })
   })
 })

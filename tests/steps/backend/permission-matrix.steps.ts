@@ -17,11 +17,15 @@ import {
   apiPut,
   apiDelete,
   createVolunteerViaApi,
+  updateUserViaApi,
   createShiftViaApi,
   createBanViaApi,
   generateTestKeypair,
   uniquePhone,
   uniqueName,
+  ADMIN_SEED,
+  encryptForTest,
+  validNoteBody,
 } from '../../api-helpers'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
@@ -44,7 +48,7 @@ interface PermMatrixState {
   sharedRosterShiftId?: string
   sharedRosterOtherPubkey?: string
   deletableShiftId?: string
-  testBanPhone?: string
+  testBanHash?: string
   testInviteCode?: string
   testNoteId?: string
 }
@@ -78,12 +82,13 @@ function roleIdFromName(roleName: string): string {
 
 Given('test users exist for all default roles', async ({ request, world }) => {
   const roles = ['super-admin', 'hub-admin', 'reviewer', 'volunteer', 'reporter']
-  // Create each role user as a MEMBER of the scenario's hub. Since #1540 made hub
-  // membership the sole authority boundary inside a hub, a global-only role grants
-  // nothing on a `/hubs/:hubId/*` route — `hubContext` 403s before
-  // `requirePermission` ever runs. Passing `hubId` writes the roles to both the
-  // global and the hub-scoped set (apps/worker/services/identity.ts), so the
-  // unscoped expectations in this matrix are unchanged.
+  // Each role user is a MEMBER of the scenario's hub, which is what makes a role
+  // count inside `/hubs/:hubId/*` (`hubContext` 403s before `requirePermission`
+  // runs for a non-member). Adding a member writes the grant to `hubRoles` ONLY —
+  // the account-wide `roles` column is authority over every hub (#2153) — so the
+  // unscoped rows of this matrix, which assert what a GLOBAL role carries, give
+  // the same role globally the way an instance operator would: an explicit
+  // super-admin edit of the account.
   const hubId = getScenarioState(world).hubId
   for (const role of roles) {
     const vol = await createVolunteerViaApi(request, {
@@ -91,6 +96,7 @@ Given('test users exist for all default roles', async ({ request, world }) => {
       roleIds: [roleIdFromName(role)],
       hubId,
     })
+    await updateUserViaApi(request, vol.pubkey, { roles: [roleIdFromName(role)] })
     getPermMatrixState(world).roleUsers[role] = { deviceKey: vol.deviceKey, pubkey: vol.pubkey, name: vol.name }
   }
 })
@@ -170,7 +176,7 @@ Given('a test ban exists', async ({ request, world }) => {
   // Create a fresh ban each time (will be deleted by the test)
   const hubId = getScenarioState(world).hubId
   const ban = await createBanViaApi(request, { phone: uniquePhone(), reason: 'PM test', hubId })
-  getPermMatrixState(world).testBanPhone = ban.phone
+  getPermMatrixState(world).testBanHash = ban.phoneHash
 })
 
 Given('a test invite exists', async ({ request, world, workerHub }) => {
@@ -189,15 +195,7 @@ Given('a test invite exists', async ({ request, world, workerHub }) => {
 Given('a test note exists', async ({ request, world }) => {
   if (!getPermMatrixState(world).testNoteId) {
     // Create a note as admin (super-admin has notes:* via wildcard)
-    const keypair = generateTestKeypair()
-    const { data, status } = await apiPost<{ note?: { id?: string } }>(request, '/notes', {
-      encryptedContent: 'test-encrypted-content',
-      callId: `pm-test-note-${Date.now()}`,
-      authorEnvelope: {
-        ct: 'test-key-data',
-        enc: keypair.pubkey,
-      },
-    })
+    const { data, status } = await apiPost<{ note?: { id?: string } }>(request, '/notes', await validNoteBody(request))
     if (status === 200 || status === 201) {
       getPermMatrixState(world).testNoteId = data.note?.id
     }
@@ -210,7 +208,9 @@ When('the {string} user sends {string} to {string}', async ({ request, world }, 
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  getSharedState(world).lastResponse = await sendRequest(request, method, path, user.deviceKey)
+  // `:hubId` stands for the scenario's own hub, the way a client addresses it.
+  const hubPath = path.replace(':hubId', getScenarioState(world).hubId ?? ':hubId')
+  getSharedState(world).lastResponse = await sendRequest(request, method, hubPath, user.deviceKey)
 })
 
 When('the {string} user sends {string} to {string} with valid volunteer body', async ({ request, world }, role: string, _method: string, _path: string) => {
@@ -310,7 +310,7 @@ When('the {string} user sends {string} to the test ban endpoint', async ({ reque
 
   getSharedState(world).lastResponse = await apiDelete(
     request,
-    `/bans/${encodeURIComponent(getPermMatrixState(world).testBanPhone!)}`,
+    `/bans/${getPermMatrixState(world).testBanHash!}`,
     user.deviceKey,
   )
 })
@@ -319,27 +319,22 @@ When('the {string} user sends {string} to {string} with valid note body', async 
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  getSharedState(world).lastResponse = await apiPost(request, '/notes', {
-    encryptedContent: 'pm-test-encrypted',
-    callId: `pm-note-${Date.now()}`,
-    authorEnvelope: {
-      ct: 'test-key',
-      enc: user.pubkey,
-    },
-  }, user.deviceKey)
+  getSharedState(world).lastResponse = await apiPost(
+    request,
+    '/notes',
+    await validNoteBody(request, user.deviceKey),
+    user.deviceKey,
+  )
 })
 
 When('the {string} user sends {string} to the test note reply endpoint with reply body', async ({ request, world }, role: string, _method: string) => {
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
+  const { encryptedContent, envelopes } = await encryptForTest('pm-test-reply', [user.deviceKey, ADMIN_SEED])
   getSharedState(world).lastResponse = await apiPost(request, `/notes/${getPermMatrixState(world).testNoteId}/replies`, {
-    encryptedContent: 'pm-test-reply',
-    readerEnvelopes: [{
-      pubkey: user.pubkey,
-      ct: 'test-key',
-      enc: user.pubkey,
-    }],
+    encryptedContent,
+    readerEnvelopes: envelopes,
   }, user.deviceKey)
 })
 
@@ -492,15 +487,13 @@ When('the {string} user sends {string} to {string} with valid report body', asyn
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
+  // Sealed to the reporter AND the admin, as the real report form does (#2113).
+  const { encryptedContent, envelopes } = await encryptForTest('pm-test-report', [user.deviceKey, ADMIN_SEED])
   getSharedState(world).lastResponse = await apiPost(request, '/reports', {
     title: uniqueName('PM Report'),
     category: 'general',
-    encryptedContent: 'pm-test-encrypted-report',
-    readerEnvelopes: [{
-      pubkey: user.pubkey,
-      ct: 'test-key',
-      enc: user.pubkey,
-    }],
+    encryptedContent,
+    readerEnvelopes: envelopes,
   }, user.deviceKey)
 })
 

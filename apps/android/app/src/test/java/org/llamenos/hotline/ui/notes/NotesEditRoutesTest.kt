@@ -30,6 +30,7 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.EncryptedNote
 import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.crypto.NoteEnvelope
+import org.llamenos.hotline.telephony.EndedCallHold
 
 /**
  * Editing a note (#1730). `NotesViewModel.updateNote` sent `PUT /api/notes/:id`; the server
@@ -66,7 +67,7 @@ class NotesEditRoutesTest {
                     json("""{"error":"unrecognised keys $unknown"}""", 400)
                 } else {
                     stored = JsonObject(stored + patch + ("updatedAt" to kotlinx.serialization.json.JsonPrimitive("2026-10-20T11:00:00.000Z")))
-                    json(stored.toString())
+                    json("""{"note":$stored}""")
                 }
             },
             Route("GET", "/api/settings/custom-fields") {
@@ -99,7 +100,7 @@ class NotesEditRoutesTest {
         }
         val session = mockk<SessionState>(relaxed = true)
         every { session.adminPubkeys } returns listOf(adminPub)
-        return NotesViewModel(server.apiService, crypto, session, server.activeHubState)
+        return NotesViewModel(server.apiService, crypto, session, server.activeHubState, EndedCallHold())
     }
 
     @Test

@@ -131,6 +131,7 @@ function createApp() {
       bootstrapAdmin: vi.fn().mockResolvedValue(undefined),
       updateUser: vi.fn().mockResolvedValue(undefined),
       revokeSession: vi.fn().mockResolvedValue(undefined),
+      countLiveSessions: vi.fn().mockResolvedValue(0),
       getWebAuthnCredentials: vi.fn().mockResolvedValue({ credentials: [] }),
       getWebAuthnSettings: vi.fn().mockResolvedValue({
         requireForAdmins: false,
@@ -146,6 +147,9 @@ function createApp() {
       }),
       getTranscriptionSettings: vi.fn().mockResolvedValue({ allowUserOptOut: true }),
     },
+    activeShifts: {
+      clockOutEverywhere: vi.fn().mockResolvedValue([]),
+    },
     audit: {},
   }
 
@@ -158,6 +162,9 @@ function createApp() {
     c.set('user', user as never)
     c.set('permissions', permissions as never)
     c.set('allRoles', (await services.settings.getRoles()).roles as never)
+    // What the real auth middleware stores for a session-authenticated request.
+    const sessionHeader = c.req.header('Authorization')
+    if (sessionHeader?.startsWith('Session ')) c.set('sessionToken', sessionHeader.slice(8).trim() as never)
     await next()
   })
 
@@ -474,6 +481,50 @@ describe('auth routes', () => {
 
       await app.request('/auth/me/logout', { method: 'POST' }, defaultEnv)
       expect(mockAudit).toHaveBeenCalled()
+    })
+
+    it('clocks the user out of every hub, and audits each, when no live session remains', async () => {
+      const { app, services, user } = createApp()
+      services.identity.countLiveSessions.mockResolvedValue(0)
+      services.activeShifts.clockOutEverywhere.mockResolvedValue(['hub-a', 'hub-b'])
+
+      const res = await app.request('/auth/me/logout', {
+        method: 'POST',
+        headers: { Authorization: 'Session test-session-token' },
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      expect(services.activeShifts.clockOutEverywhere).toHaveBeenCalledWith(user.pubkey)
+      const clockOutAudits = mockAudit.mock.calls.filter(call => call[1] === 'shiftClockOut')
+      expect(clockOutAudits.map(call => call[5])).toEqual(['hub-a', 'hub-b'])
+    })
+
+    it('leaves the user on shift while another live session remains', async () => {
+      const { app, services } = createApp()
+      services.identity.countLiveSessions.mockResolvedValue(1)
+
+      const res = await app.request('/auth/me/logout', {
+        method: 'POST',
+        headers: { Authorization: 'Session test-session-token' },
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      expect(services.activeShifts.clockOutEverywhere).not.toHaveBeenCalled()
+      expect(mockAudit.mock.calls.some(call => call[1] === 'shiftClockOut')).toBe(false)
+    })
+
+    it('counts the remaining sessions only after revoking this one', async () => {
+      const { app, services } = createApp()
+      const order: string[] = []
+      services.identity.revokeSession.mockImplementation(async () => { order.push('revoke') })
+      services.identity.countLiveSessions.mockImplementation(async () => { order.push('count'); return 0 })
+
+      await app.request('/auth/me/logout', {
+        method: 'POST',
+        headers: { Authorization: 'Session test-session-token' },
+      }, defaultEnv)
+
+      expect(order).toEqual(['revoke', 'count'])
     })
   })
 

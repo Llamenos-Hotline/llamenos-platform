@@ -30,9 +30,11 @@ import { hmac } from '@noble/hashes/hmac.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
-import { HMAC_PREFERENCE_TOKEN, HMAC_SUBSCRIBER } from '@shared/crypto-labels'
+import { HMAC_PREFERENCE_TOKEN } from '@shared/crypto-labels'
 import { encryptContactIdentifier } from '../lib/crypto'
+import { messagingContactHash, canonicalSubscriberIdentifier } from '../lib/messaging-contact-hash'
 import { ServiceError } from './settings'
+import { MessagingSuppressionService } from './messaging-suppression'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,7 +95,19 @@ export class BlastsService {
   constructor(
     protected db: Database,
     protected hmacSecret?: string,
+    protected serverKek?: string,
+    protected messagingHashKey?: string,
+    /** The opt-out record: STOP writes it; import and the subscribe keyword consult it. */
+    protected suppression: MessagingSuppressionService = new MessagingSuppressionService(db, messagingHashKey),
   ) {}
+
+  /** Seal a subscriber identifier under SERVER_KEK; the server needs it back to send. */
+  private sealIdentifier(identifier: string): string {
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
+    }
+    return encryptContactIdentifier(identifier, this.serverKek)
+  }
 
   // --- Preference token generation ---
 
@@ -106,13 +120,18 @@ export class BlastsService {
     return bytesToHex(hmac(sha256, key, input))
   }
 
-  private hashIdentifier(identifier: string): string {
-    if (!this.hmacSecret) {
-      throw new ServiceError(500, 'HMAC secret not configured')
+  /**
+   * The subscriber's identity in a hub: the messaging contact hash, the same value
+   * the webhook router computes for a sender and looks the row up by. Every writer
+   * of `subscribers.identifier_hash` goes through here or takes the router's value,
+   * so a STOP always finds the row an import created (#2261). A phone number is
+   * filed in its canonical `+digits` spelling, which the router's lookup always tries.
+   */
+  private hashIdentifier(identifier: string, channel: MessagingChannelType, hubId: string): string {
+    if (!this.messagingHashKey) {
+      throw new ServiceError(500, 'Messaging hash key not configured')
     }
-    return bytesToHex(
-      hmac(sha256, hexToBytes(this.hmacSecret), utf8ToBytes(`${HMAC_SUBSCRIBER}${identifier}`)),
-    )
+    return messagingContactHash(canonicalSubscriberIdentifier(channel, identifier), hubId, this.messagingHashKey)
   }
 
   // --- Blast settings ---
@@ -162,6 +181,18 @@ export class BlastsService {
       .limit(1)
 
     return row ?? null
+  }
+
+  /** Every subscriber of the hub filed under any of these hashes — one person can sit under several identifier shapes. */
+  async getSubscribersByIdentifierHashes(
+    identifierHashes: string[],
+    hubId: string,
+  ): Promise<SubscriberRow[]> {
+    if (identifierHashes.length === 0) return []
+    return this.db
+      .select()
+      .from(subscribers)
+      .where(and(eq(subscribers.hubId, hubId), inArray(subscribers.identifierHash, identifierHashes)))
   }
 
   async getSubscriberById(id: string): Promise<SubscriberRow | null> {
@@ -235,11 +266,14 @@ export class BlastsService {
     // identifiers are handled atomically at the database level. Channel merge
     // uses SQL-level jsonb_agg to avoid read-modify-write races.
     for (const entry of entries) {
-      const identifierHash = this.hashIdentifier(entry.identifier)
+      // An identifier that sent STOP is imported opted out, whether or not it was
+      // ever a subscriber here: importing never grants consent. A re-import of an
+      // existing row is unsubscribed for the same reason; one that is not
+      // suppressed keeps whatever status the row already had.
+      const suppressed = await this.suppression.isSuppressed(entry.channel, [entry.identifier])
+      const identifierHash = this.hashIdentifier(entry.identifier, entry.channel, hubId)
       const preferenceToken = this.generatePreferenceToken(identifierHash)
-      const encrypted = this.hmacSecret
-        ? encryptContactIdentifier(entry.identifier, this.hmacSecret)
-        : null
+      const encrypted = this.sealIdentifier(entry.identifier)
       const newChannels = [{ type: entry.channel, verified: false }]
       const entryTags = entry.tags ?? []
 
@@ -252,7 +286,7 @@ export class BlastsService {
           channels: newChannels,
           tags: entryTags,
           language: entry.language ?? 'en',
-          status: 'active',
+          status: suppressed ? 'unsubscribed' : 'active',
           doubleOptInConfirmed: false,
           preferenceToken,
         })
@@ -275,6 +309,7 @@ export class BlastsService {
                   FROM unnest(${subscribers.tags} || ARRAY[${sql.join(entryTags.map(t => sql`${t}`), sql`,`)}]::text[]) t
                 )`
               : subscribers.tags,
+            ...(suppressed ? { status: 'unsubscribed' } : {}),
           },
         })
         .returning({ id: subscribers.id, xmax: sql<string>`xmax` })
@@ -367,7 +402,17 @@ export class BlastsService {
     hubId: string,
     data: {
       identifier: string
+      /** Where a new subscriber is filed. */
       identifierHash: string
+      /** Every hash an existing row for this sender may sit under (`identifierHash` included). */
+      lookupHashes: string[]
+      /**
+       * Every identifier of the sender the keyword applies to: a STOP files the
+       * opt-out under each; the subscribe keyword is refused while any is suppressed.
+       */
+      identifiers: string[]
+      /** Provider message id of the inbound keyword message. */
+      externalId?: string
       keyword: string
       channel: MessagingChannelType
     },
@@ -380,19 +425,37 @@ export class BlastsService {
       normalizedKeyword === settings.unsubscribeKeyword.toUpperCase() ||
       normalizedKeyword === 'STOP'
     ) {
-      const existing = await this.getSubscriberByIdentifierHash(data.identifierHash, hubId)
-      if (existing) {
+      // The opt-out is recorded against the identifier first, subscriber or not:
+      // a STOP from someone we hold no row for must still stop a later import, or
+      // any other send, from reaching them.
+      await this.suppression.suppress({
+        channel: data.channel,
+        identifiers: data.identifiers,
+        sourceHubId: hubId || undefined,
+        sourceExternalId: data.externalId,
+      })
+      // Every row the sender sits under, not the first: an opt-out must hold for
+      // each identifier shape the same person is subscribed by.
+      const existing = await this.getSubscribersByIdentifierHashes(data.lookupHashes, hubId)
+      if (existing.length > 0) {
         await this.db
           .update(subscribers)
           .set({ status: 'unsubscribed' })
-          .where(eq(subscribers.id, existing.id))
+          .where(inArray(subscribers.id, existing.map((row) => row.id)))
       }
       return { action: 'unsubscribed', message: settings.unsubscribeMessage }
     }
 
     // --- Subscribe ---
     if (normalizedKeyword === settings.subscribeKeyword.toUpperCase()) {
-      const existing = await this.getSubscriberByIdentifierHash(data.identifierHash, hubId)
+      // The hub's subscribe keyword is not the deployment-wide opt-in: a sender
+      // who sent STOP must send START first (the router clears the opt-out on
+      // OPT_IN_KEYWORDS). Until then nothing is subscribed, so no row claims
+      // consent the send path would refuse anyway.
+      if (await this.suppression.isSuppressed(data.channel, data.identifiers)) {
+        return { action: 'suppressed', message: '' }
+      }
+      const [existing] = await this.getSubscribersByIdentifierHashes(data.lookupHashes, hubId)
       if (existing) {
         // RACE-13: Atomic channel merge at the SQL level to avoid read-modify-write race.
         // Uses jsonb_agg(DISTINCT elem) to merge existing channels with the new one.
@@ -425,9 +488,7 @@ export class BlastsService {
 
       // Create new subscriber
       const preferenceToken = this.generatePreferenceToken(data.identifierHash)
-      const encrypted = this.hmacSecret
-        ? encryptContactIdentifier(data.identifier, this.hmacSecret)
-        : null
+      const encrypted = this.sealIdentifier(data.identifier)
       const [created] = await this.db
         .insert(subscribers)
         .values({
@@ -813,24 +874,24 @@ export class BlastsService {
    * Also checks subscriber hasn't opted out mid-flight.
    */
   async drainDeliveryBatch(blastId: string, batchSize: number): Promise<BlastDeliveryRow[]> {
-    // Use FOR UPDATE SKIP LOCKED to prevent concurrent pollers from double-sending
-    const rows = await this.db.execute(
-      sql`WITH claimed AS (
-        SELECT id FROM blast_deliveries
-        WHERE blast_id = ${blastId}
-          AND status = 'pending'
-          AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-        LIMIT ${batchSize}
-        FOR UPDATE SKIP LOCKED
-      )
-      UPDATE blast_deliveries
-      SET status = 'sending'
-      WHERE id IN (SELECT id FROM claimed)
-      RETURNING *`,
-    )
-
-    // db.execute returns Record<string, any>[] — raw SQL results at system boundary
-    return rows as BlastDeliveryRow[]
+    // FOR UPDATE SKIP LOCKED keeps concurrent pollers from double-sending.
+    //
+    // The claim goes through the query builder's RETURNING, not `db.execute`:
+    // raw rows come back with the database's snake_case keys, so a cast to
+    // BlastDeliveryRow left `subscriberId` and `attempts` undefined on every
+    // delivery — the opt-out check looked up no subscriber and the retry count
+    // was lost (#2286).
+    const claimed = sql`SELECT id FROM blast_deliveries
+      WHERE blast_id = ${blastId}
+        AND status = 'pending'
+        AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED`
+    return this.db
+      .update(blastDeliveries)
+      .set({ status: 'sending' })
+      .where(sql`${blastDeliveries.id} IN (${claimed})`)
+      .returning()
   }
 
   /**
@@ -909,12 +970,15 @@ export class BlastsService {
   /**
    * Mark a delivery as opted out (subscriber unsubscribed mid-flight).
    */
-  async markDeliveryOptedOut(deliveryId: string): Promise<void> {
+  async markDeliveryOptedOut(deliveryId: string, reason?: string): Promise<void> {
     await this.db
       .update(blastDeliveries)
       .set({
         status: 'opted_out',
         lastAttemptAt: new Date(),
+        // Why it was not sent: absent for a subscriber who unsubscribed, the
+        // suppression error when the outbound backstop refused the send.
+        error: reason ?? null,
       })
       .where(eq(blastDeliveries.id, deliveryId))
   }
@@ -1169,8 +1233,10 @@ export class BlastsService {
 
     // Delegate to crypto utility for decryption
     const { decryptContactIdentifier } = await import('../lib/crypto')
-    if (!this.hmacSecret) return null
-    return decryptContactIdentifier(row.encryptedIdentifier, this.hmacSecret)
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
+    }
+    return decryptContactIdentifier(row.encryptedIdentifier, this.serverKek)
   }
 
   async resolveSubscriberIdentifierHash(subscriberId: string): Promise<string | null> {
@@ -1183,12 +1249,13 @@ export class BlastsService {
     return row?.identifierHash ?? null
   }
 
-  // --- Reset (demo/development only) ---
+  // --- Reset (the secret-gated dev surface only) ---
 
   async reset(): Promise<void> {
     await this.db.delete(blastDeliveries)
     await this.db.delete(blastSettingsTable)
     await this.db.delete(blasts)
     await this.db.delete(subscribers)
+    await this.suppression.reset()
   }
 }

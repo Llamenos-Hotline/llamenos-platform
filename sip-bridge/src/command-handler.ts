@@ -28,6 +28,25 @@ const QUEUE_WAIT_INTERVAL_MS = 10_000
 /** How long a volunteer's phone rings before the leg gives up */
 const RING_TIMEOUT_SECONDS = 30
 
+/**
+ * Machine-readable `error` the /ring endpoint answers a total outage with. The worker's
+ * SipBridgeAdapter keys off this exact value to raise AllDialsFailedError — keep the two
+ * in step (apps/worker/telephony/sip-bridge-adapter.ts, BRIDGE_ALL_DIALS_FAILED).
+ */
+export const RING_ALL_DIALS_FAILED = 'all-dials-failed'
+
+/**
+ * Thrown by `ringVolunteers` when every leg it tried to place was refused — a total
+ * PBX/trunk outage. Distinct from "the caller already hung up" (no legs attempted,
+ * returns `[]`) and from a partial failure (some legs placed, returns those).
+ */
+export class AllRingLegsFailedError extends Error {
+  constructor(public readonly attempted: number) {
+    super(`All ${attempted} dial attempt(s) failed`)
+    this.name = 'AllRingLegsFailedError'
+  }
+}
+
 /** A volunteer phone to ring for a waiting caller (POST /ring from the worker) */
 export interface RingRequest {
   parentCallSid: string
@@ -465,6 +484,14 @@ export class CommandHandler {
       `Ringing ${channelIds.length - appChannels}/${request.volunteers.length} volunteer phone(s)` +
         ` and ${appChannels}/${appTargets.length} in-app endpoint(s)`
     )
+    // Every leg failed (a total PBX/trunk outage): a total outage must not look like
+    // `{ ok: true, channelIds: [] }` to the worker (#1136). index.ts's /ring handler turns
+    // this into a machine-readable 502 the worker classifies. A partial failure (some
+    // legs placed) is normal and still returns what succeeded.
+    const attempted = request.volunteers.length + appTargets.length
+    if (channelIds.length === 0 && attempted > 0) {
+      throw new AllRingLegsFailedError(attempted)
+    }
     return channelIds
   }
 
@@ -902,6 +929,27 @@ export class CommandHandler {
     for (const [name, entry] of this.recordings) {
       if (entry.expiresAt !== undefined && now > entry.expiresAt) this.recordings.delete(name)
     }
+  }
+}
+
+/**
+ * Answer a POST /ring. The protocol the worker's SipBridgeAdapter reads:
+ *   - 200 `{ ok: true, channelIds }` — the legs placed; `[]` when the caller hung up
+ *     before ringing (not an outage) and nothing was attempted;
+ *   - 502 `{ ok: false, error: RING_ALL_DIALS_FAILED, attempted }` — every leg refused,
+ *     a total PBX/trunk outage (#1136);
+ *   - 500 `{ ok: false, error: 'Command failed' }` — anything else.
+ */
+export async function ringResponse(handler: Pick<CommandHandler, 'ringVolunteers'>, request: RingRequest): Promise<Response> {
+  try {
+    const channelIds = await handler.ringVolunteers(request)
+    return Response.json({ ok: true, channelIds })
+  } catch (err) {
+    logger.error('[bridge]', 'Ring error', err)
+    if (err instanceof AllRingLegsFailedError) {
+      return Response.json({ ok: false, error: RING_ALL_DIALS_FAILED, attempted: err.attempted }, { status: 502 })
+    }
+    return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
   }
 }
 

@@ -68,7 +68,13 @@ services:
       # Host header for webhook signature validation — so the container would
       # crash-loop with no compose-level explanation. Fail at `up` instead.
       - "WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:?WEBHOOK_BASE_URL is required — the public https:// base URL webhooks are delivered to, e.g. https://api.example.org}"
+      # One role per secret (D6, #2171). HMAC_SECRET is a HASHING key only (phone/IP
+      # hashes, signed URLs): it encrypts nothing. SERVER_KEK encrypts the data the
+      # server must read back (provider credentials, reply addresses, queued sends).
+      # SERVER_SECRET derives the relay and server identity keys. Three secrets,
+      # three different values: the app refuses to boot if two are equal.
       - "HMAC_SECRET=${HMAC_SECRET:?HMAC_SECRET is required — generate with openssl rand -hex 32}"
+      - "SERVER_KEK=${SERVER_KEK:?SERVER_KEK is required — generate with openssl rand -hex 32 (a different value from HMAC_SECRET and SERVER_SECRET)}"
       - STORAGE_ENDPOINT=http://rustfs:9000
       - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
       - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:?STORAGE_SECRET_KEY is required}
@@ -103,11 +109,15 @@ services:
       # Set NTFY_URL explicitly when you run `--profile push`.
       - NTFY_URL=${NTFY_URL:-}
       - NTFY_AUTH_TOKEN=${NTFY_AUTH_TOKEN:-}
+      # Key the signal-notifier sidecar verifies registration tokens with. Must
+      # equal the sidecar's value below. No fallback to HMAC_SECRET: required (and
+      # checked at boot) whenever NOTIFIER_API_KEY is set.
+      - NOTIFIER_TOKEN_SECRET=${NOTIFIER_TOKEN_SECRET:-}
       # Per-volunteer SIP registrar (profile: asterisk/telephony). Master
       # secret the worker derives each volunteer's unique PJSIP endpoint
       # secret from (telephony/registrar.ts) — NOT the hub credential and
-      # not the ARI password. Falls back to HMAC_SECRET when unset; set it
-      # separately to rotate SIP secrets independently.
+      # not the ARI password. No fallback to another secret: in-app SIP is
+      # refused while it is unset. Required with the asterisk profile.
       - "SIP_REGISTRAR_SECRET=${SIP_REGISTRAR_SECRET:-}"
       # CoTURN relay (profile: telephony). Both must be set for /sip-token
       # to return time-limited TURN credentials; TURN_SECRET must equal the
@@ -128,6 +138,16 @@ services:
     volumes:
       # Read-only: the app publishes the anchor, it never writes one.
       - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY reach the app ONLY as these files
+    # (/run/secrets/ban-hash-key, /run/secrets/messaging-hash-key), never as
+    # environment variables: the app refuses them there. The sources are
+    # ./secrets/<name> (first-run.sh creates them), outside .env, so the keys are
+    # in no env_file, no `docker compose config` output and no config backup.
+    # Append new file-only secrets: deploy/ansible/scripts/check-required-env.py
+    # reads this list in order.
+    secrets:
+      - ban-hash-key
+      - messaging-hash-key
     networks:
       - web
       - internal
@@ -505,6 +525,34 @@ services:
     # container's docker logging driver never sees — `docker compose logs`
     # would read an empty log, the exact trap the #1689 smoke assertion guards
     # against on the Ansible path.
+    #
+    # PEER ACL (#2136). Every volunteer holds working TURN credentials and this
+    # container shares the host's network, so an allocation is a socket on the
+    # host that a volunteer can aim at the app, signal-cli, postgres, Asterisk's
+    # ARI and the host's own address. coturn denies loopback by default and
+    # nothing else, so every other non-routable range and the relay's own
+    # address are denied here (ranges, not CIDR: coturn aborts on CIDR). TCP
+    # relay (RFC 6062) is off — WebRTC does not use it. See the Ansible template
+    # (deploy/ansible/roles/llamenos-coturn/templates/compose/coturn.j2) for the
+    # full reasoning and the measurements.
+    #
+    # TURN_MEDIA_PEER_IP is the MEDIA SERVER: a relayed call is volunteer ->
+    # relay -> Asterisk, Asterisk advertises its docker-bridge address (inside
+    # the denied 172.16/12), and with that range denied and no allowance the call
+    # connects and carries no audio. Set it to Asterisk's address to relay media.
+    # Left unset, the relay can reach no private address at all, which is the
+    # safe default for a stack whose relay is on loopback (as here). coturn
+    # matches by IP only, so the allowance cannot be scoped to the RTP ports, and
+    # once it is set every other peer is refused. It is not pinned in this file
+    # because a fixed subnet would collide between parallel compose projects; the
+    # Ansible path pins Asterisk's address. Note Asterisk sits on the `internal:
+    # true` network below, which the host (and so this container) cannot route to
+    # — measured — so relayed media does not reach it on this path with or
+    # without the allowance.
+    #
+    # Behind 1:1 NAT (--external-ip), coturn exempts the host's own addresses from
+    # this ACL whatever is denied — measured. Do not treat the host-address denial
+    # as holding there.
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
@@ -516,6 +564,24 @@ services:
       --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
       --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
       ${TURN_EXTERNAL_IP:+--external-ip=${TURN_EXTERNAL_IP}}
+      --denied-peer-ip=0.0.0.0-0.255.255.255
+      --denied-peer-ip=10.0.0.0-10.255.255.255
+      --denied-peer-ip=100.64.0.0-100.127.255.255
+      --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=169.254.0.0-169.254.255.255
+      --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=192.0.0.0-192.0.0.255
+      --denied-peer-ip=192.168.0.0-192.168.255.255
+      --denied-peer-ip=198.18.0.0-198.19.255.255
+      --denied-peer-ip=::-::1
+      --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      --denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+      --denied-peer-ip=${TURN_RELAY_IP:-127.0.0.1}
+      --denied-peer-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      ${TURN_MEDIA_PEER_IP:+--allowed-peer-ip=${TURN_MEDIA_PEER_IP}}
+      --no-tcp-relay
+      --no-multicast-peers
       --no-tls
       --no-dtls
       --no-cli
@@ -641,7 +707,10 @@ services:
       - PORT=3100
       - "NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-changeme}"
       - NOTIFIER_API_KEY_PREVIOUS=${NOTIFIER_API_KEY_PREVIOUS:-}
-      - "NOTIFIER_TOKEN_SECRET=${NOTIFIER_TOKEN_SECRET:-${HMAC_SECRET}}"
+      # Required, with no fallback to HMAC_SECRET: the sidecar exits at boot without
+      # it. (Not `:?` — compose interpolates the whole file, so that would demand
+      # it of every deployment that never enables the `signal` profile.)
+      - "NOTIFIER_TOKEN_SECRET=${NOTIFIER_TOKEN_SECRET:-}"
       - "DATABASE_URL=postgres://llamenos:${PG_PASSWORD}@postgres:5432/llamenos?sslmode=disable"
       - SIGNAL_BRIDGE_URL=http://signal-cli:8080
       - SIGNAL_BRIDGE_API_KEY=${SIGNAL_BRIDGE_API_KEY:-}
@@ -659,6 +728,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+secrets:
+  ban-hash-key:
+    file: ./secrets/ban-hash-key
+  messaging-hash-key:
+    file: ./secrets/messaging-hash-key
 
 configs:
   # Rendered from ARI_PASSWORD so asterisk and sip-bridge share one credential.

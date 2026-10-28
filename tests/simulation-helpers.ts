@@ -136,6 +136,28 @@ export interface SimulationResponse<T> {
   data: Partial<T> & { error?: string; banned?: boolean; status?: string }
 }
 
+/** POST to a simulation endpoint and return the raw HTTP outcome instead of throwing. */
+async function postSimulationRaw<T>(
+  request: APIRequestContext,
+  endpoint: string,
+  body: Record<string, unknown>,
+): Promise<SimulationResponse<T>> {
+  const res = await request.post(`${HUB_BASE_URL}/api/test-simulate/${endpoint}`, {
+    headers: simulationHeaders(),
+    data: body,
+  })
+  const text = await res.text()
+  let data: Record<string, unknown>
+  try {
+    data = text ? JSON.parse(text) as Record<string, unknown> : {}
+  } catch {
+    // A non-JSON body is never a routing decision — surface it verbatim so the
+    // step's assertion message names what the server actually returned.
+    data = { error: text }
+  }
+  return { status: res.status(), ok: res.ok(), data: data as SimulationResponse<T>['data'] }
+}
+
 /**
  * Simulate an incoming call and return the raw HTTP outcome instead of throwing.
  *
@@ -148,25 +170,12 @@ export async function simulateIncomingCallResponse(
   request: APIRequestContext,
   options: SimulateIncomingCallOptions,
 ): Promise<SimulationResponse<SimulateIncomingCallResult>> {
-  const res = await request.post(`${HUB_BASE_URL}/api/test-simulate/incoming-call`, {
-    headers: simulationHeaders(),
-    data: {
-      callerNumber: options.callerNumber,
-      ...(options.language ? { language: options.language } : {}),
-      ...(options.hubId ? { hubId: options.hubId } : {}),
-      ...(options.checkVolunteers ? { checkVolunteers: true } : {}),
-    },
+  return postSimulationRaw<SimulateIncomingCallResult>(request, 'incoming-call', {
+    callerNumber: options.callerNumber,
+    ...(options.language ? { language: options.language } : {}),
+    ...(options.hubId ? { hubId: options.hubId } : {}),
+    ...(options.checkVolunteers ? { checkVolunteers: true } : {}),
   })
-  const text = await res.text()
-  let data: Record<string, unknown>
-  try {
-    data = text ? JSON.parse(text) as Record<string, unknown> : {}
-  } catch {
-    // A non-JSON body is never a routing decision — surface it verbatim so the
-    // step's assertion message names what the server actually returned.
-    data = { error: text }
-  }
-  return { status: res.status(), ok: res.ok(), data: data as SimulationResponse<SimulateIncomingCallResult>['data'] }
 }
 
 /**
@@ -216,6 +225,19 @@ export async function simulateAnswerCall(
     'answer-call',
     { callId, pubkey },
   )
+}
+
+/**
+ * Simulate answering a ringing call and return the raw HTTP outcome instead of
+ * throwing — for steps that assert on the losing side of a race (409) or a
+ * call that is gone (404).
+ */
+export async function simulateAnswerCallResponse(
+  request: APIRequestContext,
+  callId: string,
+  pubkey: string,
+): Promise<SimulationResponse<SimulateAnswerCallResult>> {
+  return postSimulationRaw<SimulateAnswerCallResult>(request, 'answer-call', { callId, pubkey })
 }
 
 /**
@@ -315,4 +337,22 @@ export async function simulateDeliveryStatus(
 export function uniqueCallerNumber(): string {
   const suffix = Date.now().toString().slice(-7)
   return `+1212${suffix}`
+}
+
+/**
+ * A real ringing call in `hubId` (or the unscoped hub), for a note to hang off.
+ *
+ * `POST /notes` refuses a `callId` that is not a call of the hub it is written
+ * to (#2112), so a fixture can no longer invent one — it files the note under a
+ * call the server actually knows. Returns the call id.
+ */
+export async function simulateCallForNote(
+  request: APIRequestContext,
+  hubId?: string,
+): Promise<string> {
+  const { callId } = await simulateIncomingCall(request, {
+    callerNumber: uniqueCallerNumber(),
+    ...(hubId ? { hubId } : {}),
+  })
+  return callId
 }

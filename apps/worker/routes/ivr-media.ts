@@ -8,7 +8,7 @@
  */
 import { Hono, type Context } from 'hono'
 import type { AppEnv } from '../types'
-import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '../lib/helpers'
+import { IVR_HUB_ID_PATTERN, IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '../lib/helpers'
 import { verifyIvrMediaPath } from '../lib/ivr-media-url'
 
 const ivrMedia = new Hono<AppEnv>()
@@ -18,21 +18,31 @@ const ivrMedia = new Hono<AppEnv>()
  * buildAudioUrlMap mints (#1325). Every refusal is the same 404, and the
  * signature is checked before the database is: an unsigned request learns
  * nothing — not even whether a prompt exists for a language.
+ *
+ * The platform default lives at `/ivr-audio/:promptType/:language`; a call in
+ * a hub is handed `/ivr-audio/:hubId/:promptType/:language`, which serves the
+ * hub's own recording and falls back to the default. The hub is part of the
+ * signed path, so a URL minted for one hub cannot be repointed at another.
  */
-ivrMedia.get('/ivr-audio/:promptType/:language', async (c) => {
+const uploadedPrompt = (hubSegment: boolean) => async (c: Context<AppEnv>) => {
   const notFound = () => c.json({ error: 'Not found' }, 404)
   const url = new URL(c.req.url)
   if (!verifyIvrMediaPath(c.env.HMAC_SECRET, url.pathname, url.searchParams, { requireExpiry: true })) {
     return notFound()
   }
-  const promptType = c.req.param('promptType')
-  const language = c.req.param('language')
+  const hubId = hubSegment ? c.req.param('hubId') : undefined
+  const promptType = c.req.param('promptType') ?? ''
+  const language = c.req.param('language') ?? ''
+  if (hubSegment && !IVR_HUB_ID_PATTERN.test(hubId ?? '')) return notFound()
   if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) return notFound()
-  const result = await c.get('services').settings.getIvrAudio(promptType, language)
+  const result = await c.get('services').settings.getEffectiveIvrAudio(hubId, promptType, language)
   if (!result) return notFound()
   // Uploads are validated as PCM WAV (ivrAudioFormatError), so the type is true.
   return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
-})
+}
+
+ivrMedia.get('/ivr-audio/:promptType/:language', uploadedPrompt(false))
+ivrMedia.get('/ivr-audio/:hubId/:promptType/:language', uploadedPrompt(true))
 
 /**
  * Generated speech (#1347): what a self-hosted PBX plays for a prompt no

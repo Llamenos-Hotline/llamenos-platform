@@ -30,12 +30,12 @@ vi.mock('@worker/lib/ws-events', () => ({
   publishEvent: vi.fn(),
 }))
 import { getMessagingAdapterFromService } from '@worker/lib/service-factories'
+import { messagingContactHash } from '@worker/lib/messaging-contact-hash'
 
 const incoming: IncomingMessage = {
   channelType: 'sms',
   externalId: 'SM-1132',
   senderIdentifier: '+15551110000',
-  senderIdentifierHash: 'hash-1132',
   body: 'hello',
   timestamp: '2026-09-27T00:00:00.000Z',
 }
@@ -73,6 +73,7 @@ async function createBunShapedApp(services: Services) {
     c.env = {
       ADMIN_PUBKEY: 'a'.repeat(64),
       HMAC_SECRET: 'b'.repeat(64),
+      MESSAGING_HASH_KEY: 'f'.repeat(64),
     } as unknown as AppEnv['Bindings']
     await next()
   })
@@ -119,7 +120,7 @@ describe('messaging webhook on a runtime with no ExecutionContext (Bun) — #113
     expect(auditLog).toHaveBeenCalledWith(
       'messageReceived',
       'system',
-      expect.objectContaining({ channel: 'sms', senderHash: 'hash-1132' }),
+      expect.objectContaining({ channel: 'sms', senderHash: messagingContactHash(incoming.senderIdentifier, undefined, 'f'.repeat(64)) }),
       null,
     )
   })

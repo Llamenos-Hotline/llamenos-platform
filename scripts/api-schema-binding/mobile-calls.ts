@@ -135,8 +135,11 @@ function indexFunctions(source: SourceText): FuncDef[] {
         break
       }
       if (ch === '=' && text[i + 1] !== '=' && text[i + 1] !== '>' && !'=!<>'.includes(text[i - 1])) {
-        const end = readExpression(text, i + 1, lang)
-        found = { name: m[1], params, bodyStart: i + 1, bodyEnd: end, exprBody: true }
+        // `fun f(...): String =\n    expr` — the body starts on the next line; reading from the
+        // `=` itself would stop at that newline and see an empty expression.
+        const start = i + 1 + (text.slice(i + 1).length - text.slice(i + 1).trimStart().length)
+        const end = readExpression(text, start, lang)
+        found = { name: m[1], params, bodyStart: start, bodyEnd: end, exprBody: true }
         break
       }
       if (ch === '\n') {
@@ -351,8 +354,10 @@ function evalCall(ctx: Ctx, name: string, open: number, close: number): Res {
     const inner = evalRange(sub, ...args[0].range)
     return isUnres(inner) ? inner : { alts: inner.alts.map(a => ({ path: a.path, scoping: a.scoping === 'none' ? 'hp' : a.scoping })) }
   }
-  // Swift `APIService.hubPath(hubId, "/api/x")` — the canonical explicit-hub builder.
-  if (name === 'hubPath' && lang === 'swift' && args.length === 2) {
+  // `APIService.hubPath(hubId, "/api/x")` (Swift) and `ApiService.hubPath(hubId, "/api/x")`
+  // (Kotlin) — the canonical explicit-hub builder. A one-argument `hubPath(path)` is a
+  // different, file-private helper and is resolved as an ordinary call below.
+  if (name === 'hubPath' && args.length === 2) {
     const inner = evalRange(sub, ...args[1].range)
     return isUnres(inner) ? inner : { alts: inner.alts.map(a => ({ path: scopeToHub(a.path), scoping: 'explicit' as HubScoping })) }
   }
@@ -441,11 +446,11 @@ interface Entry {
   style: 'labelled' | 'positional'
 }
 
-const SWIFT_ENTRY: Entry = { callees: ['request', 'rawRequest'], style: 'labelled' }
+const SWIFT_ENTRY: Entry = { callees: ['request', 'rawRequest', 'publicRequest'], style: 'labelled' }
 const KOTLIN_ENTRY: Entry = { callees: ['request', 'requestNoContent', 'requestRawNoContent', 'requestBytes'], style: 'positional' }
 
 /** Request entry points: a bare own-parameter path handed on from one of these is plumbing. */
-const ENTRY_NAMES = new Set(['request', 'rawRequest', 'requestNoContent', 'requestRawNoContent', 'requestBytes', 'resolve'])
+const ENTRY_NAMES = new Set(['request', 'rawRequest', 'publicRequest', 'requestNoContent', 'requestRawNoContent', 'requestBytes', 'resolve'])
 
 function isPassThrough(m: FileModel, at: number, expr: string): boolean {
   const fn = enclosingFn(m, at)

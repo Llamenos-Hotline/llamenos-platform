@@ -346,7 +346,7 @@ describe('Calls Routes — response conformance', () => {
     {
       callId: 'call-1',
       hubId: 'hub-1',
-      callerNumber: 'f'.repeat(64),
+      callerNumberSealed: 'f'.repeat(64),
       callerLast4: '4567',
       answeredBy: null,
       status: 'ringing',
@@ -548,14 +548,28 @@ describe('Notes Routes — response conformance', () => {
       createInteraction: vi.fn().mockResolvedValue(undefined),
     }
 
+    // The note is filed under a call of THIS hub (#2112) and carries an envelope
+    // an admin can open (#2113); the route refuses it otherwise, so the fixtures
+    // supply both rather than the case quietly testing a 404/422 instead.
+    const adminKey = 'a'.repeat(64)
+    const mockCalls = {
+      getActiveCallById: vi.fn().mockResolvedValue({ callId: 'call-1', hubId: DEFAULT_HUB_ID }),
+      getCallRecord: vi.fn().mockResolvedValue(null),
+    }
     const { app, env } = buildApp('/notes', notesRoutes, {
-      services: { records: mockRecords, cases: mockCasesService },
+      services: {
+        records: mockRecords,
+        cases: mockCasesService,
+        calls: mockCalls,
+        identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([adminKey]) },
+      },
     })
 
     const result = await assertConformsToSchema(app, 'POST', '/notes', notePostResponseSchema, {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',
+        adminEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
       },
       expectedStatus: 201,
       env,
@@ -573,7 +587,6 @@ describe('Bans Routes — response conformance', () => {
   it('GET /bans — conforms to banListResponseSchema', async () => {
     const mockBans = [
       {
-        phone: '***4567',
         phoneHash: 'a'.repeat(64),
         reason: 'Harassment',
         bannedBy: MOCK_PUBKEY,
@@ -591,7 +604,7 @@ describe('Bans Routes — response conformance', () => {
 
     const result = await assertConformsToSchema(app, 'GET', '/bans', banListResponseSchema, { env })
     expect(Array.isArray(result.parsed.bans)).toBe(true)
-    expect(result.parsed.bans[0].phone).toBe('***4567')
+    expect(result.parsed.bans[0]).not.toHaveProperty('phone')
   })
 })
 
@@ -718,11 +731,12 @@ describe('Shifts Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/shifts', shiftsRoutes, {
-      services: { shifts: mockShifts },
+      services: { shifts: mockShifts, activeShifts: { getActive: vi.fn().mockResolvedValue(null) } },
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/shifts/my-status', myStatusResponseSchema, { env })
     expect(typeof result.parsed.onShift).toBe('boolean')
+    expect(result.parsed.clockedIn).toBe(false)
     expect(result.parsed.nextShift).toBeNull()
   })
 })

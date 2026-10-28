@@ -24,6 +24,11 @@ on:
       - ".github/workflows/helm-validate.yml"
   workflow_dispatch:
 
+concurrency:
+  # A superseded push cancels its own PR run (#2094); every other event gets a per-SHA group that nothing can cancel.
+  group: ${{ github.event_name == 'pull_request' && format('helm-validate-pr-{0}', github.ref) || format('helm-validate-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions: {}  # deny-all; per-job permissions below
 
 jobs:
@@ -37,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Helm
         uses: Azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -66,9 +71,46 @@ jobs:
             --set secrets.postgresPassword=ci-placeholder \
             --set secrets.hmacSecret=0000000000000000000000000000000000000000000000000000000000000000 \
             --set secrets.serverSecret=1111111111111111111111111111111111111111111111111111111111111111 \
+            --set secrets.serverKek=2222222222222222222222222222222222222222222222222222222222222222 \
+            --set secrets.banHashKey=3333333333333333333333333333333333333333333333333333333333333333 \
+            --set secrets.messagingHashKey=4444444444444444444444444444444444444444444444444444444444444444 \
             --set rustfs.credentials.accessKey=ci-placeholder \
             --set rustfs.credentials.secretKey=ci-placeholder \
             > /dev/null
+
+      # D6 (#2171): each key has one role and the chart must never render an
+      # empty one. serverKek lands in the "-secrets" Secret, banHashKey and
+      # messagingHashKey each in their own Secret mounted as a file — assert all three
+      # refuse to render when unset.
+      - name: Verify the chart refuses a blank secrets.serverKek
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set secrets.serverKek= > /tmp/should-have-failed-3.yaml 2>/tmp/should-have-failed-3.log; then
+            echo "::error::helm template succeeded with an empty secrets.serverKek — the required guard in templates/secret.yaml regressed (#2171)."
+            cat /tmp/should-have-failed-3.log
+            exit 1
+          fi
+          grep -q "secrets.serverKek is required" /tmp/should-have-failed-3.log
+
+      - name: Verify the chart refuses a blank secrets.banHashKey
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set secrets.banHashKey= > /tmp/should-have-failed-4.yaml 2>/tmp/should-have-failed-4.log; then
+            echo "::error::helm template succeeded with an empty secrets.banHashKey — the required guard in templates/secret-ban-hash-key.yaml regressed (#2171)."
+            cat /tmp/should-have-failed-4.log
+            exit 1
+          fi
+          grep -q "secrets.banHashKey is required" /tmp/should-have-failed-4.log
+
+      - name: Verify the chart refuses a blank secrets.messagingHashKey
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set secrets.messagingHashKey= > /tmp/should-have-failed-5.yaml 2>/tmp/should-have-failed-5.log; then
+            echo "::error::helm template succeeded with an empty secrets.messagingHashKey — the required guard in templates/secret-messaging-hash-key.yaml regressed (#2182)."
+            cat /tmp/should-have-failed-5.log
+            exit 1
+          fi
+          grep -q "secrets.messagingHashKey is required" /tmp/should-have-failed-5.log
 
       # Verify-by-breaking: these two guards exist specifically to stop a
       # `helm install` from ever again starting more than one app replica

@@ -8,6 +8,11 @@ Feature: Permission Matrix
     And test users exist for all default roles
 
   # ─── Volunteers Domain ─────────────────────────────────────────────
+  # `/api/users` outside a hub is the INSTANCE view: every user on the server,
+  # across every hub. Only a super-admin reaches it; a hub admin manages their
+  # own hub's members through /api/hubs/:hubId/users, where the path hub bounds
+  # every read and write (hub-isolation.feature, hub-membership-isolation.feature).
+  # A missing hub must never widen authority (#1099, #2153).
 
   Scenario Outline: <role> <expected> access to list volunteers
     When the "<role>" user sends "GET" to "/api/users"
@@ -16,7 +21,7 @@ Feature: Permission Matrix
     Examples:
       | role         | expected  | status |
       | super-admin  | has       | 200    |
-      | hub-admin    | has       | 200    |
+      | hub-admin    | denied    | 403    |
       | reviewer     | denied    | 403    |
       | volunteer    | denied    | 403    |
       | reporter     | denied    | 403    |
@@ -28,7 +33,19 @@ Feature: Permission Matrix
     Examples:
       | role         | expected  | status |
       | super-admin  | has       | 201    |
-      | hub-admin    | has       | 201    |
+      | hub-admin    | denied    | 403    |
+      | reviewer     | denied    | 403    |
+      | volunteer    | denied    | 403    |
+      | reporter     | denied    | 403    |
+
+  Scenario Outline: <role> <expected> access to list the members of their own hub
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/users"
+    Then the response status should be <status>
+
+    Examples:
+      | role         | expected  | status |
+      | super-admin  | has       | 200    |
+      | hub-admin    | has       | 200    |
       | reviewer     | denied    | 403    |
       | volunteer    | denied    | 403    |
       | reporter     | denied    | 403    |
@@ -41,7 +58,7 @@ Feature: Permission Matrix
     Examples:
       | role         | expected  | status |
       | super-admin  | has       | 200    |
-      | hub-admin    | has       | 200    |
+      | hub-admin    | denied    | 403    |
       | reviewer     | denied    | 403    |
       | volunteer    | denied    | 403    |
       | reporter     | denied    | 403    |
@@ -54,7 +71,7 @@ Feature: Permission Matrix
     Examples:
       | role         | expected  | status |
       | super-admin  | has       | 200    |
-      | hub-admin    | has       | 200    |
+      | hub-admin    | denied    | 403    |
       | reviewer     | denied    | 403    |
       | volunteer    | denied    | 403    |
       | reporter     | denied    | 403    |

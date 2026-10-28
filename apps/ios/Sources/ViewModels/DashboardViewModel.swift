@@ -1,25 +1,5 @@
 import Foundation
 
-// MARK: - ShiftStatus
-
-/// The volunteer's current shift status.
-enum ShiftStatus: Equatable {
-    /// Not currently on shift.
-    case offShift
-    /// On shift and available to receive calls.
-    case onShift
-    /// On shift but currently on a call.
-    case onCall
-    /// Loading shift status from the API.
-    case loading
-    /// Failed to load shift status.
-    case error(String)
-
-    var isOnShift: Bool {
-        self == .onShift || self == .onCall
-    }
-}
-
 // MARK: - RecentNotePreview
 
 /// Lightweight preview of a recent note for the dashboard.
@@ -53,21 +33,42 @@ final class DashboardViewModel {
     private let cryptoService: CryptoService
     private let webSocketService: WebSocketService
     private let hubContext: HubContext
+    private let shiftClockService: ShiftClockService
 
-    /// Current shift status.
-    var shiftStatus: ShiftStatus = .offShift
+    /// What the server will do with a ring for this volunteer: scheduled ∧ clocked in ∧ not
+    /// on break, on any member hub (rings come from all of them, not just the one being
+    /// browsed). Nil until the server has answered.
+    ///
+    /// Read from `ShiftClockService`, i.e. from `GET /shifts/my-status` per hub — never from
+    /// its scheduled-only `onShift` by itself, which made this card say "On Shift" for a
+    /// volunteer the server was not ringing (#2204, the iOS counterpart of #2108).
+    var readiness: ShiftReadiness? { shiftClockService.readiness(across: callHubIds) }
 
-    /// Convenience: whether the volunteer is currently on shift.
-    var isOnShift: Bool { shiftStatus.isOnShift }
-
-    /// When the current shift started, for the elapsed timer.
-    var shiftStartedAt: Date?
+    /// When the volunteer started being rung, for the elapsed timer.
+    var shiftStartedAt: Date? { shiftClockService.readySince(across: callHubIds) }
 
     /// Number of active calls (loaded from API).
     var activeCallCount: Int = 0
 
-    /// The current volunteer's active call (if any).
+    /// The call this volunteer answered and is on — the one whose `answeredBy` is this
+    /// device's identity. Never "whichever call the hub lists first": a call someone else
+    /// answered is not theirs to hang up, spam or ban (the server refuses with 403).
     var currentCall: ActiveCall?
+
+    /// Calls ringing this volunteer, across every member hub (the multi-hub routing axiom).
+    var ringingCalls: [ActiveCall] = []
+
+    /// This volunteer's own call that has just ended. Holds the call id so a note can still
+    /// be filed against it; in memory only, and gone when the volunteer dismisses it, saves
+    /// the note, locks or logs out. Never written to disk.
+    private(set) var endedCall: CallReference?
+
+    /// Rings the server refused to answer in the app (422: the hub has no in-app leg for
+    /// this volunteer), which can only be answered on the phone.
+    private(set) var answerOnPhoneCallIds: Set<String> = []
+
+    /// Rings with an answer request in flight.
+    private(set) var answeringCallIds: Set<String> = []
 
     /// Number of recent notes (loaded from API).
     var recentNoteCount: Int = 0
@@ -86,6 +87,8 @@ final class DashboardViewModel {
 
     /// Active shift timer display string.
     var elapsedTimeDisplay: String {
+        // Reading `tick` subscribes the view to the once-a-second timer invalidations.
+        _ = tick
         guard let startedAt = shiftStartedAt else { return "--:--:--" }
         let elapsed = Date().timeIntervalSince(startedAt)
         let hours = Int(elapsed) / 3600
@@ -102,13 +105,23 @@ final class DashboardViewModel {
     @ObservationIgnored nonisolated(unsafe) private var eventTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var timerTask: Task<Void, Never>?
 
+    /// Bumped once a second while ringing so the elapsed-time display re-evaluates.
+    private var tick: Int = 0
+
     /// Nonisolated: it only stores its arguments, so the model can be built anywhere —
     /// every state change after construction still happens on the main actor.
-    nonisolated init(apiService: APIService, cryptoService: CryptoService, webSocketService: WebSocketService, hubContext: HubContext) {
+    nonisolated init(
+        apiService: APIService,
+        cryptoService: CryptoService,
+        webSocketService: WebSocketService,
+        hubContext: HubContext,
+        shiftClockService: ShiftClockService
+    ) {
         self.apiService = apiService
         self.cryptoService = cryptoService
         self.webSocketService = webSocketService
         self.hubContext = hubContext
+        self.shiftClockService = shiftClockService
     }
 
     // MARK: - Data Loading
@@ -168,25 +181,22 @@ final class DashboardViewModel {
         case .callRing, .callAnswered, .callUpdate, .voicemailNew, .presenceSummary, .presenceDetail:
             // Call/presence events on any member hub affect shift status and the active call.
             Task {
-                await fetchShiftStatus()
+                await fetchShiftStatus(hubIds: [attributed.hubId])
                 await fetchActiveCall()
             }
         case .callEnded:
-            // Call ended — clear it immediately if it was this hub's call, then refresh
-            if currentCall?.hubId == attributed.hubId {
-                currentCall = nil
-            }
+            // The event does not say which call ended; the hub's call list does.
             Task {
-                await fetchShiftStatus()
+                await fetchShiftStatus(hubIds: [attributed.hubId])
                 await fetchActiveCall()
             }
         case .shiftStarted, .shiftEnded, .shiftUpdate:
-            Task { await fetchShiftStatus() }
+            Task { await fetchShiftStatus(hubIds: [attributed.hubId]) }
         case .noteCreated:
             // Recent notes are browsing data for the active hub only.
             guard attributed.hubId == hubContext.activeHubId else { return }
             Task { await fetchRecentNotes() }
-        case .messageNew, .messageStatus, .conversationNew, .conversationAssigned, .conversationClosed:
+        case .messageNew, .messageStatus, .conversationNew, .conversationAssigned, .conversationClosed, .conversationEnvelopesAdded:
             // Message events don't affect dashboard — handled by ConversationsViewModel
             break
         case .deviceWipe, .unknown:
@@ -196,12 +206,16 @@ final class DashboardViewModel {
 
     // MARK: - Timer
 
-    func startTimer() {
-        stopTimer()
-        timerTask = Task { [weak self] in
+    /// Run the timer while the server is ringing this volunteer, stop it otherwise.
+    private func syncTimer() {
+        guard readiness?.isRingTarget == true else {
+            stopTimer()
+            return
+        }
+        guard timerTask == nil else { return }
+        timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                // Touch a property to trigger @Observable re-evaluation
-                self?.shiftStartedAt = self?.shiftStartedAt
+                self?.tick &+= 1
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -214,14 +228,36 @@ final class DashboardViewModel {
 
     // MARK: - Call Actions
 
+    /// Answer a ringing call in the app (on the call's own hub, not the active hub).
+    ///
+    /// 422 means the hub has no in-app leg for this volunteer: the call is still ringing and
+    /// can only be answered on the phone, so the card says so instead of offering Answer.
+    func answerCall(_ call: ActiveCall) async {
+        guard !answeringCallIds.contains(call.id) else { return }
+        answeringCallIds.insert(call.id)
+        defer { answeringCallIds.remove(call.id) }
+        do {
+            try await apiService.request(method: "POST", path: APIService.hubPath(call.hubId, "/api/calls/\(call.id)/answer"))
+            await fetchActiveCall()
+        } catch APIError.requestFailed(statusCode: 422, _) {
+            answerOnPhoneCallIds.insert(call.id)
+        } catch {
+            // 409: someone else picked up first. Anything else: the call is still ringing.
+            errorMessage = NSLocalizedString("calls_answer_failed", comment: "Couldn't answer the call.")
+            await fetchActiveCall()
+        }
+    }
+
     /// Hang up the current active call (on the call's own hub, not the active hub).
     func hangupCall() async {
         guard let call = currentCall else { return }
         do {
             try await apiService.request(method: "POST", path: APIService.hubPath(call.hubId, "/api/calls/\(call.id)/hangup"))
-            currentCall = nil
+            finish(call)
         } catch {
-            errorMessage = error.localizedDescription
+            // The call is still on screen and still ringing the caller: say the hang-up
+            // did not happen, rather than the bare refusal reason.
+            errorMessage = NSLocalizedString("calls_hangup_failed", comment: "Couldn't end the call. Try again.")
         }
     }
 
@@ -246,10 +282,43 @@ final class DashboardViewModel {
             } else {
                 try await apiService.request(method: "POST", path: path)
             }
-            currentCall = nil
+            finish(call)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = NSLocalizedString("call_actions_ban_failed", comment: "Failed to ban caller")
         }
+    }
+
+    // MARK: - Ended Call
+
+    /// Calls the note editor can offer straight away: the one in progress and the one that
+    /// just ended.
+    var heldCalls: [CallReference] {
+        [currentCall?.reference, endedCall].compactMap { $0 }
+    }
+
+    /// The volunteer dismissed the "Call Ended" prompt.
+    func dismissEndedCall() {
+        endedCall = nil
+    }
+
+    /// A note was filed against `call`: the prompt has done its job.
+    func noteSaved(for call: CallReference) {
+        if endedCall?.id == call.id { endedCall = nil }
+    }
+
+    /// Forget every call held in memory — the app locked or the user logged out.
+    func clearCalls() {
+        currentCall = nil
+        ringingCalls = []
+        endedCall = nil
+        answerOnPhoneCallIds = []
+        answeringCallIds = []
+    }
+
+    /// This volunteer's `call` is over: swap the call card for the "Call Ended" prompt.
+    private func finish(_ call: ActiveCall) {
+        if currentCall?.id == call.id { currentCall = nil }
+        endedCall = call.reference(phase: .ended)
     }
 
     // MARK: - Private Helpers
@@ -266,12 +335,14 @@ final class DashboardViewModel {
         return ids
     }
 
-    /// Fetch the volunteer's active call (if any) across every member hub.
-    /// The active hub's call wins when several hubs have one.
+    /// Fetch the calls that concern this volunteer across every member hub: the ones ringing
+    /// them, and the one they answered. A call somebody else answered is counted, not shown.
     private func fetchActiveCall() async {
         let hubIds = callHubIds
         guard !hubIds.isEmpty else {
             currentCall = nil
+            ringingCalls = []
+            activeCallCount = 0
             return
         }
         var callsByHub: [String: ProtocolActiveCallsResponse] = [:]
@@ -290,60 +361,45 @@ final class DashboardViewModel {
                 if let response { callsByHub[hubId] = response }
             }
         }
-        guard let (hubId, first) = hubIds.lazy
-            .compactMap({ id in callsByHub[id]?.calls.first.map { (id, $0) } })
-            .first
-        else {
-            // No call anywhere. Clear only if every hub answered — a hub whose request
-            // failed may still hold the current call; the next event re-checks it.
-            if callsByHub.count == hubIds.count { currentCall = nil }
-            return
+        activeCallCount = callsByHub.values.reduce(0) { $0 + $1.calls.count }
+
+        let me = cryptoService.signingPubkeyHex
+        let live = hubIds.flatMap { hubId in
+            (callsByHub[hubId]?.calls ?? []).map { (hubId: hubId, call: $0) }
         }
-        // Attempt E2EE decryption of call metadata
-        var callerNumber = first.callerLast4
-        if let encryptedContent = first.encryptedContent,
-           let envelopes = first.adminEnvelopes, !envelopes.isEmpty {
-            let tuples = envelopes.map { (pubkey: $0.pubkey, enc: $0.enc, ct: $0.ct) }
-            if let decrypted = cryptoService.decryptCallMetadata(
-                encryptedContent: encryptedContent,
-                adminEnvelopes: tuples
-            ) {
-                callerNumber = decrypted.callerNumber
-            }
+
+        // A hub that did not answer keeps what it showed: its calls may well still be there.
+        let ringing = live
+            .filter { $0.call.status == .some(.ringing) && $0.call.answeredBy == nil }
+            .map { ActiveCall($0.call, hubId: $0.hubId) }
+        ringingCalls = ringingCalls.filter { callsByHub[$0.hubId] == nil } + ringing
+
+        // The active hub's call wins when this volunteer is on several.
+        let mine = live
+            .filter { me != nil && $0.call.answeredBy == me && $0.call.status == .some(.inProgress) }
+            .map { ActiveCall($0.call, hubId: $0.hubId) }
+        let previous = currentCall
+        if let first = mine.first {
+            currentCall = first
+        } else if let previous, callsByHub[previous.hubId] != nil {
+            currentCall = nil
         }
-        currentCall = ActiveCall(
-            id: first.id,
-            hubId: hubId,
-            callerNumber: callerNumber,
-            startedAt: DateFormatting.parseISO(first.startedAt) ?? Date(),
-            status: first.status?.rawValue ?? "unknown"
-        )
+        // Gone from a hub that answered: the call ended (hung up by the caller, the other
+        // side, or the server).
+        if let previous, callsByHub[previous.hubId] != nil, !mine.contains(where: { $0.id == previous.id }) {
+            endedCall = previous.reference(phase: .ended)
+        }
     }
 
-    private func fetchShiftStatus() async {
-        do {
-            let status: DashboardShiftStatusResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/shifts/my-status")
-            )
-            shiftStatus = status.onShift ? .onShift : .offShift
-            activeCallCount = status.activeCallCount ?? 0
-            recentNoteCount = status.recentNoteCount ?? 0
-
-            if status.onShift, let startedAtString = status.startedAt {
-                shiftStartedAt = DateFormatting.parseISO(startedAtString)
-                startTimer()
-            } else {
-                shiftStartedAt = nil
-                stopTimer()
-            }
-        } catch {
-            shiftStatus = .offShift
-            activeCallCount = 0
-            if case APIError.noBaseURL = error {
+    /// Ask the server where this volunteer stands on `hubIds` (every member hub by default).
+    private func fetchShiftStatus(hubIds: [String]? = nil) async {
+        let failure = await shiftClockService.refresh(hubIds: hubIds ?? callHubIds)
+        syncTimer()
+        if let failure {
+            if case APIError.noBaseURL = failure {
                 // Expected when hub isn't configured yet
             } else {
-                errorMessage = error.localizedDescription
+                errorMessage = failure.localizedDescription
             }
         }
     }
@@ -414,15 +470,3 @@ final class DashboardViewModel {
         timerTask?.cancel()
     }
 }
-
-// MARK: - API Response Types
-
-/// Response from the shift status endpoint.
-private struct DashboardShiftStatusResponse: Decodable {
-    let onShift: Bool
-    let shiftId: String?
-    let startedAt: String?
-    let activeCallCount: Int?
-    let recentNoteCount: Int?
-}
-

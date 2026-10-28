@@ -11,12 +11,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { listUsers, getUserLoads, updateConversation, type User, type Conversation } from '@/lib/api'
+import { listHubUsers, getUserLoads, updateConversation, type User, type HubConversation } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { User as UserIcon, Users, AlertCircle, Loader2 } from 'lucide-react'
 
 interface ReassignDialogProps {
-  conversation: Conversation
+  conversation: HubConversation
   open: boolean
   onOpenChange: (open: boolean) => void
   onReassigned?: () => void
@@ -33,21 +33,32 @@ export function ReassignDialog({
   const [users, setUsers] = useState<User[]>([])
   const [loads, setLoads] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [reassigning, setReassigning] = useState(false)
   const [selectedPubkey, setSelectedPubkey] = useState<string | null>(null)
 
-  // Load users and their current loads when dialog opens
+  // Load the conversation's own hub's members and their loads when the dialog opens.
+  // Both come from conversation.hubId — never the active hub, which is browsing context
+  // only. A hub the user cannot read members of rejects, and that is shown as a failure
+  // rather than as an empty "no volunteers available" list.
   useEffect(() => {
     if (!open) return
 
     setLoading(true)
+    setLoadFailed(false)
+    setUsers([])
+    setLoads({})
     setSelectedPubkey(null)
 
+    // A reply for a previous conversation/hub must not overwrite the current one.
+    let stale = false
+
     Promise.all([
-      listUsers(),
-      getUserLoads(),
+      listHubUsers(conversation.hubId),
+      getUserLoads(conversation.hubId),
     ])
       .then(([userRes, loadRes]) => {
+        if (stale) return
         // Filter to active users with messaging enabled
         const eligible = userRes.users.filter(u =>
           u.active &&
@@ -58,17 +69,25 @@ export function ReassignDialog({
         setLoads(loadRes.loads)
       })
       .catch(() => {
+        if (stale) return
+        setLoadFailed(true)
         toast(t('conversations.loadUsersError', { defaultValue: 'Failed to load volunteers' }), 'error')
       })
-      .finally(() => setLoading(false))
-  }, [open, conversation.assignedTo, t, toast])
+      .finally(() => {
+        if (!stale) setLoading(false)
+      })
+
+    return () => {
+      stale = true
+    }
+  }, [open, conversation.assignedTo, conversation.hubId, t, toast])
 
   const handleReassign = async () => {
     if (!selectedPubkey) return
 
     setReassigning(true)
     try {
-      await updateConversation(conversation.id, { assignedTo: selectedPubkey })
+      await updateConversation(conversation.hubId, conversation.id, { assignedTo: selectedPubkey })
       toast(t('conversations.reassigned', { defaultValue: 'Conversation reassigned' }))
       onOpenChange(false)
       onReassigned?.()
@@ -82,7 +101,7 @@ export function ReassignDialog({
   const handleUnassign = async () => {
     setReassigning(true)
     try {
-      await updateConversation(conversation.id, { status: 'waiting' })
+      await updateConversation(conversation.hubId, conversation.id, { status: 'waiting' })
       toast(t('conversations.unassigned', { defaultValue: 'Conversation unassigned' }))
       onOpenChange(false)
       onReassigned?.()
@@ -126,6 +145,13 @@ export function ReassignDialog({
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : loadFailed ? (
+          <div role="alert" className="flex flex-col items-center justify-center py-8 text-center">
+            <AlertCircle className="h-8 w-8 text-destructive mb-2" />
+            <p className="text-sm text-destructive">
+              {t('conversations.loadUsersError', { defaultValue: 'Failed to load volunteers' })}
+            </p>
           </div>
         ) : users.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">

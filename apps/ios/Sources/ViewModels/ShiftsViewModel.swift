@@ -34,18 +34,26 @@ final class ShiftsViewModel {
     /// Shifts grouped by day of week for the calendar view.
     var shiftDays: [ShiftDay] = []
 
-    /// Whether this device is clocked in to the active hub.
-    ///
-    /// Sourced from `ShiftClockService`, not `GET /shifts/my-status`: that endpoint's
-    /// `onShift` means "a scheduled shift containing this volunteer is active right
-    /// now", which is true whether or not the volunteer ever clocked in — exactly the
-    /// conflation #1216 removed on Android.
-    var isOnShift: Bool {
+    /// Whether the server holds an active-shift row for this user in the active hub. Decides
+    /// whether the screen offers Clock In or Clock Out; it does NOT mean the volunteer is
+    /// being rung — see `readiness`.
+    var isClockedIn: Bool {
         guard let hubId = hubContext.activeHubId else { return false }
         return shiftClockService.isClockedIn(to: hubId)
     }
 
-    /// When this device clocked in to the active hub, for the elapsed timer.
+    /// What the server will do with a ring for this volunteer on the active hub:
+    /// scheduled ∧ clocked in ∧ not on break. Nil until the server has answered.
+    ///
+    /// Not `GET /shifts/my-status`'s `onShift` alone: that means "a scheduled shift
+    /// containing this volunteer is active right now", true whether or not the volunteer
+    /// ever clocked in — the conflation #1216 removed on Android and #2204 on iOS.
+    var readiness: ShiftReadiness? {
+        guard let hubId = hubContext.activeHubId else { return nil }
+        return shiftClockService.readiness(for: hubId)
+    }
+
+    /// When the server says this volunteer clocked in to the active hub, for the elapsed timer.
     var shiftStartedAt: Date? {
         guard let hubId = hubContext.activeHubId else { return nil }
         return shiftClockService.clockedInAt(for: hubId)
@@ -150,7 +158,10 @@ final class ShiftsViewModel {
         isLoading = true
         errorMessage = nil
 
-        await fetchShifts()
+        async let schedule: Void = fetchShifts()
+        async let clockState: Void = refreshClockState()
+        await schedule
+        await clockState
         syncTimer()
 
         isLoading = false
@@ -177,7 +188,7 @@ final class ShiftsViewModel {
 
         do {
             try await shiftClockService.clockIn(hubId: hubId)
-            startTimer()
+            syncTimer()
 
             // Register a SIP account so the volunteer receives VoIP calls for this hub.
             //
@@ -218,7 +229,7 @@ final class ShiftsViewModel {
 
         do {
             try await shiftClockService.clockOut(hubId: hubId)
-            stopTimer()
+            syncTimer()
 
             // Unregister the SIP account so the volunteer stops receiving VoIP calls.
             onShiftEnded(hubId: hubId)
@@ -364,7 +375,7 @@ final class ShiftsViewModel {
 
     /// Match the timer's lifecycle to the clock state of the hub now being browsed.
     private func syncTimer() {
-        if isOnShift {
+        if isClockedIn {
             startTimer()
         } else {
             stopTimer()
@@ -372,6 +383,13 @@ final class ShiftsViewModel {
     }
 
     // MARK: - Private Helpers
+
+    /// Read the active hub's clock state from the server. The one source of truth: this
+    /// screen keeps no clock state of its own, so it survives a relaunch.
+    private func refreshClockState() async {
+        guard let hubId = hubContext.activeHubId else { return }
+        await shiftClockService.refresh(hubIds: [hubId])
+    }
 
     private func fetchShifts() async {
         do {

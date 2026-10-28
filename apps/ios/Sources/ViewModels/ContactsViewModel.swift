@@ -99,9 +99,8 @@ final class ContactsViewModel {
     /// The server mounts no contact search: `GET /api/contacts/search` is not a
     /// route, and its path falls into `GET /api/contacts/:hash`, which answers
     /// 200 for a contact whose hash is the word "search" (#2002). A contact is
-    /// held only as a hash plus the last four digits of its number, and those
-    /// are in every list row, so the search reads the whole list and matches
-    /// on them here.
+    /// held only as a hash, which is in every list row, so the search reads the
+    /// whole list and matches the start of the hash here.
     func search() async {
         isLoading = true
         errorMessage = nil

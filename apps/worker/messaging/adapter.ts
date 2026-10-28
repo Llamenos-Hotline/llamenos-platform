@@ -33,7 +33,8 @@ export interface IncomingMessage {
   channelType: MessagingChannelType
   externalId: string              // provider's message ID
   senderIdentifier: string        // phone number, WhatsApp ID, Signal UUID
-  senderIdentifierHash: string    // hashed for storage
+  /** Other identifiers the provider gave for the same sender (Signal: the phone number beside the UUID). */
+  aliases?: string[]
   body?: string                   // text content (plaintext from transport)
   mediaUrls?: string[]            // attachment URLs from provider
   mediaTypes?: string[]           // MIME types of attachments
@@ -56,6 +57,12 @@ export interface SendResult {
   success: boolean
   externalId?: string
   error?: string
+  /**
+   * Set when the send was refused because the recipient opted out (see
+   * `messaging/suppression-guard.ts`). Terminal: retrying cannot succeed and must
+   * not be attempted.
+   */
+  suppressed?: true
 }
 
 export interface ChannelStatus {

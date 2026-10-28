@@ -122,6 +122,7 @@ WARNING: 9 scenarios have NO platform tag
 WARNING: 6 feature files missing platform tags:
   - core/schema-browser.feature      - core/cms-assignment.feature
   - core/demo-mock-telephony.feature - core/hub-management.feature
+       (renamed core/simulated-telephony.feature by #1604)
   - core/call-actions.feature        - core/hub-context.feature
 ```
 All six carry scenario-level tags, so they are not fully dark. **The warning is non-fatal** —
@@ -142,6 +143,7 @@ all produces no failure (§6).
 | `admin/cms-advanced.feature` | 12 | runs 11 | — | — | — | RUNS |
 | `admin/custom-fields.feature` | 4 | — | runs 4 | DEAD 4 (no runner; 0 name-matched) | DEAD 4 (not shipped) | RUNS |
 | `admin/demo-dataset.feature` | 8 | runs 8 | — | — | — | RUNS |
+| ↳ *renamed `admin/sample-dataset.feature`, 5 scenarios, by #1604 — the three `POST /api/demo/reset` scenarios retired with demo mode* | | | | | | |
 | `admin/erasure.feature` | 14 | runs 14 | — | — | — | RUNS |
 | `admin/firehose.feature` | 11 | runs 11 | DEAD 11 (filter) | — | — | RUNS |
 | `admin/geocoding-settings.feature` | 7 | runs 7 | — | — | — | RUNS |

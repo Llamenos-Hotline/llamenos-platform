@@ -135,12 +135,9 @@
       "path": "/api/devices/register",
       "module": "@protocol/schemas/devices",
       "schema": "registerDeviceBodySchema",
-      "swiftType": "DeviceRegistrationRequest",
+      "swiftType": "RegisterDeviceBody",
       "callSite": "apps/ios/Sources/Services/WakeKeyService.swift",
-      "optionalKeys": [],
-      "unmodelledKeys": [
-        "deviceId"
-      ]
+      "optionalKeys": []
     },
     {
       "id": "storeUserRecoveryEnvelope",
@@ -424,16 +421,18 @@
     },
     "registerDevice": {
       "legacySnakeCase": {
-        "device_id": "44444444-4444-4444-8444-444444444444",
+        "ed25519_pubkey": "abababababababababababababababababababababababababababababababab",
         "platform": "ios",
         "push_token": "abababababababababababababababababababababababababababababababab",
-        "wake_key_public": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        "wake_key_public": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "x25519_pubkey": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
       },
       "wire": {
-        "deviceId": "44444444-4444-4444-8444-444444444444",
+        "ed25519Pubkey": "abababababababababababababababababababababababababababababababab",
         "platform": "ios",
         "pushToken": "abababababababababababababababababababababababababababababababab",
-        "wakeKeyPublic": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        "wakeKeyPublic": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "x25519Pubkey": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
       }
     },
     "storeUserRecoveryEnvelope": {

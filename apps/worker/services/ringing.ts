@@ -6,11 +6,13 @@ import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING } from '@shared/event-kinds'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableError } from '../lib/retry'
-import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { getCircuitBreaker, CircuitOpenError } from '../lib/circuit-breaker'
 import { incCounter } from '../routes/metrics'
-import { hashPhone } from '../lib/crypto'
+import { sealCallerNumber } from '../lib/crypto'
 import { resolveHubPermissions } from '@shared/permissions'
 import { listReachableVolunteerEndpoints, volunteerSipUsername } from '../telephony/registrar'
+import { AllDialsFailedError } from '../telephony/adapter'
+import { isMockProviderConfig } from '../telephony/mock'
 
 const logger = createLogger('ringing')
 
@@ -22,7 +24,7 @@ const logger = createLogger('ringing')
 export interface ParallelRingingResult {
   ringing: boolean
   /** Why nothing rang (only set when `ringing` is false). */
-  reason?: 'no-volunteers' | 'no-available-volunteers' | 'error'
+  reason?: 'no-volunteers' | 'no-available-volunteers' | 'telephony-failure' | 'error'
   /** Number of available on-shift volunteers notified (relay / VoIP push / phone). */
   volunteersNotified: number
 }
@@ -161,6 +163,16 @@ export async function resolveRingableVolunteers(
 // In-app ring targets
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether this volunteer asked to be reached in the app (`browser` or `both`).
+ * The one definition used both to pick who is rung in-app and to decide who may
+ * answer in-app, so the two can never disagree about a `phone`-only volunteer.
+ */
+export function wantsInApp(volunteer: RingableUser): boolean {
+  const pref = volunteer.callPreference ?? 'phone'
+  return pref === 'browser' || pref === 'both'
+}
+
 /** One in-app leg to ring: the volunteer, and the AOR their app registered. */
 interface InAppRingTarget {
   pubkey: string
@@ -200,7 +212,7 @@ interface InAppRingTarget {
  * per-hub row read as null, so this concluded "not our PBX" while the call
  * itself went out through the instance-wide Asterisk.
  */
-async function resolveInAppRingTargets(
+export async function resolveInAppRingTargets(
   env: Env,
   services: Services,
   hubId: string,
@@ -235,6 +247,38 @@ async function resolveInAppRingTargets(
     incCounter('llamenos_inapp_ring_errors_total', { reason: 'reachability' })
     return []
   }
+}
+
+/**
+ * Whether `POST /calls/:callId/answer` may claim a call for this volunteer.
+ *
+ * That route is a database write: it connects nobody. It is honest in exactly
+ * two situations —
+ *
+ *  - the volunteer has an in-app leg of their own ringing (their app registered
+ *    on our PBX, they asked to be reached in the app), because that leg is what
+ *    the caller is bridged to; or
+ *  - the hub is on the mock provider, whose whole purpose is a simulated call
+ *    with no PSTN leg for a tester to pick up from the app.
+ *
+ * On any other hub (every cloud provider today) it would mark the call
+ * answered, hang up the phones that are ringing and leave the caller on hold
+ * until voicemail. A volunteer there answers on their phone, and
+ * `/api/telephony/user-answer` bridges that leg.
+ *
+ * Total like `resolveInAppRingTargets`: false, never a throw, whenever the
+ * answer cannot be established.
+ */
+export async function canAnswerInApp(
+  env: Env,
+  services: Services,
+  hubId: string,
+  volunteer: RingableUser,
+): Promise<boolean> {
+  const config = await resolveHubTelephonyConfig(env, services.settings, hubId)
+  if (config && isMockProviderConfig(config)) return true
+  if (!wantsInApp(volunteer)) return false
+  return (await resolveInAppRingTargets(env, services, hubId, [volunteer])).length > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -314,11 +358,12 @@ export async function startParallelRinging(
     // reaches the queue has a call record whether or not a volunteer can be found: if
     // nobody is reachable they hear hold music, time out into voicemail, and the
     // voicemail/hangup handlers need a record to attach to (#1043).
-    // Store the HMAC hash, not the raw number.
-    const callerNumberHash = hashPhone(callerNumber, env.HMAC_SECRET)
+    // The number is held sealed (SERVER_KEK, bound to this call) for the call's life only,
+    // so the answering volunteer can ban the caller without seeing it. It is never hashed
+    // here: a hash of an ordinary caller would be a stable identifier the server keeps.
     await services.calls.addCall(hubId, {
       callId: callSid,
-      callerNumber: callerNumberHash,
+      callerNumberSealed: sealCallerNumber(callerNumber, callSid, env.SERVER_KEK),
       callerLast4: callerNumber.slice(-4),
       status: 'ringing',
     })
@@ -341,10 +386,7 @@ export async function startParallelRinging(
       .map(v => ({ pubkey: v.pubkey, phone: v.phone }))
 
     // Browser/VoIP volunteers get notified via Nostr relay and VoIP push
-    const browserVoip = available.filter(v => {
-      const pref = v.callPreference ?? 'phone'
-      return pref === 'browser' || pref === 'both'
-    })
+    const browserVoip = available.filter(wantsInApp)
 
     if (available.length === 0) {
       reportUnroutableCall(callSid, hubId, 'no-available-volunteers', 'Every volunteer on shift or in the fallback group is inactive, on break, or not a member of the hub')
@@ -359,6 +401,10 @@ export async function startParallelRinging(
     const appTargets = await resolveInAppRingTargets(env, services, hubId, browserVoip)
 
     logger.info('Ringing volunteers', { callSid, total: available.length, phone: toRingPhone.length, browserVoip: browserVoip.length, inApp: appTargets.length })
+
+    // Volunteers reached by the relay event and VoIP push below. A call that resolved
+    // to no hub sends neither, so its browser/VoIP volunteers were not notified at all.
+    const notifiedOutOfBand = hubId === '' ? 0 : browserVoip.length
 
     const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
@@ -429,57 +475,106 @@ export async function startParallelRinging(
         return { ringing: true, volunteersNotified: available.length }
       }
 
+      // One breaker per hub: each hub has its own provider account, so one hub's broken
+      // credentials or outage (which now count as failures — #1136) must not open the
+      // circuit for every other hub's calls.
+      const breakerName = `telephony:ringVolunteers:${hubId}`
       const breaker = getCircuitBreaker({
-        name: 'telephony:ringVolunteers',
+        name: breakerName,
         failureThreshold: 5,
         resetTimeoutMs: 30_000,
+        // getCircuitBreaker is a singleton keyed by name, so this only takes effect the
+        // first time the breaker is created — but that is the only time it needs to.
+        onStateChange: (_name, _from, to) => {
+          if (to === 'open') {
+            logger.error(
+              'CRITICAL: Telephony ringVolunteers circuit opened — volunteers are not being phoned',
+              new Error(`Circuit opened: ${breakerName}`),
+              { hubId },
+            )
+          } else if (to === 'closed') {
+            logger.info('Telephony ringVolunteers circuit recovered', { hubId })
+          }
+        },
       })
 
-      const legSids = await breaker.execute(() =>
-        withRetry(
-          () => adapter.ringVolunteers({
-            callSid,
-            callerNumber,
-            volunteers: volunteersWithTokens,
-            appTargets: appTargetsWithTokens,
-            callbackUrl: origin,
-            hubId,
-          }),
-          {
-            maxAttempts: 3,
-            baseDelayMs: 500,
-            maxDelayMs: 3000,
-            isRetryable: isRetryableError,
-            onRetry: (attempt, error) => {
-              logger.warn(`ringVolunteers retry ${attempt} for callSid=${callSid}`, { error })
-              incCounter('llamenos_retry_attempts_total', { service: 'telephony', operation: 'ringVolunteers' })
+      try {
+        const legSids = await breaker.execute(() =>
+          withRetry(
+            () => adapter.ringVolunteers({
+              callSid,
+              callerNumber,
+              volunteers: volunteersWithTokens,
+              appTargets: appTargetsWithTokens,
+              callbackUrl: origin,
+              hubId,
+            }),
+            {
+              maxAttempts: 3,
+              baseDelayMs: 500,
+              maxDelayMs: 3000,
+              isRetryable: isRetryableError,
+              onRetry: (attempt, error) => {
+                logger.warn(`ringVolunteers retry ${attempt} for callSid=${callSid}`, { error })
+                incCounter('llamenos_retry_attempts_total', { service: 'telephony', operation: 'ringVolunteers' })
+              },
             },
-          },
+          )
         )
-      )
-      recordRingLegs(callSid, legSids)
+        recordRingLegs(callSid, legSids)
 
-      // An INVITE the PBX refused (endpoint gone between the reachability read
-      // and the dial, a TLS failure to the contact, a PBX that will not
-      // originate) costs a leg. The remaining legs still carry the call — and
-      // if none do, the caller holds and times out into voicemail as they
-      // always have — but it must not be invisible: a volunteer who believes
-      // their app rings would be the only one who found out.
-      //
-      // Scoped to calls that asked for an in-app leg, which only the
-      // self-hosted PBX path can: one channel per requested leg is a property
-      // of that adapter, not of every provider.
-      if (appTargetsWithTokens.length > 0) {
-        const requested = volunteersWithTokens.length + appTargetsWithTokens.length
-        if (legSids.length < requested) {
-          logger.error('Some ring legs were refused by the PBX — those volunteers were not rung', {
-            callSid,
-            hubId,
-            requested,
-            rung: legSids.length,
-            inAppRequested: appTargetsWithTokens.length,
-          })
-          incCounter('llamenos_ring_legs_refused_total', { reason: 'originate-failed' })
+        // An INVITE the PBX refused (endpoint gone between the reachability read
+        // and the dial, a TLS failure to the contact, a PBX that will not
+        // originate) costs a leg. The remaining legs still carry the call — and
+        // if none do, the caller holds and times out into voicemail as they
+        // always have — but it must not be invisible: a volunteer who believes
+        // their app rings would be the only one who found out.
+        //
+        // Scoped to calls that asked for an in-app leg, which only the
+        // self-hosted PBX path can: one channel per requested leg is a property
+        // of that adapter, not of every provider.
+        if (appTargetsWithTokens.length > 0) {
+          const requested = volunteersWithTokens.length + appTargetsWithTokens.length
+          if (legSids.length < requested) {
+            logger.error('Some ring legs were refused by the PBX — those volunteers were not rung', {
+              callSid,
+              hubId,
+              requested,
+              rung: legSids.length,
+              inAppRequested: appTargetsWithTokens.length,
+            })
+            incCounter('llamenos_ring_legs_refused_total', { reason: 'originate-failed' })
+          }
+        }
+      } catch (err) {
+        // AllDialsFailedError (every leg failed) and CircuitOpenError (the breaker is
+        // already open from a prior total failure) both mean a provider outage, not a
+        // partial failure — withRetry only reaches here once retries are exhausted.
+        // A total provider outage must not be reported as a successful ring (#1136).
+        if (err instanceof AllDialsFailedError || err instanceof CircuitOpenError) {
+          logger.error(
+            'All ring legs failed to dial — phone and in-app volunteers were not reached by the PBX',
+            err,
+            { callSid, hubId, attempted: volunteersWithTokens.length + appTargetsWithTokens.length },
+          )
+          incCounter('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
+          // browserVoip volunteers, if any, were already notified over the relay/VoIP
+          // push above and may still answer — only report total failure when nobody was
+          // reached by any channel.
+          return {
+            ringing: notifiedOutOfBand > 0,
+            reason: 'telephony-failure',
+            volunteersNotified: notifiedOutOfBand,
+          }
+        }
+        // Any other ring failure: the phone/in-app legs are unknown, but the relay event
+        // and VoIP push above already went out, so those volunteers were notified and
+        // may still answer — do not report nobody was reached.
+        logger.error('startParallelRinging failed', err)
+        return {
+          ringing: notifiedOutOfBand > 0,
+          reason: 'error',
+          volunteersNotified: notifiedOutOfBand,
         }
       }
     }

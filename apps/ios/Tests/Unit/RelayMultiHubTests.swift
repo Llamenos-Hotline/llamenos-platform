@@ -17,6 +17,11 @@ private final class RelayStubURLProtocol: URLProtocol {
         requestedPaths = []
     }
 
+    static func set(_ path: String, _ body: String) {
+        lock.lock(); defer { lock.unlock() }
+        responses[path] = body
+    }
+
     static func paths() -> [String] {
         lock.lock(); defer { lock.unlock() }
         return requestedPaths
@@ -173,23 +178,35 @@ final class RelayMultiHubTests: XCTestCase {
         let ctx = HubContext()
         ctx.setActiveHub("hub-A")
 
+        let crypto = CryptoService()
+        _ = try crypto.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
+        let me = try XCTUnwrap(crypto.signingPubkeyHex)
+
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [RelayStubURLProtocol.self]
-        let api = APIService(cryptoService: CryptoService(), hubContext: ctx, sessionConfiguration: config)
+        let api = APIService(cryptoService: crypto, hubContext: ctx, sessionConfiguration: config)
         try api.configure(hubURLString: "https://hub.example.org")
 
         RelayStubURLProtocol.reset([
-            "/api/hubs/hub-A/shifts/my-status": #"{"onShift":true,"activeCallCount":1}"#,
+            "/api/hubs/hub-A/shifts/my-status": #"{"onShift":true,"clockedIn":true,"clockedInAt":"2026-10-20T09:30:00.000Z","currentShift":null,"nextShift":null}"#,
+            "/api/auth/me": #"{"pubkey":"abababababababababababababababababababababababababababababababab","roles":[],"onBreak":false}"#,
             "/api/hubs/hub-A/calls/active": #"{"calls":[]}"#,
             "/api/hubs/hub-B/calls/active":
                 #"{"calls":[{"id":"call-b","startedAt":"2026-09-26T10:00:00.000Z","status":"ringing","callerLast4":"4321"}]}"#,
+            "/api/hubs/hub-B/calls/call-b/answer": #"{"call":{}}"#,
             "/api/hubs/hub-B/calls/call-b/hangup": #"{"ok":true}"#,
         ])
 
         let ws = WebSocketService(cryptoService: CryptoService())
         ws.receiveServerMessageForTesting(#"{"type":"authenticated","hubs":["hub-A","hub-B","global"]}"#)
 
-        let vm = DashboardViewModel(apiService: api, cryptoService: CryptoService(), webSocketService: ws, hubContext: ctx)
+        let vm = DashboardViewModel(
+            apiService: api,
+            cryptoService: crypto,
+            webSocketService: ws,
+            hubContext: ctx,
+            shiftClockService: ShiftClockService(apiService: api)
+        )
         XCTAssertEqual(vm.callHubIds, ["hub-A", "hub-B"], "Calls are polled on every member hub, active hub first")
 
         vm.startEventListener()
@@ -198,10 +215,25 @@ final class RelayMultiHubTests: XCTestCase {
         try await waitUntil { true }
         ws.emitAttributedEvent(hubId: "hub-B", eventType: .callRing)
 
-        try await waitUntil { vm.currentCall != nil }
+        try await waitUntil { !vm.ringingCalls.isEmpty }
+        XCTAssertEqual(vm.ringingCalls.first?.id, "call-b")
+        XCTAssertEqual(vm.ringingCalls.first?.hubId, "hub-B")
+        XCTAssertNil(vm.currentCall, "A ring is not a call in progress")
+        XCTAssertEqual(ctx.activeHubId, "hub-A", "A background ring must never switch the active hub")
+
+        // Answer goes to the ring's hub; once answered the call is this device's.
+        RelayStubURLProtocol.set(
+            "/api/hubs/hub-B/calls/active",
+            #"{"calls":[{"id":"call-b","startedAt":"2026-09-26T10:00:00.000Z","status":"in-progress","answeredBy":"\#(me)"}]}"#
+        )
+        await vm.answerCall(try XCTUnwrap(vm.ringingCalls.first))
+        XCTAssertTrue(
+            RelayStubURLProtocol.paths().contains("POST /api/hubs/hub-B/calls/call-b/answer"),
+            "Answer must target the call's own hub. Requests: \(RelayStubURLProtocol.paths())"
+        )
         XCTAssertEqual(vm.currentCall?.id, "call-b")
         XCTAssertEqual(vm.currentCall?.hubId, "hub-B")
-        XCTAssertEqual(ctx.activeHubId, "hub-A", "A background ring must never switch the active hub")
+        XCTAssertEqual(ctx.activeHubId, "hub-A", "Answering never switches the active hub")
 
         await vm.hangupCall()
         XCTAssertTrue(
@@ -210,6 +242,7 @@ final class RelayMultiHubTests: XCTestCase {
         )
         XCTAssertFalse(RelayStubURLProtocol.paths().contains { $0.contains("/hubs/hub-A/calls/call-b") })
         XCTAssertNil(vm.currentCall)
+        XCTAssertEqual(vm.endedCall?.hubId, "hub-B", "A note for the ended call is filed on its own hub")
     }
 
     // MARK: - Helpers

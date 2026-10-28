@@ -2,17 +2,23 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState } from 'react'
-import { useCalls, useCallTimer, useShiftStatus } from '@/lib/hooks'
+import { useCallTimer, useShiftStatus } from '@/lib/hooks'
+import { useCalls, useIncomingCalls } from '@/lib/calls-context'
+import { useNoteSheet } from '@/lib/note-sheet-context'
+import { IncomingCallCard } from '@/components/call/incoming-call-card'
+import { CallEndedPrompt } from '@/components/call/call-ended-prompt'
+import { callReadiness } from '@/lib/call-readiness'
+import { useClockIn, useClockOut } from '@/lib/queries/shifts'
 import { createNote, banAndHangup, getUserPresence, listUsers, type HubCall, type UserPresence, type User } from '@/lib/api'
 import { usePersonalStats } from '@/lib/queries/analytics'
 import { encryptNote } from '@/lib/platform'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
+import { getCallNoteDraft, setCallNoteDraft } from '@/lib/call-note-drafts'
 import { useConfig } from '@/lib/config'
 import { useTranscription } from '@/lib/transcription'
 
 import { useToast } from '@/lib/toast'
 import {
-  PhoneIncoming,
   PhoneCall,
   PhoneOff,
   Activity,
@@ -42,13 +48,20 @@ export const Route = createFileRoute('/')({
 
 function DashboardPage() {
   const { t } = useTranslation()
-  const { isAuthenticated, isAdmin, hasDeviceKey, publicKey, onBreak, toggleBreak } = useAuth()
+  const { isAuthenticated, isAdmin, hasDeviceKey, publicKey, onBreak, toggleBreak, hasPermission } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate()
-  const { hubs, isMultiHub } = useConfig()
-  const hubName = (hubId: string) => hubs.find(h => h.id === hubId)?.name ?? hubId
-  const { calls, currentCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls } = useCalls()
-  const { onShift, currentShift, nextShift } = useShiftStatus()
+  const { calls, currentCall, endedCall, dismissEndedCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls } = useCalls()
+  const noteSheet = useNoteSheet()
+  const incoming = useIncomingCalls()
+  // A ringing call is already a live call on this hub — the count must not read 0 while one rings.
+  const liveCallCount = ringingCalls.length + activeCalls.length
+  const { onShift, clockedIn, currentShift, nextShift } = useShiftStatus()
+  const { currentHubId } = useConfig()
+  const clockInMutation = useClockIn()
+  const clockOutMutation = useClockOut()
+  const readiness = callReadiness({ onShift, clockedIn }, onBreak)
+  const canClockIn = isAdmin || hasPermission('shifts:set-availability')
   const [presence, setPresence] = useState<UserPresence[]>([])
   const [users, setUsers] = useState<User[]>([])
   const personalStats = usePersonalStats(isAuthenticated)
@@ -81,6 +94,14 @@ function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* The ring comes before everything else: a call nobody sees is a call nobody answers. */}
+      <IncomingCallCard
+        incoming={incoming}
+        onAnswer={callId => {
+          answerCall(callId).catch(() => toast(t('calls.answerFailed'), 'error'))
+        }}
+      />
+
       <div className="flex items-center gap-3">
         <LayoutDashboard className="h-6 w-6 text-primary" />
         <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t('dashboard.title')}</h1>
@@ -89,29 +110,51 @@ function DashboardPage() {
 
       {/* Status cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card data-testid="dashboard-active-calls" className={activeCalls.length > 0 ? 'border-green-500/20 bg-green-50/50 dark:bg-green-950/10' : undefined}>
+        <Card data-testid="dashboard-active-calls" className={liveCallCount > 0 ? 'border-green-500/20 bg-green-50/50 dark:bg-green-950/10' : undefined}>
           <CardContent className="flex items-center gap-4 py-0">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${activeCalls.length > 0 ? 'bg-green-500/15' : 'bg-muted'}`}>
-              <Activity className={`h-5 w-5 ${activeCalls.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`} />
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${liveCallCount > 0 ? 'bg-green-500/15' : 'bg-muted'}`}>
+              <Activity className={`h-5 w-5 ${liveCallCount > 0 ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`} />
             </div>
             <div>
               <p className="text-sm text-muted-foreground">{t('dashboard.activeCalls')}</p>
-              <p className="text-2xl font-bold">{activeCalls.length}</p>
+              <p className="text-2xl font-bold">{liveCallCount}</p>
             </div>
           </CardContent>
         </Card>
-        <Card data-testid="dashboard-shift-status" className={onBreak ? 'border-yellow-400/30 bg-yellow-50/50 dark:border-yellow-600/30 dark:bg-yellow-950/10' : onShift ? 'border-primary/20 bg-primary/5' : undefined}>
+        <Card data-testid="dashboard-shift-status" data-readiness={readiness} className={
+          readiness === 'on-break' ? 'border-yellow-400/30 bg-yellow-50/50 dark:border-yellow-600/30 dark:bg-yellow-950/10'
+            : readiness === 'ready' ? 'border-primary/20 bg-primary/5'
+            : readiness === 'not-clocked-in' ? 'border-orange-400/40 bg-orange-50/50 dark:border-orange-600/40 dark:bg-orange-950/10'
+            : undefined
+        }>
           <CardContent className="flex items-center gap-4 py-0">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
-              onBreak ? 'bg-yellow-500/15' : onShift ? 'bg-primary/10' : 'bg-muted'
+              readiness === 'on-break' ? 'bg-yellow-500/15' : readiness === 'ready' ? 'bg-primary/10' : readiness === 'not-clocked-in' ? 'bg-orange-500/15' : 'bg-muted'
             }`}>
-              {onBreak ? <Coffee className="h-5 w-5 text-yellow-600 dark:text-yellow-400" /> : <Clock className={`h-5 w-5 ${onShift ? 'text-primary' : 'text-muted-foreground'}`} />}
+              {readiness === 'on-break'
+                ? <Coffee className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
+                : <Clock className={`h-5 w-5 ${readiness === 'ready' ? 'text-primary' : readiness === 'not-clocked-in' ? 'text-orange-600 dark:text-orange-400' : 'text-muted-foreground'}`} />}
             </div>
             <div className="flex-1">
               <p className="text-sm text-muted-foreground">{t('dashboard.currentShift')}</p>
               <p className="text-lg font-bold sm:text-2xl">
-                {currentCall ? t('dashboard.onCall') : onBreak ? t('dashboard.onBreak') : onShift ? t('dashboard.ready') : t('shifts.offShift')}
+                {currentCall ? t('dashboard.onCall')
+                  : readiness === 'on-break' ? t('dashboard.onBreak')
+                  : readiness === 'ready' ? t('dashboard.ready')
+                  : readiness === 'not-clocked-in' ? t('dashboard.notClockedIn')
+                  : t('shifts.offShift')}
               </p>
+              {/* Say what is actually true: scheduled is not the same as being rung. */}
+              {readiness === 'not-clocked-in' && !currentCall && (
+                <p data-testid="dashboard-clock-in-prompt" className="text-xs text-orange-700 dark:text-orange-300">
+                  {t('dashboard.clockInToReceiveCalls')}
+                </p>
+              )}
+              {readiness === 'unscheduled' && !currentCall && (
+                <p data-testid="dashboard-unscheduled-notice" className="text-xs text-muted-foreground">
+                  {t('dashboard.clockedInNotScheduled')}
+                </p>
+              )}
               {onShift && currentShift && !currentCall && (
                 <p className="text-xs text-muted-foreground">
                   {currentShift.encryptedName} — {currentShift.startTime}–{currentShift.endTime}
@@ -165,9 +208,29 @@ function DashboardPage() {
         </Card>
       )}
 
-      {/* Shift action */}
+      {/* Shift actions: clock in/out (consent to be rung) and break (pause it) are separate controls */}
       {!currentCall && (
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {canClockIn && (
+            <Button
+              variant={clockedIn ? 'default' : 'outline'}
+              size="sm"
+              data-testid="clock-toggle-btn"
+              disabled={!currentHubId || clockInMutation.isPending || clockOutMutation.isPending}
+              onClick={async () => {
+                try {
+                  if (clockedIn) await clockOutMutation.mutateAsync()
+                  else await clockInMutation.mutateAsync()
+                } catch {
+                  toast(clockedIn ? t('dashboard.errorClockOut') : t('dashboard.errorClockIn'), 'error')
+                }
+              }}
+              className={clockedIn ? 'bg-green-600 hover:bg-green-700' : ''}
+            >
+              {clockedIn ? <LogOut className="h-3.5 w-3.5" /> : <LogIn className="h-3.5 w-3.5" />}
+              {clockedIn ? t('dashboard.clockOut') : t('dashboard.clockIn')}
+            </Button>
+          )}
           <Button
             variant={onBreak ? 'default' : 'outline'}
             size="sm"
@@ -176,13 +239,13 @@ function DashboardPage() {
               try {
                 await toggleBreak()
               } catch {
-                toast(t('common.error'), 'error')
+                toast(t('dashboard.errorBreak'), 'error')
               }
             }}
             className={onBreak ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
           >
-            {onBreak ? <LogIn className="h-3.5 w-3.5" /> : <LogOut className="h-3.5 w-3.5" />}
-            {onBreak ? t('dashboard.clockIn', { defaultValue: 'Clock In' }) : t('dashboard.clockOut', { defaultValue: 'Clock Out' })}
+            <Coffee className="h-3.5 w-3.5" />
+            {onBreak ? t('dashboard.endBreak') : t('dashboard.goOnBreak')}
           </Button>
         </div>
       )}
@@ -204,7 +267,9 @@ function DashboardPage() {
       {currentCall && hasDeviceKey && publicKey && (
         <ActiveCallPanel
           call={currentCall}
-          onHangup={() => hangupCall(currentCall.id)}
+          onHangup={() => {
+            hangupCall(currentCall.id).catch(() => toast(t('calls.hangupFailed'), 'error'))
+          }}
           onReportSpam={() => reportSpam(currentCall.id)}
           onBanNumber={async (reason) => {
             try {
@@ -218,36 +283,13 @@ function DashboardPage() {
         />
       )}
 
-      {/* Incoming calls (ringing) — hidden when on break */}
-      {ringingCalls.length > 0 && !currentCall && !onBreak && (
-        <Card className="border-green-500 bg-green-50 dark:border-green-600 dark:bg-green-950/20">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-green-700 dark:text-green-400">
-              <PhoneIncoming className="h-5 w-5" />
-              {t('calls.incoming')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {ringingCalls.map(call => (
-              <div key={call.id} data-testid={`incoming-call-row-${call.id}`} className="flex items-center justify-between rounded-lg bg-green-100 px-4 py-3 dark:bg-green-950/30">
-                <div>
-                  <p className="font-medium">{t('calls.incoming')}</p>
-                  {isMultiHub && (
-                    <p data-testid="call-hub-label" className="text-xs text-muted-foreground">{hubName(call.hubId)}</p>
-                  )}
-                </div>
-                <Button
-                  data-testid={`answer-call-btn-${call.id}`}
-                  onClick={() => answerCall(call.id)}
-                  className="animate-pulse bg-green-600 hover:bg-green-700"
-                >
-                  <PhoneCall className="h-4 w-4" />
-                  {t('calls.answer')}
-                </Button>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+      {/* Our own call just ended: offer to write it up while it is fresh. */}
+      {!currentCall && endedCall && (
+        <CallEndedPrompt
+          call={endedCall}
+          onAddNote={call => noteSheet.openNewNote(call.id, call.hubId)}
+          onDismiss={() => dismissEndedCall()}
+        />
       )}
 
       {/* All active calls list (admin view) */}
@@ -322,7 +364,7 @@ function DashboardPage() {
                         : 'bg-green-600'
                       }
                     >
-                      <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${
+                      <span className={`h-1.5 w-1.5 rounded-full motion-safe:animate-pulse ${
                         call.status === 'ringing' ? 'bg-yellow-500 dark:bg-yellow-400' : 'bg-white'
                       }`} />
                       {call.status === 'ringing' ? t('calls.incoming') : t('calls.active')}
@@ -349,7 +391,12 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
   const { toast } = useToast()
   const { adminDecryptionPubkey } = useAuth()
   const { formatted } = useCallTimer(call.startedAt)
-  const [noteText, setNoteText] = useState('')
+  // Held in memory (not disk) so it survives a lock, which unmounts this panel.
+  const [noteText, setNoteTextState] = useState(() => getCallNoteDraft(call.id))
+  const setNoteText = (text: string) => {
+    setNoteTextState(text)
+    setCallNoteDraft(call.id, text)
+  }
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showBanDialog, setShowBanDialog] = useState(false)
@@ -378,6 +425,8 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
       }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify({ text: noteText }), authorPubkey, [adminPub])
       await createNote({ callId: call.id, encryptedContent, authorEnvelope, adminEnvelopes }, call.hubId)
+      // Filed: no longer an unsaved draft to restore after a lock.
+      setCallNoteDraft(call.id, '')
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {
@@ -445,6 +494,7 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
             {t('notes.newNote')}
           </label>
           <textarea
+            data-testid="active-call-note-input"
             value={noteText}
             onChange={e => setNoteText(e.target.value)}
             placeholder={t('notes.notePlaceholder')}
@@ -453,6 +503,7 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
           />
           <div className="flex items-center gap-2">
             <Button
+              data-testid="active-call-note-save-btn"
               onClick={handleSaveNote}
               disabled={saving || !noteText.trim()}
               size="sm"
@@ -487,7 +538,7 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
             )}
             {txStatus === 'capturing' && (
               <>
-                <Mic className="h-3.5 w-3.5 animate-pulse text-red-500" />
+                <Mic className="h-3.5 w-3.5 motion-safe:animate-pulse text-red-500" />
                 <span className="text-xs text-muted-foreground">{t('transcription.capturing')}</span>
               </>
             )}

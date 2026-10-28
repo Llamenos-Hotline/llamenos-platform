@@ -1,6 +1,7 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -90,6 +91,8 @@ function _hubQueryParam(hubId?: string): string {
  * - REST API: POST /v1/Account/{auth_id}/Call/
  * - Webhooks use form data with CallUUID, From, To, Digits, CallStatus
  */
+const logger = createLogger('telephony.plivo')
+
 export class PlivoAdapter implements TelephonyAdapter {
   private authId: string
   private authToken: string
@@ -149,6 +152,10 @@ export class PlivoAdapter implements TelephonyAdapter {
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingXml = sayOrPlay('greeting', lang, params.audioUrls, greetingText)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    const noticeXml = params.callRecordingEnabled
+      ? sayOrPlay('recordingNotice', lang, params.audioUrls)
+      : ''
 
     if (params.rateLimited) {
       const rateLimitXml = sayOrPlay('rateLimited', lang, params.audioUrls)
@@ -165,6 +172,7 @@ export class PlivoAdapter implements TelephonyAdapter {
       return this.plivoXml(`
         <GetDigits numDigits="4" action="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" timeout="10" redirect="true">
           ${greetingXml}
+          ${noticeXml}
           ${captchaXml}
           ${speak(digits.split('').join(', ') + '.', lang)}
         </GetDigits>
@@ -176,6 +184,7 @@ export class PlivoAdapter implements TelephonyAdapter {
     const holdXml = sayOrPlay('pleaseHold', lang, params.audioUrls)
     return this.plivoXml(`
       ${greetingXml}
+      ${noticeXml}
       ${holdXml}
       <Conference waitSound="/api/telephony/wait-music?lang=${lang}${hp}" action="/api/telephony/queue-exit?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" startConferenceOnEnter="false" endConferenceOnExit="false" stayAlone="true">${params.callSid}</Conference>
     `)
@@ -200,8 +209,13 @@ export class PlivoAdapter implements TelephonyAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     // CRIT-W1: Hub and pubkey resolved from DB in /call-recording — no URL params needed
+    // #1505: leave `record` off entirely unless this hub opted in, so Plivo
+    // never writes the mixed audio to disk.
+    const recordAttrs = params.recordCall
+      ? ` record="true" recordFileFormat="mp3" callbackUrl="${escapeXml(params.callbackUrl)}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" callbackMethod="POST"`
+      : ''
     return this.plivoXml(`
-      <Conference record="true" recordFileFormat="mp3" callbackUrl="${escapeXml(params.callbackUrl)}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" callbackMethod="POST" startConferenceOnEnter="true" endConferenceOnExit="true">${params.parentCallSid}</Conference>
+      <Conference${recordAttrs} startConferenceOnEnter="true" endConferenceOnExit="true">${params.parentCallSid}</Conference>
     `)
   }
 
@@ -245,8 +259,6 @@ export class PlivoAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callSids: string[] = []
-
     const calls = await Promise.allSettled(
       params.volunteers.map(async (vol) => {
         // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs
@@ -273,17 +285,13 @@ export class PlivoAdapter implements TelephonyAdapter {
           const data = await res.json() as { request_uuid: string }
           return data.request_uuid
         }
-        throw new Error(`Failed to call volunteer`)
+        throw new Error(`Failed to call volunteer: ${res.status}`)
       })
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callSids.push(result.value)
-      }
-    }
-
-    return callSids
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Plivo', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

@@ -1,26 +1,20 @@
 import { useEffect } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from './auth'
 import { useToast } from './toast'
 import { useNoteSheet } from './note-sheet-context'
-import { getRingingCalls, getCurrentCall } from './call-state'
-import { answerCall, hangupCall } from './api'
-import { stopRinging } from './notifications'
-
-function isInputFocused(): boolean {
-  const el = document.activeElement
-  if (!el) return false
-  const tag = el.tagName.toLowerCase()
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
-  if ((el as HTMLElement).isContentEditable) return true
-  return false
-}
+import { useCalls, useIncomingCalls } from './calls-context'
+import { isEditableFocused } from './editable-focus'
 
 export function useKeyboardShortcuts() {
   const navigate = useNavigate()
-  const { isAuthenticated, onBreak, toggleBreak } = useAuth()
+  const { isAuthenticated, toggleBreak } = useAuth()
   const { toast } = useToast()
   const noteSheet = useNoteSheet()
+  const { t } = useTranslation()
+  const { currentCall, answerCall, hangupCall } = useCalls()
+  const incoming = useIncomingCalls()
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -35,8 +29,33 @@ export function useKeyboardShortcuts() {
         return
       }
 
-      // Skip shortcuts when focused on inputs (except Escape above)
-      if (isInputFocused()) return
+      // Ctrl/Cmd+Shift+A — Answer the first ringing call, on that call's own hub.
+      // Works while typing: a chord is never text, and a ring that cannot be answered
+      // from a text field is a missed call.
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'a') {
+        if (incoming.length > 0) {
+          e.preventDefault()
+          answerCall(incoming[0].call.id).catch(() => {
+            toast(t('calls.answerFailed'), 'error')
+          })
+        }
+        return
+      }
+
+      // Skip the remaining shortcuts when focused on inputs (except Escape above)
+      if (isEditableFocused()) return
+
+      // Ctrl/Cmd+Shift+H — Hang up the current call. Not while typing: the note being
+      // written during a call must not be one stray chord away from ending it.
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'h') {
+        if (currentCall) {
+          e.preventDefault()
+          hangupCall(currentCall.id).catch(() => {
+            toast(t('calls.hangupFailed'), 'error')
+          })
+        }
+        return
+      }
 
       // Alt+N — New note
       if (e.altKey && e.key === 'n' && !mod && !e.shiftKey) {
@@ -57,36 +76,11 @@ export function useKeyboardShortcuts() {
         return
       }
 
-      // Ctrl/Cmd+Shift+A — Answer call
-      if (mod && e.shiftKey && e.key === 'A') {
-        const ringing = getRingingCalls()
-        if (ringing.length > 0) {
-          e.preventDefault()
-          answerCall(ringing[0].id, ringing[0].hubId).catch(() => {
-            toast('Failed to answer call', 'error')
-          })
-          stopRinging()
-        }
-        return
-      }
-
-      // Ctrl/Cmd+Shift+H — Hang up
-      if (mod && e.shiftKey && e.key === 'H') {
-        const current = getCurrentCall()
-        if (current) {
-          e.preventDefault()
-          hangupCall(current.id, current.hubId).catch(() => {
-            toast('Failed to hang up call', 'error')
-          })
-        }
-        return
-      }
-
       // Ctrl/Cmd+Shift+B — Toggle break
       if (mod && e.shiftKey && e.key === 'B') {
         e.preventDefault()
         toggleBreak().catch(() => {
-          toast('Failed to toggle break', 'error')
+          toast(t('dashboard.errorBreak'), 'error')
         })
         return
       }
@@ -94,5 +88,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [isAuthenticated, onBreak, toggleBreak, noteSheet, navigate, toast])
+  }, [isAuthenticated, toggleBreak, noteSheet, navigate, toast, t, incoming, currentCall, answerCall, hangupCall])
 }

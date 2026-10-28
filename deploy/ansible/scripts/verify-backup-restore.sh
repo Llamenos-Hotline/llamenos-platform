@@ -72,6 +72,8 @@ AGE_PUB="$(age-keygen -y "${SCRATCH}/backup-key.txt")"
 MARKER="RT-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 CANARY="CANARY-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 PGPASS="pw-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+BANKEY="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+MSGKEY="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
 cat > "${SCRATCH}/vars.yml" <<VARS
 ---
@@ -91,6 +93,8 @@ pg_password: "${PGPASS}"
 roundtrip_project: "${PROJECT}"
 roundtrip_marker: "${MARKER}"
 roundtrip_canary_secret: "${CANARY}"
+roundtrip_ban_hash_key: "${BANKEY}"
+roundtrip_messaging_hash_key: "${MSGKEY}"
 
 # No application container in the scratch deployment, so do not spend
 # 100 seconds waiting for a health endpoint that cannot exist.

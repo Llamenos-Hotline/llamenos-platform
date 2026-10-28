@@ -50,8 +50,8 @@ const buttonTextToTestIdMap: Record<string, string> = {
   'Log Out': TestIds.LOGOUT_BTN,
   'Recovery Options': TestIds.RECOVERY_OPTIONS_BTN,
   'Confirm': TestIds.CONFIRM_DIALOG_OK,
-  'Clock In': TestIds.BREAK_TOGGLE_BTN,
-  'Clock Out': TestIds.BREAK_TOGGLE_BTN,
+  'Clock In': TestIds.CLOCK_TOGGLE_BTN,
+  'Clock Out': TestIds.CLOCK_TOGGLE_BTN,
   'Go to Dashboard': 'setup-complete-btn',
   'Update Profile': 'form-save-btn',
 }
@@ -189,10 +189,6 @@ When('I click the {string} link', async ({ page }, name: string) => {
   }
 })
 
-When('I click the {string} demo account', async ({ page }, name: string) => {
-  await page.getByText(name, { exact: true }).first().click()
-})
-
 // --- Text entry patterns ---
 
 When('I enter {string} in the {string} field', async ({ page }, value: string, field: string) => {
@@ -239,6 +235,8 @@ When('I fill in reason with {string}', async ({ page }, reason: string) => {
 
 When('I fill in the reason with {string}', async ({ page }, reason: string) => {
   await page.getByLabel(/reason/i).fill(reason)
+  // The ban list shows a ban by its reason (it holds no number), so ban steps find the row by it.
+  await page.evaluate((r) => { (window as unknown as Record<string, unknown>).__test_ban_reason = r }, reason)
 })
 
 // --- Section expand/collapse ---
@@ -317,8 +315,8 @@ Then('the {string} button should be enabled', async ({ page }, name: string) => 
 Then('the {string} button should be visible', async ({ page }, name: string) => {
   // Map feature-file button names to actual UI text/testid
   const testIdMap: Record<string, string> = {
-    'Clock In': TestIds.BREAK_TOGGLE_BTN,
-    'Clock Out': TestIds.BREAK_TOGGLE_BTN,
+    'Clock In': TestIds.CLOCK_TOGGLE_BTN,
+    'Clock Out': TestIds.CLOCK_TOGGLE_BTN,
   }
   const testId = testIdMap[name]
   if (testId) {
@@ -330,8 +328,8 @@ Then('the {string} button should be visible', async ({ page }, name: string) => 
 
 Then('the {string} button should not be visible', async ({ page }, name: string) => {
   const testIdMap: Record<string, string> = {
-    'Clock In': TestIds.BREAK_TOGGLE_BTN,
-    'Clock Out': TestIds.BREAK_TOGGLE_BTN,
+    'Clock In': TestIds.CLOCK_TOGGLE_BTN,
+    'Clock Out': TestIds.CLOCK_TOGGLE_BTN,
   }
   const testId = testIdMap[name]
   if (testId) {
@@ -584,15 +582,6 @@ Then('they should arrive at the profile setup or dashboard', async ({ page }) =>
 })
 
 // --- Dismiss patterns ---
-
-When('I dismiss the demo banner', async ({ page }) => {
-  const dismissBtn = page.getByTestId('dismiss-demo-banner')
-    .or(page.locator('button[aria-label="Dismiss"]'))
-    .first()
-  if (await dismissBtn.waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false)) {
-    await dismissBtn.click()
-  }
-})
 
 When('I dismiss the invite link card', async ({ page }) => {
   await page.getByTestId(TestIds.DISMISS_INVITE).click()

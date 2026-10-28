@@ -32,9 +32,17 @@ import { randomBytes } from '@noble/hashes/utils.js'
 import { argon2id } from '@noble/hashes/argon2.js'
 import { utf8ToBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import {
+  LABEL_CALL_META,
   LABEL_DEVICE_PROVISION,
   LABEL_DEVICE_PROVISION_BUNDLE,
+  LABEL_MESSAGE,
+  LABEL_NOTE_KEY,
+  LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
+  LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
   LABEL_PROVISIONING_SALT,
+  LABEL_RECOVERY_GROUP_SHARE_WRAP,
+  LABEL_RECOVERY_SHARE_CONTRIBUTE,
+  LABEL_WS_CHALLENGE,
   SAS_INFO,
   SAS_SALT,
 } from '@shared/crypto-labels'
@@ -44,6 +52,9 @@ import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 const PROVISIONING_BUNDLE_VERSION = 1
 /** version(1) + signing seed(32) + encryption seed(32). */
 const PROVISIONING_BUNDLE_LEN = 65
+
+/** Mirrors `platform.ts` RECOVERY_SHARE_COMMITMENT_MISMATCH / crypto.rs. */
+const RECOVERY_SHARE_COMMITMENT_MISMATCH = 'Share does not match its commitment'
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -63,6 +74,24 @@ interface MockDeviceKeyState {
 let mockSecrets: MockDeviceSecrets | null = null
 let mockDeviceState: MockDeviceKeyState | null = null
 let mockEncryptedKeys: unknown = null
+
+// ── HPKE-open label allow-lists ──────────────────────────────────────
+// Mirror of OPEN_ALLOWED_LABELS / OPEN_KEY_ALLOWED_LABELS in
+// apps/desktop/src/crypto.rs. The generic unwrap commands must refuse every other
+// label (hub key, PUK seed, recovery shares, provisioning): a mock that opened
+// them would let the suite pass against a permissive surface the real app
+// no longer has.
+const OPEN_ALLOWED_LABELS: readonly string[] = [
+  LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
+  LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
+]
+const OPEN_KEY_ALLOWED_LABELS: readonly string[] = [LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META]
+
+function requireAllowedLabel(command: string, label: string, allowed: readonly string[]): void {
+  if (!allowed.includes(label)) {
+    throw new Error(`${command}: label '${label}' is not openable from the webview`)
+  }
+}
 
 // ── Provisioning ephemeral key mock state ────────────────────────────
 let mockProvisioningEphemeral: Uint8Array | null = null
@@ -707,11 +736,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   // --- Ed25519 signing/verification ---
 
-  ed25519_sign_from_state: (a) => {
+  // Purpose-bound, like Rust: the mock builds the message itself and has no
+  // generic "sign these bytes" command.
+  sign_ws_challenge_from_state: (a) => {
     const secrets = requireSecrets()
-    const message = hexToBytes(a.messageHex as string)
-    const sig = ed25519.sign(message, secrets.signingSeed)
-    return bytesToHex(sig)
+    const { signingPubkeyHex } = requireDeviceState()
+    const message = `${LABEL_WS_CHALLENGE}:${signingPubkeyHex}:${a.nonce as string}:${a.ts as number}`
+    return bytesToHex(ed25519.sign(utf8ToBytes(message), secrets.signingSeed))
   },
 
   ed25519_verify: (a) => {
@@ -739,6 +770,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const secrets = requireSecrets()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
     const expectedLabel = a.expectedLabel as string
+    requireAllowedLabel('hpke_open_from_state', expectedLabel, OPEN_ALLOWED_LABELS)
     const aad = hexToBytes(a.aadHex as string)
     const secretHex = bytesToHex(secrets.encryptionSeed)
     const plaintext = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
@@ -758,6 +790,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const secrets = requireSecrets()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
     const expectedLabel = a.expectedLabel as string
+    requireAllowedLabel('hpke_open_key_from_state', expectedLabel, OPEN_KEY_ALLOWED_LABELS)
     const aad = hexToBytes(a.aadHex as string)
     const secretHex = bytesToHex(secrets.encryptionSeed)
     const plaintext = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
@@ -974,27 +1007,97 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return bytesToHex(sha256(data)) === commitmentHex
   },
 
-  // H16: Recovery group key isolation — create with immediate Shamir split
-  recovery_group_create: (a) => {
+  // H16: Recovery group key isolation — split AND seal every share to its holder;
+  // neither the private key nor a plaintext share is returned (mirrors Rust).
+  recovery_group_create: async (a) => {
     const total = a.total as number
     const threshold = a.threshold as number
+    const holderEncryptionPubkeys = a.holderEncryptionPubkeys as string[]
 
+    if (holderEncryptionPubkeys.length !== total) {
+      throw new Error('Exactly one holder pubkey is required per share')
+    }
     if (threshold < 2 || threshold > 5) throw new Error('Threshold must be 2-5')
     if (total < 3 || total > 5) throw new Error('Total must be 3-5')
     if (threshold > total) throw new Error('Threshold cannot exceed total')
 
     const privateKey = randomBytes(32)
     const publicKey = x25519.getPublicKey(privateKey)
-    const secretHex = bytesToHex(privateKey)
+    const splitResult = shamirSplitInternal(bytesToHex(privateKey), total, threshold)
 
-    // Split immediately — private key never returned to JS
-    const splitResult = shamirSplitInternal(secretHex, total, threshold)
+    // Share plaintext: x (1 byte) || y.
+    const shareEnvelopes = await Promise.all(
+      splitResult.shares.map((share, idx) =>
+        hpkeSealMock(
+          new Uint8Array([share.x, ...hexToBytes(share.y)]),
+          holderEncryptionPubkeys[idx],
+          LABEL_RECOVERY_GROUP_SHARE_WRAP,
+          new Uint8Array(0),
+        ),
+      ),
+    )
 
     return {
       publicKeyHex: bytesToHex(publicKey),
-      shares: splitResult.shares,
+      shareEnvelopes,
       commitments: splitResult.commitments,
     }
+  },
+
+  // Approve a recovery session (mirrors recovery_share_contribute_from_state). Like
+  // Rust, the mock takes only the session id from the caller: it fetches the session
+  // itself — authenticated with the device key, from the configured origin — and
+  // seals to the `newDevicePubkey` the server holds. There is no recipient argument.
+  recovery_share_contribute_from_state: async (a) => {
+    const secrets = requireSecrets()
+    const { signingPubkeyHex } = requireDeviceState()
+    const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
+
+    const requestedId = a.sessionId as string
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(requestedId)) throw new Error('Invalid recovery session id')
+    const path = `/api/recovery-group/session/${requestedId}`
+    const configured = await mockConfiguredOrigin()
+    const target = new URL(configured ? `${configured.origin}${path}` : path, window.location.origin)
+    if (configured) mockCheckHttpTarget(configured, target)
+    const res = await fetch(target.toString(), {
+      headers: { Authorization: `Bearer ${signMockAuthToken(Date.now(), 'GET', path, randomAuthNonce())}` },
+      redirect: 'manual',
+    })
+    if (!res.ok) throw new Error(`server returned HTTP ${res.status}`)
+    const session = (await res.json()) as { sessionId: string; status: string; newDevicePubkey: string }
+    if (session.sessionId !== requestedId) throw new Error('Server returned a different recovery session')
+    if (session.status !== 'verified' && session.status !== 'active') {
+      throw new Error(
+        `Recovery session is '${session.status}' — shares are only released for verified or active sessions`,
+      )
+    }
+    const sessionId = session.sessionId
+
+    const share = await hpkeOpenMock(
+      envelope,
+      bytesToHex(secrets.encryptionSeed),
+      LABEL_RECOVERY_GROUP_SHARE_WRAP,
+      new Uint8Array(0),
+    )
+    if (share.length === 0) throw new Error('Decrypted share is empty')
+    if (bytesToHex(sha256(share)) !== (a.commitmentHex as string)) {
+      throw new Error(RECOVERY_SHARE_COMMITMENT_MISMATCH)
+    }
+
+    const sealed = await hpkeSealMock(
+      share,
+      session.newDevicePubkey,
+      LABEL_RECOVERY_SHARE_CONTRIBUTE,
+      utf8ToBytes(`${sessionId}:${signingPubkeyHex}`),
+    )
+    const encryptedShare = JSON.stringify(sealed)
+    const signature = bytesToHex(
+      ed25519.sign(
+        utf8ToBytes(`${LABEL_RECOVERY_SHARE_CONTRIBUTE}:${sessionId}:${encryptedShare}`),
+        secrets.signingSeed,
+      ),
+    )
+    return { encryptedShare, signature }
   },
 
   // H16: Reconstruct recovery group key from HPKE-encrypted share envelopes
@@ -1161,53 +1264,6 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   // --- Device provisioning (nsec NEVER enters JS) ---
-
-  provision_encrypt_for_device: (a) => {
-    const secrets = requireSecrets()
-    const ephemeralPubkeyHex = a.ephemeralPubkeyHex as string
-
-    // ECDH: X25519(encryptionSeed, ephemeralPK)
-    const sharedSecret = x25519.getSharedSecret(secrets.encryptionSeed, hexToBytes(ephemeralPubkeyHex))
-
-    // Derive symmetric key (matches Rust provisioning::derive_provisioning_key)
-    const symmetricKey = hkdf(sha256, sharedSecret,
-      utf8ToBytes(LABEL_PROVISIONING_SALT),
-      utf8ToBytes(LABEL_DEVICE_PROVISION), 32)
-
-    // Compute SAS (matches Rust provisioning::compute_sas)
-    const sasBytes = hkdf(sha256, sharedSecret,
-      utf8ToBytes(SAS_SALT),
-      utf8ToBytes(SAS_INFO), 4)
-    const sasNum = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
-    const sasCode6 = (sasNum % 1_000_000).toString().padStart(6, '0')
-    const sasCode = `${sasCode6.slice(0, 3)} ${sasCode6.slice(3)}`
-
-    // Key bundle: version || signing seed || encryption seed — byte-identical to
-    // packages/crypto/src/provisioning.rs::encrypt_device_bundle_for_provisioning.
-    // BOTH seeds travel: they are independently random (PROTOCOL.md 2.11), so a
-    // linked device that receives only one cannot reconstruct the other.
-    const bundle = new Uint8Array(PROVISIONING_BUNDLE_LEN)
-    bundle[0] = PROVISIONING_BUNDLE_VERSION
-    bundle.set(secrets.signingSeed, 1)
-    bundle.set(secrets.encryptionSeed, 33)
-
-    const nonce = randomBytes(12)
-    const aad = utf8ToBytes(LABEL_DEVICE_PROVISION_BUNDLE)
-    const cipher = gcm(symmetricKey, nonce, aad)
-    const ciphertext = cipher.encrypt(bundle)
-
-    const packed = new Uint8Array(12 + ciphertext.length)
-    packed.set(nonce)
-    packed.set(ciphertext, 12)
-
-    const encPubkey = bytesToHex(deriveX25519Pubkey(secrets.encryptionSeed))
-
-    return {
-      encryptedHex: bytesToHex(packed),
-      sasCode,
-      primaryEncPubkeyHex: encPubkey,
-    }
-  },
 
   provision_create_session: () => {
     const ephemeralSecret = randomBytes(32)

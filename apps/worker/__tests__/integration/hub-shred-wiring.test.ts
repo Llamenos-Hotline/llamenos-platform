@@ -40,6 +40,7 @@ import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { eq, sql } from 'drizzle-orm'
@@ -88,7 +89,7 @@ async function createHub(): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(db))
   return id
 }
 
@@ -228,7 +229,7 @@ beforeAll(async () => {
 
   // THE point of this suite: the production service registry, built exactly as
   // src/server/index.ts builds it. Nothing below constructs a service.
-  services = createServices(db, { hmacSecret: HMAC_SECRET, env: { ENVIRONMENT: 'test' } })
+  services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
   await services.settings.ensureInit()
 }, 180_000)
 

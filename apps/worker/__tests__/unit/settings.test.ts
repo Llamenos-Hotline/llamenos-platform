@@ -390,12 +390,15 @@ describe('SettingsService.createHub', () => {
     updatedAt: new Date().toISOString(),
   }
 
+  const founder = { pubkey: 'admin-pk', roleIds: ['role-hub-admin'] }
+  const founderRow = { active: true, status: 'active', hubRoles: [] }
+
   it('throws 409 when slug already exists', async () => {
     const { db, service } = setup()
     // Slug check returns existing hub
     db.$setSelectResult([makeHub({ slug: 'new-hub' })])
 
-    await expect(service.createHub(validHub)).rejects.toMatchObject({
+    await expect(service.createHub(validHub, founder)).rejects.toMatchObject({
       status: 409,
       message: 'Hub slug already exists',
     })
@@ -403,23 +406,58 @@ describe('SettingsService.createHub', () => {
 
   it('creates hub when slug is unique', async () => {
     const { db, service } = setup()
-    // Slug check: not found
-    db.$setSelectResult([])
+    // Selects in order: slug check (none), founder row, role catalog
+    db.$setSelectResults([[], [founderRow], []])
     db.$setInsertResult([])
 
-    const result = await service.createHub(validHub)
+    const result = await service.createHub(validHub, founder)
     expect(result.hub.id).toBe('hub-new')
     expect(db.insert).toHaveBeenCalled()
   })
 
   it('creates hub_settings row after creating hub', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([])
+    db.$setSelectResults([[], [founderRow], []])
     db.$setInsertResult([])
 
-    await service.createHub(validHub)
+    await service.createHub(validHub, founder)
     // insert should be called twice: once for hub, once for hub_settings
     expect(db.insert).toHaveBeenCalledTimes(2)
+  })
+
+  it('grants the founder their admin role in the same transaction as the hub (#2126)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([[], [founderRow], []])
+    db.$setInsertResult([])
+
+    await service.createHub(validHub, founder)
+    expect(db.transaction).toHaveBeenCalledTimes(1)
+    expect(db.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates no hub when the founder does not exist', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([[], []])
+
+    await expect(service.createHub(validHub, founder)).rejects.toMatchObject({ status: 404 })
+    expect(db.insert).not.toHaveBeenCalled()
+  })
+
+  it('creates no hub when the founder is deactivated', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([[], [{ ...founderRow, active: false }]])
+
+    await expect(service.createHub(validHub, founder)).rejects.toMatchObject({ status: 409 })
+    expect(db.insert).not.toHaveBeenCalled()
+  })
+
+  it('creates no hub when the founder role confers no admin authority', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([[], [founderRow], []])
+
+    await expect(service.createHub(validHub, { pubkey: 'admin-pk', roleIds: ['role-volunteer'] }))
+      .rejects.toMatchObject({ status: 400 })
+    expect(db.insert).not.toHaveBeenCalled()
   })
 })
 

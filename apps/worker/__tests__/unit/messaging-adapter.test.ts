@@ -93,6 +93,7 @@ describe('MessagingAdapter types', () => {
       const rcs: RCSConfig = {
         agentId: 'agent-123',
         serviceAccountKey: '{"type":"service_account"}',
+        webhookSecret: 'rcs-secret',
         fallbackToSms: true,
       }
       expect(rcs.agentId).toBeTruthy()

@@ -10,8 +10,10 @@ import {
   apiPost,
   generateTestKeypair,
   encryptForTest,
+  seedHexToPubkey,
   ADMIN_SEED,
 } from '../../api-helpers'
+import { simulateCallForNote } from '../../simulation-helpers'
 import {
   hpkeRecipientForSeed,
   wrapKeyForRecipient,
@@ -46,14 +48,13 @@ Before({ tags: '@backend' }, async ({ world }) => {
 
 Given('a new note is created', async ({request, world}) => {
   // Create a note via the API with real AES-256-GCM encryption
-  const callId = `test-call-${Date.now()}`
   const { encryptedContent, envelopes } = await encryptForTest('test note encrypted', [ADMIN_SEED])
   const { status, data } = await apiPost<{ note?: Record<string, unknown> }>(
     request,
     '/notes',
     {
       encryptedContent,
-      callId,
+      callId: await simulateCallForNote(request),
       adminEnvelopes: envelopes,
     },
   )
@@ -69,7 +70,7 @@ Given('a note created by a volunteer', async ({request, world}) => {
     '/notes',
     {
       encryptedContent,
-      callId: `test-call-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       adminEnvelopes: envelopes,
     },
   )
@@ -80,7 +81,10 @@ Given('a note created by a volunteer', async ({request, world}) => {
 
 Given('a hub with {int} admins', async ({request: _request, world}, count: number) => {
   getNoteTestState(world).adminKeypairs = []
-  for (let i = 0; i < count; i++) {
+  // The first admin is the deployment's own super-admin — the key the server
+  // requires an envelope for (#2113); the rest are additional admins.
+  getNoteTestState(world).adminKeypairs.push({ seedHex: ADMIN_SEED, pubkey: seedHexToPubkey(ADMIN_SEED) })
+  for (let i = 1; i < count; i++) {
     const kp = generateTestKeypair()
     getNoteTestState(world).adminKeypairs.push(kp)
   }
@@ -93,7 +97,7 @@ Given('an encrypted note envelope', async ({request, world}) => {
     '/notes',
     {
       encryptedContent,
-      callId: `test-call-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       adminEnvelopes: envelopes,
     },
   )
@@ -115,7 +119,7 @@ Given('two notes created by the same volunteer', async ({request, world}) => {
       '/notes',
       {
         encryptedContent,
-        callId: `test-call-${Date.now()}-${i}`,
+        callId: await simulateCallForNote(request),
         adminEnvelopes: envelopes,
       },
     )
@@ -143,7 +147,7 @@ When('a note is created', async ({request, world}) => {
     '/notes',
     {
       encryptedContent,
-      callId: `test-call-${Date.now()}`,
+      callId: await simulateCallForNote(request),
       adminEnvelopes,
     },
   )

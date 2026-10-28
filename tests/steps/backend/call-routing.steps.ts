@@ -8,6 +8,7 @@ import { getScenarioState } from './common.steps'
 import {
   simulateIncomingCallResponse,
   simulateAnswerCall,
+  simulateAnswerCallResponse,
   simulateEndCall,
   simulateVoicemail,
 } from '../../simulation-helpers'
@@ -67,27 +68,29 @@ When('the call goes to voicemail', async ({ request, world }) => {
   getScenarioState(world).callStatus = result.status
 })
 
-// ── In-app answer (first pickup wins) ──────────────────────────────
-// These go through the real POST /hubs/:hubId/calls/:callId/answer route — the
-// simulation endpoint bypasses the ring-set and first-pickup checks under test.
+// ── Answering (first pickup wins) ──────────────────────────────────
+// A phone pickup is the simulation endpoint: it claims the call through the same
+// atomic ringing → in-progress update the provider's answer webhook does. The REST
+// route (answerInApp) is the in-app answer; it is refused unless the hub has an
+// in-app leg for the volunteer, which these scenarios' hub does not.
 
-const IN_APP_ANSWER_KEY = 'inAppAnswer'
+const ANSWER_KEY = 'callAnswer'
 
-interface InAppAnswer {
+interface AnswerAttempt {
   /** 1-based volunteer index (into ScenarioState.volunteers) */
   volunteer: number
   status: number
 }
 
-interface InAppAnswerState {
-  answers: InAppAnswer[]
+interface AnswerState {
+  answers: AnswerAttempt[]
 }
 
-function inAppAnswers(world: Record<string, unknown>): InAppAnswerState {
-  let s = getState<InAppAnswerState | undefined>(world, IN_APP_ANSWER_KEY)
+function answerAttempts(world: Record<string, unknown>): AnswerState {
+  let s = getState<AnswerState | undefined>(world, ANSWER_KEY)
   if (!s) {
     s = { answers: [] }
-    setState(world, IN_APP_ANSWER_KEY, s)
+    setState(world, ANSWER_KEY, s)
   }
   return s
 }
@@ -96,14 +99,29 @@ async function answerInApp(
   request: Parameters<typeof apiPost>[0],
   world: Record<string, unknown>,
   index: number,
-): Promise<InAppAnswer> {
+): Promise<AnswerAttempt> {
   const state = getScenarioState(world)
   expect(state.callId).toBeDefined()
   const vol = state.volunteers[index - 1]
   expect(vol).toBeDefined()
   const res = await apiPost(request, `/hubs/${state.hubId}/calls/${state.callId}/answer`, {}, vol.deviceKey)
   const answer = { volunteer: index, status: res.status }
-  inAppAnswers(world).answers.push(answer)
+  answerAttempts(world).answers.push(answer)
+  return answer
+}
+
+async function answerOnPhone(
+  request: Parameters<typeof apiPost>[0],
+  world: Record<string, unknown>,
+  index: number,
+): Promise<AnswerAttempt> {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeDefined()
+  const vol = state.volunteers[index - 1]
+  expect(vol).toBeDefined()
+  const res = await simulateAnswerCallResponse(request, state.callId!, vol.pubkey)
+  const answer = { volunteer: index, status: res.status }
+  answerAttempts(world).answers.push(answer)
   return answer
 }
 
@@ -118,6 +136,10 @@ When('volunteer {int} answers the call in the app', async ({ request, world }, i
   await answerInApp(request, world, index)
 })
 
+When('volunteer {int} answers the call on their phone', async ({ request, world }, index: number) => {
+  await answerOnPhone(request, world, index)
+})
+
 When('the off-shift member answers the call in the app', async ({ request, world }) => {
   const state = getScenarioState(world)
   const index = state.volunteers.findIndex(v => v.onShift === false) + 1
@@ -126,31 +148,31 @@ When('the off-shift member answers the call in the app', async ({ request, world
 })
 
 When(
-  'volunteers {int} and {int} answer the call in the app at the same time',
+  'volunteers {int} and {int} answer the call on their phones at the same time',
   async ({ request, world }, a: number, b: number) => {
-    await Promise.all([answerInApp(request, world, a), answerInApp(request, world, b)])
+    await Promise.all([answerOnPhone(request, world, a), answerOnPhone(request, world, b)])
   },
 )
 
-Then('exactly {int} in-app answer succeeds', async ({ world }, count: number) => {
-  expect(inAppAnswers(world).answers.filter(a => a.status === 200)).toHaveLength(count)
+Then('exactly {int} answer succeeds', async ({ world }, count: number) => {
+  expect(answerAttempts(world).answers.filter(a => a.status === 200)).toHaveLength(count)
 })
 
-Then('every other in-app answer is rejected with status {int}', async ({ world }, status: number) => {
-  const losers = inAppAnswers(world).answers.filter(a => a.status !== 200)
+Then('every other answer is rejected with status {int}', async ({ world }, status: number) => {
+  const losers = answerAttempts(world).answers.filter(a => a.status !== 200)
   expect(losers.length).toBeGreaterThan(0)
   for (const loser of losers) expect(loser.status).toBe(status)
 })
 
-Then('the last in-app answer is rejected with status {int}', async ({ world }, status: number) => {
-  const answers = inAppAnswers(world).answers
+Then('the last answer is rejected with status {int}', async ({ world }, status: number) => {
+  const answers = answerAttempts(world).answers
   expect(answers.length).toBeGreaterThan(0)
   expect(answers[answers.length - 1].status).toBe(status)
 })
 
 Then('the winning volunteer owns the call', async ({ request, world }) => {
   const state = getScenarioState(world)
-  const winners = inAppAnswers(world).answers.filter(a => a.status === 200)
+  const winners = answerAttempts(world).answers.filter(a => a.status === 200)
   expect(winners).toHaveLength(1)
   const { status, data } = await apiGet<{ answeredBy: string; status: string }>(
     request,
@@ -169,6 +191,17 @@ Then('volunteer {int} can still hang up the call', async ({ request, world }, in
 })
 
 // ── Call State Assertions ──────────────────────────────────────────
+
+Then('the call is still ringing and unanswered', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const { status, data } = await apiGet<{ answeredBy: string | null; status: string }>(
+    request,
+    `/hubs/${state.hubId}/calls/${state.callId}`,
+  )
+  expect(status).toBe(200)
+  expect(data.status).toBe('ringing')
+  expect(data.answeredBy).toBeNull()
+})
 
 Then('the call status is {string}', async ({ world }, expectedStatus: string) => {
   expect(getScenarioState(world).callStatus).toBe(expectedStatus)

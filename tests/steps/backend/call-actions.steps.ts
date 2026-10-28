@@ -7,15 +7,16 @@
  * Note: Phone numbers are HMAC-hashed by CallRouterDO before storage,
  * so ban list verification uses count-based assertions rather than raw phone matching.
  */
-import { expect } from '@playwright/test'
+import { expect, type APIRequestContext } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
 import type { CallRecord } from '@protocol/schemas/calls'
-import { apiPost, apiGet, listBansViaApi, listNotesViaApi, encryptForTest } from '../../api-helpers'
+import { apiPost, apiGet, listBansViaApi, listNotesViaApi, sealedNoteFields } from '../../api-helpers'
 import {
   simulateIncomingCall,
   simulateAnswerCall,
+  simulateEndCall,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
 
@@ -59,22 +60,15 @@ Given('an incoming call is ringing for the hub', async ({ request, world }) => {
   state.callId = callId
 })
 
-// Answers through the real hub-scoped REST endpoint (the in-app answer path),
-// not the simulation shortcut — so the route's own audit entry is exercised.
+// The phone pickup: the simulation endpoint claims the call through the same atomic
+// update as the provider's answer webhook, and records the audit entry the webhook
+// writes once the leg is bridged. The hub-scoped REST answer is not this path.
 When(
-  'volunteer {int} answers the call through the hub API',
+  'volunteer {int} answers the ringing call on their phone',
   async ({ request, world }, volIndex: number) => {
     const state = getScenarioState(world)
     expect(state.callId).toBeTruthy()
-    const res = await apiPost(
-      request,
-      `/hubs/${state.hubId}/calls/${state.callId}/answer`,
-      {},
-      state.volunteers[volIndex].deviceKey,
-    )
-    state.lastApiResponse = res
-    setLastResponse(world, res)
-    expect(res.status).toBe(200)
+    await simulateAnswerCall(request, state.callId!, state.volunteers[volIndex].pubkey)
   },
 )
 
@@ -130,23 +124,50 @@ When(
 
 // ── Note Actions ─────────────────────────────────────────────────
 
+/** POST a sealed note about the scenario's call to the scenario's hub, as the given volunteer. */
+async function postCallNote(request: APIRequestContext, world: Record<string, unknown>, volIndex: number, text: string): Promise<void> {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeTruthy()
+  const res = await apiPost(
+    request,
+    `/hubs/${state.hubId}/notes`,
+    {
+      ...(await sealedNoteFields(state.volunteers[volIndex].deviceKey, text)),
+      callId: state.callId,
+    },
+    state.volunteers[volIndex].deviceKey,
+  )
+  state.lastApiResponse = res
+  setLastResponse(world, res)
+}
+
 When(
   'volunteer {int} creates a note for the active call',
+  async ({ request, world }, volIndex: number) => postCallNote(request, world, volIndex, 'bdd test note for active call'),
+)
+
+// ── Ended-call note (the "Call Ended / Add Note" prompt) ─────────
+
+When('the call ends', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeTruthy()
+  await simulateEndCall(request, state.callId!)
+})
+
+Then(
+  'volunteer {int} cannot read the hub call history',
   async ({ request, world }, volIndex: number) => {
     const state = getScenarioState(world)
-    expect(state.callId).toBeTruthy()
-    const res = await apiPost(
-      request,
-      `/hubs/${state.hubId}/notes`,
-      {
-        callId: state.callId,
-        encryptedContent: (await encryptForTest('bdd test note for active call', [state.volunteers[volIndex].deviceKey])).encryptedContent,
-      },
-      state.volunteers[volIndex].deviceKey,
-    )
-    state.lastApiResponse = res
-    setLastResponse(world, res)
+    const res = await apiGet(request, `/hubs/${state.hubId}/calls/history`, state.volunteers[volIndex].deviceKey)
+    // The note below must succeed WITHOUT this permission: a volunteer writes up their
+    // own call without being able to read everyone else's.
+    expect(res.status).toBe(403)
   },
+)
+
+When(
+  'volunteer {int} creates a note for the call that ended',
+  async ({ request, world }, volIndex: number) => postCallNote(request, world, volIndex, 'bdd test note for the call just ended'),
 )
 
 // ── Ban Callback ─────────────────────────────────────────────────

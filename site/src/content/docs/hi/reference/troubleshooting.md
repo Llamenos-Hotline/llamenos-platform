@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # सब कुछ डिप्लॉय करें (app + marketing site)
-bun run deploy:demo     # केवल app Worker डिप्लॉय करें
 bun run deploy:site     # केवल marketing site डिप्लॉय करें
 ```
 

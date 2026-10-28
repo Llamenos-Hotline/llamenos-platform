@@ -12,6 +12,7 @@
  */
 import { and, eq, isNull } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import * as schema from '../../db/schema'
 
 // Same rationale as the execute suite: vitest cannot load the native FFI.
@@ -43,7 +44,7 @@ async function createHub(): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(fresh.db))
   return id
 }
 

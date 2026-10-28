@@ -8,7 +8,7 @@ import {
   randomBytes,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, HMAC_BAN_PREFIX, LABEL_BAN_KEY_DERIVE, LABEL_CALLER_NUMBER_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
 // getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
@@ -37,6 +37,58 @@ export function hashPhone(phone: string, secret: string): string {
   return bytesToHex(hmacSha256(key, input))
 }
 
+/** Ban scope of the platform-wide list; a hub's scope is its hub id. */
+export const PLATFORM_BAN_SCOPE = 'platform'
+
+/**
+ * Hash of a BANNED number under one scope's key: HMAC(HKDF(BAN_HASH_KEY, scope), number).
+ *
+ * Only numbers an admin banned are ever hashed this way and stored. A caller who
+ * has not been banned is hashed here transiently to be compared against the ban
+ * list and the digest is dropped, so the server keeps no deterministic
+ * identifier for an ordinary caller. The per-scope key means a hub's ban hashes
+ * cannot be compared with another hub's, with the platform list, or with any
+ * other hash of the same number. BAN_HASH_KEY is a file-only secret (never in
+ * the DB, `.env` or a config backup), so a database dump alone confirms nothing.
+ */
+export function banHash(phone: string, scope: string, banHashKey: string): string {
+  const scopeKey = hkdfSha256(hexToBytes(banHashKey), new Uint8Array(0), utf8ToBytes(`${LABEL_BAN_KEY_DERIVE}:${scope}`), 32)
+  return bytesToHex(hmacSha256(scopeKey, utf8ToBytes(`${HMAC_BAN_PREFIX}${phone}`)))
+}
+
+/** The hashes a call must be compared against: its hub's list (when it has a hub) and the platform's. */
+export interface BanHashes {
+  hub?: string
+  platform: string
+}
+
+export function banHashes(phone: string, hubId: string | undefined, banHashKey: string): BanHashes {
+  return {
+    hub: hubId ? banHash(phone, hubId, banHashKey) : undefined,
+    platform: banHash(phone, PLATFORM_BAN_SCOPE, banHashKey),
+  }
+}
+
+const CALLER_RATE_KEY_EPOCH_MS = 60_000
+let callerRateKey: { epoch: number; key: Uint8Array } | null = null
+
+/**
+ * Digest that tells the per-caller rate limiter two calls came from one number,
+ * and only within one rate-limit window. The key is random, lives in this
+ * process's memory only and is replaced every window, so the digests left in
+ * `rate_limits` cannot be linked to a number, to each other past the window, or
+ * to a later call, even by someone holding every server secret. The cost is that
+ * the limit is counted per process and restarts at each window boundary.
+ */
+export function callerRateLimitDigest(phone: string, now: number = Date.now()): string {
+  const epoch = Math.floor(now / CALLER_RATE_KEY_EPOCH_MS)
+  if (callerRateKey?.epoch !== epoch) {
+    callerRateKey?.key.fill(0)
+    callerRateKey = { epoch, key: randomBytes(32) }
+  }
+  return bytesToHex(hmacSha256(callerRateKey.key, utf8ToBytes(`${HMAC_PHONE_PREFIX}${phone}`))).slice(0, 32)
+}
+
 /**
  * Hash an IP address for storage in audit logs.
  * Uses HMAC-SHA256 with a server secret, truncated to 96 bits.
@@ -50,20 +102,31 @@ export function hashIP(ip: string, secret: string): string {
 // --- Server-Side Symmetric Encryption (Tier 1) ---
 
 /**
- * Encrypt data with a server-derived key (HKDF + AES-256-GCM via FFI).
- * Used for data the server must read at runtime (credentials, push endpoints).
+ * AAD for the server-side seal: the label alone, or `label:context` when the
+ * ciphertext must also be bound to one record (e.g. a user), so a row copied
+ * onto another record's slot fails to open.
  */
-export function serverEncrypt(plaintext: Uint8Array, label: string, serverSecret: Uint8Array): Uint8Array {
-  const key = hkdfSha256(serverSecret, new Uint8Array(0), utf8ToBytes(label), 32)
-  return symmetricEncrypt(key, plaintext, utf8ToBytes(label))
+function serverSealAad(label: string, context?: string): Uint8Array {
+  return utf8ToBytes(context === undefined ? label : `${label}:${context}`)
 }
 
 /**
- * Decrypt server-encrypted data (HKDF + AES-256-GCM via FFI).
+ * Encrypt data with a server-derived key (HKDF + AES-256-GCM via FFI).
+ * Used for data the server must read at runtime (credentials, push endpoints).
+ * `context` is optional extra AAD binding the ciphertext to one record.
  */
-export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecret: Uint8Array): Uint8Array {
+export function serverEncrypt(plaintext: Uint8Array, label: string, serverSecret: Uint8Array, context?: string): Uint8Array {
   const key = hkdfSha256(serverSecret, new Uint8Array(0), utf8ToBytes(label), 32)
-  return symmetricDecrypt(key, ciphertext, utf8ToBytes(label))
+  return symmetricEncrypt(key, plaintext, serverSealAad(label, context))
+}
+
+/**
+ * Decrypt server-encrypted data (HKDF + AES-256-GCM via FFI). `context` must
+ * match the one given to serverEncrypt.
+ */
+export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecret: Uint8Array, context?: string): Uint8Array {
+  const key = hkdfSha256(serverSecret, new Uint8Array(0), utf8ToBytes(label), 32)
+  return symmetricDecrypt(key, ciphertext, serverSealAad(label, context))
 }
 
 // --- Envelope-Pattern Encryption (Tier 3: E2EE) ---
@@ -140,49 +203,164 @@ export function encryptCallRecordForStorage(
   metadata: Record<string, unknown>,
   adminPubkeys: string[],
 ): { encryptedContent: string; adminEnvelopes: RecipientEnvelope[] } {
+  // Same refusal as encryptMessageForStorage: a call record sealed to nobody
+  // is ciphertext no admin will ever open — persist nothing rather than mint
+  // an unreadable row and call it encrypted (#1684).
+  if (adminPubkeys.length === 0) {
+    throw new Error(
+      'encryptCallRecordForStorage: refusing to encrypt with an empty reader list — ' +
+      'the result would be undecryptable by everyone. Ensure ADMIN_DECRYPTION_PUBKEY ' +
+      'is configured and/or an admin has a registered X25519 device key.'
+    )
+  }
   const { encryptedContent, envelopes } = sealForPubkeys(JSON.stringify(metadata), adminPubkeys, LABEL_CALL_META)
   return { encryptedContent, adminEnvelopes: envelopes }
 }
 
+// --- Per-User Audit Keys (CRYPTO_ARCHITECTURE.md → packages/crypto/src/audit_key.rs) ---
+//
+// Byte-compatible with audit_key.rs so a future client binding can unwrap and
+// decrypt what the server wrote:
+//   key wrap : HPKE info = LABEL_AUDIT_USER_KEY_WRAP, aad = `${label}:${userPubkey}`
+//   details  : AES-256-GCM, aad = `${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`,
+//              stored as "nonce_hex:ciphertext_hex"
+
+/**
+ * Wrap a per-user audit key for each admin recipient. Throws on an empty
+ * recipient list, matching wrap_audit_key_to_admins — a key wrapped to nobody
+ * can never be recovered by an admin.
+ */
+export function wrapAuditKeyForAdmins(
+  auditKey: Uint8Array,
+  adminPubkeys: string[],
+  userPubkey: string,
+): RecipientEnvelope[] {
+  if (adminPubkeys.length === 0) {
+    throw new Error('wrapAuditKeyForAdmins: at least one admin pubkey required')
+  }
+  const aad = utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${userPubkey}`)
+  const label = utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP)
+  return adminPubkeys.map((pk): RecipientEnvelope => {
+    const sealed = hpkeSeal(hexToBytes(pk), auditKey, label, aad)
+    return {
+      pubkey: pk,
+      enc: bytesToHex(sealed.subarray(0, 32)),
+      ct: bytesToHex(sealed.subarray(32)),
+    }
+  })
+}
+
+/** Encrypt audit entry details with the user's audit key. Returns "nonce_hex:ciphertext_hex". */
+export function encryptAuditDetails(
+  auditKey: Uint8Array,
+  detailsJson: string,
+  userPubkey: string,
+  entryId: string,
+): string {
+  const aad = utf8ToBytes(`${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`)
+  const sealed = symmetricEncrypt(auditKey, utf8ToBytes(detailsJson), aad)
+  // symmetricEncrypt output is iv(12) || ciphertext || tag — split the nonce
+  // out to match audit_key.rs's nonce_hex:ciphertext_hex storage format.
+  return `${bytesToHex(sealed.subarray(0, 12))}:${bytesToHex(sealed.subarray(12))}`
+}
+
+/** Decrypt audit entry details produced by encryptAuditDetails. Throws on wrong key/user/entry. */
+export function decryptAuditDetails(
+  auditKey: Uint8Array,
+  encrypted: string,
+  userPubkey: string,
+  entryId: string,
+): string {
+  const [nonceHex, ctHex] = encrypted.split(':')
+  if (!nonceHex || !ctHex) {
+    throw new Error('decryptAuditDetails: expected nonce_hex:ciphertext_hex format')
+  }
+  const data = new Uint8Array([...hexToBytes(nonceHex), ...hexToBytes(ctHex)])
+  const aad = utf8ToBytes(`${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`)
+  return new TextDecoder().decode(symmetricDecrypt(auditKey, data, aad))
+}
+
+/**
+ * Seal a per-user audit key for the server-held copy
+ * (audit_user_keys.encrypted_key), which lets the server decrypt details for
+ * admin reads. Hex-encoded. Sealed under LABEL_AUDIT_USER_KEY_SERVER_SEAL — not
+ * the admin HPKE wrap's LABEL_AUDIT_USER_KEY_WRAP, which names a different
+ * construction — with the user's pubkey bound as AAD (`label:userPubkey`), so a
+ * row copied onto another user's slot fails to open.
+ */
+export function sealAuditKeyForServer(auditKey: Uint8Array, userPubkey: string, serverSecret: Uint8Array): string {
+  return bytesToHex(serverEncrypt(auditKey, LABEL_AUDIT_USER_KEY_SERVER_SEAL, serverSecret, userPubkey))
+}
+
+/** Open a key sealed by sealAuditKeyForServer. Throws on a wrong secret, wrong user, or tampered row. */
+export function openServerSealedAuditKey(encryptedKey: string, userPubkey: string, serverSecret: Uint8Array): Uint8Array {
+  return serverDecrypt(hexToBytes(encryptedKey), LABEL_AUDIT_USER_KEY_SERVER_SEAL, serverSecret, userPubkey)
+}
+
+
 // --- Contact Identifier Encryption ---
+//
+// Server-readable data (a reply address the server must be able to use later,
+// a storage IAM secret) is sealed under SERVER_KEK, never under HMAC_SECRET:
+// HMAC_SECRET is only a hashing key, so rotating or leaking it must not touch
+// anything the server has to decrypt (#2171, D6).
 
 /**
  * Encrypt a contact identifier for at-rest storage.
- * Uses HKDF(HMAC_SECRET) → AES-256-GCM via FFI.
- * Stored with "enc:" prefix to distinguish from legacy plaintext.
+ * Uses HKDF(SERVER_KEK) → AES-256-GCM via FFI.
+ * Stored with an "enc:" prefix so a value that was never sealed is rejected on
+ * read rather than returned as if it were plaintext.
  */
-export function encryptContactIdentifier(identifier: string, hmacSecret: string): string {
-  const ct = serverEncrypt(utf8ToBytes(identifier), LABEL_CONTACT_ID, hexToBytes(hmacSecret))
+export function encryptContactIdentifier(identifier: string, serverKek: string): string {
+  const ct = serverEncrypt(utf8ToBytes(identifier), LABEL_CONTACT_ID, hexToBytes(serverKek))
   return 'enc:' + bytesToHex(ct)
 }
 
 /**
- * Decrypt a contact identifier from storage.
- * Handles both encrypted ("enc:"-prefixed) and legacy plaintext values.
+ * Decrypt a contact identifier from storage. Throws on a value without the
+ * "enc:" prefix, a wrong key, or a tampered ciphertext.
  */
-export function decryptContactIdentifier(stored: string, hmacSecret: string): string {
-  if (!stored.startsWith('enc:')) return stored
+export function decryptContactIdentifier(stored: string, serverKek: string): string {
+  if (!stored.startsWith('enc:')) {
+    throw new Error('Contact identifier is not sealed (missing "enc:" prefix)')
+  }
   const ct = hexToBytes(stored.slice(4))
-  return new TextDecoder().decode(serverDecrypt(ct, LABEL_CONTACT_ID, hexToBytes(hmacSecret)))
+  return new TextDecoder().decode(serverDecrypt(ct, LABEL_CONTACT_ID, hexToBytes(serverKek)))
+}
+
+// --- Live-Call Caller Number ---
+
+/**
+ * Seal a live caller's number for the life of one call. SERVER_KEK, under its own
+ * label and bound to the call id: a value copied onto another call's row fails to
+ * open, and the key is not the one that opens contact identifiers.
+ */
+export function sealCallerNumber(phone: string, callId: string, serverKek: string): string {
+  return bytesToHex(serverEncrypt(utf8ToBytes(phone), LABEL_CALLER_NUMBER_SEAL, hexToBytes(serverKek), callId))
+}
+
+/** Open a number sealed by sealCallerNumber. Throws on a wrong key, wrong call, or tampered value. */
+export function openCallerNumber(sealed: string, callId: string, serverKek: string): string {
+  return new TextDecoder().decode(serverDecrypt(hexToBytes(sealed), LABEL_CALLER_NUMBER_SEAL, hexToBytes(serverKek), callId))
 }
 
 // --- Storage Credential Encryption ---
 
 /**
  * Encrypt a storage IAM secret key for at-rest protection.
- * Uses HKDF(HMAC_SECRET) → AES-256-GCM via FFI.
+ * Uses HKDF(SERVER_KEK) → AES-256-GCM via FFI.
  */
-export function encryptStorageCredential(secretKey: string, hmacSecret: string): string {
-  const ct = serverEncrypt(utf8ToBytes(secretKey), LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(hmacSecret))
+export function encryptStorageCredential(secretKey: string, serverKek: string): string {
+  const ct = serverEncrypt(utf8ToBytes(secretKey), LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(serverKek))
   return bytesToHex(ct)
 }
 
 /**
  * Decrypt a storage IAM secret key from at-rest storage.
  */
-export function decryptStorageCredential(encrypted: string, hmacSecret: string): string {
+export function decryptStorageCredential(encrypted: string, serverKek: string): string {
   const ct = hexToBytes(encrypted)
-  return new TextDecoder().decode(serverDecrypt(ct, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(hmacSecret)))
+  return new TextDecoder().decode(serverDecrypt(ct, LABEL_STORAGE_CREDENTIAL_WRAP, hexToBytes(serverKek)))
 }
 
 // --- Audit Entry Hashing ---

@@ -32,6 +32,13 @@
     - scripts
     - logs
 
+- name: Write the hash key secret files
+  ansible.builtin.include_role:
+    name: llamenos-app
+    tasks_from: hash-keys
+  vars:
+    hash_keys_restart_handler: Restart llamenos stack
+
 - name: Template docker-compose.yml
   ansible.builtin.template:
     src: docker-compose.j2
@@ -64,7 +71,7 @@
 
 # ── ntfy/UnifiedPush push relay (issue #959) ─────────────────────────────
 # Android testers can only be rung for an incoming call through this relay,
-# so on the staging/demo path it is brought up and provisioned BEFORE the
+# so on this path it is brought up and provisioned BEFORE the
 # app's .env is rendered: the backend's publish token only exists once
 # `ntfy token add` has run inside the running broker, and the .env must
 # carry it. Compose validates every service's env_file when it loads the

@@ -90,6 +90,8 @@ function ProfileSetupPage() {
               {LANGUAGES.map(lang => (
                 <button
                   key={lang.code}
+                  type="button"
+                  aria-pressed={uiLang === lang.code}
                   onClick={() => {
                     setUiLang(lang.code)
                     setLanguage(lang.code)
@@ -121,6 +123,8 @@ function ProfileSetupPage() {
               {LANGUAGES.map(lang => (
                 <button
                   key={lang.code}
+                  type="button"
+                  aria-pressed={spokenLangs.includes(lang.code)}
                   onClick={() => toggleSpokenLang(lang.code)}
                   className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
                     spokenLangs.includes(lang.code)

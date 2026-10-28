@@ -121,7 +121,6 @@ protocol BanRowDisplay: Identifiable, Sendable {
     var reasonText: String? { get }
     var bannedByDisplay: String { get }
     var bannedDate: Date? { get }
-    var truncatedHash: String { get }
 }
 
 extension BanListResponseBan: Identifiable, BanRowDisplay {
@@ -131,7 +130,6 @@ extension BanListResponseBan: Identifiable, BanRowDisplay {
     var reasonText: String? { reason.isEmpty ? nil : reason }
     var bannedByDisplay: String { Self.truncated(bannedBy) }
     var bannedDate: Date? { DateFormatting.parseISO(bannedAt) }
-    var truncatedHash: String { Self.truncated(phoneHash) }
 
     private static func truncated(_ value: String) -> String {
         guard value.count > 16 else { return value }
@@ -143,7 +141,6 @@ extension PlatformBanListResponseBan: Identifiable, BanRowDisplay {
     var reasonText: String? { reason }
     var bannedByDisplay: String { Self.truncated(bannedBy ?? "") }
     var bannedDate: Date? { DateFormatting.parseISO(bannedAt) }
-    var truncatedHash: String { Self.truncated(phoneHash) }
 
     private static func truncated(_ value: String) -> String {
         guard value.count > 16 else { return value }
@@ -155,7 +152,6 @@ extension SearchBansResponseBan: Identifiable, BanRowDisplay {
     var reasonText: String? { reason }
     var bannedByDisplay: String { Self.truncated(bannedBy ?? "") }
     var bannedDate: Date? { DateFormatting.parseISO(bannedAt) }
-    var truncatedHash: String { Self.truncated(phoneHash) }
 
     private static func truncated(_ value: String) -> String {
         guard value.count > 16 else { return value }

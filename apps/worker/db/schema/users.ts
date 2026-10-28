@@ -22,7 +22,7 @@ export const users = pgTable('users', {
   roles: text('roles')
     .array()
     .notNull()
-    .default(sql`'{"role-volunteer"}'::text[]`),
+    .default(sql`'{}'::text[]`),
   displayName: text('display_name'),
   phone: text('phone'),
     // Valid values: 'active', 'inactive', 'erased' (EP08: set on account erasure)
@@ -177,6 +177,15 @@ export const devices = pgTable(
     // Phase 6 crypto: per-device key material for HPKE/PUK distribution
     ed25519Pubkey: text('ed25519_pubkey'),   // hex-encoded Ed25519 signing public key
     x25519Pubkey: text('x25519_pubkey'),     // hex-encoded X25519 key agreement public key
+    // When `x25519_pubkey` last took its current value (#2143). `registered_at`
+    // cannot stand in: a registration that matches an existing row by its
+    // Ed25519 key OVERWRITES the X25519 key and leaves `registered_at` alone, so
+    // a stolen session swapping in its own key would look as old as the device.
+    // Moves only when the key's value actually changes, never on a re-register of
+    // the same key.
+    x25519SetAt: timestamp('x25519_set_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     registeredAt: timestamp('registered_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

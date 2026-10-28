@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "封禁并挂断",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "封禁来电者并挂断？",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "通话中",
-    "addNote": "Add Note",
+    "addNote": "添加备注",
     "answer": "接听",
+    "answerFailed": "无法接听来电。可能已有其他人先接听了。",
+    "answerOnPhone": "在手机上接听",
     "banned": "此号码已被封禁",
     "caller": "来电者",
     "duration": "时长",
     "ended": "通话结束",
     "hangUp": "挂断",
+    "hangupFailed": "无法结束通话。请重试。",
     "hold": "保持",
     "incoming": "来电",
     "mute": "静音",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "转至语音信箱",
     "unknown": "未知号码",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "未知来电者",
     "unmute": "取消静音",
     "voicemail": "Voicemail"
   },
@@ -1781,8 +1784,10 @@
     "calls": "Calls",
     "callsToday": "Calls Today",
     "cases": "案件",
-    "clockIn": "Clock In",
-    "clockOut": "Clock Out",
+    "clockIn": "开始值班",
+    "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
+    "clockOut": "结束值班",
+    "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
     "contactsSubtitle": "View caller interaction history",
@@ -1802,6 +1807,7 @@
     "noRecentNotes": "No Recent Notes",
     "noShift": "暂无排班",
     "noUsersOnline": "没有志愿者在线",
+    "notClockedIn": "Not clocked in",
     "notes": "Notes",
     "offShift": "Off Shift",
     "offline": "离线",
@@ -1824,18 +1830,6 @@
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
     "title": "Delete role"
-  },
-  "demo": {
-    "admin": "Admin",
-    "banner": "Demo Mode",
-    "bannerText": "测试环境——请勿输入真实来电者信息。此处的数据不具保密性，可能随时被删除。",
-    "bannerTextSchedule": "测试环境——请勿输入真实来电者信息。数据会{{schedule}}重置，且不具保密性。",
-    "dismiss": "Dismiss",
-    "getStarted": "Deploy your own",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo",
-    "volunteer": "Volunteer"
   },
   "deviceWipe": {
     "contactAdmin": "Contact your hub administrator for assistance.",
@@ -2073,6 +2067,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "失败次数过多，生物识别解锁已被锁定。请输入您的PIN码。",
     "biometricNotEnrolled": "您设备的生物识别信息已更改，因此生物识别解锁已关闭。请输入您的PIN码。",
@@ -2080,6 +2076,12 @@
     "httpNotAllowed": "不允许使用不安全的 HTTP 连接。请使用 HTTPS 地址。",
     "pinLockoutDuration": "失败次数过多。请在 {{seconds}} 秒后重试。",
     "pinWiped": "PIN码错误次数过多。为保障您的安全，此设备上的所有密钥均已被清除。"
+  },
+  "errors": {
+    "deviceNotRegistered": "此设备尚未在您的中心注册。请让管理您所在中心的人员添加它。",
+    "forbidden": "您没有执行此操作的权限。请联系管理您所在中心的人员。",
+    "notFound": "该内容已不存在，可能已被删除。",
+    "serverUnavailable": "目前无法连接到服务器。请稍后重试。"
   },
   "eventType": {
     "call": "通话",
@@ -2500,9 +2502,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "有人正在拨打热线",
+  "incomingCallAnswer": "接听",
+  "incomingCallDecline": "拒接",
   "incomingCallMicrophoneRequired": "在应用内接听来电需要麦克风权限。",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2517,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "如需中文服务，请按[N]。",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "已启用但此 hub 中无人会说的语言数量：{{count}}",
+    "uncoveredHint": "选择其中某种语言的来电者可能找不到会说该语言的人。请在成员资料中添加所说语言，或关闭该语言。",
+    "maxLanguagesReached": "按键菜单最多容纳 {{max}} 种语言。其他语言的来电者将根据电话号码前缀进行匹配。"
   },
   "ivrAudio": {
     "delete": "删除",
@@ -2535,6 +2538,7 @@
       "greeting": "问候语",
       "pleaseHold": "请稍候",
       "rateLimited": "高通话量消息",
+      "recordingNotice": "录音提示",
       "voicemailPrompt": "语音留言提示",
       "waitMessage": "等待消息"
     },
@@ -2555,8 +2559,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "由于失败尝试次数过多，密钥已被清除",
+    "wrongPin": "PIN错误"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2751,6 +2755,7 @@
     "pendingCountOne": "{{count}} 待处理",
     "pendingSyncMessage": "{{count}} 个操作等待同步",
     "pendingSyncMessageOne": "{{count}} 个操作等待同步",
+    "rejected": "未保存：服务器拒绝了该请求",
     "relayReconnected": "已重新连接 — 正在同步遗漏事件",
     "relayReconnecting": "正在重新连接实时服务器...",
     "syncComplete": "所有操作已成功同步",
@@ -2895,6 +2900,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "PIN不匹配。请重试。",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}}/{{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2908,7 +2914,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN不正确。"
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",
@@ -3825,9 +3831,6 @@
     "complete": "Setup complete! Welcome to your hotline.",
     "completeFailed": "Failed to complete setup",
     "configured": "Configured",
-    "demoMode": "Populate with sample data",
-    "demoModeDescription": "Creates sample volunteer accounts, shifts, and ban entries for testing and demos. Demo account credentials will be shown on the login page.",
-    "demoSeedFailed": "Sample data partially created",
     "generateInvite": "Generate Invite",
     "generatedInvites": "Generated Invites",
     "goToDashboard": "Go to Dashboard",
@@ -4597,6 +4600,7 @@
     "role": "角色",
     "roleAdmin": "管理员",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "中心默认",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "志愿者",
@@ -4689,6 +4693,7 @@
   },
   "voice": {
     "greeting": "感谢您致电{name}。",
+    "recordingNotice": "请注意：本次通话将被录音。",
     "rateLimited": "我们目前通话量较大，请稍后再试。",
     "captchaPrompt": "请输入以下数字：",
     "captchaTimeout": "我们未收到您的输入。再见。",

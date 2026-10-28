@@ -14,7 +14,7 @@ import { createServices, schedulerServiceDeps, type Services } from '../../apps/
 import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
-import { validateConfig } from '../../apps/worker/lib/config'
+import { validateConfig, readSecretFile } from '../../apps/worker/lib/config'
 import { getMessagingAdapterFromService } from '../../apps/worker/lib/service-factories'
 import { publishEvent, setEventOutbox, drainOutbox, cleanupOutbox } from '../../apps/worker/lib/ws-events'
 import {
@@ -56,18 +56,30 @@ const db = createDatabase(databaseUrl)
 console.log('[llamenos] Database initialized')
 
 // --- Read secrets ---
+// One role per secret (D6): hmacSecret only hashes, serverKek only encrypts data
+// the server must read back, and banHashKey / messagingHashKey (file-only —
+// validateConfig refuses them in the environment) key the ban-list and the
+// messaging-thread hashes, each its own key.
 const hmacSecret = readSecret('hmac-secret', 'HMAC_SECRET')
+const serverKek = readSecret('server-kek', 'SERVER_KEK')
+const banHashKey = readSecretFile('ban-hash-key') ?? ''
+const messagingHashKey = readSecretFile('messaging-hash-key') ?? ''
 const serverSecret = readSecret('server-secret', 'SERVER_SECRET')
 const firehoseSealKey = readSecret('firehose-agent-seal-key', 'FIREHOSE_AGENT_SEAL_KEY') || undefined
 
-// --- Create services (pass HMAC secret for encryption operations) ---
+// --- Create services ---
 const notifierUrl = process.env.NOTIFIER_URL || ''
 const notifierApiKey = readSecret('notifier-api-key', 'NOTIFIER_API_KEY')
-// notifierTokenSecret: defaults to hmacSecret so existing deployments require no config change
-const notifierTokenSecret = readSecret('notifier-token-secret', 'NOTIFIER_TOKEN_SECRET') || hmacSecret
+// notifierTokenSecret has no fallback to another secret: it is the key the
+// sidecar verifies registration tokens with, and it has exactly that one role.
+// Unset means no tokens can be issued (UserNotificationsService refuses), never
+// tokens signed with another secret or with an empty key.
+const notifierTokenSecret = readSecret('notifier-token-secret', 'NOTIFIER_TOKEN_SECRET')
 const services: Services = createServices(db, {
   hmacSecret,
+  serverKek,
   firehoseSealKey,
+  messagingHashKey,
   notifierUrl,
   notifierApiKey,
   notifierTokenSecret,
@@ -95,8 +107,8 @@ console.log('[llamenos] Services initialized')
 // exists, or a request authenticating in between resolves role-super-admin
 // against an empty table and is refused (see the ordering note in
 // routes/dev.ts test-reset). Both only fill what is missing, so they are safe
-// on every boot against an existing database. Mode-specific seeding (demo
-// accounts, a pre-completed setup) stays with the demo/dev flows that own it.
+// on every boot against an existing database. Mode-specific seeding (the
+// sample cast, a pre-completed setup) stays with the dev-surface flows that own it.
 // A failure here must stop the boot: a server without roles cannot authorise.
 await services.settings.ensureInit()
 await services.identity.ensurePlatformAdmin()
@@ -135,15 +147,14 @@ const env: Record<string, unknown> = {
   ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
   ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
   HMAC_SECRET: hmacSecret,
+  SERVER_KEK: serverKek,
+  BAN_HASH_KEY: banHashKey,
+  MESSAGING_HASH_KEY: messagingHashKey,
   HOTLINE_NAME: process.env.HOTLINE_NAME || 'Hotline',
   ENVIRONMENT: process.env.ENVIRONMENT || 'production',
   TWILIO_ACCOUNT_SID: readSecret('twilio-account-sid', 'TWILIO_ACCOUNT_SID'),
   TWILIO_AUTH_TOKEN: readSecret('twilio-auth-token', 'TWILIO_AUTH_TOKEN'),
   TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER || '',
-  DEMO_MODE: process.env.DEMO_MODE || undefined,
-  DEMO_MODE_CONFIRM: process.env.DEMO_MODE_CONFIRM || undefined,
-  // Read by apps/worker/routes/config.ts:101 to report the demo reset schedule.
-  DEMO_RESET_CRON: process.env.DEMO_RESET_CRON || undefined,
   AI: createTranscriptionService(),
   BLOB_STORAGE: createBlobStorage(),
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
@@ -247,7 +258,7 @@ services.scheduler.start({
   ...schedulerServiceDeps(services),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
-      return await getMessagingAdapterFromService(channel, services.settings, hmacSecret)
+      return await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression)
     } catch {
       return null
     }

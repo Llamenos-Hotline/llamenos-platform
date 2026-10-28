@@ -2,16 +2,18 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType } from '@shared/types'
-import { hashPhone } from '../lib/crypto'
+import { banHashes, sealCallerNumber } from '../lib/crypto'
+import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
 import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
-import { seedDemoDataset } from '../services/demo-seeder'
+import { seedSampleDataset } from '../services/sample-seeder'
 import { ServiceError } from '../services/settings'
+import { audit } from '../services/audit'
 import { resolveRingableVolunteers } from '../services/ringing'
-import { DEMO_HUB } from '../lib/demo-dataset'
-import { demoIdentities } from '../lib/demo-identities'
+import { SAMPLE_HUB } from '../lib/sample-dataset'
+import { sampleIdentities } from '../lib/sample-identities'
 import { getDb } from '../db'
 import { sql as rawSql, eq } from 'drizzle-orm'
 import { signalMessageQueue } from '../db/schema'
@@ -30,7 +32,7 @@ import {
 import type { SignalConfig } from '@shared/types'
 import type { BridgeHealthStatus } from '../messaging/signal/health'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
-import { devSurfacesEnabled, devSurfaceSecretPresented, demoSurfacesEnabled, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import { devSurfacesEnabled, devSurfaceSecretPresented, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -75,24 +77,6 @@ function devRouteDenied(c: {
   return null
 }
 
-/**
- * The guard for the three `/test-*` routes that hand out or register the demo
- * cast's identities. Those seeds are only mintable on a development server
- * (`demoSurfacesEnabled`, lib/dev-surfaces.ts), which the staging allowlist
- * deliberately does not widen — so on a staging E2E target these must answer a
- * clean 404 rather than let `demoIdentities()` throw into a 500.
- */
-function demoRouteDenied(c: {
-  env: DevSurfacesEnv
-  req: { header(name: string): string | undefined }
-  json(obj: unknown, status: 404): Response
-}): Response | null {
-  const denied = devRouteDenied(c)
-  if (denied) return denied
-  if (!demoSurfacesEnabled(c.env)) return c.json({ error: 'Not Found' }, 404)
-  return null
-}
-
 // Intentionally undefended (no ENVIRONMENT/checkResetSecret check) — every other
 // /test-* route carries its own inner guard, which means the outer devGuard
 // (app.ts `api.use('/test-*', devGuard)`) could silently stop matching and
@@ -109,38 +93,34 @@ dev.post('/test-reset', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
+  // `devRouteDenied` above has already proved both halves; the services re-check
+  // the same predicate (lib/dev-surfaces.ts `destructiveResetRefusal`) with these.
+  const env: DevSurfacesEnv = c.env
+  const secret = c.req.header('X-Test-Secret')
   const adminPubkey = c.env.ADMIN_PUBKEY
   await services.audit.reset()
-  await services.identity.reset(true, c.env.ENVIRONMENT, c.env.DEMO_MODE_CONFIRM)
+  await services.identity.reset(env, secret)
   // Reset settings (including roles table and hubs) BEFORE re-seeding admin.
   // The old order was: identity.reset → identity.ensureInit → settings.reset.
   // That created a window where the admin existed but the roles table was empty,
   // causing resolvePermissions('role-super-admin', []) → [] → 403 on hub routes.
   // By resetting settings first, the roles table is re-seeded before the admin
   // user is created and before concurrent requests can authenticate.
-  await services.settings.reset(env)
+  await services.settings.reset(env, secret)
   await services.settings.ensureInit()
   // Re-seed admin immediately — minimizes the window where hasAdmin()=false
   // (concurrent browser requests between reset() and the later ensureInit() would
   // see needsBootstrap=true, causing flaky AdminBootstrap to appear in E2E tests)
   if (adminPubkey) {
     await services.identity.ensureInit(adminPubkey)
-    // `demoSurfacesEnabled`, not `DEMO_MODE === 'true'`: the demo cast's signing
-    // seeds are only mintable on a development server (lib/dev-surfaces.ts), and
-    // a staging E2E target can legitimately run DEMO_MODE=true. Keying off the
-    // flag made `demoIdentities` throw there and turned this reset into a 500.
-    if (c.env.DEMO_MODE === 'true' && demoSurfacesEnabled(c.env)) {
-      await services.identity.ensureDemoAccounts(demoIdentities(c.env))
-    }
   }
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')
   await services.conversations.reset()
   await services.blasts.reset()
-  await services.contacts.reset(env)
-  await services.cases.reset(env)
+  await services.contacts.reset(env, secret)
+  await services.cases.reset(env, secret)
   await services.providerSetup.reset()
   // Final safety net: verify the admin user has role-super-admin after all
   // resets complete. A race condition between reset() and ensureInit() or
@@ -164,18 +144,21 @@ dev.post('/test-reset-no-admin', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
+  // `devRouteDenied` above has already proved both halves; the services re-check
+  // the same predicate (lib/dev-surfaces.ts `destructiveResetRefusal`) with these.
+  const env: DevSurfacesEnv = c.env
+  const secret = c.req.header('X-Test-Secret')
   // Reset all services
   await services.audit.reset()
-  await services.identity.reset(true, c.env.ENVIRONMENT, c.env.DEMO_MODE_CONFIRM)
-  await services.settings.reset(env)
+  await services.identity.reset(env, secret)
+  await services.settings.reset(env, secret)
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')
   await services.conversations.reset()
   await services.blasts.reset()
-  await services.contacts.reset(env)
-  await services.cases.reset(env)
+  await services.contacts.reset(env, secret)
+  await services.cases.reset(env, secret)
   // Tell IdentityService to skip admin re-creation from ADMIN_PUBKEY on next ensureInit().
   await services.identity.testSkipAdminSeed()
   // Delete the admin volunteer that the reset's ensureInit() already created
@@ -200,13 +183,16 @@ dev.post('/test-reset-records', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
+  // `devRouteDenied` above has already proved both halves; the services re-check
+  // the same predicate (lib/dev-surfaces.ts `destructiveResetRefusal`) with these.
+  const env: DevSurfacesEnv = c.env
+  const secret = c.req.header('X-Test-Secret')
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')
   await services.conversations.reset()
-  await services.contacts.reset(env)
-  await services.cases.reset(env)
+  await services.contacts.reset(env, secret)
+  await services.cases.reset(env, secret)
   return c.json({ ok: true })
 })
 
@@ -770,35 +756,42 @@ dev.post('/test-seed', async (c) => {
 })
 
 
-// ─── Demo dataset (BDD helper) ─────────────────────────────────────────────────
-// Runs the same seeder the demo reset uses, without the destructive global wipe,
-// so BDD can exercise it against the shared dev server. Creates the demo accounts
-// if they are missing; DELETE removes the demo hub and accounts again.
+// ─── Sample dataset (test helper) ─────────────────────────────────────────────
+// Seeds the fixed fictional dataset (lib/sample-dataset.ts) into one hub without
+// the destructive global wipe, so a scenario can exercise it against a shared
+// server. Creates the sample accounts if they are missing; DELETE removes the
+// sample hub and accounts again.
+//
+// Until #1604 these three carried a SECOND, narrower guard pinned to
+// ENVIRONMENT=development, because the same per-process seeds were also handed
+// to an unauthenticated login picker. That picker went with demo mode, so these
+// ask `devRouteDenied` like every other /test-* route — which is what makes the
+// sample dataset reachable on a deployed staging target at all (#1625).
 
-dev.post('/test-seed-demo', async (c) => {
-  const denied = demoRouteDenied(c)
+dev.post('/test-seed-sample', async (c) => {
+  const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  await services.identity.ensureDemoAccounts(demoIdentities(c.env))
-  const summary = await seedDemoDataset(services, c.env)
+  await services.identity.ensureSampleAccounts(sampleIdentities(c.env))
+  const summary = await seedSampleDataset(services, c.env)
   return c.json({ ok: true, summary })
 })
 
-// The demo accounts' signing keys are generated per server process and never
+// The sample accounts' signing keys are generated per server process and never
 // committed, so a test signs in as one by asking the process that holds them.
-dev.get('/test-demo-identities', async (c) => {
-  const denied = demoRouteDenied(c)
+dev.get('/test-sample-identities', async (c) => {
+  const denied = devRouteDenied(c)
   if (denied) return denied
-  const identities = demoIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
+  const identities = sampleIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
   return c.json({ identities })
 })
 
-dev.delete('/test-seed-demo', async (c) => {
-  const denied = demoRouteDenied(c)
+dev.delete('/test-seed-sample', async (c) => {
+  const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  await services.settings.purgeHub(DEMO_HUB.id)
-  for (const account of demoIdentities(c.env)) {
+  await services.settings.purgeHub(SAMPLE_HUB.id)
+  for (const account of sampleIdentities(c.env)) {
     await services.identity.deleteUser(account.pubkey).catch(() => {})
   }
   return c.json({ ok: true })
@@ -875,8 +868,7 @@ dev.post('/test-simulate/incoming-call', async (c) => {
   const hubId = body.hubId ?? ''
 
   // Check if the caller is banned (hash before lookup — mirrors real telephony flow)
-  const callerNumberHash = hashPhone(body.callerNumber, c.env.HMAC_SECRET)
-  const banned = await services.records.checkBan(callerNumberHash, hubId || undefined)
+  const banned = await services.records.checkBan(banHashes(body.callerNumber, hubId || undefined, c.env.BAN_HASH_KEY), hubId || undefined)
   if (banned) {
     return c.json({ error: 'Caller is banned', banned: true }, 403)
   }
@@ -896,7 +888,7 @@ dev.post('/test-simulate/incoming-call', async (c) => {
 
   await services.calls.addCall(hubId, {
     callId,
-    callerNumber: callerNumberHash,
+    callerNumberSealed: sealCallerNumber(body.callerNumber, callId, c.env.SERVER_KEK),
     callerLast4: body.callerNumber?.slice(-4),
   })
 
@@ -923,14 +915,22 @@ dev.post('/test-simulate/answer-call', async (c) => {
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
   if (!call) return c.json({ error: 'Call not found' }, 404)
+  let answered
   try {
-    await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+    answered = await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
   } catch (err) {
     if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
       return c.json({ error: err.message }, err.status)
     }
     throw err
   }
+
+  // The simulated pickup stands in for a volunteer's phone leg being bridged
+  // (/api/telephony/user-answer), which is where the real flow writes this entry.
+  // The REST answer route no longer does for a leg it cannot bridge.
+  await audit(services.audit, 'callAnswered', body.pubkey, {
+    callerLast4: answered.callerLast4 || '',
+  }, undefined, answered.hubId || null)
 
   // Publish call update event (mirrors real telephony flow)
   // Await to ensure event is in relay before returning — prevents race conditions in E2E tests
@@ -1010,7 +1010,7 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   }
 
   const channel: MessagingChannelType = body.channel || 'sms'
-  const senderHash = hashPhone(body.senderNumber, c.env.HMAC_SECRET)
+  const senderHash = messagingContactHash(body.senderNumber, body.hubId, c.env.MESSAGING_HASH_KEY)
 
   const services = c.get('services')
   const adminDecryptionPubkey = adminHpkeRecipient(c.env)
@@ -1018,10 +1018,9 @@ dev.post('/test-simulate/incoming-message', async (c) => {
     channelType: channel,
     externalId: crypto.randomUUID(),
     senderIdentifier: body.senderNumber,
-    senderIdentifierHash: senderHash,
     body: body.body,
     timestamp: new Date().toISOString(),
-  }, adminDecryptionPubkey, body.hubId)
+  }, senderHash, adminDecryptionPubkey, body.hubId)
 
   // Publish to the conversation's hub (mirrors real messaging webhook flow)
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -1172,7 +1171,7 @@ dev.post('/test-simulate/signal-unknown-envelope', (c) => {
   const denied = simulationGuard(c)
   if (denied) return denied
 
-  const adapter = new SignalAdapter(TEST_SIGNAL_CONFIG, c.env.HMAC_SECRET)
+  const adapter = new SignalAdapter(TEST_SIGNAL_CONFIG)
   const payload: SignalWebhookPayload = {
     envelope: {
       source: '+15559876543',
@@ -1240,7 +1239,7 @@ dev.post('/test-simulate/signal-queue/enqueue', async (c) => {
     return c.json({ error: 'hubId, conversationId, recipientIdentifier, and body are required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   const id = await queue.enqueue({
     hubId: body.hubId,
     conversationId: body.conversationId,
@@ -1260,7 +1259,7 @@ dev.post('/test-simulate/signal-queue/mark-failed', async (c) => {
     return c.json({ error: 'messageId is required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   const [before] = await getDb().select().from(signalMessageQueue).where(eq(signalMessageQueue.id, body.messageId))
   if (!before) {
     return c.json({ error: 'Message not found' }, 404)
@@ -1286,7 +1285,7 @@ dev.post('/test-simulate/signal-queue/mark-sent', async (c) => {
     return c.json({ error: 'messageId is required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   await queue.markSent(body.messageId, body.externalId)
   return c.json({ ok: true })
 })
@@ -1322,7 +1321,7 @@ dev.get('/test-simulate/signal-queue/rate-limited', async (c) => {
     return c.json({ error: 'recipientIdentifier query param is required' }, 400)
   }
 
-  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET)
+  const queue = new SignalMessageQueue(getDb(), c.env.HMAC_SECRET, c.env.SERVER_KEK)
   const rateLimited = await queue.isRateLimited(recipientIdentifier)
   return c.json({ rateLimited })
 })
@@ -1535,56 +1534,38 @@ dev.post('/test-create-hub', async (c) => {
     updatedAt: new Date().toISOString(),
   }
 
-  try {
-    await services.settings.createHub(hub)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create hub'
-    return c.json({ error: message }, 500)
-  }
-
-  // Add admin as a member of the new hub so WS relay subscribe works in tests.
-  // This is CRITICAL for E2E — without hub membership, all hub-scoped API calls
-  // return 403 and the frontend fails to render hub pages.
+  // The admin founds the hub — it is a member of the new hub so WS relay
+  // subscribe works in tests, and CRITICAL for E2E: without hub membership all
+  // hub-scoped API calls return 403 and the frontend fails to render hub pages.
+  // A hub is never created without an admin (#2126), so one must be nameable.
   // Accept adminPubkey from request body as fallback — local dev may not have
   // ADMIN_PUBKEY set in env, but the test helper knows the admin pubkey.
   const bodyAdminPubkey = typeof rawBody === 'object' && rawBody !== null && 'adminPubkey' in rawBody && typeof rawBody.adminPubkey === 'string'
     ? rawBody.adminPubkey : undefined
   const adminPubkey = (c.env?.ADMIN_PUBKEY as string | undefined) || bodyAdminPubkey
-  if (adminPubkey) {
-    // Ensure the admin user exists before attempting setHubRole. During parallel
-    // test startup, test-create-hub can race with test-reset/ensureInit — the
-    // admin row may not exist yet. ensureInit uses onConflictDoUpdate so it's
-    // safe to call concurrently (idempotent, always sets role-super-admin).
-    await services.identity.ensureInit(adminPubkey)
-
-    // Retry up to 3 times — even after ensureInit, a concurrent reset could
-    // briefly delete the user row between our ensureInit and setHubRole.
-    let hubRoleSet = false
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await services.identity.setHubRole({
-          pubkey: adminPubkey,
-          hubId: hub.id,
-          roleIds: ['role-super-admin'],
-        })
-        hubRoleSet = true
-        break
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[test-create-hub] setHubRole attempt ${attempt + 1}/3 failed: ${msg}`)
-        if (attempt < 2) {
-          await new Promise(r => setTimeout(r, 500))
-          // Re-ensure admin exists before retrying
-          await services.identity.ensureInit(adminPubkey).catch(() => {})
-        }
-      }
-    }
-    if (!hubRoleSet) {
-      console.error(`[test-create-hub] FAILED to set admin hub role for hub ${hub.id} — hub-scoped tests will 403`)
-    }
+  if (!adminPubkey) {
+    return c.json({ error: 'adminPubkey is required: a hub cannot be created without an admin' }, 400)
   }
 
-  return c.json({ id: hub.id, name: hub.name })
+  // Retry up to 3 times — during parallel test startup test-create-hub can race
+  // with test-reset/ensureInit, so the admin row may not exist yet or may
+  // briefly vanish. ensureInit uses onConflictDoUpdate so it is safe to call
+  // concurrently (idempotent, always sets role-super-admin), and createHub is
+  // atomic, so a failed attempt leaves nothing behind to collide with the retry.
+  let lastError = 'Failed to create hub'
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await services.identity.ensureInit(adminPubkey)
+      await services.settings.createHub(hub, { pubkey: adminPubkey, roleIds: ['role-super-admin'] })
+      return c.json({ id: hub.id, name: hub.name })
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err)
+      console.warn(`[test-create-hub] attempt ${attempt + 1}/3 failed: ${lastError}`)
+      if (err instanceof ServiceError && err.status === 409 && lastError.includes('slug')) break
+      if (attempt < 2) await new Promise(r => setTimeout(r, 500))
+    }
+  }
+  return c.json({ error: lastError }, 500)
 })
 
 // ─── Database identity (test-harness cross-check) ─────────────────────────

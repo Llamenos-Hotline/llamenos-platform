@@ -613,6 +613,82 @@ Then('unwrapping it under the label {string} should be rejected', async ({ page 
   expect(result.rejected, `unwrap under ${labelName} must be rejected, but it succeeded`).toBe(true)
 })
 
+Then('unwrapping it under the label {string} should be refused as not openable from the webview', async ({ page }, labelName: string) => {
+  const label = (clientLabels as unknown as Record<string, string>)[labelName]
+  expect(label, `unknown label constant ${labelName}`).toBeTruthy()
+  const result = await page.evaluate(async (lbl) => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+    }
+    const w = (window as unknown as Record<string, unknown>).__test_wrapped as { env: unknown }
+    try {
+      await p.hpkeOpenKeyFromState(w.env, lbl, '')
+      return { error: null as string | null }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) }
+    }
+  }, label)
+  // The envelope IS valid under this label (the step above wrapped it under it),
+  // so a refusal for any other reason — a label mismatch, say — would be the
+  // allow-list not doing its job.
+  expect(result.error, `unwrap under ${labelName} must be refused`).toMatch(/not openable from the webview/)
+})
+
+// ─── Recovery group: shares are sealed in Rust, never returned ───────────
+
+When('I create a recovery group of 3 shares with threshold 2 sealed to this device', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
+      recoveryGroupCreate(total: number, threshold: number, holders: string[]): Promise<Record<string, unknown>>
+    }
+    const me = await p.getDevicePubkeys()
+    const out = await p.recoveryGroupCreate(3, 2, [
+      me.encryptionPubkeyHex,
+      me.encryptionPubkeyHex,
+      me.encryptionPubkeyHex,
+    ])
+    return {
+      keys: Object.keys(out).sort(),
+      envelopes: (out.shareEnvelopes as unknown[]).length,
+      commitments: (out.commitments as unknown[]).length,
+      envelope: (out.shareEnvelopes as unknown[])[0],
+    }
+  })
+  await setStash(page, '__test_recovery_group', result)
+})
+
+Then('the result should contain sealed share envelopes and no plaintext shares', async ({ page }) => {
+  const r = await stash<{ keys: string[]; envelopes: number; commitments: number }>(page, '__test_recovery_group')
+  expect(r.keys).toEqual(['commitments', 'publicKeyHex', 'shareEnvelopes'])
+  expect(r.envelopes).toBe(3)
+  expect(r.commitments).toBe(3)
+})
+
+Then('the webview should be unable to open a share envelope itself', async ({ page }) => {
+  const r = await stash<{ envelope: unknown }>(page, '__test_recovery_group')
+  const label = clientLabels.LABEL_RECOVERY_GROUP_SHARE_WRAP
+  const errors = await page.evaluate(async ({ envelope, lbl }) => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      hpkeOpenFromState(env: unknown, expected: string, aad: string): Promise<string>
+      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+    }
+    const attempt = async (open: () => Promise<string>) => {
+      try {
+        await open()
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    }
+    return [
+      await attempt(() => p.hpkeOpenFromState(envelope, lbl, '')),
+      await attempt(() => p.hpkeOpenKeyFromState(envelope, lbl, '')),
+    ]
+  }, { envelope: r.envelope, lbl: label })
+  for (const err of errors) expect(err).toMatch(/not openable from the webview/)
+})
+
 // ─── SAS derivation ─────────────────────────────────────────────────────
 
 Given('a shared secret hex string', async ({ page }) => {

@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "Bloquear y colgar",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "¿Bloquear al llamante y colgar?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "Llamada Activa",
-    "addNote": "Add Note",
+    "addNote": "Añadir nota",
     "answer": "Contestar",
+    "answerFailed": "No se pudo contestar la llamada. Puede que otra persona haya contestado antes.",
+    "answerOnPhone": "Contesta en tu teléfono",
     "banned": "Este número está bloqueado",
     "caller": "Llamante",
     "duration": "Duración",
     "ended": "Llamada Terminada",
     "hangUp": "Colgar",
+    "hangupFailed": "No se pudo terminar la llamada. Inténtalo de nuevo.",
     "hold": "En Espera",
     "incoming": "Llamada Entrante",
     "mute": "Silenciar",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "Enviar a Buzón de Voz",
     "unknown": "Número Desconocido",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "Llamante desconocido",
     "unmute": "Activar Audio",
     "voicemail": "Voicemail"
   },
@@ -1781,8 +1784,10 @@
     "calls": "Calls",
     "callsToday": "Llamadas Hoy",
     "cases": "Casos",
-    "clockIn": "Clock In",
-    "clockOut": "Clock Out",
+    "clockIn": "Iniciar turno",
+    "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
+    "clockOut": "Terminar turno",
+    "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
     "contactsSubtitle": "View caller interaction history",
@@ -1802,6 +1807,7 @@
     "noRecentNotes": "No Recent Notes",
     "noShift": "No hay turno programado",
     "noUsersOnline": "No hay voluntarios en línea",
+    "notClockedIn": "Not clocked in",
     "notes": "Notes",
     "offShift": "Off Shift",
     "offline": "Desconectado",
@@ -1824,18 +1830,6 @@
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
     "title": "Delete role"
-  },
-  "demo": {
-    "admin": "Admin",
-    "banner": "Demo Mode",
-    "bannerText": "Entorno de prueba: no ingrese información real de quienes llaman. Los datos aquí no son confidenciales y pueden eliminarse en cualquier momento.",
-    "bannerTextSchedule": "Entorno de prueba: no ingrese información real de quienes llaman. Los datos se restablecen {{schedule}} y no son confidenciales.",
-    "dismiss": "Dismiss",
-    "getStarted": "Deploy your own",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo",
-    "volunteer": "Volunteer"
   },
   "deviceWipe": {
     "contactAdmin": "Contact your hub administrator for assistance.",
@@ -2073,6 +2067,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "El desbloqueo biométrico está bloqueado por demasiados intentos fallidos. Introduce tu PIN.",
     "biometricNotEnrolled": "La biometría de tu dispositivo cambió, por lo que el desbloqueo biométrico se desactivó. Introduce tu PIN.",
@@ -2080,6 +2076,12 @@
     "httpNotAllowed": "No se permiten conexiones HTTP inseguras. Usa una dirección HTTPS.",
     "pinLockoutDuration": "Demasiados intentos fallidos. Vuelve a intentarlo en {{seconds}} segundos.",
     "pinWiped": "Demasiados intentos fallidos de PIN. Por tu seguridad, se han borrado todas las claves de este dispositivo."
+  },
+  "errors": {
+    "deviceNotRegistered": "Este dispositivo aún no está registrado en tu hub. Pide a alguien que gestione tu hub que lo añada.",
+    "forbidden": "No tienes permiso para hacer esto. Pídeselo a alguien que gestione tu hub.",
+    "notFound": "Esto ya no existe. Puede que se haya eliminado.",
+    "serverUnavailable": "No se puede conectar con el servidor ahora mismo. Inténtalo de nuevo en un momento."
   },
   "eventType": {
     "call": "Llamada",
@@ -2500,9 +2502,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "Alguien está llamando a la línea de ayuda",
+  "incomingCallAnswer": "Contestar",
+  "incomingCallDecline": "Rechazar",
   "incomingCallMicrophoneRequired": "Se necesita acceso al micrófono para responder llamadas en la app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2517,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "Para español, marque [N].",
-    "moreLanguages": "Para más idiomas, marque [N].",
-    "goBack": "Para volver, marque 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Idiomas habilitados que nadie en este hub habla: {{count}}",
+    "uncoveredHint": "Quien llame y elija uno de ellos puede no encontrar a nadie que lo hable. Añade idiomas hablados a los perfiles de los miembros o desactiva el idioma.",
+    "maxLanguagesReached": "El menú del teclado admite {{max}} idiomas. A quienes llaman en otros idiomas se les asigna por el prefijo telefónico."
   },
   "ivrAudio": {
     "delete": "Eliminar",
@@ -2535,6 +2538,7 @@
       "greeting": "Saludo",
       "pleaseHold": "Espere por favor",
       "rateLimited": "Alto volumen",
+      "recordingNotice": "Aviso de grabación",
       "voicemailPrompt": "Mensaje de Buzón de Voz",
       "waitMessage": "Mensaje de espera"
     },
@@ -2555,8 +2559,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "La clave se ha borrado por demasiados intentos fallidos",
+    "wrongPin": "PIN incorrecto"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2751,6 +2755,7 @@
     "pendingCountOne": "{{count}} pendiente",
     "pendingSyncMessage": "{{count}} operaciones esperando sincronización",
     "pendingSyncMessageOne": "{{count}} operación esperando sincronización",
+    "rejected": "No se guardó: el servidor lo rechazó",
     "relayReconnected": "Reconectado — recuperando eventos perdidos",
     "relayReconnecting": "Reconectando al servidor en tiempo real...",
     "syncComplete": "Todas las operaciones se sincronizaron correctamente",
@@ -2895,6 +2900,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "Los PIN no coinciden. Inténtalo de nuevo.",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{count}} de {{total}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2908,7 +2914,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN incorrecto."
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",
@@ -3825,9 +3831,6 @@
     "complete": "Setup complete! Welcome to your hotline.",
     "completeFailed": "Failed to complete setup",
     "configured": "Configured",
-    "demoMode": "Populate with sample data",
-    "demoModeDescription": "Creates sample volunteer accounts, shifts, and ban entries for testing and demos. Demo account credentials will be shown on the login page.",
-    "demoSeedFailed": "Sample data partially created",
     "generateInvite": "Generate Invite",
     "generatedInvites": "Generated Invites",
     "goToDashboard": "Go to Dashboard",
@@ -4597,6 +4600,7 @@
     "role": "Rol",
     "roleAdmin": "Administrador",
     "roleHubAdmin": "Admin de Hub",
+    "roleHubDefault": "Predeterminado del centro",
     "roleReporter": "Reportero",
     "roleReviewer": "Revisor",
     "roleVolunteer": "Voluntario",
@@ -4689,6 +4693,7 @@
   },
   "voice": {
     "greeting": "Gracias por llamar a {name}.",
+    "recordingNotice": "Tenga en cuenta que esta llamada será grabada.",
     "rateLimited": "Estamos experimentando un alto volumen de llamadas. Por favor, intente más tarde.",
     "captchaPrompt": "Por favor, ingrese los siguientes dígitos:",
     "captchaTimeout": "No recibimos su entrada. Adiós.",

@@ -154,8 +154,10 @@ When('I enter PIN {string}', async ({ page }, pin: string) => {
 // ── Volunteer on shift ────────────────────────────────────────────
 
 Given('I am logged in as a volunteer on shift', async ({ page, backendRequest: request, workerHub }) => {
-  // Create a volunteer, put them on a current shift, then log in
-  const vol = await createUserViaApi(request)
+  // Create a volunteer IN THE TEST HUB (a user created without a hub has no
+  // access to it: every hub-scoped route, `shifts/my-status` and `clock-in`
+  // included, answers 403), put them on a current shift, then log in
+  const vol = await createUserViaApi(request, { hubId: workerHub })
   await createShiftViaApi(request, {
     name: `Shift-${Date.now()}`,
     startTime: '00:00',
@@ -165,6 +167,11 @@ Given('I am logged in as a volunteer on shift', async ({ page, backendRequest: r
     hubId: workerHub,
   })
   await loginAsVolunteer(page, vol.nsec)
+  // Scenarios that ask the server about THIS volunteer (is a ring target) need
+  // to know who they logged in as; a SPA navigation keeps `window`.
+  await page.evaluate((pubkey) => {
+    ;(window as unknown as Record<string, unknown>).__test_vol_pubkey = pubkey
+  }, vol.pubkey)
 })
 
 // Reporter steps defined in tests/steps/auth/user-steps.ts:

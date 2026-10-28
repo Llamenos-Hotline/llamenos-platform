@@ -108,7 +108,6 @@ Tu carî rasterast `wrangler pages deploy` an `wrangler deploy` nexin. Her dem s
 
 ```bash
 bun run deploy          # Her tiştî bideploy bike (app + malpera kirrûbirî)
-bun run deploy:demo     # Tenê app Worker bideploy bike
 bun run deploy:site     # Tenê malpera kirrûbirî bideploy bike
 ```
 

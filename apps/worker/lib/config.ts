@@ -12,7 +12,32 @@
  * docs/superpowers/specs/2026-03-21-hardening-final.md Gap 4.
  */
 
+import fs from 'node:fs'
+
 const HEX_RE = /^[0-9a-f]+$/
+
+/** Where a file-only secret is mounted unless `<NAME>_FILE` points elsewhere (dev, CI). */
+const SECRETS_DIR = '/run/secrets'
+
+/**
+ * Read a secret that is delivered ONLY as a file, never as an environment
+ * variable. The path is `${SECRETS_DIR}/<name>`, or the file named by
+ * `<NAME>_FILE` (`ban-hash-key` → `BAN_HASH_KEY_FILE`, `messaging-hash-key` → `MESSAGING_HASH_KEY_FILE`) so dev and CI can point
+ * at a scratch file without the value ever entering an env block. Returns
+ * undefined when the file does not exist or is empty.
+ */
+export function readSecretFile(
+  name: string,
+  env: ConfigInput = process.env,
+): string | undefined {
+  const override = env[`${name.toUpperCase().replace(/-/g, '_')}_FILE`]?.trim()
+  const path = override || `${SECRETS_DIR}/${name}`
+  try {
+    return fs.readFileSync(path, 'utf-8').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
 
 type ConfigInput = Partial<Record<string, string | undefined>>
 
@@ -34,6 +59,81 @@ function assertHex64(env: ConfigInput, key: string): void {
       `[llamenos] ${key} must be exactly 64 lowercase hex characters (got length ${val.length}). ` +
       `Generate with: openssl rand -hex 32`
     )
+  }
+}
+
+const ROLE_SECRETS = ['HMAC_SECRET', 'SERVER_SECRET', 'SERVER_KEK'] as const
+
+/** No two role secrets may share a value: that is a secret with two roles. */
+function assertDistinctSecrets(env: ConfigInput): void {
+  for (let i = 0; i < ROLE_SECRETS.length; i++) {
+    for (let j = i + 1; j < ROLE_SECRETS.length; j++) {
+      const a = env[ROLE_SECRETS[i]!]?.trim()
+      const b = env[ROLE_SECRETS[j]!]?.trim()
+      if (a && a === b) {
+        throw new Error(
+          `[llamenos] ${ROLE_SECRETS[i]} and ${ROLE_SECRETS[j]} are identical. Each server ` +
+          `secret has exactly one role; generate a separate value for each with: openssl rand -hex 32`
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Keys that are delivered only as a secret FILE, never as an environment
+ * variable. Each keys one hash of a phone number or contact identifier; kept out
+ * of `.env`, so out of every config backup, because a hash under a key the
+ * database holds is reversible by anyone who reads the database. Supplying one
+ * as an environment variable is refused rather than quietly accepted.
+ */
+const FILE_ONLY_KEYS = [
+  { file: 'ban-hash-key', env: 'BAN_HASH_KEY', role: 'the ban-list hash' },
+  { file: 'messaging-hash-key', env: 'MESSAGING_HASH_KEY', role: 'the messaging-thread hash' },
+] as const
+
+function assertFileOnlyKey(
+  key: (typeof FILE_ONLY_KEYS)[number],
+  env: ConfigInput,
+  readFile: (name: string) => string | undefined,
+): string {
+  if (env[key.env]?.trim()) {
+    throw new Error(
+      `[llamenos] ${key.env} must not be set as an environment variable. Deliver it only as ` +
+      `the /run/secrets/${key.file} secret file, so it never lands in .env or a config backup.`
+    )
+  }
+  const val = readFile(key.file)
+  if (!val) {
+    throw new Error(
+      `[llamenos] Required secret file ${key.file} is missing or empty. Mount it at ` +
+      `/run/secrets/${key.file} (or point ${key.env}_FILE at it). Generate with: openssl rand -hex 32`
+    )
+  }
+  if (val.length !== 64 || !HEX_RE.test(val)) {
+    throw new Error(
+      `[llamenos] ${key.file} must be exactly 64 lowercase hex characters (got length ${val.length}). ` +
+      `Generate with: openssl rand -hex 32`
+    )
+  }
+  for (const other of ROLE_SECRETS) {
+    if (env[other]?.trim() === val) {
+      throw new Error(`[llamenos] ${key.file} and ${other} are identical. Each server secret has exactly one role.`)
+    }
+  }
+  return val
+}
+
+/** Every file-only key, validated, and no two of them equal: each keys one hash and nothing else. */
+function assertFileOnlyKeys(env: ConfigInput, readFile: (name: string) => string | undefined): void {
+  const seen = new Map<string, string>()
+  for (const key of FILE_ONLY_KEYS) {
+    const val = assertFileOnlyKey(key, env, readFile)
+    const clash = seen.get(val)
+    if (clash) {
+      throw new Error(`[llamenos] ${clash} and ${key.file} are identical. Each server secret has exactly one role.`)
+    }
+    seen.set(val, key.file)
   }
 }
 
@@ -65,11 +165,21 @@ function warnIfAbsent(env: ConfigInput, key: string, featureNote: string): void 
  *
  * @param env - Environment object to validate (defaults to process.env).
  */
-export function validateConfig(env: ConfigInput = process.env): void {
+export function validateConfig(
+  env: ConfigInput = process.env,
+  readFile: (name: string) => string | undefined = (name) => readSecretFile(name, env),
+): void {
   // --- Required vars ---
   assertDatabaseUrl(env)
+  // One role per secret (D6, #2171): HMAC_SECRET only hashes, SERVER_KEK only
+  // encrypts data the server must read back, SERVER_SECRET derives the relay and
+  // server identity keys. A deployment that supplies one value for two roles
+  // couples their rotations and their blast radius.
   assertHex64(env, 'HMAC_SECRET')
   assertHex64(env, 'SERVER_SECRET')
+  assertHex64(env, 'SERVER_KEK')
+  assertDistinctSecrets(env)
+  assertFileOnlyKeys(env, readFile)
 
   // ADMIN_PUBKEY: 64 hex chars (Ed25519 public key, hex-encoded)
   // Optional: if not set, the first admin is bootstrapped via the Tauri desktop app.
@@ -131,40 +241,29 @@ export function validateConfig(env: ConfigInput = process.env): void {
   assertNonEmpty(env, 'HOTLINE_NAME')
   assertNonEmpty(env, 'ENVIRONMENT')
 
-  // --- Demo mode production gate ---
-  // DEMO_MODE=true in a production environment would allow scheduled data destruction.
-  // Hard-fail at startup to prevent accidental misconfiguration.
-  const demoMode = env['DEMO_MODE']?.trim() === 'true'
+  // Required because the server cannot boot without them, not because a
+  // feature wants them: `src/server/index.ts` builds its env with
+  // `BLOB_STORAGE: createBlobStorage()` as a plain property, and
+  // `createBlobStorage` (lib/blob-storage.ts) throws outright when either is
+  // absent.
+  //
+  // Before this, they were absent from the validator, so a deployment missing
+  // them passed every check here, logged "Database initialized", "Services
+  // initialized" and "Default settings, roles and platform admin ensured" —
+  // i.e. ran its migrations and seeded its admin — and only THEN died with a
+  // raw stack trace from a factory. The three preceding lines read as
+  // success and the only warnings were about unrelated optional features
+  // (webhooks, push), so it did not look like a configuration problem at all.
+  // Deployed configs all set these (docker-compose, Helm, the Ansible env
+  // template), which is why it never bit in CI: it bites whoever assembles
+  // their own env, i.e. a self-hoster. #1438.
+  //
+  // STORAGE_ENDPOINT stays optional — `createBlobStorage` defaults it to
+  // http://localhost:9000 and that default is harmless.
+  assertNonEmpty(env, 'STORAGE_ACCESS_KEY')
+  assertNonEmpty(env, 'STORAGE_SECRET_KEY')
+
   const environment = env['ENVIRONMENT']?.trim() ?? ''
-  if (demoMode) {
-    if (environment === 'production') {
-      throw new Error(
-        '[llamenos] CRITICAL: DEMO_MODE=true is set in a production environment. ' +
-        'This would allow scheduled destruction of all application data. ' +
-        'Remove DEMO_MODE from your production environment configuration immediately.',
-      )
-    }
-    if (environment !== 'development' && environment !== 'staging' && environment !== 'demo') {
-      logger.error(
-        'CRITICAL: DEMO_MODE=true detected in unrecognized environment "%s". ' +
-        'Demo mode should only run in development, staging, or demo environments. ' +
-        'Verify your environment configuration before proceeding.',
-        environment,
-      )
-    }
-    const confirm = env['DEMO_MODE_CONFIRM']?.trim()
-    if (confirm !== 'DESTROY_ALL_DATA') {
-      throw new Error(
-        '[llamenos] DEMO_MODE=true requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA. ' +
-        'This two-factor confirmation prevents accidental data destruction. ' +
-        'Set DEMO_MODE_CONFIRM=DESTROY_ALL_DATA alongside DEMO_MODE=true.',
-      )
-    }
-    logger.warn(
-      'DEMO_MODE is enabled — scheduled data resets are active. ' +
-      'This server will periodically destroy all application data.',
-    )
-  }
 
   // --- Dev-surface production gate ---
   // The /api/test-* routes reset the database, delete the admin and promote

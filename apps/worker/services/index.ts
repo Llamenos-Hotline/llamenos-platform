@@ -4,8 +4,8 @@
  * Services replace Durable Objects. Each service owns a domain's tables
  * and provides typed methods for CRUD and business logic.
  */
+import { hexToBytes } from '@shared/encoding'
 import type { Database } from '../db'
-
 import { IdentityService } from './identity'
 import { SettingsService } from './settings'
 import { RecordsService } from './records'
@@ -14,6 +14,7 @@ import { ShiftsService } from './shifts'
 import { CallsService } from './calls'
 import { ConversationsService } from './conversations'
 import { BlastsService } from './blasts'
+import { MessagingSuppressionService } from './messaging-suppression'
 import { ContactsService } from './contacts'
 import { CasesService } from './cases'
 import { TaskScheduler, type TaskSchedulerServiceDeps } from './scheduler'
@@ -53,6 +54,8 @@ export interface Services {
   calls: CallsService
   conversations: ConversationsService
   blasts: BlastsService
+  /** Messaging opt-outs: every outbound adapter and the subscriber importer consult it. */
+  messagingSuppression: MessagingSuppressionService
   contacts: ContactsService
   cases: CasesService
   scheduler: TaskScheduler
@@ -85,12 +88,17 @@ export interface Services {
 }
 
 export interface ServicesOpts {
+  /** Hashing key only (HMAC_SECRET): never encrypts anything. */
   hmacSecret?: string
+  /** Key-encryption key (SERVER_KEK) for server-readable data: provider credentials, reply addresses, queued sends. */
+  serverKek?: string
   firehoseSealKey?: string
+  /** Messaging contact hash key (file-only MESSAGING_HASH_KEY): what a subscriber import hashes under, so STOP matches it. */
+  messagingHashKey?: string
   env?: Record<string, string | undefined>
   notifierUrl?: string
   notifierApiKey?: string
-  /** Secret shared with the sidecar for signing client registration tokens. Falls back to hmacSecret. */
+  /** Secret shared with the sidecar for signing client registration tokens. Has no fallback to another secret. */
   notifierTokenSecret?: string
   /**
    * Object-storage binding (Env.BLOB_STORAGE) — required for the hub shred to
@@ -103,22 +111,44 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   // Register provider implementations once during service initialization (not at module import)
   registerAllProviders()
 
-  const audit = new AuditService(db)
   const settings = new SettingsService(db)
-  const conversations = new ConversationsService(db, opts?.hmacSecret)
+  const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
+  const hubShred = new HubShredService(db, opts?.blobStorage)
+  const erasure = new ErasureService(db, {
+    deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
+  })
+
+  // The X25519 recipients for hub-less server-sealed envelope sets (call records,
+  // audit keys): ADMIN_DECRYPTION_PUBKEY. Super-admins are never readers (D1,
+  // #2190), and a record with no hub has no hub admins.
+  const resolveAdminRecipients = (): Promise<string[]> =>
+    identity.listAdminEnvelopeRecipients(opts?.env?.ADMIN_DECRYPTION_PUBKEY)
+
+  // The per-user audit key path (issue #1684 item 3) requires SERVER_SECRET to
+  // store the key server-decryptably. validateConfig refuses to boot without
+  // it; a hand-rolled caller that omits it gets the plaintext-details behavior
+  // the audit log had before EP08.
+  const serverSecretHex = opts?.env?.SERVER_SECRET?.trim()
+  const audit = new AuditService(db, serverSecretHex
+    ? {
+        serverSecret: hexToBytes(serverSecretHex),
+        resolveAdminRecipients,
+        keyStore: erasure,
+      }
+    : undefined)
+
+  const conversations = new ConversationsService(db, opts?.serverKek)
   const firehose = new FirehoseService(db)
   const signalContacts = new SignalContactsService(db, opts?.hmacSecret ?? '')
   const securityPrefs = new SecurityPrefsService(db)
   const userNotifications = new UserNotificationsService(signalContacts, securityPrefs, audit, {
     notifierUrl: opts?.notifierUrl ?? '',
     notifierApiKey: opts?.notifierApiKey ?? '',
-    tokenSecret: opts?.notifierTokenSecret ?? opts?.hmacSecret ?? '',
+    tokenSecret: opts?.notifierTokenSecret ?? '',
   })
   const digestCron = new DigestCronService(db, userNotifications, securityPrefs)
-  const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', webhookOrigin(opts?.env ?? {}))
-
-  const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
-  const hubShred = new HubShredService(db, opts?.blobStorage)
+  const messagingSuppression = new MessagingSuppressionService(db, opts?.messagingHashKey)
+  const providerSetup = new ProviderSetup(db, opts?.serverKek ?? '', webhookOrigin(opts?.env ?? {}))
 
   const services: Services = {
     identity,
@@ -126,14 +156,16 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     records: new RecordsService(db, audit),
     audit,
     shifts: new ShiftsService(db),
-    calls: new CallsService(db),
+    calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients, serverKek: opts?.serverKek }),
     conversations,
-    blasts: new BlastsService(db, opts?.hmacSecret),
+    blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek, opts?.messagingHashKey, messagingSuppression),
+    messagingSuppression,
     contacts: new ContactsService(db),
     cases: new CasesService(db),
     scheduler: new TaskScheduler(
       db,
       opts?.hmacSecret ?? '',
+      opts?.serverKek ?? '',
       parseSignalQueueRetentionDays(opts?.env?.SIGNAL_QUEUE_RETENTION_DAYS),
     ),
     cryptoKeys: new CryptoKeysService(db),
@@ -148,18 +180,16 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     // `devSurfaceRequestAuthorized`, which needs the opt-in flag and the
     // configured secret as well (#1623). Listed explicitly rather than spread,
     // so what the service can read stays visible here.
-    signalRegistration: new SignalRegistrationService(db, opts?.hmacSecret ?? '', {
+    signalRegistration: new SignalRegistrationService(db, opts?.serverKek ?? '', {
       ENVIRONMENT: opts?.env?.ENVIRONMENT,
       DEV_ROUTES_ENABLED: opts?.env?.DEV_ROUTES_ENABLED,
       DEV_RESET_SECRET: opts?.env?.DEV_RESET_SECRET,
       E2E_TEST_SECRET: opts?.env?.E2E_TEST_SECRET,
     }),
-    a2pRegistration: new A2pRegistrationService(db, opts?.hmacSecret ?? ''),
+    a2pRegistration: new A2pRegistrationService(db, opts?.serverKek ?? ''),
     providerTemplates: new ProviderTemplateService(db),
     hubOnboard: new HubOnboardService(db, providerSetup, settings),
-    erasure: new ErasureService(db, identity, {
-      deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
-    }),
+    erasure,
     retention: new RetentionService(db),
     hubShred,
     ringGroups: new RingGroupsService(db),
@@ -209,6 +239,7 @@ export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDe
     erasureService: services.erasure,
     identityService: services.identity,
     hubShred: services.hubShred,
+    callsService: services.calls,
   }
 }
 
@@ -226,6 +257,7 @@ export {
   CallsService,
   ConversationsService,
   BlastsService,
+  MessagingSuppressionService,
   ContactsService,
   CasesService,
   TaskScheduler,

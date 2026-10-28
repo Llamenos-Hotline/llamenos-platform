@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { PR_COMMITS_PAGE_SIZE, type PrCommitIdentity } from './ci.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -119,4 +120,26 @@ export async function ghJson<T>(
     onFailure?.(describeGhFailure(e))
     return undefined
   }
+}
+
+/**
+ * The PR's commits by identity — ONE page, `PR_COMMITS_PAGE_SIZE` — or
+ * `undefined` when unreadable (`commitsAllBotAuthored` reads that as "not all
+ * bot": fail closed). Needs only `pull-requests: read`.
+ */
+export async function readPrCommits(
+  pr: string,
+  onFailure?: (detail: string) => void,
+): Promise<PrCommitIdentity[] | undefined> {
+  if (!/^[0-9]+$/.test(pr)) return undefined
+  const data = await ghJson<{
+    sha: string
+    author?: { login?: string | null } | null
+    committer?: { login?: string | null } | null
+    commit?: { verification?: { verified?: boolean | null } | null } | null
+  }[]>(['api', `repos/${REPO}/pulls/${pr}/commits?per_page=${PR_COMMITS_PAGE_SIZE}`], 30_000, onFailure)
+  if (!Array.isArray(data)) return undefined
+  return data.map((c) => ({ sha: c.sha, authorLogin: c.author?.login, committerLogin: c.committer?.login,
+    verified: c.commit?.verification?.verified,
+  }))
 }

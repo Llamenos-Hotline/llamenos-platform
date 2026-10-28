@@ -101,7 +101,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -199,7 +199,7 @@ jobs:
           fi
 
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: "1.3.5"
 
@@ -480,7 +480,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -559,7 +559,7 @@ jobs:
           cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
 
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: "1.3.5"
 
@@ -810,14 +810,3 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: security delete-keychain build.keychain 2>/dev/null || true
-
-  # ─── Redeploy the marketing site so its download links see the new APK ───
-  # The site resolves the newest `android-v*` release at build time
-  # (site/src/utils/releases.ts). Waits on build-android only: the iOS job publishes
-  # build metadata, not an installer the site links.
-  deploy-site:
-    needs: [build-android]
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy-site.yml
-    secrets: inherit

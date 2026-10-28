@@ -64,7 +64,25 @@ export interface Env {
   ENVIRONMENT: string
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
   CORS_ALLOWED_ORIGINS?: string   // Comma-separated allowed origins (overrides hardcoded defaults)
+  /** Hashing key ONLY (phone/IP hashes, signed URLs). Encrypts nothing. */
   HMAC_SECRET: string
+  /**
+   * Key-encryption key for data the server must read back: provider
+   * credentials, reply addresses, queued Signal sends. Distinct from
+   * HMAC_SECRET and SERVER_SECRET (D6, #2171).
+   */
+  SERVER_KEK: string
+  /**
+   * Ban-list hash key. Delivered only as the `ban-hash-key` secret file —
+   * never in `.env`, never in a config backup (D6, A16).
+   */
+  BAN_HASH_KEY: string
+  /**
+   * Messaging-thread hash key: HMAC(HKDF(key, hubId), identifier) names a
+   * conversation's contact. Delivered only as the `messaging-hash-key` secret
+   * file, a key of its own (D2, #2182).
+   */
+  MESSAGING_HASH_KEY: string
   /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
   SIGNAL_QUEUE_RETENTION_DAYS?: string
   METRICS_SCRAPE_TOKEN?: string
@@ -73,10 +91,6 @@ export interface Env {
   DEV_AUTH_BYPASS?: string           // "true" to skip Ed25519 signature verification (dev only)
   DEV_ROUTES_ENABLED?: string        // "true" to enable /test-* dev routes (dev only)
 
-  // Demo mode (scheduled resets all data on a cron schedule)
-  DEMO_MODE?: string              // "true" to enable (blocked in ENVIRONMENT=production)
-  DEMO_MODE_CONFIRM?: string      // Must be "DESTROY_ALL_DATA" when DEMO_MODE=true (two-factor confirmation)
-  DEMO_RESET_CRON?: string        // Human-readable schedule label (e.g., "every 4 hours")
 
   // Server secret — hex 32 bytes used for HKDF key derivation (signing, encryption, auth)
   SERVER_SECRET?: string
@@ -94,14 +108,14 @@ export interface Env {
   NOTIFIER_URL?: string
   /** @deprecated Use SIGNAL_NOTIFIER_BEARER_TOKEN */
   NOTIFIER_API_KEY?: string
-  NOTIFIER_TOKEN_SECRET?: string  // HMAC secret for signing client registration tokens (falls back to HMAC_SECRET)
+  NOTIFIER_TOKEN_SECRET?: string  // HMAC secret for signing client registration tokens 
 
   // Per-volunteer SIP registrar (profile: asterisk/telephony — see telephony/registrar.ts).
   // Master secret from which each volunteer's unique PJSIP endpoint secret is
   // derived (HMAC-SHA256, domain-separated by HMAC_SIP_VOLUNTEER_SECRET). Not
   // the hub credential and not the ARI password: rotating it rotates every
   // volunteer's SIP secret at once.
-  SIP_REGISTRAR_SECRET?: string // Falls back to HMAC_SECRET when unset
+  SIP_REGISTRAR_SECRET?: string // No fallback: in-app SIP is refused while unset
   // CoTURN relay (profile: telephony). Both must be set to mint the
   // time-limited TURN credentials /sip-token returns (RFC 8489 long-term
   // credentials against the coturn --static-auth-secret); either unset means
@@ -177,7 +191,6 @@ export interface WakePayload {
 
 /** Full-tier payload — decryptable only with volunteer's device key */
 export interface FullPushPayload extends WakePayload {
-  senderLast4?: string
   previewText?: string
   duration?: number
   callerLast4?: string
@@ -257,6 +270,14 @@ export interface SpamSettings {
 export interface CallSettings {
   queueTimeoutSeconds: number   // 30-300, default 90
   voicemailMaxSeconds: number   // 30-300, default 120
+  /**
+   * Record answered calls at the telephony provider. Default FALSE (#1505) —
+   * provider-side recording writes crisis-call audio to a third party's disk,
+   * so a hub has to opt in, and the caller is told in the greeting when it is on.
+   *
+   * Never gates voicemail: that recording is caller-initiated.
+   */
+  recordCalls: boolean          // default false
 }
 
 /**
@@ -345,7 +366,6 @@ export interface Conversation {
   id: string
   channelType: MessagingChannelType | 'web'
   contactIdentifierHash: string   // hashed phone/ID
-  contactLast4?: string           // last 4 digits (admin-only, like callerLast4)
   assignedTo?: string             // volunteer pubkey
   status: ConversationStatus
   createdAt: string

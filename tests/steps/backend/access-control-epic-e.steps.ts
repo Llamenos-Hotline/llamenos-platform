@@ -227,17 +227,33 @@ function resolveApproverPubkey(world: Record<string, unknown>, label: string): s
 
 // ── H01: Erasure co-approver admin check ─────────────────────────────
 
-Given('a registered volunteer user with pubkey {string}', async ({ request, world }, label: string) => {
+/** Register `label` and make them a member of `hubLabel` holding `roleIds` there (and nothing globally). */
+async function registerHubMember(
+  request: APIRequestContext,
+  world: Record<string, unknown>,
+  label: string,
+  hubLabel: string,
+  roleIds: string[],
+): Promise<void> {
+  const hubId = await ensureHub(request, world, hubLabel)
   const user = await createUserViaApi(request, { roleIds: ['role-volunteer'] })
+  await apiPost(request, `/hubs/${hubId}/members`, { pubkey: user.pubkey, roleIds })
   getS(world).actors[label] = { pubkey: user.pubkey, seedHex: user.seedHex, registered: true }
+}
+
+Given('a registered user {string} holds role {string} in hub {string}', async ({ request, world }, label: string, roleId: string, hubLabel: string) => {
+  await registerHubMember(request, world, label, hubLabel, [roleId])
 })
 
-Given('a registered admin user with pubkey {string}', async ({ request, world }, label: string) => {
-  const user = await createUserViaApi(request, { roleIds: ['role-super-admin'] })
-  getS(world).actors[label] = { pubkey: user.pubkey, seedHex: user.seedHex, registered: true }
+// A role the instance never heard of by name: only its permissions can make its holder an admin.
+Given('a registered user {string} holds a custom role granting {string} and {string} in hub {string}', async ({ request, world }, label: string, first: string, second: string, hubLabel: string) => {
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const role = await createRoleViaApi(request, { name: `epic-e night coordinators ${unique}`, slug: `epic-e-night-coordinators-${unique}`, permissions: [first, second] })
+  await registerHubMember(request, world, label, hubLabel, [role.id])
 })
 
-Given('a registered admin user with pubkey {string} and role {string}', async ({ request, world }, label: string, roleId: string) => {
+// Authority over a hub's data comes from the hub's roles, never from a global role id (#2232).
+Given('a registered user {string} holds only the global role {string}', async ({ request, world }, label: string, roleId: string) => {
   const user = await createUserViaApi(request, { roleIds: [roleId] })
   getS(world).actors[label] = { pubkey: user.pubkey, seedHex: user.seedHex, registered: true }
 })
@@ -721,7 +737,7 @@ When('I call GET \\/api\\/test-push-log with correct X-Test-Secret', async ({ re
   setLastResponse(world, await devGet(request, '/test-push-log'))
 })
 
-// ── HIGH-W3: Ban list phone masking ────────────────────────────────────
+// ── HIGH-W3 / D2: a ban keeps a keyed hash and no digits of the number ──
 
 Given('I am authenticated as an admin with {string} permission', async ({ request, world }, permission: string) => {
   const s = getS(world)
@@ -738,15 +754,16 @@ When('I ban the phone number {string} with reason {string}', async ({ request, w
   setLastResponse(world, await apiPost(request, `/hubs/${s.currentHubId}/bans`, { phone, reason }, s.currentActorSeed!))
 })
 
-Then('the ban response contains phone {string}', ({ world }, expectedDisplay: string) => {
-  const res = getSharedState(world).lastResponse!
-  expect((res.data as { ban?: { phone?: string } }).ban?.phone).toBe(expectedDisplay)
-})
+/** Digits that appear in the numbers these scenarios ban (last four of each, and the national number). */
+const BANNED_DIGITS = ['1234', '5678', '2125551234']
 
-Then('the stored phoneDisplay field does not contain the full phone number', ({ world }) => {
+Then('the ban response carries no phone number', ({ world }) => {
   const res = getSharedState(world).lastResponse!
-  const phone = (res.data as { ban?: { phone?: string } }).ban?.phone ?? ''
-  expect(phone).not.toContain('2125551234')
+  const ban = (res.data as { ban?: Record<string, unknown> }).ban
+  expect(ban).toBeDefined()
+  expect(ban).not.toHaveProperty('phone')
+  expect(Object.keys(ban!).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
+  for (const digits of BANNED_DIGITS) expect(JSON.stringify(res.data)).not.toContain(digits)
 })
 
 When('I bulk ban phones [{string}, {string}]', async ({ request, world }, phone1: string, phone2: string) => {
@@ -757,12 +774,15 @@ When('I bulk ban phones [{string}, {string}]', async ({ request, world }, phone1
   }, s.currentActorSeed!))
 })
 
-Then('the stored phoneDisplay values are {string} and {string}', async ({ request, world }, display1: string, display2: string) => {
+Then('the ban list carries no phone number', async ({ request, world }) => {
   const s = getS(world)
   const bans = await listBansViaApi(request, s.currentHubId)
-  const displays = bans.map((b) => b.phone)
-  expect(displays).toContain(display1)
-  expect(displays).toContain(display2)
+  expect(bans.length).toBeGreaterThan(0)
+  for (const ban of bans) {
+    expect(ban).not.toHaveProperty('phone')
+    expect(Object.keys(ban).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
+  }
+  for (const digits of BANNED_DIGITS) expect(JSON.stringify(bans)).not.toContain(digits)
 })
 
 // ── HIGH-W6: Recovery-group emergency override approver match ─────────

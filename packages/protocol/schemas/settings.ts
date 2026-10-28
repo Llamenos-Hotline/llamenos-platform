@@ -125,9 +125,7 @@ export const updateReportTypeBodySchema = z.object({
 
 export const ttlOverridesBodySchema = z.record(z.string(), z.number().int().min(0))
 
-export const setupCompleteBodySchema = z.object({
-  demoMode: z.boolean().optional(),
-})
+export const setupCompleteBodySchema = z.object({})
 
 export const spamSettingsSchema = z.object({
   voiceCaptchaEnabled: z.boolean().optional(),
@@ -141,6 +139,22 @@ export type SpamSettings = z.infer<typeof spamSettingsSchema>
 export const callSettingsSchema = z.object({
   queueTimeoutSeconds: z.number().int().min(30).max(300).optional(),
   voicemailMaxSeconds: z.number().int().min(30).max(300).optional(),
+  /**
+   * Record answered calls at the telephony provider. Defaults to OFF: a crisis
+   * call must not be written to a third party's disk unless a hub has
+   * deliberately opted in. When enabled, the caller is told so in the greeting
+   * (`voice.recordingNotice`) before they are ever connected — see #1505.
+   *
+   * This does NOT gate voicemail. A caller who leaves a message has chosen to
+   * leave one; that recording is caller-initiated and always permitted.
+   *
+   * Deliberately NOT `.optional().default(false)`: this schema is also the PATCH
+   * body, and a default would materialise `recordCalls: false` for every client
+   * that only changed a timeout — silently turning recording off, or writing a
+   * hub override that shadows the platform value (#1643). The default (off) lives
+   * in SettingsService's DEFAULT_CALL_SETTINGS, so every read still returns it.
+   */
+  recordCalls: z.boolean().optional(),
 })
 
 export type CallSettings = z.infer<typeof callSettingsSchema>
@@ -224,6 +238,19 @@ export const transcriptionSettingsSchema = z.object({
 export const ivrLanguagesSchema = z.object({
   enabledLanguages: z.array(z.string()),
 })
+
+/**
+ * What the IVR language settings screen reads and gets back from a save.
+ *
+ * `uncoveredLanguageCount` is how many enabled languages no hub member lists in
+ * `spokenLanguages` — a caller who picks one of those reaches nobody who speaks
+ * it. It is a COUNT, never the languages or the people: naming who speaks what
+ * would turn a staffing aid into a roster disclosure about volunteers.
+ */
+export const ivrLanguageSettingsSchema = ivrLanguagesSchema.extend({
+  uncoveredLanguageCount: z.number().int().nonnegative(),
+})
+export type IvrLanguageSettings = z.infer<typeof ivrLanguageSettingsSchema>
 
 /** Hub-scoped IVR language configuration (ordered list) */
 export const hubIvrLanguagesSchema = z.object({

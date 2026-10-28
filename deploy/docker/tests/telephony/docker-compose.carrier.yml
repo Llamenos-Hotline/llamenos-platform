@@ -45,6 +45,7 @@ services:
       - TRUST_PROXY_HEADERS=true
       - "HMAC_SECRET=${HMAC_SECRET:?HMAC_SECRET is required}"
       - "SERVER_SECRET=${SERVER_SECRET:?SERVER_SECRET is required}"
+      - "SERVER_KEK=${SERVER_KEK:?SERVER_KEK is required}"
       - STORAGE_ENDPOINT=http://rustfs:9000
       - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-rustfsadmin}
       - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-rustfsadmin}
@@ -52,13 +53,19 @@ services:
       # Per-volunteer SIP registrar under test (run-register-e2e.sh sets these):
       # the master secret the worker derives per-volunteer endpoint secrets
       # from, and the CoTURN static-auth pair /sip-token mints TURN credentials
-      # against. Unset/empty = HMAC_SECRET fallback / STUN-only ICE servers.
+      # against. Unset/empty SIP_REGISTRAR_SECRET = in-app SIP refused (no fallback to
+      # another secret) / unset TURN pair = STUN-only ICE servers.
       - "SIP_REGISTRAR_SECRET=${SIP_REGISTRAR_SECRET:-}"
       - TURN_HOST=${TURN_HOST:-}
       - TURN_SECRET=${TURN_SECRET:-}
       - SIP_TLS_CA_FILE=/var/lib/llamenos/sip-tls/kamailio.pem
     volumes:
       - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files, never env vars
+    # (run-*-e2e.sh create them).
+    secrets:
+      - ban-hash-key
+      - messaging-hash-key
     ports:
       - "127.0.0.1:${E2E_WORKER_PORT:-3931}:3000"
     depends_on:
@@ -95,3 +102,13 @@ services:
       timeout: 5s
       retries: 6
       start_period: 10s
+
+# The ban-list and messaging-thread hash keys, as the files the app reads at
+# /run/secrets/<name>. Created by the run-*-e2e.sh launchers
+# (scripts/lib/server-hash-keys.sh); relative to deploy/docker/ like every path in
+# this file, and gitignored.
+secrets:
+  ban-hash-key:
+    file: ./secrets/ban-hash-key
+  messaging-hash-key:
+    file: ./secrets/messaging-hash-key

@@ -47,8 +47,8 @@ function makeApp(opts: {
   const auditLog = vi.fn().mockResolvedValue(undefined)
 
   const mockSettings = {
-    getSetupState: vi.fn().mockResolvedValue({ setupCompleted: false, demoMode: false }),
-    updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: false }),
+    getSetupState: vi.fn().mockResolvedValue({ setupCompleted: false }),
+    updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
     getHubs: vi.fn().mockResolvedValue({ hubs: [] }),
     createHub: vi.fn().mockResolvedValue(undefined),
     getMessagingConfig: vi.fn().mockResolvedValue(null),
@@ -99,7 +99,7 @@ function makeApp(opts: {
 describe('GET /setup/state', () => {
   it('returns setup state for admin', async () => {
     const { app, mockSettings } = makeApp()
-    mockSettings.getSetupState.mockResolvedValue({ setupCompleted: false, demoMode: false })
+    mockSettings.getSetupState.mockResolvedValue({ setupCompleted: false })
 
     const res = await app.request('/state')
     expect(res.status).toBe(200)
@@ -122,7 +122,7 @@ describe('GET /setup/state', () => {
 describe('PATCH /setup/state', () => {
   it('updates setup state and audits', async () => {
     const { app, mockSettings, auditLog } = makeApp()
-    mockSettings.updateSetupState.mockResolvedValue({ setupCompleted: true, demoMode: false })
+    mockSettings.updateSetupState.mockResolvedValue({ setupCompleted: true })
 
     const res = await app.request('/state', {
       method: 'PATCH',
@@ -159,21 +159,22 @@ describe('POST /setup/complete', () => {
       env: { HOTLINE_NAME: 'Test Hotline', TWILIO_PHONE_NUMBER: '+15550001234' },
     })
     mockSettings.getHubs.mockResolvedValue({ hubs: [] })
-    mockSettings.updateSetupState.mockResolvedValue({ setupCompleted: true, demoMode: false })
+    mockSettings.updateSetupState.mockResolvedValue({ setupCompleted: true })
 
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ demoMode: false }),
+      body: JSON.stringify({}),
     })
 
     expect(res.status).toBe(200)
+    // The setup admin founds the hub as part of creating it (#2126) — there is
+    // no second step that could fail and leave the hub without an admin.
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Test Hotline', phoneNumber: '+15550001234' }),
+      { pubkey: 'a'.repeat(64), roleIds: ['role-super-admin'] },
     )
-    expect(mockIdentity.setHubRole).toHaveBeenCalledWith(
-      expect.objectContaining({ pubkey: 'a'.repeat(64), roleIds: ['role-super-admin'] }),
-    )
+    expect(mockIdentity.setHubRole).not.toHaveBeenCalled()
     expect(auditLog).toHaveBeenCalledOnce()
   })
 
@@ -206,21 +207,6 @@ describe('POST /setup/complete', () => {
     expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
   })
 
-  it('fails the request when assigning the creator admin role on the default hub fails', async () => {
-    const { app, mockSettings, mockIdentity } = makeApp()
-    mockSettings.getHubs.mockResolvedValue({ hubs: [] })
-    mockIdentity.setHubRole.mockRejectedValue(new Error('DB error'))
-
-    const res = await app.request('/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    })
-
-    expect(res.status).toBe(500)
-    expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
-  })
-
   it('uses Hotline as default name when HOTLINE_NAME not set', async () => {
     const { app, mockSettings } = makeApp({ env: {} })
     mockSettings.getHubs.mockResolvedValue({ hubs: [] })
@@ -233,6 +219,7 @@ describe('POST /setup/complete', () => {
 
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Hotline', slug: 'hotline' }),
+      expect.objectContaining({ roleIds: ['role-super-admin'] }),
     )
   })
 

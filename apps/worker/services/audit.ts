@@ -12,15 +12,63 @@
  * Append order is `created_at` then `id`; `log()` guarantees `created_at` is
  * strictly increasing within a chain (see there), so the order is total.
  */
+import { randomBytes } from 'node:crypto'
 import { eq, and, asc, desc, sql, count, gte, lte, inArray } from 'drizzle-orm'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
 import type { Database } from '../db'
-import { auditLog } from '../db/schema'
-import { hashIP } from '../lib/crypto'
+import { auditLog, auditUserKeys } from '../db/schema'
+import {
+  hashIP,
+  sealAuditKeyForServer,
+  openServerSealedAuditKey,
+  wrapAuditKeyForAdmins,
+  encryptAuditDetails,
+  decryptAuditDetails,
+} from '../lib/crypto'
 import { getClientIp, CLIENT_FINGERPRINT_PREFIX } from '../lib/client-ip'
+import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
+import type { ErasureService } from './erasure'
+
+const logger = createLogger('services.audit')
+
+/**
+ * Marker key on the details JSON object identifying a server-encrypted
+ * details value ({ "$encrypted": "nonce_hex:ciphertext_hex" }). Set only by
+ * the write path below, which replaces the caller's whole object, so a
+ * plaintext details object can never carry it.
+ */
+const ENCRYPTED_DETAILS_KEY = '$encrypted'
+
+/** `actor_pubkey` on an entry rewritten by a user's account erasure (services/erasure.ts). */
+export const ERASED_ACTOR = '[erased]'
+
+/** `actor_pubkey` on an entry rewritten by a hub crypto-shred (services/hub-shred.ts). */
+export const SHREDDED_ACTOR = '[shredded]'
+
+function isEncryptedDetails(details: unknown): details is { [ENCRYPTED_DETAILS_KEY]: string } {
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    typeof (details as Record<string, unknown>)[ENCRYPTED_DETAILS_KEY] === 'string'
+  )
+}
+
+/**
+ * Deps for the per-user audit key path (EP08 / issue #1684 item 3). Without
+ * them the service stores details as plaintext JSON — the pre-EP08 behavior
+ * the existing unit tests exercise.
+ */
+export interface AuditCryptoDeps {
+  /** SERVER_SECRET — unwraps the stored key so the server can decrypt details for admin reads. */
+  serverSecret: Uint8Array
+  /** Admin X25519 recipients a freshly created key is wrapped for. */
+  resolveAdminRecipients: () => Promise<string[]>
+  /** audit_user_keys row access (owned by ErasureService). */
+  keyStore: Pick<ErasureService, 'getAuditUserKey' | 'ensureAuditUserKey' | 'backfillAuditUserKeyEnvelopes' | 'lockAuditActor'>
+}
 
 // ---------------------------------------------------------------------------
 // Event type category mapping (for filtered queries)
@@ -39,12 +87,12 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
   calls: [
     'callAnswered', 'callEnded', 'callMissed',
     'spamReported', 'voicemailReceived',
-    'demoCallSimulated', 'demoCallerHungUp',
+    'callSimulated', 'simulatedCallerHungUp',
   ],
   settings: [
     'settingsUpdated', 'telephonyConfigured', 'transcriptionToggled',
     'ivrUpdated', 'customFieldsUpdated', 'spamSettingsUpdated',
-    'callSettingsUpdated', 'demoMockTelephonyToggled',
+    'callSettingsUpdated', 'mockTelephonyToggled',
   ],
   shifts: [
     'shiftCreated', 'shiftUpdated', 'shiftDeleted',
@@ -142,6 +190,22 @@ export function computeEntryHash(entry: {
 
 const VERIFY_PAGE_SIZE = 2000
 
+/**
+ * Why an entry stamped `erasedAt` is not in the form erasure leaves behind, or
+ * null when it is. Both writers (account erasure, hub shred) and the append
+ * path for an already-erased actor produce the same shape: a tombstone actor
+ * and NULL details.
+ */
+function erasedEntryViolation(entry: Pick<AuditEntry, 'actorPubkey' | 'details'>): string | null {
+  if (entry.actorPubkey !== ERASED_ACTOR && entry.actorPubkey !== SHREDDED_ACTOR) {
+    return 'erasedAt set on an entry that still names its actor'
+  }
+  if (entry.details !== null && entry.details !== undefined) {
+    return 'erasedAt set on an entry that still carries details'
+  }
+  return null
+}
+
 /** Rows of one chain: a hub's, or the platform chain when `hubId` is undefined. */
 function chainCondition(hubId: string | null | undefined) {
   return hubId ? eq(auditLog.hubId, hubId) : sql`${auditLog.hubId} IS NULL`
@@ -157,7 +221,126 @@ function chainLockKey(hubId: string | null | undefined): string {
 // ---------------------------------------------------------------------------
 
 export class AuditService {
-  constructor(protected db: Database) {}
+  constructor(
+    protected db: Database,
+    private readonly cryptoDeps?: AuditCryptoDeps,
+  ) {}
+
+  /**
+   * The user's 32-byte audit key, creating and storing it on first use.
+   *
+   * The stored row is the authority: encryptedKey is server-sealed (so
+   * this server can read details for admin views) and adminEnvelopes carries
+   * the key HPKE-wrapped to every admin under LABEL_AUDIT_USER_KEY_WRAP with
+   * AAD `label:userPubkey`, byte-matching audit_key.rs / LABEL_AUDIT_USER_KEY
+   * on clients.
+   *
+   * Null when the user is erased: their key was shredded and must never be
+   * re-minted (ErasureService.ensureAuditUserKey).
+   */
+  private async ensureUserAuditKey(userPubkey: string): Promise<Uint8Array | null> {
+    const deps = this.cryptoDeps
+    if (!deps) throw new Error('ensureUserAuditKey requires crypto deps')
+
+    const row = await deps.keyStore.ensureAuditUserKey(userPubkey, async () => {
+      const key = randomBytes(32)
+      const recipients = await deps.resolveAdminRecipients()
+      // Loud-but-stored, matching CallsService.sealCallMetadata: an audit
+      // write must not fail (or be dropped) because no admin recipient is
+      // registered yet — e.g. the very first bootstrap actions. The key is
+      // still server-sealed, so details are encrypted at rest and readable
+      // through the admin API; only the offline admin-envelope path is
+      // missing, and the error says so. backfillAdminEnvelopes restores it
+      // once a recipient exists.
+      if (recipients.length === 0) {
+        logger.error(
+          'audit user key stored WITHOUT admin envelopes: no admin HPKE recipient resolvable ' +
+          '(configure ADMIN_DECRYPTION_PUBKEY and/or register an admin device). ' +
+          'Details are encrypted at rest but no admin can unwrap the key offline until one ' +
+          'is registered; the next audit write for this user then attaches the envelopes.',
+          { userPubkey },
+        )
+      }
+      return {
+        encryptedKey: sealAuditKeyForServer(key, userPubkey, deps.serverSecret),
+        adminEnvelopes: recipients.length === 0 ? [] : wrapAuditKeyForAdmins(key, recipients, userPubkey),
+      }
+    })
+    if (!row) return null
+    const key = openServerSealedAuditKey(row.encryptedKey, userPubkey, deps.serverSecret)
+    if (Array.isArray(row.adminEnvelopes) && row.adminEnvelopes.length === 0) {
+      await this.backfillAdminEnvelopes(key, userPubkey, deps)
+    }
+    return key
+  }
+
+  /**
+   * Repair a key row stored before any admin recipient existed. The row is
+   * returned by ensureAuditUserKey forever, so without this its offline
+   * admin-unwrap path would stay empty for the life of the user. Best effort:
+   * the audit write in progress must not fail because the repair did, and with
+   * still no recipient there is nothing to attach (the creation path already
+   * logged that).
+   */
+  private async backfillAdminEnvelopes(
+    key: Uint8Array,
+    userPubkey: string,
+    deps: AuditCryptoDeps,
+  ): Promise<void> {
+    try {
+      const recipients = await deps.resolveAdminRecipients()
+      if (recipients.length === 0) return
+      await deps.keyStore.backfillAuditUserKeyEnvelopes(
+        userPubkey,
+        wrapAuditKeyForAdmins(key, recipients, userPubkey),
+      )
+    } catch (err) {
+      logger.error('audit user key admin-envelope backfill failed', {
+        userPubkey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
+   * Decrypt an entry's details for an admin read, or null when the key is
+   * gone (crypto-shredded by erasure). Plaintext details pass through
+   * unchanged; a decryption failure is a warn, not a crash — one bad row must
+   * not take down the whole audit view.
+   */
+  private async openDetails(
+    entry: Pick<AuditEntry, 'id' | 'actorPubkey' | 'details'>,
+    keyCache: Map<string, Uint8Array | null>,
+  ): Promise<Record<string, unknown> | null> {
+    if (!isEncryptedDetails(entry.details)) {
+      return (entry.details ?? null) as Record<string, unknown> | null
+    }
+    const deps = this.cryptoDeps
+    if (!deps) return null
+
+    let key = keyCache.get(entry.actorPubkey)
+    if (key === undefined) {
+      const row = await deps.keyStore.getAuditUserKey(entry.actorPubkey)
+      key = row
+        ? openServerSealedAuditKey(row.encryptedKey, entry.actorPubkey, deps.serverSecret)
+        : null
+      keyCache.set(entry.actorPubkey, key)
+    }
+    if (!key) return null
+
+    try {
+      return JSON.parse(
+        decryptAuditDetails(key, entry.details[ENCRYPTED_DETAILS_KEY], entry.actorPubkey, entry.id),
+      ) as Record<string, unknown>
+    } catch (err) {
+      logger.warn('audit details failed to decrypt', {
+        entryId: entry.id,
+        actorPubkey: entry.actorPubkey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+  }
 
   /**
    * Append an entry to the hash-chained audit log.
@@ -177,7 +360,7 @@ export class AuditService {
     actorPubkey: string,
     details: Record<string, unknown> = {},
     hubId?: string | null,
-    /** Explicit timestamp — only for seeding historical demo data. Entries must be appended in chronological order. */
+    /** Explicit timestamp — only for seeding the historical sample dataset. Entries must be appended in chronological order. */
     at?: Date,
   ): Promise<AuditEntry> {
     // Validate actorPubkey format: 'system' or 64-char hex
@@ -187,8 +370,46 @@ export class AuditService {
 
     const id = crypto.randomUUID()
 
+    // Per-user audit key (EP08): user-actor details are stored encrypted so a
+    // database read alone reveals nothing about what any user did. The hash
+    // chain commits to the PLAINTEXT details — that is what makes client-side
+    // recomputation (and verifyChain, which decrypts before re-hashing)
+    // possible; hashing the ciphertext would tie verification to a random
+    // nonce and prove nothing about the underlying event.
+    const keyedActor = this.cryptoDeps && actorPubkey !== 'system' ? this.cryptoDeps : null
+    const userKey = keyedActor ? await this.ensureUserAuditKey(actorPubkey) : null
+
     return await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${chainLockKey(hubId)}))`)
+
+      // An erased actor's entry is written the way erasure leaves that user's
+      // earlier entries: actor '[erased]', no details, erasedAt stamped. The
+      // shared audit-key lock (held to commit) orders this append against
+      // executeErasure, so the user is either still active here — and the
+      // erasure's rewrite catches the committed row — or already erased.
+      // Nothing is ever sealed under a key the erasure has destroyed, and no
+      // key is minted for an erased user.
+      let entryActor = actorPubkey
+      let hashedDetails: Record<string, unknown> | null = details
+      let storedDetails: Record<string, unknown> | null = details
+      let erasedAt: Date | null = null
+      if (keyedActor) {
+        const { erased } = await keyedActor.keyStore.lockAuditActor(actorPubkey, tx)
+        if (erased) {
+          entryActor = ERASED_ACTOR
+          hashedDetails = null
+          storedDetails = null
+          erasedAt = new Date()
+        } else if (!userKey) {
+          throw new ServiceError(500, 'audit user key unavailable for an active user')
+        } else {
+          storedDetails = {
+            [ENCRYPTED_DETAILS_KEY]: encryptAuditDetails(
+              userKey, JSON.stringify(details), actorPubkey, id,
+            ),
+          }
+        }
+      }
 
       const [latest] = await tx
         .select({ entryHash: auditLog.entryHash, createdAt: auditLog.createdAt })
@@ -208,9 +429,9 @@ export class AuditService {
       const entryHash = computeEntryHash({
         id,
         action,
-        actorPubkey,
+        actorPubkey: entryActor,
         createdAt,
-        details,
+        details: hashedDetails,
         previousEntryHash,
       })
 
@@ -220,10 +441,11 @@ export class AuditService {
           id,
           hubId: hubId ?? null,
           action,
-          actorPubkey,
-          details,
+          actorPubkey: entryActor,
+          details: storedDetails,
           previousEntryHash,
           entryHash,
+          erasedAt,
           // Explicitly set createdAt to the same timestamp used for hash
           // computation. Using sql`` avoids JS Date round-trip issues and
           // ensures the stored value exactly matches the hashed value.
@@ -231,7 +453,10 @@ export class AuditService {
         })
         .returning()
 
-      return row
+      // Callers and the tests pinning this method's return contract see the
+      // plaintext details they passed in, never the sealed storage form —
+      // except for an erased actor, whose details were never stored.
+      return { ...row, details: hashedDetails }
     })
   }
 
@@ -286,8 +511,11 @@ export class AuditService {
       conditions.push(lte(auditLog.createdAt, new Date(dateTo + 'T23:59:59.999Z')))
     }
 
-    // Full-text search across action, actor, and details
-    if (search) {
+    // Full-text search across action, actor, and details. With the per-user
+    // key active, encrypted details are opaque to SQL, so search decrypts and
+    // filters in memory instead (audit views are admin-only and small).
+    const searchNeedle = this.cryptoDeps && search ? search.toLowerCase() : undefined
+    if (search && searchNeedle === undefined) {
       const pattern = `%${search.toLowerCase()}%`
       conditions.push(
         sql`(
@@ -299,6 +527,26 @@ export class AuditService {
     }
 
     const where = conditions.length > 0 ? and(...conditions) : undefined
+
+    if (searchNeedle !== undefined) {
+      const rows = await this.db
+        .select()
+        .from(auditLog)
+        .where(where)
+        .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+
+      const keyCache = new Map<string, Uint8Array | null>()
+      const matched: AuditEntry[] = []
+      for (const row of rows) {
+        const details = await this.openDetails(row, keyCache)
+        const haystack = `${row.action} ${row.actorPubkey} ${details ? stableJsonStringify(details) : ''}`
+          .toLowerCase()
+        if (haystack.includes(searchNeedle)) {
+          matched.push({ ...row, details })
+        }
+      }
+      return { entries: matched.slice(offset, offset + limit), total: matched.length }
+    }
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -314,7 +562,15 @@ export class AuditService {
         .where(where),
     ])
 
-    return { entries: rows, total: Number(total) }
+    if (!this.cryptoDeps) {
+      return { entries: rows, total: Number(total) }
+    }
+    const keyCache = new Map<string, Uint8Array | null>()
+    const entries: AuditEntry[] = []
+    for (const row of rows) {
+      entries.push({ ...row, details: await this.openDetails(row, keyCache) })
+    }
+    return { entries, total: Number(total) }
   }
 
   /**
@@ -328,16 +584,41 @@ export class AuditService {
    * Returned in chronological order (oldest first) to read as a timeline.
    */
   async listForEvidence(evidenceId: string, hubId?: string): Promise<AuditEntry[]> {
-    const conditions = [sql`${auditLog.details} ->> 'evidenceId' = ${evidenceId}`]
+    if (!this.cryptoDeps) {
+      const conditions = [sql`${auditLog.details} ->> 'evidenceId' = ${evidenceId}`]
+      if (hubId) {
+        conditions.push(eq(auditLog.hubId, hubId))
+      }
+
+      return await this.db
+        .select()
+        .from(auditLog)
+        .where(and(...conditions))
+        .orderBy(asc(auditLog.createdAt), asc(auditLog.id))
+    }
+
+    // Encrypted details are opaque to SQL. Evidence-custody entries are few
+    // and the action set is closed, so bound the scan by action + hub and
+    // match on the decrypted details.
+    const conditions = [inArray(auditLog.action, EVENT_CATEGORIES.evidence)]
     if (hubId) {
       conditions.push(eq(auditLog.hubId, hubId))
     }
-
-    return await this.db
+    const rows = await this.db
       .select()
       .from(auditLog)
       .where(and(...conditions))
       .orderBy(asc(auditLog.createdAt), asc(auditLog.id))
+
+    const keyCache = new Map<string, Uint8Array | null>()
+    const out: AuditEntry[] = []
+    for (const row of rows) {
+      const details = await this.openDetails(row, keyCache)
+      if (details?.evidenceId === evidenceId) {
+        out.push({ ...row, details })
+      }
+    }
+    return out
   }
 
   /**
@@ -411,6 +692,7 @@ export class AuditService {
       : await baseQuery.offset(offset)
 
     let previousHash: string | null = offset === 0 ? null : predecessorHash
+    const keyCache = new Map<string, Uint8Array | null>()
 
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i]
@@ -431,12 +713,58 @@ export class AuditService {
         }
       }
 
-      // GDPR erasure rewrites actorPubkey/details in place and stamps
-      // erasedAt (services/erasure.ts), so an erased entry can no longer be
-      // re-hashed. Its chain linkage is still checked above.
+      // GDPR erasure and hub shred rewrite an entry in place — actor to a
+      // tombstone, details removed — and stamp erasedAt, so it can no longer be
+      // re-hashed. Its chain linkage is still checked above. But `erasedAt` is
+      // an ordinary column: honouring it blindly would let anyone with write
+      // access stamp it on a live entry and then rewrite that entry unseen. So
+      // an erased entry must LOOK erased — a tombstone actor and no details —
+      // which leaves the stamp able to destroy evidence (as erasure does) but
+      // not to substitute different evidence under an intact hash.
       if (entry.erasedAt) {
+        const violation = erasedEntryViolation(entry)
+        if (violation) {
+          return {
+            valid: false,
+            totalEntries,
+            checkedEntries: i,
+            firstBrokenEntry: {
+              id: entry.id,
+              seqIndex: offset + i,
+              expected: null,
+              actual: entry.actorPubkey,
+              reason: violation,
+            },
+          }
+        }
         previousHash = entry.entryHash
         continue
+      }
+
+      // Encrypted details commit the PLAINTEXT to the chain (log()), so
+      // re-hashing requires decrypting first. An encrypted entry whose key is
+      // gone without an erasure rewrite is an anomaly (real erasure nulls
+      // details and stamps erasedAt) — and a possible attack: tamper with the
+      // ciphertext, then delete the key row so nobody can re-hash it. Fail
+      // closed rather than vouch for content nobody can read.
+      let detailsForHash = (entry.details ?? {}) as Record<string, unknown>
+      if (isEncryptedDetails(entry.details)) {
+        const opened = await this.openDetails(entry, keyCache)
+        if (opened === null) {
+          return {
+            valid: false,
+            totalEntries,
+            checkedEntries: i,
+            firstBrokenEntry: {
+              id: entry.id,
+              seqIndex: offset + i,
+              expected: null,
+              actual: null,
+              reason: 'details undecryptable (audit key missing or corrupted)',
+            },
+          }
+        }
+        detailsForHash = opened
       }
 
       // Recompute the hash and check it matches stored entryHash
@@ -447,7 +775,7 @@ export class AuditService {
         createdAt: entry.createdAt instanceof Date
           ? entry.createdAt.toISOString()
           : entry.createdAt,
-        details: (entry.details ?? {}) as Record<string, unknown>,
+        details: detailsForHash,
         previousEntryHash: entry.previousEntryHash,
       })
 
@@ -506,9 +834,10 @@ export class AuditService {
     }
   }
 
-  /** Clear all audit log entries (test/demo reset only). */
+  /** Clear all audit log entries and per-user audit keys (the secret-gated test reset only). */
   async reset(): Promise<void> {
     await this.db.delete(auditLog)
+    await this.db.delete(auditUserKeys)
   }
 }
 

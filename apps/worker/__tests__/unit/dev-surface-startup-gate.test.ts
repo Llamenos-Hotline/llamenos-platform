@@ -4,7 +4,7 @@
  *
  * The other two are `apps/worker/lib/dev-surfaces.ts` (the router and every
  * route answer 404) and `deploy/ansible` (the `.env` is never rendered, and
- * `playbooks/tasks/guard-demo-mode.yml` hard-fails the combination before any
+ * `playbooks/tasks/guard-dev-routes.yml` hard-fails the combination before any
  * file reaches the host).
  *
  * Why a startup refusal and not just the 404: a production process configured
@@ -13,8 +13,12 @@
  * misconfiguration impossible to miss and impossible to leave in place.
  */
 import { describe, it, expect } from 'vitest'
-import { validateConfig } from '@worker/lib/config'
+import { validateConfig as validateConfigWithFiles } from '@worker/lib/config'
+import { secretFiles } from '../helpers/secret-files'
 import { MIN_DEPLOYED_SECRET_LENGTH } from '@worker/lib/dev-surfaces'
+
+const validateConfig = (env: Parameters<typeof validateConfigWithFiles>[0]) =>
+  validateConfigWithFiles(env, secretFiles())
 
 const STRONG = 'a'.repeat(MIN_DEPLOYED_SECRET_LENGTH)
 
@@ -24,8 +28,12 @@ function baseEnv(environment: string): Record<string, string> {
     DATABASE_URL: 'postgresql://llamenos:dev@localhost:5432/llamenos',
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: environment,
+    // Required since #1438: createBlobStorage() runs unconditionally at boot.
+    STORAGE_ACCESS_KEY: 'rustfsadmin',
+    STORAGE_SECRET_KEY: 'rustfsadmin',
     // config.ts requires this in production; irrelevant elsewhere.
     WEBHOOK_BASE_URL: 'https://hotline.example.org',
   }

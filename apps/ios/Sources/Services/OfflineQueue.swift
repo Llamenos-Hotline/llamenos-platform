@@ -33,6 +33,9 @@ struct QueuedOperation: Codable, Identifiable, Sendable {
     var attempts: Int
     /// Last error message from a failed replay attempt
     var lastError: String?
+    /// The HTTP status of the server's permanent refusal, once it has given one. Set only
+    /// on operations in `OfflineQueue.rejected`.
+    var rejectedStatus: Int?
 }
 
 // MARK: - OfflineQueue
@@ -47,7 +50,13 @@ struct QueuedOperation: Codable, Identifiable, Sendable {
 /// Usage:
 /// - Wire into APIService: when a write request fails with a network error, call `enqueue(...)`
 /// - The queue replays automatically when connectivity is restored
-/// - UI observes `pendingCount` to show a banner
+/// - UI observes `pendingCount` to show a banner, and `rejected` to tell the author a
+///   queued write was refused
+///
+/// A write the server refuses for good (a 4xx that is not 401/408/409/429) is taken out of
+/// the replay queue after the FIRST refusal and kept in `rejected`, body intact, until the
+/// author retries or dismisses it. Replaying it on every launch hid the loss behind an
+/// "operation waiting to sync" banner (#2208); deleting it would lose what they wrote.
 ///
 /// `@MainActor` (#1920 audit): `OfflineBanner` renders `pendingCount` / `isReplaying` on main
 /// and `replay()` was already main-actor, but `enqueue` ran synchronously inside
@@ -60,10 +69,10 @@ final class OfflineQueue {
 
     // MARK: - Constants
 
-    private static let maxAttempts = 10
     private static let baseRetryDelay: TimeInterval = 1.0
     private static let maxRetryDelay: TimeInterval = 60.0
     private static let queueFileName = "offline-queue.json"
+    private static let rejectedFileName = "offline-rejected.json"
 
     // MARK: - Observable State
 
@@ -73,9 +82,16 @@ final class OfflineQueue {
     /// Whether the queue is currently replaying operations.
     private(set) var isReplaying: Bool = false
 
+    /// Writes the server refused permanently, oldest first. They are no longer replayed;
+    /// the author decides whether to `retryRejected(id:)` or `dismissRejected(id:)`.
+    private(set) var rejected: [QueuedOperation] = []
+
     // MARK: - Private State
 
     private var queue: [QueuedOperation] = []
+    /// A rejected operation was put back while a replay was running; replay once more
+    /// when it finishes, since the running pass iterates a snapshot that lacks it.
+    private var replayAgain = false
     private let apiService: APIService
     private var networkMonitor: NetworkMonitorService?
     private var connectivityTask: Task<Void, Never>?
@@ -148,9 +164,10 @@ final class OfflineQueue {
     /// Attempt to replay all queued operations in FIFO order.
     ///
     /// Operations are removed on success (HTTP 2xx or 409 conflict).
-    /// Permanent client errors (4xx except 401/429) increment the attempt counter;
-    /// the operation is removed after maxAttempts.
-    /// Server errors (5xx) and network errors cause retry with exponential backoff.
+    /// A permanent client error (4xx except 401/408/409/429) moves the operation to
+    /// `rejected` straight away — the server will answer the same way every time.
+    /// 401, 408, 429, server errors (5xx) and network errors cause retry with
+    /// exponential backoff: a later replay can succeed.
     func replay() async {
         guard !isReplaying, !queue.isEmpty else { return }
 
@@ -170,14 +187,12 @@ final class OfflineQueue {
                 if (200...299).contains(statusCode) || statusCode == 409 {
                     // Success or idempotent conflict — remove
                     toRemove.insert(op.id)
-                } else if statusCode >= 400 && statusCode < 500 && statusCode != 401 && statusCode != 429 {
-                    // Permanent client error — increment attempts
+                } else if APIError.isPermanentRefusal(status: statusCode) {
+                    // Refused for good — stop replaying it and tell the author.
                     op.attempts += 1
                     op.lastError = "HTTP \(statusCode)"
-                    if op.attempts >= Self.maxAttempts {
-                        toRemove.insert(op.id)
-                    }
-                    storeReplayResult(op)
+                    op.rejectedStatus = statusCode
+                    reject(op)
                 } else {
                     // Server error / auth / rate limit — retry with backoff
                     op.attempts += 1
@@ -202,6 +217,47 @@ final class OfflineQueue {
         pendingCount = queue.count
         saveToDisk()
         isReplaying = false
+
+        if replayAgain {
+            replayAgain = false
+            await replay()
+        }
+    }
+
+    /// Move a refused operation from the replay queue to `rejected`, unless it was
+    /// cleared or removed while its request was in flight (logout and wipe must not be
+    /// undone by a late response).
+    private func reject(_ op: QueuedOperation) {
+        guard queue.contains(where: { $0.id == op.id }) else { return }
+        queue.removeAll { $0.id == op.id }
+        rejected.append(op)
+        pendingCount = queue.count
+        saveToDisk()
+    }
+
+    /// Put a rejected operation back at the end of the replay queue, for an author who
+    /// expects the refusal to have been fixed (a permission granted, a record restored).
+    /// Replays at once if online; a refusal moves it straight back to `rejected`.
+    func retryRejected(id: String) {
+        guard let index = rejected.firstIndex(where: { $0.id == id }) else { return }
+        var op = rejected.remove(at: index)
+        op.attempts = 0
+        op.lastError = nil
+        op.rejectedStatus = nil
+        queue.append(op)
+        pendingCount = queue.count
+        saveToDisk()
+        if isReplaying {
+            replayAgain = true
+        } else {
+            Task { await replay() }
+        }
+    }
+
+    /// Discard a rejected operation the author has seen and does not want to retry.
+    func dismissRejected(id: String) {
+        rejected.removeAll { $0.id == id }
+        saveToDisk()
     }
 
     /// Record a replayed operation's new attempt state, if it is still queued.
@@ -222,6 +278,7 @@ final class OfflineQueue {
     /// Clear all queued operations.
     func clear() {
         queue.removeAll()
+        rejected.removeAll()
         pendingCount = 0
         saveToDisk()
     }
@@ -266,29 +323,27 @@ final class OfflineQueue {
 
     // MARK: - Persistence
 
-    private var queueFileURL: URL {
+    private func fileURL(_ name: String) -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("llamenos", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(Self.queueFileName)
+        return dir.appendingPathComponent(name)
     }
 
     private func saveToDisk() {
         do {
             let data = try JSONEncoder().encode(queue)
-            try data.write(to: queueFileURL, options: [.atomic, .completeFileProtection])
+            try data.write(to: fileURL(Self.queueFileName), options: [.atomic, .completeFileProtection])
+            let rejectedData = try JSONEncoder().encode(rejected)
+            try rejectedData.write(to: fileURL(Self.rejectedFileName), options: [.atomic, .completeFileProtection])
         } catch {
             // Persistence failure — operations may be lost on app termination
         }
     }
 
     private func loadFromDisk() {
-        do {
-            let data = try Data(contentsOf: queueFileURL)
-            queue = try JSONDecoder().decode([QueuedOperation].self, from: data)
-        } catch {
-            queue = []
-        }
+        queue = (try? JSONDecoder().decode([QueuedOperation].self, from: Data(contentsOf: fileURL(Self.queueFileName)))) ?? []
+        rejected = (try? JSONDecoder().decode([QueuedOperation].self, from: Data(contentsOf: fileURL(Self.rejectedFileName)))) ?? []
     }
 }
 

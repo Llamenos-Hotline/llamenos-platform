@@ -45,7 +45,7 @@ contacts.get('/',
 
     // Merge data
     const merged = new Map<string, {
-      contactHash: string; last4?: string; firstSeen: string; lastSeen: string
+      contactHash: string; firstSeen: string; lastSeen: string
       callCount: number; conversationCount: number; noteCount: number; reportCount: number
     }>()
 
@@ -67,14 +67,12 @@ contacts.get('/',
       const csLastSeen = cs.lastSeen.toISOString()
       const existing = merged.get(hash)
       if (existing) {
-        existing.last4 = cs.last4 ?? undefined
         existing.conversationCount = cs.conversationCount
         if (csFirstSeen < existing.firstSeen) existing.firstSeen = csFirstSeen
         if (csLastSeen > existing.lastSeen) existing.lastSeen = csLastSeen
       } else {
         merged.set(hash, {
           contactHash: hash,
-          last4: cs.last4 ?? undefined,
           firstSeen: csFirstSeen,
           lastSeen: csLastSeen,
           callCount: 0,
@@ -112,11 +110,14 @@ contacts.get('/:hash',
   async (c) => {
     const services = c.get('services')
     const hash = c.req.param('hash')
+    // The hash is a blind index: the same caller hashes identically in every hub.
+    // Inside /hubs/:hubId the timeline is that hub's alone.
+    const hubId = c.get('hubId')
 
     // Parallel fetch from RecordsService (notes) and ConversationsService (conversations)
     const [notesResult, conversations] = await Promise.all([
-      services.records.listNotes({ contactHash: hash }),
-      services.conversations.getContactConversations(hash),
+      services.records.listNotes({ hubId, contactHash: hash }),
+      services.conversations.getContactConversations(hash, hubId),
     ])
 
     return c.json({ notes: notesResult.notes, conversations })

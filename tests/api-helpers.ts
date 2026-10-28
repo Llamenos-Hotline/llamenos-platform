@@ -14,6 +14,7 @@
 
 import { type APIRequestContext } from '@playwright/test'
 import { devSurfaceSecret, devSurfaceHeaders, harnessClientHeaders } from './dev-surface-secret'
+import { simulateCallForNote } from './simulation-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
@@ -715,27 +716,28 @@ export async function createBanViaApi(
   const phone = options?.phone ?? uniquePhone()
   const reason = options?.reason ?? 'E2E test ban'
 
-  const { status, data } = await apiPost<{ ban: { phone: string; phoneHash: string; reason: string } }>(request, hubPath('/bans', options?.hubId), { phone, reason })
+  const { status, data } = await apiPost<{ ban: { phoneHash: string; reason: string } }>(request, hubPath('/bans', options?.hubId), { phone, reason })
   if (status !== 200 && status !== 201) {
     throw new Error(`Failed to create ban: ${status}`)
   }
   return { phone, phoneHash: data.ban.phoneHash, reason }
 }
 
+/** Unban by the opaque handle the ban list returns (`phoneHash`); the server takes no number here. */
 export async function removeBanViaApi(
   request: APIRequestContext,
-  phone: string,
+  phoneHash: string,
   hubId?: string,
 ): Promise<void> {
-  const { status } = await apiDelete(request, hubPath(`/bans/${encodeURIComponent(phone)}`, hubId))
+  const { status } = await apiDelete(request, hubPath(`/bans/${phoneHash}`, hubId))
   if (status !== 200) throw new Error(`Failed to remove ban: ${status}`)
 }
 
 export async function listBansViaApi(
   request: APIRequestContext,
   hubId?: string,
-): Promise<Array<{ phone: string; phoneHash: string; reason: string; bannedBy: string; bannedAt: string }>> {
-  const { status, data } = await apiGet<{ bans: Array<{ phone: string; phoneHash: string; reason: string; bannedBy: string; bannedAt: string }> }>(request, hubPath('/bans', hubId))
+): Promise<Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }>> {
+  const { status, data } = await apiGet<{ bans: Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }> }>(request, hubPath('/bans', hubId))
   if (status !== 200) throw new Error(`Failed to list bans: ${status}`)
   return data.bans
 }
@@ -861,6 +863,23 @@ export async function setFallbackGroupViaApi(
   if (status !== 200) throw new Error(`Failed to set fallback group: ${status}`)
 }
 
+/**
+ * Select the mock telephony provider for a hub (admin, `settings:manage-telephony`).
+ *
+ * `POST /calls/:id/answer` only claims a call on a hub that can actually connect the
+ * volunteer — an in-app leg on our PBX, or the mock provider (#2168). A test hub has no
+ * telephony provider at all, so a scenario that answers a call from the app must put the
+ * hub on the mock, exactly as a tester does. Throws if the mock is not selectable here
+ * (the host is not a test target) rather than letting the answer 422 later.
+ */
+export async function enableMockTelephonyViaApi(
+  request: APIRequestContext,
+  hubId: string,
+): Promise<void> {
+  const { status, data } = await apiPut(request, hubPath('/simulated-telephony/mock', hubId), { enabled: true })
+  if (status !== 200) throw new Error(`Failed to enable mock telephony on hub ${hubId}: ${status} ${JSON.stringify(data)}`)
+}
+
 // ── Roles CRUD ────────────────────────────────────────────────────
 
 export interface RoleDefinition {
@@ -921,8 +940,9 @@ export async function updateRoleViaApi(
 export async function deleteRoleViaApi(
   request: APIRequestContext,
   id: string,
-): Promise<{ status: number }> {
-  // Returns status so callers can assert 403 for system roles
+): Promise<{ status: number; data: unknown }> {
+  // Returns status and body so callers can assert 403 for system roles and
+  // surface the server's reason when a delete is refused
   return apiDelete(request, `/settings/roles/${id}`)
 }
 
@@ -1060,9 +1080,11 @@ export async function createReportViaApi(
   const seedHex = options?.seedHex ?? ADMIN_SEED
 
   const title = options?.title ?? `Test Report ${Date.now()}`
+  // The reporter AND the admin, as the real ReportForm seals it: the server
+  // refuses a report no admin can open (#2113).
   const { encryptedContent, envelopes } = await encryptForTest(
     `report content: ${title}`,
-    [seedHex],
+    [...new Set([seedHex, ADMIN_SEED])],
   )
 
   const body: Record<string, unknown> = {
@@ -1203,7 +1225,7 @@ export async function cleanupTestData(
     userPubkeys?: string[]
     /** @deprecated Use userPubkeys instead */
     volunteerPubkeys?: string[]
-    banPhones?: string[]
+    banPhoneHashes?: string[]
     shiftIds?: string[]
     roleIds?: string[]
   },
@@ -1213,8 +1235,8 @@ export async function cleanupTestData(
   for (const pubkey of [...(data.userPubkeys ?? []), ...(data.volunteerPubkeys ?? [])]) {
     try { await deleteUserViaApi(request, pubkey) } catch (e) { errors.push(String(e)) }
   }
-  for (const phone of data.banPhones ?? []) {
-    try { await removeBanViaApi(request, phone) } catch (e) { errors.push(String(e)) }
+  for (const phoneHash of data.banPhoneHashes ?? []) {
+    try { await removeBanViaApi(request, phoneHash) } catch (e) { errors.push(String(e)) }
   }
   for (const id of data.shiftIds ?? []) {
     try { await deleteShiftViaApi(request, id) } catch (e) { errors.push(String(e)) }
@@ -1610,6 +1632,48 @@ export async function encryptForTest(
     recipientSeedHexes.map(seed => realEnvelope(contentKey, seed, label)),
   )
   return { encryptedContent, envelopes }
+}
+
+/**
+ * The sealed half of a note the server accepts: real AES-256-GCM content, an
+ * author envelope for `authorSeedHex`, and an admin envelope for the admin key.
+ *
+ * The admin envelope is not optional. The server cannot re-wrap a client-sealed
+ * content key, so it refuses (422) a note no admin can open (#2113) — a fixture
+ * that "doesn't care about the envelopes" is exactly what that guard rejects.
+ */
+export async function sealedNoteFields(
+  authorSeedHex: string = ADMIN_SEED,
+  plaintext = 'test note',
+): Promise<{
+  encryptedContent: string
+  authorEnvelope: { ct: string; enc: string }
+  adminEnvelopes: Array<{ pubkey: string; ct: string; enc: string }>
+}> {
+  const contentKey = generateContentKey()
+  const author = await realEnvelope(contentKey, authorSeedHex)
+  const admin = await realEnvelope(contentKey, ADMIN_SEED)
+  return {
+    encryptedContent: encryptContent(plaintext, contentKey, LABEL_NOTE_KEY),
+    authorEnvelope: { ct: author.ct, enc: author.enc },
+    adminEnvelopes: [admin],
+  }
+}
+
+/**
+ * A complete `POST /notes` body the server accepts: {@link sealedNoteFields}
+ * filed under a REAL call (#2112 refuses an id that is not one), in `hubId` when
+ * the note is posted through `/hubs/:hubId/notes`.
+ */
+export async function validNoteBody(
+  request: APIRequestContext,
+  authorSeedHex: string = ADMIN_SEED,
+  options?: { plaintext?: string; hubId?: string },
+): Promise<Record<string, unknown>> {
+  return {
+    callId: await simulateCallForNote(request, options?.hubId),
+    ...(await sealedNoteFields(authorSeedHex, options?.plaintext)),
+  }
 }
 
 export async function createContactViaApi(

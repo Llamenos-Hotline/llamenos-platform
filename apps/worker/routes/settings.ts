@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { Hono, type Context } from 'hono'
+import { createMiddleware } from 'hono/factory'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
@@ -15,6 +16,7 @@ import {
   webauthnSettingsSchema,
   transcriptionSettingsSchema,
   ivrLanguagesSchema,
+  ivrLanguageSettingsSchema,
   setupStateSchema,
   customFieldsBodySchema,
   createReportTypeBodySchema,
@@ -43,6 +45,8 @@ import { audit } from '../services/audit'
 import { invalidateRolesCache } from '../services/settings'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
+import { buildProviderWebhookUrls, webhookOrigin } from '../lib/provider-webhook-urls'
+import { TelegramAdapter } from '../messaging/telegram/adapter'
 import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } from '../lib/helpers'
 
 const settings = new Hono<AppEnv>()
@@ -57,6 +61,22 @@ const settings = new Hono<AppEnv>()
 function targetHubId(c: Context<AppEnv>): string | undefined {
   return (c.get('hubId') as string | undefined) || c.req.query('hubId') || undefined
 }
+
+/**
+ * IVR recordings are per hub. Under `/hubs/:hubId/settings/ivr-audio` a request
+ * reaches only that hub's recordings. The global mount manages the PLATFORM
+ * DEFAULTS that every hub falls back to until it records its own, so it needs
+ * the instance-level permission on top of `settings:manage-ivr` — and it ignores
+ * `?hubId=`, so there is exactly one way to name a hub. `undefined` = platform default.
+ */
+const ivrAudioHub = (c: Context<AppEnv>): string | undefined => (c.get('hubId') as string | undefined) || undefined
+
+const requireIvrAudioScope = createMiddleware<AppEnv>(async (c, next) => {
+  if (!ivrAudioHub(c) && !checkPermission(c.get('permissions'), 'system:manage-instance')) {
+    return c.json({ error: 'Forbidden', required: 'system:manage-instance' }, 403)
+  }
+  await next()
+})
 
 // --- Transcription settings: readable + writable by settings:manage-transcription ---
 settings.get('/transcription',
@@ -282,7 +302,7 @@ settings.get('/ivr-languages',
         description: 'IVR language settings',
         content: {
           'application/json': {
-            schema: resolver(ivrLanguagesSchema),
+            schema: resolver(ivrLanguageSettingsSchema),
           },
         },
       },
@@ -293,7 +313,7 @@ settings.get('/ivr-languages',
   async (c) => {
     const services = c.get('services')
     const hubId = targetHubId(c)
-    const result = await services.settings.getIvrLanguages(hubId)
+    const result = await services.settings.getIvrLanguageSettings(hubId)
     return c.json(result)
   },
 )
@@ -307,7 +327,7 @@ settings.patch('/ivr-languages',
         description: 'IVR language settings updated',
         content: {
           'application/json': {
-            schema: resolver(ivrLanguagesSchema),
+            schema: resolver(ivrLanguageSettingsSchema),
           },
         },
       },
@@ -321,9 +341,9 @@ settings.patch('/ivr-languages',
     const body = c.req.valid('json')
     const services = c.get('services')
     const hubId = targetHubId(c)
-    const result = await services.settings.updateIvrLanguages(body as Parameters<typeof services.settings.updateIvrLanguages>[0], hubId)
+    await services.settings.updateIvrLanguages(body as Parameters<typeof services.settings.updateIvrLanguages>[0], hubId)
     await audit(services.audit, 'ivrLanguagesUpdated', pubkey, { ...(body as Record<string, unknown>), hubId }, undefined, targetHubId(c) ?? null)
-    return c.json(result)
+    return c.json(await services.settings.getIvrLanguageSettings(hubId))
   },
 )
 
@@ -420,9 +440,8 @@ settings.get('/telephony-provider',
   requirePermission('settings:manage-telephony'),
   async (c) => {
     const services = c.get('services')
-    const hmacSecret = c.env.HMAC_SECRET as string | undefined
     const hubId = c.get('hubId') as string | undefined
-    const result = await services.settings.getTelephonyProvider(hmacSecret, hubId)
+    const result = await services.settings.getTelephonyProvider(c.env.SERVER_KEK, hubId)
     return c.json(result)
   },
 )
@@ -605,18 +624,70 @@ settings.post('/messaging/test',
   async (c) => {
     const { channel } = c.req.valid('json')
     const services = c.get('services')
-    const hmacSecret = c.env.HMAC_SECRET
     try {
       const adapter = await getMessagingAdapterFromService(
         channel as import('@shared/types').MessagingChannelType,
         services.settings,
-        hmacSecret,
+        services.messagingSuppression,
       )
       const status = await adapter.getChannelStatus()
       return c.json({ connected: status.connected, error: status.error })
     } catch (err) {
       return c.json({ connected: false, error: err instanceof Error ? err.message : String(err) })
     }
+  },
+)
+
+// Telegram only sends the X-Telegram-Bot-Api-Secret-Token header (which the
+// adapter requires on every inbound webhook) if the webhook was registered with
+// a secret_token, so registering it is part of setting the channel up (#2154).
+settings.post('/messaging/telegram/register-webhook',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Register the Telegram webhook with the configured secret_token',
+    responses: {
+      200: {
+        description: 'Telegram accepted the webhook registration',
+        content: {
+          'application/json': {
+            schema: resolver(okResponseSchema),
+          },
+        },
+      },
+      502: {
+        description: 'Telegram refused or could not be reached',
+        content: {
+          'application/json': {
+            schema: resolver(errorResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-messaging'),
+  async (c) => {
+    const services = c.get('services')
+    let adapter: Awaited<ReturnType<typeof getMessagingAdapterFromService>>
+    try {
+      adapter = await getMessagingAdapterFromService(
+        'telegram',
+        services.settings,
+        services.messagingSuppression,
+        c.env.WEBHOOK_BASE_URL ?? '',
+      )
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
+    }
+    if (!(adapter instanceof TelegramAdapter)) {
+      return c.json({ error: 'Telegram is not configured' }, 400)
+    }
+    const url = buildProviderWebhookUrls(webhookOrigin(c.env), targetHubId(c)).messaging.telegram
+    const result = await adapter.registerWebhook(url)
+    if (!result.ok) {
+      return c.json({ error: result.error ?? 'Telegram setWebhook failed' }, 502)
+    }
+    return c.json({ ok: true })
   },
 )
 
@@ -690,9 +761,10 @@ settings.get('/ivr-audio',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const services = c.get('services')
-    const result = await services.settings.getIvrAudioList()
+    const result = await services.settings.getIvrAudioList(ivrAudioHub(c))
     return c.json(result)
   },
 )
@@ -708,6 +780,7 @@ settings.get('/ivr-audio/:promptType/:language',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const promptType = c.req.param('promptType')
     const language = c.req.param('language')
@@ -715,7 +788,7 @@ settings.get('/ivr-audio/:promptType/:language',
       return c.json({ error: 'Invalid parameters' }, 400)
     }
     const services = c.get('services')
-    const result = await services.settings.getIvrAudio(promptType, language)
+    const result = await services.settings.getIvrAudio(ivrAudioHub(c), promptType, language)
     if (!result) return c.json({ error: 'Not found' }, 404)
     return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
   },
@@ -738,6 +811,7 @@ settings.put('/ivr-audio/:promptType/:language',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const pubkey = c.get('pubkey')
     const promptType = c.req.param('promptType')
@@ -752,8 +826,8 @@ settings.put('/ivr-audio/:promptType/:language',
     if (formatError) return c.json({ error: formatError }, 400)
     const services = c.get('services')
     const audioBase64 = Buffer.from(bytes).toString('base64')
-    const result = await services.settings.uploadIvrAudio(promptType, language, audioBase64, bytes.byteLength)
-    await audit(services.audit, 'ivrAudioUploaded', pubkey, { promptType, language }, undefined, targetHubId(c) ?? null)
+    const result = await services.settings.uploadIvrAudio(ivrAudioHub(c), promptType, language, audioBase64, bytes.byteLength)
+    await audit(services.audit, 'ivrAudioUploaded', pubkey, { promptType, language }, undefined, ivrAudioHub(c) ?? null)
     return c.json(result)
   },
 )
@@ -775,13 +849,14 @@ settings.delete('/ivr-audio/:promptType/:language',
     },
   }),
   requirePermission('settings:manage-ivr'),
+  requireIvrAudioScope,
   async (c) => {
     const pubkey = c.get('pubkey')
     const promptType = c.req.param('promptType')
     const language = c.req.param('language')
     const services = c.get('services')
-    const result = await services.settings.deleteIvrAudio(promptType, language)
-    await audit(services.audit, 'ivrAudioDeleted', pubkey, { promptType, language }, undefined, targetHubId(c) ?? null)
+    const result = await services.settings.deleteIvrAudio(ivrAudioHub(c), promptType, language)
+    await audit(services.audit, 'ivrAudioDeleted', pubkey, { promptType, language }, undefined, ivrAudioHub(c) ?? null)
     return c.json(result)
   },
 )

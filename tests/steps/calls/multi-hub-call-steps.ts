@@ -14,12 +14,15 @@
  * routing never registers a ringing call nobody can answer, so the volunteer is put in
  * the second hub's fallback group and the simulation is asked to refuse a call that
  * would ring nobody (`checkVolunteers`), keeping the precondition loud.
+ *
+ * The second hub also selects the mock telephony provider: the answer route refuses a
+ * pickup on a hub with no way to connect the volunteer (#2168), and a bare test hub has none.
  */
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
 import { TestIds, Timeouts } from '../../helpers'
 import { rowTestId } from '../../test-ids'
-import { apiGet, setFallbackGroupViaApi } from '../../api-helpers'
+import { apiGet, enableMockTelephonyViaApi, setFallbackGroupViaApi } from '../../api-helpers'
 import type { CallRecord } from '@protocol/schemas/calls'
 import { simulateIncomingCall, uniqueCallerNumber } from '../../simulation-helpers'
 
@@ -57,6 +60,10 @@ When('a call comes in on the volunteer\'s second hub while the first hub is acti
   // The call rings the volunteer on the second hub: nobody is on shift there, so the
   // hub's fallback group is its ring set.
   await setFallbackGroupViaApi(backendRequest, [volunteerPubkey!], hubId)
+  // Answering from the app is a database write that bridges nobody, so the server only
+  // accepts it on a hub that can connect the volunteer (#2168): the mock provider is that
+  // hub for a test. Without it the answer is refused (422) and the call stays ringing.
+  await enableMockTelephonyViaApi(backendRequest, hubId!)
 
   const { callId, status } = await simulateIncomingCall(backendRequest, {
     callerNumber: uniqueCallerNumber(),
@@ -75,9 +82,32 @@ Then('the volunteer should see that call ringing', async ({ page }) => {
   await expect(page.getByTestId(rowTestId(TestIds.INCOMING_CALL_ROW, callId!))).toBeVisible({ timeout: RING_TIMEOUT })
 })
 
+Then('the ring should be announced to assistive technology', async ({ page }) => {
+  // The region is always mounted and its text changes when a call rings — that change is
+  // what a screen reader speaks. Generic text only: the caller's number must not be in it.
+  // (The hub name may follow a dash, and a test hub's name carries digits, so judge the text before it.)
+  const region = page.getByTestId(TestIds.INCOMING_CALL_ANNOUNCEMENT)
+  await expect(region).toHaveAttribute('aria-live', 'polite')
+  await expect(region).not.toBeEmpty({ timeout: Timeouts.ELEMENT })
+  const [spoken] = (await region.textContent())!.split(' — ')
+  expect(spoken).not.toMatch(/\d/)
+})
+
 When('the volunteer answers that call', async ({ page }) => {
   const { callId } = await recordedIds(page)
   await page.getByTestId(rowTestId(TestIds.ANSWER_CALL_BTN, callId!)).click()
+})
+
+When('the volunteer answers that call with the keyboard alone', async ({ page }) => {
+  const { callId } = await recordedIds(page)
+  // Focus is offered to Answer when the ring arrives; Enter on a native button is all it takes.
+  await expect(page.getByTestId(rowTestId(TestIds.ANSWER_CALL_BTN, callId!))).toBeFocused({ timeout: Timeouts.ELEMENT })
+  await page.keyboard.press('Enter')
+})
+
+When('the volunteer answers that call with the answer shortcut', async ({ page }) => {
+  // Works from anywhere, including a text field: nothing here clicks or focuses the card.
+  await page.keyboard.press('ControlOrMeta+Shift+A')
 })
 
 Then('the volunteer should be on an active call', async ({ page }) => {
@@ -96,4 +126,40 @@ Then('that call should be answered on the second hub', async ({ page, backendReq
     const call = data.calls.find(c => c.id === callId)
     return call ? { status: call.status, answered: !!call.answeredBy } : null
   }, { timeout: Timeouts.API }).toEqual({ status: 'in-progress', answered: true })
+})
+
+When('the volunteer writes a note on the active call panel', async ({ page }) => {
+  const text = `dashboard-note-${Date.now()}`
+  await page.getByTestId(TestIds.ACTIVE_CALL_NOTE_INPUT).fill(text)
+  await page.getByTestId(TestIds.ACTIVE_CALL_NOTE_SAVE_BTN).click()
+})
+
+When('the volunteer writes a note about that call through the note sheet', async ({ page }) => {
+  const { callId } = await recordedIds(page)
+  expect(callId, 'the call step must record the call id').toBeTruthy()
+  const text = `sheet-note-${Date.now()}`
+  // Alt+N opens the note sheet; focus must not be inside an input for the shortcut to fire.
+  await page.locator('body').press('Alt+n')
+  await expect(page.getByTestId(TestIds.NOTE_SHEET)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await page.getByTestId(TestIds.SHEET_CALL_ID_INPUT).fill(callId!)
+  await page.getByTestId(TestIds.SHEET_NOTE_TEXT).fill(text)
+  await page.getByTestId(TestIds.SHEET_SAVE_BTN).click()
+  await expect(page.getByTestId(TestIds.NOTE_SHEET)).toBeHidden({ timeout: Timeouts.ELEMENT })
+})
+
+Then('that note should be filed under the second hub and not the first', async ({ page, backendRequest, workerHub }) => {
+  const { hubId, callId } = await recordedIds(page)
+  expect(hubId).toBeTruthy()
+  expect(workerHub).not.toBe(hubId)
+  // Server-side truth: the note must exist under the call's own hub and never under the active one.
+  const countFor = async (hub: string) => {
+    const { status, data } = await apiGet<{ notes: { callId?: string }[] }>(
+      backendRequest,
+      `/hubs/${hub}/notes?callId=${encodeURIComponent(callId!)}`,
+    )
+    expect(status).toBe(200)
+    return data.notes.filter(n => n.callId === callId).length
+  }
+  await expect.poll(() => countFor(hubId!), { timeout: Timeouts.API }).toBe(1)
+  expect(await countFor(workerHub)).toBe(0)
 })

@@ -13,6 +13,7 @@ export type AdminWorld = {
   lastUserPubkey: string
   lastShiftName: string
   lastPhone: string
+  lastBanReason: string
   lastHubId: string
   lastHubName: string
   /** Display name set by 'I change my display name', checked after a reload. */
@@ -69,11 +70,13 @@ export type ConversationWorld = {
   /**
    * The conversation the scenario's Given step seeded and selected. Steps that
    * must re-select it after the app clears the detail selection (closing sets
-   * selectedId to null) find it by its unique last-4 digits.
+   * selectedId to null) find it by its contact label.
    */
   seeded?: SeededConversation
   /** The outbound message posted by "I sent a message in a conversation". */
   outbound?: { conversationId: string; messageId: string; body: string }
+  /** Inbound messages simulated at the worker's hub from one sender, in arrival order. */
+  inbound?: { label: string; conversationIds: string[]; bodies: string[] }
 }
 
 export type SasWorld = {
@@ -152,7 +155,7 @@ export const test = base.extend<
 
     // After each test: hard-fail on 500s which indicate real server bugs.
     // Filter out known non-test-related 500s (SIP bridge health, WebSocket upgrades,
-    // hub users list during demo mode setup, call simulation endpoints).
+    // hub users list during setup, call simulation endpoints).
     const ignoredPaths = ['/api/health', '/api/sip-bridge', '/ws', '/api/hubs/', '/api/test-', '/api/calls/simulate']
     const serverErrors = state.responses.filter(r =>
       r.status >= 500 && !ignoredPaths.some(p => r.url.includes(p))
@@ -178,7 +181,7 @@ export const test = base.extend<
   }, { auto: true }],
   // Scenario-scoped world objects — fresh per test, no cross-scenario leakage.
   adminWorld: async ({}, use) => {
-    await use({ lastUserName: '', lastUserPubkey: '', lastShiftName: '', lastPhone: '', lastHubId: '', lastHubName: '', lastDisplayName: '' })
+    await use({ lastUserName: '', lastUserPubkey: '', lastShiftName: '', lastPhone: '', lastBanReason: '', lastHubId: '', lastHubName: '', lastDisplayName: '' })
   },
   rolesWorld: async ({}, use) => {
     await use({ cachedRoles: [], lastCreatedRoleId: '', volunteerNsec: '', reporterNsec: '' })

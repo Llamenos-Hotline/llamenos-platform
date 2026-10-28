@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { TwilioAdapter } from '../../telephony/twilio'
+import { TwilioAdapter, isMachineAnsweredBy } from '../../telephony/twilio'
 import { SignalWireAdapter } from '../../telephony/signalwire'
 
 describe('TwilioAdapter', () => {
@@ -77,6 +77,7 @@ describe('TwilioAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited response when rateLimited=true', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -90,6 +91,7 @@ describe('TwilioAdapter', () => {
 
     it('returns CAPTCHA gather when voiceCaptchaEnabled and captchaDigits provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -106,6 +108,7 @@ describe('TwilioAdapter', () => {
 
     it('returns enqueue response for normal call', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -120,6 +123,7 @@ describe('TwilioAdapter', () => {
 
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -157,17 +161,56 @@ describe('TwilioAdapter', () => {
     })
   })
 
+  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    it('returns Dial with Queue and recording callback', async () => {
-      const res = await adapter.handleCallAnswered({
+    const answer = (recordCall: boolean) =>
+      adapter.handleCallAnswered({
+        recordCall,
         parentCallSid: 'CA-parent',
         callbackUrl: 'https://example.com',
         userPubkey: 'pk123',
       })
+
+    it('emits no recording directive at all when recording is off', async () => {
+      const res = await answer(false)
+      // Still bridges the caller to the volunteer...
+      expect(res.body).toContain('<Dial')
+      expect(res.body).toContain('<Queue>CA-parent</Queue>')
+      // ...but nothing that would make Twilio write the audio to disk.
+      expect(res.body).not.toContain('record')
+      expect(res.body).not.toContain('record="record-from-answer"')
+      expect(res.body).not.toContain('recordingStatusCallback')
+      expect(res.body).not.toContain('/api/telephony/call-recording')
+    })
+
+    it('records and posts the recording callback when recording is on', async () => {
+      const res = await answer(true)
       expect(res.body).toContain('<Dial')
       expect(res.body).toContain('record="record-from-answer"')
       expect(res.body).toContain('<Queue>CA-parent</Queue>')
       expect(res.body).toContain('/api/telephony/call-recording')
+    })
+
+    // SignalWire inherits this method rather than overriding it, which is how it
+    // was silently recording every call too. Pin the inherited behaviour.
+    it('SignalWire inherits the same opt-in, not an unconditional record', async () => {
+      const sw = new SignalWireAdapter('11111111-2222-3333-4444-555555555555', 'tok', '+15551234567', 'space')
+      const off = await sw.handleCallAnswered({
+        recordCall: false,
+        parentCallSid: 'CA-parent',
+        callbackUrl: 'https://example.com',
+        userPubkey: 'pk123',
+      })
+      expect(off.body).toContain('<Dial')
+      expect(off.body).not.toContain('record')
+
+      const on = await sw.handleCallAnswered({
+        recordCall: true,
+        parentCallSid: 'CA-parent',
+        callbackUrl: 'https://example.com',
+        userPubkey: 'pk123',
+      })
+      expect(on.body).toContain('record="record-from-answer"')
     })
   })
 
@@ -276,20 +319,39 @@ describe('TwilioAdapter', () => {
       expect(body.get('MachineDetection')).toBe('Enable')
     })
 
-    it('handles API failures gracefully', async () => {
+    // #1136: when EVERY dial attempt fails this must reject (not resolve to `[]`) so
+    // the caller (services/ringing.ts) can retry and the circuit breaker can see the
+    // failure — a total provider outage must never look like a successful ring.
+    it('rejects when every dial attempt fails (total outage, #1136)', async () => {
       fetchMock.mockResolvedValue({
         ok: false,
         status: 400,
       } as Response)
 
-      const sids = await adapter.ringVolunteers({
+      await expect(adapter.ringVolunteers({
         callSid: 'CA-parent',
         callerNumber: '+15551111111',
         volunteers: [{ phone: '+15552222222', callToken: 'token-abc' }],
         callbackUrl: 'https://example.com',
+      })).rejects.toThrow('All 1 dial attempt(s) failed')
+    })
+
+    it('returns whatever succeeded on a partial failure — not every leg failing (#1136)', async () => {
+      fetchMock
+        .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ sid: 'CA-vol-ok' }) } as Response)
+
+      const sids = await adapter.ringVolunteers({
+        callSid: 'CA-parent',
+        callerNumber: '+15551111111',
+        volunteers: [
+          { phone: '+15552222222', callToken: 'token-a' },
+          { phone: '+15553333333', callToken: 'token-b' },
+        ],
+        callbackUrl: 'https://example.com',
       })
 
-      expect(sids).toHaveLength(0)
+      expect(sids).toEqual(['CA-vol-ok'])
     })
 
     it('uses MachineDetection for volunteer calls', async () => {
@@ -522,6 +584,38 @@ describe('TwilioAdapter', () => {
       expect(result.callSid).toBe('CA123')
       expect(result.callerNumber).toBe('+15551234567')
       expect(result.calledNumber).toBe('+15559876543')
+    })
+
+    // Legs are dialled with MachineDetection, so Twilio sends AnsweredBy on the answer URL.
+    // A carrier voicemail greeting must not read as a pickup (#2169).
+    const legAnsweredBy = async (answeredBy?: string) => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `CallSid=CA123&From=%2B15551234567${answeredBy ? `&AnsweredBy=${answeredBy}` : ''}`,
+      })
+      return (await adapter.parseIncomingWebhook(request)).answeredByMachine
+    }
+
+    it.each(['machine_start', 'machine_end_beep', 'machine_end_silence', 'machine_end_other', 'fax'])(
+      'flags AnsweredBy=%s as a machine',
+      async (answeredBy) => {
+        expect(await legAnsweredBy(answeredBy)).toBe(true)
+      },
+    )
+
+    it.each(['human', 'unknown'])('does not flag AnsweredBy=%s', async (answeredBy) => {
+      expect(await legAnsweredBy(answeredBy)).toBe(false)
+    })
+
+    it('does not flag a webhook that carries no AnsweredBy', async () => {
+      expect(await legAnsweredBy()).toBe(false)
+    })
+
+    it('treats a missing or empty AnsweredBy as not a machine', () => {
+      expect(isMachineAnsweredBy('machine_start')).toBe(true)
+      expect(isMachineAnsweredBy(null)).toBe(false)
+      expect(isMachineAnsweredBy('')).toBe(false)
     })
   })
 
@@ -808,6 +902,7 @@ describe('SignalWireAdapter', () => {
 
   it('inherits Twilio IVR behavior', async () => {
     const res = await adapter.handleIncomingCall({
+      callRecordingEnabled: false,
       callSid: 'CA123',
       callerNumber: '+15559876543',
       voiceCaptchaEnabled: false,

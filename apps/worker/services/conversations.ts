@@ -12,6 +12,8 @@ import {
   messages,
   files,
   contactIdentifiers,
+  devices,
+  deviceVerifications,
 } from '../db/schema'
 import type { ConversationStatus, MessageDeliveryStatus } from '../types'
 import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
@@ -20,6 +22,9 @@ import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { getUserHpkeRecipients, messageReaders } from '../lib/device-recipients'
+import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { listAdminPubkeys } from '../lib/hub-admin'
+import { mayRewrapHistoryTo } from '@shared/history-rewrap-gate'
 import { ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
 
@@ -45,7 +50,6 @@ export interface CreateConversationInput {
   hubId?: string
   channelType?: MessagingChannelType | 'web'
   contactIdentifierHash?: string
-  contactLast4?: string
   assignedTo?: string
   status?: ConversationStatus
   metadata?: Record<string, unknown>
@@ -96,12 +100,23 @@ export interface CreateFileInput {
  * What a re-wrapping client needs to make existing messages readable by the
  * current assignee (#1512). See `ConversationsService.listAssigneeEnvelopeGaps`.
  */
+/** One X25519 device key of an assignee, as the re-wrap gate sees it (#2143). */
+export interface AssigneeRecipientState {
+  pubkey: HpkeRecipientPubkey
+  /** When the key took its current value (ISO 8601). */
+  keySetAt: string
+  /** A verification by the key's owner or a hub admin covers the key as it stands. */
+  confirmed: boolean
+}
+
 export interface AssigneeEnvelopeGaps {
   assignedTo: string | null
-  /** Every X25519 device key of the assignee — the keys to seal to. */
-  recipients: HpkeRecipientPubkey[]
+  /** Every X25519 device key of the assignee, with what the re-wrap gate needs to judge it. */
+  recipients: AssigneeRecipientState[]
   messages: Array<{
     id: string
+    /** When the message was written — the age `recipients[].keySetAt` is judged against. */
+    createdAt: string
     /** The message's existing envelopes, so the re-wrapper can open its own. */
     readerEnvelopes: RecipientEnvelope[]
     missingRecipients: HpkeRecipientPubkey[]
@@ -124,7 +139,6 @@ export interface VolunteerLoadResult {
 
 export interface ContactSummary {
   contactHash: string
-  last4?: string | null
   conversationCount: number
   reportCount: number
   firstSeen: Date
@@ -143,7 +157,7 @@ type FileRow = typeof files.$inferSelect
 export class ConversationsService {
   constructor(
     protected db: Database,
-    protected hmacSecret?: string,
+    protected serverKek?: string,
     protected adminPubkey?: string,
   ) {}
 
@@ -156,7 +170,6 @@ export class ConversationsService {
         hubId: input.hubId,
         channelType: input.channelType ?? 'web',
         contactIdentifierHash: input.contactIdentifierHash ?? '',
-        contactLast4: input.contactLast4,
         assignedTo: input.assignedTo,
         status: input.status ?? 'waiting',
         metadata: input.metadata ?? null,
@@ -172,6 +185,26 @@ export class ConversationsService {
       .select()
       .from(conversations)
       .where(eq(conversations.id, id))
+      .limit(1)
+
+    if (!row) throw new ServiceError(404, 'Conversation not found')
+    return row
+  }
+
+  /**
+   * The conversation `id`, only if it belongs to `hubId`.
+   *
+   * A conversation of another hub is reported exactly as a missing one — one
+   * query, one error — so a hub-scoped route cannot be used to learn whether an
+   * id exists in a hub the caller is not a member of (#2011). Hub-scoped
+   * handlers fetch through here; `getById` is for callers that already hold
+   * authority over every hub (webhooks, the cleanup jobs).
+   */
+  async getByIdForHub(id: string, hubId: string): Promise<ConversationRow> {
+    const [row] = await this.db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.id, id), eq(conversations.hubId, hubId)))
       .limit(1)
 
     if (!row) throw new ServiceError(404, 'Conversation not found')
@@ -340,9 +373,88 @@ export class ConversationsService {
   static readonly ASSIGNEE_GAP_PAGE = 200
 
   /**
+   * The assignee's X25519 device keys, each with the facts the re-wrap gate
+   * needs: when the key last took its current value, and whether a device
+   * verification covers it as it stands (#2143, PROTOCOL.md §2.4.1 "Trust").
+   *
+   * "Confirmed" means a `device_verifications` row for that device, recorded
+   * by the key's owner or by an admin of the conversation's hub (operator
+   * decision A13), at or after the moment the key took its current value and
+   * against the device's current signing key. A verification that predates a
+   * key overwrite says nothing about the new key, so it does not count.
+   *
+   * Two devices carrying the same key collapse to one entry, judged by the
+   * stricter of the two: the newer `keySetAt`, and confirmed only if both are.
+   */
+  private async loadAssigneeRecipients(
+    assignedTo: string,
+    hubId: string | null,
+  ): Promise<AssigneeRecipientState[]> {
+    const rows = await this.db
+      .select({
+        id: devices.id,
+        ed25519Pubkey: devices.ed25519Pubkey,
+        x25519Pubkey: devices.x25519Pubkey,
+        x25519SetAt: devices.x25519SetAt,
+      })
+      .from(devices)
+      .where(and(eq(devices.pubkey, assignedTo), isNotNull(devices.x25519Pubkey)))
+    if (rows.length === 0) return []
+
+    const verifiers = new Set<string>([assignedTo, ...(hubId ? await listAdminPubkeys(this.db, hubId) : [])])
+    const verifications = await this.db
+      .select({
+        targetDeviceId: deviceVerifications.targetDeviceId,
+        targetPubkey: deviceVerifications.targetPubkey,
+        verifierPubkey: deviceVerifications.verifierPubkey,
+        verifiedAt: deviceVerifications.verifiedAt,
+      })
+      .from(deviceVerifications)
+      .where(inArray(deviceVerifications.targetDeviceId, rows.map((r) => r.id)))
+
+    const byKey = new Map<HpkeRecipientPubkey, { keySetAt: Date; confirmed: boolean }>()
+    for (const row of rows) {
+      const pubkey = hpkeRecipientPubkey(row.x25519Pubkey)
+      if (!pubkey) continue
+      const confirmed =
+        row.ed25519Pubkey !== null &&
+        verifications.some(
+          (v) =>
+            v.targetDeviceId === row.id &&
+            v.targetPubkey === row.ed25519Pubkey &&
+            verifiers.has(v.verifierPubkey) &&
+            v.verifiedAt.getTime() >= row.x25519SetAt.getTime(),
+        )
+      const seen = byKey.get(pubkey)
+      byKey.set(
+        pubkey,
+        seen
+          ? {
+              keySetAt: seen.keySetAt.getTime() >= row.x25519SetAt.getTime() ? seen.keySetAt : row.x25519SetAt,
+              confirmed: seen.confirmed && confirmed,
+            }
+          : { keySetAt: row.x25519SetAt, confirmed },
+      )
+    }
+    return [...byKey].map(([pubkey, { keySetAt, confirmed }]) => ({
+      pubkey,
+      keySetAt: keySetAt.toISOString(),
+      confirmed,
+    }))
+  }
+
+  /**
    * Messages in the conversation that lack an envelope for at least one of the
-   * current assignee's registered device keys, oldest first, plus the full
-   * recipient set those envelopes must be sealed to.
+   * current assignee's registered device keys AND may be re-wrapped to it,
+   * oldest first, plus the assignee's device keys with the gate's inputs.
+   *
+   * A key set after a message was written, and not confirmed, is not a gap for
+   * that message (`mayRewrapHistoryTo`; #2143). It is still listed in the
+   * message's `missingRecipients` when the message has some other permitted
+   * gap, so the re-wrapping client sees it and applies the gate itself. A
+   * message whose every missing key is withheld is left out of the page
+   * entirely: oldest-first paging would otherwise fill with messages the client
+   * must skip, and never reach the newer ones it may re-wrap.
    *
    * Messages with NO envelopes are excluded: they are the deliberately
    * unreadable records `handleIncoming` stores when no reader existed at all,
@@ -352,11 +464,11 @@ export class ConversationsService {
     const conv = await this.getById(conversationId)
     if (!conv.assignedTo) return { assignedTo: null, recipients: [], messages: [] }
 
-    const recipients = await getUserHpkeRecipients(this.db, conv.assignedTo)
+    const recipients = await this.loadAssigneeRecipients(conv.assignedTo, conv.hubId ?? null)
     if (recipients.length === 0) return { assignedTo: conv.assignedTo, recipients, messages: [] }
 
     const rows = await this.db
-      .select({ id: messages.id, readerEnvelopes: messages.readerEnvelopes })
+      .select({ id: messages.id, createdAt: messages.createdAt, readerEnvelopes: messages.readerEnvelopes })
       .from(messages)
       .where(eq(messages.conversationId, conversationId))
       .orderBy(messages.createdAt, messages.id)
@@ -366,9 +478,14 @@ export class ConversationsService {
       const readerEnvelopes = row.readerEnvelopes as RecipientEnvelope[]
       if (readerEnvelopes.length === 0) continue
       const present = new Set(readerEnvelopes.map((e) => e.pubkey))
-      const missingRecipients = recipients.filter((r) => !present.has(r))
-      if (missingRecipients.length === 0) continue
-      gaps.push({ id: row.id, readerEnvelopes, missingRecipients })
+      const missing = recipients.filter((r) => !present.has(r.pubkey))
+      if (!missing.some((r) => mayRewrapHistoryTo(r, row.createdAt))) continue
+      gaps.push({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        readerEnvelopes,
+        missingRecipients: missing.map((r) => r.pubkey),
+      })
       if (gaps.length >= ConversationsService.ASSIGNEE_GAP_PAGE) break
     }
 
@@ -382,7 +499,11 @@ export class ConversationsService {
    * dropped.
    *
    * Every envelope must name one of the CURRENT assignee's registered X25519
-   * device keys. The conversation row is locked for the duration, so a
+   * device keys, and must not name a key set after its message was written
+   * unless that key is confirmed (#2143). The client already withholds those
+   * (`mayRewrapHistoryTo`); refusing them here too is defence in depth against a
+   * session that submits envelopes directly, and it is no more than that: the
+   * timestamps and confirmations are the server's own claims. The conversation row is locked for the duration, so a
    * reassignment cannot land between the recipient check and the write and
    * leave the previous assignee holding envelopes on messages they no longer
    * own. Rejecting the whole batch on one bad entry is deliberate: a partial
@@ -401,14 +522,16 @@ export class ConversationsService {
   ): Promise<{ added: number; assignedTo: string }> {
     return this.db.transaction(async (tx) => {
       const [conv] = await tx
-        .select({ assignedTo: conversations.assignedTo })
+        .select({ assignedTo: conversations.assignedTo, hubId: conversations.hubId })
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .for('update')
       if (!conv) throw new ServiceError(404, 'Conversation not found')
       if (!conv.assignedTo) throw new ServiceError(409, 'Conversation has no assignee')
 
-      const recipients = new Set<string>(await getUserHpkeRecipients(this.db, conv.assignedTo))
+      const recipients = new Map(
+        (await this.loadAssigneeRecipients(conv.assignedTo, conv.hubId)).map((r) => [r.pubkey as string, r]),
+      )
       for (const { envelope } of entries) {
         if (!recipients.has(envelope.pubkey)) {
           throw new ServiceError(400, 'Envelope recipient is not a registered device key of the conversation assignee')
@@ -417,12 +540,27 @@ export class ConversationsService {
 
       const messageIds = [...new Set(entries.map((e) => e.messageId))]
       const rows = await tx
-        .select({ id: messages.id, readerEnvelopes: messages.readerEnvelopes })
+        .select({ id: messages.id, createdAt: messages.createdAt, readerEnvelopes: messages.readerEnvelopes })
         .from(messages)
         .where(and(eq(messages.conversationId, conversationId), inArray(messages.id, messageIds)))
         .for('update')
       if (rows.length !== messageIds.length) {
         throw new ServiceError(404, 'Message not found in conversation')
+      }
+
+      const createdAtById = new Map(rows.map((r) => [r.id, r.createdAt]))
+      for (const { messageId, envelope } of entries) {
+        const recipient = recipients.get(envelope.pubkey)
+        const createdAt = createdAtById.get(messageId)
+        // Both lookups succeed here — membership and message existence were
+        // checked above — and a miss would mean the gate cannot be evaluated,
+        // which refuses rather than writes.
+        if (!recipient || !createdAt || !mayRewrapHistoryTo(recipient, createdAt)) {
+          throw new ServiceError(
+            400,
+            `Envelope recipient key was set after message ${messageId} was written and has not been confirmed`,
+          )
+        }
       }
 
       const byId = new Map(rows.map((r) => [r.id, [...(r.readerEnvelopes as RecipientEnvelope[])]]))
@@ -614,6 +752,12 @@ export class ConversationsService {
   async handleIncoming(
     incoming: IncomingMessage,
     /**
+     * The thread identity of `incoming.senderIdentifier`: `messagingContactHash`,
+     * computed once by the caller (the messaging router, or the dev simulation)
+     * with the same hub id passed below. No adapter hashes, so a message can
+     * never be filed under a hash its own hub's key did not produce.
+     */
+    contactHash: string,
     /**
      * The platform admin's X25519 HPKE recipient, or `undefined` when the
      * deployment has none. Typed as a brand so an Ed25519 auth key — which is
@@ -628,15 +772,15 @@ export class ConversationsService {
     isNew: boolean
     status: string
   }> {
-    if (!this.hmacSecret) {
-      throw new ServiceError(500, 'HMAC secret not configured')
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
     }
 
     // Find existing conversation from this sender on this channel.
     // hubId scoping prevents cross-worker bleed in parallel test execution.
     const whereConditions = [
       eq(conversations.channelType, incoming.channelType),
-      eq(conversations.contactIdentifierHash, incoming.senderIdentifierHash),
+      eq(conversations.contactIdentifierHash, contactHash),
       sql`${conversations.status} IN ('active', 'waiting', 'closed')`,
     ]
     if (hubId) {
@@ -668,16 +812,12 @@ export class ConversationsService {
       }
     } else {
       // Create new conversation
-      const digits = incoming.senderIdentifier.replace(/\D/g, '')
-      const last4 = digits.length >= 4 ? digits.slice(-4) : digits
-
       const [created] = await this.db
         .insert(conversations)
         .values({
           hubId: hubId ?? null,
           channelType: incoming.channelType,
-          contactIdentifierHash: incoming.senderIdentifierHash,
-          contactLast4: last4,
+          contactIdentifierHash: contactHash,
           status: 'waiting',
           lastMessageAt: new Date(),
         })
@@ -689,7 +829,7 @@ export class ConversationsService {
       // Store encrypted contact identifier for outbound sends
       await this.setContactIdentifier(
         conv.id,
-        encryptContactIdentifier(incoming.senderIdentifier, this.hmacSecret),
+        encryptContactIdentifier(incoming.senderIdentifier, this.serverKek),
       )
     }
 
@@ -776,8 +916,8 @@ export class ConversationsService {
   }
 
   async getContactIdentifier(conversationId: string): Promise<string> {
-    if (!this.hmacSecret) {
-      throw new ServiceError(500, 'HMAC secret not configured')
+    if (!this.serverKek) {
+      throw new ServiceError(500, 'Server KEK not configured')
     }
 
     const [row] = await this.db
@@ -788,15 +928,7 @@ export class ConversationsService {
 
     if (!row) throw new ServiceError(404, 'No contact identifier stored')
 
-    const identifier = decryptContactIdentifier(row.encryptedIdentifier, this.hmacSecret)
-
-    // Lazy migration: re-encrypt legacy plaintext entries
-    if (!row.encryptedIdentifier.startsWith('enc:')) {
-      await this.setContactIdentifier(
-        conversationId,
-        encryptContactIdentifier(identifier, this.hmacSecret),
-      )
-    }
+    const identifier = decryptContactIdentifier(row.encryptedIdentifier, this.serverKek)
 
     return identifier
   }
@@ -1046,7 +1178,6 @@ export class ConversationsService {
     const rows = await this.db
       .select({
         contactHash: conversations.contactIdentifierHash,
-        last4: sql<string | null>`MIN(${conversations.contactLast4})`,
         conversationCount: sql<number>`COUNT(*) FILTER (WHERE ${conversations.metadata} IS NULL OR ${conversations.metadata}->>'type' IS NULL OR ${conversations.metadata}->>'type' != 'report')`,
         reportCount: sql<number>`COUNT(*) FILTER (WHERE ${conversations.metadata}->>'type' = 'report')`,
         firstSeen: sql<Date>`MIN(${conversations.createdAt})`,
@@ -1059,7 +1190,6 @@ export class ConversationsService {
 
     return rows.map((r) => ({
       contactHash: r.contactHash,
-      last4: r.last4,
       conversationCount: Number(r.conversationCount),
       reportCount: Number(r.reportCount),
       firstSeen: r.firstSeen,
@@ -1067,11 +1197,20 @@ export class ConversationsService {
     }))
   }
 
-  async getContactConversations(contactHash: string): Promise<ConversationRow[]> {
+  /**
+   * Every conversation with `contactHash`, within `hubId` — or across all hubs
+   * when `hubId` is undefined (the unscoped mount, which has no hub to bound
+   * to). Required rather than optional so a hub-scoped caller cannot omit it:
+   * the hash is a blind index, equal across hubs for the same caller, and an
+   * unbounded lookup would stitch one caller's contact history together across
+   * hubs that must not know of each other.
+   */
+  async getContactConversations(contactHash: string, hubId: string | undefined): Promise<ConversationRow[]> {
+    const byContact = eq(conversations.contactIdentifierHash, contactHash)
     return this.db
       .select()
       .from(conversations)
-      .where(eq(conversations.contactIdentifierHash, contactHash))
+      .where(hubId ? and(byContact, eq(conversations.hubId, hubId)) : byContact)
       .orderBy(desc(conversations.lastMessageAt))
   }
 
@@ -1115,7 +1254,7 @@ export class ConversationsService {
     return deleted.length
   }
 
-  // --- Reset (demo/development only) ---
+  // --- Reset (the secret-gated dev surface only) ---
 
   async reset(): Promise<void> {
     await this.db.delete(contactIdentifiers)

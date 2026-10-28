@@ -765,13 +765,7 @@ final class AdminSettingsUITests: BaseUITest {
             errorState.exists,
             "System health should load from the connected backend, not show its error state"
         )
-
-        guard loaded else {
-            // Neither cards nor error appeared — check loading state
-            let loading = find("health-loading")
-            XCTAssertTrue(loading.exists, "System health should show loading, cards, or error")
-            return
-        }
+        XCTAssertTrue(loaded, "System health should render its cards within 10s")
 
         // Health cards loaded — verify all 6 are present
         let cards = [

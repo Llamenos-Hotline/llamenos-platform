@@ -9,11 +9,13 @@ import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService } from '../lib/push-dispatch'
 import { createLogger } from '../lib/logger'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { messagingContactHash, subscriberHashes } from '../lib/messaging-contact-hash'
 import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
 import type { SignalWebhookPayload } from './signal/types'
 import { SignalIdentityService } from './signal/identity'
+import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
@@ -94,7 +96,7 @@ messaging.post('/:channel/webhook',
 
   let adapter: MessagingAdapter
   try {
-    adapter = await getMessagingAdapterFromService(channel, services.settings, c.env.HMAC_SECRET, c.env.WEBHOOK_BASE_URL ?? '')
+    adapter = await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression, c.env.WEBHOOK_BASE_URL ?? '')
   } catch {
     return c.json({ error: `${channel} channel is not configured` }, 404)
   }
@@ -217,6 +219,12 @@ messaging.post('/:channel/webhook',
     return c.json({ error: 'Failed to parse message' }, 400)
   }
 
+  // The one place a messaging contact is hashed: per-hub keyed, from the same
+  // identifier the sealed reply address holds. The hash names the thread and
+  // feeds blast keywords, the firehose observer and the audit entry below; no
+  // adapter hashes, so there is no second value that could disagree with it.
+  const senderHash = messagingContactHash(incoming.senderIdentifier, hubId, c.env.MESSAGING_HASH_KEY)
+
   // Identity trust tracking: record/refresh the sender's Signal identity on
   // first (and every subsequent) contact. SignalIdentityService.recordIdentity
   // already existed with full trust-level logic (TOFU/auto/manual) and a
@@ -251,8 +259,8 @@ messaging.post('/:channel/webhook',
       observeFirehoseMessage(services.firehose, {
         signalGroupId: incoming.metadata.groupId,
         senderIdentifier: incoming.senderIdentifier,
-        senderIdentifierHash: incoming.senderIdentifierHash,
-        senderUsername: incoming.metadata?.sourceName ?? incoming.senderIdentifier.slice(-4),
+        senderIdentifierHash: senderHash,
+        senderUsername: incoming.metadata?.sourceName ?? senderHash.slice(0, 8),
         content: incoming.body,
         timestamp: new Date(incoming.timestamp),
         hubId,
@@ -268,19 +276,26 @@ messaging.post('/:channel/webhook',
     if (normalizedBody === 'STOP') {
       await services.blasts.handleSubscriberKeyword(effectiveHubId, {
         identifier: incoming.senderIdentifier,
-        identifierHash: incoming.senderIdentifierHash,
+        ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: true }),
+        externalId: incoming.externalId,
         keyword: 'STOP',
         channel: incoming.channelType,
       })
       // Still forward to conversation for logging
     } else {
+      // START / UNSTOP: the one message that lifts an opt-out, for exactly the
+      // identifiers it carries (never a number merely recorded for the sender).
+      if (OPT_IN_KEYWORDS.has(normalizedBody)) {
+        await services.messagingSuppression.clear(incoming.channelType, carriedIdentifiers(incoming))
+      }
       // Check if it matches the subscribe keyword
       try {
         const settings = await services.blasts.getBlastSettings(effectiveHubId)
         if (normalizedBody === settings.subscribeKeyword.toUpperCase()) {
           await services.blasts.handleSubscriberKeyword(effectiveHubId, {
             identifier: incoming.senderIdentifier,
-            identifierHash: incoming.senderIdentifierHash,
+            ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: false }),
+            externalId: incoming.externalId,
             keyword: normalizedBody,
             channel: incoming.channelType,
           })
@@ -303,7 +318,7 @@ messaging.post('/:channel/webhook',
   // The desktop client only ever calls that hub-scoped path, so inbound messages
   // were invisible on desktop. The dev simulation route forwards a hubId from its
   // request body, which is why every backend BDD messaging scenario passed.
-  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env), hubId)
+  const convResult = await services.conversations.handleIncoming(incoming, senderHash, adminHpkeRecipient(c.env), hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -350,13 +365,45 @@ messaging.post('/:channel/webhook',
   backgroundTask(c,
     audit(services.audit, 'messageReceived', 'system', {
       channel,
-      senderHash: incoming.senderIdentifierHash,
+      senderHash,
     }, undefined, hubId ?? null)
   )
 
   // Return 200 to acknowledge webhook (providers expect fast acknowledgment)
   return c.json({ ok: true })
 })
+
+/** Every identifier this message itself carries for its sender. */
+function carriedIdentifiers(incoming: IncomingMessage): string[] {
+  return [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
+}
+
+/**
+ * The hashes a blast subscriber is filed and found under for this sender, and the
+ * identifiers they came from (the suppression record is filed, or cleared, under
+ * the same ones). Every identifier the webhook carried counts: Signal's UUID and
+ * phone number, and, when the envelope hides the number (phone-number privacy),
+ * the number a previous message from this UUID recorded. A STOP matched on one
+ * shape alone would leave the same person subscribed under the other.
+ *
+ * The recorded number is server-linked, not carried by this message, so only an
+ * opt-out may use it: widening a re-subscribe through it could grant consent to a
+ * row the sender never named.
+ */
+async function subscriberHashesFor(
+  services: Services,
+  incoming: IncomingMessage,
+  hubId: string | undefined,
+  messagingHashKey: string,
+  { includeRecorded }: { includeRecorded: boolean },
+) {
+  const identifiers = carriedIdentifiers(incoming)
+  if (includeRecorded && incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
+    const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
+    if (known?.number) identifiers.push(known.number)
+  }
+  return { identifiers, ...subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey) }
+}
 
 /**
  * Try to auto-assign a new conversation to an available volunteer.

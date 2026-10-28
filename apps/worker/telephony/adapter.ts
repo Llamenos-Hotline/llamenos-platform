@@ -5,6 +5,14 @@ export interface WebhookCallInfo {
   callerNumber: string
   /** The called number (To / hotline number) — used for multi-hub routing */
   calledNumber?: string
+  /**
+   * True when the provider reports that an automated answerer — a carrier
+   * voicemail greeting, an answering machine, a fax — picked up an outbound
+   * volunteer leg rather than a person. Set only by providers that deliver
+   * machine detection on the answer webhook; absent means "not reported", never
+   * "human". A leg flagged here must not claim the call.
+   */
+  answeredByMachine?: boolean
 }
 
 export interface WebhookDigits {
@@ -172,6 +180,16 @@ export interface IncomingCallParams {
   rateLimited: boolean
   callerLanguage: string
   hotlineName: string
+  /**
+   * Whether this hub records answered calls (`callSettings.recordCalls`).
+   * When true the greeting MUST disclose it to the caller before they can be
+   * connected — see #1505. Required, not optional: a legal notice that a call
+   * site can forget to pass is a notice that will eventually go missing.
+   *
+   * This is the same value the route passes as `CallAnsweredParams.recordCall`,
+   * read once per call, so the notice and the recording cannot disagree.
+   */
+  callRecordingEnabled: boolean
   audioUrls?: AudioUrlMap
   /** Pre-generated CAPTCHA digits (generated server-side with CSPRNG) */
   captchaDigits?: string
@@ -193,6 +211,18 @@ export interface CaptchaResponseParams {
 export interface CallAnsweredParams {
   /** The incoming call SID, used as the queue name to bridge caller → volunteer */
   parentCallSid: string
+  /**
+   * Whether to record this call at the telephony provider
+   * (`callSettings.recordCalls`, default false — #1505).
+   *
+   * Required, not optional: provider-side recording writes crisis-call audio to
+   * a third party's disk, so no adapter and no call site may fall into it by
+   * omission. When false, the adapter MUST emit no recording directive at all.
+   *
+   * Does not apply to voicemail: `handleVoicemail`'s record step is
+   * caller-initiated and stays unconditional.
+   */
+  recordCall: boolean
   /** Origin URL for recording status callbacks */
   callbackUrl: string
   /**
@@ -282,4 +312,46 @@ export async function assertHangupResponse(res: Response, provider: string): Pro
   if (res.ok || res.status === 404) return
   const detail = await res.text().catch(() => '')
   throw new Error(`${provider} hangup failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ''}`)
+}
+
+/**
+ * Thrown by `ringVolunteers` when EVERY per-volunteer dial attempt failed — a total
+ * provider outage, not a partial one. Distinguishing "all legs failed" from "some legs
+ * failed" matters: a partial failure (some volunteers unreachable, others rung fine) is
+ * normal and must not trip the circuit breaker or retry the whole batch (the volunteers
+ * who WERE reached must not be re-dialled). A total failure means the provider is down
+ * and the caller — services/ringing.ts — must retry, trip the breaker on repeated
+ * failure, and report the ring as failed rather than claiming success (#1136).
+ */
+export class AllDialsFailedError extends Error {
+  constructor(public readonly attempted: number) {
+    super(`All ${attempted} dial attempt(s) failed`)
+    this.name = 'AllDialsFailedError'
+  }
+}
+
+/**
+ * Collect the call/leg SIDs from a `Promise.allSettled` of per-volunteer dial attempts.
+ * Each individual failure is logged (so a specific bad number is diagnosable), but this
+ * only throws when NONE of the attempts succeeded. A partial failure returns whatever
+ * did succeed — ringing fewer legs than requested is not the same event as ringing none
+ * (#1136).
+ */
+export function collectRingResults(
+  results: PromiseSettledResult<string>[],
+  provider: string,
+  logFailure: (message: string, err: unknown) => void,
+): string[] {
+  const sids: string[] = []
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      sids.push(result.value)
+    } else {
+      logFailure(`${provider}: failed to dial a volunteer`, result.reason)
+    }
+  }
+  if (sids.length === 0 && results.length > 0) {
+    throw new AllDialsFailedError(results.length)
+  }
+  return sids
 }

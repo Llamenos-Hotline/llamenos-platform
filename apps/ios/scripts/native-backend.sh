@@ -80,6 +80,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+# shellcheck source=../../../scripts/lib/server-hash-keys.sh
+source "$ROOT/scripts/lib/server-hash-keys.sh"
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # Recorded BEFORE defaulting: everything that kills a process keys off this.
 # Unset ports mean a developer running the script by hand, where 3000/5432 are
@@ -99,7 +101,7 @@ WATCHDOG_PID="$STATE_DIR/watchdog.pid"
 PG_FORMULA="postgresql@17"
 CRYPTO_LIB="$ROOT/packages/crypto/dist/server/libllamenos_core.dylib"
 DATABASE_URL="postgresql://llamenos@127.0.0.1:${PGPORT}/llamenos"
-# Same value as TEST_ADMIN_PUBKEY in ci.yml / desktop-e2e.yml.
+# Same value as TEST_ADMIN_PUBKEY in ci.yml.
 ADMIN_PUBKEY="${ADMIN_PUBKEY:-79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183}"
 # Stamped into the server's argv by `start` and looked for by `reclaim`. The
 # server ignores argv entirely, so this is a label and nothing else.
@@ -448,6 +450,10 @@ cmd_start() {
     export TRUST_PROXY_HEADERS=true
     HMAC_SECRET="$(openssl rand -hex 32)"
     export HMAC_SECRET
+    SERVER_KEK="$(openssl rand -hex 32)"
+    export SERVER_KEK
+    # BAN_HASH_KEY_FILE and MESSAGING_HASH_KEY_FILE, under the state dir.
+    export_hash_key_files "$STATE_DIR"
     export SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
     export LLAMENOS_CRYPTO_LIB="$CRYPTO_LIB"
     export STORAGE_ENDPOINT=http://127.0.0.1:9

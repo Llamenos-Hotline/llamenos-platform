@@ -118,7 +118,7 @@ struct SettingsView: View {
             ) {
                 Button(NSLocalizedString("cancel", comment: "Cancel"), role: .cancel) {}
                 Button(NSLocalizedString("logout_confirm_action", comment: "Logout"), role: .destructive) {
-                    appState.didLogout()
+                    Task { await appState.logOut() }
                 }
             } message: {
                 Text(NSLocalizedString(

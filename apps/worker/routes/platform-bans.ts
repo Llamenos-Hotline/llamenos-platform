@@ -13,7 +13,7 @@ import {
 } from '@protocol/schemas/bans'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { hashPhone } from '../lib/crypto'
+import { banHash, PLATFORM_BAN_SCOPE } from '../lib/crypto'
 
 const platformBans = new Hono<AppEnv>()
 
@@ -84,12 +84,10 @@ platformBans.post(
         400,
       )
     }
-    const phoneHash = hashPhone(body.phone, c.env.HMAC_SECRET)
-    // HIGH-W3: Never store plaintext phone — only masked last-4 for admin display
-    const phoneMasked = body.phone.length >= 4 ? `***${body.phone.slice(-4)}` : '***'
+    // Never store the number or any digits of it: only the platform-keyed hash that ban matching needs.
+    const phoneHash = banHash(body.phone, PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY)
     await services.records.addBan({
-      phone: phoneHash,
-      phoneDisplay: phoneMasked,
+      phoneHash,
       reason: body.reason ?? '',
       bannedBy: pubkey,
     })
@@ -135,13 +133,9 @@ platformBans.post(
         400,
       )
     }
-    // HIGH-W3: Never store plaintext phone — only masked last-4 for admin display
-    const entries = body.phones.map((p: string) => ({
-      phoneHash: hashPhone(p, c.env.HMAC_SECRET),
-      phoneDisplay: p.length >= 4 ? `***${p.slice(-4)}` : '***',
-    }))
+    const phoneHashes = body.phones.map((p: string) => banHash(p, PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY))
     const added = await services.records.bulkAddBans(
-      entries,
+      phoneHashes,
       body.reason ?? '',
       pubkey,
     )
@@ -214,9 +208,14 @@ platformBans.get(
         400,
       )
     }
-    const phoneHash = hashPhone(phone, c.env.HMAC_SECRET)
 
-    const rows = await services.records.searchBansByPhone(phoneHash)
+    // Every scope has its own key, so the number is hashed once per hub and once for
+    // the platform. Nothing is stored: the digests only select rows that match.
+    const { hubs } = await services.settings.getHubs()
+    const rows = await services.records.searchBans([
+      { hubId: null, phoneHash: banHash(phone, PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY) },
+      ...hubs.map((hub) => ({ hubId: hub.id, phoneHash: banHash(phone, hub.id, c.env.BAN_HASH_KEY) })),
+    ])
 
     return c.json({
       bans: rows.map((b) => ({
@@ -264,9 +263,18 @@ platformBans.post(
       return c.json({ error: 'Ban is already platform-scoped' }, 409)
     }
 
+    // The hub's hash is keyed to that hub, so it cannot be turned into a platform hash:
+    // the number has to be entered again. It must be the number that hub banned, which
+    // the stored hash proves, so a mistyped number cannot ban someone else.
+    if (!isValidE164(body.phone)) {
+      return c.json({ error: 'Invalid phone number. Use E.164 format (e.g. +12125551234)' }, 400)
+    }
+    if (banHash(body.phone, sourceBan.hubId, c.env.BAN_HASH_KEY) !== sourceBan.phone) {
+      return c.json({ error: 'Phone number does not match the ban being promoted' }, 400)
+    }
+
     await services.records.addBan({
-      phone: sourceBan.phone,
-      phoneDisplay: sourceBan.phoneDisplay ?? '',
+      phoneHash: banHash(body.phone, PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY),
       reason: sourceBan.reason ?? '',
       bannedBy: pubkey,
     })

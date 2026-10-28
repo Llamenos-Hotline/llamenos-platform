@@ -14,6 +14,7 @@ import {
 } from '../db/schema'
 import type { AuditService } from './audit'
 import { ServiceError } from './settings'
+import type { BanHashes } from '../lib/crypto'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,7 +41,7 @@ export interface CreateNoteInput {
   fieldEnvelopes?: unknown
   authorEnvelope: unknown
   adminEnvelopes?: unknown[]
-  /** Explicit creation time — only for seeding historical demo data. */
+  /** Explicit creation time — only for seeding the historical sample dataset. */
   createdAt?: Date
 }
 
@@ -70,8 +71,8 @@ export interface CreateReplyInput {
 
 export interface AddBanInput {
   hubId?: string
-  phone: string       // HMAC hash for lookup
-  phoneDisplay?: string // Original E.164 for admin display (may be absent for mid-call bans)
+  /** `banHash` of the number under this ban's scope. The number itself is never stored. */
+  phoneHash: string
   reason: string
   bannedBy: string
 }
@@ -168,12 +169,21 @@ export class RecordsService {
     return { notes: rows, total: Number(total) }
   }
 
-  async updateNote(id: string, input: UpdateNoteInput): Promise<NoteRow> {
-    const existing = await this.getNote(id)
-
-    if (existing.authorPubkey !== input.authorPubkey) {
+  /**
+   * The note `id`, only if `authorPubkey` wrote it. Routes call this before
+   * judging an edit's content, so a non-author is told 403 whatever they sent —
+   * never a validation error that says anything about the note.
+   */
+  async getNoteAuthoredBy(id: string, authorPubkey: string): Promise<NoteRow> {
+    const note = await this.getNote(id)
+    if (note.authorPubkey !== authorPubkey) {
       throw new ServiceError(403, 'Only the note author can update this note')
     }
+    return note
+  }
+
+  async updateNote(id: string, input: UpdateNoteInput): Promise<NoteRow> {
+    await this.getNoteAuthoredBy(id, input.authorPubkey)
 
     const updates: Partial<typeof notes.$inferInsert> = {
       encryptedContent: input.encryptedContent,
@@ -295,8 +305,7 @@ export class RecordsService {
       .insert(bans)
       .values({
         hubId,
-        phone: input.phone,
-        phoneDisplay: input.phoneDisplay ?? null,
+        phone: input.phoneHash,
         reason: input.reason,
         bannedBy: input.bannedBy,
       })
@@ -311,7 +320,7 @@ export class RecordsService {
 
     // Conflict — the ban already exists; return it (idempotent).
     const conditions = [
-      eq(bans.phone, input.phone),
+      eq(bans.phone, input.phoneHash),
       hubId ? eq(bans.hubId, hubId) : sql`${bans.hubId} IS NULL`,
     ]
     const [existing] = await this.db
@@ -327,20 +336,19 @@ export class RecordsService {
     return existing
   }
 
-  async listBans(hubId?: string): Promise<{ bans: Array<{ phone: string; phoneHash: string; reason: string | null; bannedBy: string | null; bannedAt: Date }> }> {
-    const rows = hubId
-      ? await this.db
-          .select()
-          .from(bans)
-          .where(eq(bans.hubId, hubId))
-          .orderBy(desc(bans.bannedAt))
-      : await this.db
-          .select()
-          .from(bans)
-          .orderBy(desc(bans.bannedAt))
+  /**
+   * A scope's ban list: the hub's, or the platform's when there is no hub (the same
+   * scoping addBan, removeBan and checkBan use). It carries no number, masked or
+   * otherwise: `phoneHash` is an opaque handle for unbanning.
+   */
+  async listBans(hubId?: string): Promise<{ bans: Array<{ phoneHash: string; reason: string | null; bannedBy: string | null; bannedAt: Date }> }> {
+    const rows = await this.db
+      .select()
+      .from(bans)
+      .where(hubId ? eq(bans.hubId, hubId) : isNull(bans.hubId))
+      .orderBy(desc(bans.bannedAt))
     return {
       bans: rows.map(r => ({
-        phone: r.phoneDisplay ?? r.phone,  // display original phone; fall back to hash for legacy rows
         phoneHash: r.phone,
         reason: r.reason,
         bannedBy: r.bannedBy,
@@ -350,29 +358,23 @@ export class RecordsService {
   }
 
   async bulkAddBans(
-    entries: Array<{ phoneHash: string; phoneDisplay: string }>,
+    phoneHashes: string[],
     reason: string,
     bannedBy: string,
     hubId?: string,
   ): Promise<number> {
     // RACE-13: Deduplicate within input, then INSERT...ON CONFLICT DO NOTHING
     // to handle concurrent imports atomically at the database level.
-    const seen = new Set<string>()
-    const uniqueEntries = entries.filter((e) => {
-      if (seen.has(e.phoneHash)) return false
-      seen.add(e.phoneHash)
-      return true
-    })
+    const uniqueHashes = [...new Set(phoneHashes)]
 
-    if (uniqueEntries.length === 0) return 0
+    if (uniqueHashes.length === 0) return 0
 
     const inserted = await this.db
       .insert(bans)
       .values(
-        uniqueEntries.map((entry) => ({
+        uniqueHashes.map((phoneHash) => ({
           hubId: hubId || null,  // normalize empty string to null
-          phone: entry.phoneHash,
-          phoneDisplay: entry.phoneDisplay,
+          phone: phoneHash,
           reason,
           bannedBy,
         })),
@@ -396,11 +398,17 @@ export class RecordsService {
       .where(and(...conditions))
   }
 
-  async checkBan(phone: string, hubId?: string): Promise<boolean> {
-    // Include platform-scoped bans (hubId IS NULL) in addition to hub-specific bans
-    const where = hubId
-      ? and(eq(bans.phone, phone), or(eq(bans.hubId, hubId), isNull(bans.hubId)))
-      : and(eq(bans.phone, phone), isNull(bans.hubId))
+  /**
+   * Whether a caller is banned by their hub's list or by the platform's. Each scope
+   * has its own key (`banHash`), so the candidate hashes are matched per scope: a
+   * hub's hash is only ever compared with that hub's rows, the platform's with the
+   * platform's.
+   */
+  async checkBan(hashes: BanHashes, hubId?: string): Promise<boolean> {
+    const platform = and(eq(bans.phone, hashes.platform), isNull(bans.hubId))
+    const where = hubId && hashes.hub
+      ? or(and(eq(bans.phone, hashes.hub), eq(bans.hubId, hubId)), platform)
+      : platform
 
     const [row] = await this.db
       .select({ id: bans.id })
@@ -489,7 +497,7 @@ export class RecordsService {
   }
 
   // -----------------------------------------------------------------------
-  // Reset (demo/development only)
+  // Reset (the secret-gated dev surface only)
   // -----------------------------------------------------------------------
 
   async reset(): Promise<void> {
@@ -539,11 +547,16 @@ export class RecordsService {
     return { bans: rows, total: Number(total) }
   }
 
-  async searchBansByPhone(phoneHash: string): Promise<BanRow[]> {
+  /** Every ban matching one of the candidate (scope, hash) pairs; a null hubId is the platform scope. */
+  async searchBans(candidates: Array<{ hubId: string | null; phoneHash: string }>): Promise<BanRow[]> {
+    if (candidates.length === 0) return []
     return this.db
       .select()
       .from(bans)
-      .where(eq(bans.phone, phoneHash))
+      .where(or(...candidates.map(({ hubId, phoneHash }) => and(
+        eq(bans.phone, phoneHash),
+        hubId ? eq(bans.hubId, hubId) : isNull(bans.hubId),
+      ))))
   }
 
   async deletePlatformBan(banId: string): Promise<BanRow | null> {

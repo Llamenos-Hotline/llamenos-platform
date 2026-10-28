@@ -414,6 +414,62 @@
       "when": 1792759689495,
       "tag": "0058_puk_envelopes_sigchain_devices",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792870369277,
+      "tag": "0059_hub_admin_invariant",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792927248900,
+      "tag": "0060_device_x25519_set_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792947406856,
+      "tag": "0061_ivr_audio_per_hub",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792963793950,
+      "tag": "0062_ban_hash_only_for_banned_numbers",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792997813531,
+      "tag": "0063_users_roles_no_implicit_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1793001413531,
+      "tag": "0064_messaging_thread_hash_per_hub",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1793005013531,
+      "tag": "0065_subscribers_drop_hmac_secret_hashes",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1793126493673,
+      "tag": "0066_messaging_suppressions",
+      "breakpoints": true
     }
   ]
 }

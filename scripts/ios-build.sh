@@ -217,6 +217,12 @@ cmd_uitest() {
   if [ -f "$docker_dir/docker-compose.test.yml" ]; then
     if ! curl -sf "http://localhost:3000/api/health" &>/dev/null; then
       log "Starting Docker Compose test backend..."
+      # The compose app mounts the ban-list and messaging-thread hash keys from
+      # ./secrets/ and refuses to start without them. Create development keys if
+      # absent (gitignored, never printed, kept across runs).
+      # shellcheck source=lib/server-hash-keys.sh
+      source "$PROJECT_ROOT/scripts/lib/server-hash-keys.sh"
+      ensure_hash_key_files "$docker_dir/secrets" 0444
       cd "$docker_dir"
       docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build app 2>&1 || {
         warn "Docker Compose start failed — running UI tests without API backend"

@@ -54,7 +54,7 @@ type InviteRefusal =
   | { reason: 'retryable'; retryAfterSeconds?: number }
 
 type InviteCheck =
-  | { ok: true; name: string; roleIds: string[] }
+  | { ok: true; name: string }
   | ({ ok: false } & InviteRefusal)
 
 /** Why the entry screen is not moving on: a refusal, or `malformed` — never sent anywhere. */
@@ -65,7 +65,7 @@ async function checkInvite(code: string): Promise<InviteCheck> {
   // validateInvite never throws: every failure to get a verdict is `retryable`.
   const result = await validateInvite(code)
   if (result.outcome === 'valid') {
-    return { ok: true, name: result.name, roleIds: result.roleIds || ['role-volunteer'] }
+    return { ok: true, name: result.name }
   }
   if (result.outcome === 'invalid') {
     const reason = result.error === 'expired' || result.error === 'already_used' ? result.error : 'invalid'
@@ -103,7 +103,7 @@ function OnboardingPage() {
   const [checkingCode, setCheckingCode] = useState(false)
 
   const [step, setStep] = useState<Step>(() => (urlCode ? 'loading' : 'code'))
-  const [inviteData, setInviteData] = useState<{ name: string; roleIds: string[] } | null>(null)
+  const [inviteData, setInviteData] = useState<{ name: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [uiLang, setUiLang] = useState(i18n.language || 'en')
 
@@ -159,7 +159,7 @@ function OnboardingPage() {
     void checkInvite(code).then(result => {
       if (result.ok) {
         setInviteCode(code)
-        setInviteData({ name: result.name, roleIds: result.roleIds })
+        setInviteData({ name: result.name })
         setStep('welcome')
         return
       }
@@ -197,7 +197,7 @@ function OnboardingPage() {
     setCheckingCode(false)
     if (result.ok) {
       setInviteCode(code)
-      setInviteData({ name: result.name, roleIds: result.roleIds })
+      setInviteData({ name: result.name })
       setStep('welcome')
     } else {
       setCodeIssue(result)

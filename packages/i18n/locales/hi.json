@@ -730,7 +730,7 @@
     "statusVoicemail": "Voicemail"
   },
   "callActions": {
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "ब्लॉक करें और फ़ोन काटें",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "कॉलर को ब्लॉक करें और फ़ोन काटें?",
     "banFailed": "Failed to ban caller",
@@ -778,13 +778,16 @@
   },
   "calls": {
     "active": "सक्रिय कॉल",
-    "addNote": "Add Note",
+    "addNote": "नोट जोड़ें",
     "answer": "उत्तर दें",
+    "answerFailed": "कॉल का उत्तर नहीं दिया जा सका। हो सकता है किसी और ने पहले उठा लिया हो।",
+    "answerOnPhone": "अपने फ़ोन पर उत्तर दें",
     "banned": "यह नंबर प्रतिबंधित है",
     "caller": "कॉलर",
     "duration": "अवधि",
     "ended": "कॉल समाप्त",
     "hangUp": "काटें",
+    "hangupFailed": "कॉल समाप्त नहीं की जा सकी। पुनः प्रयास करें।",
     "hold": "होल्ड करें",
     "incoming": "आने वाली कॉल",
     "mute": "म्यूट करें",
@@ -794,7 +797,7 @@
     "transcription": "Transcription",
     "transferToVoicemail": "वॉइसमेल पर भेजें",
     "unknown": "अज्ञात नंबर",
-    "unknownCaller": "Unknown Caller",
+    "unknownCaller": "अज्ञात कॉलर",
     "unmute": "अनम्यूट करें",
     "voicemail": "Voicemail"
   },
@@ -1781,8 +1784,10 @@
     "calls": "Calls",
     "callsToday": "Calls Today",
     "cases": "मामले",
-    "clockIn": "Clock In",
-    "clockOut": "Clock Out",
+    "clockIn": "शिफ़्ट शुरू करें",
+    "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
+    "clockOut": "शिफ़्ट समाप्त करें",
+    "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "Connection",
     "contacts": "Contacts",
     "contactsSubtitle": "View caller interaction history",
@@ -1802,6 +1807,7 @@
     "noRecentNotes": "No Recent Notes",
     "noShift": "कोई शिफ्ट निर्धारित नहीं",
     "noUsersOnline": "कोई स्वयंसेवक ऑनलाइन नहीं",
+    "notClockedIn": "Not clocked in",
     "notes": "Notes",
     "offShift": "Off Shift",
     "offline": "ऑफ़लाइन",
@@ -1824,18 +1830,6 @@
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
     "title": "Delete role"
-  },
-  "demo": {
-    "admin": "Admin",
-    "banner": "Demo Mode",
-    "bannerText": "परीक्षण वातावरण — कॉलर की वास्तविक जानकारी दर्ज न करें। यहां का डेटा गोपनीय नहीं है और किसी भी समय हटाया जा सकता है।",
-    "bannerTextSchedule": "परीक्षण वातावरण — कॉलर की वास्तविक जानकारी दर्ज न करें। डेटा {{schedule}} रीसेट होता है और यह गोपनीय नहीं है।",
-    "dismiss": "Dismiss",
-    "getStarted": "Deploy your own",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo",
-    "volunteer": "Volunteer"
   },
   "deviceWipe": {
     "contactAdmin": "Contact your hub administrator for assistance.",
@@ -2073,6 +2067,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
     "biometricLockout": "बहुत अधिक असफल प्रयासों के बाद बायोमेट्रिक अनलॉक लॉक हो गया है। अपना पिन दर्ज करें।",
     "biometricNotEnrolled": "आपके डिवाइस की बायोमेट्रिक जानकारी बदल गई, इसलिए बायोमेट्रिक अनलॉक बंद कर दिया गया। अपना पिन दर्ज करें।",
@@ -2080,6 +2076,12 @@
     "httpNotAllowed": "असुरक्षित HTTP कनेक्शन की अनुमति नहीं है। HTTPS पता उपयोग करें।",
     "pinLockoutDuration": "बहुत अधिक असफल प्रयास। {{seconds}} सेकंड बाद पुनः प्रयास करें।",
     "pinWiped": "बहुत अधिक असफल पिन प्रयास। आपकी सुरक्षा के लिए, इस डिवाइस की सभी कुंजियाँ मिटा दी गई हैं।"
+  },
+  "errors": {
+    "deviceNotRegistered": "यह डिवाइस अभी आपके हब में पंजीकृत नहीं है। अपना हब संभालने वाले किसी व्यक्ति से इसे जोड़ने को कहें।",
+    "forbidden": "आपको यह करने की अनुमति नहीं है। अपना हब संभालने वाले किसी व्यक्ति से कहें।",
+    "notFound": "यह अब मौजूद नहीं है। हो सकता है इसे हटा दिया गया हो।",
+    "serverUnavailable": "अभी सर्वर तक नहीं पहुँचा जा सका। थोड़ी देर बाद पुनः प्रयास करें।"
   },
   "eventType": {
     "call": "कॉल",
@@ -2500,9 +2502,9 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "कोई हॉटलाइन पर कॉल कर रहा है",
+  "incomingCallAnswer": "उत्तर दें",
+  "incomingCallDecline": "अस्वीकार करें",
   "incomingCallMicrophoneRequired": "ऐप में कॉल का उत्तर देने के लिए माइक्रोफ़ोन की अनुमति आवश्यक है।",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -2517,15 +2519,16 @@
   "invitesEmpty": "No invites",
   "ivr": {
     "selfAnnouncement": "हिन्दी के लिए, [N] दबाएँ।",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "सक्षम की गई वे भाषाएँ जिन्हें इस hub में कोई नहीं बोलता: {{count}}",
+    "uncoveredHint": "इनमें से कोई भाषा चुनने वाला कॉलर शायद ऐसे किसी व्यक्ति तक न पहुँच पाए जो वह भाषा बोलता हो। सदस्यों की प्रोफ़ाइल में बोली जाने वाली भाषाएँ जोड़ें, या उस भाषा को बंद करें।",
+    "maxLanguagesReached": "कीपैड मेनू में अधिकतम {{max}} भाषाएँ आती हैं। अन्य भाषाओं के कॉलर फ़ोन नंबर के उपसर्ग से पहचाने जाते हैं।"
   },
   "ivrAudio": {
     "delete": "हटाएं",
@@ -2535,6 +2538,7 @@
       "greeting": "अभिवादन",
       "pleaseHold": "कृपया प्रतीक्षा करें",
       "rateLimited": "उच्च कॉल मात्रा",
+      "recordingNotice": "रिकॉर्डिंग सूचना",
       "voicemailPrompt": "वॉइसमेल संकेत",
       "waitMessage": "प्रतीक्षा संदेश"
     },
@@ -2555,8 +2559,8 @@
   },
   "lock": {
     "app": "Lock App",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "बहुत अधिक असफल प्रयासों के कारण कुंजी मिटा दी गई है",
+    "wrongPin": "गलत PIN"
   },
   "login": {
     "createIdentity": "Create New Identity",
@@ -2751,6 +2755,7 @@
     "pendingCountOne": "{{count}} लंबित",
     "pendingSyncMessage": "{{count}} ऑपरेशन सिंक होने की प्रतीक्षा में",
     "pendingSyncMessageOne": "{{count}} ऑपरेशन सिंक होने की प्रतीक्षा में",
+    "rejected": "सहेजा नहीं गया: सर्वर ने इसे अस्वीकार कर दिया",
     "relayReconnected": "पुनः कनेक्ट हो गया — छूटे हुए इवेंट प्राप्त कर रहा है",
     "relayReconnecting": "रियल-टाइम सर्वर से पुनः कनेक्ट हो रहा है...",
     "syncComplete": "सभी ऑपरेशन सफलतापूर्वक सिंक हो गए",
@@ -2895,6 +2900,7 @@
     "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "PIN मेल नहीं खाते। पुनः प्रयास करें।",
     "placeholder": "PIN or passphrase (8+ characters)",
+    "progress": "{{total}} में से {{count}}",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
@@ -2908,7 +2914,7 @@
     "description": "Enter your PIN to continue with this action.",
     "maxAttempts": "Maximum attempts exceeded. Key has been wiped.",
     "title": "Verify Your Identity",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN गलत है।"
   },
   "platformBans": {
     "bulkDialogTitle": "Bulk Import Bans",
@@ -3825,9 +3831,6 @@
     "complete": "Setup complete! Welcome to your hotline.",
     "completeFailed": "Failed to complete setup",
     "configured": "Configured",
-    "demoMode": "Populate with sample data",
-    "demoModeDescription": "Creates sample volunteer accounts, shifts, and ban entries for testing and demos. Demo account credentials will be shown on the login page.",
-    "demoSeedFailed": "Sample data partially created",
     "generateInvite": "Generate Invite",
     "generatedInvites": "Generated Invites",
     "goToDashboard": "Go to Dashboard",
@@ -4597,6 +4600,7 @@
     "role": "भूमिका",
     "roleAdmin": "एडमिन",
     "roleHubAdmin": "Hub Admin",
+    "roleHubDefault": "हब का डिफ़ॉल्ट",
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "स्वयंसेवक",
@@ -4689,6 +4693,7 @@
   },
   "voice": {
     "greeting": "{name} पर कॉल करने के लिए धन्यवाद।",
+    "recordingNotice": "कृपया ध्यान दें: इस कॉल को रिकॉर्ड किया जाएगा।",
     "rateLimited": "वर्तमान में कॉल की संख्या अधिक है। कृपया बाद में पुनः प्रयास करें।",
     "captchaPrompt": "कृपया निम्नलिखित अंक दर्ज करें:",
     "captchaTimeout": "हमें आपका इनपुट नहीं मिला। अलविदा।",

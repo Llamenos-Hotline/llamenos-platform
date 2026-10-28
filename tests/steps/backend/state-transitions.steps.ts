@@ -18,6 +18,8 @@ import {
   enableCaseManagementViaApi,
   generateTestKeypair,
   uniqueName,
+  encryptForTest,
+  ADMIN_SEED,
 } from '../../api-helpers'
 
 // ── Local State ──────────────────────────────────────────────────
@@ -56,15 +58,16 @@ Given('a reporter exists for conversion testing', async ({ request, world }) => 
 
 When('the reporter submits a report for conversion', async ({ request, world }) => {
   expect(getTransitionState(world).reporterDeviceKey).toBeDefined()
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('conversion-report-content', [ADMIN_SEED])
   const { data, status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
     '/reports',
     {
       title: uniqueName('Conversion Report'),
       category: 'general',
-      encryptedContent: 'conversion-report-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent: sealed.encryptedContent,
+      readerEnvelopes: sealed.envelopes,
     },
     getTransitionState(world).reporterDeviceKey!,
   )

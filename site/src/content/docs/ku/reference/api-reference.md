@@ -81,8 +81,6 @@ Mîhenga giştî ya hub, kanalên çalak, û nasnameya serverê vedigere.
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "..." }],
   "defaultHubId": "...",
@@ -1377,7 +1375,7 @@ POST /api/setup/complete
 **Laş:**
 
 ```json
-{ "demoMode": false }
+{}
 ```
 
 Her weha hub-ek xwerû çêdike heke tune be.

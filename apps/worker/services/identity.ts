@@ -7,6 +7,7 @@
  */
 import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
+import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
@@ -35,7 +36,8 @@ import type {
   DeviceRecord,
 } from '../types'
 import { ServiceError } from './settings'
-import type { DemoIdentity } from '../lib/demo-identities'
+import type { SampleIdentity } from '../lib/sample-identities'
+import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
@@ -48,6 +50,7 @@ import {
   type Role,
 } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, mergeHubRole, type HubRoleAssignment } from '../lib/hub-admin'
 
 const log = createLogger('services.identity')
 
@@ -59,6 +62,7 @@ import {
   SESSION_DURATION_MS,
   RENEWAL_THRESHOLD_MS,
   decideSessionRenewal,
+  type RenewalDecision,
 } from '../lib/session-renewal'
 import { decideDeviceRegistration } from '../lib/device-eviction'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
@@ -201,6 +205,13 @@ function hubMember(hubId: string): SQL {
   )`
 }
 
+/** `hubRoles` with the assignment in `hubId` replaced by `roleIds` (added if absent); every other hub is untouched */
+function replaceHubRole(hubRoles: readonly HubRoleAssignment[], hubId: string, roleIds: readonly string[]): HubRoleAssignment[] {
+  return hubRoles.some(hr => hr.hubId === hubId)
+    ? hubRoles.map(hr => (hr.hubId === hubId ? { ...hr, roleIds: [...roleIds] } : hr))
+    : [...hubRoles, { hubId, roleIds: [...roleIds] }]
+}
+
 /** A user as seen from inside one hub: their role assignments in other hubs are not its business */
 function scopeToHub(user: User, hubId: string | undefined): User {
   if (!hubId) return user
@@ -224,18 +235,6 @@ function sanitizeUserForHub(vol: User, hubId: string, allRoles: Role[]): ReturnT
   }
 }
 
-/**
- * SQL predicate: the user holds a role assignment in `hubId`.
- *
- * Compares `hubId` as a text parameter. Binding a JSON string and casting it
- * (`@> ${JSON.stringify(...)}::jsonb`) reaches Postgres double-encoded — a
- * jsonb *string*, not an array — so the containment never matched and every
- * hub's member list came back empty.
- */
-function isHubMember(hubId: string) {
-  return sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${users.hubRoles}) AS assignment WHERE assignment->>'hubId' = ${hubId})`
-}
-
 /** Map a DB invite row to InviteCode interface */
 function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
   return {
@@ -252,25 +251,24 @@ function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
   }
 }
 
+/** The verdict on a stored session: a renewal decision, or that its signing key was revoked. */
+type SessionVerdict = RenewalDecision | { action: 'revoked_key' }
+
 /**
- * Add a hub grant to a user's hubRoles, preserving every other hub.
- *
- * A second invite into a hub the user already belongs to unions the roles
- * rather than replacing them, so redeeming one can never take a role away.
+ * The single definition of whether a stored session may authenticate.
+ * `validateSession` acts on the verdict (renew, delete, reject); `countLiveSessions`
+ * only reads it, so the two can never disagree about what "live" means.
  */
-function mergeHubRole(
-  hubRoles: NonNullable<User['hubRoles']>,
-  hubId: string,
-  roleIds: string[],
-): NonNullable<User['hubRoles']> {
-  const merged = hubRoles.map(hr => ({ ...hr, roleIds: [...hr.roleIds] }))
-  const existing = merged.find(hr => hr.hubId === hubId)
-  if (existing) {
-    existing.roleIds = [...new Set([...existing.roleIds, ...roleIds])]
-  } else {
-    merged.push({ hubId, roleIds: [...roleIds] })
-  }
-  return merged
+function classifySession(
+  row: Pick<typeof sessions.$inferSelect, 'pubkey' | 'expiresAt' | 'createdAt'>,
+  now: Date,
+): SessionVerdict {
+  if (isRevokedSigningKey(row.pubkey)) return { action: 'revoked_key' }
+  return decideSessionRenewal(row.expiresAt, now, RENEWAL_THRESHOLD_MS, SESSION_DURATION_MS, row.createdAt)
+}
+
+function isSessionLive(verdict: SessionVerdict): boolean {
+  return verdict.action === 'valid' || verdict.action === 'renew'
 }
 
 /** Map a DB session row to ServerSession interface */
@@ -402,6 +400,22 @@ export class IdentityService {
   }
 
   /**
+   * Every admin X25519 recipient for an envelope set: `adminDecryptionPubkey`
+   * (`ADMIN_DECRYPTION_PUBKEY`, the escrow key) plus the registered device keys
+   * of every admin of `hubId` — the members holding an admin role in it, the
+   * same predicate the last-admin invariant counts with (`lib/hub-admin.ts`).
+   * Super-admins are never recipients (D1, #2190): they are zero-knowledge. A
+   * record with no hub, or a server-sealed one with no hub of its own, has no hub
+   * admins, so only the escrow key.
+   *
+   * The one definition of "a key an admin holds": server-sealed records are
+   * wrapped to it, and client-sealed ones are checked against it.
+   */
+  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined, hubId?: string): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await listAdminPubkeys(this.db, hubId))
+  }
+
+  /**
    * Pubkeys of all active super-admins — recipients of client-reported
    * security alerts (e.g. certificate pin mismatches).
    */
@@ -454,7 +468,7 @@ export class IdentityService {
 
   /**
    * Seed (or restore) the given admin as an active super-admin. Used by the
-   * dev and demo resets; server startup uses ensurePlatformAdmin, which does
+   * the dev-surface reset; server startup uses ensurePlatformAdmin, which does
    * not overwrite an existing row.
    */
   async ensureInit(adminPubkey?: string): Promise<void> {
@@ -473,10 +487,10 @@ export class IdentityService {
   }
 
   /**
-   * Register the demo accounts. The identities can only come from
-   * `demoIdentities(env)`, which refuses anywhere but a development server.
+   * Register the sample cast. The identities can only come from
+   * `sampleIdentities(env)`, which refuses anywhere the dev surface is closed.
    */
-  async ensureDemoAccounts(identities: readonly DemoIdentity[]): Promise<void> {
+  async ensureSampleAccounts(identities: readonly SampleIdentity[]): Promise<void> {
     for (const account of identities) {
       await this.db.insert(users).values({
         pubkey: account.pubkey,
@@ -603,8 +617,17 @@ export class IdentityService {
   }
 
   /**
-   * Create a new volunteer. With a hubId, they are created as a member of that
-   * hub, holding the same roles there.
+   * Create a new user.
+   *
+   * No role is implied: `roleIds` is what they hold, and none means none (the
+   * route resolves the hub template's default before calling).
+   *
+   * With a hubId they are created as a member of that hub, holding `roleIds`
+   * THERE and nothing globally: the account-wide `roles` column is authority
+   * over the whole instance on every unscoped route, so a hub grant written to
+   * it makes a hub admin an admin of every hub (#2153). Without a hubId the
+   * roles are global, which only an instance-level caller (a super-admin on the
+   * unscoped route) can ask for.
    */
   async createUser(data: {
     pubkey: string
@@ -619,7 +642,8 @@ export class IdentityService {
     hubId?: string
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
-    const roles = this.enforceAdminRoles(data.pubkey, data.roleIds ?? data.roles ?? ['role-volunteer'])
+    const grantedRoleIds = data.roleIds ?? data.roles ?? []
+    const roles = this.enforceAdminRoles(data.pubkey, data.hubId ? [] : grantedRoleIds)
     // onConflictDoNothing (not onConflictDoUpdate): a second create for a pubkey
     // that already belongs to a DIFFERENT person must never overwrite their row —
     // unlike bootstrapAdmin/ensureInit above, which intentionally re-assert one
@@ -632,7 +656,7 @@ export class IdentityService {
       displayName: data.name,
       phone: data.phone,
       roles,
-      ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: roles }] }),
+      ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: grantedRoleIds }] }),
       encryptedSecretKey: data.encryptedSecretKey,
       transcriptionEnabled: true,
       spokenLanguages: ['en'],
@@ -654,7 +678,11 @@ export class IdentityService {
 
   /**
    * Update a volunteer's fields. Non-admin callers are restricted to safe fields.
-   * With a hubId, the returned volunteer shows only their role assignment in it.
+   *
+   * With a hubId, the returned volunteer shows only their role assignment in
+   * it, and `roles` replaces their assignment IN THAT HUB — it never touches the
+   * account-wide `roles` column, which is authority over every hub (#2153).
+   * Without a hubId, `roles` is that global column.
    */
   async updateUser(
     pubkey: string,
@@ -669,11 +697,15 @@ export class IdentityService {
     // Build update payload — map User fields to DB columns
     const updates: Partial<typeof users.$inferInsert> = {}
 
+    let hubRoleIds: string[] | undefined
     const applyField = (key: string, value: unknown) => {
       switch (key) {
         case 'name': updates.displayName = value as string; break
         case 'phone': updates.phone = value as string; break
-        case 'roles': updates.roles = this.enforceAdminRoles(pubkey, value as string[]); break
+        case 'roles':
+          if (hubId) hubRoleIds = value as string[]
+          else updates.roles = this.enforceAdminRoles(pubkey, value as string[])
+          break
         case 'active': updates.active = value as boolean; break
         case 'encryptedSecretKey': updates.encryptedSecretKey = value as string; break
         case 'transcriptionEnabled': updates.transcriptionEnabled = value as boolean; break
@@ -703,11 +735,29 @@ export class IdentityService {
     }
     updates.updatedAt = new Date()
 
-    const [row] = await this.db
-      .update(users)
-      .set(updates)
-      .where(eq(users.pubkey, pubkey))
-      .returning()
+    // Rewriting hubRoles, or deactivating, can take away admin authority; those
+    // updates run under the admin invariant (#2126, #2190). Global `roles` carry
+    // none: only a role held in a hub makes a user an admin of it.
+    const touchesAdminAuthority = updates.hubRoles !== undefined || hubRoleIds !== undefined || updates.active === false
+    const [row] = touchesAdminAuthority
+      ? await this.db.transaction(async (tx) => {
+          const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
+          if (!current) throw new ServiceError(404, 'Not found')
+          if (hubId && hubRoleIds) updates.hubRoles = replaceHubRole(rowToUser(current).hubRoles ?? [], hubId, hubRoleIds)
+          await assertHubsKeepAnAdmin(
+            tx,
+            pubkey,
+            adminStateOf(current),
+            adminStateOf({
+              active: updates.active ?? current.active,
+              status: current.status,
+              hubRoles: updates.hubRoles ?? current.hubRoles,
+            }),
+            updates.active === false ? 'deactivate this user' : 'change this user\'s roles',
+          )
+          return tx.update(users).set(updates).where(eq(users.pubkey, pubkey)).returning()
+        })
+      : await this.db.update(users).set(updates).where(eq(users.pubkey, pubkey)).returning()
 
     if (!row) throw new ServiceError(404, 'Not found')
     return { volunteer: sanitizeUser(scopeToHub(rowToUser(row), hubId)) }
@@ -717,7 +767,12 @@ export class IdentityService {
    * Delete (hard-remove) a volunteer. Cascading FKs clean up sessions, creds, devices.
    */
   async deleteUser(pubkey: string): Promise<void> {
-    await this.db.delete(users).where(eq(users.pubkey, pubkey))
+    await this.db.transaction(async (tx) => {
+      const [current] = await tx.select().from(users).where(eq(users.pubkey, pubkey)).for('update').limit(1)
+      if (!current) return
+      await assertHubsKeepAnAdmin(tx, pubkey, adminStateOf(current), null, 'delete this user')
+      await tx.delete(users).where(eq(users.pubkey, pubkey))
+    })
   }
 
   // =========================================================================
@@ -738,13 +793,20 @@ export class IdentityService {
       if (rows.length === 0) throw new ServiceError(404, 'User not found')
 
       const vol = rowToUser(rows[0])
-      const hubRoles = vol.hubRoles ?? []
-      const idx = hubRoles.findIndex(hr => hr.hubId === data.hubId)
-      if (idx >= 0) {
-        hubRoles[idx].roleIds = data.roleIds
-      } else {
-        hubRoles.push({ hubId: data.hubId, roleIds: data.roleIds })
-      }
+      const priorRoles = vol.hubRoles ?? []
+      // Built without mutating `priorRoles`: the guard below compares against
+      // what is stored, and the row's array is the same object.
+      const hubRoles = replaceHubRole(priorRoles, data.hubId, data.roleIds)
+
+      // Replacing the roles is how an admin is demoted: refuse if this
+      // user is the hub's last admin (#2126).
+      await assertHubsKeepAnAdmin(
+        tx,
+        data.pubkey,
+        adminStateOf(rows[0]),
+        adminStateOf({ ...rows[0], hubRoles }),
+        'change this member\'s role',
+      )
 
       const [row] = await tx
         .update(users)
@@ -803,6 +865,16 @@ export class IdentityService {
       const vol = rowToUser(rows[0])
       const priorRoles = vol.hubRoles ?? []
       const hubRoles = priorRoles.filter(hr => hr.hubId !== data.hubId)
+
+      // Refuse before any write, including the revocation job below: a refused
+      // removal must leave no trace (#2126).
+      await assertHubsKeepAnAdmin(
+        tx,
+        data.pubkey,
+        adminStateOf(rows[0]),
+        adminStateOf({ ...rows[0], hubRoles }),
+        'remove this member from the hub',
+      )
 
       const [row] = await tx
         .update(users)
@@ -947,8 +1019,9 @@ export class IdentityService {
    * Invites created before they carried a hub (#1037) have `hub_id` null. On a
    * single-hub deployment — the shape R1 ships — there is exactly one answer,
    * the same one `GET /api/config` reports as `defaultHubId`. With zero or
-   * several active hubs there is no answer, and the redeemer is created
-   * without hub membership rather than guessed into the wrong hub.
+   * several active hubs there is no answer, and the redemption is refused
+   * rather than guessing the redeemer into the wrong hub — or, worse, into a
+   * global role (#2153).
    */
   private async resolveSoleActiveHubId(tx: Database): Promise<string | null> {
     const rows = await tx
@@ -996,6 +1069,13 @@ export class IdentityService {
       // role, and the member joins with none for the operator to assign.
       const grantedRoleIds = invite.roleIds
       const hubId = invite.hubId ?? await this.resolveSoleActiveHubId(tx)
+      // An invite admits someone to a hub. With no hub to name there is nothing
+      // it can grant, and falling back to a global role would hand the redeemer
+      // authority over every hub (#2153) — so refuse. Throwing rolls back the
+      // claim above, leaving the invite redeemable once a hub exists.
+      if (!hubId) {
+        throw new ServiceError(409, 'This invite is not tied to a hub and the server has no single hub to admit you to — ask for a new invite')
+      }
 
       // An already-registered pubkey is a person being invited into a SECOND
       // hub, not an error. Merge the grant into their existing hubRoles rather
@@ -1010,11 +1090,6 @@ export class IdentityService {
         .limit(1)
 
       if (existing.length > 0) {
-        // With no hub to merge into there is nothing an invite can add, so the
-        // duplicate key is a genuine conflict. Throwing rolls back the claim
-        // above, leaving the invite redeemable.
-        if (!hubId) throw new ServiceError(409, 'A user with this key already exists')
-
         const current = rowToUser(existing[0])
         const [row] = await tx
           .update(users)
@@ -1035,9 +1110,12 @@ export class IdentityService {
         pubkey: data.pubkey,
         displayName: invite.name,
         phone: invite.phone,
-        roles: this.enforceAdminRoles(data.pubkey, grantedRoleIds),
+        // Global roles stay empty: the grant is a membership of `hubId`, held in
+        // `hubRoles` only (#2153). The configured platform admin is the one
+        // exception — enforceAdminRoles keeps their super-admin role.
+        roles: this.enforceAdminRoles(data.pubkey, []),
         // Hub membership — what makes the redeemer visible to the operator.
-        ...(hubId && { hubRoles: [{ hubId, roleIds: grantedRoleIds }] }),
+        hubRoles: [{ hubId, roleIds: grantedRoleIds }],
         encryptedSecretKey: '',
         transcriptionEnabled: true,
         spokenLanguages: ['en'],
@@ -1118,18 +1196,12 @@ export class IdentityService {
     }
 
     // Checked before any renewal: a session under a revoked key is removed, never extended.
-    if (isRevokedSigningKey(row.pubkey)) {
+    const decision = classifySession(row, new Date())
+
+    if (decision.action === 'revoked_key') {
       await this.db.delete(sessions).where(eq(sessions.token, token))
       throw new ServiceError(401, 'Invalid session')
     }
-
-    const decision = decideSessionRenewal(
-      row.expiresAt,
-      new Date(),
-      RENEWAL_THRESHOLD_MS,
-      SESSION_DURATION_MS,
-      row.createdAt,
-    )
 
     if (decision.action === 'max_lifetime_exceeded') {
       await this.db.delete(sessions).where(eq(sessions.token, token))
@@ -1174,6 +1246,21 @@ export class IdentityService {
    */
   async revokeSession(token: string): Promise<void> {
     await this.db.delete(sessions).where(eq(sessions.token, token))
+  }
+
+  /**
+   * How many sessions this pubkey can still authenticate with.
+   *
+   * "Live" is exactly the verdict `validateSession` (and so the auth
+   * middleware) reaches — `classifySession` — evaluated without its side
+   * effects: no renewal, which would rotate another device's token out from
+   * under it, and no deletion. A row that is expired, past its absolute
+   * lifetime or under a revoked signing key does not count.
+   */
+  async countLiveSessions(pubkey: string): Promise<number> {
+    const rows = await this.db.select().from(sessions).where(eq(sessions.pubkey, pubkey))
+    const now = new Date()
+    return rows.filter(row => isSessionLive(classifySession(row, now))).length
   }
 
   /**
@@ -1445,6 +1532,7 @@ export class IdentityService {
           lastSeenAt: devices.lastSeenAt,
           pushToken: devices.pushToken,
           ed25519Pubkey: devices.ed25519Pubkey,
+          x25519Pubkey: devices.x25519Pubkey,
         })
         .from(devices)
         .where(eq(devices.pubkey, pubkey))
@@ -1455,6 +1543,15 @@ export class IdentityService {
       })
 
       if (decision.action === 'update_existing') {
+        // The key's age is the time its VALUE last changed. A client re-registers
+        // the same key on every launch; that must not make the key look new.
+        // `registered_at` is no substitute — it never moves when the key is
+        // overwritten (#2143). Stamped by the database clock, the one
+        // `messages.created_at` also uses, so the re-wrap gate compares two
+        // times from the same source and app/database skew cannot reorder them.
+        const current = allDevices.find((d) => d.id === decision.deviceId)
+        const x25519Changed =
+          data.x25519Pubkey !== undefined && data.x25519Pubkey !== current?.x25519Pubkey
         await tx
           .update(devices)
           .set({
@@ -1462,6 +1559,7 @@ export class IdentityService {
             ...(data.wakeKeyPublic !== undefined && { wakeKeyPublic: data.wakeKeyPublic }),
             ...(data.ed25519Pubkey !== undefined && { ed25519Pubkey: data.ed25519Pubkey }),
             ...(data.x25519Pubkey !== undefined && { x25519Pubkey: data.x25519Pubkey }),
+            ...(x25519Changed && { x25519SetAt: sql`clock_timestamp()` }),
             ...(data.deviceName !== undefined && { deviceName: data.deviceName }),
             ...(data.deviceModel !== undefined && { deviceModel: data.deviceModel }),
             ...(data.osVersion !== undefined && { osVersion: data.osVersion }),
@@ -1483,6 +1581,7 @@ export class IdentityService {
         wakeKeyPublic: data.wakeKeyPublic,
         ed25519Pubkey: data.ed25519Pubkey,
         x25519Pubkey: data.x25519Pubkey,
+        x25519SetAt: sql`clock_timestamp()`,
         deviceName: data.deviceName,
         deviceModel: data.deviceModel,
         osVersion: data.osVersion,
@@ -2402,20 +2501,23 @@ export class IdentityService {
   }
 
   // =========================================================================
-  // Test Reset (demo/development only)
+  // Test Reset (the secret-gated dev surface only)
   // =========================================================================
 
   /**
-   * Truncate all identity-related tables. Only allowed in demo/development mode.
+   * Truncate all identity-related tables.
+   *
+   * Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts), the same
+   * predicate the whole `/api/test-*` surface uses: `ENVIRONMENT=production` is
+   * refused before any secret is read, `staging` additionally needs
+   * `DEV_ROUTES_ENABLED=true` and a 32-character `DEV_RESET_SECRET`, and the
+   * REQUEST must present that secret. `presentedSecret` is the caller's
+   * `X-Test-Secret` header, which `routes/dev.ts` has already checked — this is
+   * the service layer's own copy of the check, not the gate.
    */
-  async reset(demoMode: boolean, environment: string, demoModeConfirm?: string): Promise<void> {
-    const isDev = environment === 'development'
-    if (!demoMode && !isDev) {
-      throw new ServiceError(403, 'Reset not allowed outside demo/development mode')
-    }
-    if (demoMode && !isDev && demoModeConfirm !== 'DESTROY_ALL_DATA') {
-      throw new ServiceError(403, 'DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
-    }
+  async reset(env: DevSurfacesEnv, presentedSecret?: string): Promise<void> {
+    const refusal = destructiveResetRefusal(env, presentedSecret)
+    if (refusal) throw new ServiceError(403, refusal)
 
     await this.db.transaction(async (tx) => {
       // Delete in FK-safe order (children first)

@@ -212,6 +212,17 @@ final class APIServiceResponseDecodingTests: XCTestCase {
         XCTAssertEqual(settings.voiceCAPTCHAEnabled, false)
     }
 
+    /// #2204: both shift screens read this one answer. The hand-written dashboard struct it
+    /// replaced knew only `onShift` (scheduled-now) and named three fields the server never sends.
+    func testMyStatusDecodesTheScheduleAndTheClockIn() throws {
+        let status = try decoder.decode(MyStatusResponse.self, from: try payload("myStatus"))
+        XCTAssertTrue(status.onShift, "scheduled now")
+        XCTAssertTrue(status.clockedIn, "an active_shifts row exists")
+        XCTAssertEqual(status.clockedInAt, "2026-10-20T09:30:00.000Z")
+        XCTAssertEqual(status.currentShift?.startTime, "00:00")
+        XCTAssertEqual(status.nextShift?.day, 2)
+    }
+
     func testTheStoredIvrLanguagesDecodeInOrder() throws {
         let languages = try decoder.decode(IvrLanguages.self, from: try payload("ivrLanguages"))
         XCTAssertEqual(

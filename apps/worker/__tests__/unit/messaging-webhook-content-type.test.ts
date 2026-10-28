@@ -36,7 +36,6 @@ function makeFormAdapter(): MessagingAdapter {
         channelType: 'sms',
         externalId: String(form.get('MessageSid')),
         senderIdentifier: String(form.get('From')),
-        senderIdentifierHash: 'hash-2068',
         body: String(form.get('Body')),
         timestamp: '2026-10-22T00:00:00.000Z',
       }
@@ -73,6 +72,7 @@ async function createApp(services: Services) {
       ADMIN_PUBKEY: 'a'.repeat(64),
       ADMIN_DECRYPTION_PUBKEY: 'c'.repeat(64),
       HMAC_SECRET: 'b'.repeat(64),
+      MESSAGING_HASH_KEY: 'f'.repeat(64),
     } as unknown as AppEnv['Bindings']
     await next()
   })

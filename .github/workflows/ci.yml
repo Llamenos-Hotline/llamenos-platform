@@ -135,9 +135,16 @@ jobs:
       # where they actually pass (three tests failed on contended GitHub
       # runners today and pass on the Mac).
       #
-      # Authors are not left blind: desktop-e2e.yml's `E2E (Linux)` still runs
-      # on `pull_request` (it is deliberately NOT gated here), unit suites still
-      # run everywhere, and `lint`/`build`/`typecheck` are untouched.
+      # `E2E (Linux)` used to be the one exception, left running on
+      # `pull_request` so authors were not blind. It was an exception by
+      # accident, not by design: it lived in its own workflow
+      # (`desktop-e2e.yml`) gated on `desktop` alone, and simply never got
+      # this term when the rest of the e2e tier did. Two gates in two files
+      # drift silently. That workflow is now this file's `desktop-e2e` job
+      # under this same gate — one workflow, one gate — so no e2e tier runs
+      # on `pull_request` any more, which is what the operator expects of a
+      # PR. Unit suites still run everywhere, and `lint`/`build`/`typecheck`
+      # are untouched.
       #
       # As of #1762 the mobile platforms are not blind on PR heads either:
       # `ios-compile-check` / `android-compile-check` gate on `pr_gate` (the
@@ -164,6 +171,13 @@ jobs:
       # report on merge_group" rail in tests/orchestrator/guards.test.ts
       # requires of everything in ci-status's `needs`.
       pr_gate: ${{ github.event_name == 'pull_request' }}
+      # True only for a knope release PR whose ENTIRE diff is version lines and
+      # the changelog (#2094) — see the "Detect changes" step. `pull_request`
+      # only: on `merge_group` it is always false, so the queue still runs the
+      # full matrix over the tree that lands. The platform flags below are
+      # already all false when this is true; it exists for the ungated
+      # guard jobs (lint, build, ...) that no platform flag reaches.
+      release_only: ${{ steps.filter.outputs.release_only }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -178,7 +192,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -190,6 +204,9 @@ jobs:
           # flowing into a git command rather than a SHA, so it is quoted as
           # data and never spliced into the script text.
           TARGET_REF: ${{ github.event.merge_group.base_ref }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
         run: |
           # Diff against the PR's actual base, not HEAD^ — HEAD^ only agrees
           # with the base by coincidence on `pull_request` (today's merge-ref
@@ -295,11 +312,35 @@ jobs:
           echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
+          # A knope release PR is rewritten on every merge to main (16 times in
+          # one day, #2094) and its diff is version lines plus a changelog, so
+          # the platform path map would switch on every suite for it. If, and
+          # only if, the diff really is that — is-release-bump.sh checks the
+          # CONTENT, never the branch name — classify it as an empty change
+          # set: every platform flag false, nothing scheduled. Both the head
+          # branch and the head repo are checked first because a fork can name
+          # its branch `release`. `merge_group` never takes this path: the
+          # queue re-runs everything over the tree that lands.
+          RELEASE_ONLY=false
+          if [[ "${{ github.event_name }}" == "pull_request" \
+                && "$PR_HEAD_REF" == "release" \
+                && "$PR_HEAD_REPO" == "$REPO" ]] \
+             && bash .github/scripts/is-release-bump.sh "$BASE" "$HEAD"; then
+            RELEASE_ONLY=true
+            CHANGED=""
+          fi
+          echo "release_only=$RELEASE_ONLY" >> "$GITHUB_OUTPUT"
+
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
 
   # ─── Guard: No Generated Files In Git ────────────────────
   no-generated-files-in-git:
     name: No generated files in git
+    needs: changes
+    # Skipped for a release-bump-only PR (#2094) — see `changes.outputs.release_only`.
+    # `!cancelled()` rather than a bare expression so a FAILED `changes` job
+    # still lets this guard run instead of silently skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -307,7 +348,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check for tracked generated files
         run: |
@@ -350,6 +391,9 @@ jobs:
   # ─── Guard: Updater Pubkey Must Be Set ───────────────────
   verify-updater-config:
     name: Updater pubkey is set
+    needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -357,7 +401,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Verify updater pubkey
         run: |
@@ -404,6 +448,8 @@ jobs:
   # ─── Build & Validate ──────────────────────────────────────
   build:
     needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -411,10 +457,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -513,7 +559,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
@@ -549,10 +595,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -597,10 +643,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -732,6 +778,197 @@ jobs:
             test-results/
           retention-days: 7
 
+  # ─── Desktop E2E (Playwright chromium, non-BDD specs) ──────
+  #
+  # Moved here verbatim from the standalone `desktop-e2e.yml` workflow, which
+  # this replaces (#664 tracked "folding it into ci.yml's ci-status aggregate"
+  # separately; this is that fold). Two workflows ran desktop E2E under two
+  # different gates: this tier gated on `desktop` alone and so ran on every
+  # desktop-touching PR, while `e2e` above gained the `revalidate` term and
+  # became queue-only. The drift was invisible because the two gates lived in
+  # two files. One workflow, one gate: this job carries the SAME `if:` as
+  # `e2e` above, and guards.test.ts pins the two to be character-identical.
+  #
+  # It is a distinct tier, not a duplicate of `e2e`: `e2e` runs the
+  # `bootstrap` + `bdd` Playwright projects sharded ×4 against a full sidecar
+  # stack, this runs the `bootstrap` + `chromium` projects (the non-BDD specs
+  # — crypto interop, WASM, the Tauri lockfile rail) in one job. Neither
+  # covers the other's specs.
+  #
+  # The matrix is preserved from desktop-e2e.yml, including `os_label`, so the
+  # check keeps reporting as `E2E (Linux)`. It has one entry today: Windows
+  # was removed earlier because Docker Compose is not reliably available on
+  # Windows GHA runners, and the backend here is Compose. The matrix shape
+  # stays so re-adding an OS is an added row, not a rewritten job.
+  #
+  # It consumes `build`'s `app-build` artifact instead of building its own.
+  # desktop-e2e.yml had a second `build` job that ran codegen, i18n codegen,
+  # typecheck and `PLAYWRIGHT_TEST=true bun run build` and uploaded the same
+  # `app-build` name from the same `dist/` path — a strict subset of what
+  # `build` above already does and uploads. That duplicate job is gone; the
+  # artifact contract is unchanged.
+  desktop-e2e:
+    needs: [changes, build]
+    # Character-identical to `e2e` above, and pinned so by guards.test.ts:
+    # both drive the same app against a backend built from the PR
+    # (`bootstrap-backend` runs `up --build`), so both are relevant if either
+    # side changed (#664), and both are heavy enough to belong behind
+    # `revalidate` (#1426).
+    if: needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            os_label: Linux
+
+    runs-on: ${{ matrix.platform }}
+    name: E2E (${{ matrix.os_label }})
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-build
+          path: dist
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Playwright deps (cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+
+      # ── Start backend services ──────────────────────────────────
+      - name: Bootstrap backend
+        uses: ./.github/actions/bootstrap-backend
+        with:
+          admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
+          admin_decryption_pubkey: ${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
+
+      # ── WASM build (required for crypto-interop-wasm.spec.ts) ──
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      # Keyed on BOTH lockfiles (not just packages/crypto's) so a change to
+      # either invalidates the cache. This cache backs both the crypto interop
+      # step below AND tests/tauri-lockfile-consistency.spec.ts's
+      # `cargo metadata --locked --manifest-path apps/desktop/Cargo.toml` call
+      # — see the "Warm cargo cache for apps/desktop" step for why that
+      # matters (#927: a cold `~/.cargo/registry`/`~/.cargo/git` made that
+      # check's resolve slow enough to look like a hang). rust-cache is the
+      # sole owner of `~/.cargo/registry`, `~/.cargo/git` and each listed
+      # workspace's `target` dir — a second hand-rolled `actions/cache` step
+      # targeting the same paths raced this one's save/restore lifecycle and
+      # produced a cache that matched neither key (#901).
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            packages/crypto
+            apps/desktop
+
+      - name: Generate interop test vectors
+        run: cargo test --manifest-path packages/crypto/Cargo.toml --test interop
+
+      # tests/tauri-lockfile-consistency.spec.ts (run later via Playwright)
+      # calls `cargo metadata --locked --manifest-path apps/desktop/Cargo.toml`
+      # to verify apps/desktop/Cargo.lock is consistent. A cold registry index
+      # plus a fresh clone of the `hpke-rs` git patch dependency made that call
+      # slow enough on a cache-miss runner to look indistinguishable from a
+      # hang (#927). Warm both here so the check's own cargo call is normally
+      # a cache hit. `--locked` means this can only read the committed
+      # lockfile, never rewrite it; `|| true` makes this step best-effort so a
+      # genuine drift or network failure here doesn't short-circuit the actual
+      # rail test's more precise classification (timeout vs environment vs
+      # real drift) downstream.
+      - name: Warm cargo cache for apps/desktop
+        run: cargo fetch --locked --manifest-path apps/desktop/Cargo.toml || true
+
+      # ── Generate BDD test files from Gherkin features ───────────
+      - name: Generate BDD test files
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
+      # ── Start preview server and run Playwright ─────────────────
+      - name: Start Vite preview server
+        run: |
+          bunx vite preview --port 8788 --strictPort &
+          PREVIEW_PID=$!
+          echo "preview_pid=$PREVIEW_PID" >> "$GITHUB_ENV"
+          for _i in $(seq 1 30); do
+            if bun -e "try{await fetch('http://localhost:8788');process.exit(0)}catch{process.exit(1)}" 2>/dev/null; then
+              echo "Preview server ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run desktop E2E tests
+        # The BDD projects run in the `e2e` job above. This tier only runs the
+        # chromium (non-BDD spec) tests, to avoid duplication.
+        run: bunx playwright test --project=bootstrap --project=chromium
+        env:
+          CI: "true"
+          PLAYWRIGHT_TEST: "true"
+          PLAYWRIGHT_BASE_URL: "http://localhost:8788"
+          E2E_TEST_SECRET: "test-reset-secret"
+          DEV_RESET_SECRET: "test-reset-secret"
+          TEST_HUB_URL: "http://localhost:3000"
+
+      - name: Stop Vite preview server
+        if: always()
+        run: kill "$preview_pid" 2>/dev/null || true
+
+      - name: Tear down Docker Compose
+        if: always()
+        run: |
+          docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            down -v || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-e2e-results
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   # ─── Backend BDD Tests ─────────────────────────────────────
   backend-bdd:
     needs: [changes]
@@ -743,10 +980,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -822,6 +1059,188 @@ jobs:
             test-results/
           retention-days: 7
 
+  # ─── Backend BDD Opt-in Project (signed-webhooks) ──────────
+  # #1210: the @signed-webhooks Playwright project needs server-wide config
+  # the `backend-bdd` job's server above does not carry, so it had never run
+  # in CI: real provider-signed Twilio webhooks, regression coverage for a bug
+  # where a genuine signed webhook was swallowed as a replay before its
+  # handler ran. A signature can only be computed with the provider's auth
+  # token, so the server needs the env-var Twilio provider
+  # (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER) and the test
+  # process needs the same (fake, CI-only) values to sign like Twilio does.
+  #
+  # (The second opt-in project this job originally carried,
+  # backend-bdd-demo-mode, no longer exists: #1604 regated the
+  # MockTelephonyAdapter on devSurfacesEnabled — which every BDD server
+  # already satisfies — the suite was renamed backend-bdd-simulated-telephony,
+  # and scripts/test-backend-bdd.sh runs it every time. Only signed-webhooks
+  # remains opt-in; the job keeps its generic name so a future opt-in project
+  # joins here rather than paying for another full Compose bring-up — this
+  # fleet's self-hosted runners are a known contention point.)
+  #
+  # This intentionally does NOT go through `bun run test:backend:bdd`'s
+  # BDD_SIGNED_WEBHOOKS flag (that would also re-run the entire default
+  # `backend-bdd` + `backend-bdd-global-setting` suites a second time). It
+  # mirrors the `e2e` job above instead: bring up the backend, bddgen, then
+  # invoke Playwright directly with `--no-deps` and let
+  # tests/global-setup.ts (which always runs, regardless of --no-deps) do
+  # backend-readiness wait + admin bootstrap, exactly as it does for the
+  # `e2e` job's `--project=bootstrap --project=bdd` run above.
+  #
+  # This job creates its own `.env` and brings Compose up directly rather than
+  # calling `./.github/actions/bootstrap-backend` — that shared action has no
+  # input for the extra TWILIO_* values this job needs, and it is out of this
+  # PR's scope to extend (not under .github/workflows/).
+  backend-bdd-opt-in:
+    needs: [changes]
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Playwright deps (cached browsers)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+
+      # Inlined rather than calling ./.github/actions/bootstrap-backend — see the
+      # job header comment above. This is the same core-services bring-up that
+      # action performs (.env creation + `up --build --wait app`), plus the
+      # TWILIO_* values neither the action nor the regular backend-bdd
+      # job's .env carries. No sidecars: @signed-webhooks is not @signal/@telephony.
+      - name: Create .env for Docker Compose
+        run: |
+          printf '%s\n' \
+            "ADMIN_PUBKEY=${{ env.TEST_ADMIN_PUBKEY }}" \
+            "ADMIN_DECRYPTION_PUBKEY=${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}" \
+            "DOMAIN=localhost" \
+            "PG_POOL_SIZE=40" \
+            "PG_PASSWORD=ci-test-password" \
+            "HMAC_SECRET=$(openssl rand -hex 32)" \
+            "SERVER_KEK=$(openssl rand -hex 32)" \
+            "STORAGE_ACCESS_KEY=testaccess" \
+            "STORAGE_SECRET_KEY=testsecret123456" \
+            "HOTLINE_NAME=Llámenos" \
+            "WEBHOOK_BASE_URL=http://localhost:3000" \
+            "BRIDGE_SECRET=ci-test-bridge-secret" \
+            "ARI_PASSWORD=changeme" \
+            "SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001" \
+            "NOTIFIER_API_KEY=ci-test-notifier-key" \
+            "SIGNAL_REGISTERED_NUMBER=+15550000000" \
+            "PBX_TYPE=asterisk" \
+            "GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)" \
+            "TOKEN_MAX_AGE_MS=3600000" \
+            "TURN_SECRET=$(openssl rand -hex 32)" \
+            "TWILIO_ACCOUNT_SID=ACtest0000000000000000000000000000" \
+            "TWILIO_AUTH_TOKEN=ci-test-twilio-auth-token-not-a-real-secret" \
+            "TWILIO_PHONE_NUMBER=+15559876543" \
+            > .env
+          # The ban-list and messaging-thread hash keys are secret FILES the app mounts, never .env entries.
+          source scripts/lib/server-hash-keys.sh
+          ensure_hash_key_files deploy/docker/secrets 0444
+
+      - name: Build and start Docker Compose (core services)
+        run: |
+          timeout 600 docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            up -d --build --wait app
+
+      - name: Wait for backend health
+        run: |
+          echo "Waiting for backend to be ready..."
+          for i in $(seq 1 60); do
+            HTTP_CODE=$(curl -s -o /tmp/health.json -w "%{http_code}" http://localhost:3000/api/health/ready 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Backend is fully ready"
+              break
+            elif [ "$HTTP_CODE" = "503" ]; then
+              PG_STATUS=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('checks',{}).get('postgres',{}).get('status','unknown'))" < /tmp/health.json 2>/dev/null || echo "unknown")
+              if [ "$PG_STATUS" = "ok" ]; then
+                echo "Backend degraded but postgres is ok — proceeding (no sidecars running, expected)"
+                break
+              fi
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::Backend did not become healthy after 120s"
+              cat /tmp/health.json 2>/dev/null || true
+              docker compose --env-file .env \
+                -f deploy/docker/docker-compose.yml \
+                -f deploy/docker/docker-compose.test.yml \
+                logs --tail=50 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Generate BDD test files
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
+      - name: Run opt-in backend BDD projects
+        run: bunx playwright test --project=backend-bdd-signed-webhooks --no-deps
+        timeout-minutes: 12
+        env:
+          TEST_HUB_URL: http://localhost:3000
+          TEST_RELAY_URL: ws://127.0.0.1:3000/ws
+          DEV_RESET_SECRET: test-reset-secret
+          E2E_TEST_SECRET: test-reset-secret
+          DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+          SERVER_SECRET: "0000000000000000000000000000000000000000000000000000000000000001"
+          # Must match the values the server was bootstrapped with above — the
+          # @signed-webhooks steps sign requests with this token themselves,
+          # the same way Twilio would with its real one.
+          TWILIO_ACCOUNT_SID: ACtest0000000000000000000000000000
+          TWILIO_AUTH_TOKEN: ci-test-twilio-auth-token-not-a-real-secret
+          TWILIO_PHONE_NUMBER: "+15559876543"
+
+      - name: Tear down Docker Compose
+        if: always()
+        run: |
+          docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            down -v || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-bdd-opt-in-results
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   # ─── Backend Unit Tests ────────────────────────────────────
   backend-unit:
     needs: changes
@@ -837,10 +1256,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -937,10 +1356,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -1091,10 +1510,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -1152,7 +1571,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The ubuntu-24.04 hosted image ships a PEP 668 "externally managed"
       # system Python, which rejects `pip install --user`. setup-python
@@ -1378,7 +1797,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -1405,10 +1824,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -1447,10 +1866,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -1514,10 +1933,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -1556,7 +1975,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Enable KVM hardware acceleration
         run: |
@@ -1565,7 +1984,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -1889,7 +2308,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Disk headroom, before anything expensive and before this job creates a
       # simulator or a build product.
@@ -1933,11 +2352,15 @@ jobs:
           echo "BUN_TMPDIR=$RUNNER_TEMP/bun-tmp" >> "$GITHUB_ENV"
 
       # TMPDIR pinned on every bun/node step for node's and bun's JS temp
-      # files; it is NOT what `bun install` uses (see the step above).
+      # files; it is NOT what `bun install` uses (see the step above). HOME is
+      # pinned on this step only, so setup-bun's cache restore cannot rewrite
+      # the ~/.bun/bin/bun that the other runner on this Mac is executing (a
+      # SIGKILLed `bun install` — see ios-e2e.yml's `build` copy of this step).
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         env:
           TMPDIR: ${{ runner.temp }}
+          HOME: ${{ runner.temp }}/bun-home
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -2103,10 +2526,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun (for codegen)
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -2221,7 +2644,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check for raw crypto label string literals
         run: |
@@ -2318,6 +2741,9 @@ jobs:
   # going live — but any *new* lint error introduced in a touched file fails
   # the build immediately.
   lint:
+    needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -2325,12 +2751,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -2399,8 +2825,14 @@ jobs:
 
       - name: Run ESLint on changed files
         if: steps.changed.outputs.files != ''
+        env:
+          # Via env, never `${{ }}` inside the script: the shell would expand
+          # the `$pubkey` in `users_.$pubkey.tsx` (TanStack route files carry a
+          # literal `$`) to nothing, and ESLint then fails on a path that does
+          # not exist (#2266). A filename is data, not shell source.
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
         run: |
-          echo "${{ steps.changed.outputs.files }}" | xargs -r bunx eslint
+          printf '%s\n' "$CHANGED_FILES" | xargs -r -d '\n' bunx eslint
 
   # ─── Migration Drift Check ────────────────────────────────────
   migration-drift:
@@ -2413,10 +2845,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: "1.3.5"
 
@@ -2427,12 +2859,15 @@ jobs:
         run: bun run migration:check --ci
 
   docs-guard:
+    needs: changes
+    # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
+    if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check label counts
         run: bash scripts/check-label-count.sh
@@ -2445,7 +2880,7 @@ jobs:
 
       # No `bun install`: the rail uses only Bun's built-in YAML parser.
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -2495,7 +2930,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Every value a production bring-up requires. Generated, never real: this
       # stack is destroyed at the end of the job and never reachable off-runner.
@@ -2514,6 +2949,7 @@ jobs:
           ADMIN_DECRYPTION_PUBKEY=${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
           SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
           HMAC_SECRET=$(openssl rand -hex 32)
+          SERVER_KEK=$(openssl rand -hex 32)
           PG_PASSWORD=$(openssl rand -hex 16)
           STORAGE_ACCESS_KEY=smoketestaccess
           STORAGE_SECRET_KEY=$(openssl rand -hex 16)
@@ -2525,9 +2961,13 @@ jobs:
           TURN_SECRET=$(openssl rand -hex 32)
           GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)
           NOTIFIER_API_KEY=$(openssl rand -hex 16)
+          NOTIFIER_TOKEN_SECRET=$(openssl rand -hex 32)
           TOKEN_MAX_AGE_MS=3600000
           PG_POOL_SIZE=10
           ENVEOF
+          # The hash keys are secret files, not .env values (see first-run.sh).
+          source scripts/lib/server-hash-keys.sh
+          ensure_hash_key_files deploy/docker/secrets 0444
           echo "wrote .env with $(grep -c . .env) values"
 
       # No optional profiles. That is the point: the default deployment, which
@@ -2730,7 +3170,7 @@ jobs:
   # own `if:` names `event_name` without `merge_group`), and that rail is
   # load-bearing. This job's `if:` names no event, so the rail passes.
   platform-suite-coverage:
-    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd, crypto-tests]
+    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, desktop-e2e, backend-bdd, crypto-tests]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2753,6 +3193,7 @@ jobs:
           R_IOS_E2E: ${{ needs.ios-e2e.result }}
           R_ANDROID_E2E: ${{ needs.android-e2e.result }}
           R_E2E: ${{ needs.e2e.result }}
+          R_DESKTOP_E2E: ${{ needs.desktop-e2e.result }}
           R_BACKEND_BDD: ${{ needs.backend-bdd.result }}
           R_CRYPTO: ${{ needs.crypto-tests.result }}
         run: |
@@ -2777,6 +3218,7 @@ jobs:
             fi
             if [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; then
               if [ "$R_E2E" = "skipped" ]; then deferred="$deferred e2e"; fi
+              if [ "$R_DESKTOP_E2E" = "skipped" ]; then deferred="$deferred desktop-e2e"; fi
             fi
             if [ "$BACKEND" = "true" ]; then
               if [ "$R_BACKEND_BDD" = "skipped" ]; then deferred="$deferred backend-bdd"; fi
@@ -2791,6 +3233,7 @@ jobs:
             if [ "$ANDROID" = "true" ] && [ "$R_ANDROID_BUILD" = "skipped" ]; then gap="$gap android-build-test"; fi
             if [ "$ANDROID" = "true" ] && [ "$R_ANDROID_E2E" = "skipped" ]; then gap="$gap android-e2e"; fi
             if { [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; } && [ "$R_E2E" = "skipped" ]; then gap="$gap e2e"; fi
+            if { [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; } && [ "$R_DESKTOP_E2E" = "skipped" ]; then gap="$gap desktop-e2e"; fi
             if [ "$BACKEND" = "true" ] && [ "$R_BACKEND_BDD" = "skipped" ]; then gap="$gap backend-bdd"; fi
           fi
 
@@ -2820,7 +3263,7 @@ jobs:
           echo "coverage audit: event=$EVENT_NAME gap='${gap:-none}' deferred='${deferred:-none}'"
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, backend-integration, desktop-unit, android-build-test, android-compile-check, android-e2e, e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard, production-smoke, platform-suite-coverage]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-bdd-opt-in, backend-unit, backend-integration-bun, backend-integration, desktop-unit, android-build-test, android-compile-check, android-e2e, e2e, desktop-e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard, production-smoke, platform-suite-coverage]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2843,7 +3286,9 @@ jobs:
           check_job "lint" "${{ needs.lint.result }}"
           check_job "crypto-tests" "${{ needs.crypto-tests.result }}"
           check_job "e2e" "${{ needs.e2e.result }}"
+          check_job "desktop-e2e" "${{ needs.desktop-e2e.result }}"
           check_job "backend-bdd" "${{ needs.backend-bdd.result }}"
+          check_job "backend-bdd-opt-in" "${{ needs.backend-bdd-opt-in.result }}"
           check_job "backend-unit" "${{ needs.backend-unit.result }}"
           check_job "backend-integration-bun" "${{ needs.backend-integration-bun.result }}"
           check_job "backend-integration" "${{ needs.backend-integration.result }}"

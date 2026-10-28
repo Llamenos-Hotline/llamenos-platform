@@ -15,7 +15,6 @@ describe('ConversationsService', () => {
       hubId: 'hub-1',
       channelType: 'sms',
       contactIdentifierHash: 'hash1',
-      contactLast4: '4567',
       assignedTo: null,
       status: 'waiting',
       metadata: null,

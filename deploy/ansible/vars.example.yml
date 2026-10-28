@@ -109,8 +109,9 @@ llamenos_signal_enabled: false
 # The sip-bridge sidecar's image. The bridge is obtained by WHICHEVER ROUTE
 # this deployment uses for the app image — never a different one (issue #1697):
 #   * Docker Hub release path: leave empty. Derived from llamenos_app_image by
-#     putting `-sip-bridge` on the REPOSITORY, which is how
-#     .github/workflows/docker.yml publishes it.
+#     putting `-sip-bridge` on the REPOSITORY, which is how the image is named
+#     when it is published (images are published from a local machine, never
+#     by CI).
 #   * docker save | docker load: build and side-load it next to the app image —
 #         docker build -t llamenos-sip-bridge:<version> ./sip-bridge
 #         docker save llamenos-sip-bridge:<version> | ssh <host> sudo docker load
@@ -153,8 +154,8 @@ hotline_name: Hotline
 
 # Application environment. Consumed as ENVIRONMENT by the worker container
 # (apps/worker/lib/config.ts requires it non-empty at startup) and by
-# playbooks/tasks/guard-demo-mode.yml to refuse demo_mode/dev_routes_enabled/
-# dev_reset_secret on anything but a demo/staging/development host.
+# playbooks/tasks/guard-dev-routes.yml to refuse dev_routes_enabled/
+# dev_reset_secret on anything but a staging/development host.
 #
 # NOTE: this used to be a var literally named `environment`, which Ansible
 # treats as a reserved name (it collides with the per-task `environment:`
@@ -170,7 +171,7 @@ app_environment: production
 # REQUIRED by apps/worker/lib/config.ts whenever app_environment is
 # "production" — without it, webhook signature validation falls back to the
 # spoofable Host header and the app refuses to start. Optional (with a
-# startup warning) for demo/staging/development. See
+# startup warning) for staging/development. See
 # playbooks/preflight.yml's webhook_base_url assert.
 webhook_base_url: ""
 
@@ -190,9 +191,32 @@ admin_pubkey: ""
 
 admin_decryption_pubkey: ""
 
-# HMAC secret for hashing phone numbers and IPs
-# Generate with: openssl rand -hex 32
+# HMAC secret for hashing phone numbers and IPs. A hashing key ONLY: it
+# encrypts nothing, so rotating it never makes stored data unreadable (it only
+# stops phone/IP hashes matching). Generate with: openssl rand -hex 32
 hmac_secret: ""
+
+# Key-encryption key for data the server must read back: telephony/messaging
+# provider credentials, conversation reply addresses, queued Signal sends and
+# storage credentials. Its own secret -- never reuse hmac_secret or
+# server_secret (preflight refuses a repeated value). Losing or rotating it
+# without re-encrypting makes that data unreadable: see
+# docs/security/KEK_ROTATION.md. Generate with: openssl rand -hex 32
+server_kek: ""
+
+# Keys the ban-list hash. Written to a SECRET FILE outside the services
+# directory (never into .env), so no config backup carries it. Because it is
+# not in the backups, a full rebuild without your own offline copy loses every
+# ban: keep this vars.yml (vault-encrypted) backed up where it lives.
+# Generate with: openssl rand -hex 32
+ban_hash_key: ""
+
+# Keys the per-hub messaging-thread hash (which conversation a returning contact
+# belongs to). Same delivery and same warning as ban_hash_key: a SECRET FILE
+# outside the services directory, in no backup; losing it splits every returning
+# contact into a new thread. Its own value (preflight refuses a repeat).
+# Generate with: openssl rand -hex 32
+messaging_hash_key: ""
 
 # ─── PostgreSQL ──────────────────────────────────────────────────
 # Database password (generate with: openssl rand -hex 24). Any value works --
@@ -307,6 +331,22 @@ turn_relay_max_port: 49200
 # The realm coturn puts in its challenges — logged, and it belongs to this
 # deployment.
 turn_realm: "{{ domain }}"
+# The docker network the PBX, the app and the SIP bridge share, and the address
+# Asterisk is pinned to on it. Declared, not left to the daemon, because a
+# relayed call's media goes volunteer -> CoTURN -> Asterisk's address on this
+# network, and CoTURN denies every private range except exactly that one
+# address (#2136). Inside the daemon's 172.30.0.0/16 pool (roles/docker), at its
+# far end so it does not collide with the networks the daemon hands out in order.
+# Containers that are NOT pinned are handed addresses only from the upper half
+# (llamenos_internal_ip_range), so none of them can ever land on Asterisk's
+# address and inherit the relay's allowance. Change them TOGETHER: the address
+# must sit inside the subnet and OUTSIDE the range. An existing llamenos-internal
+# keeps its old addressing until recreated — roles/docker says how.
+llamenos_internal_subnet: "172.30.255.0/24"
+llamenos_internal_ip_range: "172.30.255.128/25"
+asterisk_internal_ip: "172.30.255.10"
+# The one address a TURN relay may send to. Leave it at Asterisk's.
+turn_media_peer_ip: "{{ asterisk_internal_ip }}"
 
 # Master secret every volunteer's PJSIP endpoint password is derived from.
 # REQUIRED when llamenos_asterisk_enabled is true. Rotating it rotates every
@@ -328,9 +368,9 @@ apns_team_id: ""
 
 # ntfy/UnifiedPush (Android push). Set llamenos_ntfy_enabled: true to stand
 # up a self-hosted ntfy broker (roles/llamenos-ntfy) via this playbook.
-# Off by default here, but a staging/demo backend MUST enable it — without it
+# Off by default here, but a staging backend MUST enable it — without it
 # Android devices can never be rung for a call (no FCM by design). See
-# deploy/PUSH_NOTIFICATIONS.md; playbooks/deploy-demo.yml enforces it.
+# deploy/PUSH_NOTIFICATIONS.md.
 llamenos_ntfy_enabled: false
 ntfy_url: "http://ntfy:80" # Compose service name:port, not a public URL
 ntfy_domain: "push.hotline.example.org" # Public hostname — required when enabled
@@ -343,25 +383,6 @@ ntfy_auth_token: ""
 # GlitchTip/Sentry-compatible DSN for client-side crash reporting.
 # Leave empty to disable — crash reporting is skipped gracefully.
 glitchtip_dsn: ""
-
-# ─── Demo / Staging Mode ──────────────────────────────────────────
-# See docs/deploy/staging.md. NEVER set demo_mode: true when
-# app_environment is "production" — both the app and an Ansible preflight
-# assert (playbooks/tasks/guard-demo-mode.yml) refuse to proceed if you do.
-# When demo_mode is true, demo_mode_confirm MUST be exactly the literal
-# string "DESTROY_ALL_DATA" — this two-factor confirmation is required by
-# apps/worker/lib/config.ts before it will run scheduled data resets.
-demo_mode: false
-demo_mode_confirm: ""
-
-# Optional human-readable label describing how often YOU manually re-run
-# playbooks/reset-demo.yml, e.g. "every 4 hours". Purely cosmetic — there is
-# no actual cron/scheduler for demo resets, reset-demo.yml is manual
-# workflow_dispatch only (see docs/deploy/staging.md). Shown verbatim in the
-# demo banner (apps/worker/routes/config.ts -> demoResetSchedule ->
-# src/client/components/demo-banner.tsx). Leave empty to omit the schedule
-# clause from the banner text. Only takes effect when demo_mode is true.
-demo_reset_cron: ""
 
 # ─── Developer/Test Routes (the end-to-end suite's staging knobs) ─
 # These two open the `/api/test-*` HTTP surface, which can WIPE THE DATABASE

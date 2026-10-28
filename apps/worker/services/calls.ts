@@ -12,7 +12,11 @@
 import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
+import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
+import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
+
+const logger = createLogger('services.calls')
 
 /** Ringing calls older than 3 minutes are stale */
 const RINGING_TTL_MS = 3 * 60 * 1000
@@ -23,8 +27,79 @@ const IN_PROGRESS_TTL_MS = 2 * 60 * 60 * 1000
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
 
+export interface CallsServiceDeps {
+  /**
+   * Resolve every admin X25519 recipient for §2.5 call-metadata envelopes
+   * (ADMIN_DECRYPTION_PUBKEY plus each super-admin's device keys). Supplied by
+   * createServices; when absent the service cannot seal and stores records
+   * without envelopes (unit-test construction only).
+   */
+  getAdminRecipients?: () => Promise<string[]>
+  /**
+   * SERVER_KEK, to open the sealed caller number an active call carries. Without it
+   * (unit-test construction only) a finished call's record carries no number.
+   */
+  serverKek?: string
+}
+
 export class CallsService {
-  constructor(protected db: Database) {}
+  constructor(
+    protected db: Database,
+    private readonly deps?: CallsServiceDeps,
+  ) {}
+
+  /**
+   * Resolve the §2.5 envelope recipients once per write batch, or null when
+   * the service was constructed without the sealing dep (unit-test only).
+   */
+  private async resolveAdminRecipients(): Promise<string[] | null> {
+    if (!this.deps?.getAdminRecipients) return null
+    return this.deps.getAdminRecipients()
+  }
+
+  /**
+   * Seal a finished call's §2.5 metadata for the admin envelope set.
+   *
+   * The caller's number is opened from the row's KEK-sealed copy and goes only
+   * into the admin envelopes; the row, and with it the sealed copy, is deleted
+   * in the same transaction. §2.5 keeps callerLast4, timestamps, duration and
+   * flags in plaintext columns. No hash of the number is kept anywhere.
+   *
+   * Loud-but-stored, matching the inbound-message contract in
+   * conversations.ts: with no resolvable admin recipient the record is still
+   * written (a dropped call record is the worse outcome), with empty content
+   * and an operator-visible error.
+   */
+  private sealCallMetadata(
+    call: Pick<ActiveCallRow, 'callId' | 'answeredBy' | 'callerNumberSealed'>,
+    recipients: string[] | null,
+  ): { encryptedContent: string; adminEnvelopes: unknown[] } {
+    if (!recipients) return { encryptedContent: '', adminEnvelopes: [] }
+    if (recipients.length === 0) {
+      logger.error(
+        'call record stored WITHOUT §2.5 metadata envelopes: no admin HPKE recipient ' +
+        'resolvable (configure ADMIN_DECRYPTION_PUBKEY and/or register an admin device). ' +
+        'Admins cannot decrypt this record\'s metadata.',
+        { callId: call.callId },
+      )
+      return { encryptedContent: '', adminEnvelopes: [] }
+    }
+    return encryptCallRecordForStorage(
+      { answeredBy: call.answeredBy ?? null, callerNumber: this.callerNumberOf(call) },
+      recipients,
+    )
+  }
+
+  /** The live call's caller number, or '' when it was never recorded or cannot be opened (logged, never thrown: the record is still written). */
+  private callerNumberOf(call: Pick<ActiveCallRow, 'callId' | 'callerNumberSealed'>): string {
+    if (!call.callerNumberSealed || !this.deps?.serverKek) return ''
+    try {
+      return openCallerNumber(call.callerNumberSealed, call.callId, this.deps.serverKek)
+    } catch (err) {
+      logger.error('caller number could not be opened; call record stored without it', err, { callId: call.callId })
+      return ''
+    }
+  }
 
   // =========================================================================
   // Active Calls
@@ -41,6 +116,33 @@ export class CallsService {
       .from(activeCalls)
       .where(eq(activeCalls.hubId, hubId))
 
+    return this.archiveStaleCalls(rows)
+  }
+
+  /**
+   * Reap stale call rows across EVERY hub, not only the one a dashboard happens to be
+   * polling right now. `getActiveCalls(hubId)` above only expires rows for the hub it
+   * is called with — a hub nobody has an open dashboard for (or whose provider stopped
+   * sending status callbacks) would otherwise accumulate `active_calls` /
+   * `call_tokens` rows indefinitely. Intended to be called from a scheduled worker
+   * (lib/stale-call-reaper-worker.ts), not from a request path (#1136).
+   *
+   * Returns the number of rows reaped.
+   */
+  async reapStaleCalls(): Promise<number> {
+    const rows = await this.db.select().from(activeCalls)
+    if (rows.length === 0) return 0
+    const active = await this.archiveStaleCalls(rows)
+    return rows.length - active.length
+  }
+
+  /**
+   * Split call rows into still-live and past-TTL ("stale"), archiving the stale ones
+   * into call_records in a single transaction. Shared by the hub-scoped lazy reap
+   * (getActiveCalls) and the instance-wide scheduled reap (reapStaleCalls) so the two
+   * can never apply different staleness rules to the same row (#1136).
+   */
+  private async archiveStaleCalls(rows: ActiveCallRow[]): Promise<ActiveCallRow[]> {
     const now = Date.now()
     const active: ActiveCallRow[] = []
     const stale: ActiveCallRow[] = []
@@ -49,7 +151,9 @@ export class CallsService {
       const age = now - new Date(row.startedAt).getTime()
       if (
         (row.status === 'ringing' && age > RINGING_TTL_MS) ||
-        (row.status === 'in-progress' && age > IN_PROGRESS_TTL_MS)
+        // A spam-reported call stays in active_calls with its status changed; it
+        // ages out like an in-progress one, so its sealed caller number cannot outlive it.
+        ((row.status === 'in-progress' || row.status === 'spam') && age > IN_PROGRESS_TTL_MS)
       ) {
         stale.push(row)
       } else {
@@ -59,6 +163,7 @@ export class CallsService {
 
     // Move stale calls to call_records atomically
     if (stale.length > 0) {
+      const recipients = await this.resolveAdminRecipients()
       await this.db.transaction(async (tx) => {
         for (const call of stale) {
           const endedAt = call.endedAt ?? new Date()
@@ -66,6 +171,7 @@ export class CallsService {
             (new Date(endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000,
           )
           const finalStatus = call.status === 'ringing' ? 'unanswered' : 'completed'
+          const sealed = this.sealCallMetadata(call, recipients)
 
           await tx.insert(callRecords).values({
             callId: call.callId,
@@ -79,8 +185,8 @@ export class CallsService {
             hasVoicemail: call.hasVoicemail ?? false,
             hasRecording: call.hasRecording ?? false,
             recordingSid: call.recordingSid,
-            encryptedContent: '',
-            adminEnvelopes: [],
+            encryptedContent: sealed.encryptedContent,
+            adminEnvelopes: sealed.adminEnvelopes,
           }).onConflictDoNothing()
 
           await tx
@@ -153,7 +259,8 @@ export class CallsService {
     hubId: string,
     data: {
       callId: string
-      callerNumber: string
+      /** The caller's number sealed by `sealCallerNumber` for this call; null when it is not to be held. */
+      callerNumberSealed: string | null
       callerLast4?: string
       status?: string
     },
@@ -163,7 +270,7 @@ export class CallsService {
       .values({
         callId: data.callId,
         hubId,
-        callerNumber: data.callerNumber,
+        callerNumberSealed: data.callerNumberSealed,
         callerLast4: data.callerLast4 ?? null,
         status: data.status ?? 'ringing',
       })
@@ -206,16 +313,11 @@ export class CallsService {
 
   /**
    * End an active call: remove from active_calls and insert into call_records.
-   * Accepts optional encrypted content and admin envelopes for the history record.
+   * The history record's §2.5 metadata ({ answeredBy, callerNumber }) is sealed
+   * for the admin envelope set here — callers cannot supply their own. The row's
+   * sealed caller number goes with the row.
    */
-  async endCall(
-    hubId: string,
-    callId: string,
-    data?: {
-      encryptedContent?: string
-      adminEnvelopes?: unknown[]
-    },
-  ): Promise<CallRecordRow> {
+  async endCall(hubId: string, callId: string): Promise<CallRecordRow> {
     const record = await this.db.transaction(async (tx) => {
       // Fetch and delete the active call
       const [call] = await tx
@@ -237,6 +339,7 @@ export class CallsService {
         (endedAt.getTime() - new Date(call.startedAt).getTime()) / 1000,
       )
       const finalStatus = call.answeredBy ? 'completed' : 'unanswered'
+      const sealed = this.sealCallMetadata(call, await this.resolveAdminRecipients())
 
       const [row] = await tx
         .insert(callRecords)
@@ -253,8 +356,8 @@ export class CallsService {
           hasVoicemail: call.hasVoicemail ?? false,
           hasRecording: call.hasRecording ?? false,
           recordingSid: call.recordingSid,
-          encryptedContent: data?.encryptedContent ?? '',
-          adminEnvelopes: data?.adminEnvelopes ?? [],
+          encryptedContent: sealed.encryptedContent,
+          adminEnvelopes: sealed.adminEnvelopes,
         })
         .returning()
 
@@ -273,7 +376,7 @@ export class CallsService {
 
   /**
    * Insert an already-finished call straight into history.
-   * Only for seeding demo data — live calls go through addCall → endCall.
+   * Only for seeding the sample dataset — live calls go through addCall → endCall.
    */
   async recordHistoricalCall(
     hubId: string,
@@ -311,11 +414,18 @@ export class CallsService {
   }
 
   /** Get a single encrypted call record by ID */
-  async getCallRecord(callId: string): Promise<CallRecordRow | null> {
+  /**
+   * The finished call `callId`, within `hubId`. A call of another hub reads as
+   * missing (`null`), exactly like an unknown id (#2011). `hubId === ''` is the
+   * unscoped mount, which has no hub to bound to (the convention of
+   * `getActiveCallById`'s callers: `c.get('hubId') ?? ''`).
+   */
+  async getCallRecord(hubId: string, callId: string): Promise<CallRecordRow | null> {
+    const byId = eq(callRecords.callId, callId)
     const [row] = await this.db
       .select()
       .from(callRecords)
-      .where(eq(callRecords.callId, callId))
+      .where(hubId ? and(byId, eq(callRecords.hubId, hubId)) : byId)
       .limit(1)
 
     return row ?? null

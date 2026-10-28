@@ -399,7 +399,7 @@ erasure.post(
     // Erasure deactivates the account and wipes its devices, but a SIP
     // endpoint on our own PBX authenticates against the PBX, not against us:
     // it would keep registering. Tear it down with the rest (#1540).
-    await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetUserId)
+    await revokeVolunteerSipIdentity(services, c.env.SERVER_KEK, targetUserId)
 
     const wsManager = getConnectionManager()
     if (wsManager) {

@@ -251,7 +251,6 @@ class ScreenshotTests {
     private val sampleContacts = listOf(
         ContactSummary(
             contactHash = "hash-abc",
-            last4 = "7890",
             firstSeen = "2025-08-15T09:00:00Z",
             lastSeen = sampleTimestamp,
             callCount = 8,
@@ -261,7 +260,6 @@ class ScreenshotTests {
         ),
         ContactSummary(
             contactHash = "hash-def",
-            last4 = "3456",
             firstSeen = "2025-11-01T12:00:00Z",
             lastSeen = sampleTimestamp2,
             callCount = 2,
@@ -271,7 +269,6 @@ class ScreenshotTests {
         ),
         ContactSummary(
             contactHash = "hash-ghi",
-            last4 = null,
             firstSeen = "2026-03-20T16:00:00Z",
             lastSeen = "2026-04-28T20:00:00Z",
             callCount = 1,
@@ -281,7 +278,6 @@ class ScreenshotTests {
         ),
         ContactSummary(
             contactHash = "hash-jkl",
-            last4 = "1122",
             firstSeen = "2026-01-10T08:00:00Z",
             lastSeen = "2026-04-20T15:00:00Z",
             callCount = 15,
@@ -416,14 +412,12 @@ class ScreenshotTests {
         BanEntry(
             bannedAt = "2026-04-15T10:00:00Z",
             bannedBy = samplePubkey,
-            phone = "ban-hash-abc",
             phoneHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
             reason = "Repeated abusive calls targeting volunteers",
         ),
         BanEntry(
             bannedAt = "2026-04-10T14:30:00Z",
             bannedBy = samplePubkey2,
-            phone = "ban-hash-def",
             phoneHash = "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
             reason = "Spam calls",
         ),
@@ -527,6 +521,7 @@ class ScreenshotTests {
                     onLock = {},
                     onLogout = {},
                     onNavigateToNotes = {},
+                    onNavigateToNoteCreate = { _, _ -> },
                     onNavigateToNoteDetail = {},
                     onNavigateToCallHistory = {},
                     onNavigateToReports = {},

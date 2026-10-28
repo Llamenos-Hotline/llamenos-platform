@@ -50,19 +50,9 @@ export function EditContactDialog({ contact, open, onOpenChange, onUpdated }: Ed
       }
       const encryptedSummary = await encryptMessage(JSON.stringify(summary), readerPubkeys)
 
-      // Recompute blind index tokens
-      const normalized = displayName.trim().toLowerCase()
-      const trigrams: string[] = []
-      for (let i = 0; i <= normalized.length - 3; i++) {
-        trigrams.push(normalized.slice(i, i + 3))
-      }
-      const nameHash = btoa(normalized).slice(0, 32)
-
       const updated = await updateDirectoryContact(contact.id, {
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
-        nameHash,
-        trigramTokens: trigrams,
       })
       toast(t('contactDirectory.updated', { defaultValue: 'Contact updated' }))
       onUpdated(updated)

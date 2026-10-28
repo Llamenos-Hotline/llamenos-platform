@@ -20,7 +20,7 @@
 # find-and-replace of an existing pin; it does not add the first one (adding
 # a `container:` block via scripted YAML editing is exactly the kind of
 # blind mutation this repo's determinism rules warn about). Wiring
-# desktop-e2e.yml's `build` job and ci.yml's `build` / `crypto-tests` jobs
+# ci.yml's `build`, `desktop-e2e` and `crypto-tests` jobs
 # onto the published digest — the actual "start with the non-compose jobs"
 # rollout — is a short, hand-reviewed follow-up once this workflow has
 # published at least once. See #903 for the full design and the E2E-job
@@ -39,6 +39,11 @@ on:
     paths:
       - deploy/docker/Dockerfile.ci-base
       - .github/workflows/ci-base-image-nightly.yml
+
+concurrency:
+  # A superseded push cancels its own PR run (#2094); every other event gets a per-SHA group that nothing can cancel.
+  group: ${{ github.event_name == 'pull_request' && format('ci-base-image-pr-{0}', github.ref) || format('ci-base-image-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}  # deny-all; per-job permissions below
 
@@ -60,7 +65,7 @@ jobs:
       published: ${{ steps.push-gate.outputs.published }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Determine whether this run may publish
         id: push-gate
@@ -105,7 +110,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 

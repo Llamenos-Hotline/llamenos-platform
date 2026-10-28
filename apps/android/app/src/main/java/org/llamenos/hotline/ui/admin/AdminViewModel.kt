@@ -44,10 +44,9 @@ import org.llamenos.hotline.model.TelephonyProviderType
 import org.llamenos.hotline.model.TranscriptionSettings
 import org.llamenos.hotline.model.UpdateCustomFieldsRequest
 import org.llamenos.protocol.CreateBanBody
+import org.llamenos.protocol.PromoteBanBody
 import org.llamenos.hotline.model.Member
 import org.llamenos.hotline.model.MemberDirectory
-import org.llamenos.hotline.model.id
-import org.llamenos.hotline.model.identifierHash
 import javax.inject.Inject
 
 /**
@@ -1605,16 +1604,19 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun promoteBanToPlatform(banId: String) {
+    /**
+     * Promote a hub ban to platform scope. The number is entered again: a hub's ban
+     * hash is keyed to that hub, so the server cannot re-key it to the platform list
+     * without it, and it checks the number against the hub ban before adding.
+     */
+    fun promoteBanToPlatform(banId: String, phone: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(platformBansError = null) }
             try {
-                val ban = _uiState.value.bans.firstOrNull { it.id == banId } ?: return@launch
-                val body = AddBanRequest(
-                    identifier = ban.identifierHash,
-                    reason = ban.reason,
+                apiService.requestNoContent(
+                    "POST", "/api/bans/platform/promote",
+                    PromoteBanBody(banID = banId, phone = phone.trim()),
                 )
-                apiService.requestNoContent("POST", "/api/bans/platform", body)
                 loadPlatformBans()
             } catch (e: Exception) {
                 _uiState.update {

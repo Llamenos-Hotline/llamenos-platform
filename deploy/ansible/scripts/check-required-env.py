@@ -3,7 +3,7 @@
 actually produced by BOTH Ansible .env templates.
 
 Why this exists (PR #771 review round 2, issue #716): roles/llamenos/templates/
-env.j2 (the monolithic/demo deploy path) silently drifted from
+env.j2 (the deprecated monolithic deploy path) silently drifted from
 roles/llamenos-app/templates/env/app.j2 (the per-service production path) and
 ended up missing DATABASE_URL entirely -- config.ts hard-fails at startup
 without it, so the container never booted. That bug shipped because nothing
@@ -115,8 +115,6 @@ ENV_LOOKUP_RE = re.compile(r"env\['([A-Z_][A-Z0-9_]*)'\]")
 #   NTFY_URL/NTFY_AUTH_TOKEN             -> same two files (Android push via ntfy)
 #   GLITCHTIP_DSN                        -> apps/worker/routes/config.ts (client crash reporting DSN)
 #   SIGNAL_NOTIFIER_BEARER_TOKEN         -> signal-notifier/ sidecar auth
-#   DEMO_RESET_CRON                      -> apps/worker/routes/config.ts -> demoResetSchedule
-#                                            -> src/client/components/demo-banner.tsx (display only)
 #   METRICS_SCRAPE_TOKEN                 -> apps/worker/routes/metrics.ts (bearer auth for
 #                                            /api/metrics/prometheus; without it the Prometheus
 #                                            `llamenos-app` scrape can never authenticate, #1148)
@@ -126,7 +124,8 @@ ENV_LOOKUP_RE = re.compile(r"env\['([A-Z_][A-Z0-9_]*)'\]")
 # voip-push.test.ts) despite the review flagging them as possibly dead --
 # only DEMO_RESET_CRON was genuinely unwired at the Ansible layer (no var
 # existed in vars.example.yml or either .env template) despite already
-# having an app-side consumer and test (config.test.ts). This list, checked
+# having an app-side consumer and test -- and it went with demo mode in #1604,
+# along with DEMO_MODE and DEMO_MODE_CONFIRM. This list, checked
 # against the "optional vars" scenario render
 # (scripts/full-scenario.extra-vars.json), is what proves that's still true
 # and stays true.
@@ -138,7 +137,6 @@ OPTIONAL_VARS_WITH_CONSUMERS = [
     "NTFY_AUTH_TOKEN",
     "GLITCHTIP_DSN",
     "SIGNAL_NOTIFIER_BEARER_TOKEN",
-    "DEMO_RESET_CRON",
     "METRICS_SCRAPE_TOKEN",
 ]
 
@@ -153,7 +151,7 @@ OPTIONAL_VARS_WITH_CONSUMERS = [
 #
 # Those are opposite outcomes from the SAME inputs, so neither can be proven by
 # the existing renders: the required-vars scenario is production with the flags
-# off, and the full scenario is demo with the flags off. Two extra renders,
+# off, and the full scenario is staging with the flags off. Two extra renders,
 # differing only in app_environment, are what make the conditional in
 # templates/env/_worker-required-env.j2 falsifiable in both directions.
 DEV_ROUTE_VARS = ["DEV_ROUTES_ENABLED", "DEV_RESET_SECRET"]
@@ -417,6 +415,96 @@ def _compose_app_block(text: str) -> str:
     return "\n".join(out)
 
 
+# The file-only hash keys: (environment variable the worker refuses, compose secret name).
+# Each keys one hash and nothing else; none may ride in .env or inside the services
+# directory (config backups archive it, update.yml snapshots it).
+HASH_KEY_SECRETS = (
+    ("BAN_HASH_KEY", "ban-hash-key"),
+    ("MESSAGING_HASH_KEY", "messaging-hash-key"),
+)
+
+
+def _top_level_secret_files(text: str) -> dict[str, str]:
+    """Compose top-level `secrets:` block as {name: file path}. Order-independent."""
+    files: dict[str, str] = {}
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if re.match(r"^secrets:\s*$", line))
+    except StopIteration:
+        return files
+    name: str | None = None
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith((" ", "\t")):
+            break
+        entry = re.match(r"^\s+([A-Za-z0-9_.-]+):\s*$", line)
+        if entry:
+            name = entry.group(1)
+            continue
+        source = re.match(r"^\s+file:\s*(\S+)", line)
+        if source and name:
+            files[name] = source.group(1)
+    return files
+
+
+def _service_secret_mounts(text: str) -> set[str]:
+    """Every secret name listed under any service-level `secrets:` list."""
+    mounted: set[str] = set()
+    for block in re.finditer(r"^[ \t]+secrets:[ \t]*\n((?:[ \t]+-[ \t]+\S+[ \t]*\n?)+)", text, re.M):
+        mounted.update(re.findall(r"-[ \t]+(\S+)", block.group(1)))
+    return mounted
+
+
+def check_hash_keys_file_only(
+    env_renders: dict[str, Path],
+    compose_renders: dict[str, Path],
+) -> list[str]:
+    """The hash keys are secret FILES, never rendered environment variables (D6, D2).
+
+    BAN_HASH_KEY and MESSAGING_HASH_KEY must stay out of every file the config
+    backup, a rollback snapshot or `env_file` can reach, so:
+
+      - no .env render may assign either (the worker's validateConfig refuses them
+        in the environment anyway; this catches it before deploy);
+      - each app compose render must declare each key's compose secret, source it
+        from a path OUTSIDE the services directory (the tree backup-config archives
+        and update.yml snapshots), and mount it into the app service.
+
+    Declaration and mount are looked up by name, so adding a secret never depends on
+    where in the list it was put.
+    """
+    failures: list[str] = []
+    for label, path in env_renders.items():
+        keys = rendered_keys(path)
+        for env_name, secret_name in HASH_KEY_SECRETS:
+            if env_name in keys:
+                failures.append(
+                    f"{label}: renders {env_name}. It must be delivered only as the "
+                    f"{secret_name} secret file, never through .env"
+                )
+    for label, path in compose_renders.items():
+        text = path.read_text()
+        declared = _top_level_secret_files(text)
+        mounted = _service_secret_mounts(text)
+        for _, secret_name in HASH_KEY_SECRETS:
+            source = declared.get(secret_name)
+            if source is None:
+                failures.append(
+                    f"{label}: does not declare the top-level `{secret_name}` compose secret "
+                    "sourced from a file"
+                )
+                continue
+            if "/services/" in source or source.endswith("/services"):
+                failures.append(
+                    f"{label}: sources {secret_name} from {source}, inside the services "
+                    "directory that config backups archive"
+                )
+            if secret_name not in mounted:
+                failures.append(
+                    f"{label}: the app service does not mount the `{secret_name}` secret"
+                )
+    return failures
+
+
 def check_calling_vars(
     calling_env: dict[str, Path],
     base_env: dict[str, Path],
@@ -532,6 +620,61 @@ def check_calling_vars(
                         f"still return 200 (rendered: {path}, {coturn_compose})"
                     )
 
+        failures.extend(_coturn_peer_acl_failures(text, coturn_compose))
+
+    return failures
+
+
+# The ranges a TURN relay must never send to (#2136). A volunteer holds working
+# credentials and coturn runs on the host network, so each of these is a way to
+# reach the docker bridges, the host or the cloud metadata service through a
+# socket the volunteer chose. coturn takes ranges, not CIDR.
+COTURN_DENIED_PEER_RANGES = (
+    "0.0.0.0-0.255.255.255",
+    "10.0.0.0-10.255.255.255",
+    "100.64.0.0-100.127.255.255",
+    "127.0.0.0-127.255.255.255",
+    "169.254.0.0-169.254.255.255",
+    "172.16.0.0-172.31.255.255",
+    "192.168.0.0-192.168.255.255",
+    "fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+    "fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+)
+
+
+def _coturn_peer_acl_failures(text: str, path: Path) -> list[str]:
+    """The rendered relay must deny private space and allow only the media server."""
+    failures: list[str] = []
+    # The command, not the prose around it: the template's comments discuss these
+    # flags and must not be able to satisfy (or trip) the check.
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    denied = set(re.findall(r"--denied-peer-ip=(\S+)", text))
+    for rng in COTURN_DENIED_PEER_RANGES:
+        if rng not in denied:
+            failures.append(
+                f"coturn compose: --denied-peer-ip={rng} is missing from {path}. "
+                "Without it any volunteer's TURN credentials relay into that range "
+                "(the docker bridges, the host, the cloud metadata service)"
+            )
+    for flag, why in (
+        ("--no-tcp-relay", "RFC 6062 TCP allocations reach HTTP services such as ARI"),
+        ("--no-multicast-peers", "a relay should not forward to multicast peers"),
+    ):
+        if flag not in text:
+            failures.append(f"coturn compose: {flag} is missing from {path} ({why})")
+    allowed = re.findall(r"--allowed-peer-ip=(\S+)", text)
+    if len(allowed) != 1:
+        failures.append(
+            f"coturn compose: expected exactly one --allowed-peer-ip (the media "
+            f"server) in {path}, found {allowed!r}. With none, denying 172.16/12 "
+            "drops every relayed call's audio; with a range, the allowance is not "
+            "'only the media server'"
+        )
+    elif not re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", allowed[0]) or allowed[0].startswith(("0.", "127.")):
+        failures.append(
+            f"coturn compose: --allowed-peer-ip={allowed[0]} in {path} is not a "
+            "single non-loopback IPv4 address"
+        )
     return failures
 
 
@@ -787,7 +930,7 @@ def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
     required = unconditional + conditional
 
     targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role)": renders.monolithic_env,
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role)": renders.monolithic_env,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role)": renders.app_env,
     }
 
@@ -813,7 +956,7 @@ def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
     print(f"  {', '.join(OPTIONAL_VARS_WITH_CONSUMERS)}")
 
     full_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, full scenario)": renders.monolithic_env_full,
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role, full scenario)": renders.monolithic_env_full,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, full scenario)": renders.app_env_full,
     }
     for label, path in full_targets.items():
@@ -862,13 +1005,13 @@ def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
     print("  app_environment=production + dev_routes_enabled=true -> MUST be absent")
 
     staging_devroute_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, staging + dev routes)":
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role, staging + dev routes)":
             renders.monolithic_env_staging_devroutes,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, staging + dev routes)":
             renders.app_env_staging_devroutes,
     }
     production_devroute_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, production + dev routes)":
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role, production + dev routes)":
             renders.monolithic_env_prod_devroutes,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, production + dev routes)":
             renders.app_env_prod_devroutes,
@@ -949,6 +1092,26 @@ def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
             "when their feature is on and not when it is off, the anchor mount "
             "accompanies SIP_TLS_CA_FILE, and TURN_SECRET matches coturn's "
             "--static-auth-secret"
+        )
+
+    print("\n[check-required-env] BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files, never env vars:")
+    ban_key_failures = check_hash_keys_file_only(
+        env_renders={
+            "roles/llamenos/templates/env.j2 (monolithic)": renders.monolithic_env,
+            "roles/llamenos-app/templates/env/app.j2 (per-service)": renders.app_env,
+            "roles/llamenos/templates/env.j2 (monolithic, full scenario)": renders.monolithic_env_full,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, full scenario)": renders.app_env_full,
+        },
+        compose_renders={
+            "roles/llamenos-app/templates/compose/app.j2": renders.compose_app_base,
+            "roles/llamenos/templates/docker-compose.j2": renders.compose_monolithic_prod,
+        },
+    )
+    failures.extend(ban_key_failures)
+    if not ban_key_failures:
+        print(
+            "[check-required-env] OK   no render assigns BAN_HASH_KEY or MESSAGING_HASH_KEY, and "
+            "both app composes mount both secrets from outside the services directory"
         )
 
     if failures:

@@ -16,9 +16,11 @@ import {
   createBanViaApi,
   listAuditLogViaApi,
   listNotesViaApi,
-  generateTestKeypair,
   uniquePhone,
   uniqueName,
+  encryptForTest,
+  sealedNoteFields,
+  ADMIN_SEED,
 } from '../../api-helpers'
 import {
   simulateIncomingCall,
@@ -112,9 +114,8 @@ When('the volunteer writes a note for the call', async ({ request, world }) => {
     request,
     `/hubs/${getScenarioState(world).hubId}/notes`,
     {
-      encryptedContent: 'xdo-test-note',
+      ...(await sealedNoteFields(getCrossDoState(world).volunteerDeviceKey!, 'xdo-test-note')),
       callId: getCrossDoState(world).callId,
-      readerEnvelopes: [],
     },
     getCrossDoState(world).volunteerDeviceKey!,
   )
@@ -158,7 +159,8 @@ Then('the audit log should have entries for each step', async ({request, world})
 
 When('an admin bans {string}', async ({request, world}, phone: string) => {
   const hubId = getScenarioState(world).hubId
-  await createBanViaApi(request, { phone, reason: 'XDO ban test', hubId })
+  const ban = await createBanViaApi(request, { phone, reason: 'XDO ban test', hubId })
+  getScenarioState(world).phoneHashMap[phone] = ban.phoneHash
 })
 
 When('an incoming call arrives from {string}', async ({ request, world }, phone: string) => {
@@ -192,10 +194,13 @@ Then('the call should be ringing', async ({ world }) => {
 // ─── Conversation Lifecycle ─────────────────────────────────────────
 
 When('an SMS arrives from {string} with body {string}', async ({ request, world }, phone: string, body: string) => {
+  // The volunteer claims it through the hub-scoped route, which only admits a
+  // conversation of that hub (#2011) — so it must arrive in the scenario's hub.
   const result = await simulateIncomingMessage(request, {
     senderNumber: phone,
     body,
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
   getCrossDoState(world).conversationId = result.conversationId
   getCrossDoState(world).conversationIds.push(result.conversationId)
@@ -226,9 +231,10 @@ When('the volunteer claims the conversation', async ({ request, world }) => {
     const claimPath = hubId
       ? `/hubs/${hubId}/conversations/${getCrossDoState(world).conversationId}/claim`
       : `/conversations/${getCrossDoState(world).conversationId}/claim`
-    await apiPost(request, claimPath, {
+    const { status } = await apiPost(request, claimPath, {
       pubkey: volPubkey,
     }, volDeviceKey!)
+    expect(status, 'claiming a conversation of the scenario hub').toBe(200)
   }
 })
 
@@ -250,11 +256,12 @@ When('the admin closes the conversation', async ({ request, world }) => {
   }
 })
 
-When('another SMS arrives from {string} with body {string}', async ({request, world: _world}, phone: string, body: string) => {
+When('another SMS arrives from {string} with body {string}', async ({request, world}, phone: string, body: string) => {
   await simulateIncomingMessage(request, {
     senderNumber: phone,
     body,
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
 })
 
@@ -349,15 +356,16 @@ Given('a reporter and reviewer exist', async ({ request, world }) => {
 })
 
 When('the reporter creates a report', async ({ request, world }) => {
-  const kp = generateTestKeypair()
+  // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
+  const sealed = await encryptForTest('xdo-report-content', [ADMIN_SEED])
   const { data, status: _status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
     '/reports',
     {
       title: uniqueName('XDO Report'),
       category: 'general',
-      encryptedContent: 'xdo-report-content',
-      readerEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      encryptedContent: sealed.encryptedContent,
+      readerEnvelopes: sealed.envelopes,
     },
     getCrossDoState(world).reporterDeviceKey!,
   )
@@ -438,9 +446,8 @@ When('the volunteer writes a note for the conversation', async ({ request, world
       request,
       '/notes',
       {
-        encryptedContent: 'xdo-conv-note',
+        ...(await sealedNoteFields(volDeviceKey, 'xdo-conv-note')),
         conversationId: getCrossDoState(world).conversationId,
-        readerEnvelopes: [],
       },
       volDeviceKey,
     )

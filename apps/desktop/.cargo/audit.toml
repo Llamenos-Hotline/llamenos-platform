@@ -31,8 +31,34 @@
 # `cargo update -p tauri-plugin-updater -p libsodium-sys-stable`, and run
 # `cargo audit`. Anything that no longer fires is dead config.
 
+# ── crypto-bigint 0.5.5 (RUSTSEC-2026-0387) ───────────────────────────────────
+#
+# Timing variability in constant-time bignum operations; patched only in
+# crypto-bigint >= 0.7.6 (published 2026-10-23). Verified 2026-10-24.
+#
+# NO UPGRADE PATH EXISTS: crypto-bigint 0.5.5 <- elliptic-curve 0.13.8 <-
+# ecdsa 0.16.9 / k256 0.13.4 <- iota-crypto 0.23.2 (`k256 = "0.13"`) <-
+# iota_stronghold 2.1.0 / stronghold-runtime / stronghold_engine <-
+# tauri-plugin-stronghold. iota-crypto 0.23.2, iota_stronghold 2.1.0 and
+# tauri-plugin-stronghold 2.4.0 (its `iota-crypto ^0.23`) are all the latest
+# stable releases, and `cargo update -p crypto-bigint --precise 0.7.6` is
+# rejected by the elliptic-curve 0.13.8 requirement. k256 0.14.0 exists but
+# iota-crypto has not moved to it.
+#
+# NOT REACHABLE: k256 is iota-crypto's secp256k1 ECDSA support, i.e. Stronghold's
+# Secp256k1 sign procedures. We use Stronghold purely as an encrypted
+# key/value vault (platform.ts: `client.getStore()` + `insert`/`get`/`remove`,
+# PBKDF2-derived vault key in lib.rs). No Stronghold procedure is ever
+# executed, and our own identity keys are Ed25519/X25519 inside llamenos-core
+# (which does not depend on k256 or crypto-bigint at all).
+#
+# REVISIT by 2026-12-01 (same dated reason as /deny.toml): `cargo update -p
+# tauri-plugin-stronghold -p iota-crypto`, then
+# `cargo update -p crypto-bigint --precise 0.7.6`.
+#
 [advisories]
 ignore = [
+  "RUSTSEC-2026-0387", # crypto-bigint 0.5.5 timing variability; no release reaches >=0.7.6 (iota-crypto -> k256 0.13 pin), secp256k1 never invoked, tracked with #1956 [expires 2026-12-01]
   "RUSTSEC-2026-0367", # zip <9.0.0 keeps SUID/SGID bits on extract; only minisign-verified archives are extracted, no upgrade exists, tracked in #1956 [expires 2026-12-31]
   "RUSTSEC-2026-0368", # zip <9.0.0 extract() follows attacker symlinks; same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
   "RUSTSEC-2026-0369", # zip <9.0.0 applies Unix permissions through symlinks on extract(); same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]

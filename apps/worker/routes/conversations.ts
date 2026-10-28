@@ -21,10 +21,22 @@ import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
+import { resourceInPathHub } from '../lib/hub-scope'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
 
 const logger = createLogger('routes.conversations')
 
 const conversations = new Hono<AppEnv>()
+
+// Inside /hubs/:hubId every /:id route may only touch a conversation of that
+// hub (#2011). Registered before the handlers so no route can opt out; a
+// conversation of another hub is a 404, the same as a missing one.
+const conversationInPathHub = resourceInPathHub({
+  param: 'id',
+  skip: new Set(['stats', 'load']),
+  load: (services, id, hubId) => services.conversations.getByIdForHub(id, hubId),
+})
+conversations.use('/:id/*', conversationInPathHub)
 
 /** Dispatch push notification to a specific user (Epic 86) */
 function dispatchPushToUser(
@@ -385,6 +397,13 @@ conversations.post('/:id/messages',
       return c.json({ error: 'plaintextForSending or body is required for external channels' }, 400)
     }
 
+    // A client-sealed message is readable by exactly the envelopes it brought.
+    // Server-sealed ones (the branch above) always include the admin reader, so
+    // only the client-supplied set can leave the admins out (#2113).
+    if (body.encryptedContent) {
+      await assertAdminCanRead(services, c.env, conv.hubId ?? undefined, body.readerEnvelopes, 'A message', { conversationId: id })
+    }
+
     // Build the message with initial pending status
     const messageId = crypto.randomUUID()
     let status: EncryptedMessage['status'] = 'pending'
@@ -406,7 +425,7 @@ conversations.post('/:id/messages',
             () => routeOutboundMessage(
               {
                 settingsService: services.settings,
-                hmacSecret: c.env.HMAC_SECRET,
+                suppression: services.messagingSuppression,
                 notifierUrl: c.env.NOTIFIER_URL,
                 notifierApiKey: c.env.NOTIFIER_API_KEY,
               },

@@ -14,7 +14,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ContactSummary(
     val contactHash: String,
-    val last4: String? = null,
     val firstSeen: String,
     val lastSeen: String,
     val callCount: Int = 0,
@@ -42,7 +41,6 @@ data class ContactTimelineEvent(
 @Serializable
 data class ContactDetail(
     val contactHash: String,
-    val last4: String? = null,
     val firstSeen: String,
     val lastSeen: String,
     val callCount: Int = 0,

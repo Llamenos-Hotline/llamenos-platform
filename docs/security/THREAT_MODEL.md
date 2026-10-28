@@ -432,6 +432,23 @@ Admin pubkeys are only returned to authenticated users. The attacker must compro
 
 A server compromise can serve modified client code that removes the pinning check. This is a fundamental limitation of any application that receives code from a server. Native apps with code signing (Tauri updater, App Store) partially address this but introduce their own supply chain risks.
 
+## Recipient Keys Are Server-Listed (Accepted Risk, M1)
+
+Every client decides who may read E2EE content from X25519 public keys **the server hands it**, and verifies none of them: the admin recipient from `/auth/me`, record recipients from `/records/:id/envelope-recipients`, the assignee's device keys from `/conversations/:id/assignee-envelopes`. `POST /api/devices/register` needs only an authenticated session — no proof of possession, no sigchain link — and overwrites the X25519 key of an existing device matched by its Ed25519 key (#2143, #2148).
+
+**Accepted for M1.** A compromised or compelled server, or anyone with database write access, can list a key of its own as a user's device and receive everything subsequently sealed to that user. The user sigchain is built but not yet consulted by any sealing client; checking each recipient key against the owner's verified sigchain **is the M2 gate** and the only thing that closes this. Until then the zero-knowledge claim holds against a server that does not lie about recipient keys, not against one that does.
+
+### History re-wrap gate (narrows the stolen-session case only)
+
+The one automatic re-wrap of existing history is the assignee re-wrap (PROTOCOL.md §2.4.1). It no longer seals history to every key the server lists. A key whose value was set **after** a message was written (`devices.x25519_set_at`, which moves whenever the X25519 value changes and, unlike `registered_at`, on an overwrite) receives that message's content key only if it is *confirmed*: an SAS verification (`device_verifications`) of that device by its owner or by an admin of the conversation's hub, recorded after the key took its current value. The desktop client applies this as `mayRewrapHistoryTo` before sealing; the worker repeats the rule when envelopes are submitted, as defence in depth. Any future automatic history re-wrap must call the same predicate.
+
+| Adversary | Effect |
+|-----------|--------|
+| Holds a user's session token, no device key; registers or overwrites an X25519 key | **Narrowed.** The new key cannot obtain the user's past messages by waiting for an admin client to re-wrap them. It still receives content sealed *after* it registered, because every sealing path trusts the registry. |
+| Malicious or compromised server, DB write access | **Not stopped.** `x25519_set_at`, the `device_verifications` rows and the messages' `created_at` are all server-asserted; such an adversary can backdate the key or insert a verification. The gate does not defend against it and must not be read as doing so. |
+
+Residual: a verification by the key owner counts, so a stolen session that can also call `POST /devices/:id/verify` (requires `users:manage-devices`) could confirm its own device. Volunteers do not hold that permission; an admin session theft is already a reader-class compromise.
+
 ## Departed User Key Retirement
 
 When a user departs the organization, they retain their device private keys. There is no technical mechanism to force deletion of keys from a device the organization no longer controls.

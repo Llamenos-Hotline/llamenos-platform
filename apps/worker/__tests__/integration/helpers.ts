@@ -120,7 +120,10 @@ export function createMockEnv(overrides?: Partial<Env>): Env {
     ENVIRONMENT: 'test',
     // Valid 32-byte hex — needed by hashPhone() which calls hexToBytes(secret)
     HMAC_SECRET: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    DEMO_MODE: 'false',
+    // Distinct values: a test that fixes one secret into two roles cannot tell which one was used.
+    SERVER_KEK: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    BAN_HASH_KEY: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    MESSAGING_HASH_KEY: '9999999999999999999999999999999999999999999999999999999999999999',
   }
   return { ...defaultEnv, ...overrides }
 }

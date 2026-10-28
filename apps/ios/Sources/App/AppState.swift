@@ -43,7 +43,9 @@ final class AppState {
     let linphoneService: LinphoneService
     let wipeService: WipeService
     let permissionService: PermissionService
+    let authMeLoader: AuthMeLoader
     let shiftClockService: ShiftClockService
+    let inviteEnrollment: InviteEnrollmentService
 
     // MARK: - Auth State
 
@@ -89,15 +91,12 @@ final class AppState {
     /// Whether to show the soft-update banner (dismissible).
     var showUpdateBanner: Bool = false
 
-    /// Pending hub invite token from a `llamenos://hub-invite?token=` deep link.
-    /// Set before the user is authenticated so the login / registration flow can
-    /// use it when creating or linking an account to a hub.
-    var pendingHubInviteToken: String?
-
     // MARK: - WebSocket Event Listener
 
     /// Background task that listens for WebSocket events.
     private var eventListenerTask: Task<Void, Never>?
+    /// The `/api/auth/me` refresh in flight, or waiting to retry.
+    private var roleFetchTask: Task<Void, Never>?
     /// Resolves the relay endpoint from `/api/config` and connects.
     private var relayConnectTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "org.llamenos.hotline", category: "Relay")
@@ -136,14 +135,19 @@ final class AppState {
         )
         self.linphoneService = linphone
         self.permissionService = permission
+        let authMe = AuthMeLoader(apiService: api, permissionService: permission)
+        self.authMeLoader = authMe
         self.shiftClockService = ShiftClockService(apiService: api)
+        self.inviteEnrollment = InviteEnrollmentService(apiService: api, cryptoService: crypto)
         self.wipeService = WipeService(
             keychainService: keychain,
             cryptoService: crypto,
             wakeKeyService: wake,
             offlineQueue: offline,
             crashReportingService: crashReporting,
-            webSocketService: ws
+            webSocketService: ws,
+            authMeLoader: authMe,
+            permissionService: permission
         )
 
         // Wire offline queue into API service for automatic enqueue on network errors
@@ -356,6 +360,8 @@ final class AppState {
 
     /// Lock the app: clear device key from memory, set locked state.
     func lockApp() {
+        wakeKeyService.cancelRegistration()
+        cancelRoleFetch()
         authService.lock()
         isLocked = true
         authStatus = .locked
@@ -369,6 +375,8 @@ final class AppState {
         fetchUserRole()
         loadMemberHubs()
         offlineQueue.startMonitoring()
+        // Registration is signed, so it can only happen now (#2201).
+        wakeKeyService.registerDeviceIfUnlocked()
         // Replay any queued operations now that we're authenticated
         Task { await offlineQueue.replay() }
         // Retry any queued security events (e.g. a cert pin mismatch seen while
@@ -396,6 +404,23 @@ final class AppState {
         }
     }
 
+    /// Finish enrolment once the PIN screen has created the device keys.
+    ///
+    /// With an invite pending, redeem it first: the server only knows this device after
+    /// that, so registering its keys (`didCompleteOnboarding`) before it would be refused
+    /// as an unknown user. If redemption fails the invite stays pending and the
+    /// enrolment screen offers a retry; nothing here grants a role or a hub.
+    func completeEnrollment() async {
+        guard await inviteEnrollment.redeem() else { return }
+        didCompleteOnboarding()
+    }
+
+    /// The user chose to carry on without enrolling after a failed redemption.
+    func continueWithoutEnrolling() {
+        inviteEnrollment.abandon()
+        didCompleteOnboarding()
+    }
+
     /// Called after successful onboarding (new identity or import + PIN set).
     func didCompleteOnboarding() {
         isLocked = false
@@ -411,19 +436,48 @@ final class AppState {
         fetchUserRole()
         loadMemberHubs()
         offlineQueue.startMonitoring()
+        wakeKeyService.registerDeviceIfUnlocked()
         Task { await SecurityEventService.shared.flush() }
     }
 
     /// Handle a device wipe command from the server.
     func handleDeviceWipe(reason: String) {
         wipeService.wipeAll()
+        shiftClockService.reset()
+        inviteEnrollment.reset()
         deviceWipeReason = reason
         isDeviceWiped = true
     }
 
-    /// Called when the user logs out / resets identity.
+    /// Stop the permission refresh. Permissions are left as they are: a locked app that
+    /// is unlocked again asks afresh (`didUnlock`), and logout clears them.
+    private func cancelRoleFetch() {
+        roleFetchTask?.cancel()
+        roleFetchTask = nil
+        authMeLoader.cancel()
+    }
+
+    /// Log out: end the session on the server, then wipe local state.
+    ///
+    /// The server call comes first because it is signed by the device key that
+    /// `didLogout()` locks away, and because it is what takes a user who has left
+    /// off the ringing roster (#2205). A server that cannot be reached must not trap
+    /// the user in the app, so the local logout proceeds regardless; the failure is
+    /// logged, not swallowed.
+    func logOut() async {
+        do {
+            try await apiService.endSession()
+        } catch {
+            logger.error("Logout did not reach the server; continuing locally: \(error.localizedDescription)")
+        }
+        didLogout()
+    }
+
+    /// Wipe local state after logout / identity reset. Does not tell the server —
+    /// use `logOut()` for a user-initiated logout.
     func didLogout() {
         wipeService.logout()
+        cancelRoleFetch()
         eventListenerTask?.cancel()
         eventListenerTask = nil
         relayConnectTask?.cancel()
@@ -433,6 +487,8 @@ final class AppState {
         membershipLoadTask?.cancel()
         membershipLoadTask = nil
         hubMembershipService.reset()
+        shiftClockService.reset()
+        inviteEnrollment.reset()
         authService.logout()
         isLocked = false
         authStatus = .unauthenticated
@@ -510,47 +566,46 @@ final class AppState {
         }
     }
 
-    /// Fetch the current user's role and permissions from the API after authentication.
+    /// Fetch the current user's permissions and profile from the API after authentication.
+    ///
+    /// Retries until the server answers (see `AuthMeLoader`). A failed request never
+    /// changes what the user may do: the last known permissions stay in force and
+    /// `permissionService.refreshFailure` says the refresh is pending.
     func fetchUserRole() {
-        Task {
-            do {
-                let response: AuthMeResponse = try await apiService.request(
-                    method: "GET",
-                    path: "/api/auth/me"
-                )
-                await MainActor.run {
-                    // Store fine-grained permissions from the server
-                    self.permissionService.update(permissions: response.permissions ?? [])
+        roleFetchTask?.cancel()
+        roleFetchTask = Task { [weak self] in
+            guard let self else { return }
+            switch await authMeLoader.refresh() {
+            case .cancelled:
+                return
+            case .denied:
+                syncDisplayRole()
+            case .loaded(let response):
+                syncDisplayRole()
 
-                    // Legacy role field — kept for backward compat with views that
-                    // haven't migrated to hasPermission() yet
-                    let hasAdminRole = response.roles.contains { $0.contains("admin") }
-                    self.userRole = hasAdminRole ? .admin : .volunteer
-
-                    // Store admin decryption pubkey for E2EE envelope encryption
-                    self.adminDecryptionPubkey = response.adminDecryptionPubkey
-                    // Persist to keychain so it's available immediately on next unlock
-                    if let pubkey = response.adminDecryptionPubkey {
-                        try? self.keychainService.storeString(pubkey, key: KeychainKey.adminDecryptionPubkey)
-                    }
-
-                    // Store server event keys in Rust CryptoState for epoch-aware decryption.
-                    // current key is required; previous key is optional (used during epoch rotation).
-                    if let keyHex = response.serverEventKeyHex {
-                        try? self.cryptoService.setServerEventKeys(
-                            currentHex: keyHex,
-                            previousHex: response.serverEventKeyPrevHex
-                        )
-                    }
+                // Store admin decryption pubkey for E2EE envelope encryption
+                adminDecryptionPubkey = response.adminDecryptionPubkey
+                // Persist to keychain so it's available immediately on next unlock
+                if let pubkey = response.adminDecryptionPubkey {
+                    try? keychainService.storeString(pubkey, key: KeychainKey.adminDecryptionPubkey)
                 }
-            } catch {
-                // Default to volunteer if role fetch fails
-                await MainActor.run {
-                    self.userRole = .volunteer
-                    self.permissionService.clear()
+
+                // Store server event keys in Rust CryptoState for epoch-aware decryption.
+                // current key is required; previous key is optional (used during epoch rotation).
+                if let keyHex = response.serverEventKeyHex {
+                    try? cryptoService.setServerEventKeys(
+                        currentHex: keyHex,
+                        previousHex: response.serverEventKeyPrevHex
+                    )
                 }
             }
         }
+    }
+
+    /// Display-only role badge, derived from the permissions the server granted — never
+    /// from a role's name or id. Views that gate behaviour use `hasPermission`.
+    private func syncDisplayRole() {
+        userRole = permissionService.isAdmin ? .admin : .volunteer
     }
 
     /// Relay event kinds subscribed on every member hub: call ring/update/voicemail,
@@ -600,7 +655,7 @@ final class AppState {
                 return url
             } catch {
                 if Task.isCancelled { return nil }
-                logger.warning("Relay config fetch failed (attempt \(attempt + 1)): \(error.localizedDescription, privacy: .public)")
+                logger.warning("Relay config fetch failed (attempt \(attempt + 1)): \(error.localizedDescription)")
                 if attempt + 1 < maxAttempts {
                     try? await Task.sleep(for: .seconds(pow(2.0, Double(attempt))))
                 }

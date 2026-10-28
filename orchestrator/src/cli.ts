@@ -56,7 +56,7 @@ import { runBoard } from './board.js'
 import { runMissingChecks } from './missing-checks.js'
 import { notify } from './notify.js'
 import { FLEET_DIR, LOG_FILE, HALT_REASON_FILE, DISPATCH_SCRIPT, FLEET_ENV_FILE } from './paths.js'
-import { REPO, gh, ghJson } from './gh.js'
+import { REPO, gh, ghJson, readPrCommits } from './gh.js'
 import { GitHubSink } from './sink.js'
 import {
   ensureDigestIssue, postDigestComment, digestRunId,
@@ -1486,6 +1486,10 @@ async function runReviewGate(): Promise<number> {
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
+    // Every commit's author/committer, so that skip also needs the BRANCH to
+    // be all bot — not just the PR's author (`commitsAllBotAuthored`).
+    prCommits: () => readPrCommits(ctx.pr, (detail) => ciLog(
+      `reading the commits of PR #${ctx.pr} failed — the bot-authored skip does not apply, fails closed: ${detail}`)),
     // The BASE checkout's knope.toml (REPO_ROOT is the trusted base, never
     // the head export): the list of files knope versions, which is what a
     // release PR's diff is checked against (release-shape.ts).

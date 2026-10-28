@@ -1,17 +1,14 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE } from '@shared/crypto-labels'
 import {
   contributeShare,
   cancelRecoverySession,
   type RecoverySessionInfo,
 } from '@/lib/api'
 import {
-  hpkeOpenFromState,
-  hpkeSeal,
-  ed25519Sign,
-  shamirVerify,
+  RECOVERY_SHARE_COMMITMENT_MISMATCH,
+  recoveryShareContribute,
   getDevicePubkeys,
   type HpkeEnvelope,
 } from '@/lib/platform'
@@ -33,7 +30,6 @@ import {
   Loader2,
   ShieldAlert,
 } from 'lucide-react'
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
 
 interface Props {
   sessions: RecoverySessionInfo[]
@@ -103,44 +99,30 @@ export function RecoveryRequestsSection({
         return
       }
 
-      // Decrypt our stored share envelope
+      // Rust opens our share, checks it against its commitment, seals it to the
+      // recovering user's new device and signs the result: the plaintext share never
+      // reaches the webview. Rust reads the recipient key from the server's session
+      // record itself — it is not an argument.
       const envelope = JSON.parse(myShareEnvelope) as HpkeEnvelope
-      const shareHex = await hpkeOpenFromState(
-        envelope,
-        LABEL_RECOVERY_GROUP_SHARE_WRAP,
-        '',
-      )
-
-      // Verify share against commitment
-      const x = parseInt(shareHex.slice(0, 2), 16)
-      const yHex = shareHex.slice(2)
-      const valid = await shamirVerify(x, yHex, myShareCommitment)
-      if (!valid) {
-        toast(t('recoveryGroup.error.commitmentFailed'), 'error')
-        return
+      let contribution
+      try {
+        contribution = await recoveryShareContribute(
+          envelope,
+          myShareCommitment,
+          session.sessionId,
+        )
+      } catch (err) {
+        if (err instanceof Error && err.message === RECOVERY_SHARE_COMMITMENT_MISMATCH) {
+          toast(t('recoveryGroup.error.commitmentFailed'), 'error')
+          return
+        }
+        throw err
       }
-
-      // HPKE-seal share to the recovering user's new device pubkey
-      const aad = bytesToHex(
-        utf8ToBytes(`${session.sessionId}:${deviceState.signingPubkeyHex}`),
-      )
-      const contribution = await hpkeSeal(
-        shareHex,
-        session.newDevicePubkey,
-        LABEL_RECOVERY_SHARE_CONTRIBUTE,
-        aad,
-      )
-
-      // Sign the contribution
-      const sigPayload = bytesToHex(
-        utf8ToBytes(JSON.stringify(contribution) + ':' + session.sessionId),
-      )
-      const signature = await ed25519Sign(sigPayload)
 
       const result = await contributeShare(
         session.sessionId,
-        JSON.stringify(contribution),
-        signature,
+        contribution.encryptedShare,
+        contribution.signature,
       )
       toast(
         `${t('recoveryGroup.requests.approve')} (${result.contributionCount}/${session.threshold})`,

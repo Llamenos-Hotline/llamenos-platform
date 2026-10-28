@@ -228,8 +228,10 @@ Every HPKE/ECIES derivation, HKDF context, HMAC key, and signature binding uses 
 |----------|-------|---------|
 | `HMAC_PHONE_PREFIX` | `llamenos:phone:` | Phone number hashing prefix |
 | `HMAC_IP_PREFIX` | `llamenos:ip:` | IP address hashing prefix |
+| `HMAC_BAN_PREFIX` | `llamenos:ban:` | Ban-list hashing prefix (§2.10 Ban Hashing) |
+| `HMAC_MESSAGING_CONTACT_PREFIX` | `llamenos:messaging-contact:` | Messaging thread hashing prefix (§2.10 Messaging Thread Hashing) |
 | `HMAC_KEYID_PREFIX` | `llamenos:keyid:` | Key identification hashing prefix |
-| `HMAC_SUBSCRIBER` | `llamenos:subscriber` | Subscriber identifier HMAC key |
+| `HMAC_SUBSCRIBER` | `llamenos:subscriber` | Retired (#2261): subscribers are hashed under `HMAC_MESSAGING_CONTACT_PREFIX`; the slot stays so the registry keeps its indices |
 | `HMAC_PREFERENCE_TOKEN` | `llamenos:preference-token` | Preference token HMAC key |
 
 #### Recovery / Backup
@@ -643,7 +645,7 @@ When the server receives an inbound message via a messaging webhook (SMS/WhatsAp
 
 1. Server generates a random `message_key`.
 2. Server encrypts the plaintext with AES-256-GCM with **empty AAD** (stored-record format, see the note above).
-3. Server wraps `message_key` for each authorized reader (assigned volunteer + all admins) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
+3. Server wraps `message_key` for each authorized reader (the assigned volunteer's devices + the admin escrow key `ADMIN_DECRYPTION_PUBKEY`; super-admins are never readers — see the admin invariant in §4.15) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
 4. Plaintext is discarded from memory. The server cannot read stored messages after this point.
 
 ### 2.4.1 Assignee Re-wrap (Client-Mediated)
@@ -674,11 +676,13 @@ Trigger (on the re-wrapping client):
 
 Loop, per conversation:
   1. gaps = GET /hubs/:hubId/conversations/:id/assignee-envelopes
-       → { assignedTo, recipients: x25519_hex[],
-           messages: [{ id, readerEnvelopes: RecipientEnvelope[],
+       → { assignedTo,
+           recipients: [{ pubkey: x25519_hex, keySetAt: iso8601, confirmed: bool }],
+           messages: [{ id, createdAt: iso8601, readerEnvelopes: RecipientEnvelope[],
                         missingRecipients: x25519_hex[] }] }
      At most 200 messages, oldest first. Messages with NO envelopes are never
-     listed: nobody holds a key that could re-wrap them.
+     listed: nobody holds a key that could re-wrap them. Neither is a message
+     whose every missing key is withheld by the gate in step 3.
      If gaps.messages is empty → done.
 
   2. Refuse an incoherent answer: assignedTo must be set, and every
@@ -688,7 +692,8 @@ Loop, per conversation:
        own = readerEnvelopes.find(e => e.pubkey is this device's key)
        if none → skip (this device is not a reader; another reader must do it)
        message_key = HPKE.Open(own, info = UTF-8("llamenos:message"), aad = empty)
-       for each pk in missingRecipients:
+       for each pk in missingRecipients that mayRewrapHistoryTo(recipients[pk], message.createdAt):
+         (a key withheld by the gate is skipped and logged, never an error)
          sealed = HPKE.Seal(pk, message_key, info = UTF-8("llamenos:message"), aad = empty)
          entry  = { messageId: id,
                     envelope: { pubkey: pk, enc: hex(sealed[0..32]), ct: hex(sealed[32..]) } }
@@ -701,8 +706,9 @@ Loop, per conversation:
      All-or-nothing. 400 if any envelope names a key that is not a registered
      X25519 device key of the CURRENT assignee; 404 if a message is not in the
      conversation; 409 if the conversation has no assignee or a message has no
-     readers. An envelope for a recipient that already has one on that message
-     is skipped — first write wins, because the server cannot tell a correct
+     readers. 400 also if an envelope names a key for which
+     mayRewrapHistoryTo is false (see Trust). An envelope for a recipient that
+     already has one on that message is skipped — first write wins, because the server cannot tell a correct
      re-wrap from a wrong one.
 
   5. If no entry was produced, or added == 0 (another re-wrapper got there
@@ -749,7 +755,34 @@ covers. The client refuses answers that are internally inconsistent (step 2),
 but it cannot yet verify a device key independently; that requires the user
 sigchain (§2.11, "Device Authorization (Sigchain)") to be checked before sealing, and when
 it is wired in, the re-wrapper MUST verify each recipient against the
-assignee's sigchain.
+assignee's sigchain. **That is the M2 gate; until then this is an accepted
+risk** (docs/security/THREAT_MODEL.md, "Recipient Keys Are Server-Listed").
+
+What the exchange does enforce is a narrower rule, aimed at a stolen session
+rather than the server. A record is never re-wrapped to a key that was set
+after it was written unless that key is confirmed:
+
+```
+mayRewrapHistoryTo(recipient, recordCreatedAt) =
+    recipient.confirmed  OR  recipient.keySetAt <= recordCreatedAt
+```
+
+- `keySetAt` is `devices.x25519_set_at`: when the X25519 value last changed
+  (set on insert; moved by a registration that changes the value; untouched by
+  a re-registration of the same key). `registered_at` is not used — it does not
+  move when a session overwrites an existing device's key.
+- `confirmed` is true when a device verification (SAS) of that device exists
+  from the key's owner or from an admin of the conversation's hub, recorded at
+  or after `keySetAt`, against the device's current signing key.
+- A key that predates the record (the ordinary claim path) is unaffected.
+
+The client applies the rule before sealing; the server repeats it when envelopes
+are POSTed. The client is the primary gate — the server's refusal is defence in
+depth. Every input is server-asserted, so a server that backdates `keySetAt` or
+inserts a verification defeats it; it raises the bar for a holder of a stolen
+session, not for a malicious server. Any further automatic re-wrap of history
+MUST use this same predicate (`mayRewrapHistoryTo`,
+`packages/shared/history-rewrap-gate.ts`).
 
 ### 2.5 Call Record Metadata Encryption
 
@@ -760,9 +793,11 @@ Active calls remain as plaintext (routing necessity). When a call completes, sen
 ```typescript
 interface CallRecordMetadata {
   answeredBy: string | null   // Volunteer pubkey
-  callerNumber: string        // HMAC-hashed phone number
+  callerNumber: string        // caller's E.164 number (never a hash — see below)
 }
 ```
+
+While the call is live the server holds the number only as `active_calls.caller_number_sealed`: AES-256-GCM under a key HKDF-derived from `SERVER_KEK` (info = `LABEL_CALLER_NUMBER_SEAL`, AAD = `label:callId`), so a volunteer can ban the caller without seeing it. It is opened once, into this envelope, and the active row is deleted in the same transaction (end or stale-call archive). No hash of the number is kept on the server (see §2.10 Ban Hashing).
 
 #### What Stays in Plaintext
 
@@ -773,7 +808,7 @@ hasVoicemail, hasRecording, recordingSid
 
 #### Algorithm
 
-Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients:
+Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients. A call record has no hub, so the server seals it to the admin escrow key `ADMIN_DECRYPTION_PUBKEY` alone; super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
 
 ```
 encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
@@ -1041,6 +1076,44 @@ hashIP(ip_string, hmac_secret_hex):
   return hex(HMAC-SHA256(key, input))[0..24]
   // Truncated to 96 bits (24 hex chars)
 ```
+
+#### Ban Hashing
+
+The server stores a hash of a number **only if that number is banned**. A caller who is not banned is hashed transiently to be compared with the ban lists and the digest is dropped. `BAN_HASH_KEY` is a file-only secret (never in the database, `.env` or a config backup).
+
+```
+banHash(phone_e164, scope, ban_hash_key_hex):
+  // scope = the hub id, or the literal "platform"
+  scope_key = HKDF-SHA256(ikm  = hex_to_bytes(ban_hash_key_hex),
+                          salt = "",
+                          info = UTF-8(LABEL_BAN_KEY_DERIVE + ":" + scope),
+                          len  = 32)
+  input = UTF-8(HMAC_BAN_PREFIX + phone_e164)
+  return hex(HMAC-SHA256(scope_key, input))
+```
+
+A hub's hash cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again (§4.47). Neither the ban store nor any ban response carries digits of the number.
+
+#### Messaging Thread Hashing
+
+A messaging conversation is identified by a per-hub keyed hash of the sender's identifier (`conversations.contact_identifier_hash`). `MESSAGING_HASH_KEY` is a file-only secret (`/run/secrets/messaging-hash-key`; never in the database, `.env` or a config backup) and is a key of its own: the only other value hashed under it is the blast subscriber's `identifier_hash` (below), which is the same hash by design. No ban or audit hash of the same number can be compared with a thread hash.
+
+```
+messagingContactHash(identifier, hub_id | null, messaging_hash_key_hex):
+  // scope = the hub id, or the literal "global" for a webhook with no ?hub=
+  scope_key = HKDF-SHA256(ikm  = hex_to_bytes(messaging_hash_key_hex),
+                          salt = "",
+                          info = UTF-8(LABEL_MESSAGING_CONTACT_HUB_KEY + ":" + scope),
+                          len  = 32)
+  input = UTF-8(HMAC_MESSAGING_CONTACT_PREFIX + identifier)
+  return hex(HMAC-SHA256(scope_key, input))
+```
+
+A blast subscriber is identified by the same hash (`subscribers.identifier_hash`, per hub), whichever way the row was created: the webhook keyword handler stores the router's value, and the bulk importer (`POST /api/blasts/subscribers/import`) calls the same function with the hub it imports into. A single prefix, `HMAC_MESSAGING_CONTACT_PREFIX`, is used for both, so a subscriber's STOP matches the row an import created. `HMAC_SUBSCRIBER` is retired: nothing hashes under it any more, and its registry slot stays (the registry is append-only).
+
+`identifier` is `IncomingMessage.senderIdentifier`, the same value the sealed reply address holds (the Signal UUID when present, otherwise the number). It is computed once, by the messaging router after the adapter has parsed the webhook; adapters do not hash. The same contact in two hubs has two unrelated hashes. The reply address (`contact_identifiers`) stays sealed under `SERVER_KEK` with `LABEL_CONTACT_ID`; its format is unchanged.
+
+No part of the contact's number is stored or displayed: the conversation has no `contactLast4`, and `ContactTimelineSummary` has no `last4`. A client names a thread by a short prefix of `contactIdentifierHash`, or "Unknown" when it is empty, and searches by that prefix.
 
 ### 2.11 Per-Device Key Storage (Current)
 
@@ -1395,8 +1468,6 @@ Response: {
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "...", ... }],
   "defaultHubId": "...",
@@ -1424,9 +1495,12 @@ Response: {
 #### IVR Audio (Public -- Twilio Fetches During Calls)
 
 ```
-GET /api/ivr-audio/:promptType/:language
+GET /api/ivr-audio/:promptType/:language           // platform default
+GET /api/ivr-audio/:hubId/:promptType/:language    // a call in that hub
 Response: audio/wav binary
 // promptType: [a-z_-]+, language: [a-z]{2,5}(-[A-Z]{2})?
+// Both are signed and expiring (?exp=&sig=); the hub is inside the signed path.
+// The hub form serves that hub's recording, else the platform default.
 ```
 
 #### Messaging Preferences (Token-Validated, No Auth)
@@ -1492,6 +1566,13 @@ POST /api/auth/me/logout
 Auth: Bearer or Session
 Response: { "ok": true }
 // If using Session auth, the token is revoked server-side
+// If that was the user's LAST live session (same liveness test as the auth
+// middleware: not expired, not past its absolute lifetime, signing key not
+// revoked), the user is also clocked out of every hub and each is audited as
+// `shiftClockOut`. Otherwise they stay on shift and keep ringing on their other
+// signed-in devices. Only sessions are revoked — never devices or keys.
+// A client MUST send this before discarding its credentials: a logout the
+// server never hears about leaves the user clocked in and being rung.
 ```
 
 #### Update Profile
@@ -1729,12 +1810,13 @@ Response: { "notes": EncryptedNote[], "total": number }
 POST /api/notes
 Permission: notes:create
 Body: {
-  "callId": string,
+  "callId"?: string,            // an active call or a call record in the hub; no calls:read-history needed
+  "conversationId"?: string,    // one of callId / conversationId is required
   "encryptedContent": hex,
   "authorEnvelope"?: { "enc": hex64, "ct": hex },         // KeyEnvelope (HPKE; no pubkey field)
   "adminEnvelopes"?: { "pubkey": hex64, "enc": hex64, "ct": hex }[]  // RecipientEnvelope[]
 }
-Response: EncryptedNote
+Response: 201 { "note": EncryptedNote }   // NoteStoredResponse — wrapped, never the bare note
 
 PATCH /api/notes/:id
 Permission: notes:update-own
@@ -1743,10 +1825,16 @@ Body: {
   "authorEnvelope"?: { "enc": hex64, "ct": hex },         // KeyEnvelope (HPKE; no pubkey field)
   "adminEnvelopes"?: { "pubkey": hex64, "enc": hex64, "ct": hex }[]  // RecipientEnvelope[]
 }
-Response: EncryptedNote
+Response: { "note": EncryptedNote }       // NoteStoredResponse
 ```
 
 Hub-scoped: `/api/hubs/:hubId/notes/*`
+
+**Server-side write guards (#2112, #2113).** The server never holds a note's content key, so a malformed write cannot be repaired afterwards; it is refused at the boundary instead:
+
+- `callId` / `conversationId` must name an existing call (live or finished) / conversation **of the hub in the path**. Under `/api/hubs/:hubId` a record of another hub and one that does not exist are both `404` with the same message; on the unscoped mount the record must sit in a hub the caller holds a role in (a record with no hub is global).
+- `adminEnvelopes` must include at least one envelope addressed to a key an admin holds — `ADMIN_DECRYPTION_PUBKEY` or the registered device key of an admin of the note's hub (a member holding an admin role in that hub — the same set the hub last-admin invariant counts; super-admins are never readers). An empty or absent set, or one addressed only to non-admin keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
+- A deployment with **no** resolvable admin recipient at all (no `ADMIN_DECRYPTION_PUBKEY`, no admin of the hub with a registered device) is **refused** with `503` and an operator-visible error log. The hub last-admin invariant guarantees the hub has an admin, so an empty recipient set is a misconfiguration, and storing under it would create a note nobody can ever open. Server-sealed records (inbound messages, call records) are unaffected: the server cannot refuse a caller who has already spoken, so those keep the loud-but-stored contract.
 
 ### 4.8 Calls
 
@@ -1916,23 +2004,26 @@ Hub-scoped: `/api/hubs/:hubId/reports/*`
 
 ```
 POST /api/bans
-Permission: bans:report
+Permission: bans:create
 Body: { "phone": string (E.164), "reason": string }
-Response: BanEntry
+Response: { "ban": BanEntry }
 
 GET /api/bans
 Permission: bans:read
 Response: { "bans": BanEntry[] }
+
+// BanEntry = { "phoneHash": string, "reason": string, "bannedBy": string, "bannedAt": string }
+// phoneHash is the §2.10 banHash for the hub: an opaque unban handle. No number, masked or not.
 
 POST /api/bans/bulk
 Permission: bans:bulk-create
 Body: { "phones": string[] (E.164), "reason": string }
 Response: { "ok": true, "count": number }
 
-DELETE /api/bans/:phone
+DELETE /api/bans/:phoneHash
 Permission: bans:delete
 Response: { "ok": true }
-// :phone is URL-encoded E.164 (e.g., %2B12125551234)
+// :phoneHash is the 64-hex handle from GET /api/bans. A number in the path is refused (400).
 ```
 
 Hub-scoped: `/api/hubs/:hubId/bans/*`
@@ -2010,6 +2101,12 @@ Response: { "ok": true }
 ```
 
 #### IVR Audio
+
+Recordings are per hub (`ivr_audio` is keyed `(hub_id, prompt_type, language)`). A call
+in hub H plays H's recording, else the platform default, else generated speech.
+Under `/api/hubs/:hubId/settings/ivr-audio` each verb reaches only that hub's recordings.
+On the global mount (`/api/settings/ivr-audio`) they manage the platform defaults and
+additionally require `system:manage-instance`; `?hubId=` is ignored there.
 
 ```
 GET /api/settings/ivr-audio
@@ -2280,6 +2377,32 @@ Response: { "ok": true }
 DELETE /api/hubs/:hubId/members/:pubkey
 Permission: users:manage-roles
 Response: { "ok": true }
+// Admin invariant: a hub always has at least one admin. ONE definition of "an admin of hub H"
+// (apps/worker/lib/hub-admin.ts `administersHub`) serves both this invariant and the POST /notes
+// envelope guard (below): an active, un-erased user, with no erasure request in flight and no revoked
+// signing key, who HOLDS IN H (users.hub_roles) roles granting both settings:manage and notes:read-all.
+// Super-admins are zero-knowledge and are NEVER readers of any hub's data (operator decision D1): the
+// global role-super-admin confers no admin authority here, is not counted, and is not a recipient. A
+// super-admin counts only for a hub in which it also holds an admin role in hub_roles, like any member.
+// A hub whose only "admin" is a super-admin therefore has no admin, and its real hub admin cannot leave.
+// The readers of a hub are its admins plus an optional hub-controlled escrow key.
+// POST /hubs creates the hub and its creator's admin assignment atomically, and every change that would
+// leave a hub with none of those -- demoting or removing the member (above), PATCH/DELETE
+// /api/users/:pubkey (deactivate, delete, rewrite hubRoles), editing or deleting the role that confers
+// admin, and account erasure -- is refused with 409 and leaves nothing changed. Erasure of a hub's only
+// admin is deferred, not denied: it succeeds once another admin exists.
+// Envelope guard, same set: POST /notes (and note edit, note replies, client-sealed outbound messages,
+// reports) require at least one envelope addressed to ADMIN_DECRYPTION_PUBKEY (the instance-wide
+// escrow key every shipped client seals to today) or a registered device key of an admin of the
+// RECORD'S hub (422 otherwise). A record with no hub has no hub admins, so only the escrow key reads it.
+// If neither exists -- no ADMIN_DECRYPTION_PUBKEY and no admin device -- the write is REFUSED with 503
+// and an operator-visible error is logged; it is no longer stored.
+// What this still does NOT guarantee (tracked in #2190): that a hub admin can open a given note.
+// Clients seal only to ADMIN_DECRYPTION_PUBKEY, so a hub admin reads a note only if its sealer addressed
+// one of their devices. Replacing the instance-wide ADMIN_DECRYPTION_PUBKEY with a per-hub escrow key
+// (B-ADM-CUTOVER) and widening what clients seal to are not yet done.
+// The check is race-free: guards take advisory locks (the role catalog shared, then each affected hub)
+// BEFORE reading role definitions and counting, and a role-definition edit takes the catalog lock exclusively.
 
 GET /api/hubs/:hubId/key
 Auth: Required (hub member)
@@ -2306,7 +2429,7 @@ Response: SetupState
 
 POST /api/setup/complete
 Permission: settings:manage
-Body: { "demoMode"?: boolean }
+Body: {}
 Response: SetupState
 // Also creates a default hub if none exists
 
@@ -3383,8 +3506,9 @@ Response: { "bans": PlatformBan[] }
 
 POST   /api/bans/platform/promote
 Permission: bans:create-platform
-Body: { "banId": string }
+Body: { "banId": string, "phone": string (E.164) }
 Response: { "ok": true }
+// The number is entered again (§2.10): it must hash to the hub ban being promoted, else 400.
 ```
 
 ### 4.48 Platform Settings
@@ -3442,39 +3566,70 @@ Response: RingGroup
 
 ### 4.50 Recovery Group
 
-Social recovery with Shamir secret sharing. Mix of public and authenticated routes.
+Social recovery with Shamir secret sharing. This is the **only** specification of the recovery-group routes; it is checked against `apps/worker/routes/recovery-group.ts`. Every route below is mounted **unscoped** (`/api/recovery-group/*`, never `/api/hubs/:hubId/...`) — the hub is named in the body, query, or path where it matters, and the route enforces hub membership itself. Clients MUST NOT hub-prefix these paths.
 
 **Unauthenticated (rate-limited):**
 ```
 POST /api/recovery-group/initiate
-Body: { "hubId": string, "userIdentifier": string, "newDevicePubkey": hex64 }
-Response: RecoveryInitiateResponse
-Rate limit: 10/5min per IP
+Body: { "hubId": uuid, "userIdentifier": string, "newDevicePubkey": hex64 }
+Response: { "sessionId": uuid, "verificationSent": boolean }
+Rate limit: 10/5min per IP. The response shape is identical whether or not the
+user exists (anti-enumeration).
 
 POST /api/recovery-group/initiate/verify
-Body: { "sessionId": string, "verificationCode": string }
-Response: RecoveryInitiateVerifyResponse
+Body: { "sessionId": uuid, "verificationCode": string }
+Response: { "ok": boolean, "expiresAt": ISO-8601 }
+Attempts per session are capped.
+
+POST /api/recovery-group/session/:id/complete
+Body: { "sigchainSeqNo": int, "sigchainPayload": object, "signature": hex128,
+        "prevHash": hex64 | null, "hash": hex64, "signerDeviceId": string,
+        "timestamp": ISO-8601 }
+Response: { "ok": boolean, "sigchainLink": SigchainLink }
+The recovering device has no prior session, so this is unauthenticated. The link
+is signed by the NEW device's own key and is accepted only once the session is
+`active` (>= threshold contributions) and its post-verification delay has
+elapsed. `sigchainPayload` MUST carry `{ sessionId, contributingHolderPubkeys }`;
+the server verifies both independently.
+
+GET  /api/recovery-group/user-envelope/:hubId?sessionId=<uuid>
+Response: { "envelope": string | null }
+Session-scoped: released only after the delay has elapsed and the threshold of
+contributions has been received.
 ```
 
 **Authenticated:**
 ```
 POST /api/recovery-group/enroll
-Permission: recovery:manage
+Permission: recovery:manage (and membership of the hub)
 Body: RecoveryGroupEnrollBody
 Response: { "ok": true }
 
+POST /api/recovery-group/rotate
+Permission: recovery:manage (and membership of the hub)
+Body: { hubId, threshold, totalShares, groupPublicKey, shareEnvelopes, shareCommitments,
+        duressCommitments?, sigchainLinkHash, delayHours?, emergencyFloorHours?,
+        rewrappedUserEnvelopes: [{ userPubkey, envelope }] }
+Response: { "ok": true }
+Atomic: replaces the group and re-wraps every user envelope in one transaction.
+
+GET  /api/recovery-group/sessions?hubId=<uuid>
+Permission: recovery:view (and membership of the hub)
+Response: { sessionId, hubId, userPubkey, newDevicePubkey, status, signalVerified,
+           expiresAt, createdAt, completedAt, cancelledAt, cancelledBy }[]
+
 GET  /api/recovery-group/:hubId
-Permission: recovery:view
+Permission: recovery:view (and membership of the hub)
 Response: RecoveryGroupInfo
 
 POST /api/recovery-group/session/:id/contribute
-Permission: recovery:hold-share
+Permission: recovery:hold-share (and current hub membership + enrollment)
 Body: { "encryptedShare": hex, "contributorSignature": hex128 }
-Response: RecoveryContributeResponse
+Response: { "ok": boolean, "status": RecoverySessionStatus, "contributionCount": number }
 
 GET  /api/recovery-group/session/:id
-Permission: recovery:view
-Response: RecoverySessionStatus
+Permission: recovery:view (and membership of the session's hub)
+Response: RecoverySessionStatusResponse
 
 POST /api/recovery-group/session/:id/emergency
 Permission: recovery:approve
@@ -3487,14 +3642,29 @@ Response: { "ok": true }
 
 POST /api/recovery-group/user-envelope
 Auth: Required
-Body: { "hubId": string, "envelope": string }
+Body: { "hubId": uuid, "envelope": string }
 Response: { "ok": true }
 
 POST /api/recovery-group/shares/liveness
 Permission: recovery:hold-share
-Body: { "hubId": string, "proof": string }
+Body: { "hubId": uuid, "proof": string }
 Response: { "ok": true }
+
+GET  /api/recovery-group/shares/my?hubId=<uuid>
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Response: MyShareEnvelopeResponse = { "hubId": uuid, "shareEnvelope": string }
 ```
+
+`GET /shares/my` returns **only the calling holder's own** envelope — the HPKE
+envelope (label `LABEL_RECOVERY_GROUP_SHARE_WRAP`) sealing that holder's Shamir
+share to their own key. The holder is the authenticated pubkey and is never a
+parameter: `hubId` selects which hub's share, nothing selects whose. Any
+`holderPubkey`/`pubkey` a caller adds is ignored. The server answers `403
+"Not a share holder for this hub"` — one message — whether the caller is no
+longer a member of the hub, was never enrolled, or the hub has no recovery
+group, so the route cannot be used to probe enrollment. A holder cannot take part
+in recovery without this route: it is the only way to get the envelope they must
+open to produce a `contribute` payload.
 
 ### 4.51 Teams
 
@@ -3828,11 +3998,7 @@ POST   /api/settings/cms
 ```
 
 #### Recovery Groups
-```
-POST /api/recovery-group/initiate
-POST /api/recovery-group/verify
-POST /api/recovery-group/complete
-```
+See §4.50 — the complete, authoritative route list.
 
 #### PUK (Per-User Key) Management
 ```
@@ -4169,61 +4335,6 @@ PATCH  /api/settings/cms/report-types/:id
 DELETE /api/settings/cms/report-types/:id
        Permission: cases:manage-types
        Response: { "ok": true }
-```
-
-### 4.27 Recovery Group
-
-**Authenticated routes** (`/api/recovery-group/*`):
-
-```
-POST   /api/recovery-group/enroll
-       Permission: recovery:manage
-       Body: { "hubId": string, "threshold": number, "totalShares": number, "groupPublicKey": hex, "shareEnvelopes": [...], ... }
-       Response: { "ok": true }
-
-GET    /api/recovery-group/:hubId
-       Permission: recovery:view
-       Response: RecoveryGroupInfo
-
-POST   /api/recovery-group/session/:id/contribute
-       Permission: recovery:hold-share
-       Body: { "encryptedShare": hex, "contributorSignature": hex }
-       Response: { "contributions": number, "thresholdMet": boolean }
-
-GET    /api/recovery-group/session/:id
-       Permission: recovery:view
-       Response: RecoverySessionStatus
-
-POST   /api/recovery-group/session/:id/emergency
-       Permission: recovery:approve
-       Body: { "approverPubkey": hex, "justification": string, "signature": hex }
-       Response: { "ok": true }
-
-POST   /api/recovery-group/session/:id/cancel
-       Auth: Required
-       Response: { "ok": true }
-
-POST   /api/recovery-group/user-envelope
-       Auth: Required
-       Body: { "hubId": string, "envelope": hex }
-       Response: { "ok": true }
-
-POST   /api/recovery-group/shares/liveness
-       Permission: recovery:hold-share
-       Body: { "hubId": string, "proof": hex }
-       Response: { "ok": true }
-```
-
-**Unauthenticated routes** (rate-limited):
-
-```
-POST   /api/recovery-group/initiate
-       Body: { "hubId": string, "userIdentifier": string, "newDevicePubkey": hex }
-       Response: { "sessionId": string, "status": string }
-
-POST   /api/recovery-group/initiate/verify
-       Body: { "sessionId": string, "verificationCode": string }
-       Response: { "verified": boolean, "status": string }
 ```
 
 ### 4.28 Security Events
@@ -5147,7 +5258,7 @@ What exists at the time of writing, with evidence. This table is the thing to up
 | `llamenos-link` URI scheme registration | **Not registered** | iOS `Info.plist` and the Android manifest register only `llamenos://` |
 | Short code (§6.5) | **Not implemented** | no derivation in any client |
 | Primary-device encrypt path, mobile | **Not implemented** | iOS and Android wrap only `compute_shared_x_hex` / `decrypt_with_shared_key_hex`; neither has an encrypt side, so neither can act as primary |
-| Desktop IPC commands | **Pre-#1865; fail closed; no linking UI** | `apps/desktop/src/crypto.rs`: `provision_encrypt_for_device` calls the ephemeral Rust seal, but returns the long-term `primaryEncPubkeyHex` and drops `claimHex`. `provision_compute_sas` runs a raw ECDH against whatever key it is given. `provision_decrypt_and_import` passes that key where the claim is expected and is rejected with `InvalidFormat`. To conform, desktop must forward `claimHex` and call `compute_provisioning_sas` |
+| Desktop IPC commands | **Pre-#1865; fail closed; no linking UI** | `apps/desktop/src/crypto.rs`: the primary-side `provision_encrypt_for_device` was **removed** (#2158) — it sealed both device seeds to a webview-chosen key with no native confirmation, so the desktop has no primary-side linking command until one is rebuilt behind a Rust-owned, user-confirmed session. `provision_compute_sas` runs a raw ECDH against whatever key it is given. `provision_decrypt_and_import` passes that key where the claim is expected and is rejected with `InvalidFormat`. To conform, desktop must forward `claimHex` and call `compute_provisioning_sas` |
 | Desktop Playwright IPC mock | **Pre-#1865** | `tests/mocks/tauri-core.ts` still mirrors the long-term-key ECDH and bare-label AAD |
 | Target profile (PUK + sigchain) | **Not implemented** | PUK endpoints and FFI exist with no client callers; sigchain wired only for recovery-group enrollment and the unused revoke fields (§6.12) |
 
@@ -5348,7 +5459,7 @@ Permissions: ["*"]
 System role: true (cannot be modified or deleted)
 ```
 
-Full system access. Creates hubs, manages all settings and users.
+Full system access. Creates hubs, manages all settings and users. This is authority over the instance, not over its data: a super-admin is zero-knowledge and is never a reader of any hub's records (see the admin invariant in §4.15).
 
 #### Hub Admin (`role-hub-admin`)
 

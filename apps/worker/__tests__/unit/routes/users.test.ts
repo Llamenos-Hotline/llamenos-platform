@@ -4,6 +4,12 @@ import type { AppEnv } from '@worker/types'
 import userRoutes from '@worker/routes/users'
 import { ServiceError } from '@worker/services/settings'
 import { DEFAULT_ROLES } from '@shared/permissions'
+import { resolveHubDefaultMemberRoles } from '@worker/lib/hub-default-role'
+
+vi.mock('@worker/lib/hub-default-role', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@worker/lib/hub-default-role')>()),
+  resolveHubDefaultMemberRoles: vi.fn().mockResolvedValue([]),
+}))
 
 const VOLUNTEER_PERMISSIONS = DEFAULT_ROLES.find(r => r.id === 'role-volunteer')!.permissions
 
@@ -18,6 +24,13 @@ function createTestApp(opts: {
   serviceMock?: Record<string, unknown>
   auditLogSpy?: ReturnType<typeof vi.fn>
   userHubRoles?: { hubId: string; roleIds: string[] }[]
+  /**
+   * Whether the caller holds a global super-admin role. Defaults to true
+   * outside a hub — the unscoped mount is the instance view and is refused to
+   * everyone else — and wherever `permissions` is the wildcard. `permissions`
+   * still decides each route, so a limited set exercises requirePermission.
+   */
+  superAdmin?: boolean
 } = {}) {
   const {
     permissions = ['*'],
@@ -26,6 +39,7 @@ function createTestApp(opts: {
     serviceMock = {},
     auditLogSpy = vi.fn().mockResolvedValue(undefined),
     userHubRoles = [],
+    superAdmin = permissions.includes('*') || hubId === undefined,
   } = opts
   // `permissions` is the request's resolved authority (what hubContext / auth
   // would set); `role-test` carries the same set so role lookups agree.
@@ -35,6 +49,7 @@ function createTestApp(opts: {
 
   const services: Record<string, unknown> = {
     identity: serviceMock.identity || {},
+    settings: serviceMock.settings || {},
     cases: serviceMock.cases || {},
     audit: mockAuditService,
   }
@@ -51,7 +66,7 @@ function createTestApp(opts: {
       pubkey,
       name: 'Test User',
       phone: '+1555000000',
-      roles: permissions.includes('*') ? ['role-super-admin'] : ['role-test'],
+      roles: superAdmin ? ['role-super-admin'] : ['role-test'],
       hubRoles: userHubRoles,
       active: true,
       createdAt: new Date().toISOString(),
@@ -139,9 +154,9 @@ describe('users routes', () => {
   // -------------------------------------------------------------------------
 
   describe('POST /users', () => {
-    it('creates a user with default volunteer role when roleIds omitted', async () => {
+    it('grants no role when roleIds is omitted and there is no hub to name a default', async () => {
       const createUserSpy = vi.fn().mockResolvedValue({
-        volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-volunteer'] },
+        volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: [] },
       })
       const { app, auditLogSpy } = createTestApp({
         permissions: ['users:create', ...VOLUNTEER_PERMISSIONS],
@@ -155,10 +170,33 @@ describe('users routes', () => {
       })
 
       expect(res.status).toBe(201)
-      expect(createUserSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ roleIds: ['role-volunteer'] }),
-      )
+      // No role is implied by the code: a hard-coded `role-volunteer` here was a
+      // default-role id acting as an authorisation decision (#2233).
+      expect(createUserSpy).toHaveBeenCalledWith(expect.objectContaining({ roleIds: [] }))
       expect(auditLogSpy).toHaveBeenCalledOnce()
+    })
+
+    it("grants the hub template's default member role when roleIds is omitted under a hub", async () => {
+      vi.mocked(resolveHubDefaultMemberRoles).mockResolvedValueOnce(['role-reviewer'])
+      const createUserSpy = vi.fn().mockResolvedValue({
+        volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: [], hubRoles: [] },
+      })
+      const { app } = createTestApp({
+        permissions: ['*'],
+        hubId: 'hub-1',
+        serviceMock: { identity: { createUser: createUserSpy, getUsers: vi.fn(), getUser: vi.fn() } },
+      })
+
+      await app.request('/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), name: 'New User', phone: '+15551234567' }),
+      })
+
+      expect(resolveHubDefaultMemberRoles).toHaveBeenCalledWith(expect.anything(), 'hub-1')
+      expect(createUserSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ hubId: 'hub-1', roleIds: ['role-reviewer'] }),
+      )
     })
 
     it('creates a user with provided roleIds', async () => {
@@ -182,7 +220,7 @@ describe('users routes', () => {
       )
     })
 
-    it('defaults to volunteer when roleIds is empty array', async () => {
+    it('treats an empty roleIds array as no role named', async () => {
       const createUserSpy = vi.fn().mockResolvedValue({
         volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-volunteer'] },
       })
@@ -199,7 +237,7 @@ describe('users routes', () => {
 
       expect(res.status).toBe(201)
       expect(createUserSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ roleIds: ['role-volunteer'] }),
+        expect.objectContaining({ roleIds: [] }),
       )
     })
 
@@ -517,7 +555,10 @@ describe('users routes', () => {
     })
 
     it('creates the user as a member of the hub, not with a global role', async () => {
-      const createUserSpy = vi.fn().mockResolvedValue({ volunteer: { pubkey: 'b'.repeat(64) } })
+      // The service stores the grant in hubRoles only, so the row it returns
+      // has no global role; the response shows the role held in this hub.
+      const created = { pubkey: 'b'.repeat(64), roles: [], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }
+      const createUserSpy = vi.fn().mockResolvedValue({ volunteer: created })
       const { app } = createTestApp({
         permissions: hubAdminPerms,
         hubId: 'hub-b',
@@ -531,6 +572,7 @@ describe('users routes', () => {
       })
       expect(res.status).toBe(201)
       expect(createUserSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-b', roleIds: ['role-volunteer'] }))
+      expect((await res.json()).roles).toEqual(['role-volunteer'])
     })
 
     it('refuses to grant a role broader than the caller\'s own', async () => {
@@ -550,12 +592,12 @@ describe('users routes', () => {
       expect(createUserSpy).not.toHaveBeenCalled()
     })
 
-    it('applies role edits like any other admin edit, scoped to the hub view', async () => {
-      // Main's model: `roles` on PATCH are the account's global roles; the
-      // hub in the path only scopes what is returned. (The branch this was
-      // re-cut from made them the hub assignment only — recorded as an open
-      // question on the PR.)
-      const member = { pubkey: 'u1', roles: ['role-volunteer'], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }
+    it('role edits are handed to the service with the hub, which applies them to that hub\'s assignment only', async () => {
+      // Under a hub `roles` is the member's assignment IN that hub; the
+      // account-wide column is never written from here (#2153). The service
+      // owns that (see hub-user-authority.test.ts); the route's part is to pass
+      // the hub through and show the hub view back.
+      const member = { pubkey: 'u1', roles: [], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }
       const updateUserSpy = vi.fn().mockResolvedValue({ volunteer: member })
       const { app } = createTestApp({
         permissions: hubAdminPerms,
@@ -563,6 +605,7 @@ describe('users routes', () => {
         serviceMock: {
           identity: {
             getUser: vi.fn().mockResolvedValue(member),
+            getUserInternal: vi.fn().mockResolvedValue(member),
             updateUser: updateUserSpy,
             revokeAllSessions: vi.fn(),
           },
@@ -576,6 +619,30 @@ describe('users routes', () => {
       })
       expect(res.status).toBe(200)
       expect(updateUserSpy).toHaveBeenCalledWith('u1', { name: 'Renamed', roles: ['role-volunteer'] }, true, 'hub-b')
+      expect((await res.json()).roles).toEqual(['role-volunteer'])
+    })
+
+    it('refuses to edit an instance super-admin', async () => {
+      const updateUserSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: {
+          identity: {
+            getUser: vi.fn().mockResolvedValue({ pubkey: 'root' }),
+            getUserInternal: vi.fn().mockResolvedValue({ pubkey: 'root', roles: ['role-super-admin'], hubRoles: [] }),
+            updateUser: updateUserSpy,
+          },
+        },
+      })
+
+      const res = await app.request('/users/root', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'hijacked' }),
+      })
+      expect(res.status).toBe(403)
+      expect(updateUserSpy).not.toHaveBeenCalled()
     })
 
     it.each([
@@ -626,6 +693,66 @@ describe('users routes', () => {
       const res = await app.request('/users/u1/cases?hubId=hub-a')
       expect(res.status).toBe(200)
       expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-b' }))
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // The unscoped mount is the instance view: super-admin only (#1099, #2153)
+  // -------------------------------------------------------------------------
+
+  describe('unscoped (/users) for a caller who is not a super-admin', () => {
+    // A caller holding every users:* permission through a non-super-admin role
+    // is still refused: with no hub in the path there is nothing to bound them
+    // to, and a missing hub must never widen authority.
+    const allUsersPerms = ['users:*', 'users:read-cases', 'users:read-metrics']
+    const reached = vi.fn()
+    const identity = {
+      getUsers: reached, getUser: reached, getUserInternal: reached, createUser: reached,
+      updateUser: reached, deleteUser: reached, revokeAllSessions: reached,
+    }
+
+    it.each([
+      ['GET', '/users', undefined],
+      ['GET', '/users/u1', undefined],
+      ['POST', '/users', { pubkey: 'b'.repeat(64), name: 'New', phone: '+15551234567', roleIds: ['role-volunteer'] }],
+      ['PATCH', '/users/u1', { active: false }],
+      ['DELETE', '/users/u1', undefined],
+      ['GET', '/users/u1/cases?hubId=hub-a', undefined],
+      ['GET', '/users/u1/metrics?hubId=hub-a', undefined],
+    ])('%s %s → 403 before any service is reached', async (method, path, body) => {
+      reached.mockClear()
+      const { app } = createTestApp({
+        permissions: allUsersPerms,
+        superAdmin: false,
+        serviceMock: { identity, cases: { list: reached } },
+      })
+
+      const res = await app.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+      expect(res.status).toBe(403)
+      expect(reached).not.toHaveBeenCalled()
+    })
+
+    it('a super-admin still lists every user', async () => {
+      const getUsersSpy = vi.fn().mockResolvedValue({ users: [] })
+      const { app } = createTestApp({
+        permissions: ['users:read'],
+        serviceMock: { identity: { getUsers: getUsersSpy } },
+      })
+      expect((await app.request('/users')).status).toBe(200)
+      expect(getUsersSpy).toHaveBeenCalledWith(undefined)
+    })
+
+    it('cases and metrics outside a hub say a hub is needed instead of returning an empty list', async () => {
+      const { app } = createTestApp({
+        permissions: ['users:read-cases', 'users:read-metrics'],
+        serviceMock: { identity: { getUser: vi.fn().mockResolvedValue({ pubkey: 'u1' }) }, cases: { list: vi.fn() } },
+      })
+      expect((await app.request('/users/u1/cases')).status).toBe(400)
+      expect((await app.request('/users/u1/metrics')).status).toBe(400)
     })
   })
 })

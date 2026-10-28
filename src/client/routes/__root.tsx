@@ -10,7 +10,9 @@ import { setServerEventKeys } from '@/lib/platform'
 import { needsServerAddress } from '@/lib/api-config'
 import { ServerAddressScreen } from '@/components/setup/ServerAddressScreen'
 import { RelayProvider } from '@/lib/relay/context'
-import { useCalls, useShiftStatus } from '@/lib/hooks'
+import { useShiftStatus } from '@/lib/hooks'
+import { CallsProvider, useCalls } from '@/lib/calls-context'
+import { IncomingCallAnnouncer } from '@/components/call/incoming-call-announcer'
 import { useAssigneeRewrap } from '@/lib/assignee-rewrap'
 import { CommandPalette, triggerCommandPalette } from '@/components/command-palette'
 import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog'
@@ -18,7 +20,6 @@ import { NoteSheet } from '@/components/note-sheet'
 import { useKeyboardShortcuts } from '@/lib/use-keyboard-shortcuts'
 import { LanguageSelect } from '@/components/language-select'
 import { LogoMark } from '@/components/logo-mark'
-import { DemoBanner } from '@/components/demo-banner'
 import { NotificationPromptBanner } from '@/components/notification-prompt-banner'
 import { UpdateChecker } from '@/components/UpdateChecker'
 import { PanicWipeIndicator } from '@/components/panic-wipe-indicator'
@@ -94,7 +95,7 @@ function DeviceWipeOverlay() {
 function RootLayout() {
   const { t } = useTranslation()
   const { isAuthenticated, isLoading, profileCompleted, webauthnEnrollmentRequired, hasPermission } = useAuth()
-  const { needsBootstrap, demoMode, isLoading: configLoading, currentHubId, hubsResolved, hubsError } = useConfig()
+  const { needsBootstrap, isLoading: configLoading, currentHubId, hubsResolved, hubsError } = useConfig()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -196,10 +197,7 @@ function RootLayout() {
       )
     } else {
       content = (
-        <>
-          {demoMode && <DemoBanner />}
-          <Outlet />
-        </>
+        <Outlet />
       )
     }
   } else if (HUB_GATE_EXEMPT_PATHS.includes(location.pathname)) {
@@ -280,7 +278,9 @@ function RelayWrappedLayout() {
       devicePubkey={publicKey ?? undefined}
       isAuthenticated={true}
     >
-      <AuthenticatedLayout />
+      <CallsProvider>
+        <AuthenticatedLayout />
+      </CallsProvider>
     </RelayProvider>
   )
 }
@@ -288,14 +288,14 @@ function RelayWrappedLayout() {
 function AuthenticatedLayout() {
   const { t } = useTranslation()
   const { isAdmin, signOut, name, sessionExpiring, sessionExpired, renewSession, hasPermission, primaryRoleName } = useAuth()
-  const { hotlineName, hotlineNumber, channels, demoMode, currentHubId } = useConfig()
+  const { hotlineName, hotlineNumber, channels, currentHubId } = useConfig()
   const hasMessaging = useHasMessaging()
   const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { currentCall } = useCalls()
-  const { onShift, currentShift, nextShift } = useShiftStatus()
+  const { onShift, clockedIn, currentShift, nextShift } = useShiftStatus()
   // Admin clients re-wrap pre-claim messages for a conversation's new assignee
   // (#2046). Lives here, not on the conversations page: an assignment must be
   // served whatever screen the admin is on.
@@ -309,6 +309,8 @@ function AuthenticatedLayout() {
 
   return (
     <div className="flex h-screen">
+      <IncomingCallAnnouncer />
+
       {/* Skip link */}
       <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">
         {t('a11y.skipToContent')}
@@ -356,7 +358,8 @@ function AuthenticatedLayout() {
               {/* Shift status indicator */}
               {!currentCall && (
                 <div className="flex items-center gap-1.5 px-2">
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${onShift ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  {/* Green only when the server would actually ring this user: scheduled AND clocked in. */}
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${onShift && clockedIn ? 'bg-green-500' : onShift ? 'bg-orange-400' : 'bg-gray-400'}`} />
                   <span className="text-xs text-muted-foreground">
                     {onShift && currentShift
                       ? `${currentShift.encryptedName} — ${t('shifts.until')} ${currentShift.endTime}`
@@ -515,7 +518,6 @@ function AuthenticatedLayout() {
 
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {demoMode && <DemoBanner />}
         <UpdateChecker />
         <NotificationPromptBanner />
 

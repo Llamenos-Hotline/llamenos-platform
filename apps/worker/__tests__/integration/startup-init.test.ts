@@ -2,7 +2,7 @@
  * Server startup initialisation (#1138) — boots the real entry point.
  *
  * Every other test path reaches initialisation through `/api/test-reset` or the
- * demo seeder, both of which call `ensureInit` themselves. Production has
+ * sample seeder, both of which call `ensureInit` themselves. Production has
  * neither, so a fresh deployment came up with no settings row, no roles and no
  * admin — ADMIN_PUBKEY was inert. These tests boot `src/server/index.ts` as a
  * subprocess against a freshly migrated, never-seeded database and inspect what
@@ -12,13 +12,14 @@
  * Each test gets its own database, dropped on teardown.
  */
 import { spawn, spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { DEFAULT_ROLES } from '@shared/permissions'
-import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import { bytesToHex } from '@shared/encoding'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
@@ -39,6 +40,15 @@ const ADMIN_PUBKEY = 'c'.repeat(64)
  */
 const ADMIN_DECRYPTION_PUBKEY = 'd'.repeat(64)
 const BOOT_TIMEOUT_MS = 60_000
+
+// BAN_HASH_KEY reaches the server only as a secret file; BAN_HASH_KEY_FILE points
+// this boot at a scratch one, exactly as a deployment mounts /run/secrets/ban-hash-key.
+const SECRET_DIR = mkdtempSync(path.join(tmpdir(), 'startup-init-secrets-'))
+const BAN_HASH_KEY_FILE = path.join(SECRET_DIR, 'ban-hash-key')
+writeFileSync(BAN_HASH_KEY_FILE, `${'e'.repeat(64)}\n`)
+const MESSAGING_HASH_KEY_FILE = path.join(SECRET_DIR, 'messaging-hash-key')
+writeFileSync(MESSAGING_HASH_KEY_FILE, `${'f'.repeat(64)}\n`)
+afterAll(() => rmSync(SECRET_DIR, { recursive: true, force: true }))
 
 const createdDatabases: string[] = []
 
@@ -109,6 +119,9 @@ async function bootServer(
     PORT: String(port),
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
+    BAN_HASH_KEY_FILE,
+    MESSAGING_HASH_KEY_FILE,
     HOTLINE_NAME: 'Boot Test',
     ENVIRONMENT: 'production',
     WEBHOOK_BASE_URL: 'https://boot-test.invalid',
@@ -210,6 +223,43 @@ afterEach(async () => {
 
 const DEFAULT_ROLE_IDS = DEFAULT_ROLES.map((r) => r.id).sort()
 
+describe('server startup: one role per secret', () => {
+  it('refuses to boot without the ban-hash-key secret file', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { BAN_HASH_KEY_FILE: path.join(SECRET_DIR, 'absent') } }),
+    ).rejects.toThrow(/ban-hash-key/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses to boot without the messaging-hash-key secret file', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { MESSAGING_HASH_KEY_FILE: path.join(SECRET_DIR, 'absent') } }),
+    ).rejects.toThrow(/messaging-hash-key/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses MESSAGING_HASH_KEY as an environment variable even with the file present', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { MESSAGING_HASH_KEY: 'e'.repeat(64) } }),
+    ).rejects.toThrow(/must not be set as an environment variable/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses BAN_HASH_KEY as an environment variable even with the file present', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { BAN_HASH_KEY: 'f'.repeat(64) } }),
+    ).rejects.toThrow(/must not be set as an environment variable/)
+  }, BOOT_TIMEOUT_MS * 2)
+
+  it('refuses to boot when HMAC_SECRET and SERVER_KEK are one value', async () => {
+    const url = await freshMigratedDatabase()
+    await expect(
+      bootServer(url, undefined, { extraEnv: { SERVER_KEK: 'a'.repeat(64) } }),
+    ).rejects.toThrow(/identical/)
+  }, BOOT_TIMEOUT_MS * 2)
+})
+
 describe('server startup initialisation', () => {
   it('a never-seeded database boots with the configured admin and the default roles', async () => {
     const url = await freshMigratedDatabase()
@@ -299,60 +349,47 @@ describe('server startup initialisation', () => {
 })
 
 /**
- * The shipped entry point, configured the way a demo/staging host is and then
- * some: every demo and dev flag set, and the setup-state row claiming demo
- * mode. None of it is a development server, so no demo identity may be
- * generated, revealed or registered.
+ * The shipped entry point on an environment that is NOT on the `/api/test-*`
+ * allowlist (`ENVIRONMENT=demo`), with the dev flag and a strong secret set
+ * anyway. Nothing may mint, reveal or register a sample identity there, and the
+ * destructive reset must 404.
+ *
+ * #1604 narrowed what this covers, and that is the point of keeping it.
+ * `ENVIRONMENT=demo` used to be the one environment demo mode was *for*, and
+ * `isMockTelephonyAllowed` accepted it; the dev-surface allowlist is
+ * `['development', 'staging']` and never did. So the removal made this host
+ * strictly less capable, and the rail asserts the narrower result rather than
+ * the mode's old one. Two of the endpoints it used to probe
+ * (`GET /api/config/demo/credentials`, `POST /api/demo/reset`) no longer exist
+ * and are not asserted 404 here — a 404 for an absent route would pass forever
+ * for the wrong reason.
  */
-describe('demo identities on the shipped entry point', () => {
-  // validateConfig refuses a dev surface on a deployed environment below 32 characters.
-  const RESET_SECRET = 'boot-test-reset-secret-'.padEnd(32, 'x')
+describe('sample identities on the shipped entry point, off the allowlist', () => {
+  // >= MIN_DEPLOYED_SECRET_LENGTH so the refusal under test is the ENVIRONMENT
+  // allowlist, not the secret-length check. lib/config.ts refuses to START with
+  // DEV_ROUTES_ENABLED on a non-development environment and a short secret, so a
+  // weak one here would never reach the route layer at all.
+  const RESET_SECRET = 'b'.repeat(64)
   const adminSecret = ed25519.utils.randomSecretKey()
   const adminPubkey = bytesToHex(ed25519.getPublicKey(adminSecret))
 
-  function signedBy(method: string, path: string): string {
-    const timestamp = Date.now()
-    // Header auth is the nonce-bearing domain: the server rejects a nonce-less
-    // token on every route that does not explicitly opt in.
-    const nonce = randomAuthNonce()
-    const message = buildAuthMessage(adminPubkey, timestamp, method, path, nonce)
-    const token = bytesToHex(ed25519.sign(message, adminSecret))
-    return `Bearer ${JSON.stringify({ pubkey: adminPubkey, timestamp, token, nonce })}`
-  }
-
-  it('a demo deployment with every flag set and a demo-claiming database registers and reveals nothing', async () => {
+  it('an off-allowlist deployment with the flag and a strong secret registers and reveals nothing', async () => {
     const url = await freshMigratedDatabase()
     const extraEnv = {
       ENVIRONMENT: 'demo',
-      DEMO_MODE: 'true',
-      DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA',
       DEV_ROUTES_ENABLED: 'true',
       DEV_RESET_SECRET: RESET_SECRET,
     }
     await bootServer(url, adminPubkey, { extraEnv })
-    await withDb(url, async (sql) => {
-      const setupState = { setupCompleted: true, completedSteps: [], pendingChannels: [], selectedChannels: [], demoMode: true }
-      await sql`UPDATE system_settings SET setup_state = ${sql.json(setupState)}`
-    })
 
     await bootServer(url, adminPubkey, {
       extraEnv,
       whileServing: async (base) => {
-        const credentials = await fetch(`${base}/api/config/demo/credentials`)
-        expect(credentials.status).toBe(404)
-        expect(await credentials.text()).not.toMatch(/seed/i)
-
-        const reset = await fetch(`${base}/api/demo/reset`, {
-          method: 'POST',
-          headers: { Authorization: signedBy('POST', '/api/demo/reset'), 'Content-Type': 'application/json' },
-          body: '{}',
-        })
-        expect(reset.status).toBe(403)
-        expect((await reset.json() as { error: string }).error).toMatch(/development server/)
-
         const devHeaders = { 'X-Test-Secret': RESET_SECRET, 'Content-Type': 'application/json' }
-        expect((await fetch(`${base}/api/test-seed-demo`, { method: 'POST', headers: devHeaders, body: '{}' })).status).toBe(404)
-        expect((await fetch(`${base}/api/test-demo-identities`, { headers: devHeaders })).status).toBe(404)
+        expect((await fetch(`${base}/api/test-seed-sample`, { method: 'POST', headers: devHeaders, body: '{}' })).status).toBe(404)
+        const identities = await fetch(`${base}/api/test-sample-identities`, { headers: devHeaders })
+        expect(identities.status).toBe(404)
+        expect(await identities.text()).not.toMatch(/seed/i)
         expect((await fetch(`${base}/api/test-reset`, { method: 'POST', headers: devHeaders })).status).toBe(404)
       },
     })

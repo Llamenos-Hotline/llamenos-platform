@@ -18,6 +18,12 @@ services:
     # here for the app service.
     env_file:
       - .env
+    # BAN_HASH_KEY and MESSAGING_HASH_KEY are delivered only as these secret files,
+    # never through env_file (roles/llamenos-app/templates/compose/app.j2 has the
+    # full note).
+    secrets:
+      - ban-hash-key
+      - messaging-hash-key
 {% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
     # The SIP edge's PUBLIC trust anchor the app publishes to clients in
     # /api/telephony/sip-token (SIP_TLS_CA_FILE in .env). Same mount, same
@@ -32,7 +38,7 @@ services:
     # http://localhost:3000/api/health from the host, and SSH tunnelling is
     # the intended way an operator reaches the app (Caddy fronts it publicly).
     # Without this the app was only on the internal Docker network, so that
-    # probe failed on every demo deploy while the container itself was
+    # probe failed on every deploy of this role while the container itself was
     # healthy (issue #1602, finding 1). NOT 0.0.0.0 — the port must not be
     # reachable from off the host; Caddy is the only public entrypoint.
     ports:
@@ -88,9 +94,10 @@ services:
   is the same belt-and-braces as templates/env/_worker-required-env.j2 —
   playbooks/tasks/guard-dev-routes.yml already refuses that combination outright.
 
-  NOTE: this monolithic role is deprecated and its only consumer is
-  playbooks/deploy-demo.yml, which is being removed with demo mode. Both shapes
-  a real deployment takes run playbooks/deploy.yml -> the per-service roles, so
+  NOTE: this monolithic role is deprecated. Its last playbook consumer,
+  playbooks/deploy-demo.yml, went with demo mode in #1604; what still reads its
+  templates is playbooks/update.yml and scripts/check-required-env.py. Both
+  shapes a real deployment takes run playbooks/deploy.yml -> the per-service roles, so
   roles/llamenos-postgres/templates/compose/postgres.j2 is the copy that
   matters. This one is kept in step only so the two do not diverge while both
   exist (scripts/check-required-env.py renders and checks both).
@@ -173,6 +180,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+secrets:
+  ban-hash-key:
+    file: {{ llamenos_ban_hash_key_file }}
+  messaging-hash-key:
+    file: {{ llamenos_messaging_hash_key_file }}
 
 volumes:
   postgres-data:

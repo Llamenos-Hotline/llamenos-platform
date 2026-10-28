@@ -21,6 +21,7 @@ import '../../db/pg-array-patch'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { insertHubFounder } from '../helpers/hub-founder'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
@@ -57,7 +58,7 @@ async function createHub(status = 'active'): Promise<string> {
     createdBy: 'integration-test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as never)
+  } as never, await insertHubFounder(db))
   return id
 }
 
@@ -130,6 +131,9 @@ describe('redeemInvite grants hub membership', () => {
 
     expect(volunteer.pubkey).toBe(pubkey)
     expect(volunteer.hubRoles).toEqual([{ hubId, roleIds: ['role-volunteer'] }])
+    // The grant lives in hubRoles ONLY. A role in the account-wide column is
+    // authority over every hub on unscoped routes (#2153).
+    expect(volunteer.roles, 'a hub grant leaked into the global roles column').toEqual([])
 
     // Resolved by Postgres against `hub_roles @> ...`, not by a mock. This is
     // the list the shift editor and the ring-group picker populate from, so
@@ -188,7 +192,6 @@ describe('redeemInvite grants hub membership', () => {
   })
 
   it('leaves an existing user\'s global roles, name and active flag alone', async () => {
-    const hubA = await createHub()
     const hubB = await createHub()
     const pubkey = freshPubkey()
 
@@ -198,8 +201,10 @@ describe('redeemInvite grants hub membership', () => {
       phone: '+15550001111',
       roleIds: ['role-volunteer'],
       encryptedSecretKey: '',
-      hubId: hubA,
     })
+    // Created without a hub, so `role-volunteer` is a GLOBAL role — the state the
+    // assertion below is about. (Created under a hub it would be a hub grant and
+    // the global column would be empty, #2153.)
     await identity.updateUser(pubkey, { active: false } as never, true)
 
     await identity.redeemInvite({ code: await invite(hubB, ['role-super-admin']), pubkey })
@@ -258,16 +263,46 @@ describe('redeemInvite grants hub membership', () => {
     expect(volunteer.hubRoles).toEqual([{ hubId: soleHub, roleIds: ['role-volunteer'] }])
   })
 
-  it('creates no membership for a hub-less invite when the hub is ambiguous', async () => {
+  it('refuses a hub-less invite when the hub is ambiguous, instead of granting a global role', async () => {
+    // The fallback used to create the redeemer with the invite's roles in the
+    // account-wide column and no hub — a global grant from an invite that named
+    // no hub (#2153). A missing hub must never widen authority: refuse.
     await sql`UPDATE hubs SET status = 'archived'`
     await createHub()
     await createHub()
     const pubkey = freshPubkey()
-    const code = await invite(null, ['role-volunteer'])
+    const code = await invite(null, ['role-hub-admin'])
     await sql`UPDATE invite_codes SET hub_id = NULL WHERE code = ${code}`
 
-    const { volunteer } = await identity.redeemInvite({ code, pubkey })
-    expect(volunteer.hubRoles, 'a volunteer was guessed into a hub nobody chose').toEqual([])
+    await expect(identity.redeemInvite({ code, pubkey })).rejects.toMatchObject({ status: 409 })
+
+    const rows = await sql`SELECT pubkey FROM users WHERE pubkey = ${pubkey}`
+    expect(rows.length, 'a refused redemption still created a user').toBe(0)
+    // The refusal rolled back the claim: the invite is redeemable once a hub exists.
+    expect((await identity.validateInvite(code)).valid).toBe(true)
+  })
+
+  it('refuses a hub-less invite when there is no active hub at all', async () => {
+    await sql`UPDATE hubs SET status = 'archived'`
+    const pubkey = freshPubkey()
+    const code = await invite(null, ['role-hub-admin'])
+    await sql`UPDATE invite_codes SET hub_id = NULL WHERE code = ${code}`
+
+    await expect(identity.redeemInvite({ code, pubkey })).rejects.toMatchObject({ status: 409 })
+    expect((await sql`SELECT pubkey FROM users WHERE pubkey = ${pubkey}`).length).toBe(0)
+  })
+
+  it('keeps the configured platform admin a super-admin when they redeem an invite', async () => {
+    // enforceAdminRoles is the instance recovery path: the hub grant must not
+    // strip it, and must not be the reason it is missing.
+    const hubId = await createHub()
+    const adminPubkey = freshPubkey()
+    const withAdmin = new IdentityService(db, adminPubkey)
+
+    const { volunteer } = await withAdmin.redeemInvite({ code: await invite(hubId, ['role-volunteer']), pubkey: adminPubkey })
+
+    expect(volunteer.roles).toEqual(['role-super-admin'])
+    expect(volunteer.hubRoles).toEqual([{ hubId, roleIds: ['role-volunteer'] }])
   })
 
   it('stays single-use: a spent code cannot mint a second identity', async () => {

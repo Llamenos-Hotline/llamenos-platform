@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -71,6 +72,8 @@ function hubQP(hubId?: string): string {
 function hubQPFirst(hubId?: string): string {
   return hubId ? `?hub=${encodeURIComponent(hubId)}` : ''
 }
+
+const logger = createLogger('telephony.vonage')
 
 /**
  * VonageAdapter — Vonage Voice API implementation of TelephonyAdapter.
@@ -149,6 +152,10 @@ export class VonageAdapter implements TelephonyAdapter {
     const hp = hubQP(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingAction = sayOrStream('greeting', lang, params.audioUrls, greetingText)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    const noticeActions = params.callRecordingEnabled
+      ? [sayOrStream('recordingNotice', lang, params.audioUrls)]
+      : []
 
     if (params.rateLimited) {
       const rateLimitAction = sayOrStream('rateLimited', lang, params.audioUrls)
@@ -162,6 +169,7 @@ export class VonageAdapter implements TelephonyAdapter {
 
       return this.ncco([
         greetingAction,
+        ...noticeActions,
         captchaAction,
         digitsTalk,
         {
@@ -177,6 +185,7 @@ export class VonageAdapter implements TelephonyAdapter {
     const holdAction = sayOrStream('pleaseHold', lang, params.audioUrls)
     return this.ncco([
       greetingAction,
+      ...noticeActions,
       holdAction,
       {
         action: 'conversation',
@@ -210,15 +219,22 @@ export class VonageAdapter implements TelephonyAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     // CRIT-W1: Hub and pubkey resolved from DB in /call-recording — no URL params needed
+    // #1505: omit `record` (and its recording callback) entirely unless this hub
+    // opted in, so Vonage never writes the conversation audio to disk.
+    const recording = params.recordCall
+      ? {
+          record: true,
+          eventUrl: [`${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}`],
+          eventMethod: 'POST',
+        }
+      : {}
     return this.ncco([
       {
         action: 'conversation',
         name: params.parentCallSid,
         startOnEnter: true,
         endOnExit: true,
-        record: true,
-        eventUrl: [`${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}`],
-        eventMethod: 'POST',
+        ...recording,
       },
     ])
   }
@@ -276,8 +292,6 @@ export class VonageAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callSids: string[] = []
-
     const calls = await Promise.allSettled(
       params.volunteers.map(async (vol) => {
         // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs
@@ -302,17 +316,13 @@ export class VonageAdapter implements TelephonyAdapter {
           const data = await res.json() as { uuid: string }
           return data.uuid
         }
-        throw new Error(`Failed to call volunteer`)
+        throw new Error(`Failed to call volunteer: ${res.status}`)
       })
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callSids.push(result.value)
-      }
-    }
-
-    return callSids
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Vonage', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

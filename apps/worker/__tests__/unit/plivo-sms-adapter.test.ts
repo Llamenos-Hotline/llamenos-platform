@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { PlivoSMSAdapter } from '@worker/messaging/sms/plivo'
 
-const HMAC_SECRET = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' // gitleaks:allow
 
 describe('PlivoSMSAdapter', () => {
   let adapter: PlivoSMSAdapter
@@ -12,7 +11,7 @@ describe('PlivoSMSAdapter', () => {
   const phoneNumber = '+15551234567'
 
   beforeEach(() => {
-    adapter = new PlivoSMSAdapter(authId, authToken, phoneNumber, HMAC_SECRET)
+    adapter = new PlivoSMSAdapter(authId, authToken, phoneNumber)
     fetchMock = vi.fn()
     globalThis.fetch = fetchMock as unknown as typeof fetch
   })
@@ -48,7 +47,7 @@ describe('PlivoSMSAdapter', () => {
       expect(result.channelType).toBe('sms')
       expect(result.externalId).toBe('PLV-MSG-001')
       expect(result.senderIdentifier).toBe('+15559876543')
-      expect(result.senderIdentifierHash).toBeTruthy()
+      expect(result).not.toHaveProperty('senderIdentifierHash')
       expect(result.body).toBe('Hello from Plivo')
       expect(result.metadata?.to).toBe('+15551234567')
       expect(result.timestamp).toBeTruthy()
@@ -94,7 +93,7 @@ describe('PlivoSMSAdapter', () => {
       expect(result.mediaUrls).toBeUndefined()
     })
 
-    it('produces consistent senderIdentifierHash for same number', async () => {
+    it('leaves hashing to the router: same same number, same senderIdentifier, no hash', async () => {
       const makeRequest = () =>
         new Request('https://example.com/webhook', {
           method: 'POST',
@@ -103,7 +102,8 @@ describe('PlivoSMSAdapter', () => {
         })
       const r1 = await adapter.parseIncomingMessage(makeRequest())
       const r2 = await adapter.parseIncomingMessage(makeRequest())
-      expect(r1.senderIdentifierHash).toBe(r2.senderIdentifierHash)
+      expect(r1.senderIdentifier).toBe(r2.senderIdentifier)
+      expect(r1).not.toHaveProperty('senderIdentifierHash')
     })
   })
 

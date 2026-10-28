@@ -46,8 +46,7 @@ const only = (f: Finding[]) => {
 describe('route table', () => {
   test('is read from the router, not the OpenAPI spec', () => {
     const paths = new Set(routes.map(r => `${r.method.toUpperCase()} ${r.path}`))
-    // Three of the 82 operations the generated spec lacks.
-    expect(paths.has('GET /api/config/demo/credentials')).toBe(true)
+    // Two of the 82 operations the generated spec lacks.
     expect(routes.some(r => r.path.startsWith('/api/firehose'))).toBe(true)
     expect(routes.some(r => r.path.startsWith('/api/hubs/:hubId/firehose'))).toBe(true)
     // `telephony.all('/wait-music')` registers as ALL.
@@ -189,6 +188,16 @@ describe('call-site parsing follows the way the clients build paths', () => {
       suspend fun b() = apiService.request<R>("POST", onboardPath())
     `))
     expect(f.path).toBe('/api/hubs/:param/onboard/nope')
+  })
+
+  test('kotlin: ApiService.hubPath(hubId, path) names the hub explicitly, through a helper whose body starts on the next line', () => {
+    const f = only(kotlin(`
+      private fun callPath(call: ActiveCall, action: String): String =
+          apiService.hubPath(call.hubId ?: apiService.activeHubIdOrNull(), "/api/calls/\${call.id}/$action")
+      suspend fun hangup(call: ActiveCall) = apiService.requestNoContent("POST", callPath(call, "nope"))
+    `))
+    expect(f.category).toBe('unmounted')
+    expect(f.path).toBe('/api/hubs/:param/calls/:param/nope')
   })
 
   test('a private hubPath() that only appends a query is not read as hub scoping', () => {

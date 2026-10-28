@@ -369,11 +369,14 @@
     "active": "လက်ရှိခေါ်ဆိုမှု",
     "addNote": "မှတ်စုထည့်မည်",
     "answer": "ဖြေမည်",
+    "answerFailed": "ခေါ်ဆိုမှုကို မဖြေနိုင်ခဲ့ပါ။ တခြားတစ်ယောက်က အရင်ဖြေသွားခြင်း ဖြစ်နိုင်သည်။",
+    "answerOnPhone": "သင့်ဖုန်းတွင် ဖြေပါ",
     "banned": "ဤနံပါတ်ကို ပိတ်ပင်ထားသည်",
     "caller": "ခေါ်ဆိုသူ",
     "duration": "ကြာချိန်",
     "ended": "ခေါ်ဆိုမှု ပြီးဆုံးပြီ",
     "hangUp": "ချမည်",
+    "hangupFailed": "ခေါ်ဆိုမှုကို မအဆုံးသတ်နိုင်ခဲ့ပါ။ ထပ်ကြိုးစားပါ။",
     "hold": "ခဏထားမည်",
     "incoming": "ဝင်လာသောခေါ်ဆိုမှု",
     "mute": "အသံပိတ်မည်",
@@ -613,6 +616,8 @@
     "breakDescription": "နားနေစဉ် ဖုန်းခေါ်ဆိုမှုများ လက်ခံရမည်မဟုတ်ပါ",
     "calls": "ဖုန်းခေါ်ဆိုမှုများ",
     "callsToday": "ယနေ့ခေါ်ဆိုမှုများ",
+    "clockInToReceiveCalls": "You're scheduled now. Clock in to receive calls.",
+    "clockedInNotScheduled": "You're clocked in, but no shift covers you right now, so calls won't ring you.",
     "connection": "ချိတ်ဆက်မှု",
     "contacts": "အဆက်အသွယ်များ",
     "contactsSubtitle": "ဖုန်းခေါ်သူ ဆက်သွယ်မှုမှတ်တမ်းကို ကြည့်မည်",
@@ -632,6 +637,7 @@
     "noRecentNotes": "မကြာသေးမီ မှတ်စုများ မရှိပါ",
     "noShift": "အလှည့် သတ်မှတ်ထားခြင်း မရှိပါ",
     "noUsersOnline": "အွန်လိုင်းတွင် အသုံးပြုသူ မရှိပါ",
+    "notClockedIn": "Not clocked in",
     "notes": "မှတ်စုများ",
     "offShift": "အလှည့်ပြင်ပ",
     "offline": "အော့ဖ်လိုင်း",
@@ -652,6 +658,12 @@
     "clockIn": "အလှည့်ဝင်မည်",
     "cases": "Cases",
     "triage": "Triage"
+  },
+  "errors": {
+    "deviceNotRegistered": "ဤစက်ကို သင့် ဟပ်တွင် မှတ်ပုံတင်ရသေးပါ။ သင့် ဟပ်ကို စီမံသူတစ်ဦးအား ထည့်ပေးရန် တောင်းဆိုပါ။",
+    "forbidden": "ဤလုပ်ဆောင်ချက်အတွက် ခွင့်ပြုချက် မရှိပါ။ သင့် ဟပ်ကို စီမံသူတစ်ဦးကို မေးပါ။",
+    "notFound": "၎င်းမှာ မရှိတော့ပါ။ ဖယ်ရှားခံရခြင်း ဖြစ်နိုင်သည်။",
+    "serverUnavailable": "ယခု ဆာဗာသို့ ချိတ်ဆက်၍ မရပါ။ ခဏနေ ထပ်ကြိုးစားပါ။"
   },
   "hubs": {
     "accessDenied": "ဝင်ရောက်ခွင့် ပိတ်ပင်ထားသည်",
@@ -706,15 +718,16 @@
   },
   "ivr": {
     "selfAnnouncement": "မြန်မာဘာသာအတွက် [N] နှိပ်ပါ။",
-    "moreLanguages": "For more languages, press [N].",
-    "goBack": "To go back, press 0.",
     "title": "IVR Language Menu",
     "description": "Configure which languages callers can select from via keypad.",
     "enabledLanguages": "Enabled languages (ordered)",
     "subMenu": "sub-menu",
     "subMenuNote": "Languages after position 8 are in a sub-menu (caller presses 9 for more).",
     "availableLanguages": "Available languages",
-    "atLeastOne": "At least one language must be enabled."
+    "atLeastOne": "At least one language must be enabled.",
+    "uncoveredLanguages": "Enabled languages nobody in this hub speaks: {{count}}",
+    "uncoveredHint": "A caller who picks one of these may reach no one who speaks it. Add spoken languages to member profiles, or turn the language off.",
+    "maxLanguagesReached": "The keypad menu holds {{max}} languages. Callers in other languages are matched by phone-number prefix."
   },
   "ivrAudio": {
     "delete": "ဖျက်မည်",
@@ -724,6 +737,7 @@
       "greeting": "နှုတ်ခွန်းဆက်",
       "pleaseHold": "ခဏစောင့်ပါ",
       "rateLimited": "ခေါ်ဆိုမှုများပြားချိန် မက်ဆေ့ချ်",
+      "recordingNotice": "အသံဖမ်းယူမှု အကြောင်းကြားချက်",
       "voicemailPrompt": "အသံမက်ဆေ့ချ် အညွှန်း",
       "waitMessage": "စောင့်ဆိုင်းမက်ဆေ့ချ်"
     },
@@ -918,6 +932,7 @@
     "keyLocked": "သော့ကို သော့ခတ်ထားသည်",
     "lockoutRemaining": "သော့ခတ်ထားသည်။ {{seconds}} စက္ကန့်အကြာ ထပ်ကြိုးစားပါ။",
     "mismatch": "PIN များ မကိုက်ညီပါ။ ထပ်ကြိုးစားပါ။",
+    "progress": "{{total}} အနက် {{count}}",
     "setEncrypting": "သင့်သော့ကို စာဝှက်နေသည်...",
     "setSubtitle": "သင့်သော့ကို ကာကွယ်ရန် ဂဏန်း ၆-၈ လုံး PIN ရွေးချယ်ပါ",
     "setTitle": "PIN ဖန်တီးပါ",
@@ -935,7 +950,7 @@
     "description": "ဤလုပ်ဆောင်ချက်ကို ဆက်လုပ်ရန် သင့် PIN ကို ရိုက်ထည့်ပါ။",
     "maxAttempts": "အများဆုံးကြိုးစားမှု ကျော်လွန်ပြီ။ သော့ကို ဖျက်ပြီးပါပြီ။",
     "title": "သင့်အထောက်အထား စစ်ဆေးမည်",
-    "wrongPin": "Incorrect PIN."
+    "wrongPin": "PIN မမှန်ပါ။"
   },
   "preferences": {
     "invalidToken": "ဦးစားပေးလင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် ကုန်ဆုံးသွားပါပြီ",
@@ -1279,9 +1294,6 @@
     "complete": "ပြင်ဆင်မှု ပြီးဆုံးပါပြီ! သင့်ဟော့လိုင်းသို့ ကြိုဆိုပါသည်။",
     "completeFailed": "ပြင်ဆင်မှု ပြီးဆုံးခြင်း မအောင်မြင်ပါ",
     "configured": "ပြင်ဆင်ပြီး",
-    "demoMode": "နမူနာဒေတာဖြင့် ဖြည့်မည်",
-    "demoModeDescription": "စမ်းသပ်ခြင်းနှင့် သရုပ်ပြခြင်းအတွက် နမူနာစေတနာ့ဝန်ထမ်းအကောင့်များ၊ အလှည့်များနှင့် ပိတ်ပင်ခြင်းများကို ဖန်တီးသည်။ သရုပ်ပြအကောင့် အထောက်အထားများကို ဝင်ရောက်ရန်စာမျက်နှာတွင် ပြမည်။",
-    "demoSeedFailed": "နမူနာဒေတာ တစ်စိတ်တစ်ပိုင်း ဖန်တီးပြီး",
     "generateInvite": "ဖိတ်ကြားချက် ဖန်တီးမည်",
     "generatedInvites": "ဖန်တီးထားသော ဖိတ်ကြားချက်များ",
     "goToDashboard": "ဒက်ရှ်ဘုတ်သို့ သွားမည်",
@@ -1849,6 +1861,7 @@
     "role": "ရာထူး",
     "roleAdmin": "စီမံခန့်ခွဲသူ",
     "roleHubAdmin": "ဟပ်စီမံခန့်ခွဲသူ",
+    "roleHubDefault": "ဟပ်၏ မူလ",
     "roleReporter": "အစီရင်ခံသူ",
     "roleReviewer": "ပြန်လည်စစ်ဆေးသူ",
     "roleVolunteer": "စေတနာ့ဝန်ထမ်း",
@@ -4046,18 +4059,6 @@
     "updateError": "Failed to update report type",
     "updated": "Report type updated"
   },
-  "demo": {
-    "dismiss": "ပယ်မည်",
-    "getStarted": "Deploy your own",
-    "admin": "စီမံခန့်ခွဲသူ",
-    "volunteer": "စေတနာ့ဝန်ထမ်း",
-    "banner": "Demo Mode",
-    "bannerText": "Test environment — do not enter real caller information. Data here is not confidential and may be deleted at any time.",
-    "bannerTextSchedule": "Test environment — do not enter real caller information. Data resets {{schedule}} and is not confidential.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
-  },
   "dismiss": "ပယ်မည်",
   "smsWebhook": "SMS Webhook",
   "webhook": {
@@ -4099,6 +4100,7 @@
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "rejected": "မသိမ်းဆည်းရပါ- ဆာဗာက ငြင်းပယ်လိုက်သည်",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
     "syncComplete": "All operations synced successfully",
@@ -4288,6 +4290,8 @@
     "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
     "wakeRegisterFailed": "Device registration failed: {{reason}}",
+    "permissionsStale": "Couldn't refresh your permissions. You keep the access you last had while we retry.",
+    "permissionsUnavailable": "Couldn't load your permissions, so some features are hidden until the connection recovers. Retrying.",
     "biometricLockout": "Biometric unlock is locked after too many failed attempts. Enter your PIN.",
     "biometricNotEnrolled": "Your device's biometrics changed, so biometric unlock was turned off. Enter your PIN.",
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
@@ -4349,7 +4353,7 @@
   "verificationCodeLabel": "စစ်ဆေးကုဒ်",
   "callActions": {
     "openNotes": "မှတ်စုများ",
-    "banAndHangUp": "Ban & Hang Up",
+    "banAndHangUp": "ပိတ်ပင်ပြီး ချမည်",
     "banAndHangUpConfirm": "Ban this caller and end the call?",
     "banConfirmTitle": "Ban caller and hang up?",
     "banFailed": "Failed to ban caller",
@@ -4472,8 +4476,8 @@
   "connectionSuccess": "ချိတ်ဆက်မှု အောင်မြင်သည်",
   "lock": {
     "app": "အက်ပ်သော့ခတ်မည်",
-    "keyWiped": "Key has been wiped due to too many failed attempts",
-    "wrongPin": "Wrong PIN"
+    "keyWiped": "မအောင်မြင်သော ကြိုးစားမှု များလွန်းသဖြင့် သော့ကို ဖျက်လိုက်ပြီ",
+    "wrongPin": "PIN မှားနေသည်"
   },
   "testConnection": "ချိတ်ဆက်မှု စမ်းသပ်မည်",
   "accountNameLabel": "Account Name",
@@ -4580,9 +4584,9 @@
   },
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
-  "incomingCallBody": "Someone is calling the hotline",
-  "incomingCallAnswer": "Answer",
-  "incomingCallDecline": "Decline",
+  "incomingCallBody": "တစ်စုံတစ်ဦးက ကူညီရေးလိုင်းကို ခေါ်ဆိုနေသည်",
+  "incomingCallAnswer": "ဖြေမည်",
+  "incomingCallDecline": "ငြင်းမည်",
   "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
@@ -4694,6 +4698,7 @@
   },
   "voice": {
     "greeting": "{name} သို့ ဖုန်းခေါ်ဆိုမှုအတွက် ကျေးဇူးတင်ပါသည်။",
+    "recordingNotice": "ကျေးဇူးပြု၍ သတိပြုပါ။ ဤဖုန်းခေါ်ဆိုမှုကို အသံဖမ်းယူမည်ဖြစ်ပါသည်။",
     "rateLimited": "လောလောဆယ် ဖုန်းခေါ်ဆိုမှု အလွန်များနေပါသည်။ ကျေးဇူးပြု၍ နောက်မှ ထပ်ကြိုးစားပါ။",
     "captchaPrompt": "ကျေးဇူးပြု၍ အောက်ပါ ဂဏန်းများကို ထည့်ပါ:",
     "captchaTimeout": "သင်ထည့်သွင်းမှုကို မရရှိပါ။ ဂုဏ်ယူပါသည်။",

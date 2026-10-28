@@ -19,6 +19,17 @@
 // there, so it changed nothing, and no test asserted anything about it. These
 // tests assert the variable bun actually reads, on every job that can land on
 // that host, before the first step that could run bun.
+//
+// ── ...and setup-bun installs into a per-runner HOME ─────────────────────────
+//
+// The same two runners are the same macOS user, so setup-bun's
+// `$HOME/.bun/bin/bun` is one file. Its cache restore is a `tar -xf -P` over
+// that file — an in-place rewrite of a signed Mach-O that the other runner may
+// be exec'ing or running (the native backend is a bun process for a whole
+// job). macOS SIGKILLs a process whose executable no longer matches its
+// signature: `bun install` died `Killed: 9` (exit 137) 40 ms in, before any
+// test, in merge group 40438235535, 25 ms after the other runner's tar wrote
+// the file. A setup-bun step with HOME under runner.temp gets its own copy.
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -112,6 +123,35 @@ export function bunTmpdirViolations(workflows: Map<string, Workflow>): { checked
   return { checked, violations }
 }
 
+/** Does this step install bun? */
+export function installsBun(step: Step): boolean {
+  return step.uses?.includes('oven-sh/setup-bun') === true
+}
+
+/** Does this step install bun under a HOME that only this runner can see? */
+export function installsBunIntoPerRunnerHome(step: Step): boolean {
+  return /^\$\{\{\s*runner\.temp\s*\}\}\/\S+$/.test(String(step.env?.HOME ?? ''))
+}
+
+/** Every self-hosted-Mac job whose setup-bun could rewrite a bun the co-tenant is running. */
+export function bunHomeViolations(workflows: Map<string, Workflow>): { checked: string[]; violations: Violation[] } {
+  const checked: string[] = []
+  const violations: Violation[] = []
+  for (const [file, wf] of workflows) {
+    for (const [id, job] of Object.entries(wf.jobs ?? {})) {
+      if (!canRunOnSelfHostedMac(job)) continue
+      for (const step of (job.steps ?? []).filter(installsBun)) {
+        const where = `${file}:${id}:${step.name ?? step.uses}`
+        checked.push(where)
+        if (!installsBunIntoPerRunnerHome(step)) {
+          violations.push({ job: where, problem: 'setup-bun runs without HOME=${{ runner.temp }}/…, so it rewrites the shared ~/.bun/bin/bun' })
+        }
+      }
+    }
+  }
+  return { checked, violations }
+}
+
 describe('self-hosted Mac jobs give bun install a per-runner BUN_TMPDIR', () => {
   const workflows = loadWorkflows()
 
@@ -122,6 +162,22 @@ describe('self-hosted Mac jobs give bun install a per-runner BUN_TMPDIR', () => 
 
   test('each exports BUN_TMPDIR under RUNNER_TEMP before its first bun step, and nothing overrides it', () => {
     const { violations } = bunTmpdirViolations(workflows)
+    expect(violations).toEqual([])
+  })
+})
+
+describe('self-hosted Mac jobs install bun into a per-runner HOME', () => {
+  const workflows = loadWorkflows()
+
+  test('finds every setup-bun step that can land on the self-hosted Mac (an empty scan would pass vacuously)', () => {
+    const { checked } = bunHomeViolations(workflows)
+    expect(checked.map((c) => c.split(':').slice(0, 2).join(':'))).toEqual(
+      expect.arrayContaining(['ci.yml:ios-build-test', 'ios-e2e.yml:build', 'ios-e2e.yml:ui']),
+    )
+  })
+
+  test('each pins HOME under runner.temp on its setup-bun step', () => {
+    const { violations } = bunHomeViolations(workflows)
     expect(violations).toEqual([])
   })
 })
@@ -168,5 +224,26 @@ describe('the BUN_TMPDIR check rejects the defects it was written for', () => {
     expect(touchesBun({ run: 'echo ok && bun run codegen' })).toBe(true)
     expect(touchesBun({ run: 'echo bundle exec fastlane' })).toBe(false)
     expect(touchesBun({ run: 'rm -rf bun-cache' })).toBe(false)
+  })
+})
+
+describe('the setup-bun HOME check rejects the defect it was written for', () => {
+  const mac = ['self-hosted', 'macOS', 'ARM64', 'ios-e2e']
+  const shared: Step = { name: 'Setup Bun', uses: 'oven-sh/setup-bun@x', env: { TMPDIR: '${{ runner.temp }}' } }
+  const isolated: Step = { ...shared, env: { ...shared.env, HOME: '${{ runner.temp }}/bun-home' } }
+  const one = (job: Job) => bunHomeViolations(new Map([['w.yml', { jobs: { j: job } }]])).violations
+
+  test('a setup-bun step on the real HOME — merge group 40438235535\'s shape — is rejected', () => {
+    expect(one({ 'runs-on': mac, steps: [shared] })).toHaveLength(1)
+  })
+
+  test('a HOME that is not per-runner is rejected', () => {
+    const fixed = { ...shared, env: { HOME: '/Users/rhonda' } }
+    expect(one({ 'runs-on': mac, steps: [fixed] })).toHaveLength(1)
+  })
+
+  test('a per-runner HOME passes, and hosted jobs are out of scope', () => {
+    expect(one({ 'runs-on': mac, steps: [isolated] })).toEqual([])
+    expect(one({ 'runs-on': 'macos-15', steps: [shared] })).toEqual([])
   })
 })

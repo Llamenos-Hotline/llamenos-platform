@@ -72,7 +72,7 @@ function makeServices(): Services {
       verifyCaptcha: vi.fn().mockResolvedValue({ match: true, expected: '1234' }),
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 }),
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
-      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
       getTranscriptionSettings: vi.fn().mockResolvedValue({ globalEnabled: false }),
     },
     records: {
@@ -118,6 +118,8 @@ function makeEnv(overrides?: Record<string, unknown>): AppEnv['Bindings'] {
     ENVIRONMENT: 'test',
     HOTLINE_NAME: 'Test Hotline',
     HMAC_SECRET: 'a'.repeat(64),
+    SERVER_KEK: 'c'.repeat(64),
+    BAN_HASH_KEY: 'b'.repeat(64),
     TWILIO_ACCOUNT_SID: 'AC123',
     TWILIO_AUTH_TOKEN: 'token',
     TWILIO_PHONE_NUMBER: '+15551234567',
@@ -373,6 +375,37 @@ describe('Telephony routes', () => {
       )
     })
 
+    // ---- #1505: the caller is told, in the greeting, before being connected ----
+
+    const selectLanguage = async () => {
+      const app = await createTestApp(adapter, services)
+      return app.request('/api/telephony/language-selected?hub=hub-1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallSid=CA-lang&From=%2B15551111111&Digits=2',
+      })
+    }
+
+    /** The callRecordingEnabled flag the greeting was built with */
+    const noticeArg = () =>
+      (adapter.handleIncomingCall as ReturnType<typeof vi.fn>).mock.calls[0][0].callRecordingEnabled
+
+    it('builds the greeting with no recording notice when the hub does not record', async () => {
+      const res = await selectLanguage()
+      expect(res.status).toBe(200)
+      expect(noticeArg()).toBe(false)
+    })
+
+    it('builds the greeting with the recording notice when the hub records', async () => {
+      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+        queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: true,
+      })
+      const res = await selectLanguage()
+      expect(res.status).toBe(200)
+      expect(noticeArg()).toBe(true)
+      expect(services.settings.getCallSettings).toHaveBeenCalledWith('hub-1')
+    })
+
     it('uses forceLang query param when provided', async () => {
       const app = await createTestApp(adapter, services)
       await app.request('/api/telephony/language-selected?hub=hub-1&forceLang=es', {
@@ -536,38 +569,44 @@ describe('Telephony routes', () => {
   })
 
   describe('POST /user-answer', () => {
-    it('returns 403 for invalid call token', async () => {
-      services.calls.answerCallWithToken = vi.fn().mockResolvedValue(null)
-      const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/user-answer?callToken=bad-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: '',
-      })
-      expect(res.status).toBe(403)
-      expect(await res.json()).toEqual({ error: 'Forbidden' })
-    })
-
-    it('bridges call and publishes events on valid token', async () => {
-      services.calls.answerCallWithToken = vi.fn().mockResolvedValue({
-        callSid: 'CA-parent',
-        volunteerPubkey: 'pk-vol-1',
-        hubId: 'hub-1',
-      })
+    const validToken = () => {
+      const leg = { callSid: 'CA-parent', volunteerPubkey: 'pk-vol-1', hubId: 'hub-1' }
+      services.calls.resolveCallToken = vi.fn().mockResolvedValue(leg)
+      services.calls.answerCallWithToken = vi.fn().mockResolvedValue(leg)
       services.calls.getActiveCalls = vi.fn().mockResolvedValue([
         { callId: 'CA-parent', callerLast4: '1111', startedAt: new Date().toISOString() },
       ])
+    }
+    const answer = async (body = 'CallSid=LEG-2', token = 'valid-token') => {
       const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/user-answer?callToken=valid-token', {
+      return app.request(`/api/telephony/user-answer?callToken=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: '',
+        body,
       })
+    }
+    /** TwiML that ends the leg, with the call untouched: no bridge, no audit, no cancellation. */
+    const expectLegRefused = async (res: Response) => {
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Content-Type')).toContain('xml')
+      expect(await res.text()).toBe('<Response><Hangup/></Response>')
+      expect(adapter.handleCallAnswered).not.toHaveBeenCalled()
+      expect(adapter.cancelRinging).not.toHaveBeenCalled()
+      expect(services.audit.log).not.toHaveBeenCalled()
+    }
+
+    it('hangs up the leg (TwiML, not a JSON 403) for an invalid call token', async () => {
+      const res = await answer('', 'bad-token')
+      await expectLegRefused(res)
+    })
+
+    it('bridges call and publishes events on valid token', async () => {
+      validToken()
+      const res = await answer('')
       expect(res.status).toBe(200)
       expect(res.headers.get('Content-Type')).toContain('xml')
       expect(await res.text()).toContain('<Dial')
       expect(services.calls.answerCallWithToken).toHaveBeenCalledWith('valid-token')
-      expect(services.calls.resolveCallToken).not.toHaveBeenCalled()
       expect(adapter.handleCallAnswered).toHaveBeenCalledWith(
         expect.objectContaining({
           parentCallSid: 'CA-parent',
@@ -577,37 +616,88 @@ describe('Telephony routes', () => {
       )
     })
 
-    const validToken = () => {
-      services.calls.answerCallWithToken = vi.fn().mockResolvedValue({
-        callSid: 'CA-parent',
-        volunteerPubkey: 'pk-vol-1',
-        hubId: 'hub-1',
+    it('writes callAnswered only after the bridge instruction exists', async () => {
+      validToken()
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(services.audit.log).toHaveBeenCalledWith('callAnswered', 'pk-vol-1', { callerLast4: '1111' }, 'hub-1')
+      const bridged = vi.mocked(adapter.handleCallAnswered).mock.invocationCallOrder[0]
+      const audited = vi.mocked(services.audit.log).mock.invocationCallOrder[0]
+      expect(bridged).toBeLessThan(audited)
+    })
+
+    it('does not audit an answer when building the bridge fails', async () => {
+      validToken()
+      vi.mocked(adapter.handleCallAnswered).mockRejectedValue(new Error('provider down'))
+      const res = await answer()
+      expect(res.status).toBe(500)
+      expect(services.audit.log).not.toHaveBeenCalled()
+    })
+
+    it('a leg answered by a machine neither claims the call nor cancels the other legs', async () => {
+      // A carrier voicemail greeting picks up first when a volunteer's phone is off. It
+      // must not take the call (the caller would be recorded onto a third-party mailbox
+      // and every volunteer who really is ringing would be cancelled).
+      validToken()
+      vi.mocked(adapter.parseIncomingWebhook).mockResolvedValue({
+        callSid: 'LEG-2', callerNumber: '+1', calledNumber: '+2', answeredByMachine: true,
       })
-    }
-    const answer = async () => {
-      const app = await createTestApp(adapter, services)
-      return app.request('/api/telephony/user-answer?callToken=valid-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'CallSid=LEG-2',
+      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
+      const res = await answer('CallSid=LEG-2&AnsweredBy=machine_start')
+      await expectLegRefused(res)
+      expect(services.calls.answerCallWithToken).not.toHaveBeenCalled()
+    })
+
+    // ---- #1505: provider-side recording is opt-in per hub, OFF by default ----
+
+    /** The recordCall flag the route actually handed the adapter */
+    const recordCallArg = () =>
+      (adapter.handleCallAnswered as ReturnType<typeof vi.fn>).mock.calls[0][0].recordCall
+
+    it('does not record when the hub has no recording setting (the default)', async () => {
+      validToken()
+      // makeServices()'s getCallSettings returns no recordCalls at all — the
+      // shape a hub that never touched the setting has.
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(recordCallArg()).toBe(false)
+    })
+
+    it('does not record when the hub has recording explicitly disabled', async () => {
+      validToken()
+      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+        queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: false,
       })
-    }
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(recordCallArg()).toBe(false)
+    })
+
+    it('records only when the hub has turned recording on', async () => {
+      validToken()
+      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+        queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: true,
+      })
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(recordCallArg()).toBe(true)
+      // Read for this hub, not globally: hub A's choice must not record hub B.
+      expect(services.settings.getCallSettings).toHaveBeenCalledWith('hub-1')
+    })
 
     it('refuses a leg that lost the answer race: no bridge, no audit, no event, no leg cancellation', async () => {
       // answerCallWithToken is the atomic ringing → in-progress claim; null means
       // another volunteer already won (or the call is gone / the token is spent).
+      validToken()
       services.calls.answerCallWithToken = vi.fn().mockResolvedValue(null)
       recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
       const res = await answer()
-      expect(res.status).toBe(403)
-      expect(adapter.handleCallAnswered).not.toHaveBeenCalled()
-      expect(adapter.cancelRinging).not.toHaveBeenCalled()
-      expect(services.audit.log).not.toHaveBeenCalled()
+      await expectLegRefused(res)
+      expect(services.calls.answerCallWithToken).toHaveBeenCalledWith('valid-token')
     })
 
     it('cancels the other ringing legs, sparing the winner\'s own leg', async () => {
       validToken()
-      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
       vi.mocked(adapter.parseIncomingWebhook).mockResolvedValue({ callSid: 'LEG-2', callerNumber: '+1', calledNumber: '+2' } as never)
       recordRingLegs('CA-parent', ['LEG-1', 'LEG-2', 'LEG-3'])
       const res = await answer()
@@ -617,7 +707,6 @@ describe('Telephony routes', () => {
 
     it('does not cancel any leg when the winner\'s leg SID is unknown (would hang up the winner)', async () => {
       validToken()
-      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
       vi.mocked(adapter.parseIncomingWebhook).mockRejectedValue(new Error('unparseable'))
       recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
       const res = await answer()

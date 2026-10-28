@@ -509,60 +509,57 @@ class BaseUITest: XCTestCase {
         }
     }
 
-    /// Navigate through full onboarding: create identity, set + confirm PIN, reach dashboard.
-    ///
-    /// V3 device key model: there is no backup-confirmation step and no digit
-    /// PIN pad here — PINSetView.swift uses a free-text SecureField
-    /// ("pin-input"/"pin-submit") so a PIN or passphrase (8+ characters) can
-    /// be entered, and device keys are generated atomically once the same
-    /// value is entered twice (PINViewModel.handleSetPIN). The digit
-    /// PINPadView ("pin-pad", `enterPIN`) is only used on the lock/unlock
-    /// screen — see PINUnlockView.swift.
-    func completeOnboarding(hubURL: String = "https://test.example.org", pin: String = "12345678") {
-        // Enter hub URL
-        let hubURLInput = find("hub-url-input")
-        if hubURLInput.waitForExistence(timeout: 5) {
-            hubURLInput.tap()
-            hubURLInput.typeText(hubURL)
-            dismissKeyboard()
-        }
-
-        // Create identity
-        let createButton = find("create-identity")
-        if createButton.waitForExistence(timeout: 3) {
-            createButton.tap()
-        }
-
-        // Enter PIN (first entry)
-        let pinInput = find("pin-input")
-        guard pinInput.waitForExistence(timeout: 10) else { return }
-        pinInput.tap()
-        pinInput.typeText(pin)
-
-        let submitButton = find("pin-submit")
-        if submitButton.waitForExistence(timeout: 3) {
-            submitButton.tap()
-        }
-
-        // Confirm PIN (second entry)
-        if pinInput.waitForExistence(timeout: 5) {
-            pinInput.tap()
-            pinInput.typeText(pin)
-
-            if submitButton.waitForExistence(timeout: 3) {
-                submitButton.tap()
-            }
-        }
-
-        // Wait for dashboard
-        let dashboardTitle = find("dashboard-title")
-        _ = dashboardTitle.waitForExistence(timeout: 10)
-    }
-
     /// Dismiss the keyboard by tapping a neutral area of the screen.
     func dismissKeyboard() {
         let coordinate = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
         coordinate.tap()
+    }
+
+    /// Give a text field keyboard focus, returning only once it holds it.
+    ///
+    /// `tap()` returns when the touch is synthesized, not when the field has become first
+    /// responder, and `typeText` then fails with "Neither element nor any descendant has keyboard
+    /// focus" if it has not. That happened to `testAddBanEnablesSubmissionAfterEnteringAnIdentifier`
+    /// (merge group 40426201858, shard 3): the tap came ~200 ms after the Add Ban sheet's button
+    /// was tapped, while the sheet was still sliding in, and every `typeText` retry afterwards
+    /// re-dispatched into a field nothing had focused. So wait for the field to be on screen and
+    /// still, tap it, and wait on `hasKeyboardFocus`; a tap that did not take is tapped again, up
+    /// to `attempts` times, each time against the condition rather than a delay.
+    @discardableResult
+    func focusTextField(
+        _ field: XCUIElement,
+        attempts: Int = 3,
+        file: StaticString = #filePath, line: UInt = #line
+    ) -> Bool {
+        guard field.waitForExistence(timeout: 10) else {
+            XCTFail("The text field should exist before it is focused", file: file, line: line)
+            return false
+        }
+
+        // A presenting sheet moves its content; a tap aimed at a frame read mid-slide lands
+        // elsewhere. Settled means hittable with the same frame on two consecutive samples.
+        var previousFrame = CGRect.null
+        let settleDeadline = Date().addingTimeInterval(10)
+        var settled = false
+        while !settled && Date() < settleDeadline {
+            let frame = field.frame
+            settled = field.isHittable && frame == previousFrame
+            previousFrame = frame
+            if !settled { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        }
+        guard settled else {
+            XCTFail("The text field never stopped moving or never became hittable", file: file, line: line)
+            return false
+        }
+
+        let focused = NSPredicate(format: "hasKeyboardFocus == true")
+        for _ in 0..<attempts {
+            field.tap()
+            let focus = XCTNSPredicateExpectation(predicate: focused, object: field)
+            if XCTWaiter.wait(for: [focus], timeout: 3) == .completed { return true }
+        }
+        XCTFail("The text field never took keyboard focus after \(attempts) taps", file: file, line: line)
+        return false
     }
 
     // MARK: - Element Helpers
@@ -680,5 +677,80 @@ class BaseUITest: XCTestCase {
         } else {
             XCTFail("Element '\(identifier)' not found after \(maxSwipes) swipes")
         }
+    }
+
+    /// What `awaitSettled` last saw, so a timeout says which condition was never met.
+    private final class SettleWatch {
+        var frame = CGRect.null
+        var since = Date()
+        var samples = 0
+        var observed = "never resolved"
+    }
+
+    /// Wait until `element` is on screen (hittable), enabled (a tap on a disabled
+    /// control is silently dropped) AND has held the same frame for `settle` seconds.
+    /// `exists` is true for a SwiftUI `List` row that is mid-push-transition or about
+    /// to be reflowed by rows inserted above it, and a tap that lands then is
+    /// swallowed with no error (#2091: hosted `macos-15` lost the tap on
+    /// `admin-events` while the Mac, which settles in time, never did). Waiting on the
+    /// element's state — not a fixed delay — makes the tap land on a stable target.
+    ///
+    /// Judging "still" takes at least two samples `settle` apart, and every sample
+    /// pays for fresh accessibility resolves. On hosted `macos-15` one resolve costs
+    /// 0.7–1.8 s (#2092's merge group: `exists`, `isHittable`, `isEnabled` and
+    /// `frame` as four separate resolves made one sample ~5 s, so a 10 s ceiling fit
+    /// fewer than two and failed on a field that had been stable for the whole wait).
+    /// So a sample takes ONE snapshot (existence, enabled, frame together) plus one
+    /// `isHittable`, and the ceiling is sized for a slow host: it is only ever spent
+    /// when the element really never settles, because a settled element returns at once.
+    private func awaitSettled(
+        _ element: XCUIElement, timeout: TimeInterval, settle: TimeInterval = 0.5
+    ) -> (settled: Bool, lastSeen: String) {
+        let watch = SettleWatch()
+        let settled = NSPredicate { _, _ in
+            guard let snapshot = try? element.snapshot() else {
+                watch.observed = "not in the hierarchy"
+                watch.frame = .null
+                return false
+            }
+            guard snapshot.isEnabled else {
+                watch.observed = "disabled"
+                watch.frame = .null
+                return false
+            }
+            guard element.isHittable else {
+                watch.observed = "not hittable"
+                watch.frame = .null
+                return false
+            }
+            watch.samples += 1
+            if snapshot.frame != watch.frame {
+                watch.frame = snapshot.frame
+                watch.since = Date()
+            }
+            let held = Date().timeIntervalSince(watch.since)
+            watch.observed = "hittable and enabled, frame unchanged for \(String(format: "%.1f", held))s"
+                + " over \(watch.samples) sample(s)"
+            return held >= settle
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: settled, object: app)
+        let settledInTime = XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+        return (settledInTime, watch.observed)
+    }
+
+    /// Tap `element` once it is settled on screen, failing the test if it never is.
+    func tapWhenSettled(
+        _ element: XCUIElement, timeout: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let outcome = awaitSettled(element, timeout: timeout)
+        guard outcome.settled else {
+            XCTFail(
+                "\(element) should be on screen, enabled and still before it is tapped"
+                    + " (last seen: \(outcome.lastSeen))",
+                file: file, line: line
+            )
+            return
+        }
+        element.tap()
     }
 }

@@ -2,12 +2,14 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
+import type { Services } from '../services'
 import { getTelephonyFromService } from '../lib/service-factories'
 import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
+import { banHash, openCallerNumber, PLATFORM_BAN_SCOPE } from '../lib/crypto'
 import { ServiceError } from '../services/settings'
-import { resolveRingableVolunteers, cancelLosingLegs } from '../services/ringing'
+import { resolveRingableVolunteers, canAnswerInApp, cancelLosingLegs } from '../services/ringing'
 import { getHubPresence } from '../services/presence'
 import { currentRingDecision } from '../services/routing-readiness'
 import { publishEvent } from '../lib/ws-events'
@@ -21,11 +23,10 @@ import { authErrors, notFoundError } from '../openapi/helpers'
 const calls = new Hono<AppEnv>()
 
 // Every call a route returns is projected onto `callRecordResponseSchema`, never
-// passed through as a row. An active_calls row carries the HMAC of the caller's
-// number (`callerNumber`), who reported the call as spam, and the provider's
-// recording handle. The HMAC is a stable caller identifier: anyone holding it can
-// link two calls from one person, or confirm a number has called by computing it.
-// Bans resolve it server-side, so no client needs it.
+// passed through as a row. An active_calls row carries the caller's number sealed
+// under SERVER_KEK (`callerNumberSealed`), who reported the call as spam, and the
+// provider's recording handle. Bans open the sealed number server-side, so no
+// client needs it.
 
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
@@ -61,6 +62,22 @@ function toCallRecordResponse(row: CallRecordRow): CallRecord {
     encryptedContent: row.encryptedContent || undefined,
     adminEnvelopes: row.adminEnvelopes,
   })
+}
+
+/**
+ * The live call `callId` as seen from this request: inside /hubs/:hubId only a
+ * call of that hub exists (a call of another hub reads as missing — #2011);
+ * on the unscoped mount (`hubId === ''`) there is no hub to bound to, so the
+ * lookup is by id alone.
+ */
+function findActiveCall(
+  services: Services,
+  hubId: string,
+  callId: string,
+): Promise<ActiveCallRow | null> {
+  return hubId
+    ? services.calls.getActiveCallById(hubId, callId)
+    : services.calls.getActiveCallByCallId(callId)
 }
 
 calls.get('/active',
@@ -143,14 +160,15 @@ calls.get('/presence',
  *
  * The ring decision used to be unmeasurable on a deployment. Nothing reported
  * what `resolveRingableVolunteers` resolves to, and its only non-provider caller
- * is `POST /demo/telephony/simulate/incoming-call`, which is demo-gated — so on
- * a VM running `DEMO_MODE=false` the live suite's ring-eligibility checks
- * skipped, and R1's "that volunteer clocks in, receives a call" could only be
- * verified on a demo server. This is the read-only oracle for it, and the answer
- * an operator needs before a caller finds out.
+ * is `POST /hubs/:id/simulated-telephony/simulate/incoming-call`, which only a
+ * host with the dev surface enabled may serve — so on a VM without it the live
+ * suite's ring-eligibility checks skipped, and R1's "that volunteer clocks in,
+ * receives a call" could only be verified on a test instance. This is the
+ * read-only oracle for it, and the answer an operator needs before a caller
+ * finds out.
  *
  * Read-only by construction: it resolves, it does not ring. No provider call, no
- * call record, no demo gate.
+ * call record, no host-level gate.
  *
  * Two tiers, following `/active`'s `calls:read-active` + `calls:read-active-full`
  * precedent rather than a new rule. The gate is `calls:read-active`, which the
@@ -354,12 +372,10 @@ calls.get('/:callId',
     const hubId = c.get('hubId') ?? ''
 
     // Try active calls first (hub-scoped if available, then global), fall back to history
-    const activeCall = hubId
-      ? await services.calls.getActiveCallById(hubId, callId)
-      : await services.calls.getActiveCallByCallId(callId)
+    const activeCall = await findActiveCall(services, hubId, callId)
     if (activeCall) return c.json(toActiveCallResponse(activeCall))
 
-    const historyRecord = await services.calls.getCallRecord(callId)
+    const historyRecord = await services.calls.getCallRecord(hubId, callId)
     if (historyRecord) return c.json(toCallRecordResponse(historyRecord))
 
     return c.json({ error: 'Call not found' }, 404)
@@ -382,6 +398,7 @@ calls.post('/:callId/answer',
           },
         },
       },
+      422: { description: 'The hub has no in-app leg for this volunteer — answer on the phone' },
       ...authErrors,
     },
   }),
@@ -400,8 +417,18 @@ calls.post('/:callId/answer',
 
     // Only a volunteer who was actually rung for this call may answer it.
     const ringable = await resolveRingableVolunteers(services, hubId)
-    if (!ringable?.available.some(v => v.pubkey === pubkey)) {
+    const volunteer = ringable?.available.find(v => v.pubkey === pubkey)
+    if (!volunteer) {
       return c.json({ error: 'Not rung for this call' }, 403)
+    }
+
+    // This route is a database write that bridges nobody. Without an in-app leg
+    // for this volunteer it would mark the call answered, hang up every phone
+    // still ringing and leave the caller on hold music until voicemail. Refuse
+    // it; the volunteer answers on their phone, whose leg
+    // /api/telephony/user-answer bridges.
+    if (!await canAnswerInApp(c.env, services, hubId, volunteer)) {
+      return c.json({ error: 'This hub cannot connect you to the call in the app — answer on your phone' }, 422)
     }
 
     let result
@@ -484,7 +511,7 @@ calls.post('/:callId/hangup',
       // The provider's status callback can end the record between our disconnect and
       // this write. The caller is disconnected either way — return the finished record.
       if (err instanceof ServiceError && err.status === 404) {
-        const record = await services.calls.getCallRecord(callId)
+        const record = await services.calls.getCallRecord(hubId, callId)
         if (record) return c.json({ call: toCallRecordResponse(record) })
       }
       return c.json({ error: 'Failed to hang up call' }, 500)
@@ -557,8 +584,7 @@ calls.post('/:callId/ban',
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
 
-    // Look up by callId only — route may lack hub context (not mounted under hubScoped)
-    const call = await services.calls.getActiveCallByCallId(callId)
+    const call = await findActiveCall(services, hubId, callId)
     if (!call) return c.json({ error: 'Call not found' }, 404)
 
     if (call.answeredBy !== pubkey) {
@@ -567,15 +593,19 @@ calls.post('/:callId/ban',
 
     const body = c.req.valid('json')
 
-    // Ban the caller (server resolves phone number — volunteer never sees it)
+    // Ban the caller (server resolves phone number — volunteer never sees it). The number is
+    // opened from the call's KEK-sealed copy and hashed under the hub's ban key; the call
+    // holds no hash of it. A call without a sealed number cannot be banned.
     let banned = false
     try {
+      if (!call.callerNumberSealed) throw new Error('call holds no caller number')
+      const banHubId = call.hubId ?? hubId ?? undefined
+      const number = openCallerNumber(call.callerNumberSealed, callId, c.env.SERVER_KEK)
       await services.records.addBan({
-        phone: call.callerNumber, // already HMAC-hashed at call ingestion
-        phoneDisplay: call.callerLast4 ? `***${call.callerLast4}` : undefined,
+        phoneHash: banHash(number, banHubId || PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY),
         reason: body.reason || 'Banned during active call',
         bannedBy: pubkey,
-        hubId: call.hubId ?? hubId ?? undefined,
+        hubId: banHubId,
       })
       banned = true
     } catch {
@@ -621,8 +651,9 @@ calls.get('/:callId/recording',
     const pubkey = c.get('pubkey')
 
     // Check call record for recording info (try active calls first, then history)
-    const activeCall = await services.calls.getActiveCallById(c.get('hubId') ?? '', callId)
-    const historyRecord = activeCall ? null : await services.calls.getCallRecord(callId)
+    const hubId = c.get('hubId') ?? ''
+    const activeCall = await services.calls.getActiveCallById(hubId, callId)
+    const historyRecord = activeCall ? null : await services.calls.getCallRecord(hubId, callId)
     const recordingSid = activeCall?.recordingSid ?? historyRecord?.recordingSid
     const hasRecording = activeCall?.hasRecording ?? historyRecord?.hasRecording
     const answeredBy = activeCall?.answeredBy ?? null

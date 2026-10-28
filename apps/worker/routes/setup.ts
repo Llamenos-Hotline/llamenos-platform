@@ -97,7 +97,6 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
   validator('json', setupCompleteBodySchema),
   async (c) => {
     const pubkey = c.get('pubkey')
-    const body = c.req.valid('json')
     const services = c.get('services')
 
     // Create default hub if none exists. Deliberately NOT caught here: if hub
@@ -120,14 +119,13 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
-      await services.settings.createHub(defaultHub)
-      // Assign admin to the default hub with all roles
-      await services.identity.setHubRole({ pubkey, hubId: defaultHub.id, roleIds: ['role-super-admin'] })
+      // The setup admin founds the default hub with all roles, atomically (#2126)
+      await services.settings.createHub(defaultHub, { pubkey, roleIds: ['role-super-admin'] })
     }
 
-    const result = await services.settings.updateSetupState({ setupCompleted: true, demoMode: body.demoMode ?? false })
+    const result = await services.settings.updateSetupState({ setupCompleted: true })
 
-    await audit(services.audit, 'setupCompleted', pubkey, { demoMode: body.demoMode ?? false }, undefined, null)
+    await audit(services.audit, 'setupCompleted', pubkey, {}, undefined, null)
     return c.json(result)
   })
 

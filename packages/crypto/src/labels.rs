@@ -103,6 +103,15 @@ pub const AUTH_PREFIX: &str = "llamenos:auth:";
 /// Phone number hashing prefix
 pub const HMAC_PHONE_PREFIX: &str = "llamenos:phone:";
 
+/// Ban-list hashing prefix — message prefix of HMAC(HKDF(BAN_HASH_KEY, scope), prefix || E.164).
+/// Distinct from `HMAC_PHONE_PREFIX` so a ban hash can never equal a contact/thread hash.
+pub const HMAC_BAN_PREFIX: &str = "llamenos:ban:";
+
+/// Messaging-thread hashing prefix — message prefix of
+/// HMAC(HKDF(MESSAGING_HASH_KEY, hub), prefix || identifier). Distinct from
+/// `HMAC_PHONE_PREFIX` and `HMAC_BAN_PREFIX` so a thread hash can never equal either.
+pub const HMAC_MESSAGING_CONTACT_PREFIX: &str = "llamenos:messaging-contact:";
+
 /// IP address hashing prefix
 pub const HMAC_IP_PREFIX: &str = "llamenos:ip:";
 
@@ -302,6 +311,29 @@ pub const LABEL_WS_CHALLENGE: &str = "llamenos:ws-auth:v1";
 /// Audit user key wrapping — per-user symmetric key HPKE-wrapped to admin pubkeys
 pub const LABEL_AUDIT_USER_KEY_WRAP: &str = "llamenos:audit-user-key-wrap:v1";
 
+/// Server-held copy of a per-user audit key — AES-256-GCM under a key HKDF-derived
+/// from SERVER_SECRET (HKDF info = this label, AAD = `label:userPubkey`). Distinct
+/// from `LABEL_AUDIT_USER_KEY_WRAP`, which is the HPKE wrap to admin pubkeys: one
+/// label must never name two constructions. TS-only today (`audit_user_keys.
+/// encrypted_key`); registered so the label set stays closed across platforms.
+pub const LABEL_AUDIT_USER_KEY_SERVER_SEAL: &str = "llamenos:audit-user-key-server-seal:v1";
+
+/// Per-scope ban-key derivation — HKDF info = `label:scope`, where scope is a hub id or
+/// `platform`. Derives the HMAC key behind a ban hash from the file-only BAN_HASH_KEY, so a
+/// hub's ban hashes cannot be compared with another hub's or with the platform's.
+pub const LABEL_BAN_KEY_DERIVE: &str = "llamenos:ban-key-derive:v1";
+
+/// Per-hub messaging-thread key derivation — HKDF info = `label:hubId` (or `label:global` for
+/// the hub-less webhook path). Derives the HMAC key behind a conversation's contact hash from
+/// the file-only MESSAGING_HASH_KEY, so one hub's thread hashes cannot be compared with another's.
+pub const LABEL_MESSAGING_CONTACT_HUB_KEY: &str = "llamenos:messaging-contact-hub-key:v1";
+
+/// Live-call caller number — AES-256-GCM under a key HKDF-derived from SERVER_KEK
+/// (HKDF info = this label, AAD = `label:callId`). Held on `active_calls` for the
+/// life of one call so a volunteer can ban the caller without seeing the digits.
+/// Its own label, so the derived key is not the one that opens contact identifiers.
+pub const LABEL_CALLER_NUMBER_SEAL: &str = "llamenos:caller-number-seal:v1";
+
 /// Erasure override co-approver signature — Ed25519 sig over (targetUserId || timestamp || justification)
 pub const LABEL_ERASURE_OVERRIDE_SIG: &str = "llamenos:erasure-override-sig:v1";
 
@@ -434,6 +466,9 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Index 98: Per-volunteer SIP registrar (#1556)
 // Index 99: Device provisioning key bundle
 // Index 100: Device provisioning claim signature (#1865)
+// Index 101: Server seal of the per-user audit key (#2054)
+// Indices 102-104: Ban-list hashing and the live-call caller number seal (#2182)
+// Indices 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -574,6 +609,15 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_DEVICE_PROVISION_BUNDLE, // 99
     // 100: Device provisioning claim signature (#1865)
     LABEL_DEVICE_PROVISION_CLAIM, // 100
+    // 101: Server seal of the per-user audit key (#2054)
+    LABEL_AUDIT_USER_KEY_SERVER_SEAL, // 101
+    // 102-104: Ban-list hashing and the live-call caller number seal (#2182)
+    HMAC_BAN_PREFIX,          // 102
+    LABEL_BAN_KEY_DERIVE,     // 103
+    LABEL_CALLER_NUMBER_SEAL, // 104
+    // 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
+    HMAC_MESSAGING_CONTACT_PREFIX,   // 105
+    LABEL_MESSAGING_CONTACT_HUB_KEY, // 106
 ];
 
 /// Look up a label string by its numeric ID.
@@ -763,12 +807,24 @@ mod tests {
             LABEL_DEVICE_PROVISION_CLAIM,
             "llamenos:device-provision-claim:v1"
         );
+        assert_eq!(
+            LABEL_AUDIT_USER_KEY_SERVER_SEAL,
+            "llamenos:audit-user-key-server-seal:v1"
+        );
+        assert_eq!(HMAC_BAN_PREFIX, "llamenos:ban:");
+        assert_eq!(LABEL_BAN_KEY_DERIVE, "llamenos:ban-key-derive:v1");
+        assert_eq!(LABEL_CALLER_NUMBER_SEAL, "llamenos:caller-number-seal:v1");
+        assert_eq!(HMAC_MESSAGING_CONTACT_PREFIX, "llamenos:messaging-contact:");
+        assert_eq!(
+            LABEL_MESSAGING_CONTACT_HUB_KEY,
+            "llamenos:messaging-contact-hub-key:v1"
+        );
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 60 of the 101 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 66 of the 107 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -833,6 +889,12 @@ mod tests {
         assert_eq!(id_to_label(98), Some(HMAC_SIP_VOLUNTEER_SECRET));
         assert_eq!(id_to_label(99), Some(LABEL_DEVICE_PROVISION_BUNDLE));
         assert_eq!(id_to_label(100), Some(LABEL_DEVICE_PROVISION_CLAIM));
+        assert_eq!(id_to_label(101), Some(LABEL_AUDIT_USER_KEY_SERVER_SEAL));
+        assert_eq!(id_to_label(102), Some(HMAC_BAN_PREFIX));
+        assert_eq!(id_to_label(103), Some(LABEL_BAN_KEY_DERIVE));
+        assert_eq!(id_to_label(104), Some(LABEL_CALLER_NUMBER_SEAL));
+        assert_eq!(id_to_label(105), Some(HMAC_MESSAGING_CONTACT_PREFIX));
+        assert_eq!(id_to_label(106), Some(LABEL_MESSAGING_CONTACT_HUB_KEY));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

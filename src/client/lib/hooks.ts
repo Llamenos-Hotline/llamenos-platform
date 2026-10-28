@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useRelaySubscriptions } from './relay/hooks'
 import { useMemberHubIds } from './member-hubs'
-import { useConfig } from './config'
+import { useMyShiftStatus } from './queries/shifts'
 import { startRinging, stopRinging } from './notifications'
+import { rememberCallHub } from './call-hubs'
+import { isUnlocked } from './key-manager'
 import {
-  getMyShiftStatus,
   listActiveCalls,
   listConversations,
   answerCall as apiAnswerCall,
@@ -12,7 +14,7 @@ import {
   reportCallSpam as apiReportSpam,
   type HubCall,
   type ShiftStatus,
-  type Conversation,
+  type HubConversation,
 } from './api'
 import {
   KIND_CALL_RING,
@@ -31,7 +33,23 @@ const CALL_KINDS = [KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_
 const CONVERSATION_KINDS = [KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED]
 
 /**
- * Hook to manage real-time call state via WebSocket relay + REST polling fallback.
+ * The volunteer's own call that just ended and has not been written up yet: the
+ * dashboard offers "Call Ended / Add Note" for it. It names the call's own hub — never
+ * the active one — and nothing about the caller. Held in memory only.
+ */
+export interface EndedCall {
+  id: string
+  hubId: string
+}
+
+/**
+ * The call feed: real-time call state via WebSocket relay + REST polling fallback.
+ *
+ * Mounted exactly once, by `CallsProvider`; everything else reads it through
+ * `useCalls()` (calls-context.tsx). One feed means the dashboard, the sidebar,
+ * the note form and the keyboard shortcuts all see the same ringing and current
+ * call — separate per-component instances each held their own `currentCall`, so
+ * a call answered in one place was invisible in the others.
  *
  * Multi-hub axiom: calls are received from EVERY hub the user is a member of,
  * regardless of which hub is active in the UI. Each call carries the hub it
@@ -44,14 +62,40 @@ const CONVERSATION_KINDS = [KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED]
  * Call actions (answer, hangup, spam) are POST requests to REST endpoints.
  * The server is the sole authority for call state mutations.
  */
-export function useCalls() {
+export function useCallFeed() {
+  const { t } = useTranslation()
   const [calls, setCalls] = useState<HubCall[]>([])
   const [currentCall, setCurrentCall] = useState<HubCall | null>(null)
+  const [endedCall, setEndedCall] = useState<EndedCall | null>(null)
   const memberHubIds = useMemberHubIds()
+  // Record every call's hub so a note about it can be filed to the right hub later,
+  // even after the call left this list (e.g. hung up) and whatever hub is active.
+  useEffect(() => {
+    for (const c of calls) rememberCallHub(c.id, c.hubId)
+  }, [calls])
   const currentCallRef = useRef(currentCall)
   currentCallRef.current = currentCall
   const callsRef = useRef(calls)
   callsRef.current = calls
+
+  /**
+   * The user's own call is over, however it ended (hang-up, caller hung up, spam report,
+   * lost from the feed). Only ever called for `currentCall`, which is set solely by this
+   * user answering — so "ended" here always means the user's own call. A failed answer
+   * does not come through here: no call was had.
+   *
+   * Nothing is held while locked: a lock drops the prompt, and a call that ends behind
+   * the lock screen must not resurrect one on unlock.
+   */
+  const endCurrentCall = useCallback((call: HubCall) => {
+    setCurrentCall(prev => (prev?.id === call.id ? null : prev))
+    if (isUnlocked()) setEndedCall({ id: call.id, hubId: call.hubId })
+  }, [])
+
+  /** Drop the held call: dismissed, or (with `callId`) its note was filed. */
+  const dismissEndedCall = useCallback((callId?: string) => {
+    setEndedCall(prev => (!callId || prev?.id === callId ? null : prev))
+  }, [])
 
   // --- WebSocket subscriptions for real-time call events (every member hub) ---
   useRelaySubscriptions(memberHubIds, CALL_KINDS, (_kind, content: LlamenosEvent, hubId) => {
@@ -72,7 +116,7 @@ export function useCalls() {
             hasVoicemail: false,
           }]
         })
-        startRinging('Incoming Call!')
+        startRinging(t('notification.incomingCall'), t('incomingCallBody'))
         break
       }
       case 'call:update': {
@@ -93,7 +137,7 @@ export function useCalls() {
         // Update current call tracking
         if (currentCallRef.current?.id === update.callId) {
           if (update.status === 'completed') {
-            setCurrentCall(null)
+            endCurrentCall(currentCallRef.current)
           } else {
             setCurrentCall(prev => prev ? { ...prev, status: update.status, answeredBy: update.answeredBy ?? prev.answeredBy } : prev)
           }
@@ -137,10 +181,8 @@ export function useCalls() {
             const newIds = next.map(c => `${c.hubId}:${c.id}:${c.status}`).sort().join(',')
             return prevIds === newIds ? prev : next
           })
-          setCurrentCall(prev => {
-            if (!prev) return prev
-            return next.some(c => c.id === prev.id) ? prev : null
-          })
+          const current = currentCallRef.current
+          if (current && !next.some(c => c.id === current.id)) endCurrentCall(current)
         })
     }
 
@@ -151,6 +193,11 @@ export function useCalls() {
 
   // --- Call actions via REST, always against the call's own hub ---
 
+  /**
+   * Both `answerCall` and `hangupCall` throw when the server refuses, after putting
+   * local state back as it was: the caller owns telling the user, because only it
+   * knows whether to say "someone else picked up" or "try again".
+   */
   const answerCall = useCallback(async (callId: string) => {
     const call = callsRef.current.find(c => c.id === callId)
     if (!call) return
@@ -158,9 +205,9 @@ export function useCalls() {
     setCurrentCall({ ...call, status: 'in-progress' })
     try {
       await apiAnswerCall(callId, call.hubId)
-    } catch {
-      // Revert optimistic update on failure
+    } catch (err) {
       setCurrentCall(null)
+      throw err
     }
   }, [])
 
@@ -170,73 +217,53 @@ export function useCalls() {
 
   const hangupCall = useCallback(async (callId: string) => {
     const hubId = hubOf(callId)
-    setCurrentCall(null)
     if (!hubId) return
-    try {
-      await apiHangupCall(callId, hubId)
-    } catch {
-      // Call may already be ended — safe to ignore
-    }
-  }, [hubOf])
+    // Only forget the call once the server has ended it: clearing first would hide a
+    // call that is still live, with no panel left to hang up from.
+    await apiHangupCall(callId, hubId)
+    const current = currentCallRef.current
+    if (current?.id === callId) endCurrentCall(current)
+  }, [hubOf, endCurrentCall])
 
   const reportSpam = useCallback(async (callId: string) => {
     const hubId = hubOf(callId)
-    setCurrentCall(null)
+    const current = currentCallRef.current
+    if (current?.id === callId) endCurrentCall(current)
+    else setCurrentCall(null)
     if (!hubId) return
     try {
       await apiReportSpam(callId, hubId)
     } catch {
       // Report may fail if call already ended — safe to ignore
     }
-  }, [hubOf])
+  }, [hubOf, endCurrentCall])
 
-  return {
-    calls,
-    currentCall,
-    answerCall,
-    hangupCall,
-    reportSpam,
-    ringingCalls: calls.filter(c => c.status === 'ringing'),
-    activeCalls: calls.filter(c => c.status === 'in-progress'),
-  }
+  const ringingCalls = useMemo(() => calls.filter(c => c.status === 'ringing'), [calls])
+  const activeCalls = useMemo(() => calls.filter(c => c.status === 'in-progress'), [calls])
+
+  return { calls, currentCall, endedCall, dismissEndedCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls }
 }
 
 /**
- * Hook to fetch and periodically refresh the current user's shift status.
+ * The current user's shift status in the active hub, kept fresh by react-query.
  *
- * Keyed on the active hub: shift status is hub-scoped (`/hubs/<id>/shifts/my-status`),
- * so it has to be re-read when the active hub resolves or the user switches
- * hubs. Without that dependency the first poll won the race against hub
- * resolution and the result stood for a minute — the mechanism that reported an
- * on-shift volunteer as "Off Shift" in #1708.
+ * Shared (not per-component state) so the dashboard card, the sidebar indicator and
+ * the clock-in control all read one answer — and so a clock-in/out, which invalidates
+ * the `my-status` entries, updates every one of them at once. `onShift` means
+ * *scheduled now*; whether the user is actually a ring target also needs `clockedIn`
+ * (see `callReadiness`).
  */
 export function useShiftStatus() {
-  const { currentHubId } = useConfig()
-  const [status, setStatus] = useState<ShiftStatus>({ onShift: false, currentShift: null, nextShift: null })
-  const [loading, setLoading] = useState(true)
+  const { data, isLoading } = useMyShiftStatus()
+  return { ...(data ?? NO_SHIFT_STATUS), loading: isLoading }
+}
 
-  useEffect(() => {
-    if (!currentHubId) {
-      // No hub, no shift. Reporting "loading" forever would be a spinner that
-      // never resolves; reporting off-shift is the truth here.
-      setStatus({ onShift: false, currentShift: null, nextShift: null })
-      setLoading(false)
-      return
-    }
-    let mounted = true
-
-    function fetch() {
-      getMyShiftStatus()
-        .then(s => { if (mounted) { setStatus(s); setLoading(false) } })
-        .catch(() => { if (mounted) setLoading(false) })
-    }
-
-    fetch()
-    const interval = setInterval(fetch, 60_000) // Refresh every 60s
-    return () => { mounted = false; clearInterval(interval) }
-  }, [currentHubId])
-
-  return { ...status, loading }
+const NO_SHIFT_STATUS: ShiftStatus = {
+  onShift: false,
+  clockedIn: false,
+  clockedInAt: null,
+  currentShift: null,
+  nextShift: null,
 }
 
 /**
@@ -244,9 +271,15 @@ export function useShiftStatus() {
  *
  * WebSocket delivers real-time updates (new messages, assignments, closures).
  * REST polling (every 30s) provides the full conversation list as a fallback.
+ *
+ * Multi-hub axiom: both channels cover EVERY hub the user is a member of, and each
+ * conversation is tagged with its own hub so actions on it (claim, reply, note)
+ * never fall back to the active hub.
  */
 export function useConversations() {
-  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [conversations, setConversations] = useState<HubConversation[]>([])
+  const conversationsRef = useRef(conversations)
+  conversationsRef.current = conversations
   const memberHubIds = useMemberHubIds()
 
   // --- WebSocket subscriptions for conversation events (every member hub) ---
@@ -289,27 +322,40 @@ export function useConversations() {
     }
   })
 
-  // --- REST polling fallback (every 30s) ---
+  // --- REST polling fallback (every 30s, every member hub) ---
+  const memberHubKey = memberHubIds.join(',')
   useEffect(() => {
+    if (!memberHubKey) return
+    const hubIds = memberHubKey.split(',')
     let mounted = true
     const poll = () => {
-      listConversations()
-        .then(({ conversations: polled }) => {
-          if (mounted) setConversations(polled)
-        })
-        .catch(() => {
-          console.error('[conversations] Background conversation polling failed')
+      Promise.allSettled(hubIds.map(hubId => listConversations(hubId)))
+        .then(results => {
+          if (!mounted) return
+          const polled: HubConversation[] = []
+          const failedHubs = new Set<string>()
+          results.forEach((result, i) => {
+            if (result.status === 'fulfilled') polled.push(...result.value.conversations)
+            else failedHubs.add(hubIds[i])
+          })
+          if (failedHubs.size > 0) {
+            console.error('[conversations] Background conversation polling failed for hubs:', [...failedHubs].join(','))
+          }
+          // A hub whose poll failed keeps its known conversations — one unreachable hub
+          // must not make another hub's conversations vanish.
+          const kept = conversationsRef.current.filter(c => failedHubs.has(c.hubId))
+          setConversations([...polled, ...kept])
         })
     }
     poll()
     const interval = setInterval(poll, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [])
+  }, [memberHubKey])
 
   // Apply a conversation returned by a mutation (claim, reopen) so the acting
   // user's view reflects their own action without waiting for the relay echo
   // or the next poll.
-  const applyConversation = useCallback((updated: Conversation) => {
+  const applyConversation = useCallback((updated: HubConversation) => {
     setConversations(prev => prev.map(c => c.id === updated.id ? updated : c))
   }, [])
 

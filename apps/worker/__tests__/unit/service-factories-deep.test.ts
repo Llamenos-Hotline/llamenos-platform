@@ -5,6 +5,10 @@ import {
   getMessagingAdapterFromService,
 } from '@worker/lib/service-factories'
 
+
+/** A suppression record that holds nobody: these tests are about adapter selection. */
+const noSuppression = { blocksOutbound: async () => false }
+
 describe('getTelephonyFromService', () => {
   it('returns adapter from service config when available', async () => {
     const settings = {
@@ -72,17 +76,17 @@ describe('getHubTelephonyFromService', () => {
       getTelephonyProvider: vi.fn(),
     }
 
-    // The HMAC secret is what decrypts the stored credentials. This assertion
+    // The server KEK is what decrypts the stored credentials. This assertion
     // used to pin `('hub-123')` with no second argument, which is precisely
     // the defect: the hub's provider resolved and its credentials stayed
     // ciphertext. Strengthened to require the secret rather than forbid it.
     const adapter = await getHubTelephonyFromService(
-      { HMAC_SECRET: 'a'.repeat(64) } as any,
+      { HMAC_SECRET: 'a'.repeat(64), SERVER_KEK: 'c'.repeat(64) } as any,
       settings,
       'hub-123',
     )
     expect(adapter).not.toBeNull()
-    expect(settings.getHubTelephonyProvider).toHaveBeenCalledWith('hub-123', 'a'.repeat(64))
+    expect(settings.getHubTelephonyProvider).toHaveBeenCalledWith('hub-123', 'c'.repeat(64))
     expect(settings.getTelephonyProvider).not.toHaveBeenCalled()
   })
 
@@ -129,7 +133,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('whatsapp', settings, 'hmac'),
+      getMessagingAdapterFromService('whatsapp', settings, noSuppression),
     ).rejects.toThrow('whatsapp channel is not enabled')
   })
 
@@ -143,7 +147,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('sms', settings, 'hmac'),
+      getMessagingAdapterFromService('sms', settings, noSuppression),
     ).rejects.toThrow('SMS requires a configured telephony provider')
   })
 
@@ -156,7 +160,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('carrier_pigeon' as any, settings, 'hmac'),
+      getMessagingAdapterFromService('carrier_pigeon' as any, settings, noSuppression),
     ).rejects.toThrow('Unknown channel: carrier_pigeon')
   })
 
@@ -170,7 +174,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('sms', settings, 'hmac'),
+      getMessagingAdapterFromService('sms', settings, noSuppression),
     ).rejects.toThrow('SMS is not enabled')
   })
 
@@ -184,7 +188,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('whatsapp', settings, 'hmac'),
+      getMessagingAdapterFromService('whatsapp', settings, noSuppression),
     ).rejects.toThrow('WhatsApp is not configured')
   })
 
@@ -197,7 +201,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('signal', settings, 'hmac'),
+      getMessagingAdapterFromService('signal', settings, noSuppression),
     ).rejects.toThrow('Signal is not configured')
   })
 
@@ -210,7 +214,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('telegram', settings, 'hmac'),
+      getMessagingAdapterFromService('telegram', settings, noSuppression),
     ).rejects.toThrow('Telegram is not configured')
   })
 
@@ -223,7 +227,7 @@ describe('getMessagingAdapterFromService', () => {
     }
 
     await expect(
-      getMessagingAdapterFromService('rcs', settings, 'hmac'),
+      getMessagingAdapterFromService('rcs', settings, noSuppression),
     ).rejects.toThrow('RCS is not configured')
   })
 })

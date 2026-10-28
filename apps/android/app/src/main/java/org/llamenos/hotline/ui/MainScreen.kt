@@ -28,8 +28,6 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.api.NetworkMonitor
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.service.OfflineQueue
-import org.llamenos.hotline.ui.components.DemoBanner
-import org.llamenos.hotline.ui.components.DemoBannerViewModel
 import org.llamenos.hotline.ui.components.OfflineBanner
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
@@ -82,7 +80,7 @@ private enum class MainTab(
  * @param onLock Callback to lock the app (clears key from memory)
  * @param onLogout Callback to fully logout (clears all data)
  * @param onNavigateToNoteDetail Callback to navigate to note detail screen
- * @param onNavigateToNoteCreate Callback to navigate to note create screen
+ * @param onNavigateToNoteCreate Callback to open the note editor on a call (id and its hub id), or on none
  * @param onNavigateToConversationDetail Callback to navigate to conversation detail screen
  * @param onNavigateToAdmin Callback to navigate to admin panel
  */
@@ -97,7 +95,7 @@ fun MainScreen(
     onLogout: () -> Unit,
     onPanicWipe: () -> Unit,
     onNavigateToNoteDetail: (String) -> Unit,
-    onNavigateToNoteCreate: () -> Unit,
+    onNavigateToNoteCreate: (callId: String?, hubId: String?) -> Unit,
     onNavigateToConversationDetail: (String) -> Unit,
     onNavigateToAdmin: () -> Unit,
     onNavigateToCommunications: () -> Unit = {},
@@ -124,8 +122,6 @@ fun MainScreen(
     val notesViewModel: NotesViewModel = hiltViewModel()
     val conversationsViewModel: ConversationsViewModel = hiltViewModel()
     val shiftsViewModel: ShiftsViewModel = hiltViewModel()
-    val demoBannerViewModel: DemoBannerViewModel = hiltViewModel()
-    val demoBannerUiState by demoBannerViewModel.uiState.collectAsState()
     val biometricSettingsViewModel: BiometricSettingsViewModel = hiltViewModel()
     val biometricSettingsUiState by biometricSettingsViewModel.uiState.collectAsState()
     // Picks the hub to browse when none is chosen yet (#1340); refreshed by pull-to-refresh.
@@ -157,13 +153,6 @@ fun MainScreen(
         Column(modifier = Modifier.padding(paddingValues)) {
             OfflineBanner(networkMonitor, offlineQueue)
 
-            if (demoBannerUiState.visible) {
-                DemoBanner(
-                    onDismiss = demoBannerViewModel::dismiss,
-                    demoResetSchedule = demoBannerUiState.demoResetSchedule,
-                )
-            }
-
             when (MainTab.entries[selectedTab]) {
                 MainTab.DASHBOARD -> {
                     DashboardScreen(
@@ -172,6 +161,7 @@ fun MainScreen(
                         onLock = onLock,
                         onLogout = onLogout,
                         onNavigateToNotes = { selectedTab = MainTab.NOTES.ordinal },
+                        onNavigateToNoteCreate = onNavigateToNoteCreate,
                         onNavigateToNoteDetail = onNavigateToNoteDetail,
                         onNavigateToCallHistory = onNavigateToCallHistory,
                         onNavigateToReports = onNavigateToReports,
@@ -189,7 +179,12 @@ fun MainScreen(
                 MainTab.NOTES -> {
                     NotesScreen(
                         viewModel = notesViewModel,
-                        onNavigateToCreate = onNavigateToNoteCreate,
+                        // The editor opens on the volunteer's own call when there is one
+                        // (the one in progress, else the one that just ended), else on none.
+                        onNavigateToCreate = {
+                            val call = dashboardViewModel.noteTargetCall()
+                            onNavigateToNoteCreate(call?.id, call?.hubId)
+                        },
                         onNavigateToDetail = onNavigateToNoteDetail,
                     )
                 }

@@ -23,6 +23,11 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+- name: Write the hash key secret files
+  ansible.builtin.include_tasks: hash-keys.yml
+  vars:
+    hash_keys_restart_handler: Restart app service
+
 - name: Template app compose file
   ansible.builtin.template:
     src: compose/app.j2

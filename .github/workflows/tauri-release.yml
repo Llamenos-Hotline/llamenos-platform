@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -152,7 +152,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: "1.3.5"
 
@@ -469,7 +469,7 @@ jobs:
           echo "$RUNNER_TEMP/cargo/bin" >> "$GITHUB_PATH"
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -1117,13 +1117,3 @@ jobs:
           RUSTFS_BUCKET: ${{ secrets.RUSTFS_STAGING_BUCKET }}
         run: |
           echo "::error::PARTIAL RELEASE: v${VERSION} binaries were uploaded to s3://${RUSTFS_BUCKET}/desktop/v${VERSION} (and s3://${RUSTFS_BUCKET}/desktop/latest.json was updated to point at them), but a later step in this job failed — the llamenos-releases metadata commit and/or the GitHub Release for v${VERSION} may be missing or incomplete. Re-run this workflow with the same version (${VERSION}) to converge: the upload, metadata commit, and GitHub Release steps are all idempotent. If you are abandoning this version instead, manually delete s3://${RUSTFS_BUCKET}/desktop/v${VERSION} and restore s3://${RUSTFS_BUCKET}/desktop/latest.json from the previous version."
-
-  # ─── Redeploy the marketing site so its download links see the new installers ───
-  # The site resolves the newest `desktop-v*` release at build time
-  # (site/src/utils/releases.ts); without this it keeps linking the previous version.
-  deploy-site:
-    needs: [release]
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy-site.yml
-    secrets: inherit

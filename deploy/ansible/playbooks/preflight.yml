@@ -375,6 +375,75 @@
             openssl rand -hex 32
         success_msg: "server_secret: [set, 64 chars]"
 
+    - name: Assert server_kek is a valid 64-character lowercase hex string
+      ansible.builtin.assert:
+        that:
+          - server_kek is defined
+          - server_kek | length == 64
+          - server_kek is match('^[0-9a-f]{64}$')
+        fail_msg: |
+          REQUIRED: 'server_kek' must be exactly 64 lowercase hex characters.
+
+          Length seen: {{ server_kek | default('') | length }} (expected: 64)
+
+          SERVER_KEK encrypts the data the server must read back (provider
+          credentials, reply addresses, queued sends). It is its own secret:
+          never reuse hmac_secret or server_secret for it.
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "server_kek: [set, 64 hex chars]"
+
+    - name: Assert ban_hash_key is a valid 64-character lowercase hex string
+      ansible.builtin.assert:
+        that:
+          - ban_hash_key is defined
+          - ban_hash_key | length == 64
+          - ban_hash_key is match('^[0-9a-f]{64}$')
+        fail_msg: |
+          REQUIRED: 'ban_hash_key' must be exactly 64 lowercase hex characters.
+
+          Length seen: {{ ban_hash_key | default('') | length }} (expected: 64)
+
+          It keys the ban-list hash and is written to a secret file outside the
+          services directory, so no config backup carries it. Keep an offline
+          copy: a rebuilt host without it loses every ban (no recovery).
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "ban_hash_key: [set, 64 hex chars]"
+
+    - name: Assert messaging_hash_key is a valid 64-character lowercase hex string
+      ansible.builtin.assert:
+        that:
+          - messaging_hash_key is defined
+          - messaging_hash_key | length == 64
+          - messaging_hash_key is match('^[0-9a-f]{64}$')
+        fail_msg: |
+          REQUIRED: 'messaging_hash_key' must be exactly 64 lowercase hex characters.
+
+          Length seen: {{ messaging_hash_key | default('') | length }} (expected: 64)
+
+          It keys the per-hub messaging-thread hash and is written to a secret file
+          outside the services directory, so no config backup carries it. Keep an
+          offline copy: a rebuilt host without it splits every returning contact
+          into a new thread (no recovery).
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "messaging_hash_key: [set, 64 hex chars]"
+
+    - name: Assert hmac_secret, server_secret, server_kek, ban_hash_key and messaging_hash_key are five different values
+      ansible.builtin.assert:
+        that:
+          - ([hmac_secret, server_secret, server_kek, ban_hash_key, messaging_hash_key] | unique | length) == 5
+        fail_msg: |
+          Two of hmac_secret, server_secret, server_kek, ban_hash_key and
+          messaging_hash_key are identical. Each server secret has exactly one
+          role; a shared value couples their rotations and their blast radius.
+          Generate each with 'openssl rand -hex 32'.
+        success_msg: "hmac_secret, server_secret, server_kek, ban_hash_key, messaging_hash_key: [distinct]"
+
     - name: Assert pg_password meets minimum length
       ansible.builtin.assert:
         that:
@@ -417,17 +486,13 @@
             openssl rand -base64 24
         success_msg: "storage_secret_key: [set, {{ storage_secret_key | length }} chars]"
 
-    # Demo/dev-only settings (demo_mode, dev_routes_enabled, dev_reset_secret) must
-    # never reach a production instance. See issue #716.
+    # The /api/test-* surface: dev_routes_enabled and dev_reset_secret must never
+    # reach a production instance (#716). Keyed on app_environment alone — which
+    # is why it survived demo mode's removal (#1604) while the demo_mode guard it
+    # used to sit beside, tasks/guard-demo-mode.yml, went with the mode.
     # import_tasks so the tag reaches every guard task under `--tags` (see the RAM
     # assert above for why include_tasks is not enough).
-    - name: Include shared demo/dev-mode production safety guard
-      ansible.builtin.import_tasks: tasks/guard-demo-mode.yml
-      tags: always
-
-    # The /api/test-* surface specifically, keyed on app_environment alone and
-    # with no reference to demo mode — so it survives the removal of demo mode
-    # and the guard above. See tasks/guard-dev-routes.yml for the four layers.
+    # See tasks/guard-dev-routes.yml for the four layers.
     - name: Include shared /api/test-* production safety guard
       ansible.builtin.import_tasks: tasks/guard-dev-routes.yml
       tags: always
@@ -858,8 +923,7 @@
           iOS Push (APNs): {{ 'ENABLED' if (apns_key_p8 | default('') | length > 0 and apns_key_id | default('') | length > 0 and apns_team_id | default('') | length > 0) else 'DISABLED' }}
           Android Push (ntfy): {{ 'ENABLED' if llamenos_ntfy_enabled | default(false) | bool else 'DISABLED' }}
           Crash Reporting (GlitchTip): {{ 'ENABLED' if glitchtip_dsn | default('') | length > 0 else 'DISABLED' }}
-          Demo Mode: {{ 'ENABLED' if demo_mode | default(false) | bool else 'DISABLED' }} (app_environment={{ app_environment | default('production') }})
-          Dev Routes: {{ 'ENABLED' if dev_routes_enabled | default(false) | bool else 'DISABLED' }}
+          Dev Routes: {{ 'ENABLED' if dev_routes_enabled | default(false) | bool else 'DISABLED' }} (app_environment={{ app_environment | default('production') }})
           Webhook Base URL: {{ webhook_base_url if (webhook_base_url | default('') | length > 0) else 'NOT SET' }}
           ===========================================
           Proceeding with deployment...

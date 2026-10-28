@@ -192,7 +192,6 @@ function BanRow({ ban, onRemoved }: {
 
   return (
     <div data-testid="ban-row" className="flex flex-wrap items-center gap-4 px-4 py-3 sm:px-6">
-      <code className="text-xs font-mono">{ban.phone}</code>
       <span className="flex-1 text-sm text-muted-foreground">{ban.reason}</span>
       <span className="text-xs text-muted-foreground">
         {new Date(ban.bannedAt).toLocaleDateString()}
@@ -212,7 +211,7 @@ function BanRow({ ban, onRemoved }: {
         open={showConfirm}
         onOpenChange={setShowConfirm}
         title={t('banList.confirmUnban')}
-        description={ban.phone}
+        description={ban.reason}
         confirmLabel={t('banList.removeNumber')}
         onConfirm={async () => {
           try {

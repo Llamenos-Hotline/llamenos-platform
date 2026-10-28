@@ -13,6 +13,7 @@ import { safeFetch } from '../lib/safe-fetch'
 import type { SignalContactsService } from './signal-contacts'
 import type { SecurityPrefsService } from './security-prefs'
 import type { AuditService } from './audit'
+import { ServiceError } from './settings'
 
 const log = createLogger('services.user-notifications')
 
@@ -185,6 +186,11 @@ export class UserNotificationsService {
    * the hash → plaintext mapping. The app server never sees the plaintext.
    */
   issueRegistrationToken(identifierHash: string): string {
+    // An empty key would sign tokens anyone can forge. There is no other secret to
+    // fall back to (D6): refuse rather than issue.
+    if (!this.config.tokenSecret) {
+      throw new ServiceError(503, 'Signal notifier token secret is not configured (NOTIFIER_TOKEN_SECRET)')
+    }
     const expiresAt = Date.now() + 5 * 60 * 1000
     const payload = Buffer.from(JSON.stringify({ identifierHash, expiresAt })).toString('base64url')
     const sig = createHmac('sha256', this.config.tokenSecret).update(payload).digest('hex')

@@ -1,7 +1,13 @@
 import type { BridgeConfig } from './types'
 import { createBridgeClient, parsePbxType } from './client-factory'
 import { WebhookSender } from './webhook-sender'
-import { CommandHandler, callRecordingName, voicemailRecordingName, type RingRequest } from './command-handler'
+import {
+  CommandHandler,
+  callRecordingName,
+  ringResponse,
+  voicemailRecordingName,
+  type RingRequest,
+} from './command-handler'
 import { logger } from './logger'
 
 /** Max time to wait for in-flight HTTP requests to finish on SIGTERM/SIGINT. */
@@ -183,13 +189,7 @@ async function main(): Promise<void> {
         } catch {
           return Response.json({ ok: false, error: 'Invalid request' }, { status: 400 })
         }
-        try {
-          const channelIds = await handler.ringVolunteers(data)
-          return Response.json({ ok: true, channelIds })
-        } catch (err) {
-          logger.error('[bridge]', 'Ring error', err)
-          return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
-        }
+        return ringResponse(handler, data)
       }
 
       // Cancel ringing endpoint

@@ -55,6 +55,24 @@ function makeUserRow(overrides: Partial<{
   }
 }
 
+/**
+ * A db that records a plain (non-transactional) update. Global `roles` carry no
+ * hub-admin authority (D1, #2190), so rewriting them does not run under the
+ * admin invariant — only `hubRoles` and deactivation do.
+ */
+function plainUpdateDb(updatedRow: ReturnType<typeof makeUserRow>) {
+  const updateSet = vi.fn()
+  const db = {
+    update: vi.fn().mockReturnValue({
+      set: updateSet.mockReturnValue({
+        where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([updatedRow]) }),
+      }),
+    }),
+    transaction: vi.fn(),
+  }
+  return { db, updateSet }
+}
+
 function makeInviteRow(overrides: Partial<{
   code: string
   name: string
@@ -273,7 +291,7 @@ describe('IdentityService — User CRUD', () => {
   })
 
   describe('createUser', () => {
-    it('creates user with default role-volunteer', async () => {
+    it('creates a user with no role when none is given', async () => {
       const insertValues = vi.fn()
       const returnedRow = makeUserRow({ pubkey: 'new-pk' })
 
@@ -297,7 +315,8 @@ describe('IdentityService — User CRUD', () => {
 
       expect(volunteer.pubkey).toBe('new-pk')
       const vals = insertValues.mock.calls[0][0]
-      expect(vals.roles).toEqual(['role-volunteer'])
+      // No role is implied (#2233): a default-role id is not the service's to pick.
+      expect(vals.roles).toEqual([])
     })
 
     it('uses provided roleIds', async () => {
@@ -394,20 +413,8 @@ describe('IdentityService — User CRUD', () => {
     })
 
     it('never demotes the configured platform admin', async () => {
-      const existingRow = makeUserRow({ pubkey: 'admin-pk' })
       const updatedRow = makeUserRow({ pubkey: 'admin-pk', roles: ['role-super-admin'] })
-
-      const updateSet = vi.fn()
-      const db = {
-        update: vi.fn().mockReturnValue({
-          set: updateSet.mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([updatedRow]),
-            }),
-          }),
-        }),
-      }
-      void existingRow
+      const { db, updateSet } = plainUpdateDb(updatedRow)
 
       const svc = new IdentityService(db as never, 'admin-pk')
       await svc.updateUser('admin-pk', { roles: ['role-volunteer'] } as never, true)
@@ -434,26 +441,8 @@ describe('IdentityService — User CRUD', () => {
     })
 
     it('admin can update restricted fields like roles', async () => {
-      const existingRow = makeUserRow({ pubkey: 'pk-1' })
       const updatedRow = makeUserRow({ pubkey: 'pk-1', roles: ['role-admin'] })
-
-      const updateSet = vi.fn()
-      const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              limit: vi.fn().mockResolvedValue([existingRow]),
-            }),
-          }),
-        }),
-        update: vi.fn().mockReturnValue({
-          set: updateSet.mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([updatedRow]),
-            }),
-          }),
-        }),
-      }
+      const { db, updateSet } = plainUpdateDb(updatedRow)
 
       const svc = new IdentityService(db as never)
       await svc.updateUser(
@@ -464,6 +453,7 @@ describe('IdentityService — User CRUD', () => {
 
       const setVals = updateSet.mock.calls[0][0]
       expect(setVals.roles).toEqual(['role-admin'])
+      expect(db.transaction).not.toHaveBeenCalled()
     })
 
     it('never allows overwriting pubkey', async () => {
@@ -961,58 +951,85 @@ describe('IdentityService — Provisioning Rooms', () => {
 // ---------------------------------------------------------------------------
 
 describe('IdentityService — Reset', () => {
-  it('throws 403 outside demo/development mode', async () => {
-    const svc = new IdentityService({} as never)
-    await expect(
-      svc.reset(false, 'production'),
-    ).rejects.toThrow('Reset not allowed')
-  })
+  // The one destructive service call in the codebase, and the gate the
+  // deployed-target end-to-end suite depends on: its FIRST action is
+  // `POST /api/test-reset-no-admin`, which lands here.
+  //
+  // Until #1604 the gate was `reset(demoMode, environment, demoModeConfirm)` —
+  // allowed when `DEMO_MODE=true` AND `DEMO_MODE_CONFIRM=DESTROY_ALL_DATA`, or
+  // unconditionally on `ENVIRONMENT=development` with no secret at all. Demo
+  // mode is gone, so it now asks `destructiveResetRefusal`
+  // (lib/dev-surfaces.ts): the same predicate the whole `/api/test-*` surface
+  // uses, per-REQUEST, with `production` refused BEFORE any secret is read.
+  //
+  // All four directions are asserted, because "it got stricter" is not something
+  // a signature change can be trusted to have done on its own:
+  //   production + a VALID secret  -> refused
+  //   staging    + NO secret       -> refused
+  //   staging    + a WRONG secret  -> refused
+  //   staging    + the secret      -> allowed
+  const SECRET = 'a'.repeat(64)
+  const STAGING = { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }
 
-  it('throws 403 when DEMO_MODE=true but DEMO_MODE_CONFIRM is missing', async () => {
-    const svc = new IdentityService({} as never)
-    await expect(
-      svc.reset(true, 'staging'),
-    ).rejects.toThrow('DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
-  })
-
-  it('throws 403 when DEMO_MODE=true but DEMO_MODE_CONFIRM has wrong value', async () => {
-    const svc = new IdentityService({} as never)
-    await expect(
-      svc.reset(true, 'staging', 'wrong'),
-    ).rejects.toThrow('DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
-  })
-
-  it('allows reset in development mode without DEMO_MODE_CONFIRM', async () => {
-    let txDelete: ReturnType<typeof vi.fn>
-    const txFn = vi.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
+  function mockDb() {
+    let txDelete: ReturnType<typeof vi.fn> | undefined
+    const transaction = vi.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
       txDelete = vi.fn().mockResolvedValue(undefined)
-      const tx = { delete: txDelete }
-      return fn(tx)
+      return fn({ delete: txDelete })
     })
-    const db = { transaction: txFn }
+    return { db: { transaction }, transaction, deletes: () => txDelete }
+  }
+
+  it('refuses on ENVIRONMENT=production even with a valid secret', async () => {
+    const { db, transaction } = mockDb()
+    const svc = new IdentityService(db as never)
+    await expect(
+      svc.reset({ ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET),
+    ).rejects.toThrow('ENVIRONMENT=production never serves /api/test-*')
+    expect(transaction, 'production must refuse BEFORE touching the database').not.toHaveBeenCalled()
+  })
+
+  it('refuses on ENVIRONMENT=staging when the request presents no secret', async () => {
+    const { db, transaction } = mockDb()
+    const svc = new IdentityService(db as never)
+    await expect(svc.reset(STAGING, undefined)).rejects.toThrow('requires the dev-surface shared secret')
+    expect(transaction).not.toHaveBeenCalled()
+  })
+
+  it('refuses on ENVIRONMENT=staging when the request presents the wrong secret', async () => {
+    const { db, transaction } = mockDb()
+    const svc = new IdentityService(db as never)
+    await expect(svc.reset(STAGING, 'b'.repeat(64))).rejects.toThrow('requires the dev-surface shared secret')
+    expect(transaction).not.toHaveBeenCalled()
+  })
+
+  it('allows the reset on ENVIRONMENT=staging with the correct secret', async () => {
+    const { db, transaction, deletes } = mockDb()
     const svc = new IdentityService(db as never)
 
-    await svc.reset(false, 'development')
+    await svc.reset(STAGING, SECRET)
 
-    expect(txFn).toHaveBeenCalled()
+    expect(transaction).toHaveBeenCalled()
     // 8 tables must be cleared: devices, webauthnCredentials, webauthnChallenges,
     // sessions, authNonces, provisionRooms, inviteCodes, users
-    expect(txDelete!).toHaveBeenCalledTimes(8)
+    expect(deletes()!).toHaveBeenCalledTimes(8)
   })
 
-  it('allows reset in demo mode with DEMO_MODE_CONFIRM=DESTROY_ALL_DATA', async () => {
-    let txDelete: ReturnType<typeof vi.fn>
-    const txFn = vi.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
-      txDelete = vi.fn().mockResolvedValue(undefined)
-      const tx = { delete: txDelete }
-      return fn(tx)
-    })
-    const db = { transaction: txFn }
+  it('refuses on ENVIRONMENT=staging when DEV_ROUTES_ENABLED is not set', async () => {
+    const { db } = mockDb()
+    const svc = new IdentityService(db as never)
+    await expect(
+      svc.reset({ ENVIRONMENT: 'staging', DEV_RESET_SECRET: SECRET }, SECRET),
+    ).rejects.toThrow('DEV_ROUTES_ENABLED is not "true"')
+  })
+
+  it('allows the reset on ENVIRONMENT=development with the configured secret', async () => {
+    const { db, transaction, deletes } = mockDb()
     const svc = new IdentityService(db as never)
 
-    await svc.reset(true, 'staging', 'DESTROY_ALL_DATA')
+    await svc.reset({ ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET)
 
-    expect(txFn).toHaveBeenCalled()
-    expect(txDelete!).toHaveBeenCalledTimes(8)
+    expect(transaction).toHaveBeenCalled()
+    expect(deletes()!).toHaveBeenCalledTimes(8)
   })
 })

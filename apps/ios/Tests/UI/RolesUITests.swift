@@ -63,15 +63,16 @@ final class RolesUITests: BaseUITest {
         when("I navigate to the roles viewer and tap a role") {
             navigateToRoles()
 
-            let listFound = anyElementExists(["roles-list"], timeout: 10)
-            guard listFound else { return }
+            XCTAssertTrue(
+                anyElementExists(["roles-list"], timeout: 10),
+                "The roles viewer should list the hub's roles"
+            )
 
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'role-row-'"))
                 .firstMatch
-            if firstRow.waitForExistence(timeout: 5) {
-                firstRow.tap()
-            }
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "The roles list should have at least one role row")
+            firstRow.tap()
         }
         then("I should see the role detail view") {
             let detailFound = anyElementExists(["role-detail"], timeout: 5)
