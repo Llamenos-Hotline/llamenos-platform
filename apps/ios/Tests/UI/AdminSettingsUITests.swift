@@ -609,12 +609,11 @@ final class AdminSettingsUITests: BaseUITest {
             XCTFail("\(identifier) should be reachable on screen", file: file, line: line)
             throw SettingsProbeError.unreadable(identifier)
         }
-        field.tap()
         let existing = try fieldText(identifier, file: file, line: line)
-        if !existing.isEmpty {
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
-        }
-        field.typeText(text)
+        typeText(
+            String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + text,
+            into: field, file: file, line: line
+        )
     }
 
     /// A static text's label, scrolling in **either** direction to reach it.

@@ -112,8 +112,7 @@ final class NoteFlowUITests: BaseUITest {
         // Enter note text
         let textEditor = find("note-text-editor")
         XCTAssertTrue(textEditor.waitForExistence(timeout: 5))
-        textEditor.tap()
-        textEditor.typeText("Test note from UI test - \(Date().timeIntervalSince1970)")
+        typeText("Test note from UI test - \(Date().timeIntervalSince1970)", into: textEditor)
 
         // A note belongs to a call: the server rejects one with neither a call nor a
         // conversation (createNoteBodySchema), so text alone must not save. XCUITest
@@ -217,8 +216,7 @@ final class NoteFlowUITests: BaseUITest {
 
         let textEditor = find("note-text-editor")
         XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "Note text editor should appear in the create sheet")
-        textEditor.tap()
-        textEditor.typeText(text)
+        typeText(text, into: textEditor)
 
         chooseNoteCall(callId)
 

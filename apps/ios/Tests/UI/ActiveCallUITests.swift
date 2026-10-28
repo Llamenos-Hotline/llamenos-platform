@@ -102,8 +102,7 @@ final class ActiveCallUITests: BaseUITest {
             tapOnceHittable("ban-hangup-button")
             let reason = find("ban-reason-input")
             XCTAssertTrue(reason.waitForExistence(timeout: 10), "The ban dialog should ask for a reason")
-            reason.tap()
-            reason.typeText("Harassing caller")
+            typeText("Harassing caller", into: reason)
             tapOnceHittable("ban-confirm-button")
         }
         then("the call ends and the caller is banned") {
@@ -166,8 +165,7 @@ final class ActiveCallUITests: BaseUITest {
                 find("note-call-choice-\(callId)").waitForExistence(timeout: 20),
                 "The editor should offer this call"
             )
-            editor.tap()
-            editor.typeText(noteText)
+            typeText(noteText, into: editor)
             find("save-note").tap()
             XCTAssertTrue(editor.waitForNonExistence(timeout: 20), "The editor should close once the note is saved")
         }
@@ -283,8 +281,7 @@ final class ActiveCallUITests: BaseUITest {
             let editor = find("note-text-editor")
             XCTAssertTrue(editor.waitForExistence(timeout: 10))
             XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: 20))
-            editor.tap()
-            editor.typeText(noteText)
+            typeText(noteText, into: editor)
             find("save-note").tap()
             XCTAssertTrue(editor.waitForNonExistence(timeout: 20))
         }

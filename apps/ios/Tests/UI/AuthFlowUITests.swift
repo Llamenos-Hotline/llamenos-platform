@@ -59,8 +59,7 @@ final class AuthFlowUITests: XCTestCase {
         // and navigates directly to the PIN set screen — no device key display or backup step.
         let hubURLInput = find("hub-url-input")
         XCTAssertTrue(hubURLInput.waitForExistence(timeout: 5))
-        hubURLInput.tap()
-        hubURLInput.typeText("https://test-hub.example.org")
+        typeText("https://test-hub.example.org", into: hubURLInput)
         dismissKeyboard()
 
         // Tap "Create New Identity"
@@ -219,8 +218,7 @@ final class AuthFlowUITests: XCTestCase {
     private func navigateToOnboarding() {
         let hubURLInput = find("hub-url-input")
         XCTAssertTrue(hubURLInput.waitForExistence(timeout: 20), "The login screen should ask for a hub URL")
-        hubURLInput.tap()
-        hubURLInput.typeText("https://test.example.org")
+        typeText("https://test.example.org", into: hubURLInput)
         dismissKeyboard()
 
         let createButton = find("create-identity")
@@ -252,8 +250,7 @@ final class AuthFlowUITests: XCTestCase {
             XCTFail("PIN entry should exist")
             return
         }
-        pinInput.tap()
-        pinInput.typeText(pin)
+        typeText(pin, into: pinInput)
         let submit = find("pin-submit")
         guard submit.waitForExistence(timeout: 3) else {
             XCTFail("PIN submit should exist")

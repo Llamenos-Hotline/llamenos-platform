@@ -516,50 +516,63 @@ class BaseUITest: XCTestCase {
         coordinate.tap()
     }
 
-    /// Give a text field keyboard focus, returning only once it holds it.
+    // MARK: - Typing
+
+    /// Type `text` into `field` — the only way a UI test should type.
     ///
-    /// `tap()` returns when the touch is synthesized, not when the field has become first
-    /// responder, and `typeText` then fails with "Neither element nor any descendant has keyboard
-    /// focus" if it has not. That happened to `testAddBanEnablesSubmissionAfterEnteringAnIdentifier`
-    /// (merge group 40426201858, shard 3): the tap came ~200 ms after the Add Ban sheet's button
-    /// was tapped, while the sheet was still sliding in, and every `typeText` retry afterwards
-    /// re-dispatched into a field nothing had focused. So wait for the field to be on screen and
-    /// still, tap it, and wait on `hasKeyboardFocus`; a tap that did not take is tapped again, up
-    /// to `attempts` times, each time against the condition rather than a delay.
+    /// `tap()` returns once the touch is synthesized, not once the field has become first
+    /// responder, and `XCUIElement.typeText` gives up after a few seconds with "Neither element
+    /// nor any descendant has keyboard focus" if focus has not arrived. Every caller that wrote
+    /// `field.tap(); field.typeText(...)` carried that race, and it surfaced field by field:
+    /// the Add Ban identifier (merge group 40426201858, shard 3 — tapped while its sheet was
+    /// still sliding in) and the note editor behind the Call Ended prompt (run 40777327221,
+    /// shard 2 — tapped on a settled sheet while the hosted simulator was saturated, and typed
+    /// into 1.6 s later, before the tap had been turned into focus). So this waits for the
+    /// field to be settled, taps it once, and waits on keyboard focus itself before a single
+    /// keystroke is synthesized. A field that never takes focus fails here, naming the field
+    /// and whatever holds focus instead, rather than inside `typeText` with neither.
+    func typeText(
+        _ text: String, into field: XCUIElement, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard focus(field, file: file, line: line) else { return }
+        field.typeText(text)
+    }
+
+    /// Tap `field` once it is settled on screen and return once it — or an element inside it, as
+    /// with a SwiftUI container carrying the identifier — holds keyboard focus.
+    ///
+    /// One tap, then a wait on the condition. A settled, hittable field that a delivered tap
+    /// does not focus is a defect worth seeing, not one to tap past.
     @discardableResult
-    func focusTextField(
-        _ field: XCUIElement,
-        attempts: Int = 3,
-        file: StaticString = #filePath, line: UInt = #line
+    func focus(
+        _ field: XCUIElement, timeout: TimeInterval = 20, file: StaticString = #filePath, line: UInt = #line
     ) -> Bool {
-        guard field.waitForExistence(timeout: 10) else {
-            XCTFail("The text field should exist before it is focused", file: file, line: line)
+        let settled = awaitSettled(field, timeout: 30)
+        guard settled.settled else {
+            XCTFail(
+                "\(field) should be on screen, enabled and still before it is given keyboard focus"
+                    + " (last seen: \(settled.lastSeen))",
+                file: file, line: line
+            )
             return false
         }
+        field.tap()
 
-        // A presenting sheet moves its content; a tap aimed at a frame read mid-slide lands
-        // elsewhere. Settled means hittable with the same frame on two consecutive samples.
-        var previousFrame = CGRect.null
-        let settleDeadline = Date().addingTimeInterval(10)
-        var settled = false
-        while !settled && Date() < settleDeadline {
-            let frame = field.frame
-            settled = field.isHittable && frame == previousFrame
-            previousFrame = frame
-            if !settled { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        let hasFocus = NSPredicate(format: "hasKeyboardFocus == true")
+        let focused = NSPredicate { _, _ in
+            field.hasKeyboardFocus || field.descendants(matching: .any).matching(hasFocus).firstMatch.exists
         }
-        guard settled else {
-            XCTFail("The text field never stopped moving or never became hittable", file: file, line: line)
-            return false
-        }
+        let expectation = XCTNSPredicateExpectation(predicate: focused, object: field)
+        if XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed { return true }
 
-        let focused = NSPredicate(format: "hasKeyboardFocus == true")
-        for _ in 0..<attempts {
-            field.tap()
-            let focus = XCTNSPredicateExpectation(predicate: focused, object: field)
-            if XCTWaiter.wait(for: [focus], timeout: 3) == .completed { return true }
-        }
-        XCTFail("The text field never took keyboard focus after \(attempts) taps", file: file, line: line)
+        let holder = app.descendants(matching: .any).matching(hasFocus).firstMatch
+        let elsewhere = holder.exists
+            ? "keyboard focus is on '\(holder.identifier)' (\(holder.label)) instead"
+            : "nothing in the app holds keyboard focus"
+        XCTFail(
+            "\(field) was tapped but did not take keyboard focus within \(Int(timeout))s; \(elsewhere)",
+            file: file, line: line
+        )
         return false
     }
 

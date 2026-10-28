@@ -155,8 +155,7 @@ final class HubManagementUITests: BaseUITest {
             XCTAssertTrue(app.buttons["hub-create-cancel"].exists)
             XCTAssertFalse(app.buttons["hub-create-submit"].isEnabled, "An unnamed hub cannot be created")
             let name = find("hub-name-field")
-            name.tap()
-            name.typeText("Harbor Watch")
+            typeText("Harbor Watch", into: name)
             XCTAssertTrue(app.buttons["hub-create-submit"].isEnabled, "A named hub can be created")
         }
     }
@@ -172,8 +171,7 @@ final class HubManagementUITests: BaseUITest {
         navigateToHubs()
         openCreateHubForm()
         let name = find("hub-name-field")
-        name.tap()
-        name.typeText("Harbor Watch")
+        typeText("Harbor Watch", into: name)
         XCTAssertEqual(find("hub-slug-field").value as? String, "harbor-watch", "The slug should be generated from the name")
     }
 
@@ -189,13 +187,12 @@ final class HubManagementUITests: BaseUITest {
         when("I create a hub") {
             openCreateHubForm()
             let name = find("hub-name-field")
-            name.tap()
-            name.typeText("Created hub")
+            typeText("Created hub", into: name)
             // The slug is typed explicitly: the generated one stops after a character (#2035).
             let slugField = find("hub-slug-field")
-            slugField.tap()
+            XCTAssertTrue(slugField.waitForExistence(timeout: 5), "The create form should have a slug field")
             let existing = (slugField.value as? String) ?? ""
-            slugField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + slug)
+            typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + slug, into: slugField)
             app.buttons["hub-create-submit"].tap()
         }
         then("the form closes and the new hub is listed") {
@@ -215,8 +212,7 @@ final class HubManagementUITests: BaseUITest {
             navigateToHubs()
             openCreateHubForm()
             let name = find("hub-name-field")
-            name.tap()
-            name.typeText(slug)
+            typeText(slug, into: name)
         }
         when("I cancel") {
             app.buttons["hub-create-cancel"].tap()

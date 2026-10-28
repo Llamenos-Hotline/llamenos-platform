@@ -64,8 +64,7 @@ final class EventsUITests: BaseUITest {
             XCTFail("Event title field should appear in the create sheet")
             return
         }
-        tapWhenSettled(titleField)
-        titleField.typeText(title)
+        typeText(title, into: titleField)
 
         // The toolbar's `Button`, not `find()`'s `Other` container: only the button
         // carries the Disabled trait that `tapWhenSettled` waits out.
@@ -242,8 +241,7 @@ final class EventsUITests: BaseUITest {
 
             let searchField = find("events-search-field")
             XCTAssertTrue(searchField.waitForExistence(timeout: 10), "Events search field should be visible once an event exists")
-            tapWhenSettled(searchField)
-            searchField.typeText(String(token))
+            typeText(String(token), into: searchField)
         }
         then("only the matching event should remain in the list") {
             XCTAssertTrue(

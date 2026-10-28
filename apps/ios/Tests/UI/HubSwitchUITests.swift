@@ -37,17 +37,15 @@ final class HubSwitchUITests: BaseUITest {
             XCTFail("Hub name field must appear in the create hub form")
             return slug
         }
-        nameField.tap()
-        nameField.typeText("Test Hub \(slug)")
+        typeText("Test Hub \(slug)", into: nameField)
         dismissKeyboard()
 
-        // Slug field auto-populates but we can also set it explicitly
+        // The slug is typed explicitly: the generated one stops after a character (#2035).
         let slugField = find("hub-slug-field")
-        if slugField.waitForExistence(timeout: 3) {
-            slugField.tap()
-            slugField.clearAndTypeText("test-\(slug)")
-            dismissKeyboard()
-        }
+        XCTAssertTrue(slugField.waitForExistence(timeout: 5), "The create hub form should have a slug field")
+        let existing = (slugField.value as? String) ?? ""
+        typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + "test-\(slug)", into: slugField)
+        dismissKeyboard()
 
         let submitButton = find("hub-create-submit")
         guard submitButton.waitForExistence(timeout: 5) else {
@@ -143,32 +141,6 @@ final class HubSwitchUITests: BaseUITest {
                 loaded,
                 "Notes screen must load (list or empty state) after switching hub — no error state"
             )
-        }
-    }
-}
-
-// MARK: - XCUIElement Extension
-
-private extension XCUIElement {
-    /// Clear existing text and type new text into a text field.
-    func clearAndTypeText(_ text: String) {
-        guard let currentValue = value as? String, !currentValue.isEmpty else {
-            typeText(text)
-            return
-        }
-        // Select all and delete
-        tap()
-        let selectAll = XCUIApplication().menuItems["Select All"]
-        if selectAll.waitForExistence(timeout: 1) {
-            selectAll.tap()
-            typeText(text)
-        } else {
-            // Fallback: triple-tap to select all, then type
-            let coordinate = coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            coordinate.tap()
-            coordinate.tap()
-            coordinate.tap()
-            typeText(text)
         }
     }
 }

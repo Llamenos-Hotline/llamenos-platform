@@ -171,8 +171,7 @@ final class APIConnectedUITests: BaseUITest {
 
             let textEditor = find("note-text-editor")
             XCTAssertTrue(textEditor.waitForExistence(timeout: 5))
-            textEditor.tap()
-            textEditor.typeText("API test note - \(Date().timeIntervalSince1970)")
+            typeText("API test note - \(Date().timeIntervalSince1970)", into: textEditor)
         }
         then("the save button should be enabled") {
             let saveButton = find("save-note")
@@ -196,8 +195,7 @@ final class APIConnectedUITests: BaseUITest {
 
             let textEditor = find("note-text-editor")
             XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "The create sheet should open")
-            textEditor.tap()
-            textEditor.typeText("Draft that must not be saved")
+            typeText("Draft that must not be saved", into: textEditor)
 
             find("cancel-note-create").tap()
         }
@@ -1058,8 +1056,7 @@ final class APIConnectedUITests: BaseUITest {
 
             let textEditor = find("note-text-editor")
             XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "The create sheet should open")
-            textEditor.tap()
-            textEditor.typeText(noteText)
+            typeText(noteText, into: textEditor)
 
             chooseNoteCall(callId)
 
