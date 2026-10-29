@@ -4,9 +4,9 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, outOfScopeFindings, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
+import { claimDigest, finalLine, outOfScopeFindings, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
-  diffHash, isTreeSha, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
+  diffHash, hasCacheKey, isTreeSha, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
@@ -960,10 +960,16 @@ export interface ReviewCiDeps extends CiDeps {
    * the diff do what the PR claims" against a bare PR number), never an
    * UNSAFE one. Only a missing security control may stop the gate.
    *
-   * Deliberately NOT part of the review cache key (`ReviewCacheKey` is the
-   * PR plus the diff hash): an edited description does not change the code
-   * under judgement, and re-running every reviewer on a typo fix in a body
-   * is the review churn this gate's cache exists to avoid.
+   * PART OF THE REVIEW CACHE KEY (#2336), via `claimDigest`. It used not to
+   * be, on the reasoning that an edited description does not change the code
+   * under judgement — but the reviewer judges the description too: it is
+   * told to FAIL one that misstates the diff, and does. #2332 was FAILed for
+   * exactly that, had its body corrected with the tree untouched, and the
+   * re-request replayed the cached FAIL in 23 seconds with no new verdict,
+   * leaving the PR no legitimate way out. A verdict is a judgement of (tree,
+   * claim); the cache now says so. Read ONCE, before the lookup, so the key
+   * and every reviewer's prompt describe the same read. Unreadable means no
+   * key: nothing looked up, nothing recorded (`hasCacheKey`).
    */
   prClaim?(): Promise<PrClaim | undefined>
   /** Runs ONE resolved profile, read-only, against the same export. The
@@ -1436,13 +1442,30 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
 
   const diff = await deps.prDiff()
 
-  // Exactly one review per PR per JUDGED TREE per REVIEW SET (#2014). Keyed
-  // by the head's tree sha (`review-cache.ts`), never the head SHA — a no-op
-  // rebase still hits — and never the diff text, which a rebase onto a moved
-  // `main` leaves identical while changing the code under judgement;
-  // namespaced by `reviewSetTag` so a PASS produced by the general reviewer
-  // alone can never be re-published as one that also included a profile
-  // that never ran.
+  // Read ONCE and shared by every reviewer in the batch, so the generalist
+  // and every profile judge the diff against the SAME stated intent — two
+  // reviewers disagreeing because they read the PR at different moments
+  // would be the worst possible shape for this. Read BEFORE the cache, which
+  // is keyed on it (#2336): the key must describe the very text the
+  // reviewers are shown, never a second read that could have moved.
+  // Fail-soft: an unreadable claim is `undefined` and the prompt says so (see
+  // `ReviewCiDeps.prClaim`) — and with no claim there is no cache key.
+  const claim = await deps.prClaim?.().catch(() => undefined)
+  if (claim === undefined) {
+    deps.log(`no PR title/body available for pr=${deps.ctx.pr} — every reviewer is told plainly that ` +
+      'this PR stated no claim, rather than being shown a bare PR number as if it were one; ' +
+      'the review cache is neither read nor written for this run')
+  }
+
+  // Exactly one review per PR per JUDGED (TREE, CLAIM) per REVIEW SET
+  // (#2014, #2336). Keyed by the head's tree sha (`review-cache.ts`), never
+  // the head SHA — a no-op rebase still hits — and never the diff text,
+  // which a rebase onto a moved `main` leaves identical while changing the
+  // code under judgement; AND by the PR's title and body as the reviewer
+  // reads them, because the reviewer judges those too and a corrected
+  // description must be judged afresh; namespaced by `reviewSetTag` so a
+  // PASS produced by the general reviewer alone can never be re-published as
+  // one that also included a profile that never ran.
   //
   // A lookup failure and a genuine cache miss are DELIBERATELY the same
   // thing here — `cached === undefined` — because both mean "run the
@@ -1451,9 +1474,12 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // because the cache is an injected interface, not `ghJson` itself, and
   // a future or test implementation of it could still throw; the fail-safe
   // direction must hold even then.
-  const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff), headTree: await readHeadTree(deps) }
+  const cacheKey: ReviewCacheKey = {
+    pr: deps.ctx.pr, diffHash: diffHash(diff), headTree: await readHeadTree(deps),
+    claimDigest: claim === undefined ? undefined : claimDigest(claim),
+  }
   const exactScope = reviewSetTag(profiles.map((p) => p.agent))
-  const cache = cacheKey.headTree === undefined ? undefined : deps.cacheFor?.(exactScope)
+  const cache = hasCacheKey(cacheKey) ? deps.cacheFor?.(exactScope) : undefined
   if (cache !== undefined) {
     let cached: CachedVerdict | undefined
     try {
@@ -1465,7 +1491,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     if (cached !== undefined) {
       deps.log(
         `review cache hit (${cached.verdict}) for PR ${deps.ctx.pr} ` +
-        `(tree ${cacheKey.headTree}) — re-publishing instead of invoking the engine`,
+        `(tree ${cacheKey.headTree}, claim ${cacheKey.claimDigest?.slice(0, 12)}) — re-publishing instead of invoking the engine`,
       )
       // Re-published verdicts still reach the PR: a cached result must read
       // as a review, not as a bare status (see `publishReport`).
@@ -1523,16 +1549,6 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // judged commit's code anywhere in this job — which is what lets it hold
   // the key, and what every reviewer in this batch inherits.
   const names = [GENERAL_REVIEWER, ...profiles.map((p) => p.agent)]
-  // Read ONCE and shared by every reviewer in the batch, so the generalist
-  // and every profile judge the diff against the SAME stated intent — two
-  // reviewers disagreeing because they read the PR at different moments
-  // would be the worst possible shape for this. Fail-soft: an unreadable
-  // claim is `undefined` and the prompt says so (see `ReviewCiDeps.prClaim`).
-  const claim = await deps.prClaim?.().catch(() => undefined)
-  if (claim === undefined) {
-    deps.log(`no PR title/body available for pr=${deps.ctx.pr} — every reviewer is told plainly that ` +
-      'this PR stated no claim, rather than being shown a bare PR number as if it were one')
-  }
   const settled = await Promise.allSettled([
     deps.secondOpinion({
       authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir,
@@ -1567,7 +1583,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // whole record, not just its own reviewer's: the set's composed verdict is
   // not a judgement of the diff if part of it never ran.
   const substantive = results.every((r) => r.verdict !== 'UNREADABLE')
-  if (substantive && deps.cacheFor !== undefined && cacheKey.headTree !== undefined) {
+  if (substantive && deps.cacheFor !== undefined && hasCacheKey(cacheKey)) {
     // Recorded under the exact review set AND under the
     // general-reviewer-only namespace. Both directions are load-bearing,
     // and both exist because the review set for one diff CHANGES between
@@ -1724,6 +1740,15 @@ export interface ReviewGateDeps {
    */
   headTree?(): Promise<string>
   /**
+   * The PR's title and body — the cache key's claim half (#2336; see
+   * `ReviewCiDeps.prClaim`). The SAME live read the review set's
+   * `description` comes from, in production. Omitted, failing or
+   * `undefined` means no key: nothing can be a `cache-hit`, and the gate
+   * decides as on a miss — so a description nobody could read is never
+   * matched against one a reviewer judged.
+   */
+  prClaim?(): Promise<PrClaim | undefined>
+  /**
    * Whether THIS event asked US for a review — `reviewRequestFor` over the
    * workflow's own event fields. Computed by the caller so this function has
    * exactly one job: set first, cache second, tier third, request fourth.
@@ -1842,7 +1867,14 @@ export function reviewGateFailsClosed(kind: ReviewGateOutcome['kind']): boolean 
 
 export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGateOutcome> {
   const diff = await deps.prDiff()
-  const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff), headTree: await readHeadTree(deps) }
+  const claim = await deps.prClaim?.().catch((e: unknown) => {
+    deps.log(`could not read the PR title/body — the review cache is not consulted (fail safe): ${e instanceof Error ? e.message : String(e)}`)
+    return undefined
+  })
+  const cacheKey: ReviewCacheKey = {
+    pr: deps.ctx.pr, diffHash: diffHash(diff), headTree: await readHeadTree(deps),
+    claimDigest: claim === undefined ? undefined : claimDigest(claim),
+  }
   const changedFiles = await deps.changedFiles()
 
   // FIRST, ahead of the cache, the tier and the request: work out WHAT this
@@ -1894,18 +1926,18 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   // genuine miss are indistinguishable on purpose, because both mean "this
   // is not yet a known-good diff" — see `artifactReviewCache`'s own doc.
   //
-  // No tree, no lookup (#2014): the key IS the tree, and a lookup without
-  // one could only match by accident. Decided as a miss.
+  // No tree or no claim, no lookup (#2014, #2336): the key IS the pair, and
+  // a lookup without either could only match by accident. Decided as a miss.
   const cache = deps.cacheFor(reviewSetTag(set.profiles))
   let cached: CachedVerdict | undefined
   try {
-    cached = cacheKey.headTree === undefined ? undefined : await cache.lookup(cacheKey)
+    cached = hasCacheKey(cacheKey) ? await cache.lookup(cacheKey) : undefined
   } catch (e) {
     deps.log(`review cache lookup threw — treating pr=${cacheKey.pr} as a miss (fail safe): ${e instanceof Error ? e.message : String(e)}`)
     cached = undefined
   }
   if (cached !== undefined) {
-    deps.log(`reused ${cached.verdict} verdict for pr=${cacheKey.pr} tree ${cacheKey.headTree} — no engine call`)
+    deps.log(`reused ${cached.verdict} verdict for pr=${cacheKey.pr} tree ${cacheKey.headTree} claim ${cacheKey.claimDigest?.slice(0, 12)} — no engine call`)
     return { kind: 'cache-hit', cacheKey, verdict: cached, profiles: set.profiles }
   }
 
@@ -1974,7 +2006,9 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   }
 
   // A push reaching this line is a head that MOVED onto a tree no verdict
-  // covers (an unchanged tree hit the cache above; a Dependabot bump or a
+  // covers — or one whose PR description changed since its verdict (#2336),
+  // which a push can only report, never re-judge (an unchanged tree and
+  // description hit the cache above; a Dependabot bump or a
   // docs-only push concluded green above too). Crucially, `run-engine` is out of reach
   // from here, whatever `requested` says: this is the structural guarantee
   // that adding `synchronize` to `fleet-review.yml` (#1284) can never become
@@ -1991,7 +2025,8 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
     const last: LastVerdictLookup = deps.lastVerdict === undefined
       ? { kind: 'unreadable', reason: 'no lookup for the last earned verdict was wired into this gate' }
       : await deps.lastVerdict()
-    const moved = `the head of pr=${cacheKey.pr} moved onto tree ${cacheKey.headTree ?? '(unreadable)'}, which no cached verdict covers`
+    const moved = `the head of pr=${cacheKey.pr} is tree ${cacheKey.headTree ?? '(unreadable)'} with description ` +
+      `${cacheKey.claimDigest?.slice(0, 12) ?? '(unreadable)'}, a pair no cached verdict covers`
     if (last.kind === 'found') {
       const { earned } = last
       if (earned.verdict === 'PASS') {
