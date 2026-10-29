@@ -44,11 +44,20 @@ import {
   loadModule,
   parsePlPgSQLSync,
   parseSync,
+  type AlterEnumStmt,
+  type AlterObjectSchemaStmt,
+  type AlterTableStmt,
   type ColumnDef,
   type Constraint,
+  type DeleteStmt,
+  type DoStmt,
+  type DropStmt,
+  type IndexStmt,
   type Node,
   type ObjectType,
   type RangeVar,
+  type RenameStmt,
+  type TruncateStmt,
 } from '@libpg-query/parser'
 import { listMigrationFiles, splitMigrationStatements } from './lib/migration-statements'
 import {
@@ -286,11 +295,7 @@ function addsNotNullWithoutDefault(def: ColumnDef): boolean {
 
 // ── Rules ────────────────────────────────────────────────────────────────────
 
-function lintAlterTable(
-  stmt: { relation?: RangeVar; cmds?: Node[]; objtype?: ObjectType },
-  ctx: LintContext,
-  out: Finding[],
-): void {
+function lintAlterTable(stmt: AlterTableStmt, ctx: LintContext, out: Finding[]): void {
   if (stmt.objtype !== 'OBJECT_TABLE' && stmt.objtype !== 'OBJECT_FOREIGN_TABLE') return
   const table = rel(stmt.relation)
   if (!table) return
@@ -376,10 +381,10 @@ function existingConstraintColumn(
 function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[]): void {
   switch (key) {
     case 'AlterTableStmt':
-      lintAlterTable(value as Parameters<typeof lintAlterTable>[0], ctx, out)
+      lintAlterTable(value as AlterTableStmt, ctx, out)
       return
     case 'DropStmt': {
-      const s = value as { objects?: Node[]; removeType?: ObjectType }
+      const s = value as DropStmt
       for (const obj of s.objects ?? []) {
         if (s.removeType === 'OBJECT_SCHEMA') {
           const name = str(obj)
@@ -393,12 +398,7 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
       return
     }
     case 'RenameStmt': {
-      const s = value as {
-        renameType?: ObjectType
-        relation?: RangeVar
-        object?: Node
-        subname?: string
-      }
+      const s = value as RenameStmt
       if (s.renameType === 'OBJECT_COLUMN') {
         const t = rel(s.relation)
         if (t && s.subname) {
@@ -417,7 +417,7 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
     }
     case 'AlterEnumStmt': {
       // ADD VALUE is additive; RENAME VALUE carries oldVal.
-      const s = value as { typeName?: Node[]; oldVal?: string }
+      const s = value as AlterEnumStmt
       const t = qualifiedName((s.typeName ?? []).map(str))
       if (t && s.oldVal) {
         out.push({ rule: 'rename', object: { kind: 'enum-value', schema: t.schema, type: t.name, value: s.oldVal } })
@@ -425,14 +425,14 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
       return
     }
     case 'AlterObjectSchemaStmt': {
-      const s = value as { objectType?: ObjectType; relation?: RangeVar; object?: Node }
+      const s = value as AlterObjectSchemaStmt
       const target = rel(s.relation) ?? qualifiedName(listNames(s.object))
       const ref = target && relationKindRef(s.objectType, target)
       if (ref) out.push({ rule: 'set-schema', object: ref })
       return
     }
     case 'IndexStmt': {
-      const s = value as { unique?: boolean; relation?: RangeVar; indexParams?: Node[] }
+      const s = value as IndexStmt
       const t = rel(s.relation)
       if (!s.unique || !t || !ctx.floor.relation(t.schema, t.name)) return
       const cols = (s.indexParams ?? []).flatMap((p) =>
@@ -445,7 +445,7 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
       return
     }
     case 'TruncateStmt': {
-      const s = value as { relations?: Node[] }
+      const s = value as TruncateStmt
       for (const r of s.relations ?? []) {
         const t = 'RangeVar' in r ? rel(r.RangeVar) : undefined
         if (t) out.push({ rule: 'truncate', object: { kind: 'relation', ...t } })
@@ -453,13 +453,13 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
       return
     }
     case 'DeleteStmt': {
-      const s = value as { relation?: RangeVar; whereClause?: Node }
+      const s = value as DeleteStmt
       const t = rel(s.relation)
       if (t && !s.whereClause) out.push({ rule: 'delete-without-where', object: { kind: 'relation', ...t } })
       return
     }
     case 'DoStmt':
-      lintDoBlock(value as { args?: Node[] }, ctx, out)
+      lintDoBlock(value as DoStmt, ctx, out)
       return
   }
 }
@@ -508,7 +508,7 @@ const DYNAMIC_PLPGSQL = new Set(['PLpgSQL_stmt_dynexecute', 'PLpgSQL_stmt_dynfor
  * plpgsql grammar, every embedded SQL statement is judged like a top-level
  * one, and EXECUTE of a run-time string fails, because no parser can see it.
  */
-function lintDoBlock(stmt: { args?: Node[] }, ctx: LintContext, out: Finding[]): void {
+function lintDoBlock(stmt: DoStmt, ctx: LintContext, out: Finding[]): void {
   let language = 'plpgsql'
   let body: string | undefined
   for (const a of stmt.args ?? []) {
