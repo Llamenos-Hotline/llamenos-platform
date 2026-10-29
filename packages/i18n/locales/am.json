@@ -166,7 +166,10 @@
       "userRemoved": "ፈቃደኛ ተወግዷል",
       "userOnBreak": "ፈቃደኛ በእረፍት ላይ",
       "userAvailable": "ፈቃደኛ ዝግጁ",
-      "userAdded": "ፈቃደኛ ተጨምሯል"
+      "userAdded": "ፈቃደኛ ተጨምሯል",
+      "underAttackModeChanged": "የጥቃት ጊዜ ሁነታ ተቀይሯል",
+      "incidentOpened": "ክስተት ተከፍቷል",
+      "incidentClosed": "ክስተት ተዘግቷል"
     },
     "noEntries": "የኦዲት መዝገብ ምዝገባዎች የሉም",
     "search": "የኦዲት መዝገብ ፈልግ...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "ለሁሉም ፈቃደኞች የጥሪ ግልባጭ ይነቃ? ይህ ጥሪዎችን በቅጽበት ለመገልበጥ AI ይጠቀማል።",
     "transcriptionTitle": "የግልባጭ ቅንብር ቀይር",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "የጥቃት ጊዜ ሁነታን ቀይር",
+    "underAttackEnable": "የጥቃት ጊዜ ሁነታ ይብራ? ወደዚህ ማዕከል የሚደውል ሁሉ ከመገናኘቱ በፊት የድምጽ CAPTCHA ማለፍ ይኖርበታል።",
+    "underAttackDisable": "የጥቃት ጊዜ ሁነታ ይጥፋ? ጥሪዎች እንደገና በዚህ ማዕከል የተለመዱ የአይፈለጌ ቅንብሮች ይስተናገዳሉ።"
   },
   "contacts": {
     "noContacts": "ገና እውቂያዎች የሉም",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "CAPTCHA ተሰጥቷቸዋል",
+    "activityCountsOnly": "ብዛት ብቻ። የደዋዮች ቁጥሮች ፈጽሞ አይመዘገቡም።",
+    "activityFailed": "CAPTCHA ወድቀዋል",
+    "activityPassed": "CAPTCHA አልፈዋል",
+    "activityRateLimited": "በፍጥነት ገደብ ተገድበዋል",
+    "activityRepeated": "ቁጥሮቹን እንደገና ለመስማት ጠይቀዋል",
+    "activityTimedOut": "ለCAPTCHA አልመለሱም",
+    "activityTitle": "የአይፈለጌ እንቅስቃሴ",
+    "autoEnable": "በራስ-ሰር አብራ",
+    "autoEnableDescription": "ብዙ ጥሪዎች CAPTCHA ሲወድቁ፣ ጊዜያቸው ሲያልፍ ወይም የፍጥነት ገደብ ላይ ሲደርሱ የጥቃት ጊዜ ሁነታን ያበራል፣ ከጸጥታ ጊዜ በኋላም እንደገና ያጠፋዋል። በእጅ የበራ ሁነታ በራስ-ሰር ፈጽሞ አይጠፋም።",
+    "autoQuietMinutes": "ከመጥፋቱ በፊት የጸጥታ ጊዜ (ደቂቃዎች)",
+    "autoThresholdCount": "አጠራጣሪ ጥሪዎች ብዛት",
+    "autoWindowMinutes": "በውስጥ (ደቂቃዎች)",
     "blockDuration": "የማገጃ ቆይታ (ደቂቃዎች)",
     "disabled": "ተሰናክሏል",
     "enabled": "ነቅቷል",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "የፍጥነት ገደብ",
     "rateLimitingDescription": "ከአንድ ቁጥር ተደጋጋሚ ጥሪዎችን ይገድቡ",
     "title": "የአይፈለጌ ቅነሳ",
+    "underAttack": "የጥቃት ጊዜ ሁነታ",
+    "underAttackBanner": "የጥቃት ጊዜ ሁነታ በርቷል። እያንዳንዱ ደዋይ የድምጽ CAPTCHA ማለፍ አለበት።",
+    "underAttackDescription": "ይህ በበራበት ጊዜ ወደዚህ ማዕከል የሚደውል ሁሉ ከመገናኘቱ በፊት የድምጽ CAPTCHA ማለፍ አለበት። መስመሩ ባልተፈለጉ ጥሪዎች ሲጥለቀለቅ ይጠቀሙበት።",
+    "underAttackSince": "ከ{{time}} ጀምሮ በርቷል",
+    "underAttackSourceAuto": "በራስ-ሰር ተከፍቷል",
+    "underAttackSourceManual": "በእጅ ተከፍቷል",
     "voiceCaptcha": "የድምጽ CAPTCHA",
     "voiceCaptchaDescription": "ደዋዮች ከመገናኘታቸው በፊት በዘፈቀደ ቁጥር እንዲያስገቡ ይጠይቁ"
   },
@@ -4711,7 +4736,9 @@
     "waitMessage": "ጥሪዎ ለእኛ ጠቃሚ ነው። እባክዎ ከበጎ ፈቃደኛ ጋር እስኪገናኙ ድረስ ይጠብቁ።",
     "unavailableMessage": "ይቅርታ፣ በአሁኑ ጊዜ ጥሪዎን ለመቀበል ማንም የለም። እባክዎ ቆየት ብለው ይሞክሩ። ቸር ይግጠምዎ።",
     "voicemailPrompt": "በአሁኑ ጊዜ ጥሪዎን ለመቀበል ማንም የለም። እባክዎ ከድምፅ ምልክቱ በኋላ መልእክት ይተዉ።",
-    "voicemailThanks": "ለመልእክትዎ እናመሰግናለን። ቸር ይግጠምዎ።"
+    "voicemailThanks": "ለመልእክትዎ እናመሰግናለን። ቸር ይግጠምዎ።",
+    "captchaRepeatHint": "ቁጥሮቹን እንደገና ለመስማት የኮከብ ምልክቱን ይጫኑ።",
+    "overLimitMessage": "ከዚህ መስመር በጣም ብዙ ጥሪዎች እየደረሱን ስለሆነ አሁን ልናገናኝዎት አንችልም። እባክዎ ከጥቂት ደቂቃዎች በኋላ እንደገና ይሞክሩ።"
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4751,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "ሊያበቁ የተቃረቡ እገዳዎች",
+      "erasureDeadline": "ጊዜያቸው ያለፈ የመሰረዝ ጥያቄዎች",
+      "providerMedia": "በስልክ አቅራቢው ዘንድ የቀሩ ቅጂዎች",
+      "spam": "አይፈለጌ እና ያልተፈለጉ ጥሪዎች"
+    },
+    "closed": "አብቅቷል",
+    "ongoing": "ከ{{time}} ጀምሮ {{count}} ክስተቶች",
+    "opened": "አሁን እየተከሰተ ነው",
+    "push": "በመስመርዎ ላይ መታየት ያለበት እንቅስቃሴ አለ።",
+    "signalAlert": "የመስመር ማንቂያ — {{category}}: {{state}}። ለዝርዝሮች መተግበሪያውን ይክፈቱ።"
   }
 }

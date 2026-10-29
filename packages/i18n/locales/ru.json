@@ -489,6 +489,8 @@
       "adminPromoted": "Повышен до администратора",
       "callAnswered": "Звонок принят",
       "callEnded": "Звонок завершён",
+      "incidentClosed": "Инцидент закрыт",
+      "incidentOpened": "Инцидент открыт",
       "ivrAudioDeleted": "Аудио IVR удалено",
       "ivrAudioUploaded": "Аудио IVR загружено",
       "ivrLanguagesUpdated": "Языки IVR обновлены",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "Настройка антиспама изменена",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "Настройка транскрипции изменена",
+      "underAttackModeChanged": "Режим отражения атаки изменён",
       "userAdded": "Волонтёр добавлен",
       "userAvailable": "Волонтёр доступен",
       "userOnBreak": "Волонтёр на перерыве",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "Включить транскрипцию звонков для всех волонтёров? Для транскрипции звонков в реальном времени используется ИИ.",
     "transcriptionTitle": "Изменить настройку транскрипции",
     "biometricDisable": "Отключить биометрическую разблокировку? Вы всё равно сможете разблокировать с помощью PIN-кода.",
-    "biometricDisableTitle": "Отключить биометрическую разблокировку"
+    "biometricDisableTitle": "Отключить биометрическую разблокировку",
+    "underAttackTitle": "Изменить режим отражения атаки",
+    "underAttackEnable": "Включить режим отражения атаки? Каждый, кто звонит в этот хаб, должен будет пройти голосовую CAPTCHA перед подключением.",
+    "underAttackDisable": "Выключить режим отражения атаки? Звонки снова будут обрабатываться по обычным настройкам антиспама этого хаба."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "Получили CAPTCHA",
+    "activityCountsOnly": "Только количество. Номера звонящих никогда не записываются.",
+    "activityFailed": "Не прошли CAPTCHA",
+    "activityPassed": "Прошли CAPTCHA",
+    "activityRateLimited": "Ограничены по частоте",
+    "activityRepeated": "Попросили повторить цифры",
+    "activityTimedOut": "Не ответили на CAPTCHA",
+    "activityTitle": "Активность спама",
+    "autoEnable": "Включать автоматически",
+    "autoEnableDescription": "Включает режим отражения атаки, когда много звонков не проходят CAPTCHA, не отвечают вовремя или упираются в ограничение частоты, и выключает его после периода затишья. Режим, включённый вручную, никогда не выключается автоматически.",
+    "autoQuietMinutes": "Период затишья до выключения (минут)",
+    "autoThresholdCount": "Число подозрительных звонков",
+    "autoWindowMinutes": "За (минут)",
     "blockDuration": "Длительность блокировки (минуты)",
     "disabled": "Отключено",
     "enabled": "Включено",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "Ограничение частоты",
     "rateLimitingDescription": "Ограничить повторные звонки с одного номера",
     "title": "Защита от спама",
+    "underAttack": "Режим отражения атаки",
+    "underAttackBanner": "Режим отражения атаки включён. Каждый звонящий должен пройти голосовую CAPTCHA.",
+    "underAttackDescription": "Пока режим включён, каждый, кто звонит в этот хаб, должен пройти голосовую CAPTCHA перед подключением. Используйте его, когда линию заваливают нежелательными звонками.",
+    "underAttackSince": "Включён с {{time}}",
+    "underAttackSourceAuto": "Включён автоматически",
+    "underAttackSourceManual": "Включён вручную",
     "voiceCaptcha": "Голосовая CAPTCHA",
     "voiceCaptchaDescription": "Требовать от звонящих ввод случайного числа перед соединением"
   },
@@ -4706,7 +4731,9 @@
     "waitMessage": "Ваш звонок важен для нас. Пожалуйста, подождите, пока мы соединяем вас с волонтёром.",
     "unavailableMessage": "Извините, сейчас никто не может ответить на ваш звонок. Пожалуйста, перезвоните позже. До свидания.",
     "voicemailPrompt": "В данный момент никто не может ответить на ваш звонок. Пожалуйста, оставьте сообщение после сигнала.",
-    "voicemailThanks": "Спасибо за ваше сообщение. До свидания."
+    "voicemailThanks": "Спасибо за ваше сообщение. До свидания.",
+    "captchaRepeatHint": "Чтобы прослушать цифры ещё раз, нажмите звёздочку.",
+    "overLimitMessage": "С этой линии поступает очень много звонков, поэтому сейчас мы не можем вас соединить. Пожалуйста, попробуйте снова через несколько минут."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4753,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Блокировки, срок которых истекает",
+      "erasureDeadline": "Просроченные запросы на удаление",
+      "providerMedia": "Записи, оставшиеся у оператора связи",
+      "spam": "Спам и нежелательные звонки"
+    },
+    "closed": "Завершён",
+    "ongoing": "Событий с {{time}}: {{count}}",
+    "opened": "Происходит сейчас",
+    "push": "На вашей горячей линии есть активность, на которую стоит взглянуть.",
+    "signalAlert": "Оповещение горячей линии — {{category}}: {{state}}. Подробности в приложении."
   }
 }

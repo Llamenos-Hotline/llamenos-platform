@@ -489,6 +489,8 @@
       "adminPromoted": "관리자 승격됨",
       "callAnswered": "통화 응답됨",
       "callEnded": "통화 종료됨",
+      "incidentClosed": "사건 종료됨",
+      "incidentOpened": "사건 시작됨",
       "ivrAudioDeleted": "IVR 오디오 삭제됨",
       "ivrAudioUploaded": "IVR 오디오 업로드됨",
       "ivrLanguagesUpdated": "IVR 언어 업데이트됨",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "스팸 방지 설정 변경됨",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "전사 설정 변경됨",
+      "underAttackModeChanged": "공격 대응 모드 변경됨",
       "userAdded": "자원봉사자 추가됨",
       "userAvailable": "자원봉사자 대기 중",
       "userOnBreak": "자원봉사자 휴식 중",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "모든 자원봉사자에 대해 통화 전사를 활성화하시겠습니까? 이 기능은 AI를 사용하여 실시간으로 통화를 전사합니다.",
     "transcriptionTitle": "전사 설정 변경",
     "biometricDisable": "생체 인식 잠금 해제를 끄시겠습니까? PIN으로는 계속 잠금을 해제할 수 있습니다.",
-    "biometricDisableTitle": "생체 인식 잠금 해제 끄기"
+    "biometricDisableTitle": "생체 인식 잠금 해제 끄기",
+    "underAttackTitle": "공격 대응 모드 변경",
+    "underAttackEnable": "공격 대응 모드를 켜시겠습니까? 이 허브로 전화하는 모든 발신자는 연결 전에 음성 CAPTCHA를 통과해야 합니다.",
+    "underAttackDisable": "공격 대응 모드를 끄시겠습니까? 전화는 다시 이 허브의 일반 스팸 설정에 따라 처리됩니다."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "CAPTCHA 요청됨",
+    "activityCountsOnly": "건수만 표시합니다. 발신자 번호는 절대 기록되지 않습니다.",
+    "activityFailed": "CAPTCHA 실패",
+    "activityPassed": "CAPTCHA 통과",
+    "activityRateLimited": "속도 제한됨",
+    "activityRepeated": "숫자 다시 듣기 요청",
+    "activityTimedOut": "CAPTCHA 무응답",
+    "activityTitle": "스팸 활동",
+    "autoEnable": "자동으로 켜기",
+    "autoEnableDescription": "많은 전화가 CAPTCHA에 실패하거나 시간 초과되거나 속도 제한에 걸리면 공격 대응 모드를 켜고, 조용한 기간이 지나면 다시 끕니다. 수동으로 켠 모드는 절대 자동으로 꺼지지 않습니다.",
+    "autoQuietMinutes": "끄기 전 조용한 기간 (분)",
+    "autoThresholdCount": "의심스러운 전화 수",
+    "autoWindowMinutes": "기간 (분)",
     "blockDuration": "차단 기간 (분)",
     "disabled": "비활성화됨",
     "enabled": "활성화됨",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "속도 제한",
     "rateLimitingDescription": "같은 번호의 반복 통화 제한",
     "title": "스팸 방지",
+    "underAttack": "공격 대응 모드",
+    "underAttackBanner": "공격 대응 모드가 켜져 있습니다. 모든 발신자는 음성 CAPTCHA를 통과해야 합니다.",
+    "underAttackDescription": "켜져 있는 동안 이 허브로 전화하는 모든 발신자는 연결 전에 음성 CAPTCHA를 통과해야 합니다. 원치 않는 전화가 핫라인에 쏟아질 때 사용하세요.",
+    "underAttackSince": "{{time}}부터 켜짐",
+    "underAttackSourceAuto": "자동으로 켜짐",
+    "underAttackSourceManual": "수동으로 켜짐",
     "voiceCaptcha": "음성 CAPTCHA",
     "voiceCaptchaDescription": "발신자가 연결 전 임의의 숫자를 입력하도록 요구"
   },
@@ -4706,7 +4731,9 @@
     "waitMessage": "귀하의 전화는 소중합니다. 자원봉사자와 연결해 드릴 때까지 잠시만 기다려 주세요.",
     "unavailableMessage": "죄송합니다. 현재 전화를 받을 수 있는 사람이 없습니다. 나중에 다시 시도해 주세요. 안녕히 계세요.",
     "voicemailPrompt": "현재 전화를 받을 수 있는 사람이 없습니다. 신호음 후 메시지를 남겨주세요.",
-    "voicemailThanks": "메시지를 남겨 주셔서 감사합니다. 안녕히 계세요."
+    "voicemailThanks": "메시지를 남겨 주셔서 감사합니다. 안녕히 계세요.",
+    "captchaRepeatHint": "숫자를 다시 들으시려면 별표를 누르세요.",
+    "overLimitMessage": "이 회선에서 매우 많은 전화가 걸려 오고 있어 지금은 연결해 드릴 수 없습니다. 몇 분 후에 다시 시도해 주세요."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4753,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "곧 만료되는 차단",
+      "erasureDeadline": "기한이 지난 삭제 요청",
+      "providerMedia": "전화 서비스 제공업체에 남은 녹음",
+      "spam": "스팸 및 원치 않는 전화"
+    },
+    "closed": "종료됨",
+    "ongoing": "{{time}} 이후 {{count}}건",
+    "opened": "진행 중",
+    "push": "핫라인에 확인이 필요한 활동이 있습니다.",
+    "signalAlert": "핫라인 알림 — {{category}}: {{state}}. 자세한 내용은 앱을 여세요."
   }
 }

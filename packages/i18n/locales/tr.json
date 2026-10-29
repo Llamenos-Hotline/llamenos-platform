@@ -166,7 +166,10 @@
       "userAvailable": "Gönüllü Müsait",
       "userOnBreak": "Gönüllü Molada",
       "userRemoved": "Gönüllü Kaldırıldı",
-      "userAdded": "Gönüllü Eklendi"
+      "userAdded": "Gönüllü Eklendi",
+      "underAttackModeChanged": "Saldırı Modu Değiştirildi",
+      "incidentOpened": "Olay Açıldı",
+      "incidentClosed": "Olay Kapatıldı"
     },
     "noEntries": "Denetim günlüğü kaydı yok",
     "search": "Denetim günlüğünde ara...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "Tüm gönüllüler için arama transkripsiyonu etkinleştirilsin mi? Bu, aramaları gerçek zamanlı olarak transkript etmek için yapay zeka kullanır.",
     "transcriptionTitle": "Transkripsiyon Ayarını Değiştir",
     "biometricDisable": "Biyometrik kilit açma kapatılsın mı? PIN'inizle kilidi açmaya devam edebileceksiniz.",
-    "biometricDisableTitle": "Biyometrik Kilit Açmayı Kapat"
+    "biometricDisableTitle": "Biyometrik Kilit Açmayı Kapat",
+    "underAttackTitle": "Saldırı Modunu Değiştir",
+    "underAttackEnable": "Saldırı modu açılsın mı? Bu merkezi arayan herkesin bağlanmadan önce sesli CAPTCHA'yı geçmesi gerekecek.",
+    "underAttackDisable": "Saldırı modu kapatılsın mı? Aramalar yeniden bu merkezin olağan spam ayarlarına göre işlenecek."
   },
   "contacts": {
     "noContacts": "Henüz kişi yok",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "CAPTCHA'ya yönlendirildi",
+    "activityCountsOnly": "Yalnızca sayılar. Arayanların numaraları asla kaydedilmez.",
+    "activityFailed": "CAPTCHA'da başarısız",
+    "activityPassed": "CAPTCHA'yı geçti",
+    "activityRateLimited": "Hız sınırına takıldı",
+    "activityRepeated": "Rakamları tekrar dinlemek istedi",
+    "activityTimedOut": "CAPTCHA'ya yanıt vermedi",
+    "activityTitle": "Spam etkinliği",
+    "autoEnable": "Otomatik olarak aç",
+    "autoEnableDescription": "Çok sayıda arama CAPTCHA'da başarısız olduğunda, zaman aşımına uğradığında veya hız sınırına takıldığında saldırı modunu açar ve sakin bir sürenin ardından yeniden kapatır. Elle açılan mod asla otomatik olarak kapatılmaz.",
+    "autoQuietMinutes": "Kapanmadan önceki sakin süre (dakika)",
+    "autoThresholdCount": "Şüpheli arama sayısı",
+    "autoWindowMinutes": "Süre içinde (dakika)",
     "blockDuration": "Engelleme süresi (dakika)",
     "disabled": "Devre dışı",
     "enabled": "Etkin",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "Hız Sınırlama",
     "rateLimitingDescription": "Aynı numaradan tekrarlanan aramaları sınırla",
     "title": "Spam Koruması",
+    "underAttack": "Saldırı modu",
+    "underAttackBanner": "Saldırı modu açık. Arayan herkesin sesli CAPTCHA'yı geçmesi gerekiyor.",
+    "underAttackDescription": "Açıkken bu merkezi arayan herkesin bağlanmadan önce sesli CAPTCHA'yı geçmesi gerekir. Hat istenmeyen aramalarla dolduğunda kullanın.",
+    "underAttackSince": "{{time}} itibarıyla açık",
+    "underAttackSourceAuto": "Otomatik olarak açıldı",
+    "underAttackSourceManual": "Elle açıldı",
     "voiceCaptcha": "Sesli CAPTCHA",
     "voiceCaptchaDescription": "Arayanların bağlanmadan önce rastgele bir sayı girmesini zorunlu kıl"
   },
@@ -4711,7 +4736,9 @@
     "waitMessage": "Aramanız bizim için önemlidir. Sizi bir gönüllüye bağlarken lütfen bekleyin.",
     "unavailableMessage": "Üzgünüz, şu anda aramanızı yanıtlayacak kimse yok. Lütfen daha sonra tekrar deneyin. Hoşça kalın.",
     "voicemailPrompt": "Şu anda aramanızı yanıtlayacak kimse yok. Lütfen sinyal sesinden sonra mesajınızı bırakın.",
-    "voicemailThanks": "Mesajınız için teşekkür ederiz. Hoşça kalın."
+    "voicemailThanks": "Mesajınız için teşekkür ederiz. Hoşça kalın.",
+    "captchaRepeatHint": "Rakamları tekrar duymak için yıldız tuşuna basın.",
+    "overLimitMessage": "Bu hattan çok sayıda arama alıyoruz, bu nedenle sizi şu anda bağlayamıyoruz. Lütfen birkaç dakika sonra tekrar deneyin."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4751,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Süresi dolmak üzere olan engellemeler",
+      "erasureDeadline": "Süresi geçmiş silme talepleri",
+      "providerMedia": "Telefon sağlayıcısında kalan kayıtlar",
+      "spam": "Spam ve istenmeyen aramalar"
+    },
+    "closed": "Sona erdi",
+    "ongoing": "{{time}} itibarıyla {{count}} olay",
+    "opened": "Şu anda sürüyor",
+    "push": "Hattınızda göz atılması gereken bir etkinlik var.",
+    "signalAlert": "Hat uyarısı — {{category}}: {{state}}. Ayrıntılar için uygulamayı açın."
   }
 }

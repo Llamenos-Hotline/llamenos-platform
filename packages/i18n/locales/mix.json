@@ -166,7 +166,10 @@
       "userRemoved": "Ni̱ Tava Voluntario",
       "userAvailable": "Voluntario Íyo Túva̱",
       "userOnBreak": "Voluntario Nu̱ú Descanso",
-      "userAdded": "Ni̱ Chikaa Voluntario"
+      "userAdded": "Ni̱ Chikaa Voluntario",
+      "underAttackModeChanged": "Under Attack Mode Changed",
+      "incidentOpened": "Incident Opened",
+      "incidentClosed": "Incident Closed"
     },
     "noEntries": "Ñá íyo registro de auditoría",
     "search": "Nánuku registro de auditoría...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "¿Xíni̱ñúꞌú transcripción de llamada ña ndiꞌi voluntario? Kuniñúꞌú AI ña transcribir llamada en tiempo real.",
     "transcriptionTitle": "Nasama Configuración de Transcripción",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "Change Under Attack Mode",
+    "underAttackEnable": "Turn on under attack mode? Every caller to this hub will have to pass the voice CAPTCHA before connecting.",
+    "underAttackDisable": "Turn off under attack mode? Callers will be handled by this hub's usual spam settings again."
   },
   "contacts": {
     "noContacts": "Ta̱ꞌán contacto",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "Challenged with the CAPTCHA",
+    "activityCountsOnly": "Counts only. Caller numbers are never recorded.",
+    "activityFailed": "Failed the CAPTCHA",
+    "activityPassed": "Passed the CAPTCHA",
+    "activityRateLimited": "Rate limited",
+    "activityRepeated": "Asked to hear the digits again",
+    "activityTimedOut": "Did not answer the CAPTCHA",
+    "activityTitle": "Spam activity",
+    "autoEnable": "Turn on automatically",
+    "autoEnableDescription": "Turn on under attack mode when many calls fail the CAPTCHA, time out or are rate limited, and turn it off again after a quiet period. A manual switch-on is never turned off automatically.",
+    "autoQuietMinutes": "Quiet period before turning off (minutes)",
+    "autoThresholdCount": "Number of suspicious calls",
+    "autoWindowMinutes": "Within (minutes)",
     "blockDuration": "Tiempo de bloqueo (minuto)",
     "disabled": "Tási",
     "enabled": "Xíni̱ñúꞌú",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "Límite de Llamada",
     "rateLimitingDescription": "Límite llamada repetida nuu̱ iin número kuiti",
     "title": "Mitigación de Spam",
+    "underAttack": "Under attack mode",
+    "underAttackBanner": "Under attack mode is on. Every caller must pass the voice CAPTCHA.",
+    "underAttackDescription": "While this is on, every caller to this hub must pass the voice CAPTCHA before connecting. Use it when the hotline is flooded with unwanted calls.",
+    "underAttackSince": "On since {{time}}",
+    "underAttackSourceAuto": "Turned on automatically",
+    "underAttackSourceManual": "Turned on manually",
     "voiceCaptcha": "CAPTCHA de Voz",
     "voiceCaptchaDescription": "Xíni̱ñúꞌú ña̱yivi kána chikaa iin número aleatorio tá kíꞌin nu̱ú"
   },
@@ -4711,7 +4736,9 @@
     "waitMessage": "Nuu̱ ni̱ka̱ʼa̱n kúu iin ndívi̱. Koto kuñuʼún nuu̱ na̱ʼá nda̱tu̱ʼún xíʼín ñivi̱ chíndeé.",
     "unavailableMessage": "Ndúʼú va̱ʼa, ña íyo ñivi̱ kaʼví nuu̱ ni̱ka̱ʼa̱n vitin. Koto naní inka̱ʼa̱n inka tuku. Saá va̱ʼa.",
     "voicemailPrompt": "Ña íyo ñivi̱ kaʼví nuu̱ ni̱ka̱ʼa̱n vitin. Koto sandaá iin tu̱ʼun saá ndi̱kaa̱ tono.",
-    "voicemailThanks": "Tàsi̱kó nuu̱ tu̱ʼun ni̱sandaá. Saá va̱ʼa."
+    "voicemailThanks": "Tàsi̱kó nuu̱ tu̱ʼun ni̱sandaá. Saá va̱ʼa.",
+    "captchaRepeatHint": "To hear the numbers again, press star.",
+    "overLimitMessage": "We are receiving a very high number of calls from this line, so we can't connect you right now. Please try again in a few minutes."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4751,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Bans about to expire",
+      "erasureDeadline": "Overdue erasure requests",
+      "providerMedia": "Recordings left at the phone provider",
+      "spam": "Spam and unwanted calls"
+    },
+    "closed": "Ended",
+    "ongoing": "{{count}} events since {{time}}",
+    "opened": "Happening now",
+    "push": "There is activity on your hotline that needs a look.",
+    "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details."
   }
 }
