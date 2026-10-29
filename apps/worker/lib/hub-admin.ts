@@ -24,12 +24,13 @@
  * only "admin" is a super-admin therefore has no admin, and the guards refuse
  * to let its real hub admin leave.
  *
- * The readers of a hub are these admins plus an optional hub-controlled escrow
- * key. Today that key is the instance-wide `ADMIN_DECRYPTION_PUBKEY`, which
- * clients still seal to; replacing it with a per-hub escrow key is the
- * B-ADM-CUTOVER bundle, and making clients seal to hub admins' devices is
- * tracked in #2190. Until then a hub admin reads a note only if its sealer
- * addressed them.
+ * The admin readers of a hub are these admins' devices plus the hub's own
+ * optional escrow key (`hubs.escrow_pubkey`) — the `admin` row of the reader
+ * sets in `lib/readers.ts` (PROTOCOL §2.4.2), built on {@link holdsInHub}. The
+ * instance-wide `ADMIN_DECRYPTION_PUBKEY` is in no hub's reader set; the write
+ * guard still accepts it only as a transitional recipient, because clients
+ * seal to it until they seal to `GET /hubs/:hubId/readers` (#2190). Until then
+ * a hub admin reads a note only if its sealer addressed them.
  *
  * Not counted: deactivated or erased users, who cannot act; users holding a
  * revoked signing key, whose private half is public; and users with a
