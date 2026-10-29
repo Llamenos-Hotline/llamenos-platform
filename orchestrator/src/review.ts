@@ -1450,9 +1450,11 @@ function renderClaim(claim: PrClaim | undefined): { title: string; body: string;
  * replayed, with no legitimate way to clear it.
  *
  * WHY THE RENDERED TEXT, NOT THE RAW FIELDS. What a reviewer cannot see
- * cannot have changed its verdict: an edit past `PR_CLAIM_BODY_MAX_CHARS`,
- * trailing whitespace, a title's line breaks. Keying on `renderClaim`'s
- * output re-judges exactly when the judged input moved and not otherwise.
+ * cannot have changed its verdict: leading or trailing whitespace, a title's
+ * line breaks. Keying on `renderClaim`'s output re-judges exactly when the
+ * judged input moved and not otherwise. (Past `PR_CLAIM_BODY_MAX_CHARS` the
+ * truncation notice states the body's full length, so a longer or shorter
+ * body is a visible change and is re-judged.)
  *
  * WHY NOT THE LABELS. No label text reaches any reviewer's prompt; a label's
  * only effect on a review is which PROFILES run, and that is already in the
