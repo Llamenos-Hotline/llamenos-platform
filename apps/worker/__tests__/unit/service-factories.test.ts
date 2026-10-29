@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   getTelephonyFromService,
   getHubTelephonyFromService,
+  resolveHubTelephony,
   resolveHubTelephonyConfig,
   getMessagingAdapterFromService,
 } from '@worker/lib/service-factories'
@@ -166,6 +167,23 @@ describe('service-factories', () => {
         phone: '+1111',
         space: 'space',
       })
+    })
+
+    it('resolveHubTelephony says whose account the adapter is (#2309)', async () => {
+      const hubConfig = { type: 'signalwire', accountSid: 'AC_hub', authToken: 't', phoneNumber: '+1', signalwireSpace: 's' } as TelephonyProviderConfig
+      const globalConfig = { type: 'twilio', accountSid: 'AC_global', authToken: 't', phoneNumber: '+2' } as TelephonyProviderConfig
+      const env = {} as unknown as Parameters<typeof resolveHubTelephony>[0]
+      const own = await resolveHubTelephony(env, {
+        getHubTelephonyProvider: vi.fn().mockResolvedValue(hubConfig),
+        getTelephonyProvider: vi.fn().mockResolvedValue(globalConfig),
+      }, 'hub-1')
+      expect(own).toMatchObject({ source: 'hub', provider: 'signalwire' })
+      // A hub config that fails to load falls back to the platform — and says so.
+      const fallback = await resolveHubTelephony(env, {
+        getHubTelephonyProvider: vi.fn().mockRejectedValue(new Error('decrypt failed')),
+        getTelephonyProvider: vi.fn().mockResolvedValue(globalConfig),
+      }, 'hub-1')
+      expect(fallback).toMatchObject({ source: 'platform', provider: 'twilio', adapter: { sid: 'AC_global' } })
     })
 
     it('falls back to global telephony config', async () => {

@@ -1,7 +1,8 @@
 /**
  * Backend step definitions for provider-held recordings (#2297): a voicemail is fetched and
  * then deleted AT THE PROVIDER, a refused deletion stays visible, and the hub's recording
- * posture reports what it read from the provider rather than what it assumes.
+ * posture reports what it read from the provider rather than what it assumes. #2309 adds
+ * the write path (enforce) and the per-provider statement of what the provider retains.
  *
  * Drives the real voicemail processing path through the MockTelephonyAdapter, so these run
  * in the serial backend-bdd-simulated-telephony project alongside simulated-telephony.steps.ts.
@@ -27,7 +28,7 @@ interface PostureSetting {
 
 interface HeldRecording {
   callId: string
-  kind: 'voicemail' | 'call'
+  kind: 'voicemail' | 'call' | 'call-log'
   deleteAttempts: number
   lastError: string | null
 }
@@ -37,6 +38,24 @@ interface RecordingPostureResponse {
   recording: PostureSetting
   transcription: PostureSetting
   heldAtProvider: HeldRecording[]
+  retention: {
+    removed: Array<{ what: string; how: string }>
+    retained: Array<{ what: string; reason: string }>
+    source: string
+  }
+}
+
+interface EnforcementAction {
+  setting: 'recording' | 'transcription'
+  target: string
+  outcome: 'disabled' | 'already-off' | 'not-settable' | 'failed'
+  evidence?: string
+  reason?: string
+}
+
+interface EnforcementResponse {
+  actions: EnforcementAction[]
+  posture: RecordingPostureResponse
 }
 
 function lastVoicemail(world: Record<string, unknown>): SimulatedVoicemailResponse {
@@ -132,5 +151,51 @@ Then(
     // "off" is a claim about what was read; with nothing read it would have to be "unknown".
     if (expected === 'unknown') expect(value.reason, 'unknown must say why').toBeTruthy()
     else expect(value.evidence, `${setting}=${expected} must name what it was read from`).toBeTruthy()
+  },
+)
+
+When("the admin enforces the hub's recording posture", async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const res = await apiPost<EnforcementResponse>(request, `/hubs/${state.hubId}/settings/telephony-provider/recording-posture/enforce`, {})
+  state.lastApiResponse = res
+  setLastResponse(world, res)
+})
+
+When("volunteer {int} enforces the hub's recording posture", async ({ request, world }, index: number) => {
+  const state = getScenarioState(world)
+  const vol = state.volunteers[index]
+  expect(vol).toBeDefined()
+  const res = await apiPost(request, `/hubs/${state.hubId}/settings/telephony-provider/recording-posture/enforce`, {}, vol.deviceKey)
+  state.lastApiResponse = res
+  setLastResponse(world, res)
+})
+
+Then('the posture should name at least one thing the provider retains, with the reason', async ({ world }) => {
+  const data = getScenarioState(world).lastApiResponse?.data as RecordingPostureResponse
+  // An empty "retained" list would read as "the provider keeps nothing" — the claim #2309
+  // exists to stop anyone making without evidence.
+  expect(data.retention.retained.length).toBeGreaterThan(0)
+  for (const item of data.retention.retained) {
+    expect(item.what).toBeTruthy()
+    expect(item.reason).toBeTruthy()
+  }
+  expect(data.retention.source).toBeTruthy()
+})
+
+Then('every enforcement action should carry its evidence or its reason', async ({ world }) => {
+  const data = getScenarioState(world).lastApiResponse?.data as EnforcementResponse
+  expect(data.actions.length).toBeGreaterThan(0)
+  for (const action of data.actions) {
+    if (action.outcome === 'disabled' || action.outcome === 'already-off') expect(action.evidence).toBeTruthy()
+    else expect(action.reason).toBeTruthy()
+  }
+})
+
+Then(
+  'the re-read posture should report provider-side recording as {string} with the evidence it read',
+  async ({ world }, expected: string) => {
+    const data = getScenarioState(world).lastApiResponse?.data as EnforcementResponse
+    expect(data.posture.recording.state).toBe(expected)
+    expect(data.posture.recording.evidence).toBeTruthy()
   },
 )

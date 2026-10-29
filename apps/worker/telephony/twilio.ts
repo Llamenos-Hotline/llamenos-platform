@@ -5,7 +5,9 @@ import {
   assertHangupResponse,
   assertRecordingDeleted,
   collectRingResults,
+  assertCallLogDeleted,
   combineReadings,
+  enforcementFailed,
   inventoryReading,
   unreadable,
 } from './adapter'
@@ -27,7 +29,12 @@ import type {
   WebhookRecordingStatus,
   RecordingPostureContext,
 } from './adapter'
-import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+  ProviderSettingReading,
+} from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -408,6 +415,148 @@ export class TwilioAdapter implements TelephonyAdapter {
     await assertRecordingDeleted(res, this.providerLabel)
   }
 
+  /**
+   * `DELETE /Calls/{Sid}.json` (#2309). Twilio documents that the record then
+   * no longer appears in the API or console logs, that it refuses a call still
+   * in progress, and that recordings and transcriptions are NOT deleted with
+   * it — those go through `deleteRecording`. SignalWire's compatibility API
+   * documents the same route.
+   */
+  async deleteCallLog(callSid: string): Promise<void> {
+    const res = await this.twilioApi(`/Calls/${encodeURIComponent(callSid)}.json`, { method: 'DELETE' })
+    await assertCallLogDeleted(res, this.providerLabel)
+  }
+
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    const [recording, transcription] = await Promise.all([
+      this.enforceNumberRecording(),
+      this.enforceAccountTranscription(),
+    ])
+    return [...recording, ...transcription]
+  }
+
+  /**
+   * The number routes either to this server (whose TwiML records only
+   * voicemail and opted-in calls), to an Elastic SIP trunk with its own
+   * recording mode, or somewhere this server cannot see into.
+   */
+  private async enforceNumberRecording(): Promise<ProviderSettingEnforcement[]> {
+    const target = `number ${this.phoneNumber}`
+    const lookup = await this.lookupNumber()
+    if ('reading' in lookup) {
+      return [{ setting: 'recording', target, outcome: 'failed', reason: lookup.reading.reason }]
+    }
+    const { number } = lookup
+    if (number.trunk_sid) return [await this.enforceTrunkRecording(number.trunk_sid)]
+    if (number.voice_application_sid) {
+      return [{
+        setting: 'recording',
+        target,
+        outcome: 'not-settable',
+        reason: `${this.phoneNumber} runs TwiML application ${number.voice_application_sid}; ${this.providerLabel} has no recording switch for it, and this server does not rewrite another application's routing`,
+      }]
+    }
+    const reading = this.readVoiceUrl(number.voice_url ?? '')
+    if (reading.state === 'off') return [{ setting: 'recording', target, outcome: 'already-off', evidence: reading.evidence }]
+    return [{
+      setting: 'recording',
+      target,
+      outcome: 'not-settable',
+      reason: reading.state === 'unknown'
+        ? `${reading.reason}; ${this.providerLabel} has no number-level recording switch, and this server does not rewrite the number's routing`
+        : reading.evidence,
+    }]
+  }
+
+  /** Elastic SIP trunk recording — `POST /v1/Trunks/{Sid}/Recording` with `Mode=do-not-record`. SignalWire overrides it. */
+  protected async enforceTrunkRecording(trunkSid: string): Promise<ProviderSettingEnforcement> {
+    const target = `SIP trunk ${trunkSid}`
+    const current = await this.readTrunkRecording(trunkSid)
+    if (current.state === 'off') return { setting: 'recording', target, outcome: 'already-off', evidence: current.evidence }
+    let res: Response
+    try {
+      res = await this.twilioPost(
+        `https://trunking.twilio.com/v1/Trunks/${encodeURIComponent(trunkSid)}/Recording`,
+        new URLSearchParams({ Mode: 'do-not-record' }),
+      )
+    } catch (err) {
+      return enforcementFailed('recording', target, 'Twilio', err)
+    }
+    if (!res.ok) return enforcementFailed('recording', target, 'Twilio', res)
+    const was = current.state === 'on' ? ` (${current.evidence})` : ''
+    return { setting: 'recording', target, outcome: 'disabled', evidence: `Twilio accepted recording mode do-not-record for SIP trunk ${trunkSid}${was}` }
+  }
+
+  /**
+   * Conversational Intelligence: every service with `auto_transcribe` gets
+   * `AutoTranscribe=false` (`POST /v2/Services/{Sid}`; Twilio documents up to
+   * five minutes to propagate). SignalWire overrides it.
+   */
+  protected async enforceAccountTranscription(): Promise<ProviderSettingEnforcement[]> {
+    const target = 'Conversational Intelligence services'
+    let res: Response
+    try {
+      res = await this.twilioGet('https://intelligence.twilio.com/v2/Services?PageSize=50')
+    } catch (err) {
+      return [enforcementFailed('transcription', target, 'Twilio', err)]
+    }
+    if (!res.ok) return [enforcementFailed('transcription', target, 'Twilio', res)]
+    const data = await res.json() as { services?: Array<{ sid: string; unique_name?: string; auto_transcribe?: boolean }> }
+    const services = data.services ?? []
+    const auto = services.filter(svc => svc.auto_transcribe === true)
+    if (auto.length === 0) {
+      return [{ setting: 'transcription', target, outcome: 'already-off', evidence: `${services.length} Twilio Intelligence service(s), none auto-transcribing` }]
+    }
+    return Promise.all(auto.map(async (svc): Promise<ProviderSettingEnforcement> => {
+      const svcTarget = `Intelligence service ${svc.unique_name || svc.sid}`
+      let update: Response
+      try {
+        update = await this.twilioPost(
+          `https://intelligence.twilio.com/v2/Services/${encodeURIComponent(svc.sid)}`,
+          new URLSearchParams({ AutoTranscribe: 'false' }),
+        )
+      } catch (err) {
+        return enforcementFailed('transcription', svcTarget, 'Twilio', err)
+      }
+      if (!update.ok) return enforcementFailed('transcription', svcTarget, 'Twilio', update)
+      return { setting: 'transcription', target: svcTarget, outcome: 'disabled', evidence: `Twilio accepted AutoTranscribe=false for ${svcTarget} (Twilio documents up to five minutes to propagate)` }
+    }))
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    return {
+      removed: [
+        {
+          what: 'Voicemail and call recordings',
+          how: 'DELETE /Recordings/{Sid} once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+        },
+        {
+          what: 'Call log records of the caller\'s call and of every volunteer ring leg (they name both phone numbers)',
+          how: 'DELETE /Calls/{Sid} once the call has ended; Twilio refuses while a call is in progress. A refusal stays in heldAtProvider and is retried.',
+        },
+      ],
+      retained: [
+        {
+          what: 'SMS and WhatsApp message records, including bodies',
+          reason: 'This server does not delete messages at Twilio. Twilio documents DELETE /Messages/{Sid}, and says message bodies may persist in its database backups for up to 30 days after a deletion.',
+        },
+        {
+          what: 'Recordings and transcriptions this server did not request',
+          reason: 'Not deleted automatically: they are reported under recording and transcription instead, and may belong to another use of the account.',
+        },
+        {
+          what: 'Account usage and billing records',
+          reason: 'Twilio keeps per-account usage for billing; the Usage Records API is read-only.',
+        },
+        {
+          what: 'Debugger and error logs of webhook requests',
+          reason: 'They can carry request parameters such as phone numbers; this server does not delete them.',
+        },
+      ],
+      source: 'Twilio REST API documentation (Call, Recording, Message, Transcription resources), checked 2026-10-29',
+    }
+  }
+
   async probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
     const [routing, inventory, transcripts, extraRecording, extraTranscription] = await Promise.all([
       this.readNumberRouting(),
@@ -429,20 +578,9 @@ export class TwilioAdapter implements TelephonyAdapter {
    * trunk's own setting (read by the Twilio-only override).
    */
   protected async readNumberRouting(): Promise<ProviderSettingReading> {
-    const label = this.providerLabel
-    const what = `the configuration of ${this.phoneNumber}`
-    let res: Response
-    try {
-      res = await this.twilioApi(`/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(this.phoneNumber)}`, { method: 'GET' })
-    } catch (err) {
-      return unreadable(label, what, err)
-    }
-    if (!res.ok) return unreadable(label, what, res)
-    const data = await res.json() as {
-      incoming_phone_numbers?: Array<{ voice_url?: string | null; trunk_sid?: string | null; voice_application_sid?: string | null }>
-    }
-    const number = data.incoming_phone_numbers?.[0]
-    if (!number) return { state: 'unknown', reason: `${this.phoneNumber} is not a number on this ${label} account` }
+    const lookup = await this.lookupNumber()
+    if ('reading' in lookup) return lookup.reading
+    const { number } = lookup
     if (number.trunk_sid) return this.readTrunkRecording(number.trunk_sid)
     if (number.voice_application_sid) {
       return {
@@ -451,6 +589,28 @@ export class TwilioAdapter implements TelephonyAdapter {
       }
     }
     return this.readVoiceUrl(number.voice_url ?? '')
+  }
+
+  /** The hotline number's routing, or why it could not be read. */
+  private async lookupNumber(): Promise<
+    | { number: { voice_url?: string | null; trunk_sid?: string | null; voice_application_sid?: string | null } }
+    | { reading: Extract<ProviderSettingReading, { state: 'unknown' }> }
+  > {
+    const label = this.providerLabel
+    const what = `the configuration of ${this.phoneNumber}`
+    let res: Response
+    try {
+      res = await this.twilioApi(`/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(this.phoneNumber)}`, { method: 'GET' })
+    } catch (err) {
+      return { reading: unreadable(label, what, err) }
+    }
+    if (!res.ok) return { reading: unreadable(label, what, res) }
+    const data = await res.json() as {
+      incoming_phone_numbers?: Array<{ voice_url?: string | null; trunk_sid?: string | null; voice_application_sid?: string | null }>
+    }
+    const number = data.incoming_phone_numbers?.[0]
+    if (!number) return { reading: { state: 'unknown', reason: `${this.phoneNumber} is not a number on this ${label} account` } }
+    return { number }
   }
 
   private readVoiceUrl(voiceUrl: string): ProviderSettingReading {
@@ -562,6 +722,18 @@ export class TwilioAdapter implements TelephonyAdapter {
     return safeFetch(url, {
       method: 'GET',
       headers: { 'Authorization': 'Basic ' + btoa(`${this.accountSid}:${this.authToken}`) },
+    })
+  }
+
+  /** POST a form to an absolute Twilio URL (trunking, intelligence) with this account's credentials. */
+  protected twilioPost(url: string, body: URLSearchParams): Promise<Response> {
+    return safeFetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + btoa(`${this.accountSid}:${this.authToken}`),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
     })
   }
 

@@ -601,7 +601,12 @@ export class CallsService {
     return { ok: true }
   }
 
-  /** Update call metadata (recordingSid, hasRecording, etc.) */
+  /**
+   * Update call metadata (recordingSid, hasRecording, etc.) on whichever row
+   * holds the call now. Recording and transcription results usually land after
+   * the call ended, so the archived `call_records` row is updated too — before
+   * #2309 only `active_calls` was, and those flags were silently lost.
+   */
   async updateMetadata(
     hubId: string,
     callId: string,
@@ -614,6 +619,15 @@ export class CallsService {
         and(
           eq(activeCalls.callId, callId),
           eq(activeCalls.hubId, hubId),
+        ),
+      )
+    await this.db
+      .update(callRecords)
+      .set(data)
+      .where(
+        and(
+          eq(callRecords.callId, callId),
+          eq(callRecords.hubId, hubId),
         ),
       )
     return { ok: true }
@@ -724,7 +738,7 @@ export class CallsService {
   }
 
   /**
-   * Resolve hub ID for a given call SID from the active_calls table.
+   * Resolve hub ID for a given call SID from active_calls, then call_records.
    * Used by /call-recording to get hub without trusting URL params (CRIT-W1).
    */
   async getHubIdForCall(callSid: string): Promise<string | null> {
@@ -734,8 +748,15 @@ export class CallsService {
       .from(activeCalls)
       .where(eq(activeCalls.callId, callSid))
       .limit(1)
-    if (rows.length === 0) return null
-    return rows[0].hubId ?? null
+    if (rows.length > 0) return rows[0].hubId ?? null
+    // A recording callback routinely lands after /call-status archived the
+    // call; without this the recording would be filed under no hub (#2309).
+    const archived = await this.db
+      .select({ hubId: callRecords.hubId })
+      .from(callRecords)
+      .where(eq(callRecords.callId, callSid))
+      .limit(1)
+    return archived[0]?.hubId ?? null
   }
 
   /** Truncate all call data for a hub */

@@ -2,7 +2,11 @@ import { safeFetch } from '../lib/safe-fetch'
 import { getPrompt } from '@shared/voice-prompts'
 import { speechLanguageFor } from '../services/ivr-speech/voices'
 import { AllDialsFailedError, ProviderRecordingDeleteError } from './adapter'
-import type { ProviderRecordingPosture } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+} from '@protocol/schemas/settings'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -216,6 +220,38 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
         state: 'unknown',
         reason: `a speech-to-text module loaded in ${pbx} does not pass through the bridge and cannot be read from here`,
       },
+    }
+  }
+
+  /** Nothing is writable through the bridge: recording and speech modules are PBX-host configuration. */
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    const pbx = this.getPbxType()
+    return [
+      { setting: 'recording', target: `${pbx} dialplan`, outcome: 'not-settable', reason: `recording configured in the ${pbx} dialplan is host configuration the bridge cannot change` },
+      { setting: 'transcription', target: `${pbx} modules`, outcome: 'not-settable', reason: `a speech-to-text module loaded in ${pbx} is host configuration the bridge cannot change` },
+    ]
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    const pbx = this.getPbxType()
+    return {
+      removed: [
+        {
+          what: 'Voicemail and call recordings on the PBX host',
+          how: 'The bridge\'s signed DELETE /recordings/:name once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+        },
+      ],
+      retained: [
+        {
+          what: `${pbx} call detail records and logs on the PBX host`,
+          reason: 'They live on the operator\'s own PBX host and are governed by its CDR configuration, not by this server (PBX retention policy: #1320).',
+        },
+        {
+          what: 'Call detail records at the upstream SIP trunk carrier',
+          reason: 'The carrier behind the PBX is outside this server\'s reach.',
+        },
+      ],
+      source: `${pbx} deployment configuration of this project, checked 2026-10-29`,
     }
   }
 

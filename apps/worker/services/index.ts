@@ -6,6 +6,7 @@
  */
 import { hexToBytes } from '@shared/encoding'
 import type { Database } from '../db'
+import type { BlobStorage } from '../types'
 import { IdentityService } from './identity'
 import { SettingsService } from './settings'
 import { RecordsService } from './records'
@@ -34,6 +35,7 @@ import { ErasureService } from './erasure'
 import { RetentionService } from './retention'
 import { HubShredService } from './hub-shred'
 import { ProviderRecordingsService } from './provider-recordings'
+import { CallRecordingsService } from './call-recordings'
 import { RingGroupsService } from './ring-groups'
 import { ShiftOverridesService } from './shift-overrides'
 import { ActiveShiftsService } from './active-shifts'
@@ -79,6 +81,8 @@ export interface Services {
   hubShred: HubShredService
   /** Caller audio the telephony provider still holds, until the provider confirms deleting it (#2297). */
   providerRecordings: ProviderRecordingsService
+  /** The server's own sealed copies of opted-in call recordings (#2309). */
+  callRecordings: CallRecordingsService
   ringGroups: RingGroupsService
   shiftOverrides: ShiftOverridesService
   activeShifts: ActiveShiftsService
@@ -105,9 +109,10 @@ export interface ServicesOpts {
   notifierTokenSecret?: string
   /**
    * Object-storage binding (Env.BLOB_STORAGE) — required for the hub shred to
-   * destroy file envelope mirrors. Wired by the server entrypoint.
+   * destroy file envelope mirrors, and to hold the server's sealed copy of a
+   * call recording (#2309). Wired by the server entrypoint.
    */
-  blobStorage?: { delete(key: string): Promise<void> }
+  blobStorage?: Pick<BlobStorage, 'put' | 'get' | 'delete'>
 }
 
 export function createServices(db: Database, opts?: ServicesOpts): Services {
@@ -117,6 +122,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   const settings = new SettingsService(db)
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
   const hubShred = new HubShredService(db, opts?.blobStorage)
+  const callRecordings = new CallRecordingsService(db, opts?.blobStorage, opts?.serverKek)
   const erasure = new ErasureService(db, {
     deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
   })
@@ -195,7 +201,8 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     erasure,
     retention: new RetentionService(db),
     hubShred,
-    providerRecordings: new ProviderRecordingsService(db, audit),
+    providerRecordings: new ProviderRecordingsService(db, audit, callRecordings),
+    callRecordings,
     ringGroups: new RingGroupsService(db),
     shiftOverrides: new ShiftOverridesService(db),
     activeShifts: new ActiveShiftsService(db),

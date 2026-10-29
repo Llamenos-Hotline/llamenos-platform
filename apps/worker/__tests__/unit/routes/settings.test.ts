@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
+
+const { factories } = vi.hoisted(() => ({
+  factories: {
+    resolveHubTelephony: vi.fn(),
+  },
+}))
+vi.mock('@worker/lib/service-factories', async (orig) => ({
+  ...(await orig<typeof import('@worker/lib/service-factories')>()),
+  ...factories,
+}))
+
 import settingsRoute from '@worker/routes/settings'
 import { encodePcm16Wav } from '@/lib/ivr-wav'
 
@@ -441,6 +452,91 @@ describe('settings route', () => {
         body: JSON.stringify({ type: 'twilio', accountSid: 'AC123', authToken: 'token' }),
       })
       expect(res.status).toBe(403)
+    })
+  })
+
+  describe('recording posture (#2309)', () => {
+    const ENV = { SERVER_KEK: 'ab'.repeat(32), HMAC_SECRET: 'cd'.repeat(32) }
+    const retention = { removed: [], retained: [{ what: 'Call detail records', reason: 'no deletion API' }], source: 'docs' }
+    function telephonyAdapter() {
+      return {
+        probeRecordingPosture: vi.fn().mockResolvedValue({
+          recording: { state: 'off', evidence: 'read off' },
+          transcription: { state: 'unknown', reason: 'no API' },
+        }),
+        enforceRecordingPosture: vi.fn().mockResolvedValue([
+          { setting: 'recording', target: 'SIP trunk TK1', outcome: 'disabled', evidence: 'Twilio accepted do-not-record' },
+          { setting: 'transcription', target: 'account', outcome: 'not-settable', reason: 'no switch' },
+        ]),
+        providerRetention: vi.fn().mockReturnValue(retention),
+      }
+    }
+    function app(opts: { permissions: string[]; ownConfig: boolean; adapter: ReturnType<typeof telephonyAdapter> }) {
+      factories.resolveHubTelephony.mockResolvedValue({ adapter: opts.adapter, source: opts.ownConfig ? 'hub' : 'platform', provider: 'twilio' })
+      return createTestApp({
+        hubId: 'hub-1',
+        permissions: opts.permissions,
+        services: {
+          providerRecordings: { listHeld: vi.fn().mockResolvedValue([]), trackedAmong: vi.fn() },
+        },
+      })
+    }
+
+    it('GET names what the provider retains', async () => {
+      const res = await app({ permissions: ['settings:manage-telephony'], ownConfig: true, adapter: telephonyAdapter() })
+        .request('/telephony-provider/recording-posture', {}, ENV)
+      expect(res.status).toBe(200)
+      expect((await res.json()).retention).toEqual(retention)
+    })
+
+    it('POST /enforce writes, audits every action, and returns the re-read posture', async () => {
+      const adapter = telephonyAdapter()
+      const audit = { log: vi.fn().mockResolvedValue(undefined) }
+      factories.resolveHubTelephony.mockResolvedValue({ adapter, source: 'hub', provider: 'twilio' })
+      const res = await createTestApp({
+        hubId: 'hub-1',
+        permissions: ['settings:manage-telephony'],
+        services: {
+          audit,
+          providerRecordings: { listHeld: vi.fn().mockResolvedValue([]), trackedAmong: vi.fn() },
+        },
+      }).request('/telephony-provider/recording-posture/enforce', { method: 'POST' }, ENV)
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.actions.map((a: { outcome: string }) => a.outcome)).toEqual(['disabled', 'not-settable'])
+      expect(body.posture).toMatchObject({ provider: 'twilio', recording: { state: 'off' }, retention })
+      // The re-read happens AFTER the write.
+      expect(adapter.probeRecordingPosture.mock.invocationCallOrder[0])
+        .toBeGreaterThan(adapter.enforceRecordingPosture.mock.invocationCallOrder[0])
+      const [action, , details, hubId] = audit.log.mock.calls[0]
+      expect(action).toBe('providerRecordingPostureEnforced')
+      expect(hubId).toBe('hub-1')
+      expect((details as { actions: unknown[] }).actions).toHaveLength(2)
+    })
+
+    it('POST /enforce on the shared platform account needs system:manage-instance', async () => {
+      const adapter = telephonyAdapter()
+      const res = await app({ permissions: ['settings:manage-telephony'], ownConfig: false, adapter })
+        .request('/telephony-provider/recording-posture/enforce', { method: 'POST' }, ENV)
+      expect(res.status).toBe(403)
+      expect((await res.json()).required).toBe('system:manage-instance')
+      expect(adapter.enforceRecordingPosture, 'a hub admin must not change an account other hubs share').not.toHaveBeenCalled()
+    })
+
+    it('POST /enforce on the platform account is allowed to an instance manager', async () => {
+      const adapter = telephonyAdapter()
+      const res = await app({ permissions: ['settings:manage-telephony', 'system:manage-instance'], ownConfig: false, adapter })
+        .request('/telephony-provider/recording-posture/enforce', { method: 'POST' }, ENV)
+      expect(res.status).toBe(200)
+      expect(adapter.enforceRecordingPosture).toHaveBeenCalled()
+    })
+
+    it('POST /enforce requires manage-telephony', async () => {
+      const adapter = telephonyAdapter()
+      const res = await app({ permissions: ['settings:read'], ownConfig: true, adapter })
+        .request('/telephony-provider/recording-posture/enforce', { method: 'POST' }, ENV)
+      expect(res.status).toBe(403)
+      expect(adapter.enforceRecordingPosture).not.toHaveBeenCalled()
     })
   })
 

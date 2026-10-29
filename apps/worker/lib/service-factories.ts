@@ -32,6 +32,27 @@ export async function getTelephonyFromService(
     getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
 ): Promise<TelephonyAdapter | null> {
+  return (await getPlatformTelephony(env, settingsService))?.adapter ?? null
+}
+
+/**
+ * Which provider ACCOUNT an adapter talks to: the hub's own configuration, or
+ * the platform's (the instance-wide configuration or the TWILIO_* env vars),
+ * which every hub without its own shares. `provider` is the configured type.
+ */
+export interface ResolvedTelephony {
+  adapter: TelephonyAdapter
+  source: 'hub' | 'platform'
+  provider: string
+}
+
+/** The platform adapter and the provider type it was built from (env-var fallback: Twilio). */
+async function getPlatformTelephony(
+  env: Env,
+  settingsService: {
+    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
+  },
+): Promise<ResolvedTelephony | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
   try {
     // Without the KEK the stored credentials are never decrypted, so the
@@ -39,7 +60,7 @@ export async function getTelephonyFromService(
     // structural type used to omit this parameter entirely, which made the
     // omission unrepresentable at the call site rather than merely missed.
     const config = await settingsService.getTelephonyProvider(env.SERVER_KEK)
-    if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
+    if (config) return { adapter: createAdapterFromConfig(config, webhookBaseUrl, env), source: 'platform', provider: config.type }
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
       // A mock config in an environment that forbids it must never silently
@@ -51,7 +72,11 @@ export async function getTelephonyFromService(
   }
 
   if (env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_PHONE_NUMBER) {
-    return new TwilioAdapter(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN, env.TWILIO_PHONE_NUMBER, webhookBaseUrl)
+    return {
+      adapter: new TwilioAdapter(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN, env.TWILIO_PHONE_NUMBER, webhookBaseUrl),
+      source: 'platform',
+      provider: 'twilio',
+    }
   }
 
   return null
@@ -115,27 +140,39 @@ export async function resolveHubTelephonyConfig(
  */
 export async function getHubTelephonyFromService(
   env: Env,
-  settingsService: {
-    getHubTelephonyProvider(hubId: string, serverKek?: string): Promise<TelephonyProviderConfig | null>
-    getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
-  },
+  settingsService: TelephonySettingsReader,
   hubId: string,
 ): Promise<TelephonyAdapter | null> {
+  return (await resolveHubTelephony(env, settingsService, hubId))?.adapter ?? null
+}
+
+/**
+ * The adapter a hub's calls are served by, AND which account it is — from one
+ * resolution, so a caller gating on "is this the hub's own account" (#2309)
+ * gates on exactly the adapter it will then use.
+ */
+export async function resolveHubTelephony(
+  env: Env,
+  settingsService: TelephonySettingsReader,
+  hubId: string,
+): Promise<ResolvedTelephony | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
-  try {
-    // This is the path real call handling uses (services/ringing.ts:172),
-    // so a per-hub provider that resolves but never decrypts is the same
-    // silent fallback as not resolving at all.
-    const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
-    if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
-  } catch (e) {
-    if (e instanceof MockTelephonyRefusedError) {
-      logger.error('Mock telephony provider refused', { hubId, reason: e.reason })
-      return null
+  if (hubId !== '') {
+    try {
+      // This is the path real call handling uses (services/ringing.ts:172),
+      // so a per-hub provider that resolves but never decrypts is the same
+      // silent fallback as not resolving at all.
+      const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
+      if (config) return { adapter: createAdapterFromConfig(config, webhookBaseUrl, env), source: 'hub', provider: config.type }
+    } catch (e) {
+      if (e instanceof MockTelephonyRefusedError) {
+        logger.error('Mock telephony provider refused', { hubId, reason: e.reason })
+        return null
+      }
+      logger.warn('getHubTelephonyProvider failed for hub, falling back to global', { error: e })
     }
-    logger.warn('getHubTelephonyProvider failed for hub, falling back to global', { error: e })
   }
-  return getTelephonyFromService(env, settingsService)
+  return getPlatformTelephony(env, settingsService)
 }
 
 type MessagingSettingsSource = {

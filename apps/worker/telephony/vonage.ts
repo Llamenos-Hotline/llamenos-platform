@@ -24,7 +24,11 @@ import type {
   WebhookRecordingStatus,
   RecordingPostureContext,
 } from './adapter'
-import type { ProviderRecordingPosture } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+} from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -468,6 +472,44 @@ export class VonageAdapter implements TelephonyAdapter {
         state: 'unknown',
         reason: 'Vonage publishes no account-level transcription setting and no API listing an account\'s transcripts',
       },
+    }
+  }
+
+  /** Nothing is writable: Vonage publishes no account-level recording or transcription setting. */
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    return [
+      { setting: 'recording', target: 'account', outcome: 'not-settable', reason: 'Vonage publishes no account-level recording setting; a call is recorded only when its NCCO asks, and this server\'s NCCO asks only for voicemail and opted-in calls' },
+      { setting: 'transcription', target: 'account', outcome: 'not-settable', reason: 'Vonage publishes no account-level transcription setting; a transcript is made only when an NCCO record action asks, which this server never does' },
+    ]
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    return {
+      removed: [
+        {
+          what: 'Voicemail and call recordings',
+          how: 'Media API DELETE /v3/media/{id} once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+        },
+      ],
+      retained: [
+        {
+          what: 'Call detail records of the caller\'s call and of every volunteer ring leg (they name both phone numbers), kept 13 months',
+          reason: 'Vonage\'s Redact API removes the numbers from a voice CDR, but only once Vonage support has provisioned access, and not until the CDR has reached long-term storage. This server does not call it.',
+        },
+        {
+          what: 'Vonage server logs (about 15 days; Messages API logs about 10 days)',
+          reason: 'Vonage documents that the Redact API cannot redact server logs.',
+        },
+        {
+          what: 'Call legs in the Conversation API',
+          reason: 'Vonage documents leg deletion under inconsistent API versions (/v0.3/legs, /beta/legs); this server does not delete legs.',
+        },
+        {
+          what: 'SMS and Messages API records, including content',
+          reason: 'This server does not redact them; the Redact API (messages, sms products) needs the same provisioning and long-term-storage delay.',
+        },
+      ],
+      source: 'Vonage developer documentation (Redact API technical details, Media API), checked 2026-10-29',
     }
   }
 

@@ -27,7 +27,12 @@ import type {
   WebhookRecordingStatus,
   RecordingPostureContext,
 } from './adapter'
-import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+  ProviderSettingReading,
+} from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -415,6 +420,40 @@ export class PlivoAdapter implements TelephonyAdapter {
         state: 'unknown',
         reason: 'Plivo publishes no API listing transcriptions or an account-level transcription setting',
       },
+    }
+  }
+
+  /** Nothing is writable: Plivo has no account-level recording or transcription switch. */
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    return [
+      { setting: 'recording', target: 'account', outcome: 'not-settable', reason: 'Plivo has no account-level recording switch; a call is recorded only when its XML asks, and this server\'s XML asks only for voicemail and opted-in calls' },
+      { setting: 'transcription', target: 'account', outcome: 'not-settable', reason: 'Plivo transcription is requested per <Record> (transcriptionType), which this server never sets; no account-level switch exists' },
+    ]
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    return {
+      removed: [
+        {
+          what: 'Voicemail and call recordings',
+          how: 'DELETE /Recording/{id}/ once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+        },
+      ],
+      retained: [
+        {
+          what: 'Call detail records of the caller\'s call and of every volunteer ring leg (they name both phone numbers)',
+          reason: 'No Plivo API to delete a call detail record could be found in its documentation.',
+        },
+        {
+          what: 'SMS message records, including content',
+          reason: 'Plivo redacts content only when a message is sent with log=false (outbound) or the application sets log_incoming_messages=false (inbound), and documents no deletion afterwards. This server sets neither.',
+        },
+        {
+          what: 'Transcriptions this server did not request',
+          reason: 'Plivo publishes no API that lists or deletes them.',
+        },
+      ],
+      source: 'Plivo API documentation (Recording, SMS data redaction), checked 2026-10-29',
     }
   }
 

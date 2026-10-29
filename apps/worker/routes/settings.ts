@@ -34,7 +34,9 @@ import {
   cleanupMetricsResponseSchema,
   ttlOverridesResponseSchema,
   recordingPostureResponseSchema,
+  recordingPostureEnforcementResponseSchema,
   type RecordingPostureResponse,
+  type RecordingPostureEnforcementResponse,
 } from '@protocol/schemas/settings'
 import {
   geocodingConfigSchema,
@@ -47,10 +49,9 @@ import { audit } from '../services/audit'
 import { invalidateRolesCache } from '../services/settings'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
 import {
-  getHubTelephonyFromService,
   getMessagingAdapterFromService,
-  getTelephonyFromService,
-  resolveHubTelephonyConfig,
+  resolveHubTelephony,
+  type ResolvedTelephony,
 } from '../lib/service-factories'
 import { buildProviderWebhookUrls, webhookOrigin } from '../lib/provider-webhook-urls'
 import { TelegramAdapter } from '../messaging/telegram/adapter'
@@ -481,17 +482,41 @@ settings.patch('/telephony-provider',
   },
 )
 
+type HubTelephony = ResolvedTelephony & { hubId: string }
+
+/** The hub's adapter, its provider type and whose account it is — one resolution — or null when none is configured. */
+async function hubTelephony(c: Context<AppEnv>): Promise<HubTelephony | null> {
+  const hubId = (c.get('hubId') as string | undefined) ?? ''
+  const resolved = await resolveHubTelephony(c.env, c.get('services').settings, hubId)
+  return resolved ? { ...resolved, hubId } : null
+}
+
+async function readRecordingPosture(
+  services: AppEnv['Variables']['services'],
+  telephony: HubTelephony,
+): Promise<RecordingPostureResponse> {
+  const { hubId, adapter, provider } = telephony
+  const [posture, heldAtProvider] = await Promise.all([
+    adapter.probeRecordingPosture({
+      trackedRecordings: (handles) => services.providerRecordings.trackedAmong(handles, adapter),
+    }),
+    services.providerRecordings.listHeld(hubId),
+  ])
+  return { provider, ...posture, heldAtProvider, retention: adapter.providerRetention() }
+}
+
 /**
- * #1505 / #2297: what the hub's telephony provider does with caller audio on
- * its own, read with the hub's provider credentials — plus every recording
- * this server asked the provider to make that the provider has not yet
- * confirmed deleting. Each reading is evidence-backed; a setting the probe
- * could not read is `unknown` with the reason, never `off`.
+ * #1505 / #2297 / #2309: what the hub's telephony provider does with caller
+ * audio on its own, read with the hub's provider credentials — plus every
+ * recording or call log this server asked the provider to make that the
+ * provider has not yet confirmed deleting, and what the provider keeps that
+ * this server cannot remove. Each reading is evidence-backed; a setting the
+ * probe could not read is `unknown` with the reason, never `off`.
  */
 settings.get('/telephony-provider/recording-posture',
   describeRoute({
     tags: ['Settings'],
-    summary: 'Read provider-side recording and transcription, and recordings still held at the provider',
+    summary: 'Read provider-side recording and transcription, what is still held at the provider, and what it retains',
     responses: {
       200: {
         description: 'Recording posture',
@@ -503,24 +528,59 @@ settings.get('/telephony-provider/recording-posture',
   }),
   requirePermission('settings:manage-telephony'),
   async (c) => {
+    const telephony = await hubTelephony(c)
+    if (!telephony) return c.json({ error: 'No telephony provider is configured' }, 404)
+    return c.json(await readRecordingPosture(c.get('services'), telephony))
+  },
+)
+
+/**
+ * #2309: the write companion of the probe. Turns off every provider-side
+ * recording and transcription setting the provider's API lets us change, then
+ * RE-READS the posture — the re-read, not the write, is what says a setting is
+ * now off. Every attempt, including a refusal or a setting the API cannot
+ * change, is returned and recorded on the hub's audit chain. Enforcing on the
+ * shared platform account (a hub with no provider of its own) also needs
+ * `system:manage-instance`.
+ */
+settings.post('/telephony-provider/recording-posture/enforce',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Turn off provider-side recording and transcription wherever the provider API allows, then re-read the posture',
+    responses: {
+      200: {
+        description: 'What was changed, and the posture read afterwards',
+        content: { 'application/json': { schema: resolver(recordingPostureEnforcementResponseSchema) } },
+      },
+      404: { description: 'No telephony provider is configured' },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-telephony'),
+  async (c) => {
     const services = c.get('services')
-    const hubId = (c.get('hubId') as string | undefined) ?? ''
-    const adapter = hubId
-      ? await getHubTelephonyFromService(c.env, services.settings, hubId)
-      : await getTelephonyFromService(c.env, services.settings)
-    if (!adapter) return c.json({ error: 'No telephony provider is configured' }, 404)
-    // The env-var fallback (TWILIO_*) is the only adapter without a stored config.
-    const config = await resolveHubTelephonyConfig(c.env, services.settings, hubId)
-    const [posture, heldAtProvider] = await Promise.all([
-      adapter.probeRecordingPosture({
-        trackedRecordings: (handles) => services.providerRecordings.trackedAmong(handles, adapter),
-      }),
-      services.providerRecordings.listHeld(hubId),
-    ])
-    const body: RecordingPostureResponse = {
-      provider: config?.type ?? 'twilio',
-      ...posture,
-      heldAtProvider,
+    const telephony = await hubTelephony(c)
+    if (!telephony) return c.json({ error: 'No telephony provider is configured' }, 404)
+    // A hub without a provider of its own runs on the PLATFORM account, which
+    // other hubs share: changing its settings is an instance-level act, not a
+    // hub admin's. `source` comes from the same resolution that built the
+    // adapter about to be written through.
+    if (telephony.source !== 'hub' && !checkPermission(c.get('permissions'), 'system:manage-instance')) {
+      return c.json({ error: 'Forbidden', required: 'system:manage-instance' }, 403)
+    }
+    const actions = await telephony.adapter.enforceRecordingPosture()
+    await audit(services.audit, 'providerRecordingPostureEnforced', c.get('pubkey'), {
+      provider: telephony.provider,
+      actions: actions.map(a => ({
+        setting: a.setting,
+        target: a.target,
+        outcome: a.outcome,
+        detail: ('evidence' in a ? a.evidence : a.reason).slice(0, 300),
+      })),
+    }, { request: c.req.raw, hmacSecret: c.env.HMAC_SECRET }, telephony.hubId || null)
+    const body: RecordingPostureEnforcementResponse = {
+      actions,
+      posture: await readRecordingPosture(services, telephony),
     }
     return c.json(body)
   },

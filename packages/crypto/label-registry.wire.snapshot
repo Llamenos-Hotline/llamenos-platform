@@ -122,3 +122,4 @@
 104	llamenos:caller-number-seal:v1
 105	llamenos:messaging-contact:
 106	llamenos:messaging-contact-hub-key:v1
+107	llamenos:call-recording-seal:v1

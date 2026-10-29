@@ -103,7 +103,8 @@ export const callTokens = pgTable(
 // ---------------------------------------------------------------------------
 
 /**
- * One row per recording this server asked the provider to make, for as long as
+ * One row per recording (or call log record, #2309) the provider holds for this
+ * server, for as long as
  * the provider may still hold it. A row is deleted ONLY when the provider has
  * confirmed the deletion (`TelephonyAdapter.deleteRecording` resolved) — so the
  * table is the server's record of caller audio sitting outside the E2EE
@@ -133,7 +134,11 @@ export const providerRecordings = pgTable(
      * different account would answer 404 and read as "already deleted".
      */
     providerAccount: text('provider_account').notNull(),
-    /** 'voicemail' — deleted as soon as fetched; 'call' — opted-in call recording, kept for playback until the call record goes. */
+    /**
+     * 'voicemail' — deleted as soon as fetched; 'call' — opted-in call recording,
+     * deleted once the server holds its own sealed copy (#2309); 'call-log' — the
+     * provider's log record of one call leg, deleted once the call has ended.
+     */
     kind: text('kind').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     deleteAttempts: integer('delete_attempts').notNull().default(0),

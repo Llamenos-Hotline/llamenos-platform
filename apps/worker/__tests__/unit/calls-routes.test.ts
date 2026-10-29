@@ -948,7 +948,8 @@ describe('Calls Routes', () => {
         answeredBy: pubkey,
       })
 
-      const services = makeServices({ calls: callsSvc })
+      const callRecordings = { read: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) }
+      const services = makeServices({ calls: callsSvc, callRecordings })
       const { app } = createTestApp({
         permissions: ['calls:read-active'],
         pubkey,
@@ -956,7 +957,42 @@ describe('Calls Routes', () => {
       })
 
       const res = await app.request('/call-1/recording')
-      expect(res.status).not.toBe(403)
+      expect(res.status).toBe(200)
+      expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([1, 2, 3])
+      expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    })
+
+    it('plays back from the server\'s own copy, read under the request\'s hub — never the provider (#2309)', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.getActiveCallById.mockResolvedValue(null)
+      // Even a row naming another hub is read under the request's hub, where
+      // its sealed copy cannot open.
+      callsSvc.getCallRecord.mockResolvedValue({ callId: 'call-1', hubId: 'hub-other', hasRecording: true })
+      const callRecordings = { read: vi.fn().mockResolvedValue(new Uint8Array([9])) }
+      const services = makeServices({ calls: callsSvc, callRecordings })
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-recording'],
+        services,
+      })
+
+      const res = await app.request('/call-1/recording')
+      expect(res.status).toBe(200)
+      expect(callRecordings.read).toHaveBeenCalledWith('hub-1', 'call-1')
+    })
+
+    it('returns 404 when the call is marked recorded but the server holds no copy', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.getActiveCallById.mockResolvedValue({ callId: 'call-1', hasRecording: true, answeredBy: null })
+      const callRecordings = { read: vi.fn().mockResolvedValue(null) }
+      const services = makeServices({ calls: callsSvc, callRecordings })
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-recording'],
+        services,
+      })
+
+      const res = await app.request('/call-1/recording')
+      expect(res.status).toBe(404)
+      expect((await res.json()).error).toBe('Recording not available')
     })
   })
 

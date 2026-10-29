@@ -27,7 +27,12 @@ import type {
   WebhookRecordingStatus,
   RecordingPostureContext,
 } from './adapter'
-import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+  ProviderSettingReading,
+} from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -413,6 +418,36 @@ export class BandwidthAdapter implements TelephonyAdapter {
       ? { state: 'on', evidence: `${transcribed.length} Bandwidth recording(s) carry a transcription; this server never requests one` }
       : { state: 'off', evidence: `none of the ${listed.length} Bandwidth recording(s) listed carries a transcription` }
     return { recording: combineReadings([recording]), transcription }
+  }
+
+  /** Nothing is writable: Bandwidth records and transcribes only when BXML asks. */
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    return [
+      { setting: 'recording', target: 'account', outcome: 'not-settable', reason: 'Bandwidth has no account-level recording switch; a call is recorded only when its BXML asks, and this server\'s BXML asks only for voicemail and opted-in calls' },
+      { setting: 'transcription', target: 'account', outcome: 'not-settable', reason: 'Bandwidth transcribes a recording only when asked per recording, which this server never does; no account-level switch exists' },
+    ]
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    return {
+      removed: [
+        {
+          what: 'Voicemail and call recordings',
+          how: 'DELETE /calls/{callId}/recordings/{recordingId} once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+        },
+      ],
+      retained: [
+        {
+          what: 'Call detail records and call events of the caller\'s call and of every volunteer ring leg (they name both phone numbers)',
+          reason: 'No Bandwidth API to delete them could be found in its documentation.',
+        },
+        {
+          what: 'MMS media (uploads and inbound), up to 48 hours',
+          reason: 'Bandwidth states its messaging API keeps no message text but holds media for 48 hours unless deleted sooner; this server does not delete it.',
+        },
+      ],
+      source: 'Bandwidth Voice API documentation and Bandwidth support ("Does Bandwidth store SMS/MMS messages and traffic?"), checked 2026-10-29',
+    }
   }
 
   // --- Webhook Validation ---

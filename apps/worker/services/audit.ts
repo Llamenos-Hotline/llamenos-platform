@@ -89,11 +89,13 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
     'spamReported', 'voicemailReceived',
     'callSimulated', 'simulatedCallerHungUp',
     'providerRecordingDeleteFailed', 'providerRecordingUnaddressable', 'hubShredProviderMediaRemaining',
+    'callRecordingCopyDeleteFailed', 'providerCallLogDeleteFailed',
   ],
   settings: [
     'settingsUpdated', 'telephonyConfigured', 'transcriptionToggled',
     'ivrUpdated', 'customFieldsUpdated', 'spamSettingsUpdated',
     'callSettingsUpdated', 'mockTelephonyToggled',
+    'providerRecordingPostureEnforced',
   ],
   shifts: [
     'shiftCreated', 'shiftUpdated', 'shiftDeleted',

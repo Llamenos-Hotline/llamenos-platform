@@ -3,7 +3,6 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Services } from '../services'
-import { getTelephonyFromService } from '../lib/service-factories'
 import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
@@ -654,11 +653,10 @@ calls.get('/:callId/recording',
     const hubId = c.get('hubId') ?? ''
     const activeCall = await services.calls.getActiveCallById(hubId, callId)
     const historyRecord = activeCall ? null : await services.calls.getCallRecord(hubId, callId)
-    const recordingSid = activeCall?.recordingSid ?? historyRecord?.recordingSid
     const hasRecording = activeCall?.hasRecording ?? historyRecord?.hasRecording
     const answeredBy = activeCall?.answeredBy ?? null
 
-    if (!recordingSid || !hasRecording) {
+    if (!hasRecording) {
       return c.json({ error: 'No recording available for this call' }, 404)
     }
 
@@ -669,12 +667,12 @@ calls.get('/:callId/recording',
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    // Fetch recording audio from the telephony provider on demand
-    const adapter = await getTelephonyFromService(c.env, services.settings)
-    if (!adapter) return c.json({ error: 'Telephony provider not configured' }, 503)
-
-    const audio = await adapter.getRecordingAudio(recordingSid)
-    if (!audio) return c.json({ error: 'Recording not available from provider' }, 404)
+    // #2309: played back from the server's own sealed copy. The provider's
+    // copy was deleted once this one existed; the provider is never asked.
+    // Read under the REQUEST's hub, never one taken from the row: the copy is
+    // sealed to its hub, so a call of another hub cannot open here.
+    const audio = await services.callRecordings.read(hubId, callId)
+    if (!audio) return c.json({ error: 'Recording not available' }, 404)
 
     return new Response(audio, {
       headers: {

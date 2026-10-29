@@ -23,10 +23,16 @@ import {
   assertRecordingDeleted,
   collectRingResults,
   combineReadings,
+  enforcementFailed,
   inventoryReading,
   unreadable,
 } from './adapter'
-import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+  ProviderSettingReading,
+} from '@protocol/schemas/settings'
 import { DEFAULT_LANGUAGE } from '@shared/languages'
 import { getPrompt } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
@@ -158,10 +164,14 @@ class TelnyxCallControlClient {
   }
 
   /** An authenticated request against the v2 REST API. Network failures reject. */
-  async api(method: 'GET' | 'DELETE', path: string): Promise<Response> {
+  async api(method: 'GET' | 'DELETE' | 'PATCH', path: string, body?: unknown): Promise<Response> {
     return safeFetch(`${TELNYX_API_BASE}${path}`, {
       method,
-      headers: { Authorization: `Bearer ${this.apiKey}` },
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
   }
 
@@ -613,23 +623,92 @@ export class TelnyxAdapter implements TelephonyAdapter {
 
   /** Telnyx records every inbound call to a number when its voice settings say so. */
   private async readNumberRecordingSetting(): Promise<ProviderSettingReading> {
+    const read = await this.readNumberVoice()
+    if ('reading' in read) return read.reading
+    return read.enabled
+      ? { state: 'on', evidence: `${this.phoneNumber} has inbound call recording enabled` }
+      : { state: 'off', evidence: `${this.phoneNumber} has inbound call recording disabled` }
+  }
+
+  /** The number's id and its `inbound_call_recording_enabled`, or why they could not be read. */
+  private async readNumberVoice(): Promise<{ id: string; enabled: boolean } | { reading: Extract<ProviderSettingReading, { state: 'unknown' }> }> {
     const what = `the voice settings of ${this.phoneNumber}`
     try {
       const listRes = await this.client.api('GET', `/phone_numbers?filter[phone_number]=${encodeURIComponent(this.phoneNumber)}`)
-      if (!listRes.ok) return unreadable('Telnyx', what, listRes)
+      if (!listRes.ok) return { reading: unreadable('Telnyx', what, listRes) }
       const list = await listRes.json() as { data?: Array<{ id: string }> }
       const id = list.data?.[0]?.id
-      if (!id) return { state: 'unknown', reason: `${this.phoneNumber} is not a number on this Telnyx account` }
+      if (!id) return { reading: { state: 'unknown', reason: `${this.phoneNumber} is not a number on this Telnyx account` } }
       const voiceRes = await this.client.api('GET', `/phone_numbers/${encodeURIComponent(id)}/voice`)
-      if (!voiceRes.ok) return unreadable('Telnyx', what, voiceRes)
+      if (!voiceRes.ok) return { reading: unreadable('Telnyx', what, voiceRes) }
       const voice = await voiceRes.json() as { data?: { call_recording?: { inbound_call_recording_enabled?: boolean } } }
       const enabled = voice.data?.call_recording?.inbound_call_recording_enabled
-      if (enabled === undefined) return { state: 'unknown', reason: `${what} did not include call_recording` }
-      return enabled
-        ? { state: 'on', evidence: `${this.phoneNumber} has inbound call recording enabled` }
-        : { state: 'off', evidence: `${this.phoneNumber} has inbound call recording disabled` }
+      if (enabled === undefined) return { reading: { state: 'unknown', reason: `${what} did not include call_recording` } }
+      return { id, enabled }
     } catch (err) {
-      return unreadable('Telnyx', what, err)
+      return { reading: unreadable('Telnyx', what, err) }
+    }
+  }
+
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    return [
+      await this.enforceNumberRecording(),
+      {
+        setting: 'transcription',
+        target: 'account',
+        outcome: 'not-settable',
+        reason: 'Telnyx documents no account- or number-level transcription switch: a recording transcription exists only when a call-control or TeXML command asks for one, which this server never does',
+      },
+    ]
+  }
+
+  /** `PATCH /v2/phone_numbers/{id}/voice` with `call_recording.inbound_call_recording_enabled = false`. */
+  private async enforceNumberRecording(): Promise<ProviderSettingEnforcement> {
+    const target = `number ${this.phoneNumber}`
+    const read = await this.readNumberVoice()
+    if ('reading' in read) return { setting: 'recording', target, outcome: 'failed', reason: read.reading.reason }
+    if (!read.enabled) {
+      return { setting: 'recording', target, outcome: 'already-off', evidence: `${this.phoneNumber} has inbound call recording disabled` }
+    }
+    let res: Response
+    try {
+      res = await this.client.api('PATCH', `/phone_numbers/${encodeURIComponent(read.id)}/voice`, {
+        call_recording: { inbound_call_recording_enabled: false },
+      })
+    } catch (err) {
+      return enforcementFailed('recording', target, 'Telnyx', err)
+    }
+    if (!res.ok) return enforcementFailed('recording', target, 'Telnyx', res)
+    return { setting: 'recording', target, outcome: 'disabled', evidence: `Telnyx accepted inbound_call_recording_enabled=false for ${this.phoneNumber} (it was enabled)` }
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    return {
+      removed: [
+        {
+          what: 'Voicemail and call recordings',
+          how: 'DELETE /v2/recordings/{id} for every recording of the leg once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+        },
+      ],
+      retained: [
+        {
+          what: 'Call detail records of the caller\'s call and of every volunteer ring leg (they name both phone numbers)',
+          reason: 'No Telnyx API to delete a call detail record could be found in its documentation.',
+        },
+        {
+          what: 'Messaging detail records, including message text',
+          reason: 'Telnyx documents no deletion. Its message redaction blanks text at read time only, only for organisations Telnyx has allowlisted (a PATCH from any other organisation is silently ignored), and never covers records made before it was enabled. This server does not configure it.',
+        },
+        {
+          what: 'Recording transcriptions this server did not request',
+          reason: 'Not deleted automatically: they are reported under transcription instead. Telnyx documents DELETE /v2/recording_transcriptions/{id}.',
+        },
+        {
+          what: 'Account usage and billing records',
+          reason: 'No Telnyx API to delete them could be found in its documentation.',
+        },
+      ],
+      source: 'Telnyx API documentation (call recordings, phone number voice settings, message redaction), checked 2026-10-29',
     }
   }
 

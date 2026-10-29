@@ -923,6 +923,93 @@ describe('TwilioAdapter', () => {
     })
   })
 
+  describe('deleteCallLog (#2309)', () => {
+    it('DELETEs the call record and resolves on 204', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await adapter.deleteCallLog('CA123')
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(String(url)).toBe('https://api.twilio.com/2010-04-01/Accounts/AC1234567890/Calls/CA123.json')
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('treats 404 as already deleted', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }))
+      await expect(adapter.deleteCallLog('CA123')).resolves.toBeUndefined()
+    })
+
+    it('rejects while the call is in progress — never reported as deleted', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{"code":20404}', { status: 400 }))
+      await expect(adapter.deleteCallLog('CA123')).rejects.toThrow(/Twilio call log deletion failed: 400/)
+    })
+  })
+
+  describe('enforceRecordingPosture (#2309)', () => {
+    function route(map: Record<string, Response>) {
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const key = `${init?.method ?? 'GET'} ${String(url)}`
+        for (const [needle, res] of Object.entries(map)) {
+          if (key.includes(needle)) return res.clone()
+        }
+        return new Response('unexpected', { status: 599 })
+      })
+    }
+    const ours = { 'GET https://api.twilio.com/2010-04-01/Accounts/AC1234567890/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ voice_url: 'https://hotline.example/api/telephony/incoming' }] }) }
+
+    it('sets a recording trunk to do-not-record and turns off auto-transcribing Intelligence services', async () => {
+      route({
+        'GET https://api.twilio.com/2010-04-01/Accounts/AC1234567890/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ trunk_sid: 'TK1' }] }),
+        'GET https://trunking.twilio.com/v1/Trunks/TK1': Response.json({ recording: { mode: 'record-from-answer' } }),
+        'POST https://trunking.twilio.com/v1/Trunks/TK1/Recording': Response.json({ mode: 'do-not-record' }, { status: 202 }),
+        'GET https://intelligence.twilio.com/v2/Services': Response.json({ services: [{ sid: 'GA1', unique_name: 'qa', auto_transcribe: true }, { sid: 'GA2', auto_transcribe: false }] }),
+        'POST https://intelligence.twilio.com/v2/Services/GA1': Response.json({ sid: 'GA1', auto_transcribe: false }),
+      })
+      const actions = await adapter.enforceRecordingPosture()
+      expect(actions.map(a => [a.setting, a.target, a.outcome])).toEqual([
+        ['recording', 'SIP trunk TK1', 'disabled'],
+        ['transcription', 'Intelligence service qa', 'disabled'],
+      ])
+      const posts = fetchMock.mock.calls.filter(c => c[1]?.method === 'POST')
+      expect(posts.map(c => [String(c[0]), String(c[1].body)]).sort()).toEqual([
+        ['https://intelligence.twilio.com/v2/Services/GA1', 'AutoTranscribe=false'],
+        ['https://trunking.twilio.com/v1/Trunks/TK1/Recording', 'Mode=do-not-record'],
+      ])
+    })
+
+    it('writes nothing when everything already reads off', async () => {
+      route({ ...ours, 'GET https://intelligence.twilio.com/v2/Services': Response.json({ services: [] }) })
+      const actions = await adapter.enforceRecordingPosture()
+      expect(actions.map(a => a.outcome)).toEqual(['already-off', 'already-off'])
+      expect(fetchMock.mock.calls.some(c => c[1]?.method === 'POST')).toBe(false)
+    })
+
+    it('reports a refused write as failed, never as disabled', async () => {
+      route({
+        ...ours,
+        'GET https://intelligence.twilio.com/v2/Services': Response.json({ services: [{ sid: 'GA1', auto_transcribe: true }] }),
+        'POST https://intelligence.twilio.com/v2/Services/GA1': new Response('', { status: 403 }),
+      })
+      const actions = await adapter.enforceRecordingPosture()
+      expect(actions[1]).toMatchObject({ setting: 'transcription', outcome: 'failed', reason: expect.stringMatching(/Twilio answered 403/) })
+    })
+
+    it('does not claim to control a number that routes elsewhere', async () => {
+      route({
+        'GET https://api.twilio.com/2010-04-01/Accounts/AC1234567890/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ voice_url: 'https://elsewhere.example/twiml' }] }),
+        'GET https://intelligence.twilio.com/v2/Services': Response.json({ services: [] }),
+      })
+      const [recording] = await adapter.enforceRecordingPosture()
+      expect(recording).toMatchObject({ setting: 'recording', outcome: 'not-settable', reason: expect.stringMatching(/elsewhere\.example/) })
+    })
+
+    it('SignalWire touches no Twilio-only API and says transcription has no switch', async () => {
+      const sw = new SignalWireAdapter('proj', 'tok', '+15551234567', 'myspace')
+      route({ 'GET https://myspace.signalwire.com/api/laml/2010-04-01/Accounts/proj/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ trunk_sid: 'TK9' }] }) })
+      const actions = await sw.enforceRecordingPosture()
+      expect(actions.map(a => [a.setting, a.outcome])).toEqual([['recording', 'already-off'], ['transcription', 'not-settable']])
+      expect(fetchMock.mock.calls.every(c => String(c[0]).startsWith('https://myspace.signalwire.com/'))).toBe(true)
+    })
+  })
+
   describe('handleVoicemailComplete', () => {
     it('returns thank you message and hangup', () => {
       const res = adapter.handleVoicemailComplete('en')

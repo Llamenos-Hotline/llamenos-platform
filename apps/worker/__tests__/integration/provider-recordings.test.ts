@@ -1,5 +1,6 @@
 /**
- * ProviderRecordingsService and the retention purge, against real PostgreSQL (#2297).
+ * ProviderRecordingsService, the server's own call-recording copies, and the
+ * retention purge, against real PostgreSQL (#2297, #2309).
  *
  * The ledger is the server's record of caller audio the telephony provider
  * still holds. These pin its one invariant: a row disappears ONLY when the
@@ -40,17 +41,27 @@ async function createHub(): Promise<string> {
 
 const ACCOUNT = { providerAccountId: () => 'twilio:AC-one' }
 
-/** A provider that deletes everything except the handles it is told to refuse. */
-function provider(refuse: string[] = [], account = ACCOUNT) {
+const AUDIO = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4])
+
+/**
+ * A provider that deletes everything except the handles it is told to refuse,
+ * and hands over audio for every handle except those in `noAudio`.
+ */
+function provider(refuse: string[] = [], account = ACCOUNT, noAudio: string[] = []) {
   const deleted: string[] = []
+  const fetched: string[] = []
   const adapter = {
     ...account,
     deleteRecording: async (sid: string) => {
       if (refuse.includes(sid)) throw new Error(`refused ${sid}: 500`)
       deleted.push(sid)
     },
+    getRecordingAudio: async (sid: string) => {
+      fetched.push(sid)
+      return noAudio.includes(sid) ? null : AUDIO.slice().buffer
+    },
   } as unknown as TelephonyAdapter
-  return { adapter, deleted, resolve: async () => adapter }
+  return { adapter, deleted, fetched, resolve: async () => adapter }
 }
 
 describe('ProviderRecordingsService', () => {
@@ -115,8 +126,11 @@ describe('ProviderRecordingsService', () => {
     expect(await fresh.recordings.listHeld(hubId)).toHaveLength(1)
   })
 
-  it('the sweep retries only voicemails older than the grace period', async () => {
+  it('the sweep retries voicemails and call recordings older than the grace period, copying a call recording first', async () => {
     const hubId = await createHub()
+    await fresh.db.insert(schema.callRecords).values({
+      callId: 'rec', hubId, startedAt: new Date(), status: 'completed', encryptedContent: 'x',
+    })
     await fresh.recordings.track({ hubId, callId: 'old', recordingSid: 'vm-old', kind: 'voicemail', adapter: ACCOUNT })
     await fresh.recordings.track({ hubId, callId: 'new', recordingSid: 'vm-new', kind: 'voicemail', adapter: ACCOUNT })
     await fresh.recordings.track({ hubId, callId: 'rec', recordingSid: 'call-old', kind: 'call', adapter: ACCOUNT })
@@ -126,13 +140,95 @@ describe('ProviderRecordingsService', () => {
     await fresh.db.update(schema.providerRecordings).set({ createdAt: hourAgo })
       .where(eq(schema.providerRecordings.recordingSid, 'call-old'))
 
-    const { deleted, resolve } = provider()
-    await fresh.recordings.eraser(resolve).retryPendingVoicemails(15 * 60 * 1000)
+    const { deleted, resolve, fetched } = provider()
+    await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
 
-    // The young voicemail is still being processed by its own webhook; the
-    // call recording is kept for playback until its record goes.
-    expect(deleted).toEqual(['vm-old'])
-    expect((await fresh.recordings.listHeld(hubId)).map(r => r.callId).sort()).toEqual(['new', 'rec'])
+    // The young voicemail is still being processed by its own webhook.
+    expect(deleted.sort()).toEqual(['call-old', 'vm-old'])
+    expect(fetched, 'only the call recording is copied; a voicemail has no playback').toEqual(['call-old'])
+    expect((await fresh.recordings.listHeld(hubId)).map(r => r.callId)).toEqual(['new'])
+    // Playback now comes from our copy, which opens to the provider's bytes.
+    expect(await fresh.callRecordings.hasCopy(hubId, 'rec')).toBe(true)
+    expect([...(await fresh.callRecordings.read(hubId, 'rec'))!]).toEqual([...AUDIO])
+  })
+
+  it('keeps the provider copy — visibly — when the server cannot make its own', async () => {
+    const hubId = await createHub()
+    await fresh.recordings.track({ hubId, callId: 'nocopy', recordingSid: 'RE-noaudio', kind: 'call', adapter: ACCOUNT })
+    await fresh.db.update(schema.providerRecordings).set({ createdAt: new Date(Date.now() - 60 * 60 * 1000) })
+      .where(eq(schema.providerRecordings.recordingSid, 'RE-noaudio'))
+
+    const { deleted, resolve } = provider([], ACCOUNT, ['RE-noaudio'])
+    const result = await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
+
+    expect(deleted, 'the provider copy is the only copy; it must not be deleted').toEqual([])
+    expect(result.failed).toHaveLength(1)
+    const [held] = await fresh.recordings.listHeld(hubId)
+    expect(held).toMatchObject({ callId: 'nocopy', kind: 'call', deleteAttempts: 1 })
+    expect(held!.lastError).toMatch(/could not keep its own copy.*no audio/)
+    expect(await fresh.callRecordings.hasCopy(hubId, 'nocopy')).toBe(false)
+    const { entries } = await fresh.audit.list(hubId)
+    expect(entries.map(e => e.action)).toContain('providerRecordingDeleteFailed')
+  })
+})
+
+describe('provider call logs (#2309)', () => {
+  /** A provider whose call-log deletion succeeds except for the SIDs in `refuse`. */
+  function logProvider(refuse: string[] = []) {
+    const deletedLogs: string[] = []
+    const adapter = {
+      ...ACCOUNT,
+      deleteRecording: async () => {},
+      deleteCallLog: async (sid: string) => {
+        if (refuse.includes(sid)) throw new Error(`Twilio call log deletion failed: 400 ${sid} in progress`)
+        deletedLogs.push(sid)
+      },
+    } as unknown as TelephonyAdapter
+    return { deletedLogs, resolve: async () => adapter }
+  }
+  async function trackLogs(hubId: string, callId: string, sids: string[]) {
+    for (const sid of sids) await fresh.recordings.track({ hubId, callId, recordingSid: sid, kind: 'call-log', adapter: ACCOUNT })
+    await fresh.db.update(schema.providerRecordings).set({ createdAt: new Date(Date.now() - 60 * 60 * 1000) })
+      .where(eq(schema.providerRecordings.callId, callId))
+  }
+
+  it('the sweep leaves the logs of a call still in progress alone, and deletes them once it has ended', async () => {
+    const hubId = await createHub()
+    await fresh.db.insert(schema.activeCalls).values({ callId: 'CA-live', hubId, status: 'in-progress' })
+    await trackLogs(hubId, 'CA-live', ['CA-live', 'CA-leg-1', 'CA-leg-2'])
+
+    const { deletedLogs, resolve } = logProvider()
+    await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
+    expect(deletedLogs.filter(sid => sid.startsWith('CA-l')), 'the provider refuses to delete a call in progress; it must not even be asked').toEqual([])
+    expect(await fresh.recordings.listHeld(hubId)).toHaveLength(3)
+
+    await fresh.db.delete(schema.activeCalls).where(eq(schema.activeCalls.callId, 'CA-live'))
+    await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
+    expect(deletedLogs.filter(sid => sid.startsWith('CA-l')).sort()).toEqual(['CA-leg-1', 'CA-leg-2', 'CA-live'])
+    expect(await fresh.recordings.listHeld(hubId)).toEqual([])
+  })
+
+  it('a refused call-log deletion stays held, with the refusal, and is audited as a call-log failure', async () => {
+    const hubId = await createHub()
+    await trackLogs(hubId, 'CA-stuck', ['CA-stuck'])
+    const { resolve } = logProvider(['CA-stuck'])
+    const result = await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
+    // The sweep covers every hub; judge only this test's call.
+    expect(result.failed.filter(f => f.callId === 'CA-stuck')).toEqual([{ callId: 'CA-stuck', kind: 'call-log', error: expect.stringMatching(/call log deletion failed: 400/) }])
+    const [held] = await fresh.recordings.listHeld(hubId)
+    expect(held).toMatchObject({ kind: 'call-log', deleteAttempts: 1, lastError: expect.stringMatching(/in progress/) })
+    const { entries } = await fresh.audit.list(hubId)
+    expect(entries.map(e => e.action)).toContain('providerCallLogDeleteFailed')
+  })
+
+  it('a provider without call-log deletion never reports one as deleted', async () => {
+    const hubId = await createHub()
+    await trackLogs(hubId, 'CA-nolog', ['CA-nolog'])
+    const { deleted, resolve } = provider()
+    const result = await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
+    expect(deleted).not.toContain('CA-nolog')
+    expect(result.failed.find(f => f.callId === 'CA-nolog')!.error).toMatch(/offers no call log deletion/)
+    expect(await fresh.recordings.listHeld(hubId)).toHaveLength(1)
   })
 })
 
@@ -170,13 +266,20 @@ describe('ProviderRecordingsService — recordings the provider holds without a 
   it('the sweep leaves residue alone — retrying a recording with no handle cannot succeed', async () => {
     const hubId = await createHub()
     await fresh.recordings.trackUnaddressable({ hubId, callId: 'u4', kind: 'voicemail', adapter: ACCOUNT })
+    // #2309: the sweep also covers call recordings now; their residue is never
+    // handed to the copy step or the provider either.
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'u5', kind: 'call', adapter: ACCOUNT })
     await fresh.db.update(schema.providerRecordings).set({ createdAt: new Date(Date.now() - 60 * 60 * 1000) })
-      .where(eq(schema.providerRecordings.callId, 'u4'))
-    const { resolve } = provider()
-    const result = await fresh.recordings.eraser(resolve).retryPendingVoicemails(15 * 60 * 1000)
-    expect(result.failed.filter(f => f.callId === 'u4')).toEqual([])
-    // Not swept away either: it is still reported.
-    expect(await fresh.recordings.listHeld(hubId)).toMatchObject([{ callId: 'u4', addressable: false, deleteAttempts: 0 }])
+      .where(eq(schema.providerRecordings.hubId, hubId))
+    const { deleted, resolve } = provider()
+    const result = await fresh.recordings.eraser(resolve).retryPending(15 * 60 * 1000)
+    expect(result.failed.filter(f => f.callId === 'u4' || f.callId === 'u5')).toEqual([])
+    expect(deleted).toEqual([])
+    // Not swept away either: both are still reported.
+    expect(await fresh.recordings.listHeld(hubId)).toMatchObject([
+      { callId: 'u4', addressable: false, deleteAttempts: 0 },
+      { callId: 'u5', addressable: false, deleteAttempts: 0 },
+    ])
   })
 })
 
@@ -193,9 +296,10 @@ describe('RetentionService.executePurge — call records', () => {
         status: 'ended',
         encryptedContent: 'x',
         recordingSid: `RE-${callId}`,
-        hasRecording: true,
       })
       await fresh.recordings.track({ hubId, callId, recordingSid: `RE-${callId}`, kind: 'call', adapter: ACCOUNT })
+      // #2309: the server's own sealed copy, the playback source.
+      await fresh.callRecordings.copyFromProvider(provider().adapter, { hubId, callId, recordingSid: `RE-${callId}` })
     }
     await fresh.db.insert(schema.retentionSettings).values({ hubId, category: 'call_records', retentionDays: 30, updatedBy: 'test' })
 
@@ -208,6 +312,10 @@ describe('RetentionService.executePurge — call records', () => {
       .where(eq(schema.callRecords.hubId, hubId))
     expect(remaining.map(r => r.callId), 'the stuck record keeps the only handle to its audio').toEqual(['purge-stuck'])
     expect((await fresh.recordings.listHeld(hubId)).map(r => r.callId)).toEqual(['purge-stuck'])
+    // Our copies are gone either way: the data is past retention, and our copy
+    // is ours to delete whatever the provider answered.
+    expect(await fresh.callRecordings.read(hubId, 'purge-ok')).toBeNull()
+    expect(await fresh.callRecordings.read(hubId, 'purge-stuck')).toBeNull()
 
     // The audit entry says what was left behind, not just what went — in counts, never ids.
     const { entries } = await fresh.audit.list(hubId)

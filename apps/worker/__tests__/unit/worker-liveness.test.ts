@@ -115,7 +115,7 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
   'provider-recording-sweep': {
     start: () =>
       startProviderRecordingSweepWorker({
-        retryPendingVoicemails: async () => ({ deleted: 0, failed: [] }),
+        retryPending: async () => ({ deleted: 0, failed: [] }),
       } as never),
     stop: stopProviderRecordingSweepWorker,
   },

@@ -1,4 +1,9 @@
-import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+  ProviderSettingReading,
+} from '@protocol/schemas/settings'
 
 // --- Webhook result types (provider-agnostic) ---
 
@@ -173,6 +178,40 @@ export interface TelephonyAdapter {
    * reading (`unknown`), not an error.
    */
   probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture>
+
+  /**
+   * Turn OFF, with this hub's provider credentials, every provider-side
+   * recording and transcription setting the provider's API lets us change
+   * (#2309) — the write companion of `probeRecordingPosture`. Returns one
+   * entry per setting touched or considered: `disabled`/`already-off` with
+   * evidence, `not-settable` with the reason the API offers no write, or
+   * `failed` with the provider's answer. Never `disabled` without the
+   * provider's acceptance; the caller re-probes afterwards.
+   *
+   * MUST NOT throw for a provider-side failure: a refused write is a `failed`
+   * entry, not an error.
+   */
+  enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]>
+
+  /**
+   * What this provider keeps about a call beyond its recordings — call
+   * detail records, logs, message bodies — and which of it this server
+   * deletes (#2309). Static, from the provider's documentation: anything this
+   * server cannot remove is NAMED in `retained`, never left out.
+   */
+  providerRetention(): ProviderRetentionStatement
+
+  /**
+   * Delete the provider's own log record of one call leg — its call detail
+   * record, which names the caller's or a rung volunteer's number (#2309).
+   * Present ONLY on adapters whose provider documents such a deletion; an
+   * adapter without it says so in `providerRetention().retained`, and the
+   * server does not track its call legs.
+   *
+   * Same contract as `deleteRecording`: resolves on confirmed deletion or a
+   * 404, rejects in every other case (including a call still in progress).
+   */
+  deleteCallLog?(callSid: string): Promise<void>
 
   // --- Webhook parsing (provider-specific field names → agnostic types) ---
 
@@ -382,6 +421,40 @@ export async function assertRecordingDeleted(res: Response, provider: string): P
 }
 
 /**
+ * Thrown by `deleteCallLog` when the provider did not confirm the deletion.
+ */
+export class ProviderCallLogDeleteError extends Error {
+  constructor(
+    public readonly provider: string,
+    public readonly status: number | null,
+    detail: string,
+  ) {
+    super(`${provider} call log deletion failed${status !== null ? `: ${status}` : ''}${detail ? ` ${detail.slice(0, 200)}` : ''}`)
+    this.name = 'ProviderCallLogDeleteError'
+  }
+}
+
+/** Post-condition for `deleteCallLog`: 2xx deleted, 404 already gone, anything else throws. */
+export async function assertCallLogDeleted(res: Response, provider: string): Promise<void> {
+  if (res.ok || res.status === 404) return
+  const detail = await res.text().catch(() => '')
+  throw new ProviderCallLogDeleteError(provider, res.status, detail)
+}
+
+/** A provider-side write that failed, as an enforcement entry. */
+export function enforcementFailed(
+  setting: ProviderSettingEnforcement['setting'],
+  target: string,
+  provider: string,
+  cause: Response | unknown,
+): ProviderSettingEnforcement {
+  const why = cause instanceof Response
+    ? `${provider} answered ${cause.status}`
+    : `${provider} could not be reached (${cause instanceof Error ? cause.message : String(cause)})`
+  return { setting, target, outcome: 'failed', reason: `could not turn off ${target}: ${why}` }
+}
+
+/**
  * A recording younger than this may simply not have reached our webhook yet,
  * so the inventory check cannot tell "requested, callback in flight" from
  * "never requested". It is left out of the comparison and said so.
@@ -389,7 +462,7 @@ export async function assertRecordingDeleted(res: Response, provider: string): P
 export const RECORDING_IN_FLIGHT_MS = 15 * 60 * 1000
 
 /** A provider-side read that failed, as a reading: `unknown`, with why. */
-export function unreadable(provider: string, what: string, cause: Response | unknown): ProviderSettingReading {
+export function unreadable(provider: string, what: string, cause: Response | unknown): Extract<ProviderSettingReading, { state: 'unknown' }> {
   const why = cause instanceof Response
     ? `${provider} answered ${cause.status}`
     : `${provider} could not be reached (${cause instanceof Error ? cause.message : String(cause)})`
