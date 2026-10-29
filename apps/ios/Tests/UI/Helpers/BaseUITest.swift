@@ -759,7 +759,7 @@ extension XCTestCase {
 
         let holder = XCUIApplication().descendants(matching: .any).matching(hasFocus).firstMatch
         let elsewhere = holder.exists
-            ? "keyboard focus is on '\(holder.identifier)' (\(holder.label)) instead"
+            ? "keyboard focus is on '\(holder.identifier.isEmpty ? holder.label : holder.identifier)' instead"
             : "nothing in the app holds keyboard focus"
         XCTFail(
             "\(field) was tapped but did not take keyboard focus within \(Int(timeout))s; \(elsewhere)",
