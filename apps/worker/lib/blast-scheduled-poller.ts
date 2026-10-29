@@ -10,11 +10,12 @@
 
 import type { BlastsService } from '../services/blasts'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('blast-scheduler')
 
 /** How often to check for due blasts (ms) */
-const POLL_INTERVAL_MS = 60_000
+const POLL_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['scheduled-blast-poller']
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let serviceInstance: BlastsService | null = null
@@ -49,26 +50,29 @@ export function stopScheduledBlastPoller(): void {
  * Check for scheduled blasts that are due and trigger them.
  */
 async function checkScheduledBlasts(): Promise<void> {
-  if (!serviceInstance) return
+  const service = serviceInstance
+  if (!service) return
 
   try {
-    const dueBlasts = await serviceInstance.getDueScheduledBlasts()
-    if (dueBlasts.length === 0) return
+    await trackWorkerTick('scheduled-blast-poller', async () => {
+      const dueBlasts = await service.getDueScheduledBlasts()
+      if (dueBlasts.length === 0) return
 
-    logger.info(`Found ${dueBlasts.length} due scheduled blast(s)`)
+      logger.info(`Found ${dueBlasts.length} due scheduled blast(s)`)
 
-    for (const blast of dueBlasts) {
-      try {
-        // Transition to 'sending'
-        await serviceInstance.send(blast.id, blast.hubId ?? undefined)
+      for (const blast of dueBlasts) {
+        try {
+          // Transition to 'sending'
+          await service.send(blast.id, blast.hubId ?? undefined)
 
-        // Expand into delivery rows
-        const deliveryCount = await serviceInstance.expandBlast(blast.id)
-        logger.info(`Expanded blast ${blast.id} into ${deliveryCount} deliveries`)
-      } catch (err) {
-        logger.error(`Failed to trigger scheduled blast ${blast.id}`, { error: String(err) })
+          // Expand into delivery rows
+          const deliveryCount = await service.expandBlast(blast.id)
+          logger.info(`Expanded blast ${blast.id} into ${deliveryCount} deliveries`)
+        } catch (err) {
+          logger.error(`Failed to trigger scheduled blast ${blast.id}`, { error: String(err) })
+        }
       }
-    }
+    })
   } catch (err) {
     logger.error('Poll error', { error: String(err) })
   }

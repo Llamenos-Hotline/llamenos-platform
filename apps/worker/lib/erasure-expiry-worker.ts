@@ -10,11 +10,12 @@ import type { HubShredService } from '../services/hub-shred'
 import type { ProviderMediaEraser } from '../services/provider-recordings'
 import { getConnectionManager } from './ws-manager'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.erasure-expiry')
 
 /** Check interval: every 5 minutes */
-const CHECK_INTERVAL_MS = 5 * 60 * 1000
+const CHECK_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['erasure-expiry']
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
@@ -114,8 +115,8 @@ export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
 
   logger.info('Started erasure expiry worker')
 
-  const check = async () => {
-    try {
+  const check = () =>
+    trackWorkerTick('erasure-expiry', async () => {
       const expired = await opts.erasureService.getExpiredPendingRequests()
       if (expired.length === 0) return
 
@@ -134,10 +135,9 @@ export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
           await opts.erasureService.markFailed(request.id)
         }
       }
-    } catch (err) {
+    }).catch((err) => {
       logger.error('Erasure expiry check failed', { error: err })
-    }
-  }
+    })
 
   check()
 

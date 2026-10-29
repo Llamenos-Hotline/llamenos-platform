@@ -14,6 +14,7 @@ import { getErrorSummary } from '../lib/error-counter'
 import { auth } from '../middleware/auth'
 import { requirePermission } from '../middleware/permission-guard'
 import { getAllCircuitBreakerMetrics } from '../lib/circuit-breaker'
+import { renderWorkerLivenessMetrics } from '../metrics/worker-liveness'
 import { metricsResponseSchema } from '@protocol/schemas/metrics'
 import { authErrors } from '../openapi/helpers'
 
@@ -198,6 +199,10 @@ function formatPrometheusMetrics(): string {
     lines.push('# TYPE llamenos_backup_age_seconds gauge')
     lines.push(`llamenos_backup_age_seconds ${backupAge}`)
   }
+
+  // Scheduler worker liveness — judged out of process by the WorkerStalled
+  // alert rule, since a worker cannot report its own absence (#2323).
+  lines.push(...renderWorkerLivenessMetrics())
 
   // Circuit breaker metrics
   const cbMetrics = getAllCircuitBreakerMetrics()

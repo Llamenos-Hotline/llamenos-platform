@@ -22,11 +22,12 @@ import {
   SignalMessageQueue,
 } from '../messaging/signal/queue'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.signal-queue-drain')
 
 /** Drain every 30 seconds — matches the queue's base retry backoff. */
-export const DRAIN_INTERVAL_MS = 30 * 1000
+export const DRAIN_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['signal-queue-drain']
 
 const BATCH_SIZE = 10
 
@@ -128,7 +129,7 @@ export function startSignalQueueDrainWorker(opts: SignalQueueDrainWorkerOpts): v
   logger.info('Started Signal queue drain worker')
 
   const run = () => {
-    drainSignalQueue(opts).catch((err) => {
+    trackWorkerTick('signal-queue-drain', () => drainSignalQueue(opts)).catch((err) => {
       logger.error('Signal queue drain run failed', { error: err })
     })
   }

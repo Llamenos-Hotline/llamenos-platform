@@ -100,6 +100,37 @@ curl -s https://hotline.yourorg.org/api/health
 
 A Prometheus `ServiceMonitor` is pre-configured. Metrics are scraped from the `/metrics` endpoint on the app container.
 
+## Scheduler Worker Liveness (`WorkerStalled`)
+
+The app runs background workers on timers: erasure expiry, retention purge, re-encryption, Signal queue drain, blast delivery, and others (`SCHEDULER_WORKER_NAMES` in `apps/worker/services/scheduler.ts`). If one of them stops, the app itself cannot notice. A check that runs inside a worker cannot report that worker being down. A stopped `erasure-expiry` worker would let a caller-erasure deadline pass with no record anywhere (#2323).
+
+Liveness is therefore judged **out of process**, by Prometheus. For every worker, the app publishes two gauges on `/api/metrics/prometheus`:
+
+| Metric | Meaning |
+|--------|---------|
+| `llamenos_worker_tick_interval_seconds{worker}` | How often the worker should tick. Published for every registered worker from process start. |
+| `llamenos_worker_last_success_timestamp_seconds{worker}` | Unix time of the worker's last completed tick. **Absent until its first one.** |
+
+The `WorkerStalled` alert (`deploy/ansible/roles/llamenos-prometheus/templates/alert-rules.yml.j2`) fires at `severity: critical`. Its `reason` label says which way it fired:
+
+| `reason` | Fires when |
+|----------|------------|
+| `stale` | The last completed tick is older than 3 × the worker's interval, with a 10-minute minimum. |
+| `never_succeeded` | The worker has completed no tick since the process started, for longer than that same threshold. This covers a worker that never started. |
+| `no_liveness_metrics` | The app is up and scraped but publishes no worker-liveness data at all. |
+
+No data is treated as a failure, never as healthy. While the app cannot be scraped, `WorkerStalled` stays silent and `AppDown` pages instead.
+
+**What this cannot do.** The alert reaches **whoever operates the deployment**, through the Alertmanager receiver configured above. It does **not** tell hub members, volunteers or admins in the app. When the process or its scheduler is down, the app cannot tell anyone anything. Hub members learn about a stalled worker only if the operator tells them.
+
+**The receiver is not in this repository.** `alert_notification_method` and its `alert_*` settings are filled at deploy time from the operator's OS keyvault and the private `llamenos-internal` repository. Do not commit a real endpoint, address or token for it, and do not put one in a GitHub Actions secret or variable.
+
+**Liveness, not correctness.** "Completed a tick" means the worker's loop ran without throwing. A tick that catches and logs its own per-item failures still counts as alive. Those failures are tracked by the in-app incident layer, not by this alert.
+
+**Triage:** the `worker` label names the worker. Search the app logs for that worker's logger namespace (for example `lib.erasure-expiry`). Restarting the app resets the gauges. The worker must then complete a tick within its threshold, or `never_succeeded` fires.
+
+**Testing the rules:** `deploy/ansible/roles/llamenos-prometheus/tests/check-alert-rules.sh` renders the template and runs `promtool check rules` and `promtool test rules`, using the Prometheus image the role deploys. CI runs it in `ansible-validate`.
+
 ## Lightweight Mode (Healthcheck-Only)
 
 For minimal deployments where a full Prometheus/Grafana stack is too heavy:

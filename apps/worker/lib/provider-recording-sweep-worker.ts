@@ -11,11 +11,12 @@
  */
 import type { ProviderMediaEraser } from '../services/provider-recordings'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.provider-recording-sweep')
 
 /** Check interval: every 15 minutes. */
-const CHECK_INTERVAL_MS = 15 * 60 * 1000
+const CHECK_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['provider-recording-sweep']
 
 /**
  * Leave a voicemail this young to its own webhook's processing: it may still be
@@ -30,17 +31,16 @@ export function startProviderRecordingSweepWorker(providerMedia: ProviderMediaEr
 
   logger.info('Started provider recording sweep worker')
 
-  const check = async () => {
-    try {
+  const check = () =>
+    trackWorkerTick('provider-recording-sweep', async () => {
       const result = await providerMedia.retryPendingVoicemails(VOICEMAIL_SWEEP_GRACE_MS)
       if (result.deleted > 0) logger.info('Deleted voicemail recording(s) at the provider', { count: result.deleted })
       if (result.failed.length > 0) {
         logger.error('Voicemail recording(s) still held at the provider after retry', { count: result.failed.length })
       }
-    } catch (err) {
+    }).catch((err) => {
       logger.error('Provider recording sweep failed', { error: err })
-    }
-  }
+    })
 
   check()
 

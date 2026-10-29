@@ -1,0 +1,186 @@
+# promtool rule unit tests for templates/alert-rules.yml.j2.
+#
+# Run by ./check-alert-rules.sh, which renders the template first, so these
+# test exactly what the role deploys. `instance` is a placeholder label value,
+# not a host: the rules select by job and label only.
+#
+# Each case is written so that it would PASS against a rule set that lacked
+# the behaviour it names only by failing — in particular the never-published
+# cases fail against a staleness-only WorkerStalled.
+
+rule_files:
+  - llamenos.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── Stale: a worker that WAS ticking stops ────────────────────────────────
+  # erasure-expiry ticks every 300s → threshold 900s. Its last success tracks
+  # wall-clock for 10 minutes, then freezes at t=600s. Age exceeds 900s from
+  # minute 26; `for: 2m` → firing from minute 28.
+  # re-encryption (60s → floored to 600s) keeps ticking and must stay silent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x40'
+      - series: 'llamenos_uptime_seconds{job="llamenos-app",instance="app-under-test"}'
+        values: '0+60x40'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
+        values: '300x40'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
+        values: '60x40'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
+        values: '0+60x10 600x30'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WorkerStalled
+        exp_alerts: []
+      # Age 15m = exactly the threshold: not yet over it.
+      - eval_time: 25m
+        alertname: WorkerStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: WorkerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: stale
+              job: llamenos-app
+              instance: app-under-test
+              worker: erasure-expiry
+            exp_annotations:
+              summary: "A Llamenos scheduler worker has stopped completing ticks"
+              description: "The worker named in the `worker` label has not completed a tick for more than 3 of its intervals (10 minutes minimum). The work it does (erasure deadlines, retention purge, Signal retries, blast delivery, ...) is not happening. Check the app logs for that worker. Hub members are NOT notified of this by the app."
+
+  # ── The 10-minute floor: a fast worker's one long tick does not page ──────
+  # blast-delivery ticks every 10s (3x = 30s), but its last success freezes
+  # at t=300s while a long batch runs (8 minutes old at minute 13), then
+  # resumes at minute 14. Silent throughout. (Series notation: `axn` is n+1
+  # samples, so `0+60x5 300x7` covers minutes 0-13.)
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x30'
+      - series: 'llamenos_uptime_seconds{job="llamenos-app",instance="app-under-test"}'
+        values: '0+60x30'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="blast-delivery"}'
+        values: '10x30'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="blast-delivery"}'
+        values: '0+60x5 300x7 840+60x16'
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: WorkerStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WorkerStalled
+        exp_alerts: []
+
+  # ── Absent: a registered worker that NEVER publishes a success ────────────
+  # This is the outage the rule exists for. erasure-expiry's interval is
+  # published from boot but its last-success gauge never appears. Uptime
+  # passes the 900s threshold at minute 16; `for: 2m` → firing from minute 18.
+  # A staleness-only rule has nothing to compare and stays silent here.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x40'
+      - series: 'llamenos_uptime_seconds{job="llamenos-app",instance="app-under-test"}'
+        values: '0+60x40'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
+        values: '300x40'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
+        values: '60x40'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
+        values: '0+60x40'
+    alert_rule_test:
+      # Fresh process: no worker has had time to tick yet. Silent.
+      - eval_time: 10m
+        alertname: WorkerStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WorkerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: never_succeeded
+              job: llamenos-app
+              instance: app-under-test
+              worker: erasure-expiry
+            exp_annotations:
+              summary: "A Llamenos scheduler worker has never completed a tick"
+              description: "The worker named in the `worker` label has published no successful tick since the app process started, for longer than 3 of its intervals (10 minutes minimum). It is either not running or failing on every tick. Hub members are NOT notified of this by the app."
+
+  # ── Absent after a restart: the old success does not vouch for the new process
+  # erasure-expiry ticked in the old process; the app restarts at minute 10
+  # (uptime resets, the gauge is gone) and the new process never ticks it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x40'
+      - series: 'llamenos_uptime_seconds{job="llamenos-app",instance="app-under-test"}'
+        values: '0+60x10 0+60x30'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
+        values: '300x40'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WorkerStalled
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: WorkerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: never_succeeded
+              job: llamenos-app
+              instance: app-under-test
+              worker: erasure-expiry
+            exp_annotations:
+              summary: "A Llamenos scheduler worker has never completed a tick"
+              description: "The worker named in the `worker` label has published no successful tick since the app process started, for longer than 3 of its intervals (10 minutes minimum). It is either not running or failing on every tick. Hub members are NOT notified of this by the app."
+
+  # ── Absent family: the app is up but exports no liveness data at all ──────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x10'
+      - series: 'llamenos_uptime_seconds{job="llamenos-app",instance="app-under-test"}'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: WorkerStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: WorkerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: no_liveness_metrics
+              job: llamenos-app
+              instance: app-under-test
+            exp_annotations:
+              summary: "Llamenos app publishes no scheduler-worker liveness metrics"
+              description: "The app is up and scraped, but exports no llamenos_worker_tick_interval_seconds series, so no scheduler worker can be checked. Treat every background job as unverified until this clears."
+
+  # ── App down: AppDown pages; WorkerStalled does not duplicate it ──────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WorkerStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: AppDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: llamenos-app
+              instance: app-under-test
+            exp_annotations:
+              summary: "Llamenos app is down"
+              description: "The Llamenos application has been down for more than 1 minute."

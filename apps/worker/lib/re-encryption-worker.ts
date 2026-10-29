@@ -6,11 +6,12 @@
  */
 import type { ErasureService } from '../services/erasure'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.re-encryption')
 
 /** Check interval: every 60 seconds */
-const CHECK_INTERVAL_MS = 60 * 1000
+const CHECK_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['re-encryption']
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
@@ -23,8 +24,8 @@ export function startReEncryptionWorker(opts: ReEncryptionWorkerOpts): void {
 
   logger.info('Started re-encryption worker')
 
-  const check = async () => {
-    try {
+  const check = () =>
+    trackWorkerTick('re-encryption', async () => {
       const jobs = await opts.erasureService.getQueuedReEncryptionJobs()
       if (jobs.length === 0) return
 
@@ -45,10 +46,9 @@ export function startReEncryptionWorker(opts: ReEncryptionWorkerOpts): void {
           })
         }
       }
-    } catch (err) {
+    }).catch((err) => {
       logger.error('Re-encryption worker check failed', { error: err })
-    }
-  }
+    })
 
   check()
 
