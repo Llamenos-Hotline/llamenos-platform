@@ -635,7 +635,11 @@ export class TwilioAdapter implements TelephonyAdapter {
     const raw = form.get('RecordingStatus') as string
     return {
       status: raw === 'completed' ? 'completed' : 'failed',
-      recordingSid: (form.get('RecordingSid') as string) || undefined,
+      // RecordingUrl ends in the same sid; a callback missing the field still
+      // names the recording, and an unaddressed recording cannot be deleted.
+      recordingSid: (form.get('RecordingSid') as string)
+        || twilioRecordingSidFromUrl(form.get('RecordingUrl') as string | null)
+        || undefined,
       callSid: (form.get('CallSid') as string) || undefined,
     }
   }
@@ -688,4 +692,20 @@ export class TwilioAdapter implements TelephonyAdapter {
       }
     )
   }
+}
+
+/**
+ * The sid at the end of a recording-status callback's `RecordingUrl`
+ * (`…/Accounts/{account}/Recordings/{sid}`, optionally with a media
+ * extension) — Twilio `RE…` sids and SignalWire UUIDs alike.
+ */
+export function twilioRecordingSidFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  let path: string
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return null
+  }
+  return /\/Recordings\/([A-Za-z0-9-]+)(?:\.[a-z0-9]+)?$/.exec(path)?.[1] ?? null
 }

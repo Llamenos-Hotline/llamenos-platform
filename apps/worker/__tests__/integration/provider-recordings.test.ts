@@ -136,6 +136,50 @@ describe('ProviderRecordingsService', () => {
   })
 })
 
+describe('ProviderRecordingsService — recordings the provider holds without a handle', () => {
+  it('records the residue, reports it as unaddressable, and fails every deletion without asking the provider', async () => {
+    const hubId = await createHub()
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'u1', kind: 'voicemail', adapter: ACCOUNT })
+    // A redelivered webhook does not duplicate it.
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'u1', kind: 'voicemail', adapter: ACCOUNT })
+
+    const held = await fresh.recordings.listHeld(hubId)
+    expect(held).toHaveLength(1)
+    expect(held[0]).toMatchObject({ callId: 'u1', kind: 'voicemail', addressable: false, deleteAttempts: 0 })
+    expect(held[0]!.lastError, 'the residue says why it is there before any eraser runs').toMatch(/without a handle/)
+    const { entries } = await fresh.audit.list(hubId)
+    expect(entries.filter(e => e.action === 'providerRecordingUnaddressable')).toHaveLength(1)
+
+    const { deleted, resolve } = provider()
+    const result = await fresh.recordings.deleteHeld(resolve, { hubId })
+    expect(deleted, 'there is no handle to hand the provider').toEqual([])
+    expect(result.deleted).toBe(0)
+    expect(result.failed).toEqual([{ callId: 'u1', kind: 'voicemail', error: expect.stringMatching(/without a handle/) }])
+    expect(await fresh.recordings.listHeld(hubId)).toMatchObject([{ callId: 'u1', addressable: false, deleteAttempts: 1 }])
+  })
+
+  it('residue and a tracked recording of the same call coexist — the handle index never collides on NULL', async () => {
+    const hubId = await createHub()
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'u2', kind: 'call', adapter: ACCOUNT })
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'u3', kind: 'call', adapter: ACCOUNT })
+    await fresh.recordings.track({ hubId, callId: 'u2', recordingSid: 'RE-u2', kind: 'call', adapter: ACCOUNT })
+    const held = await fresh.recordings.listHeld(hubId)
+    expect(held.map(r => [r.callId, r.addressable]).sort()).toEqual([['u2', false], ['u2', true], ['u3', false]])
+  })
+
+  it('the sweep leaves residue alone — retrying a recording with no handle cannot succeed', async () => {
+    const hubId = await createHub()
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'u4', kind: 'voicemail', adapter: ACCOUNT })
+    await fresh.db.update(schema.providerRecordings).set({ createdAt: new Date(Date.now() - 60 * 60 * 1000) })
+      .where(eq(schema.providerRecordings.callId, 'u4'))
+    const { resolve } = provider()
+    const result = await fresh.recordings.eraser(resolve).retryPendingVoicemails(15 * 60 * 1000)
+    expect(result.failed.filter(f => f.callId === 'u4')).toEqual([])
+    // Not swept away either: it is still reported.
+    expect(await fresh.recordings.listHeld(hubId)).toMatchObject([{ callId: 'u4', addressable: false, deleteAttempts: 0 }])
+  })
+})
+
 describe('RetentionService.executePurge — call records', () => {
   it('deletes the provider copy first and keeps a record whose copy the provider would not delete', async () => {
     const hubId = await createHub()
@@ -164,5 +208,52 @@ describe('RetentionService.executePurge — call records', () => {
       .where(eq(schema.callRecords.hubId, hubId))
     expect(remaining.map(r => r.callId), 'the stuck record keeps the only handle to its audio').toEqual(['purge-stuck'])
     expect((await fresh.recordings.listHeld(hubId)).map(r => r.callId)).toEqual(['purge-stuck'])
+
+    // The audit entry says what was left behind, not just what went — in counts, never ids.
+    const { entries } = await fresh.audit.list(hubId)
+    const purge = entries.find(e => e.action === 'retentionPurgeExecuted')
+    expect(purge?.details).toEqual({
+      hubId,
+      category: 'call_records',
+      deletedCount: 1,
+      keptCount: 1,
+      providerRecordingsDeleted: 1,
+      providerRecordingsRemaining: 1,
+      retentionDays: 30,
+    })
+  })
+
+  it('keeps a record whose recording has no handle, and audits a run that only kept', async () => {
+    const hubId = await createHub()
+    const old = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000)
+    await fresh.db.insert(schema.callRecords).values({
+      callId: 'purge-unaddressable',
+      hubId,
+      startedAt: old,
+      createdAt: old,
+      status: 'ended',
+      encryptedContent: 'x',
+      hasVoicemail: true,
+    })
+    await fresh.recordings.trackUnaddressable({ hubId, callId: 'purge-unaddressable', kind: 'voicemail', adapter: ACCOUNT })
+    await fresh.db.insert(schema.retentionSettings).values({ hubId, category: 'call_records', retentionDays: 30, updatedBy: 'test' })
+
+    const { resolve } = provider()
+    const results = await new RetentionService(fresh.db).executePurge(fresh.audit, fresh.recordings.eraser(resolve))
+
+    expect(results.find(r => r.hubId === hubId)).toEqual({
+      hubId,
+      category: 'call_records',
+      deletedCount: 0,
+      keptCount: 1,
+      providerRecordingsDeleted: 0,
+      providerRecordingsRemaining: 1,
+    })
+    const remaining = await fresh.db.select({ callId: schema.callRecords.callId }).from(schema.callRecords)
+      .where(eq(schema.callRecords.hubId, hubId))
+    expect(remaining.map(r => r.callId), 'the record of audio nothing can delete is not purged').toEqual(['purge-unaddressable'])
+    const { entries } = await fresh.audit.list(hubId)
+    const purge = entries.find(e => e.action === 'retentionPurgeExecuted')
+    expect(purge?.details, 'a run that deleted nothing but kept records is still audited').toMatchObject({ deletedCount: 0, keptCount: 1, providerRecordingsRemaining: 1 })
   })
 })

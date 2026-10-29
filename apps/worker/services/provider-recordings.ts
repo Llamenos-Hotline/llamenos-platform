@@ -10,6 +10,12 @@
  *
  * - `track` runs when the recording webhook arrives, BEFORE anything else, so
  *   the handle survives a crash between the webhook and the deletion.
+ * - `trackUnaddressable` runs instead when the provider reported a completed
+ *   recording but its webhook carried no handle. The audio is at the provider
+ *   and cannot be deleted from here, so it is recorded as residue: a row with
+ *   no handle, which fails every deletion (keeping the call record through a
+ *   retention purge, refusing a hub shred) and is reported by `listHeld` as
+ *   `addressable: false`. It is never mistaken for "no recording was made".
  * - `deleteHeld` asks the hub's adapter to delete and removes a row only when
  *   `TelephonyAdapter.deleteRecording` resolved. A refusal stays as a row with
  *   its error, is audited, and is retried by the sweep worker — never forgotten
@@ -18,7 +24,7 @@
  * All provider calls go through the `TelephonyAdapter` (never a provider API
  * directly), resolved per hub by the caller.
  */
-import { and, eq, inArray, lt, sql, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, lt, sql, type SQL } from 'drizzle-orm'
 import type { Database } from '../db'
 import { providerRecordings } from '../db/schema'
 import type { TelephonyAdapter } from '../telephony/adapter'
@@ -47,7 +53,18 @@ export interface HeldRecordingFilter {
   kind?: ProviderRecordingKind
   /** Only rows tracked before this instant (the sweep leaves in-flight voicemails alone). */
   createdBefore?: Date
+  /**
+   * Skip unaddressable residue. Only the sweep sets this: retrying a row that
+   * has no handle cannot succeed, so it would only re-audit the same failure
+   * every 15 minutes. Every eraser that RESOLVES rows (purge, shred) must see
+   * the residue and fail on it.
+   */
+  addressableOnly?: boolean
 }
+
+/** Why an unaddressable recording can never be deleted by this server. */
+export const UNADDRESSABLE_RECORDING_ERROR =
+  'the provider reported this recording without a handle to address it by, so this server cannot delete it — it must be removed at the provider directly'
 
 /**
  * Provider-side deletion bound to the hub→adapter resolver, for callers that
@@ -99,6 +116,46 @@ export class ProviderRecordingsService {
       .onConflictDoNothing({ target: [providerRecordings.hubId, providerRecordings.recordingSid] })
   }
 
+  /**
+   * Record that the provider holds a completed recording this server has no
+   * handle for. Idempotent per (hub, call, kind). The row carries its reason
+   * from the start and is audited, so the residue is visible before any
+   * eraser ever runs.
+   */
+  async trackUnaddressable(input: {
+    hubId: string
+    callId: string
+    kind: ProviderRecordingKind
+    adapter: Pick<TelephonyAdapter, 'providerAccountId'>
+  }): Promise<void> {
+    const { adapter, ...row } = input
+    const inserted = await this.db
+      .insert(providerRecordings)
+      .values({
+        ...row,
+        recordingSid: null,
+        providerAccount: providerAccountFingerprint(adapter),
+        lastError: UNADDRESSABLE_RECORDING_ERROR,
+      })
+      .onConflictDoNothing({
+        target: [providerRecordings.hubId, providerRecordings.callId, providerRecordings.kind],
+        where: isNull(providerRecordings.recordingSid),
+      })
+      .returning({ id: providerRecordings.id })
+    if (inserted.length === 0) return
+    logger.error('Provider holds a recording this server has no handle for — it cannot be deleted from here', {
+      hubId: row.hubId,
+      callId: row.callId,
+      kind: row.kind,
+    })
+    await this.audit.log(
+      'providerRecordingUnaddressable',
+      'system',
+      { callId: row.callId, kind: row.kind },
+      row.hubId || null,
+    )
+  }
+
   /** The recordings this hub's provider still holds, oldest first. */
   async listHeld(hubId: string): Promise<HeldProviderRecording[]> {
     const rows = await this.db
@@ -109,6 +166,7 @@ export class ProviderRecordingsService {
     return rows.map(row => ({
       callId: row.callId,
       kind: row.kind as ProviderRecordingKind,
+      addressable: row.recordingSid !== null,
       createdAt: row.createdAt.toISOString(),
       deleteAttempts: row.deleteAttempts,
       lastAttemptAt: row.lastAttemptAt ? row.lastAttemptAt.toISOString() : null,
@@ -130,7 +188,7 @@ export class ProviderRecordingsService {
         inArray(providerRecordings.recordingSid, handles),
         eq(providerRecordings.providerAccount, providerAccountFingerprint(adapter)),
       ))
-    return new Set(rows.map(r => r.recordingSid))
+    return new Set(rows.flatMap(r => r.recordingSid === null ? [] : [r.recordingSid]))
   }
 
   /** Hubs that have voicemails still held at their provider, tracked before `before`. */
@@ -138,7 +196,11 @@ export class ProviderRecordingsService {
     const rows = await this.db
       .selectDistinct({ hubId: providerRecordings.hubId })
       .from(providerRecordings)
-      .where(and(eq(providerRecordings.kind, 'voicemail'), lt(providerRecordings.createdAt, before)))
+      .where(and(
+        eq(providerRecordings.kind, 'voicemail'),
+        lt(providerRecordings.createdAt, before),
+        isNotNull(providerRecordings.recordingSid),
+      ))
     return rows.map(r => r.hubId)
   }
 
@@ -162,7 +224,10 @@ export class ProviderRecordingsService {
     }
 
     for (const row of rows) {
-      const error = adapter ? await this.deleteOne(adapter, row) : resolveError
+      // Residue has no handle to hand any adapter: it fails without asking.
+      const error = row.recordingSid === null
+        ? UNADDRESSABLE_RECORDING_ERROR
+        : adapter ? await this.deleteOne(adapter, row, row.recordingSid) : resolveError
       if (error === null) {
         result.deleted++
         continue
@@ -184,7 +249,7 @@ export class ProviderRecordingsService {
         const before = new Date(Date.now() - olderThanMs)
         const total: ProviderDeletionResult = { deleted: 0, failed: [] }
         for (const hubId of await this.hubsWithPendingVoicemails(before)) {
-          const result = await this.deleteHeld(resolveAdapter, { hubId, kind: 'voicemail', createdBefore: before })
+          const result = await this.deleteHeld(resolveAdapter, { hubId, kind: 'voicemail', createdBefore: before, addressableOnly: true })
           total.deleted += result.deleted
           total.failed.push(...result.failed)
         }
@@ -194,14 +259,14 @@ export class ProviderRecordingsService {
   }
 
   /** Delete one recording at the provider; null on confirmed deletion, else the error. */
-  private async deleteOne(adapter: TelephonyAdapter, row: Row): Promise<string | null> {
+  private async deleteOne(adapter: TelephonyAdapter, row: Row, recordingSid: string): Promise<string | null> {
     if (providerAccountFingerprint(adapter) !== row.providerAccount) {
       // Another account cannot delete it, and would answer 404 — "already
       // deleted" — for a handle it never issued.
       return 'the hub\'s telephony provider account has changed since this recording was made; it is still held at the previous account'
     }
     try {
-      await adapter.deleteRecording(row.recordingSid)
+      await adapter.deleteRecording(recordingSid)
     } catch (err) {
       return errorMessage(err)
     }
@@ -238,6 +303,7 @@ export class ProviderRecordingsService {
     if (filter.callIds) clauses.push(inArray(providerRecordings.callId, filter.callIds.length > 0 ? filter.callIds : ['']))
     if (filter.kind) clauses.push(eq(providerRecordings.kind, filter.kind))
     if (filter.createdBefore) clauses.push(lt(providerRecordings.createdAt, filter.createdBefore))
+    if (filter.addressableOnly) clauses.push(isNotNull(providerRecordings.recordingSid))
     // `and` of a non-empty list is never undefined; the hub clause is always present.
     return and(...clauses) ?? clauses[0]
   }

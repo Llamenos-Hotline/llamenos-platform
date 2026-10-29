@@ -365,6 +365,12 @@ export type ProviderRecordingPosture = z.infer<typeof providerRecordingPostureSc
 export const heldProviderRecordingSchema = z.object({
   callId: z.string(),
   kind: z.enum(['voicemail', 'call']),
+  /**
+   * False when the provider reported the recording without a handle: the audio
+   * is held there and this server cannot delete it — it must be removed at the
+   * provider directly. Never resolved by a retry.
+   */
+  addressable: z.boolean(),
   createdAt: z.string(),
   deleteAttempts: z.number().int(),
   lastAttemptAt: z.string().nullable(),

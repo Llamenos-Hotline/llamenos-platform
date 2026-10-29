@@ -27,6 +27,21 @@ function isValidCategory(cat: string): cat is RetentionCategory {
   return (VALID_CATEGORIES as readonly string[]).includes(cat)
 }
 
+/**
+ * One category's purge in one hub. `keptCount` and `providerRecordingsRemaining`
+ * are what the purge left behind on purpose — expired call records kept because
+ * the provider still holds their audio, and the provider recordings it could not
+ * delete. Counts only, never ids (operator decision B6).
+ */
+export interface RetentionPurgeResult {
+  hubId: string
+  category: string
+  deletedCount: number
+  keptCount: number
+  providerRecordingsDeleted: number
+  providerRecordingsRemaining: number
+}
+
 export class RetentionService {
   constructor(protected db: Database) {}
 
@@ -132,9 +147,9 @@ export class RetentionService {
   async executePurge(
     auditService: AuditService,
     providerMedia: ProviderMediaEraser,
-  ): Promise<{ hubId: string; category: string; deletedCount: number }[]> {
+  ): Promise<RetentionPurgeResult[]> {
     const allSettings = await this.db.select().from(retentionSettings)
-    const results: { hubId: string; category: string; deletedCount: number }[] = []
+    const results: RetentionPurgeResult[] = []
 
     for (const setting of allSettings) {
       const cutoff = new Date(
@@ -142,6 +157,9 @@ export class RetentionService {
       )
 
       let deletedCount = 0
+      let keptCount = 0
+      let providerRecordingsDeleted = 0
+      let providerRecordingsRemaining = 0
 
       switch (setting.category) {
         case 'call_records': {
@@ -158,6 +176,9 @@ export class RetentionService {
           const candidates = await this.db.select({ callId: callRecords.callId }).from(callRecords).where(expired)
           const media = await providerMedia.deleteForCalls(setting.hubId, candidates.map(r => r.callId))
           const kept = [...new Set(media.failed.map(f => f.callId))]
+          keptCount = kept.length
+          providerRecordingsDeleted = media.deleted
+          providerRecordingsRemaining = media.failed.length
           if (kept.length > 0) {
             logger.error('Retention purge kept call records whose provider recordings could not be deleted', {
               hubId: setting.hubId,
@@ -211,22 +232,24 @@ export class RetentionService {
         }
       }
 
-      if (deletedCount > 0) {
-        results.push({
+      // A run that only KEPT records is still reported: an audit that showed
+      // nothing would read as "nothing expired" while caller audio sat at the
+      // provider and its records outlived their retention period.
+      if (deletedCount > 0 || keptCount > 0 || providerRecordingsDeleted > 0 || providerRecordingsRemaining > 0) {
+        const result: RetentionPurgeResult = {
           hubId: setting.hubId,
           category: setting.category,
           deletedCount,
-        })
+          keptCount,
+          providerRecordingsDeleted,
+          providerRecordingsRemaining,
+        }
+        results.push(result)
 
         await auditService.log(
           'retentionPurgeExecuted',
           'system',
-          {
-            hubId: setting.hubId,
-            category: setting.category,
-            deletedCount,
-            retentionDays: setting.retentionDays,
-          },
+          { ...result, retentionDays: setting.retentionDays },
           setting.hubId,
         )
       }
@@ -235,6 +258,8 @@ export class RetentionService {
     logger.info('Retention purge complete', {
       hubsProcessed: allSettings.length,
       totalDeleted: results.reduce((sum, r) => sum + r.deletedCount, 0),
+      totalKept: results.reduce((sum, r) => sum + r.keptCount, 0),
+      providerRecordingsRemaining: results.reduce((sum, r) => sum + r.providerRecordingsRemaining, 0),
     })
 
     return results

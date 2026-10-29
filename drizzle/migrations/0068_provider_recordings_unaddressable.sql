@@ -1,0 +1,2 @@
+ALTER TABLE "provider_recordings" ALTER COLUMN "recording_sid" DROP NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "provider_recordings_unaddressable_idx" ON "provider_recordings" USING btree ("hub_id","call_id","kind") WHERE "provider_recordings"."recording_sid" IS NULL;

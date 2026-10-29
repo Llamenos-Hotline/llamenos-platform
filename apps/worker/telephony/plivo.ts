@@ -502,7 +502,9 @@ export class PlivoAdapter implements TelephonyAdapter {
     const recordUrl = form.get('RecordUrl') as string
     return {
       status: recordUrl ? 'completed' : 'failed',
-      recordingSid: (form.get('RecordingID') as string) || undefined,
+      // RecordUrl ends in the same id; a callback missing RecordingID still
+      // names the recording, and an unaddressed recording cannot be deleted.
+      recordingSid: (form.get('RecordingID') as string) || plivoRecordingIdFromUrl(recordUrl) || undefined,
       callSid: (form.get('CallUUID') as string) || undefined,
     }
   }
@@ -517,6 +519,18 @@ export class PlivoAdapter implements TelephonyAdapter {
   emptyResponse(): TelephonyResponse {
     return this.plivoXml('')
   }
+}
+
+/** The id at the end of a `RecordUrl` (`…/Account/{auth_id}/Recording/{id}.mp3`). */
+export function plivoRecordingIdFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  let path: string
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return null
+  }
+  return /\/Recording\/([A-Za-z0-9-]+)(?:\.[a-z0-9]+)?$/.exec(path)?.[1] ?? null
 }
 
 /** Plivo timestamps look like `2023-04-03 17:08:45.583463+05:30`. */
