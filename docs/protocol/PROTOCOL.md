@@ -833,8 +833,8 @@ Rules:
   only by a member holding, in that hub's own role assignments,
   `hubs:manage-keys` **and** every purpose's permissions — nobody may confer
   read access they do not hold (`PUT`/`DELETE /api/hubs/:hubId/escrow-key`,
-  §4.15). It may not equal any registered device key or
-  `ADMIN_DECRYPTION_PUBKEY`. Rotation does not re-seal history.
+  §4.15). It may not equal any registered device key, any user's Ed25519
+  identity key, or `ADMIN_DECRYPTION_PUBKEY`. Rotation does not re-seal history.
 - **Only X25519 keys.** Every entry is a device encryption key or the escrow
   key, never an Ed25519 `users.pubkey` (#1021, #1283).
 - **Zero readers is an invariant violation, never a fallback** (A8: "a write
@@ -850,6 +850,12 @@ Clients obtain a hub's set from `GET /api/hubs/:hubId/readers?purpose=<purpose>`
 (§4.15), for the record's own hub — never the active hub, if they differ — and
 seal the author's own device in addition. The purpose is a closed enum: a
 client never names a permission.
+
+Clients take this list as the server serves it. A malicious server could list a
+key of its own; verifying each device key against its owner's sigchain (§2.11)
+before sealing is the M2 gate, and until then this is the accepted risk recorded
+in docs/security/THREAT_MODEL.md ("Recipient Keys Are Server-Listed") — the same
+trust every server-resolved recipient list already carries (§2.4.1, "Trust").
 
 ### 2.5 Call Record Metadata Encryption
 
@@ -2610,7 +2616,7 @@ Authority: hubs:manage-keys AND every reader purpose's permissions, held through
 Body: { "escrowPubkey": hex64 }  // SetHubEscrowKeyBody; X25519
 Response: { "ok": true }
 // Installs or rotates the escrow key. 403 without the authority above. 409 when the key is a registered
-// device's X25519 key or equals ADMIN_DECRYPTION_PUBKEY. Audited (hubEscrowKeySet). Rotation does not
+// device's X25519 key, a user's Ed25519 identity key, or ADMIN_DECRYPTION_PUBKEY. Audited (hubEscrowKeySet). Rotation does not
 // re-seal history.
 
 DELETE /api/hubs/:hubId/escrow-key

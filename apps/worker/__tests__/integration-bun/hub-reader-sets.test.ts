@@ -103,6 +103,9 @@ async function refusal(fn: () => Promise<unknown> | unknown): Promise<ServiceErr
   throw new Error('expected a refusal, but the call succeeded')
 }
 
+/** The reader set as plain strings, so fixtures' unbranded keys compare against it. */
+const readersOf = async (hubId: string, purpose: 'admin' | 'call-history'): Promise<string[]> => identity.readersFor(hubId, purpose)
+
 const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
 
 afterAll(async () => {
@@ -120,7 +123,7 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     await db.insert(devices).values({ pubkey: second.pubkey, platform: 'desktop', x25519Pubkey: secondLaptop })
     const volunteer = await makePerson('rs-vol', { hubRoles: [{ hubId, roleIds: ['role-volunteer'] }] })
 
-    const readers = await identity.readersFor(hubId, 'admin')
+    const readers = await readersOf(hubId, 'admin')
     expect(new Set(readers)).toEqual(new Set([founder.deviceKey, second.deviceKey, secondLaptop]))
     expect(readers).not.toContain(volunteer.deviceKey)
     // Never an Ed25519 identity key.
@@ -133,11 +136,11 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     const superAdmin = await makePerson('rs-sa', { roles: ['role-super-admin'] })
 
     for (const purpose of ['admin', 'call-history'] as const) {
-      expect(await identity.readersFor(hubId, purpose)).not.toContain(superAdmin.deviceKey)
+      expect(await readersOf(hubId, purpose)).not.toContain(superAdmin.deviceKey)
     }
 
     await identity.setHubRole({ pubkey: superAdmin.pubkey, hubId, roleIds: ['role-hub-admin'] })
-    expect(await identity.readersFor(hubId, 'admin')).toContain(superAdmin.deviceKey)
+    expect(await readersOf(hubId, 'admin')).toContain(superAdmin.deviceKey)
   })
 
   it('is decided by permission, not role: a custom role is a call-history reader without being an admin (D2)', async () => {
@@ -148,12 +151,12 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     const customAdminRole = await makeRole([...READER_PURPOSE_PERMISSIONS.admin])
     const customAdmin = await makePerson('rs-custom-admin', { hubRoles: [{ hubId, roleIds: [customAdminRole] }] })
 
-    const history = await identity.readersFor(hubId, 'call-history')
+    const history = await readersOf(hubId, 'call-history')
     expect(history).toContain(analyst.deviceKey)
     expect(history).toContain(founder.deviceKey) // role-hub-admin grants calls:*
     expect(history).not.toContain(customAdmin.deviceKey) // the admin minimum carries no calls:read-history
 
-    const admins = await identity.readersFor(hubId, 'admin')
+    const admins = await readersOf(hubId, 'admin')
     expect(admins).toContain(customAdmin.deviceKey)
     expect(admins).not.toContain(analyst.deviceKey)
   })
@@ -163,15 +166,15 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     const hubA = await makeHub('rs-a', founderA)
     const founderB = await makePerson('rs-b')
     const hubB = await makeHub('rs-b', founderB)
-    expect(await identity.readersFor(hubA, 'admin')).not.toContain(founderB.deviceKey)
-    expect(await identity.readersFor(hubB, 'admin')).not.toContain(founderA.deviceKey)
+    expect(await readersOf(hubA, 'admin')).not.toContain(founderB.deviceKey)
+    expect(await readersOf(hubB, 'admin')).not.toContain(founderA.deviceKey)
   })
 
   it('excludes a deactivated admin', async () => {
     const founder = await makePerson('rs-deact-founder')
     const hubId = await makeHub('rs-deact', founder)
     const gone = await makePerson('rs-gone', { active: false, hubRoles: [{ hubId, roleIds: ['role-hub-admin'] }] })
-    expect(await identity.readersFor(hubId, 'admin')).not.toContain(gone.deviceKey)
+    expect(await readersOf(hubId, 'admin')).not.toContain(gone.deviceKey)
   })
 
   it('never contains the instance-wide ADMIN_DECRYPTION_PUBKEY, but the guard still accepts it transitionally', async () => {
@@ -179,7 +182,7 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     const hubId = await makeHub('rs-inst', founder)
 
     for (const purpose of ['admin', 'call-history'] as const) {
-      expect(await identity.readersFor(hubId, purpose)).not.toContain(INSTANCE_KEY)
+      expect(await readersOf(hubId, purpose)).not.toContain(INSTANCE_KEY)
     }
     // Shipped clients seal to it and nothing else; refusing it would refuse every note.
     await assertAdminCanRead(services, { ADMIN_DECRYPTION_PUBKEY: INSTANCE_KEY }, hubId, sealedTo(INSTANCE_KEY), 'A note')
@@ -196,7 +199,7 @@ describe('the hub escrow key (D1, A7)', () => {
 
     expect(await identity.getHubEscrowKey(hubId)).toBe(escrow)
     for (const purpose of ['admin', 'call-history'] as const) {
-      expect(await identity.readersFor(hubId, purpose)).toContain(escrow)
+      expect(await readersOf(hubId, purpose)).toContain(escrow)
     }
     // No transitional key configured at all: the hub's own set suffices.
     await assertAdminCanRead(services, {}, hubId, sealedTo(escrow), 'A note')
@@ -205,7 +208,7 @@ describe('the hub escrow key (D1, A7)', () => {
   it('a hub with no admin device but an escrow key accepts writes instead of 503ing', async () => {
     const founder = await makePerson('esc-nodev', {}, false)
     const hubId = await makeHub('esc-nodev', founder)
-    expect(await identity.readersFor(hubId, 'admin')).toEqual([])
+    expect(await readersOf(hubId, 'admin')).toEqual([])
     const before = await refusal(() => assertAdminCanRead(services, {}, hubId, sealedTo(hexKey('aa')), 'A note'))
     expect(before.status).toBe(503)
 
@@ -221,17 +224,19 @@ describe('the hub escrow key (D1, A7)', () => {
     const second = x25519('f2')
     await identity.setHubEscrowKey(hubId, first, undefined)
     await identity.setHubEscrowKey(hubId, second, undefined)
-    const readers = await identity.readersFor(hubId, 'admin')
+    const readers = await readersOf(hubId, 'admin')
     expect(readers).toContain(second)
     expect(readers).not.toContain(first)
   })
 
-  it('refuses (409) a registered device key and the instance key', async () => {
+  it('refuses (409) a registered device key, an Ed25519 identity key, and the instance key', async () => {
     const founder = await makePerson('esc-bad')
     const hubId = await makeHub('esc-bad', founder)
     const deviceKey = hpkeRecipientPubkey(founder.deviceKey)!
     expect((await refusal(() => identity.setHubEscrowKey(hubId, deviceKey, INSTANCE_KEY))).status).toBe(409)
     expect((await refusal(() => identity.setHubEscrowKey(hubId, INSTANCE_KEY, INSTANCE_KEY))).status).toBe(409)
+    const identityKey = hpkeRecipientPubkey(founder.pubkey)!
+    expect((await refusal(() => identity.setHubEscrowKey(hubId, identityKey, INSTANCE_KEY))).status).toBe(409)
     expect(await identity.getHubEscrowKey(hubId)).toBeUndefined()
   })
 

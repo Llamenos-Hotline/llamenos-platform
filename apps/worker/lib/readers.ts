@@ -29,7 +29,7 @@
  */
 import { eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
-import { devices, hubs } from '../db/schema'
+import { devices, hubs, users } from '../db/schema'
 import { READER_PURPOSE_PERMISSIONS, type RoleCatalog } from '@shared/permissions'
 import type { ReaderPurpose } from '@protocol/schemas/hubs'
 import { ServiceError } from '../services/settings'
@@ -128,7 +128,8 @@ export function assertMayManageHubEscrow(
 /**
  * Install or rotate `hubId`'s escrow key.
  *
- * Refused (409) when the key is any registered device's X25519 key: an escrow
+ * Refused (409) when the key is a user's Ed25519 identity key (#1283), or any
+ * registered device's X25519 key: an escrow
  * key that is also a member's device key is that member's key, and it would
  * keep reading every purpose after they leave the hub. Refused (409) when it
  * is the instance-wide `ADMIN_DECRYPTION_PUBKEY`: the escrow is controlled by
@@ -160,6 +161,20 @@ export async function setHubEscrowKey(
     throw new ServiceError(
       409,
       "A hub's escrow key cannot be a registered device key: it would stay a reader after that member leaves",
+    )
+  }
+  // A user's Ed25519 identity key is 32 bytes of hex too, and DHKEM(X25519)
+  // seals to it without complaint — for a secret nobody holds (#1283). The
+  // value cannot be told apart by inspection, but it can by provenance.
+  const [identityKey] = await db
+    .select({ pubkey: users.pubkey })
+    .from(users)
+    .where(sql`lower(${users.pubkey}) = ${escrowPubkey}`)
+    .limit(1)
+  if (identityKey) {
+    throw new ServiceError(
+      409,
+      "A hub's escrow key cannot be a user's Ed25519 identity key: nothing can open an envelope sealed to it",
     )
   }
   const updated = await db
