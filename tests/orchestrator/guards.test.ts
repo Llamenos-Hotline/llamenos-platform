@@ -2184,6 +2184,111 @@ describe('rail: fleet/review reviews exactly once per tree, never twice on an id
     expect(failing).toHaveBeenCalledTimes(2)
   })
 
+  // #2336, the three checks the issue names, in order, on ONE tree. #2332 was
+  // FAILed for a body claiming 36 keys where its diff delivered 35; its body
+  // was corrected with the tree deliberately untouched; and the re-request
+  // replayed the cached FAIL in 23 seconds with no new verdict, because the
+  // cache was keyed on the tree alone. The reviewer below judges exactly
+  // what the real one did — the diff is fine, the description is not — so
+  // the property under test is the cache's, not a model's.
+  describe('a verdict covers the (tree, description) it judged — a body-only fix is re-judged (#2336)', () => {
+    const MISDESCRIBED = { title: 'feat(i18n): land 36 strings', body: 'Adds 36 keys, including `voice.overLimitMessage`.' }
+    const CORRECTED = { title: 'feat(i18n): land 35 strings', body: 'Adds 35 keys. `voice.overLimitMessage` was dropped.' }
+    const descriptionJudge = () => vi.fn(async (input: { claim?: { body: string } | undefined }) =>
+      input.claim?.body.includes('36 keys') === true
+        ? { verdict: 'FAIL' as const, text: 'VERDICT: FAIL — the PR claims 36 keys but delivers 35' }
+        : { verdict: 'PASS' as const, text: 'VERDICT: PASS — 35 keys, as described' })
+
+    it('FAILs a misdescribed diff, re-judges the corrected body on the SAME tree, and replays when nothing changed', async () => {
+      const cache = fakeCache()
+      const reviewer = descriptionJudge()
+      const publishReport = vi.fn(async () => {})
+      let claim = MISDESCRIBED
+      const request = () => runReviewCi(deps({
+        cacheFor: () => cache, secondOpinion: reviewer, publishReport, prClaim: async () => claim,
+        headTree: async () => TREE_A,
+      }))
+
+      // 1. Correct diff, misdescribing body → a real FAIL.
+      const misdescribed = await request()
+      expect(misdescribed.ok).toBe(false)
+      expect(misdescribed.result).toBe('fail')
+      expect(reviewer).toHaveBeenCalledTimes(1)
+      expect(cache.recordCalls).toBe(1)
+
+      // 2. ONLY the body changes — the tree is TREE_A both times — and the
+      //    re-request is a fresh judgement: the reviewer runs again, a new
+      //    verdict is recorded, and the report it publishes is the new one,
+      //    not the replayed FAIL.
+      claim = CORRECTED
+      const corrected = await request()
+      expect(corrected.result, 'a body-only fix replayed the cached FAIL — the #2332 deadlock').toBe('pass')
+      expect(reviewer).toHaveBeenCalledTimes(2)
+      expect(cache.recordCalls).toBe(2)
+      expect(publishReport).toHaveBeenLastCalledWith([expect.objectContaining({ verdict: 'PASS', body: expect.not.stringContaining('(cached)') })])
+
+      // 3. Nothing changes → the cache still serves it. Re-judging here would
+      //    be caching disabled, not fixed, on a gate with ONE runner.
+      const untouched = await request()
+      expect(untouched.result, 'an untouched re-request re-judged — the cache is off, not keyed').toBe('cache-pass')
+      expect(reviewer).toHaveBeenCalledTimes(2)
+      expect(cache.recordCalls).toBe(2)
+    })
+
+    it('replays the FAIL while the misdescription stands — correcting the body is what clears it', async () => {
+      const cache = fakeCache()
+      const reviewer = descriptionJudge()
+      const request = () => runReviewCi(deps({ cacheFor: () => cache, secondOpinion: reviewer, prClaim: async () => MISDESCRIBED }))
+      await request()
+      const again = await request()
+      expect(again.result).toBe('cache-fail')
+      expect(again.summary).toContain('36 keys but delivers 35')
+      expect(reviewer).toHaveBeenCalledTimes(1)
+    })
+
+    // The digest is of what the reviewer is SHOWN (`renderClaim`): an edit
+    // it cannot see cannot have changed its verdict, so it must still hit.
+    it('an edit invisible to the reviewer — whitespace a title collapses, a trailing newline — still hits', async () => {
+      const cache = fakeCache()
+      const reviewer = descriptionJudge()
+      let claim = CORRECTED
+      const request = () => runReviewCi(deps({ cacheFor: () => cache, secondOpinion: reviewer, prClaim: async () => claim }))
+      await request()
+      claim = { title: `  ${CORRECTED.title.replace(' ', '\n  ')}  `, body: `${CORRECTED.body}\n\n` }
+      expect((await request()).result).toBe('cache-pass')
+      expect(reviewer).toHaveBeenCalledTimes(1)
+    })
+
+    // No claim, no key — exactly as for the tree. A verdict formed against
+    // "this PR stated no claim" must never be served for one that did.
+    for (const [label, prClaim] of [
+      ['is not wired', undefined],
+      ['returns nothing', async () => undefined],
+      ['throws', async () => { throw new Error('gh exploded') }],
+    ] as const) {
+      it(`neither reads nor writes the cache when the PR description ${label}`, async () => {
+        const lookup = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS (cached)' }))
+        const record = vi.fn(async () => {})
+        const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
+        const v = await runReviewCi(deps({ cacheFor: () => ({ lookup, record }), secondOpinion, prClaim }))
+        expect(v.result).toBe('pass')
+        expect(lookup).not.toHaveBeenCalled()
+        expect(record).not.toHaveBeenCalled()
+        expect(secondOpinion).toHaveBeenCalledTimes(1)
+      })
+    }
+
+    // The key must describe the very text the reviewers were shown: one read,
+    // before the lookup, handed to every reviewer.
+    it('reads the PR description ONCE, and every reviewer is shown that same read', async () => {
+      const prClaim = vi.fn(async () => CORRECTED)
+      const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
+      await runReviewCi(deps({ cacheFor: () => fakeCache(), secondOpinion, prClaim }))
+      expect(prClaim).toHaveBeenCalledTimes(1)
+      expect(secondOpinion).toHaveBeenCalledWith(expect.objectContaining({ claim: CORRECTED }))
+    })
+  })
+
   // The line that must never be fudged: an UNREADABLE is not a verdict. A
   // bad model id, an outage or exhausted quota pinned to a diff hash would
   // hold the PR red until someone pushed a commit, for a reason that had
@@ -2302,6 +2407,41 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // run-engine branch it always has — the tier check must never change their
   // outcome, only add a new branch ahead of them.
   const tier2Files = async (): Promise<string[]> => ['x']
+
+  // #2336, at the gate step — which is where #2332's 23-second replay was
+  // decided. A review request after a body-only correction must reach the
+  // engine; the same request with nothing changed must stay a cache hit.
+  describe('the claim half of the key (#2336)', () => {
+    const corrected = { ...CLAIM, body: `${CLAIM.body} Corrected: it changes one thing, not two.` }
+    const failed = () => fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
+      verdict: { verdict: 'FAIL', text: 'VERDICT: FAIL (cached) — the description misstates the diff' },
+    })
+    const gate = (cache: ReviewCache, prClaim: (() => Promise<typeof CLAIM | undefined>) | undefined) => decideReviewGate({
+      ctx: ctx(), headTree: gateTree, prClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
+      requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+    })
+
+    it('a review request after ONLY the body changed is run-engine, not the cached FAIL', async () => {
+      const outcome = await gate(failed(), async () => corrected)
+      expect(outcome.kind, 'a body-only fix replayed the cached FAIL — the #2332 deadlock').toBe('run-engine')
+      expect(outcome.cacheKey.headTree).toBe(TREE)
+      expect(outcome.cacheKey.claimDigest).toBe(claimDigest(corrected))
+    })
+
+    it('the same request with nothing changed still serves the cache', async () => {
+      const outcome = await gate(failed(), gateClaim)
+      expect(outcome.kind).toBe('cache-hit')
+    })
+
+    it('an unreadable description is no key at all — never a cache hit', async () => {
+      for (const prClaim of [undefined, async () => undefined, async () => { throw new Error('gh exploded') }]) {
+        const outcome = await gate(failed(), prClaim)
+        expect(outcome.kind).toBe('run-engine')
+        expect(outcome.cacheKey.claimDigest).toBeUndefined()
+      }
+    })
+  })
 
   // Branch (a): a cache hit concludes `cache-hit` regardless of whether this
   // event was the `review` label — an unrelated label event on an

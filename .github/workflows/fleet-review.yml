@@ -63,9 +63,12 @@
 #
 #    WHY IT IS NOT THE QUOTA BURN #812 FIXED. That fix predates #1158's
 #    verdict cache, which is keyed on the head's TREE sha (`review-cache.ts`,
-#    #2014), so a push whose tree is unchanged — a no-op rebase, a
-#    content-identical one — is a `cache-hit`: no model call, the stored
-#    verdict republished on the new head. A push that DID change the tree has
+#    #2014) and on the PR's title and body as the reviewer read them
+#    (`claimDigest`, review.ts, #2336 — the reviewer judges the description
+#    too, so a corrected description must be re-judged, never replayed), so
+#    a push whose tree is unchanged — a no-op rebase, a content-identical
+#    one — on a PR whose description is unchanged is a `cache-hit`: no model
+#    call, the stored verdict republished on the new head. A push that DID change the tree has
 #    no verdict for the code it now carries, and is red without a model call:
 #    a FAIL this PR last earned is carried forward (`carried`), a PASS earned
 #    on another tree is reported as exactly that (`tree-changed`, #2014), and
@@ -173,8 +176,10 @@
 # Outcomes of the gate step, all of which reach a real conclusion:
 #   `review-set-unresolved` → FAIL. Could not work out what to review.
 #   `cache-hit`             → no model call. A prior SUBSTANTIVE verdict
-#                             exists for this exact head TREE AND this exact
-#                             review set (`reviewSetTag`, review-cache.ts):
+#                             exists for this exact head TREE, this exact
+#                             PR title and description (`claimDigest`,
+#                             #2336) AND this exact review set
+#                             (`reviewSetTag`, review-cache.ts):
 #                             a cached PASS concludes SUCCESS, a cached FAIL
 #                             concludes RED with the original verdict
 #                             restated. An UNREADABLE is never cached, so an
@@ -2346,15 +2351,15 @@ jobs:
 
           case "$token" in
             PASS:reviewed) detail="every reviewer read this diff and passed it" ;;
-            PASS:cached) detail="this exact tree and review set already passed; not reviewed again" ;;
+            PASS:cached) detail="this exact tree, description and review set already passed; not reviewed again" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:bot-authored) detail="an automated dependency update; no model review, and a human still merges it" ;;
             PASS:release-pr) detail="knope's release PR, a version-only diff (release branch + only knope.toml-listed files changed by a version swap); no review was run, by the operator's ruling, and a human still merges it" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
-            REJECTED:cached) detail="this exact tree was already rejected; push a fix" ;;
+            REJECTED:cached) detail="this exact tree and description were already rejected; push a fix, or correct the description, then request a review" ;;
             REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;
             NO-VERDICT:unreviewed) detail="no review has ever been earned on this PR and a push never starts one; request a review" ;;
-            NO-VERDICT:tree-changed) detail="a push changed the tree; the last PASS judged a different tree and does not cover this head — request a review" ;;
+            NO-VERDICT:tree-changed) detail="a push; the last PASS judged a different tree or description and does not cover this head — request a review" ;;
             NO-VERDICT:carry-unreadable) detail="a push, and this PR's last verdict could not be read; re-run the job" ;;
             NO-VERDICT:not-requested) detail="this review request does not start the fleet review; the log names whom to ask" ;;
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;

@@ -1615,9 +1615,11 @@ async function runReviewGate(): Promise<number> {
   // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A
   // cached PASS concludes green below; a cached FAIL fails HERE, restating
   // the original verdict so the check says WHY rather than going red with
-  // no explanation. The tree has not changed since that verdict, so
-  // reviewing it again could only reach the same conclusion; pushing a fix
-  // changes the tree and reviews afresh.
+  // no explanation. Neither the tree nor the PR's title and description has
+  // changed since that verdict (the cache is keyed on both — #2014, #2336),
+  // so reviewing it again could only reach the same conclusion; pushing a
+  // fix, or correcting a description the verdict faulted and re-requesting,
+  // changes the key and reviews afresh.
   if (outcome.kind === 'cache-hit') {
     // A re-published verdict still reaches the PR as a review, not as a
     // bare status — see `writeReviewReport`.
