@@ -2656,8 +2656,8 @@ describe('rail: the knope release PR concludes green without a review, and nothi
   const CURRENT = (JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string }).version
   const NEXT = CURRENT.replace(/\d+$/, (n) => String(Number(n) + 1))
 
-  /** Real repo, real version files, real diff: base commit, then `mutate`. */
-  function realDiff(mutate: (dir: string) => void): { diff: string; files: string[] } {
+  /** Real repo, real version files, real diff: base commit (after `seed`), then `mutate`. */
+  function realDiff(mutate: (dir: string) => void, seed: (dir: string) => void = () => {}): { diff: string; files: string[] } {
     const dir = mkdtempSync(join(tmpdir(), 'release-pr-rail-'))
     try {
       sh(dir, 'init', '-q', '-b', 'main')
@@ -2667,6 +2667,7 @@ describe('rail: the knope release PR concludes green without a review, and nothi
         execFileSync('mkdir', ['-p', dirname(dest)])
         writeFileSync(dest, readFileSync(join(process.cwd(), p)))
       }
+      seed(dir)
       sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base')
       mutate(dir)
       sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'head')
@@ -2678,15 +2679,56 @@ describe('rail: the knope release PR concludes green without a review, and nothi
     } finally { rmSync(dir, { recursive: true, force: true }) }
   }
 
-  /** What `knope prepare-release` does: swap the version in each versioned file, prepend a changelog section. */
-  function knopeBump(dir: string, skip: readonly string[] = []): void {
+  /**
+   * The ONE span knope rewrites in a versioned file, as a regex whose
+   * `version` group is that span. A file-wide find-and-replace of the version
+   * string is NOT what knope does, and modelling it that way broke this rail
+   * on release 0.20.2 (#2290): `apps/desktop/Cargo.lock` also pins the
+   * unrelated crate `toml_edit 0.20.2`, the fixture bumped it too, and the
+   * gate — correctly — refused that as a dependency line riding along.
+   *
+   * So the rule comes from where knope's comes from: a tabled entry's own
+   * `regex` in knope.toml, else knope's dispatch on the file's name. A
+   * versioned file with neither throws — a fixture that cannot model knope
+   * must fail loudly, never guess.
+   */
+  function knopeRule(path: string): RegExp {
+    const entry = KNOPE_TOML.split('\n').find((l) => new RegExp(`\\bpath\\s*=\\s*"${escapeRe(path)}"`).test(l))
+    const re = entry === undefined ? undefined : /\bregex\s*=\s*(?:'([^']*)'|"((?:[^"\\]|\\.)*)")/.exec(entry)
+    if (re !== undefined && re !== null) {
+      // TOML literal string → raw; basic string → its escapes (\n, \t) decoded.
+      return new RegExp(re[1] ?? (JSON.parse(`"${re[2] ?? ''}"`) as string), 'gd')
+    }
+    const name = posix.basename(path)
+    if (name.endsWith('.json')) return /^ {2}"version"\s*:\s*"(?<version>[^"]+)"/gmd
+    if (name === 'Cargo.toml') return /^\[package\]\n(?:[^[\n][^\n]*\n|\n)*?version\s*=\s*"(?<version>[^"]+)"/gmd
+    if (name === 'Cargo.lock') {
+      // knope infers the crate from the first Cargo.toml it versions.
+      const toml = VERSIONED.find((p) => posix.basename(p) === 'Cargo.toml')
+      const crate = toml === undefined ? undefined : /^\[package\]\n(?:[^[\n][^\n]*\n|\n)*?name\s*=\s*"([^"]+)"/m.exec(readFileSync(join(process.cwd(), toml), 'utf8'))?.[1]
+      if (crate === undefined) throw new Error(`no Cargo.toml crate name for ${path}`)
+      return new RegExp(`^\\[\\[package\\]\\]\\nname = "${escapeRe(crate)}"\\nversion = "(?<version>[^"]+)"`, 'gmd')
+    }
+    throw new Error(`no model of how knope rewrites ${path} — add one here`)
+  }
+
+  function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+
+  /** What `knope prepare-release` does: rewrite each versioned file's one version span to `to`, prepend a changelog section. */
+  function knopeBump(dir: string, to: string = NEXT): void {
     for (const p of VERSIONED) {
-      if (skip.includes(p)) continue
       const f = join(dir, p)
-      writeFileSync(f, readFileSync(f, 'utf8').replaceAll(`"${CURRENT}"`, `"${NEXT}"`).replaceAll(`>${CURRENT}<`, `>${NEXT}<`))
+      const text = readFileSync(f, 'utf8')
+      const hits = [...text.matchAll(knopeRule(p))]
+      if (hits.length !== 1) throw new Error(`${p}: knope's rule matched ${hits.length} spans, expected exactly 1`)
+      const span = (hits[0] as RegExpExecArray).indices?.groups?.version
+      if (span === undefined) throw new Error(`${p}: knope's rule has no "version" group`)
+      const [start, end] = span
+      if (text.slice(start, end) !== CURRENT) throw new Error(`${p}: carries ${text.slice(start, end)}, not package.json's ${CURRENT}`)
+      writeFileSync(f, text.slice(0, start) + to + text.slice(end))
     }
     const log = join(dir, 'CHANGELOG.md')
-    writeFileSync(log, `# Changelog\n\n## ${NEXT} (2026-10-23)\n\n### Fixes\n\n- something crypto-ish\n\n${readFileSync(log, 'utf8').replace(/^# Changelog\n+/, '')}`)
+    writeFileSync(log, `# Changelog\n\n## ${to} (2026-10-23)\n\n### Fixes\n\n- something crypto-ish\n\n${readFileSync(log, 'utf8').replace(/^# Changelog\n+/, '')}`)
   }
 
   const release = realDiff((d) => knopeBump(d))
@@ -2734,6 +2776,18 @@ describe('rail: the knope release PR concludes green without a review, and nothi
     expect((await gate({ profiles: ['crypto-security-reviewer'] })).kind).toBe('release-pr')
   })
 
+  it('(a) holds when an unrelated dependency happens to pin the release version — the 0.20.2 collision (#2290)', async () => {
+    // Release 0.20.2: Cargo.lock also pinned `toml_edit 0.20.2`. knope leaves
+    // that line alone, so the release diff must too, whatever CURRENT is today.
+    const LOCK = 'apps/desktop/Cargo.lock'
+    const collide = `[[package]]\nname = "zz-collides-with-the-release"\nversion = "${CURRENT}"\n`
+    const r = realDiff((d) => knopeBump(d), (d) => { writeFileSync(join(d, LOCK), `${readFileSync(join(d, LOCK), 'utf8')}\n${collide}`) })
+    const lockHunk = r.diff.split('diff --git ').find((h) => h.startsWith(`a/${LOCK} `)) ?? ''
+    expect(lockHunk.split('\n').filter((l) => /^[-+]version/.test(l))).toEqual([`-version = "${CURRENT}"`, `+version = "${NEXT}"`])
+    const o = await gate({ diff: r.diff, files: r.files })
+    expect(o.kind).toBe('release-pr')
+  })
+
   // ── (b) nothing else can reach that green ─────────────────────────────
   it('(b) the IDENTICAL diff on any other branch is not a release PR — the pre-fix red, unchanged', async () => {
     for (const branch of ['fleet/shared/1', 'feat/release', 'releases', 'release-0.19.20', 'main']) {
@@ -2765,12 +2819,7 @@ describe('rail: the knope release PR concludes green without a review, and nothi
         const f = join(d, 'apps/desktop/Cargo.toml')
         writeFileSync(f, readFileSync(f, 'utf8').replace('[package]', '[package]\nbuild = "evil.rs"'))
       }],
-      ['a downgrade', (d) => {
-        for (const p of VERSIONED) {
-          const f = join(d, p)
-          writeFileSync(f, readFileSync(f, 'utf8').replaceAll(`"${CURRENT}"`, '"0.0.1"').replaceAll(`>${CURRENT}<`, '>0.0.1<'))
-        }
-      }],
+      ['a downgrade', (d) => { knopeBump(d, '0.0.1') }],
       ['a versioned file bumped to a DIFFERENT version', (d) => {
         knopeBump(d)
         const f = join(d, 'deploy/helm/llamenos/Chart.yaml')
