@@ -1,0 +1,56 @@
+---
+# Pre-deploy migration safety gate — scripts/check-migration-safety.ts --target.
+#
+# The app image migrates its database on every container start
+# (deploy/docker/docker-entrypoint.sh), so this runs BEFORE the new image's
+# container is created: the image about to be deployed judges exactly the
+# migration files it will apply, against this database's ledger and live
+# catalog, and refuses to migrate without a pre-upgrade backup taken after the
+# database's last schema change (operator decision C1). It only reads; a
+# refusal leaves the running container and the database untouched.
+#
+# Its target is the app's own rendered .env.app (DATABASE_URL, from vars.yml).
+# Nothing here is known to, or run by, GitHub. docs/runbooks/migrations.md.
+#
+# Expects the new image to be present locally (the caller pulls or loads it)
+# and {{ llamenos_compose_app }} to be rendered for it.
+
+# The newest entry backup-postgres.sh appended to the backup manifest, read on
+# the host that holds the database's backups, and checked against the file it
+# names. An absent manifest yields no entry: the gate then accepts only a
+# deploy that migrates nothing (or a fresh database).
+- name: Find the newest PostgreSQL backup for the migration gate
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dir="{{ backup_base_dir | default(app_dir ~ '/backups') }}"
+    [ -f "$dir/manifest.log" ] || exit 0
+    entry="$(grep '^postgres|' "$dir/manifest.log" | tail -n 1 || true)"
+    [ -n "$entry" ] || exit 0
+    file="$(printf '%s' "$entry" | cut -d'|' -f3)"
+    size="$(printf '%s' "$entry" | cut -d'|' -f4)"
+    actual="$(stat -c%s "$dir/postgres/daily/$file")"
+    if [ "$actual" != "$size" ]; then
+      echo "the backup manifest names $file at $size bytes; the file on disk is $actual" >&2
+      exit 1
+    fi
+    printf '%s\n' "$entry"
+  args:
+    executable: /bin/bash
+  # backup-postgres runs where postgres is placed (its role's own rule): the
+  # first llamenos_db host, or this host when the group is empty.
+  delegate_to: "{{ (groups.get('llamenos_db') or [inventory_hostname]) | first }}"
+  register: _migration_gate_backup
+  changed_when: false
+
+- name: Migration safety gate (the new image judges its migrations against this database)
+  ansible.builtin.command:
+    argv: >-
+      {{ ['docker', 'compose', '-f', llamenos_compose_app, 'run', '--rm', '--no-deps', '-T',
+          '--entrypoint', 'bun', 'app', 'scripts/check-migration-safety.ts', '--target']
+         + (['--backup', _migration_gate_backup.stdout | trim] if (_migration_gate_backup.stdout | trim) else []) }}
+  register: _migration_gate
+  changed_when: false
+
+- name: Show the migration safety gate's verdict
+  ansible.builtin.debug:
+    var: _migration_gate.stdout_lines

@@ -150,7 +150,24 @@ native_smoke() {
   tables="$(docker exec "$pg" psql -h 127.0.0.1 -U llamenos -d llamenos -tAc \
     "select count(*) from information_schema.tables where table_schema='public'")"
   [ "${tables:-0}" -gt 0 ] || { log "FAIL: no tables in the public schema after migrations"; return 1; }
-  log "PASS: SCRAM auth + migrations complete ($tables tables)"
+
+  # The pre-deploy migration gate (deploy/ansible: the app role and
+  # playbooks/update.yml run it from the image about to be deployed, before
+  # that image migrates anything) must load from this image's production
+  # dependencies and read a real ledger and catalog. Against the database just
+  # migrated nothing is pending, so it must report OK without a backup.
+  local gate
+  if ! gate="$(docker run --rm --network "$net" \
+    --read-only --tmpfs /tmp:size=64M --security-opt no-new-privileges:true --cpus 1 \
+    -e DATABASE_URL="postgresql://llamenos:${PG_PASSWORD}@${pg}:5432/llamenos" \
+    --entrypoint bun "$IMAGE" scripts/check-migration-safety.ts --target 2>&1)"; then
+    log "FAIL: the migration safety gate did not pass inside the image"
+    echo "$gate" | tail -20 | sed 's/^/[image-smoke]   gate: /'
+    return 1
+  fi
+  echo "$gate" | sed 's/^/[image-smoke]   gate: /'
+  echo "$gate" | grep -q '^\[migration-safety\] OK' || { log "FAIL: the migration safety gate did not report OK"; return 1; }
+  log "PASS: SCRAM auth + migrations complete ($tables tables); migration safety gate runs in the image"
 }
 
 # ─────────────────────────────────────────────────────────────────────────

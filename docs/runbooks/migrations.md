@@ -2,8 +2,21 @@
 
 ## Purpose
 
-Write a migration the previous release can run against, and get it past the
-`migration-drift` CI job's safety gate (`bun run migration:safety`).
+Write a migration the previous release can run against, get it past the
+migration safety gate, and know what the gate does again before a deploy.
+
+The gate is one program, `scripts/check-migration-safety.ts`, run in two
+places:
+
+| Where | Mode | Judges | Against | Backup |
+|-------|------|--------|---------|--------|
+| CI, the `migration-drift` job | `--ci` | the migrations this change **adds** (git diff against the base) | no database: every object the change does not create is presumed to exist and be read by N-1 | — |
+| Every deploy, before the new image starts (`deploy/ansible`) | `--target` | the migrations the database's **ledger has not applied** | the live catalog of the database about to be migrated, and the release it is actually running | required whenever anything is pending |
+
+Both modes run the same `judge()`. They differ only in where its inputs come
+from, so CI and the deploy can never disagree about what a rule means. CI is
+the early, conservative read; the deploy check is the authoritative one,
+because only it can see the real schema.
 
 ## Why every migration must be backward compatible
 
@@ -27,14 +40,15 @@ anything N-1 uses is split across two releases.
 |-------|---------|------------|
 | **Expand** | N | Add the new shape next to the old one: a new column, table or enum value that is nullable or has a default. The code writes both shapes and reads the new one, falling back to the old. |
 | **Backfill** | N | An `UPDATE … WHERE` (or a batched job) copies old into new. The dual write covers rows the old code writes during the rollout. |
-| **Forget** | N+1 | The code stops using the old shape, and the drizzle schema stops declaring it. `drizzle-kit generate` writes a `DROP`. Delete that statement and keep the regenerated snapshot. The database keeps the old shape, so the floor (N) still finds it. |
-| **Contract** | N+2 | The migration drops the old shape, with a `drizzle/contract.json` entry. The floor (N+1) no longer declares it, so the gate verifies the entry and accepts the drop. |
+| **Forget** | N+1 | The code stops using the old shape, and the drizzle schema stops declaring it. `drizzle-kit generate` writes a `DROP`. Delete that statement and keep the regenerated snapshot. The database keeps the old shape, so N, still running beside the new pod, finds it. |
+| **Contract** | N+2 | The migration drops the old shape, annotated `-- migration-safety: allow …`. N+1 no longer declares it, so the gate verifies the annotation and accepts the drop. |
 
 Expand and forget can share a release when nothing in the previous release
 still needs the old shape. Contract always comes at least one release after
-forget. The gate accepts a drop only once a **shipped** release no longer
-declares the object. That release is the one running beside the new pod
-during the upgrade.
+forget. The gate accepts a drop only once the release being replaced no longer
+declares the object. At deploy time that is the release the database actually
+runs, read from its ledger, so a deploy that skips the forget release is
+refused even though CI passed the contract against its own base.
 
 ### Rename a column (`users.team_id` → `users.group_id`)
 
@@ -44,14 +58,18 @@ during the upgrade.
 2. **N+1, forget:** the code and the drizzle schema drop `team_id`. Keep the
    generated snapshot and remove the generated `DROP COLUMN` from the `.sql`
    file, leaving a comment that says why.
-3. **N+2, contract:** `ALTER TABLE "users" DROP COLUMN "team_id";` plus a
-   contract entry for `column public.users.team_id`.
+3. **N+2, contract:**
+
+   ```sql
+   -- migration-safety: allow column public.users.team_id because group_id replaced it in 0.21.0 (#1234)
+   ALTER TABLE "users" DROP COLUMN "team_id";
+   ```
 
 Never `RENAME COLUMN`: the previous release still names the old column.
 
 ### Make a column NOT NULL (`notes.author`)
 
-The gate never accepts `SET NOT NULL` on a column the floor declares. It cannot
+The gate never accepts `SET NOT NULL` on a column that already exists. It cannot
 prove that the previous release never writes NULL. Replace the column:
 
 1. **N, expand + backfill:** add `author_v2 text NOT NULL DEFAULT ''`. A
@@ -59,8 +77,8 @@ prove that the previous release never writes NULL. Replace the column:
    which do not name it. Backfill it from `author` and write both.
 2. **N+1, forget** `author` (it is nullable, so INSERTs that omit it succeed).
 3. **N+2, contract:** drop `author`. If the default on `author_v2` is now
-   unwanted, `DROP DEFAULT` on it is accepted only once the floor no longer
-   omits it on INSERT: it has to be a release after N.
+   unwanted, `DROP DEFAULT` on it is accepted only once the release being
+   replaced no longer omits it on INSERT: it has to be a release after N.
 
 ### Change a column's type (`integer` → `bigint`)
 
@@ -78,22 +96,20 @@ table **created in this release** needs no default: N-1 never writes that table.
 ### Add UNIQUE, CHECK or FOREIGN KEY constraints, or a unique index
 
 On columns N-1 already writes, the constraint rejects rows N-1 still produces.
-Constraints on columns or tables the floor does not declare are fine. N-1
+Constraints on columns or tables that do not exist yet are fine. N-1
 leaves those NULL, and UNIQUE, FK and CHECK all accept NULL. On an existing
 column, enforce it in the release **after** the code that guarantees it ships.
 
 ## What the gate checks
 
-`scripts/check-migration-safety.ts`, run in CI's `migration-drift` job, works
-offline in three parts.
+Both modes, in three parts.
 
-1. **Release floor.** `drizzle/compat/release-floor.json` records the previous
-   release: its `version` (must equal `package.json`'s), the migration files it
-   shipped, and its drizzle snapshot (must equal
-   `drizzle/migrations/meta/<snapshotFile>` byte for byte, once parsed). Shipped
-   files may not be deleted, and a new file must sort after every shipped one.
-2. **Destructive-DDL lint.** Every migration file **not** in the floor is split
-   with the runner's own splitter (`scripts/lib/migration-statements.ts`, on
+1. **Order.** Every pending file sorts after every settled one (applied, at
+   deploy time; on the base branch, in CI). The runner applies by filename, so
+   an upgraded database would run an out-of-order file last but a fresh one in
+   the middle.
+2. **Destructive-DDL lint.** Each pending file is split with the runner's own
+   splitter (`scripts/lib/migration-statements.ts`, on
    `--> statement-breakpoint`). Each statement is then parsed with the real
    Postgres 17 grammar (libpg_query, via `@libpg-query/parser`, WASM). It
    rejects:
@@ -101,11 +117,16 @@ offline in three parts.
    - `DROP COLUMN`;
    - `RENAME` of a table, column, view, sequence, type or enum value, and `SET SCHEMA`;
    - any column type change, and `SET NOT NULL`;
-   - `DROP DEFAULT` on a NOT NULL column the floor declares;
-   - `ADD COLUMN … NOT NULL` with no default, on a table the floor declares;
+   - `DROP DEFAULT` on an existing NOT NULL column;
+   - `ADD COLUMN … NOT NULL` with no default, on an existing table;
    - `ADD CONSTRAINT` UNIQUE, PRIMARY KEY, CHECK, FOREIGN KEY or EXCLUDE, and
-     `CREATE UNIQUE INDEX`, on a column the floor declares;
+     `CREATE UNIQUE INDEX`, on an existing column;
    - `TRUNCATE`, and `DELETE` without `WHERE`, at any depth (a CTE included).
+
+   "Existing" is the difference between the modes. `--target` reads it off
+   the database's catalog, including objects no snapshot declares. `--ci`
+   cannot look, so it presumes every table and column exists unless a pending
+   statement creates it, and presumes an unknown column NOT NULL.
 
    A `DO` block runs now, so its body is parsed with the plpgsql grammar and
    every SQL statement inside it is judged the same way. `EXECUTE` of a string
@@ -113,16 +134,24 @@ offline in three parts.
    body (`CREATE FUNCTION … AS $$ … $$`) is a definition and is not judged.
    Comments, string literals and `COMMENT ON` text are never mistaken for
    statements.
-3. **Schema contract.** Every column the floor snapshot declares keeps its type
-   (or a listed widening) and its nullability (or NOT NULL → nullable) in the
-   newest snapshot. Enums keep their values. Every NOT NULL column a floor table
-   gained has a default. An object may be **forgotten** (absent from the newest
-   snapshot) because part 2 still blocks physically dropping it. A forgotten
-   column must not be NOT NULL without a default, or this release's INSERTs,
-   which omit it, fail.
+3. **Schema contract.** Every column the replaced release's snapshot declares
+   keeps its type (or a listed widening) and its nullability (or NOT NULL →
+   nullable) in the newest snapshot. Enums keep their values. Every NOT NULL
+   column a known table gained has a default. An object may be **forgotten**
+   (absent from the newest snapshot) because part 2 still blocks physically
+   dropping it. A forgotten column must not be NOT NULL without a default, or
+   this release's INSERTs, which omit it, fail.
 
-The files the floor lists, including the historical destructive ones, are out
-of scope because they shipped. There is no allow-list of old files.
+**The release being replaced** is the newest drizzle snapshot
+(`drizzle/migrations/meta/NNNN_snapshot.json`) at or before the last settled
+file. Snapshots are immutable, so both modes read it from the tree: CI takes
+the last file on the base branch, the deploy takes the last file the
+database's ledger applied.
+
+CI additionally rejects any edit to, or deletion of, a migration or snapshot
+that exists on the base branch: the runner refuses a file whose checksum
+changed. The deploy check reports the same thing from the ledger before the
+new container starts, instead of after.
 
 ### Limits
 
@@ -132,59 +161,83 @@ of scope because they shipped. There is no allow-list of old files.
 - Part 3 compares drizzle snapshots. A hand-written migration must also update
   the drizzle schema, or `migration:check` (the drift check in the same job)
   fails first.
+- CI's presumptions are conservative: a statement touching a table an earlier,
+  not-yet-deployed change created is judged as if that table were live. Annotate
+  it, or (when the table has never been deployed) fold the change into a new
+  migration that creates it right.
 
-## Contracting: `drizzle/contract.json`
+## Contracting: annotations
 
-A rejected statement whose object the floor **no longer declares** may be
-exempted:
+A rejected statement may be allowed by a comment **inside that statement** (the
+chunk between `--> statement-breakpoint` markers that the runner executes):
 
-```json
-{
-  "description": "…",
-  "exemptions": [
-    {
-      "file": "0071_drop_team_id.sql",
-      "statementIndex": 0,
-      "object": "column public.users.team_id",
-      "reason": "Replaced by group_id in 0.21.0 (#1234); 0.21.0 is the floor and never reads team_id."
-    }
-  ]
-}
+```sql
+-- migration-safety: allow column public.users.team_id because group_id replaced it in 0.21.0 (#1234)
+ALTER TABLE "users" DROP COLUMN "team_id";
 ```
 
-- `statementIndex` counts from 0, in chunks between `--> statement-breakpoint`
-  markers: the same unit the runner executes. The failure message prints both
-  the index and the `object` string to copy.
-- The entry is **verified, never trusted**. If the floor still declares the
-  object, the entry fails the gate. Entries that match no finding, name a
-  shipped file, or have no `reason` also fail.
-- Dynamic SQL and unparseable statements cannot be exempted.
-- When the file ships, knope's release step removes the entry
-  (`scripts/record-release-floor.ts`), so the list never accumulates.
+- `<object>` is the finding's object exactly as the failure message prints it
+  (`table public.x`, `column public.t.c`, `type public.e`, `enum-value public.e.v`,
+  `sequence public.s`, `schema s`). The `because` reason is required.
+- The annotation is **verified, never trusted**. If the release being replaced
+  still declares the object, it fails the gate: in CI against the base branch,
+  and again at deploy time against the release the database actually runs.
+  An annotation that matches no finding in its statement, or a line that starts
+  `-- migration-safety:` but does not parse, also fails.
+- Dynamic SQL and unparseable statements cannot be allowed.
+- The annotation ships inside the file and the image, so the deploy check sees
+  exactly what CI saw.
 
-## How the floor moves
+## Deploying: the pre-deploy check and the mandatory backup
 
-Knope's `prepare-release` workflow (`knope.toml`) runs
-`bun scripts/record-release-floor.ts` after `PrepareRelease` bumps the version
-and before the release commit, then stages the floor and contract files. The
-release PR carries its own floor. Once it merges, every later migration is
-judged against that release. Never edit `release-floor.json` by hand: the gate
-checks it against `package.json` and the shipped snapshot, and CODEOWNERS
-requires a human review of any change to it.
+Migrations run from the image entrypoint on every container start
+(`deploy/docker/docker-entrypoint.sh`); there is no separate migration job. So
+the check runs **before** the new image's container exists, from that image:
 
-The floor was bootstrapped once from `v0.20.1`:
+- `deploy/ansible/roles/llamenos-app/tasks/migration-gate.yml` runs
+  `docker compose run --rm --no-deps app` with the entrypoint replaced by
+  `bun scripts/check-migration-safety.ts --target`. It uses the app's own
+  rendered `.env.app` for `DATABASE_URL` (from the vault-encrypted `vars.yml`),
+  so the image judges exactly the files it would apply, against the database
+  it would apply them to. Nothing about the target is known to GitHub.
+- `playbooks/update.yml` takes the pre-update backup, pulls the new app image,
+  runs the gate, and only then enters the recreate-with-rollback block. A
+  refusal changes nothing, so there is nothing to roll back.
+- `roles/llamenos-app` (and so `playbooks/deploy.yml`) runs the same gate
+  between pulling the image and starting the container, because `just deploy`
+  with a new `llamenos_app_image` also migrates.
+
+**The backup gate (operator decision C1).** When anything is pending,
+`--target` requires `--backup <entry>`: the newest line
+`roles/backup-postgres/templates/backup-postgres.sh.j2` appended to
+`{{ backup_base_dir }}/manifest.log`
+(`postgres|<YYYYMMDD-HHMMSS>|<file>.dump.age|<bytes>|<sha256>|<type>`). The
+task reads it on the database's backup host and checks the file it names
+exists at that size. The gate then refuses unless the backup was taken
+**after the database's last schema change** (so it can restore the schema
+being replaced) and within `--backup-max-age-minutes` (default 60) by the
+database's clock. A deploy that migrates nothing, or a fresh database, needs
+no backup. `just update-quick` skips the backup step, so it only works when
+nothing is pending or `just backup` ran within the hour.
+
+**Helm.** The chart has no pre-upgrade hook for this yet, and provisions no
+database of its own. Before `helm upgrade`, run the same check from the new
+image against the external database, with the manifest entry of the backup you
+just took:
 
 ```bash
-T=$(mktemp -d)
-git archive v0.20.1 drizzle/migrations package.json | tar -x -C "$T"
-mkdir -p "$T/drizzle/compat" && echo '{"description":"","exemptions":[]}' > "$T/drizzle/contract.json"
-bun scripts/record-release-floor.ts --root "$T"
-cp "$T/drizzle/compat/release-floor.json" drizzle/compat/
+kubectl run llamenos-migration-gate --rm -i --restart=Never --image=<new image> \
+  --env DATABASE_URL="$DATABASE_URL" --command -- \
+  bun scripts/check-migration-safety.ts --target --backup '<manifest entry>'
 ```
 
 ## Running it
 
 ```bash
-bun run migration:safety                         # the gate, against this tree
-bun test scripts/check-migration-safety.test.ts  # its rails (bun:test, not a vitest config)
+bun run migration:safety --ci                    # diff-only, against origin/main's merge-base; no database
+bun run migration:safety --ci --base <rev>       # against an explicit base
+DATABASE_URL=… bun scripts/check-migration-safety.ts --target --backup '<entry>'   # against a real database
+bun test scripts/check-migration-safety.test.ts  # rails for both modes' logic (bun:test, no database)
+bunx vitest run --config vitest.integration.config.ts \
+  apps/worker/__tests__/integration/migration-safety-target.test.ts   # --target against a real Postgres
 ```

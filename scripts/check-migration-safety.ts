@@ -24,8 +24,9 @@
  *              runs it inside the image about to be deployed). The pending
  *              files are those the runner's ledger has not applied; the
  *              database they will meet is read off its catalog. It also
- *              enforces the mandatory pre-upgrade backup: --backup must name
- *              a backup taken after the last schema change and recently.
+ *              enforces the mandatory pre-upgrade backup: when anything is
+ *              pending, --backup must name a backup taken after the
+ *              database's last schema change, and recently.
  *
  * What is judged, in both modes:
  *
@@ -1093,6 +1094,33 @@ export interface TargetOptions {
 const CLOCK_SKEW_MS = 5 * 60_000
 
 /**
+ * The mandatory pre-upgrade backup (operator decision C1): before a deploy
+ * migrates a database, a backup must exist that was taken after the
+ * database's last schema change, so it holds the schema being replaced, and
+ * within --backup-max-age-minutes of now by the database's clock. Returns
+ * what is wrong, or undefined.
+ */
+function checkBackup(opts: TargetOptions, now: Date, lastChange: Date | undefined): string | undefined {
+  const proof = opts.backup === undefined ? 'no --backup was given' : parseBackupEntry(opts.backup)
+  if (typeof proof === 'string') return `${proof}. Migrating a database without one is refused (${RUNBOOK}).`
+  if (lastChange !== undefined && proof.takenAt.getTime() < lastChange.getTime()) {
+    return (
+      `${proof.file} was taken at ${proof.takenAt.toISOString()}, before this database's last schema ` +
+      `change at ${lastChange.toISOString()}. It cannot restore the schema being replaced.`
+    )
+  }
+  const ageMs = now.getTime() - proof.takenAt.getTime()
+  if (ageMs > opts.backupMaxAgeMinutes * 60_000 || ageMs < -CLOCK_SKEW_MS) {
+    return (
+      `${proof.file} was taken at ${proof.takenAt.toISOString()} and the database clock reads ` +
+      `${now.toISOString()}; it must be from the last ${opts.backupMaxAgeMinutes} minutes.`
+    )
+  }
+  console.log(`[migration-safety] pre-upgrade backup ${proof.file} (${proof.bytes} bytes, ${proof.takenAt.toISOString()})`)
+  return undefined
+}
+
+/**
  * Reads the ledger and the catalog of the database about to be migrated. The
  * files the ledger has not applied are pending; the catalog is what they meet.
  * A database with neither ledger nor schema is fresh: no previous release runs
@@ -1164,36 +1192,15 @@ export async function targetInput(opts: TargetOptions): Promise<GateInput> {
       }
     }
 
-    // ── The mandatory pre-upgrade backup ──────────────────────────────────────
-    const proof = opts.backup === undefined ? 'no --backup was given' : parseBackupEntry(opts.backup)
-    if (typeof proof === 'string') {
-      preflight.push({ message: `pre-upgrade backup: ${proof}. Upgrading a database without one is refused (${RUNBOOK}).` })
-    } else {
-      const ageMs = now.getTime() - proof.takenAt.getTime()
-      if (lastChange !== undefined && proof.takenAt.getTime() < lastChange.getTime()) {
-        preflight.push({
-          message:
-            `pre-upgrade backup: ${proof.file} was taken at ${proof.takenAt.toISOString()}, before this ` +
-            `database's last schema change at ${lastChange.toISOString()}. It cannot restore the schema being replaced.`,
-        })
-      } else if (ageMs > opts.backupMaxAgeMinutes * 60_000 || ageMs < -CLOCK_SKEW_MS) {
-        preflight.push({
-          message:
-            `pre-upgrade backup: ${proof.file} was taken at ${proof.takenAt.toISOString()} and the database ` +
-            `clock reads ${now.toISOString()}; it must be from the last ${opts.backupMaxAgeMinutes} minutes.`,
-        })
-      } else {
-        console.log(`[migration-safety] pre-upgrade backup ${proof.file} (${proof.bytes} bytes, ${proof.takenAt.toISOString()})`)
-      }
+    const pending = files.filter((f) => !applied.has(f))
+    const backupProblem = pending.length === 0 ? undefined : checkBackup(opts, now, lastChange)
+    if (pending.length === 0) {
+      console.log('[migration-safety] nothing pending: this deploy does not change the schema, so no backup is required')
+    } else if (backupProblem !== undefined) {
+      preflight.push({ message: `pre-upgrade backup: ${backupProblem}` })
     }
 
-    return {
-      root: opts.root,
-      settled: files.filter((f) => applied.has(f)),
-      pending: files.filter((f) => !applied.has(f)),
-      live,
-      preflight,
-    }
+    return { root: opts.root, settled: files.filter((f) => applied.has(f)), pending, live, preflight }
   } finally {
     await sql.close()
   }

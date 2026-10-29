@@ -109,6 +109,10 @@ COPY --chown=llamenos:llamenos --from=rust-builder /build/packages/crypto/dist/s
 COPY --chown=llamenos:llamenos drizzle/migrations/ drizzle/migrations/
 COPY --chown=llamenos:llamenos scripts/run-migrations.ts scripts/run-migrations.ts
 COPY --chown=llamenos:llamenos scripts/lib/migration-statements.ts scripts/lib/migration-statements.ts
+# Pre-deploy migration safety gate, run from this image before it replaces the
+# running one (deploy/ansible/playbooks/update.yml, --target): it judges exactly
+# the migration files this image will apply. docs/runbooks/migrations.md.
+COPY --chown=llamenos:llamenos scripts/check-migration-safety.ts scripts/check-migration-safety.ts
 # Startup invariant check for Bun's native text layer (run by the entrypoint)
 COPY --chown=llamenos:llamenos scripts/verify-runtime.ts scripts/verify-runtime.ts
 

@@ -19,6 +19,7 @@ on:
       - 'scripts/verify-runtime.ts'
       - 'scripts/run-migrations.ts'
       - 'scripts/lib/migration-statements.ts'
+      - 'scripts/check-migration-safety.ts'
       - 'drizzle/migrations/**'
       - 'bun.lockb'
       - '.github/workflows/image-smoke.yml'

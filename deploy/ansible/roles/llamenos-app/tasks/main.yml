@@ -61,6 +61,11 @@
     state: present
     recreate: never
 
+# Before the container (re)starts and migrates: deploy.yml reaches here with a
+# new image whenever llamenos_app_image changes, not only update.yml.
+- name: Judge the image's migrations against this database before it starts
+  ansible.builtin.include_tasks: migration-gate.yml
+
 - name: Start app service
   community.docker.docker_compose_v2:
     project_src: "{{ app_dir }}/services/app"

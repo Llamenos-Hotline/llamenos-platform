@@ -3,7 +3,8 @@
 #
 # Performs a health-check-gated rolling update:
 # 1. Snapshot current per-service compose/env files and image versions (for rollback)
-# 2. Run pre-update backup
+# 2. Run pre-update backup, then the migration safety gate (the new app image
+#    judges its migrations against the live database; refuses without a backup)
 # 3. Pull new images and recreate each target service in dependency order,
 #    health-gating as each one restarts
 # 4. Health-check the full stack
@@ -45,7 +46,10 @@
   vars:
     # Which services to update: "all" or comma-separated list (e.g., "app" or "app,caddy")
     update_services: all
-    # Skip pre-update backup (faster, less safe)
+    # Skip the pre-update backup. The migration safety gate still refuses to
+    # migrate without a backup from the last 60 minutes that postdates the
+    # database's last schema change, so this only speeds up an update that
+    # migrates nothing, or one that follows a fresh `just backup`.
     update_skip_backup: false
     # Number of health check retries (each retry waits health_check_delay seconds)
     health_check_retries: 30
@@ -131,6 +135,27 @@
           tags: [update, backup]
       when: not (update_skip_backup | bool)
       tags: [update, backup]
+
+    # The new app image migrates the database the moment its container starts,
+    # so it judges its own migrations first: against this database's ledger and
+    # live catalog, and only with the backup just taken (it refuses to migrate
+    # without one newer than the last schema change). Outside the rescue block:
+    # a refusal changes nothing, so there is nothing to roll back.
+    # roles/llamenos-app/tasks/migration-gate.yml; docs/runbooks/migrations.md.
+    - name: Pull the new app image for the migration safety gate
+      ansible.builtin.command: docker compose -f {{ llamenos_compose_app }} pull app
+      changed_when: true
+      when: "'app' in _update_target_names"
+      tags: [update]
+
+    - name: Migration safety gate
+      ansible.builtin.include_role:
+        name: llamenos-app
+        tasks_from: migration-gate
+        apply:
+          tags: [update]
+      when: "'app' in _update_target_names"
+      tags: [update]
 
     # ── Phase 2-4: Update with automatic rollback on failure ───────
     - name: "Perform rolling update (rollback on failure)"
