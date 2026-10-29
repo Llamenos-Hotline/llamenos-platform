@@ -158,9 +158,15 @@ function OnboardingPage() {
   const [errorRetryable, setErrorRetryable] = useState(false)
   const validatingRef = useRef(false)
 
-  // A new link (a deep link opened while this screen is up) starts over.
+  // A new link (a deep link opened while this screen is up) starts over — but
+  // only before this device has minted a key and redeemed an invite. From
+  // 'keypair' on, the account exists and the recovery key on screen is the only
+  // copy, so a link arriving then is ignored rather than allowed to discard it.
+  const stepRef = useRef(step)
+  stepRef.current = step
   useEffect(() => {
     if (!urlCode) return
+    if (stepRef.current === 'keypair' || stepRef.current === 'backup' || stepRef.current === 'done') return
     validatingRef.current = false
     setStep('loading')
   }, [urlCode])

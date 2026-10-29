@@ -80,6 +80,20 @@ Feature: Invite a volunteer and redeem the invite on a fresh desktop install
     And the server should report the invite as already used
     And the invited volunteer should now be a member of the invite's hub
 
+  Scenario: An invite link arriving after redemption does not discard the recovery key
+    Given an admin has created an invite for a new volunteer
+    And the desktop app is simulating a packaged build with no server configured
+    When I load the app
+    And I replace the server address with this app's backend and connect
+    And the volunteer clicks the invite deep link
+    Then I should see the welcome screen for the invited volunteer
+    When I create my PIN
+    And a deep link for a second invite arrives
+    Then the recovery key on screen is still the one for my new account
+    When I save my recovery key
+    Then I should reach profile setup
+    And the invited volunteer should now be a member of the invite's hub
+
   Scenario: An invite link that launched the app goes straight to redemption
     Given an admin has created an invite for a new volunteer
     And the desktop app is simulating a packaged build with no server configured

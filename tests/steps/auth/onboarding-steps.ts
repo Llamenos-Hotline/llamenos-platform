@@ -204,7 +204,7 @@ Then('I should see the welcome screen for the invited volunteer', async ({ page 
   await expect(page.getByTestId(Ids.ONBOARDING_WELCOME)).toContainText(inviteFor(page).name, { timeout: Timeouts.API })
 })
 
-When('I create my PIN and save my recovery key', async ({ page }) => {
+async function createPin(page: Page): Promise<void> {
   await page.getByTestId(Ids.ONBOARDING_GET_STARTED_BTN).click()
   await enterPin(page, TEST_PIN)
   await expect(page.getByTestId(Ids.ONBOARDING_PIN_CONFIRM)).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -212,11 +212,51 @@ When('I create my PIN and save my recovery key', async ({ page }) => {
   // Key generation + redemption happen here; the recovery key only renders
   // once the server has accepted the redemption.
   await expect(page.getByTestId(TestIds.RECOVERY_KEY)).toBeVisible({ timeout: Timeouts.AUTH })
+}
+
+const recoveryKeysByPage = new WeakMap<Page, string>()
+
+When('I create my PIN', async ({ page }) => {
+  await createPin(page)
+  recoveryKeysByPage.set(page, (await page.getByTestId(TestIds.RECOVERY_KEY).textContent())?.trim() ?? '')
+})
+
+When('a deep link for a second invite arrives', async ({ page, backendRequest, workerHub }) => {
+  const res = await apiPost<{ invite: { code: string } }>(backendRequest, '/invites', {
+    name: uniqueName('SecondInvite'), phone: uniquePhone(), roleIds: ['role-volunteer'], hubId: workerHub,
+  })
+  expect(res.status).toBe(201)
+  const second = res.data.invite.code
+  const accepted = await page.evaluate(
+    url => (window as unknown as { __TEST_OPEN_DEEP_LINK__: (u: string) => boolean }).__TEST_OPEN_DEEP_LINK__(url),
+    `llamenos://hub-invite?code=${second}`,
+  )
+  expect(accepted, 'the deep link was refused by the shell').toBe(true)
+  // The app has acted on it once the address carries the new code.
+  await page.waitForURL(url => url.searchParams.get('code') === second, { timeout: Timeouts.NAVIGATION })
+})
+
+Then('the recovery key on screen is still the one for my new account', async ({ page }) => {
+  const shown = recoveryKeysByPage.get(page)
+  expect(shown, 'no recovery key was recorded').toBeTruthy()
+  await expect(page.getByTestId(TestIds.RECOVERY_KEY)).toHaveText(shown!)
+})
+
+When('I save my recovery key', async ({ page }) => {
+  await saveRecoveryKey(page)
+})
+
+async function saveRecoveryKey(page: Page): Promise<void> {
   const download = page.waitForEvent('download', { timeout: Timeouts.API })
   await page.getByTestId(Ids.ONBOARDING_DOWNLOAD_BACKUP_BTN).click()
   await download
   await page.getByTestId(Ids.ONBOARDING_BACKUP_ACK).check()
   await page.getByTestId(Ids.ONBOARDING_CONTINUE_BTN).click()
+}
+
+When('I create my PIN and save my recovery key', async ({ page }) => {
+  await createPin(page)
+  await saveRecoveryKey(page)
 })
 
 Then('I should reach profile setup', async ({ page }) => {
