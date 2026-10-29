@@ -1721,6 +1721,14 @@ jobs:
           ansible-playbook playbooks/check-record-smoke-result.yml \
             -i localhost, -c local -e ansible_become=false
 
+      # Renders the alert-rules template, then runs `promtool check rules` and
+      # the rule unit tests with the prom/prometheus image the role deploys.
+      # The WorkerStalled tests include a gauge that is never published: a
+      # rule that only fires on staleness passes everything else and misses the
+      # outage it exists for (#2323).
+      - name: Prometheus alert rules check and unit tests
+        run: deploy/ansible/roles/llamenos-prometheus/tests/check-alert-rules.sh
+
       # The justfile is every operator entry point — `just backup`,
       # `just restore`, `just deploy`. It sat un-parseable on main with
       # Ansible `{{ x | default(y) }}` expressions embedded in recipes

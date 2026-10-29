@@ -24,11 +24,12 @@ import type { MessagingChannelType, BlastContent, MultiBlastContent, BlastSettin
 import { DEFAULT_BLAST_SETTINGS, resolveBlastContent } from '@shared/types'
 import { TokenBucketRateLimiter } from './rate-limiter'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('blast-worker')
 
 /** How often to poll for work (ms) */
-const POLL_INTERVAL_MS = 10_000
+const POLL_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['blast-delivery']
 
 /** Max deliveries to process per batch per blast */
 const BATCH_SIZE = 50
@@ -114,20 +115,23 @@ export function stopBlastWorker(): void {
  * Main poll loop — find active blasts and process their deliveries.
  */
 async function pollForWork(): Promise<void> {
-  if (!deps || processing) return
+  const workerDeps = deps
+  if (!workerDeps || processing) return
   processing = true
 
   try {
-    const sendingBlasts = await deps.blastsService.getSendingBlasts()
-    if (sendingBlasts.length === 0) return
+    await trackWorkerTick('blast-delivery', async () => {
+      const sendingBlasts = await workerDeps.blastsService.getSendingBlasts()
+      if (sendingBlasts.length === 0) return
 
-    for (const blast of sendingBlasts) {
-      // Re-check blast status (may have been cancelled)
-      const current = await deps.blastsService.getBlast(blast.id)
-      if (current.status !== 'sending') continue
+      for (const blast of sendingBlasts) {
+        // Re-check blast status (may have been cancelled)
+        const current = await workerDeps.blastsService.getBlast(blast.id)
+        if (current.status !== 'sending') continue
 
-      await processBlastBatch(deps, blast.id, blast.hubId ?? '')
-    }
+        await processBlastBatch(workerDeps, blast.id, blast.hubId ?? '')
+      }
+    })
   } catch (err) {
     logger.error('Poll error', { error: String(err) })
   } finally {
