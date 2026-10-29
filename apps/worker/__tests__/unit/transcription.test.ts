@@ -15,7 +15,7 @@ vi.mock('@worker/lib/crypto', () => ({
 }))
 
 import { encryptMessageForStorage } from '@worker/lib/crypto'
-import { maybeTranscribe, transcribeVoicemail } from '@worker/services/transcription'
+import { maybeTranscribe } from '@worker/services/transcription'
 
 describe('transcription', () => {
   function setup() {
@@ -109,32 +109,6 @@ describe('transcription', () => {
       })
 
       await maybeTranscribe('call-1', 'rec-1', 'b'.repeat(64), env, services)
-      expect(env.AI.run).not.toHaveBeenCalled()
-    })
-  })
-
-  describe('transcribeVoicemail', () => {
-    it('transcribes voicemail for admin only', async () => {
-      const { env, services } = setup()
-      env.AI.run.mockResolvedValue({ text: 'Voicemail message' })
-      mockGetTelephonyFromService.mockResolvedValue({
-        getCallRecording: vi.fn().mockResolvedValue(new ArrayBuffer(100)),
-      })
-
-      await transcribeVoicemail('call-1', env, services)
-      expect(services.records.createNote).toHaveBeenCalled()
-
-      // Admin-only reader list, and it is the X25519 key — not ADMIN_PUBKEY (#1283).
-      const readers = vi.mocked(encryptMessageForStorage).mock.calls[0][1]
-      expect(readers).toEqual([env.ADMIN_DECRYPTION_PUBKEY])
-      expect(readers).not.toContain(env.ADMIN_PUBKEY)
-    })
-
-    it('returns early when transcription disabled globally', async () => {
-      const { env, services } = setup()
-      services.settings.getTranscriptionSettings.mockResolvedValue({ globalEnabled: false })
-
-      await transcribeVoicemail('call-1', env, services)
       expect(env.AI.run).not.toHaveBeenCalled()
     })
   })

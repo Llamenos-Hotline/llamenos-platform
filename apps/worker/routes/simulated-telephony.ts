@@ -22,7 +22,7 @@ import { audit } from '../services/audit'
 import { authErrors } from '../openapi/helpers'
 import { isValidE164 } from '../lib/helpers'
 import { isMockTelephonyAllowed } from '../telephony/mock'
-import { simulateIncomingCall, simulateCallerHangup, randomFictionalCallerNumber } from '../services/call-simulation'
+import { simulateIncomingCall, simulateCallerHangup, simulateVoicemail, randomFictionalCallerNumber } from '../services/call-simulation'
 import { ServiceError } from '../services/settings'
 
 /** Fictional hotline number the mock answers for (555-01xx is reserved for fiction). */
@@ -51,6 +51,19 @@ const hangupResponseSchema = z.object({
   ok: z.literal(true),
   callId: z.string(),
   status: z.literal('completed'),
+})
+
+const simulateVoicemailBodySchema = z.object({
+  callId: z.string().min(1),
+  /** The handle the (mock) provider holds the recording under. */
+  recordingSid: z.string().min(1).max(200),
+})
+const simulateVoicemailResponseSchema = z.object({
+  ok: z.literal(true),
+  callId: z.string(),
+  /** Whether the provider confirmed deleting its copy (#2297). */
+  recordingDeletion: z.enum(['deleted', 'failed']),
+  error: z.string().optional(),
 })
 
 const simulatedTelephony = new Hono<AppEnv>()
@@ -179,6 +192,30 @@ simulatedTelephony.post('/simulate/caller-hangup',
     if (!result.ok) return c.json({ error: result.code }, result.status)
     await audit(services.audit, 'simulatedCallerHungUp', c.get('pubkey'), { callId }, undefined, hubId)
     return c.json({ ok: true as const, callId, status: 'completed' as const })
+  },
+)
+
+simulatedTelephony.post('/simulate/voicemail',
+  describeRoute({
+    tags: ['Simulated Telephony'],
+    summary: 'Simulate the caller leaving a voicemail on a simulated call',
+    description: 'Runs the real voicemail processing: the recording is tracked, transcribed if enabled, and deleted at the provider. A recording id starting "mock-undeletable-" makes the mock refuse the deletion.',
+    responses: {
+      200: { description: 'Voicemail recorded; recordingDeletion says whether the provider confirmed deleting it', content: { 'application/json': { schema: resolver(simulateVoicemailResponseSchema) } } },
+      ...authErrors,
+      404: { description: 'Call not found' },
+      409: { description: 'Not a simulated call, or mock telephony is not enabled for this hub' },
+    },
+  }),
+  validator('json', simulateVoicemailBodySchema),
+  async (c) => {
+    const { callId, recordingSid } = c.req.valid('json')
+    const services = c.get('services')
+    const hubId = c.get('hubId') ?? ''
+    const result = await simulateVoicemail({ env: c.env, services, hubId, callId, recordingSid })
+    if (!result.ok) return c.json({ error: result.code }, result.status)
+    await audit(services.audit, 'voicemailReceived', c.get('pubkey'), { callSid: callId }, undefined, hubId)
+    return c.json(result)
   },
 )
 

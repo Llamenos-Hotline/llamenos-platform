@@ -16,7 +16,9 @@ import { MockTelephonyAdapter, MOCK_CALL_SID_PREFIX } from '../telephony/mock'
 import { startParallelRinging } from './ringing'
 import { banHashes } from '../lib/crypto'
 import { publishEvent } from '../lib/ws-events'
-import { KIND_CALL_UPDATE } from '@shared/event-kinds'
+import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL } from '@shared/event-kinds'
+import { ServiceError } from './settings'
+import { processVoicemailRecording, type VoicemailRecordingOutcome } from './voicemail'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('call-simulation')
@@ -93,4 +95,47 @@ export async function simulateCallerHangup(params: {
   await services.calls.endCall(hubId, callId)
   publishEvent(env, KIND_CALL_UPDATE, { type: 'call:update', callId, status: 'completed' }, hubId)
   return { ok: true, callId }
+}
+
+export type SimulateVoicemailResult =
+  | ({ ok: true; callId: string } & VoicemailRecordingOutcome)
+  | { ok: false; status: 404 | 409; code: 'call-not-found' | 'not-a-simulated-call' | 'mock-not-enabled' }
+
+/**
+ * The simulated caller leaves a voicemail the provider holds as `recordingSid`.
+ * Mirrors the `/voicemail-recording` webhook's `completed` branch — mark the
+ * voicemail, close the call, publish `voicemail:new` — and then runs the REAL
+ * voicemail processing (fetch, transcribe, delete at the provider) through the
+ * hub's mock adapter, awaited so the outcome can be returned.
+ */
+export async function simulateVoicemail(params: {
+  env: Env
+  services: Services
+  hubId: string
+  callId: string
+  recordingSid: string
+}): Promise<SimulateVoicemailResult> {
+  const { env, services, hubId, callId, recordingSid } = params
+  if (!callId.startsWith(MOCK_CALL_SID_PREFIX)) {
+    return { ok: false, status: 409, code: 'not-a-simulated-call' }
+  }
+  const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
+  if (!(adapter instanceof MockTelephonyAdapter)) {
+    return { ok: false, status: 409, code: 'mock-not-enabled' }
+  }
+  try {
+    await services.calls.markVoicemail(hubId, callId)
+  } catch (err) {
+    if (err instanceof ServiceError && err.status === 404) return { ok: false, status: 404, code: 'call-not-found' }
+    throw err
+  }
+  try {
+    await services.calls.endCall(hubId, callId)
+  } catch (err) {
+    if (!(err instanceof ServiceError && err.status === 404)) throw err
+  }
+  publishEvent(env, KIND_CALL_VOICEMAIL, { type: 'voicemail:new', callId }, hubId)
+
+  const outcome = await processVoicemailRecording({ env, services, adapter, hubId, callSid: callId, recordingSid })
+  return { ok: true, callId, ...outcome }
 }

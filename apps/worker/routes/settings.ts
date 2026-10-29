@@ -33,6 +33,8 @@ import {
   migrationStatusResponseSchema,
   cleanupMetricsResponseSchema,
   ttlOverridesResponseSchema,
+  recordingPostureResponseSchema,
+  type RecordingPostureResponse,
 } from '@protocol/schemas/settings'
 import {
   geocodingConfigSchema,
@@ -44,7 +46,12 @@ import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { invalidateRolesCache } from '../services/settings'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
-import { getMessagingAdapterFromService } from '../lib/service-factories'
+import {
+  getHubTelephonyFromService,
+  getMessagingAdapterFromService,
+  getTelephonyFromService,
+  resolveHubTelephonyConfig,
+} from '../lib/service-factories'
 import { buildProviderWebhookUrls, webhookOrigin } from '../lib/provider-webhook-urls'
 import { TelegramAdapter } from '../messaging/telegram/adapter'
 import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } from '../lib/helpers'
@@ -471,6 +478,51 @@ settings.patch('/telephony-provider',
     const result = await services.settings.updateTelephonyProvider(body as Parameters<typeof services.settings.updateTelephonyProvider>[0])
     await audit(services.audit, 'telephonyProviderChanged', pubkey, { type: body.type }, undefined, targetHubId(c) ?? null)
     return c.json(result)
+  },
+)
+
+/**
+ * #1505 / #2297: what the hub's telephony provider does with caller audio on
+ * its own, read with the hub's provider credentials — plus every recording
+ * this server asked the provider to make that the provider has not yet
+ * confirmed deleting. Each reading is evidence-backed; a setting the probe
+ * could not read is `unknown` with the reason, never `off`.
+ */
+settings.get('/telephony-provider/recording-posture',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Read provider-side recording and transcription, and recordings still held at the provider',
+    responses: {
+      200: {
+        description: 'Recording posture',
+        content: { 'application/json': { schema: resolver(recordingPostureResponseSchema) } },
+      },
+      404: { description: 'No telephony provider is configured' },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-telephony'),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = (c.get('hubId') as string | undefined) ?? ''
+    const adapter = hubId
+      ? await getHubTelephonyFromService(c.env, services.settings, hubId)
+      : await getTelephonyFromService(c.env, services.settings)
+    if (!adapter) return c.json({ error: 'No telephony provider is configured' }, 404)
+    // The env-var fallback (TWILIO_*) is the only adapter without a stored config.
+    const config = await resolveHubTelephonyConfig(c.env, services.settings, hubId)
+    const [posture, heldAtProvider] = await Promise.all([
+      adapter.probeRecordingPosture({
+        trackedRecordings: (handles) => services.providerRecordings.trackedAmong(handles),
+      }),
+      services.providerRecordings.listHeld(hubId),
+    ])
+    const body: RecordingPostureResponse = {
+      provider: config?.type ?? 'twilio',
+      ...posture,
+      heldAtProvider,
+    }
+    return c.json(body)
   },
 )
 

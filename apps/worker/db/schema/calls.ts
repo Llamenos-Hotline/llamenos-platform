@@ -9,6 +9,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 
@@ -93,5 +94,41 @@ export const callTokens = pgTable(
   (table) => [
     index('call_tokens_call_sid_idx').on(table.callSid),
     index('call_tokens_created_at_idx').on(table.createdAt),
+  ],
+)
+
+// ---------------------------------------------------------------------------
+// provider_recordings — #2297: caller audio the telephony provider still holds
+// ---------------------------------------------------------------------------
+
+/**
+ * One row per recording this server asked the provider to make, for as long as
+ * the provider may still hold it. A row is deleted ONLY when the provider has
+ * confirmed the deletion (`TelephonyAdapter.deleteRecording` resolved) — so the
+ * table is the server's record of caller audio sitting outside the E2EE
+ * boundary, and a refused deletion stays here, visible and retried, instead of
+ * being forgotten.
+ *
+ * `recording_sid` is the adapter's handle from `parseRecordingWebhook`; it is
+ * opaque here and only ever handed back to the same hub's adapter.
+ */
+export const providerRecordings = pgTable(
+  'provider_recordings',
+  {
+    id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+    hubId: text('hub_id').notNull().default(''),
+    callId: text('call_id').notNull(),
+    recordingSid: text('recording_sid').notNull(),
+    /** 'voicemail' — deleted as soon as fetched; 'call' — opted-in call recording, kept for playback until the call record goes. */
+    kind: text('kind').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deleteAttempts: integer('delete_attempts').notNull().default(0),
+    lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
+    lastError: text('last_error'),
+  },
+  (table) => [
+    uniqueIndex('provider_recordings_hub_recording_idx').on(table.hubId, table.recordingSid),
+    index('provider_recordings_call_idx').on(table.callId),
+    index('provider_recordings_kind_created_idx').on(table.kind, table.createdAt),
   ],
 )
