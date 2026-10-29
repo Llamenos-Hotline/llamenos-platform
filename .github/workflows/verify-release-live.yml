@@ -8,16 +8,18 @@
 # the SOURCE builds and tests, never that a tester can install anything.
 # This workflow is the missing check (#721).
 #
-# Six independent surfaces, six independent jobs:
+# Five independent surfaces, five independent jobs (numbered as before):
 #   1. desktop-installer — the latest desktop GitHub Release (`desktop-v<ver>`,
 #      published by tauri-release.yml, and the version must match the latest
 #      `v<ver>` release) carries a signed installer (+ .sig) for every
 #      required platform, and each installer's SHA-256 matches CHECKSUMS.txt.
 #      This is how internal-beta testers actually install desktop.
-#   2. staging-backend — the staging backend's health probes are up,
-#      /api/config is served and reports a completed setup, and the self-hosted
-#      ntfy push relay Android testers are rung through (UnifiedPush, no FCM) is
-#      reachable and reports healthy (#959).
+#   2. (retired) staging-backend — probed a staging host's health, setup
+#      state and ntfy relay. Removed because it only worked if GitHub held
+#      our staging hostnames (vars.STAGING_BASE_URL / vars.STAGING_NTFY_URL),
+#      and deployment internals are kept out of GitHub entirely: the server
+#      is deployed and checked from local (deploy/ansible's smoke-check.yml),
+#      never from Actions. Its number is not reused.
 #   3. play-track — the Play Console internal track's live versionCode
 #      matches what the most recent mobile-release.yml run targeted for
 #      the most recent `android-v<version>` GitHub Release (recorded as
@@ -80,10 +82,6 @@ on:
         description: "Override the desktop updater manifest URL (testing only; a http://127.0.0.1 URL also spins up a matching local CHECKSUMS.txt fixture)"
         required: false
         type: string
-      staging_base_url:
-        description: "Override the staging backend base URL (testing only)"
-        required: false
-        type: string
       play_api_base_url:
         description: "Override the Android Publisher API base URL (testing only, points at a local fixture server)"
         required: false
@@ -131,7 +129,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       desktop-installer: ${{ steps.resolve.outputs.desktop-installer }}
-      staging-backend: ${{ steps.resolve.outputs.staging-backend }}
       play-track: ${{ steps.resolve.outputs.play-track }}
       testflight: ${{ steps.resolve.outputs.testflight }}
       desktop-updater: ${{ steps.resolve.outputs.desktop-updater }}
@@ -152,7 +149,7 @@ jobs:
         run: |
           set -euo pipefail
           CFG=.github/workflows/verify-release-live.surfaces.json
-          KNOWN="desktop-installer staging-backend play-track testflight desktop-updater container-image"
+          KNOWN="desktop-installer play-track testflight desktop-updater container-image"
           jq -e . "$CFG" >/dev/null || { echo "::error::$CFG is not valid JSON"; exit 1; }
 
           # Every known surface must be listed and every listed surface known:
@@ -416,128 +413,6 @@ jobs:
             exit 1
           fi
           echo "All platform artifacts verified against CHECKSUMS.txt."
-
-  # ─── Surface 2: Staging backend ──────────────────────────────────
-  staging-backend:
-    name: "Surface 2 — Staging backend health + setup state + ntfy push relay"
-    needs: config
-    if: ${{ needs.config.outputs.staging-backend == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Start local fixture server (testing only)
-        if: ${{ inputs.staging_base_url != '' && startsWith(inputs.staging_base_url, 'http://127.0.0.1') }}
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/fixture
-          cat > /tmp/fixture/staging_server.py << 'PYEOF'
-          import http.server
-          import json
-
-
-          class Handler(http.server.BaseHTTPRequestHandler):
-              def do_GET(self):
-                  if self.path in ("/health/ready", "/health/live"):
-                      body = json.dumps({"status": "ok"}).encode()
-                  elif self.path == "/v1/health":
-                      body = json.dumps({"healthy": True}).encode()
-                  elif self.path == "/api/config":
-                      body = json.dumps({"setupCompleted": True}).encode()
-                  else:
-                      self.send_response(404)
-                      self.end_headers()
-                      return
-                  self.send_response(200)
-                  self.send_header("Content-Type", "application/json")
-                  self.send_header("Content-Length", str(len(body)))
-                  self.end_headers()
-                  self.wfile.write(body)
-
-              def log_message(self, *args):
-                  pass
-
-
-          http.server.HTTPServer(("127.0.0.1", 8932), Handler).serve_forever()
-          PYEOF
-          nohup python3 /tmp/fixture/staging_server.py >/tmp/fixture-staging.log 2>&1 &
-          for _ in $(seq 1 20); do
-            curl -sf http://127.0.0.1:8932/health/ready -o /dev/null && break
-            sleep 0.25
-          done
-
-      # This used to assert /api/config reported `demoMode: true`, which drove a
-      # test-environment banner. #1604 removed demo mode — there is no demo
-      # product, only the secure hosted shape and the self-hosted one — so the
-      # field no longer exists. `setupCompleted` is what actually says a staging
-      # backend is usable by a tester, and it is asserted in its place rather
-      # than dropping the /api/config check altogether.
-      - name: Verify /health/ready, /health/live, and /api/config setup state
-        env:
-          STAGING_BASE_URL: ${{ inputs.staging_base_url || vars.STAGING_BASE_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${STAGING_BASE_URL:-}" ]; then
-            echo "::error::SURFACE BROKEN: staging backend — no staging base URL is configured (vars.STAGING_BASE_URL is unset); refusing to report green without checking"
-            exit 1
-          fi
-          BASE="${STAGING_BASE_URL%/}"
-          FAILED=0
-
-          for path in /health/ready /health/live; do
-            CODE=$(curl -sS -o /tmp/health-resp.json --max-time 15 -w '%{http_code}' "${BASE}${path}" || echo "000")
-            if [ "$CODE" != "200" ]; then
-              echo "::error::SURFACE BROKEN: staging backend — ${path} returned HTTP $CODE"
-              FAILED=1
-            else
-              echo "OK: ${path} -> 200"
-            fi
-          done
-
-          CODE=$(curl -sS -o /tmp/config-resp.json --max-time 15 -w '%{http_code}' "${BASE}/api/config" || echo "000")
-          if [ "$CODE" != "200" ]; then
-            echo "::error::SURFACE BROKEN: staging backend — /api/config returned HTTP $CODE"
-            FAILED=1
-          else
-            SETUP_COMPLETED=$(jq -r '.setupCompleted // empty' /tmp/config-resp.json 2>/dev/null || echo "")
-            if [ "$SETUP_COMPLETED" != "true" ]; then
-              echo "::error::SURFACE BROKEN: staging backend — /api/config setupCompleted is '${SETUP_COMPLETED:-<missing>}', expected true (an un-onboarded backend is not usable by a tester)"
-              FAILED=1
-            else
-              echo "OK: /api/config setupCompleted=true"
-            fi
-          fi
-
-          if [ "$FAILED" != "0" ]; then
-            exit 1
-          fi
-
-      # Android push is UnifiedPush over a self-hosted ntfy relay — there is
-      # no FCM fallback. A staging backend whose relay is down or was never
-      # deployed is healthy-looking but can never wake a tester's phone for
-      # an incoming call, so this check is unconditional: an unset URL or an
-      # unreachable/unhealthy relay FAILS, it never skips (#959).
-      - name: Verify the ntfy push relay is reachable and healthy
-        env:
-          # The testing-only fixture server (staging_base_url = http://127.0.0.1...)
-          # also serves /v1/health, so the same override exercises this step.
-          STAGING_NTFY_URL: ${{ (startsWith(inputs.staging_base_url, 'http://127.0.0.1') && inputs.staging_base_url) || vars.STAGING_NTFY_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${STAGING_NTFY_URL:-}" ]; then
-            echo "::error::SURFACE BROKEN: staging ntfy push relay — no relay URL is configured (vars.STAGING_NTFY_URL is unset); Android testers cannot be rung without it; refusing to report green without checking"
-            exit 1
-          fi
-          NTFY_BASE="${STAGING_NTFY_URL%/}"
-          CODE=$(curl -sS -o /tmp/ntfy-health.json --max-time 15 -w '%{http_code}' "${NTFY_BASE}/v1/health" || true)
-          if [ "$CODE" != "200" ]; then
-            echo "::error::SURFACE BROKEN: staging ntfy push relay — ${NTFY_BASE}/v1/health returned HTTP $CODE"
-            exit 1
-          fi
-          HEALTHY=$(jq -r '.healthy | tostring' /tmp/ntfy-health.json 2>/dev/null || echo "")
-          if [ "$HEALTHY" != "true" ]; then
-            echo "::error::SURFACE BROKEN: staging ntfy push relay — ${NTFY_BASE}/v1/health answered 200 but healthy is '${HEALTHY:-<missing>}', expected true"
-            exit 1
-          fi
-          echo "OK: ${NTFY_BASE}/v1/health -> 200 healthy=true"
 
   # ─── Surface 3: Play Console internal track ──────────────────────
   play-track:
@@ -1038,7 +913,7 @@ jobs:
   report:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [config, desktop-installer, staging-backend, play-track, testflight, desktop-updater, container-image]
+    needs: [config, desktop-installer, play-track, testflight, desktop-updater, container-image]
     if: always()
     steps:
       - name: Checkout (surfaces config, for the exclusion reasons)
@@ -1081,7 +956,7 @@ jobs:
             echo "|---|---|---|"
           } >> "$SUMMARY"
 
-          for ID in desktop-installer staging-backend play-track testflight desktop-updater container-image; do
+          for ID in desktop-installer play-track testflight desktop-updater container-image; do
             REQUIRED=$(jq -r --arg id "$ID" '.config.outputs[$id]' <<< "$NEEDS_JSON")
             RESULT=$(jq -r --arg id "$ID" '.[$id].result' <<< "$NEEDS_JSON")
             if [ "$REQUIRED" = "true" ]; then
