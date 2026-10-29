@@ -12,4 +12,3 @@ auth
 enrollmentRejectsUnknownInvite
 deviceRegistered
 hubs
-calls role-hub-admin

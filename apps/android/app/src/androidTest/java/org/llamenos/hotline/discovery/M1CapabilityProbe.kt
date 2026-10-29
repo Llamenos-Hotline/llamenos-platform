@@ -508,6 +508,42 @@ class M1CapabilityProbe {
         }
         probe("deviceRegistered", "RESULT registered=$registered messages=${messages.size} sealed to the app's key=$sealedToApp")
         check(sealedToApp >= 1) { fail("deviceRegistered", "no inbound message carries a reader envelope for the app's key") }
+        stateFile.parentFile?.mkdirs()
+        stateFile.writeText("$pubkey\n$hub\n$x25519\n$conversationId\n$sealedToApp\n")
+    }
+
+    /**
+     * Phase 2 of [deviceRegistered] — a new process on the same app data (run without
+     * `pm clear`): cold start, unlock with the PIN. The app must still hold the X25519 key
+     * it registered, the server must still list that key for the user, and a message that
+     * arrives after the relaunch must be sealed to it.
+     */
+    @Test
+    fun deviceRegisteredAfterRestart() {
+        val (pubkey, hub, x25519, conversationId, sealedBefore) = stateFile.readLines()
+        launch()
+        waitForAnyTag("deviceRelaunch", 20_000, "pin-pad", "create-identity", "dashboard-title")
+        probe("deviceRelaunch", "cold start shows: ${visibleTags()}")
+        check(has("pin-pad")) { fail("deviceRelaunch", "cold start did not show PIN unlock") }
+        unlockWithPin("deviceRelaunch", "cold start")
+
+        val appKey = crypto().encryptionPubkeyHex
+        probe("deviceRelaunch", "app x25519 after relaunch=$appKey (registered before=$x25519)")
+        check(appKey == x25519) { fail("deviceRelaunch", "the app's X25519 key changed across a relaunch") }
+        val onServer = pollFor(15_000) { userDeviceKeys(pubkey).any { it == x25519 } }
+        check(onServer) { fail("deviceRelaunch", "the server no longer holds the app's key after a relaunch") }
+
+        backdoor(
+            "deviceRelaunch", "test-simulate/incoming-message",
+            """{"senderNumber":"+15555550188","body":"probe-device-after-relaunch","channel":"sms","hubId":"$hub"}""",
+        )
+        val sealedAfter = json.parseToJsonElement(
+            adminApi("deviceRelaunch", "GET", "/api/hubs/$hub/conversations/$conversationId/messages"),
+        ).jsonObject["messages"]!!.jsonArray.count { m ->
+            m.jsonObject["readerEnvelopes"]!!.jsonArray.any { it.jsonObject["pubkey"]?.jsonPrimitive?.contentOrNull == x25519 }
+        }
+        probe("deviceRelaunch", "RESULT key kept=true server holds it=$onServer sealed to it before=$sealedBefore after=$sealedAfter")
+        check(sealedAfter > sealedBefore.toInt()) { fail("deviceRelaunch", "a message after the relaunch carries no envelope for the app's key") }
     }
 
     /** An inbound SMS creates a conversation; open it, read it, reply. */
