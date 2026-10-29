@@ -66,7 +66,11 @@ export interface ProviderMediaEraser {
 
 type Row = typeof providerRecordings.$inferSelect
 
-/** The stored form of an adapter's account: a hash, never the identifier itself. */
+/**
+ * The stored form of an adapter's account: a SHA-256 fingerprint of
+ * `providerAccountId()`, which by contract is a public identifier, never a
+ * credential — so this is an equality key, not a password hash.
+ */
 export function providerAccountFingerprint(adapter: Pick<TelephonyAdapter, 'providerAccountId'>): string {
   return createHash('sha256').update(adapter.providerAccountId()).digest('hex')
 }
@@ -150,16 +154,15 @@ export class ProviderRecordingsService {
     if (rows.length === 0) return result
 
     let adapter: TelephonyAdapter | null = null
-    let resolveError: string | null = null
+    let resolveError = 'no telephony provider is configured for this hub, so the provider cannot be asked to delete'
     try {
       adapter = await resolveAdapter(filter.hubId)
-      if (!adapter) resolveError = 'no telephony provider is configured for this hub, so the provider cannot be asked to delete'
     } catch (err) {
       resolveError = `the hub's telephony provider could not be loaded: ${errorMessage(err)}`
     }
 
     for (const row of rows) {
-      const error = adapter ? await this.deleteOne(adapter, row) : resolveError!
+      const error = adapter ? await this.deleteOne(adapter, row) : resolveError
       if (error === null) {
         result.deleted++
         continue
@@ -235,7 +238,8 @@ export class ProviderRecordingsService {
     if (filter.callIds) clauses.push(inArray(providerRecordings.callId, filter.callIds.length > 0 ? filter.callIds : ['']))
     if (filter.kind) clauses.push(eq(providerRecordings.kind, filter.kind))
     if (filter.createdBefore) clauses.push(lt(providerRecordings.createdAt, filter.createdBefore))
-    return and(...clauses)!
+    // `and` of a non-empty list is never undefined; the hub clause is always present.
+    return and(...clauses) ?? clauses[0]
   }
 }
 

@@ -41,8 +41,8 @@ interface RecordingPostureResponse {
 
 function lastVoicemail(world: Record<string, unknown>): SimulatedVoicemailResponse {
   const res = getScenarioState(world).lastApiResponse
-  expect(res, 'no voicemail was simulated').toBeDefined()
-  return res!.data as SimulatedVoicemailResponse
+  if (!res) throw new Error('no voicemail was simulated')
+  return res.data as SimulatedVoicemailResponse
 }
 
 async function readPosture(
@@ -58,11 +58,12 @@ When(
   'the simulated caller leaves a voicemail the provider holds as {string}',
   async ({ request, world }, recordingSid: string) => {
     const state = getScenarioState(world)
-    expect(state.callId, 'no simulated call to leave a voicemail on').toBeTruthy()
+    const callId = state.callId
+    if (!callId) throw new Error('no simulated call to leave a voicemail on')
     const res = await apiPost<SimulatedVoicemailResponse>(
       request,
       `/hubs/${state.hubId}/simulated-telephony/simulate/voicemail`,
-      { callId: state.callId!, recordingSid },
+      { callId, recordingSid },
     )
     state.lastApiResponse = res
     setLastResponse(world, res)
@@ -92,10 +93,10 @@ Then("the recording still held at the provider should carry the provider's refus
   const { hubId, callId } = getScenarioState(world)
   const posture = await readPosture(request, hubId)
   const held = posture.heldAtProvider.find(r => r.callId === callId)
-  expect(held, `the refused recording for ${callId} is not tracked`).toBeDefined()
-  expect(held!.kind).toBe('voicemail')
-  expect(held!.deleteAttempts).toBeGreaterThanOrEqual(1)
-  expect(held!.lastError, 'the refusal must be recorded, not swallowed').toBeTruthy()
+  if (!held) throw new Error(`the refused recording for ${callId} is not tracked`)
+  expect(held.kind).toBe('voicemail')
+  expect(held.deleteAttempts).toBeGreaterThanOrEqual(1)
+  expect(held.lastError, 'the refusal must be recorded, not swallowed').toBeTruthy()
 })
 
 Then('the hub call history should contain {int} call with a voicemail', async ({ request, world }, count: number) => {

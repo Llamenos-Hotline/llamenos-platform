@@ -569,11 +569,11 @@ export class TelnyxAdapter implements TelephonyAdapter {
    * runs after `call.recording.saved`, by which time the recording is listed.
    */
   /**
-   * The API key is the only account-scoped value this adapter holds; it is a
-   * secret, so it is only ever stored hashed (see providerAccountId's contract).
+   * The Call Control application (connection) id: not a secret, and a
+   * connection belongs to exactly one Telnyx account. Never the API key.
    */
   providerAccountId(): string {
-    return `telnyx:${this.apiKey}`
+    return `telnyx:${this.connectionId}`
   }
 
   async deleteRecording(recordingSid: string): Promise<void> {
