@@ -108,6 +108,7 @@ COPY --chown=llamenos:llamenos --from=rust-builder /build/packages/crypto/dist/s
 # Copy Drizzle SQL migrations + migration runner with correct ownership
 COPY --chown=llamenos:llamenos drizzle/migrations/ drizzle/migrations/
 COPY --chown=llamenos:llamenos scripts/run-migrations.ts scripts/run-migrations.ts
+COPY --chown=llamenos:llamenos scripts/lib/migration-statements.ts scripts/lib/migration-statements.ts
 # Startup invariant check for Bun's native text layer (run by the entrypoint)
 COPY --chown=llamenos:llamenos scripts/verify-runtime.ts scripts/verify-runtime.ts
 

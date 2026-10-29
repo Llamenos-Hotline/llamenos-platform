@@ -30,8 +30,9 @@
  */
 import { SQL } from 'bun'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { listMigrationFiles, splitMigrationStatements } from './lib/migration-statements'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -63,9 +64,7 @@ const ADVISORY_LOCK_KEY = 7_742_010_914_551
  */
 const SCHEMA_SENTINEL_TABLE = 'users'
 
-const files = readdirSync(migrationsDir)
-  .filter((f) => f.endsWith('.sql'))
-  .sort()
+const files = listMigrationFiles(migrationsDir)
 
 if (files.length === 0) {
   console.log('[migrate] No migration files found')
@@ -474,10 +473,7 @@ try {
     // and is applied strictly, even on a database that was caught up earlier.
     const catchUp = row !== undefined
 
-    const statements = content
-      .split('--> statement-breakpoint')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
+    const statements = splitMigrationStatements(content)
 
     const skippedSql: string[] = []
 

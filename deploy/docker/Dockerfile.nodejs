@@ -61,6 +61,7 @@ COPY tsconfig.json ./
 COPY --from=rust-builder /build/packages/crypto/dist/server/libllamenos_core.so packages/crypto/dist/server/
 COPY drizzle/migrations/ drizzle/migrations/
 COPY scripts/run-migrations.ts scripts/run-migrations.ts
+COPY scripts/lib/migration-statements.ts scripts/lib/migration-statements.ts
 COPY deploy/docker/docker-entrypoint-nodejs.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY deploy/docker/download-page/ public/

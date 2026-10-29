@@ -110,8 +110,9 @@ export function templateName(schemaHash: string): string {
 
 /**
  * Identifies the schema a fresh database gets: every migration file (name and
- * content) plus the runner that applies them, since its idempotency rewrites
- * are part of what "applying" means. Reading ~55 small files costs
+ * content) plus the runner that applies them and the splitter it cuts each
+ * file with, since its idempotency rewrites and statement boundaries are part
+ * of what "applying" means. Reading ~55 small files costs
  * milliseconds, so this runs on every ensure() — a changed migration can never
  * be served from a stale template.
  */
@@ -125,6 +126,9 @@ export function schemaHash(root: string): string {
     outer.update(`${file}\0${sha256(readFileSync(join(migrationsDir, file)))}\n`)
   }
   outer.update(`runner\0${sha256(readFileSync(join(root, 'scripts', 'run-migrations.ts')))}\n`)
+  outer.update(
+    `splitter\0${sha256(readFileSync(join(root, 'scripts', 'lib', 'migration-statements.ts')))}\n`,
+  )
   return outer.digest('hex').slice(0, SCHEMA_HASH_LENGTH)
 }
 

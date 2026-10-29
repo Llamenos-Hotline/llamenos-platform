@@ -125,6 +125,8 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'scripts/check-label-count.sh',
   'scripts/check-migration-drift.sh',
   'scripts/check-migration-drift.ts',
+  'scripts/check-migration-safety.ts',
+  'scripts/check-migration-safety.test.ts',
   'scripts/check-unique-test-names.ts',
   'scripts/typecheck-tests-gate.ts',
   'scripts/eslint-rules/',
@@ -132,6 +134,13 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'scripts/image-smoke.sh',
   'scripts/verify-runtime.ts',
   'scripts/run-migrations.ts',
+  // The migration safety gate's inputs, matching CODEOWNERS: the release
+  // floor scopes the lint and verifies every exemption, and knope writes it
+  // with record-release-floor.ts, so an edit to any of them widens what the
+  // gate lets through.
+  'scripts/record-release-floor.ts',
+  'drizzle/compat/',
+  'drizzle/contract.json',
   'scripts/test-android.sh',
   'scripts/test-backend-bdd.sh',
   'scripts/test-changed.sh',

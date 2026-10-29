@@ -76,20 +76,26 @@ describe('schemaHash', () => {
     mkdirSync(join(root, 'drizzle', 'migrations', 'meta'), { recursive: true })
     mkdirSync(join(root, 'scripts'))
     writeFileSync(join(root, 'scripts', 'run-migrations.ts'), files['runner'] ?? 'runner v1')
+    mkdirSync(join(root, 'scripts', 'lib'))
+    writeFileSync(
+      join(root, 'scripts', 'lib', 'migration-statements.ts'),
+      files['splitter'] ?? 'splitter v1',
+    )
     for (const [name, sql] of Object.entries(files)) {
-      if (name !== 'runner') writeFileSync(join(root, 'drizzle', 'migrations', name), sql)
+      if (name !== 'runner' && name !== 'splitter') writeFileSync(join(root, 'drizzle', 'migrations', name), sql)
     }
     writeFileSync(join(root, 'drizzle', 'migrations', 'meta', '_journal.json'), '{}')
     return root
   }
 
-  test('changes when a migration is edited, added or renamed, or the runner changes', () => {
+  test('changes when a migration is edited, added or renamed, or the runner or its splitter changes', () => {
     const base = schemaHash(repo({ '0000_a.sql': 'CREATE TABLE a();' }))
     expect(schemaHash(repo({ '0000_a.sql': 'CREATE TABLE a();' }))).toBe(base)
     expect(schemaHash(repo({ '0000_a.sql': 'CREATE TABLE b();' }))).not.toBe(base)
     expect(schemaHash(repo({ '0000_a.sql': 'CREATE TABLE a();', '0001_b.sql': '' }))).not.toBe(base)
     expect(schemaHash(repo({ '0000_b.sql': 'CREATE TABLE a();' }))).not.toBe(base)
     expect(schemaHash(repo({ '0000_a.sql': 'CREATE TABLE a();', runner: 'runner v2' }))).not.toBe(base)
+    expect(schemaHash(repo({ '0000_a.sql': 'CREATE TABLE a();', splitter: 'splitter v2' }))).not.toBe(base)
   })
 })
 

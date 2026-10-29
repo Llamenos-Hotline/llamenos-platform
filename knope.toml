@@ -38,6 +38,21 @@ command = "git switch -c release"
 [[workflows.steps]]
 type = "PrepareRelease"
 
+# The release PR records itself as the release floor
+# (drizzle/compat/release-floor.json) — the release every later migration must
+# stay compatible with — and drops the drizzle/contract.json exemptions its
+# migrations no longer need. Runs after PrepareRelease has bumped package.json
+# (the floor's version must equal it) and before the commit, which takes only
+# what is staged. scripts/check-migration-safety.test.ts runs these steps
+# against a scratch repo; docs/runbooks/migrations.md explains the floor.
+[[workflows.steps]]
+type = "Command"
+command = "bun scripts/record-release-floor.ts"
+
+[[workflows.steps]]
+type = "Command"
+command = "git add drizzle/compat/release-floor.json drizzle/contract.json"
+
 [[workflows.steps]]
 type = "Command"
 command = "git commit -m \"chore: prepare release $version\""

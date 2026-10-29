@@ -127,6 +127,14 @@ jobs:
       # push, a bad token, a knope crash) fails the job. This step used to be
       # `continue-on-error: true`, which also swallowed a 403 on push and left
       # release PRs silently dead while the workflow stayed green.
+      # prepare-release runs `bun scripts/record-release-floor.ts` (knope.toml)
+      # to write the release floor into the release commit. The script reads
+      # only the working tree, so no `bun install` is needed.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: "1.3.5"
+
       - name: Prepare release PR
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}

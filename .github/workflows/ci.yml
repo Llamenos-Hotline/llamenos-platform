@@ -2858,6 +2858,17 @@ jobs:
       - name: Check migration drift
         run: bun run migration:check --ci
 
+      # The previous release runs against every schema this tree migrates
+      # (Helm's rolling update, and any rollback), so a migration that drops,
+      # renames, narrows or retypes something it still reads is rejected
+      # here. Offline: judged against drizzle/compat/release-floor.json.
+      # docs/runbooks/migrations.md.
+      - name: Check migration safety against the release floor
+        run: bun run migration:safety --ci
+
+      - name: Test the migration safety gate
+        run: bun test scripts/check-migration-safety.test.ts
+
   docs-guard:
     needs: changes
     # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.

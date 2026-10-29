@@ -18,6 +18,7 @@ on:
       - 'scripts/image-smoke.sh'
       - 'scripts/verify-runtime.ts'
       - 'scripts/run-migrations.ts'
+      - 'scripts/lib/migration-statements.ts'
       - 'drizzle/migrations/**'
       - 'bun.lockb'
       - '.github/workflows/image-smoke.yml'
