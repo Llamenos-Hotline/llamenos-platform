@@ -4737,8 +4737,7 @@
     "unavailableMessage": "Kojonik, man k'o ta jun chik chuyak' ri oyonem awäch wakami. Tab'ana' tachajij jun chik mul. Chawila'.",
     "voicemailPrompt": "Man k'o ta jun chik chuyak' ri oyonem awäch wakami. Tab'ana' taya' jun tzijob'äl chirij ri ch'ab'äl.",
     "voicemailThanks": "Maltiox rech ri atzijob'äl. Chawila'.",
-    "captchaRepeatHint": "To hear the numbers again, press star.",
-    "overLimitMessage": "We are receiving a very high number of calls from this line, so we can't connect you right now. Please try again in a few minutes."
+    "captchaRepeatHint": "To hear the numbers again, press star."
   },
   "enroll": {
     "redeeming": "Joining the hub…",

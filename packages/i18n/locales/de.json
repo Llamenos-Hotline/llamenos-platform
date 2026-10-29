@@ -4732,8 +4732,7 @@
     "unavailableMessage": "Es tut uns leid, im Moment ist niemand erreichbar. Bitte versuchen Sie es später erneut. Auf Wiederhören.",
     "voicemailPrompt": "Im Moment ist niemand verfügbar, um Ihren Anruf entgegenzunehmen. Bitte hinterlassen Sie eine Nachricht nach dem Signalton.",
     "voicemailThanks": "Vielen Dank für Ihre Nachricht. Auf Wiederhören.",
-    "captchaRepeatHint": "Um die Ziffern noch einmal zu hören, drücken Sie die Sterntaste.",
-    "overLimitMessage": "Wir erhalten sehr viele Anrufe von diesem Anschluss und können Sie deshalb gerade nicht verbinden. Bitte versuchen Sie es in ein paar Minuten noch einmal."
+    "captchaRepeatHint": "Um die Ziffern noch einmal zu hören, drücken Sie die Sterntaste."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

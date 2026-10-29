@@ -4732,8 +4732,7 @@
     "unavailableMessage": "抱歉，目前没有人可以接听您的电话。请稍后再试。再见。",
     "voicemailPrompt": "目前没有人能接听您的电话。请在提示音后留言，我们会尽快回复您。",
     "voicemailThanks": "感谢您的留言。再见。",
-    "captchaRepeatHint": "如需再听一遍数字，请按星号键。",
-    "overLimitMessage": "我们正收到来自此线路的大量来电，因此暂时无法为您接通。请过几分钟再试。"
+    "captchaRepeatHint": "如需再听一遍数字，请按星号键。"
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

@@ -4732,8 +4732,7 @@
     "unavailableMessage": "क्षमा करें, इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें। अलविदा।",
     "voicemailPrompt": "इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बीप के बाद एक संदेश छोड़ें।",
     "voicemailThanks": "आपके संदेश के लिए धन्यवाद। अलविदा।",
-    "captchaRepeatHint": "अंक दोबारा सुनने के लिए स्टार दबाएँ।",
-    "overLimitMessage": "इस लाइन से हमें बहुत अधिक कॉल मिल रही हैं, इसलिए हम अभी आपको कनेक्ट नहीं कर सकते। कृपया कुछ मिनट बाद फिर से प्रयास करें।"
+    "captchaRepeatHint": "अंक दोबारा सुनने के लिए स्टार दबाएँ।"
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

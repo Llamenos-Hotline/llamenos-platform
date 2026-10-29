@@ -4732,8 +4732,7 @@
     "unavailableMessage": "Xin lỗi, hiện không có ai sẵn sàng nhận cuộc gọi của bạn. Vui lòng thử lại sau. Tạm biệt.",
     "voicemailPrompt": "Hiện không có ai có thể nhận cuộc gọi của bạn. Vui lòng để lại tin nhắn sau tiếng bíp.",
     "voicemailThanks": "Cảm ơn tin nhắn của bạn. Tạm biệt.",
-    "captchaRepeatHint": "Để nghe lại các số, vui lòng bấm phím sao.",
-    "overLimitMessage": "Chúng tôi đang nhận được rất nhiều cuộc gọi từ đường dây này nên chưa thể kết nối với bạn lúc này. Vui lòng thử lại sau vài phút."
+    "captchaRepeatHint": "Để nghe lại các số, vui lòng bấm phím sao."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

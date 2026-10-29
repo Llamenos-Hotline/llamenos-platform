@@ -4732,8 +4732,7 @@
     "unavailableMessage": "죄송합니다. 현재 전화를 받을 수 있는 사람이 없습니다. 나중에 다시 시도해 주세요. 안녕히 계세요.",
     "voicemailPrompt": "현재 전화를 받을 수 있는 사람이 없습니다. 신호음 후 메시지를 남겨주세요.",
     "voicemailThanks": "메시지를 남겨 주셔서 감사합니다. 안녕히 계세요.",
-    "captchaRepeatHint": "숫자를 다시 들으시려면 별표를 누르세요.",
-    "overLimitMessage": "이 회선에서 매우 많은 전화가 걸려 오고 있어 지금은 연결해 드릴 수 없습니다. 몇 분 후에 다시 시도해 주세요."
+    "captchaRepeatHint": "숫자를 다시 들으시려면 별표를 누르세요."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

@@ -4732,8 +4732,7 @@
     "unavailableMessage": "Desculpe, não há ninguém disponível para atender sua ligação no momento. Por favor, tente novamente mais tarde. Adeus.",
     "voicemailPrompt": "Ninguém está disponível para atender sua ligação no momento. Por favor, deixe uma mensagem após o sinal.",
     "voicemailThanks": "Obrigado pela sua mensagem. Até logo.",
-    "captchaRepeatHint": "Para ouvir os números de novo, pressione asterisco.",
-    "overLimitMessage": "Estamos recebendo um número muito alto de chamadas desta linha, por isso não podemos conectar você agora. Por favor, tente novamente em alguns minutos."
+    "captchaRepeatHint": "Para ouvir os números de novo, pressione asterisco."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

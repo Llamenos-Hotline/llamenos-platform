@@ -4732,8 +4732,7 @@
     "unavailableMessage": "Paumanhin, walang available na sumagot sa iyong tawag sa ngayon. Pakisubukan muli mamaya. Paalam.",
     "voicemailPrompt": "Walang available na makasagot ng iyong tawag ngayon. Mangyaring mag-iwan ng mensahe pagkatapos ng tono.",
     "voicemailThanks": "Salamat sa iyong mensahe. Paalam.",
-    "captchaRepeatHint": "Para marinig muli ang mga numero, pindutin ang star.",
-    "overLimitMessage": "Napakaraming tawag ang natatanggap namin mula sa linyang ito, kaya hindi ka namin maikokonekta ngayon. Pakisubukang muli pagkalipas ng ilang minuto."
+    "captchaRepeatHint": "Para marinig muli ang mga numero, pindutin ang star."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

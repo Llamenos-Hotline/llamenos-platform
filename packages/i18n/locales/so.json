@@ -4737,8 +4737,7 @@
     "unavailableMessage": "Waan ka xunnahay, hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan dib u isku day habeenkii dambe. Nabad gelyo.",
     "voicemailPrompt": "Hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan ka dib fariin dhig dhawaaqa kadib.",
     "voicemailThanks": "Waad ku mahadsan tahay fariintaada. Nabad gelyo.",
-    "captchaRepeatHint": "Si aad mar kale u maqasho lambarada, riix xiddigta.",
-    "overLimitMessage": "Waxaan ka helaynaa wicitaano aad u badan khadkan, sidaa darteed hadda kuma xiri karno. Fadlan isku day mar kale dhowr daqiiqo kadib."
+    "captchaRepeatHint": "Si aad mar kale u maqasho lambarada, riix xiddigta."
   },
   "enroll": {
     "redeeming": "Joining the hub…",

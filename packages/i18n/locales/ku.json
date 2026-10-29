@@ -4737,8 +4737,7 @@
     "unavailableMessage": "Bibore, niha kes tune ku banga we bibersivîne. Ji kerema xwe paşê dîsa biceribînin. Bi xatirê te.",
     "voicemailPrompt": "Niha kes tune ku banga we bibersivîne. Ji kerema xwe piştî dengê bîpê peyamek bihêlin.",
     "voicemailThanks": "Spas ji bo peyama we. Bi xatirê te.",
-    "captchaRepeatHint": "Ji bo ku hejmaran dîsa bibihîzin, li stêrkê bixin.",
-    "overLimitMessage": "Em ji vê xetê gelek zêde bang distînin, ji ber vê yekê em niha nikarin we girê bidin. Ji kerema xwe piştî çend deqîqeyan dîsa biceribînin."
+    "captchaRepeatHint": "Ji bo ku hejmaran dîsa bibihîzin, li stêrkê bixin."
   },
   "enroll": {
     "redeeming": "Joining the hub…",

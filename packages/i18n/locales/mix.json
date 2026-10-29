@@ -4737,8 +4737,7 @@
     "unavailableMessage": "Ndúʼú va̱ʼa, ña íyo ñivi̱ kaʼví nuu̱ ni̱ka̱ʼa̱n vitin. Koto naní inka̱ʼa̱n inka tuku. Saá va̱ʼa.",
     "voicemailPrompt": "Ña íyo ñivi̱ kaʼví nuu̱ ni̱ka̱ʼa̱n vitin. Koto sandaá iin tu̱ʼun saá ndi̱kaa̱ tono.",
     "voicemailThanks": "Tàsi̱kó nuu̱ tu̱ʼun ni̱sandaá. Saá va̱ʼa.",
-    "captchaRepeatHint": "To hear the numbers again, press star.",
-    "overLimitMessage": "We are receiving a very high number of calls from this line, so we can't connect you right now. Please try again in a few minutes."
+    "captchaRepeatHint": "To hear the numbers again, press star."
   },
   "enroll": {
     "redeeming": "Joining the hub…",

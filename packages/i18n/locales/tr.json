@@ -4737,8 +4737,7 @@
     "unavailableMessage": "Üzgünüz, şu anda aramanızı yanıtlayacak kimse yok. Lütfen daha sonra tekrar deneyin. Hoşça kalın.",
     "voicemailPrompt": "Şu anda aramanızı yanıtlayacak kimse yok. Lütfen sinyal sesinden sonra mesajınızı bırakın.",
     "voicemailThanks": "Mesajınız için teşekkür ederiz. Hoşça kalın.",
-    "captchaRepeatHint": "Rakamları tekrar duymak için yıldız tuşuna basın.",
-    "overLimitMessage": "Bu hattan çok sayıda arama alıyoruz, bu nedenle sizi şu anda bağlayamıyoruz. Lütfen birkaç dakika sonra tekrar deneyin."
+    "captchaRepeatHint": "Rakamları tekrar duymak için yıldız tuşuna basın."
   },
   "enroll": {
     "redeeming": "Joining the hub…",

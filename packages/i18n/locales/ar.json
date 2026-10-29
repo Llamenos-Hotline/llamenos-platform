@@ -4732,8 +4732,7 @@
     "unavailableMessage": "نأسف، لا يوجد أحد متاح للرد على مكالمتك في الوقت الحالي. يرجى المحاولة مرة أخرى لاحقاً. مع السلامة.",
     "voicemailPrompt": "لا يوجد أحد متاح للرد على مكالمتك الآن. يرجى ترك رسالة بعد النغمة.",
     "voicemailThanks": "شكراً لرسالتك. مع السلامة.",
-    "captchaRepeatHint": "لسماع الأرقام مرة أخرى، اضغط على زر النجمة.",
-    "overLimitMessage": "نتلقى عددًا كبيرًا جدًا من المكالمات من هذا الخط، لذا لا يمكننا توصيلك الآن. يرجى المحاولة مرة أخرى بعد بضع دقائق."
+    "captchaRepeatHint": "لسماع الأرقام مرة أخرى، اضغط على زر النجمة."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",

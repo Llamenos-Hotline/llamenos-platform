@@ -4737,8 +4737,7 @@
     "unavailableMessage": "We are sorry, no one is available to take your call at this time. Please try again later. Goodbye.",
     "voicemailPrompt": "No one is available to take your call right now. Please leave a message after the tone and we will get back to you.",
     "voicemailThanks": "Thank you for your message. Goodbye.",
-    "captchaRepeatHint": "To hear the numbers again, press star.",
-    "overLimitMessage": "We are receiving a very high number of calls from this line, so we can't connect you right now. Please try again in a few minutes."
+    "captchaRepeatHint": "To hear the numbers again, press star."
   },
   "enroll": {
     "redeeming": "Joining the hub…",

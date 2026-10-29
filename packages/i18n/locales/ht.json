@@ -4732,8 +4732,7 @@
     "unavailableMessage": "Nou regrèt, pa gen moun disponib pou reponn apèl ou a kounye a. Tanpri eseye ankò pita. Orevwa.",
     "voicemailPrompt": "Pa gen moun disponib pou pran apèl ou kounye a. Tanpri kite yon mesaj apre son an.",
     "voicemailThanks": "Mèsi pou mesaj ou. Orevwa.",
-    "captchaRepeatHint": "Pou tande chif yo ankò, peze etwal.",
-    "overLimitMessage": "N ap resevwa twòp apèl ki soti nan liy sa a, kidonk nou pa ka konekte w kounye a. Tanpri eseye ankò nan kèk minit."
+    "captchaRepeatHint": "Pou tande chif yo ankò, peze etwal."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
