@@ -37,10 +37,13 @@ import { clearConfiguredApiBase, getConfiguredApiBase, persistApiBase } from './
 const useTauri = typeof window !== 'undefined' &&
   ('__TAURI_INTERNALS__' in window || !!import.meta.env.PLAYWRIGHT_TEST)
 
+/** The hosted deployment's public address. */
+export const HOSTED_SERVER_ADDRESS = 'https://api.llamenos-hotline.org'
+
 /** Same-origin default — dev/test builds reach the backend via Vite's proxy. */
 const DEFAULT_API_BASE = ''
 
-/** sessionStorage handoff from Settings → first-run screen when changing servers. */
+/** sessionStorage handoff of an already-chosen next address → first-run screen, across `leaveServer()`'s reload. */
 const PENDING_SERVER_ADDRESS_KEY = 'llamenos-pending-server-address'
 
 let cachedApiBase: string = DEFAULT_API_BASE
@@ -75,6 +78,18 @@ function isLoopbackHostname(hostname: string): boolean {
 /** True for an absolute `http(s)://` address — false for the relative dev/test default. */
 export function isAbsoluteUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
+}
+
+/**
+ * The hub's public origin, for anything handed to people outside this app (an
+ * invite link). In a packaged build the webview's own origin is the Tauri asset
+ * protocol (`tauri://localhost`), which no one else can open, so this is the
+ * configured backend address. Dev and test builds reach the backend same-origin
+ * through Vite's proxy, so there the page's origin is the server.
+ */
+export function getHubOrigin(): string {
+  const base = getApiBase()
+  return isAbsoluteUrl(base) ? new URL(base).origin : window.location.origin
 }
 
 export async function initApiBase(): Promise<void> {
@@ -112,11 +127,21 @@ export async function setApiBase(url: string): Promise<void> {
   } else {
     cachedApiBase = origin
   }
+  // A server is configured now, so any address staged for the first-run
+  // screen has been used (or overtaken) — never leave it to be auto-submitted
+  // the next time that screen appears.
+  clearPendingServerAddress()
 }
 
 /**
  * Forget the configured backend address so `needsServerAddress()` shows the
  * first-run screen again.
+ *
+ * Only half of leaving a server: it does not end the session bound to the old
+ * one, and a reload after it alone carries that session — the token in
+ * sessionStorage and an unlocked Rust CryptoState — to whatever server is
+ * configured next (#1166). Leave a server through `leaveServer()`
+ * (server-switch.ts), which tears the session down first, then calls this.
  *
  * `cachedApiBase` is intentionally only mutated AFTER `clearConfiguredApiBase()`
  * resolves, not before it. `needsServerAddress()` reads `cachedApiBase` live on
@@ -124,21 +149,17 @@ export async function setApiBase(url: string): Promise<void> {
  * clear, opens a window where the rest of the app already believes no server
  * is configured while the persisted config (and any in-flight confirmation,
  * e.g. the native dialog gating `api_config_clear` — #788) hasn't actually
- * cleared yet. Any state change during that window (this function's only
- * caller also calls `keyManager.lock()` and `setActiveHub(null)` immediately
- * before this) reactively remounts `ServerAddressScreen`, which consumes the
- * staged pending address and auto-submits it — straight into a health probe
- * that the Rust/mock IPC refuses with "a server is already configured",
- * because it still is. That one-shot probe failure permanently strands the
- * user on an empty first-run screen with no address left to retry, since the
- * pending address was already consumed by the premature mount. Reordering so
- * `cachedApiBase` only flips once the clear has genuinely completed collapses
- * this window to nothing — the very next statement in the caller is
- * `window.location.reload()`, so a real reload follows immediately instead of
- * a reactive swap racing an in-flight clear. It also means a rejected/canceled
- * confirmation (the whole point of #788's gate) leaves `cachedApiBase`
- * untouched, rather than wrongly showing "unconfigured" for a clear that
- * never happened.
+ * cleared yet. Any state change during that window (`leaveServer()` locks the
+ * key manager, which re-renders auth consumers, just before this) could
+ * reactively remount `ServerAddressScreen` and have it consume a staged pending
+ * address and auto-submit it — straight into a health probe that the Rust/mock
+ * IPC refuses with "a server is already configured", because it still is,
+ * stranding the user on an empty first-run screen. Flipping `cachedApiBase`
+ * only once the clear has genuinely completed closes that window; `leaveServer()`
+ * also stages the next address only after this resolves and then reloads
+ * without yielding. It also means a rejected/canceled confirmation (the whole
+ * point of #788's gate) leaves `cachedApiBase` untouched, rather than wrongly
+ * showing "unconfigured" for a clear that never happened.
  */
 export async function resetApiBase(): Promise<void> {
   if (useTauri) {
@@ -249,9 +270,9 @@ export function normalizeServerInput(raw: string): string {
 }
 
 /**
- * Settings → "change server": remember the new address across the reload that
- * ends the old session, so the first-run screen can pick it up and verify it
- * (health probes are only permitted while no server is configured).
+ * Remember an already-chosen next address across the reload that ends the old
+ * session, so the first-run screen can pick it up and verify it (health probes
+ * are only permitted while no server is configured). Set by `leaveServer()`.
  */
 export function stagePendingServerAddress(origin: string): void {
   sessionStorage.setItem(PENDING_SERVER_ADDRESS_KEY, origin)

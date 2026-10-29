@@ -22,7 +22,9 @@ tauri = { version = "=2.11.1", features = ["tray-icon", "isolation"] }
 tauri-plugin-stronghold = "2"
 tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
-tauri-plugin-single-instance = "2"
+# `deep-link`: forwards a second instance's llamenos:// argument (#1128)
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-log = "2"
 tauri-plugin-updater = { version = "2", optional = true }

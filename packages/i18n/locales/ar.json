@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "لقد تمت دعوتك للانضمام كمتطوع، {{volunteerName}}",
-    "welcomeTitle": "مرحباً بك في {{name}}"
+    "welcomeTitle": "مرحباً بك في {{name}}",
+    "haveInviteCode": "لدي رمز دعوة",
+    "newVolunteerHint": "متطوع جديد؟ الصق رمز الدعوة الذي أُرسل إليك عبر Signal.",
+    "enterCodeTitle": "أدخل رمز الدعوة",
+    "enterCodeDescription": "الصق رمز الدعوة من رسالة Signal الخاصة بك.",
+    "codeLabel": "رمز الدعوة",
+    "codePlaceholder": "الصق رمز الدعوة هنا",
+    "codeSentTo": "سيُرسل رمز الدعوة إلى هذا الخادم:",
+    "useDifferentServer": "استخدام خادم آخر",
+    "malformedCode": "لا يبدو هذا رمز دعوة. انسخ الرمز كاملاً من رسالة Signal والصقه مرة أخرى.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

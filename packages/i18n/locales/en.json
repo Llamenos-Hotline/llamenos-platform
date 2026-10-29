@@ -2738,7 +2738,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "You've been invited to join as a volunteer, {{volunteerName}}",
-    "welcomeTitle": "Welcome to {{name}}"
+    "welcomeTitle": "Welcome to {{name}}",
+    "haveInviteCode": "I have an invite code",
+    "newVolunteerHint": "New volunteer? Paste the invite code you were sent over Signal.",
+    "enterCodeTitle": "Enter your invite code",
+    "enterCodeDescription": "Paste the invite code from your Signal message.",
+    "codeLabel": "Invite code",
+    "codePlaceholder": "Paste your invite code here",
+    "codeSentTo": "Your invite code will be sent to this server:",
+    "useDifferentServer": "Use a different server",
+    "malformedCode": "That doesn't look like an invite code. Copy the whole code from your Signal message and paste it again.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

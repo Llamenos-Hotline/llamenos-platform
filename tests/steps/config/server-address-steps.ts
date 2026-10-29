@@ -77,6 +77,26 @@ Given('the desktop app is now simulating a packaged build connected to its own o
   }, origin)
 })
 
+Given('the desktop app is now simulating a packaged build connected to its loopback address', async ({ page }) => {
+  // As above, but configured under a DIFFERENT origin than the page's own: the
+  // same preview server reached by IP literal instead of `localhost`. A packaged
+  // build's webview origin (tauri://localhost) never equals its server's, so a
+  // scenario asserting "built from the server address, not the page origin"
+  // needs the two to differ here too. The preview server allows loopback-origin
+  // CORS (Vite's default), which the mocked Rust proxy's real fetch needs.
+  const page_ = new URL(page.url())
+  const loopback = `${page_.protocol}//127.0.0.1:${page_.port}`
+  await page.addInitScript(() => {
+    (window as unknown as Record<string, unknown>).__TEST_SIMULATE_PACKAGED_TAURI__ = true
+  })
+  await page.evaluate(async (server) => {
+    const apiConfig = (window as unknown as Record<string, unknown>).__TEST_API_CONFIG as
+      { setApiBase: (url: string) => Promise<void> }
+    await apiConfig.setApiBase(server)
+    ;(window as unknown as Record<string, unknown>).__TEST_SIMULATE_PACKAGED_TAURI__ = true
+  }, loopback)
+})
+
 // --- Test backend server lifecycle ---
 
 Given('a real test backend server is running', async ({ page }) => {

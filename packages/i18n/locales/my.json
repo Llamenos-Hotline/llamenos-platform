@@ -889,7 +889,18 @@
     "subtitle": "လုံခြုံသော အရေးပေါ်တုံ့ပြန်မှု ဟော့လိုင်း",
     "title": "သင့်လျှို့ဝှက်သော့",
     "welcomeDescription": "စေတနာ့ဝန်ထမ်းအဖြစ် ပါဝင်ရန် ဖိတ်ကြားထားပါသည်၊ {{volunteerName}}",
-    "welcomeTitle": "{{name}} မှ ကြိုဆိုပါသည်"
+    "welcomeTitle": "{{name}} မှ ကြိုဆိုပါသည်",
+    "haveInviteCode": "ကျွန်ုပ်တွင် ဖိတ်ကြားကုဒ် ရှိသည်",
+    "newVolunteerHint": "စေတနာ့ဝန်ထမ်း အသစ်လား။ Signal မှတစ်ဆင့် ပို့ထားသော ဖိတ်ကြားကုဒ်ကို ကူးထည့်ပါ။",
+    "enterCodeTitle": "သင့်ဖိတ်ကြားကုဒ်ကို ထည့်ပါ",
+    "enterCodeDescription": "သင့် Signal မက်ဆေ့ချ်မှ ဖိတ်ကြားကုဒ်ကို ကူးထည့်ပါ။",
+    "codeLabel": "ဖိတ်ကြားကုဒ်",
+    "codePlaceholder": "သင့်ဖိတ်ကြားကုဒ်ကို ဤနေရာတွင် ကူးထည့်ပါ",
+    "codeSentTo": "သင့်ဖိတ်ကြားကုဒ်ကို ဤဆာဗာသို့ ပို့ပါမည်-",
+    "useDifferentServer": "အခြားဆာဗာ သုံးမည်",
+    "malformedCode": "၎င်းသည် ဖိတ်ကြားကုဒ်နှင့် မတူပါ။ သင့် Signal မက်ဆေ့ချ်မှ ကုဒ်တစ်ခုလုံးကို ကူးယူပြီး ထပ်မံ ကူးထည့်ပါ။",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "ဒေတာအားလုံး ဖျက်မည်",

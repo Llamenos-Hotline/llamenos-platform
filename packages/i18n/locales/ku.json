@@ -889,7 +889,18 @@
     "subtitle": "Xeta krîzê ya ewle",
     "title": "Kilîda Te ya Nepenî",
     "welcomeDescription": "Tu wekî xwebexş hatiyî vexwendin, {{volunteerName}}",
-    "welcomeTitle": "Bi xêr hatî {{name}}"
+    "welcomeTitle": "Bi xêr hatî {{name}}",
+    "haveInviteCode": "Koda min a vexwendinê heye",
+    "newVolunteerHint": "Dilxwazê nû yî? Koda vexwendinê ya ku bi Signal ji te re hatiye şandin bizeliqîne.",
+    "enterCodeTitle": "Koda xwe ya vexwendinê binivîse",
+    "enterCodeDescription": "Koda vexwendinê ji peyama xwe ya Signal bizeliqîne.",
+    "codeLabel": "Koda vexwendinê",
+    "codePlaceholder": "Koda xwe ya vexwendinê li vir bizeliqîne",
+    "codeSentTo": "Koda te ya vexwendinê dê ji vê serverê re were şandin:",
+    "useDifferentServer": "Serverek din bikar bîne",
+    "malformedCode": "Ev wek koda vexwendinê xuya nake. Tevahiya kodê ji peyama xwe ya Signal kopî bike û dîsa bizeliqîne.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Hemû Daneyan Paqij Bike",

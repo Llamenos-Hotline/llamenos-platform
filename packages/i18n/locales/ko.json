@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "자원봉사자로 초대되었습니다, {{volunteerName}}",
-    "welcomeTitle": "{{name}}에 오신 것을 환영합니다"
+    "welcomeTitle": "{{name}}에 오신 것을 환영합니다",
+    "haveInviteCode": "초대 코드가 있습니다",
+    "newVolunteerHint": "새 자원봉사자이신가요? Signal로 받은 초대 코드를 붙여넣으세요.",
+    "enterCodeTitle": "초대 코드 입력",
+    "enterCodeDescription": "Signal 메시지에 있는 초대 코드를 붙여넣으세요.",
+    "codeLabel": "초대 코드",
+    "codePlaceholder": "여기에 초대 코드를 붙여넣으세요",
+    "codeSentTo": "초대 코드는 다음 서버로 전송됩니다:",
+    "useDifferentServer": "다른 서버 사용",
+    "malformedCode": "초대 코드가 아닌 것 같습니다. Signal 메시지에서 코드 전체를 복사해 다시 붙여넣으세요.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

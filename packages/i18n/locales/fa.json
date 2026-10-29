@@ -889,7 +889,18 @@
     "subtitle": "خط اضطراری امن پاسخ‌گویی بحران",
     "title": "کلید محرمانه شما",
     "welcomeDescription": "شما به عنوان داوطلب دعوت شده‌اید، {{volunteerName}}",
-    "welcomeTitle": "به {{name}} خوش آمدید"
+    "welcomeTitle": "به {{name}} خوش آمدید",
+    "haveInviteCode": "کد دعوت دارم",
+    "newVolunteerHint": "داوطلب تازه هستید؟ کد دعوتی را که از طریق Signal برایتان فرستاده شده جای‌گذاری کنید.",
+    "enterCodeTitle": "کد دعوت خود را وارد کنید",
+    "enterCodeDescription": "کد دعوت را از پیام Signal خود جای‌گذاری کنید.",
+    "codeLabel": "کد دعوت",
+    "codePlaceholder": "کد دعوت خود را اینجا جای‌گذاری کنید",
+    "codeSentTo": "کد دعوت شما به این سرور فرستاده می‌شود:",
+    "useDifferentServer": "استفاده از سرور دیگر",
+    "malformedCode": "این به نظر کد دعوت نیست. کل کد را از پیام Signal خود کپی کنید و دوباره جای‌گذاری کنید.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "پاک کردن تمام داده‌ها",

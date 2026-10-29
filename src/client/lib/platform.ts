@@ -98,6 +98,7 @@ export type TauriIpcCommand =
   | 'net_ws_connect'
   | 'net_ws_send'
   | 'net_ws_close'
+  | 'take_pending_invite'
 
 async function tauriInvoke<T>(cmd: TauriIpcCommand, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -1662,6 +1663,28 @@ export function ipcErrorMessage(err: unknown): string {
   if (typeof err === 'string') return err
   if (err instanceof Error) return err.message
   return String(err)
+}
+
+// ── Invite deep links (#1128) ───────────────────────────────────────
+
+/**
+ * Subscribe to the native event raised when a `llamenos://hub-invite` link
+ * reaches the app (apps/desktop/src/deep_link.rs). It carries nothing: the
+ * code is fetched with `takePendingInviteCode()`. Returns an unlisten function.
+ */
+export function onInviteDeepLink(handler: () => void): Promise<() => void> {
+  return platformListen('invite-deep-link', handler)
+}
+
+/**
+ * The invite code a deep link delivered, or `null`. Rust parsed and canonicalised
+ * it and hands it over once, so a second call returns `null`.
+ */
+export async function takePendingInviteCode(): Promise<string | null> {
+  if (useTauri) {
+    return tauriInvoke<string | null>('take_pending_invite')
+  }
+  throw new Error('takePendingInviteCode: not in Tauri context')
 }
 
 /** The configured backend origin, or `null` on first run. */

@@ -889,7 +889,18 @@
     "subtitle": "Güvenli kriz müdahale hattı",
     "title": "Gizli Anahtarınız",
     "welcomeDescription": "Gönüllü olarak katılmaya davet edildiniz, {{volunteerName}}",
-    "welcomeTitle": "{{name}} uygulamasına hoş geldiniz"
+    "welcomeTitle": "{{name}} uygulamasına hoş geldiniz",
+    "haveInviteCode": "Davet kodum var",
+    "newVolunteerHint": "Yeni gönüllü müsünüz? Size Signal üzerinden gönderilen davet kodunu yapıştırın.",
+    "enterCodeTitle": "Davet kodunuzu girin",
+    "enterCodeDescription": "Signal mesajınızdaki davet kodunu yapıştırın.",
+    "codeLabel": "Davet kodu",
+    "codePlaceholder": "Davet kodunuzu buraya yapıştırın",
+    "codeSentTo": "Davet kodunuz bu sunucuya gönderilecek:",
+    "useDifferentServer": "Farklı bir sunucu kullan",
+    "malformedCode": "Bu bir davet koduna benzemiyor. Kodun tamamını Signal mesajınızdan kopyalayıp yeniden yapıştırın.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Tüm Verileri Sil",

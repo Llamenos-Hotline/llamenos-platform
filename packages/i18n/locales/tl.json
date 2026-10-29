@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Inimbitahan kang sumali bilang boluntaryo, {{volunteerName}}",
-    "welcomeTitle": "Maligayang pagdating sa {{name}}"
+    "welcomeTitle": "Maligayang pagdating sa {{name}}",
+    "haveInviteCode": "May invite code ako",
+    "newVolunteerHint": "Bagong boluntaryo? I-paste ang invite code na ipinadala sa iyo sa Signal.",
+    "enterCodeTitle": "Ilagay ang iyong invite code",
+    "enterCodeDescription": "I-paste ang invite code mula sa iyong mensahe sa Signal.",
+    "codeLabel": "Invite code",
+    "codePlaceholder": "I-paste dito ang iyong invite code",
+    "codeSentTo": "Ipapadala ang iyong invite code sa server na ito:",
+    "useDifferentServer": "Gumamit ng ibang server",
+    "malformedCode": "Mukhang hindi ito invite code. Kopyahin ang buong code mula sa iyong mensahe sa Signal at i-paste itong muli.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

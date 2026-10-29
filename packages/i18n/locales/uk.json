@@ -889,7 +889,18 @@
     "subtitle": "Безпечна кризова гаряча лінія",
     "title": "Ваш секретний ключ",
     "welcomeDescription": "Вас запрошено приєднатися як волонтера, {{volunteerName}}",
-    "welcomeTitle": "Ласкаво просимо до {{name}}"
+    "welcomeTitle": "Ласкаво просимо до {{name}}",
+    "haveInviteCode": "У мене є код запрошення",
+    "newVolunteerHint": "Новий волонтер? Вставте код запрошення, який вам надіслали в Signal.",
+    "enterCodeTitle": "Введіть код запрошення",
+    "enterCodeDescription": "Вставте код запрошення з повідомлення в Signal.",
+    "codeLabel": "Код запрошення",
+    "codePlaceholder": "Вставте сюди код запрошення",
+    "codeSentTo": "Код запрошення буде надіслано на цей сервер:",
+    "useDifferentServer": "Використати інший сервер",
+    "malformedCode": "Це не схоже на код запрошення. Скопіюйте код повністю з повідомлення в Signal і вставте його ще раз.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Видалити всі дані",

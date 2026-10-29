@@ -889,7 +889,18 @@
     "subtitle": "Ruchajixik oyonem tzij rech k'ayewal",
     "title": "Ri Awewan Etal",
     "welcomeDescription": "Xat sik'ixik rech yatok achi'el aj samajel, {{volunteerName}}",
-    "welcomeTitle": "Utz apetik pa {{name}}"
+    "welcomeTitle": "Utz apetik pa {{name}}",
+    "haveInviteCode": "Tengo un código de invitación",
+    "newVolunteerHint": "¿Eres voluntario nuevo? Pega el código de invitación que te enviaron por Signal.",
+    "enterCodeTitle": "Introduce tu código de invitación",
+    "enterCodeDescription": "Pega el código de invitación de tu mensaje de Signal.",
+    "codeLabel": "Código de invitación",
+    "codePlaceholder": "Pega aquí tu código de invitación",
+    "codeSentTo": "Tu código de invitación se enviará a este servidor:",
+    "useDifferentServer": "Usar otro servidor",
+    "malformedCode": "Eso no parece un código de invitación. Copia el código completo de tu mensaje de Signal y vuelve a pegarlo.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "panicWipe": {
     "confirm": "Keyujux Ronojel Etamab'al",

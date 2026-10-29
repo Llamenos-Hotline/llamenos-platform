@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Yo envite ou pou w vin volontè, {{volunteerName}}",
-    "welcomeTitle": "Byenveni nan {{name}}"
+    "welcomeTitle": "Byenveni nan {{name}}",
+    "haveInviteCode": "Mwen gen yon kòd envitasyon",
+    "newVolunteerHint": "Nouvo volontè? Kole kòd envitasyon yo te voye ba ou sou Signal la.",
+    "enterCodeTitle": "Antre kòd envitasyon ou",
+    "enterCodeDescription": "Kole kòd envitasyon ki nan mesaj Signal ou a.",
+    "codeLabel": "Kòd envitasyon",
+    "codePlaceholder": "Kole kòd envitasyon ou isit la",
+    "codeSentTo": "Kòd envitasyon ou a pral voye bay sèvè sa a:",
+    "useDifferentServer": "Sèvi ak yon lòt sèvè",
+    "malformedCode": "Sa pa sanble ak yon kòd envitasyon. Kopye tout kòd la nan mesaj Signal ou a epi kole l ankò.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "Sie wurden als Freiwilliger eingeladen, {{volunteerName}}",
-    "welcomeTitle": "Willkommen bei {{name}}"
+    "welcomeTitle": "Willkommen bei {{name}}",
+    "haveInviteCode": "Ich habe einen Einladungscode",
+    "newVolunteerHint": "Neu als Freiwillige*r? Fügen Sie den Einladungscode ein, den Sie über Signal erhalten haben.",
+    "enterCodeTitle": "Einladungscode eingeben",
+    "enterCodeDescription": "Fügen Sie den Einladungscode aus Ihrer Signal-Nachricht ein.",
+    "codeLabel": "Einladungscode",
+    "codePlaceholder": "Einladungscode hier einfügen",
+    "codeSentTo": "Ihr Einladungscode wird an diesen Server gesendet:",
+    "useDifferentServer": "Anderen Server verwenden",
+    "malformedCode": "Das sieht nicht wie ein Einladungscode aus. Kopieren Sie den vollständigen Code aus Ihrer Signal-Nachricht und fügen Sie ihn erneut ein.",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

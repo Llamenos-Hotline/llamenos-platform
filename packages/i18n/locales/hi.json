@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "आपको स्वयंसेवक के रूप में आमंत्रित किया गया है, {{volunteerName}}",
-    "welcomeTitle": "{{name}} में आपका स्वागत है"
+    "welcomeTitle": "{{name}} में आपका स्वागत है",
+    "haveInviteCode": "मेरे पास आमंत्रण कोड है",
+    "newVolunteerHint": "नए स्वयंसेवक हैं? Signal पर भेजा गया आमंत्रण कोड पेस्ट करें।",
+    "enterCodeTitle": "अपना आमंत्रण कोड दर्ज करें",
+    "enterCodeDescription": "अपने Signal संदेश से आमंत्रण कोड पेस्ट करें।",
+    "codeLabel": "आमंत्रण कोड",
+    "codePlaceholder": "अपना आमंत्रण कोड यहाँ पेस्ट करें",
+    "codeSentTo": "आपका आमंत्रण कोड इस सर्वर पर भेजा जाएगा:",
+    "useDifferentServer": "कोई दूसरा सर्वर उपयोग करें",
+    "malformedCode": "यह आमंत्रण कोड जैसा नहीं लगता। अपने Signal संदेश से पूरा कोड कॉपी करें और फिर से पेस्ट करें।",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

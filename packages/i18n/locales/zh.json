@@ -2802,7 +2802,18 @@
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
     "welcomeDescription": "您已被邀请作为志愿者加入，{{volunteerName}}",
-    "welcomeTitle": "欢迎加入 {{name}}"
+    "welcomeTitle": "欢迎加入 {{name}}",
+    "haveInviteCode": "我有邀请码",
+    "newVolunteerHint": "新志愿者？请粘贴通过 Signal 发给你的邀请码。",
+    "enterCodeTitle": "输入你的邀请码",
+    "enterCodeDescription": "粘贴你的 Signal 消息中的邀请码。",
+    "codeLabel": "邀请码",
+    "codePlaceholder": "在此粘贴你的邀请码",
+    "codeSentTo": "你的邀请码将发送到此服务器：",
+    "useDifferentServer": "使用其他服务器",
+    "malformedCode": "这看起来不像邀请码。请从你的 Signal 消息中复制完整的邀请码，然后重新粘贴。",
+    "otherServer": "This invite is for {{server}}, not the server this app is connected to. Ask the person who invited you which server to use.",
+    "inviteWhileSignedIn": "An invite link was opened, but someone is signed in on this device. Sign out first to redeem it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

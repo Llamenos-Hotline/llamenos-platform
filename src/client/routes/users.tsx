@@ -17,6 +17,8 @@ import {
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
 import { generateEphemeralKeypair } from '@/lib/platform'
+import { getHubOrigin } from '@/lib/api-config'
+import { buildInviteLink } from '@/lib/invite-code'
 import { useToast } from '@/lib/toast'
 import { UserPlus, Shield, ShieldCheck, Trash2, Key, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -121,7 +123,7 @@ function UsersPage() {
         </Card>
       )}
 
-      {/* Invite link display */}
+      {/* Invite link display — on the hub's own address, never the webview origin (#1128) */}
       {inviteLink && (
         <Card className="border-green-400/50 bg-green-50 dark:border-green-600/50 dark:bg-green-950/10">
           <CardContent className="space-y-3">
@@ -133,11 +135,12 @@ function UsersPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <code data-testid="invite-link-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 text-xs">{inviteLink}</code>
+              <code data-testid="invite-link-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 font-mono text-xs">{inviteLink}</code>
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => { navigator.clipboard.writeText(inviteLink); toast(t('common.success'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
+                data-testid="copy-invite-link-btn"
+                onClick={() => { navigator.clipboard.writeText(inviteLink); toast(t('setup.inviteCopied'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
                 aria-label={t('a11y.copyToClipboard')}
               >
                 <Copy className="h-3.5 w-3.5" />
@@ -156,7 +159,7 @@ function UsersPage() {
           roles={roles}
           onCreated={(invite) => {
             setInvites(prev => [...prev, invite])
-            setInviteLink(`${window.location.origin}/onboarding?code=${invite.code}`)
+            setInviteLink(buildInviteLink(invite.code, getHubOrigin()))
             setShowInviteForm(false)
           }}
           onCancel={() => setShowInviteForm(false)}
@@ -307,6 +310,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
               <Label htmlFor="invite-name">{t('users.name')}</Label>
               <Input
                 id="invite-name"
+                data-testid="invite-name-input"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 required
@@ -316,6 +320,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
               <Label htmlFor="invite-phone">{t('users.phone')}</Label>
               <PhoneInput
                 id="invite-phone"
+                testId="invite-phone-input"
                 value={phone}
                 onChange={setPhone}
                 required
