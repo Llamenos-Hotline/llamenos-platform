@@ -873,13 +873,17 @@ class CryptoService @Inject constructor() {
     }
 
     /**
-     * Decrypt a server event using Rust-stored server event keys (current + previous epoch).
-     * Returns null if no keys are set or decryption fails with both keys.
+     * Decrypt a relay event with the Rust-stored server event keys (current + previous epoch).
+     *
+     * The server seals each event under an epoch-scoped AAD and pads the plaintext to a
+     * power-of-two bucket (`ws-events.ts` `encryptEventContent`), so the frame's own
+     * [epoch] is required to open it and the padding is stripped in Rust. Returns null
+     * if no keys are set or neither key opens the frame.
      */
-    fun decryptServerEventWithStoredKeys(encryptedHex: String): String? {
+    fun decryptServerEventWithStoredKeys(encryptedHex: String, epoch: Long): String? {
         if (!nativeLibLoaded) return null
         return try {
-            org.llamenos.core.mobileDecryptServerEvent(encryptedHex)
+            org.llamenos.core.mobileDecryptServerEventWithEpoch(encryptedHex, epoch.toULong())
         } catch (_: Exception) {
             null
         }

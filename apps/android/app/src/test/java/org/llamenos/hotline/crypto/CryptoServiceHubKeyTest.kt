@@ -133,7 +133,7 @@ class CryptoServiceHubKeyTest {
 
     @Test
     fun `decryptServerEventWithStoredKeys returns null without native lib`() {
-        val result = cryptoService.decryptServerEventWithStoredKeys("deadbeef")
+        val result = cryptoService.decryptServerEventWithStoredKeys("deadbeef", 1L)
         assertNull(result)
     }
 

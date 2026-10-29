@@ -1,7 +1,9 @@
 package org.llamenos.hotline.api
 
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -11,11 +13,14 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.hub.HubActivityService
+import org.llamenos.hotline.model.AuthMeEventKeysResponse
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
 
@@ -34,7 +39,7 @@ class WebSocketServiceTest {
         decryptResult: String?,
     ): Pair<WebSocketService, HubActivityService> {
         val crypto = mockk<CryptoService>()
-        every { crypto.decryptServerEventWithStoredKeys(any()) } returns decryptResult
+        every { crypto.decryptServerEventWithStoredKeys(any(), any()) } returns decryptResult
         val activity = HubActivityService()
         val service = WebSocketService(
             cryptoService = crypto,
@@ -45,8 +50,82 @@ class WebSocketServiceTest {
         return service to activity
     }
 
-    private fun eventFrame(hubId: String, payload: String = "deadbeef") =
-        """{"type":"event","v":1,"hubId":"$hubId","kind":1000,"payload":"$payload","epoch":1,"ts":1730000000000,"sig":"ab"}"""
+    private fun eventFrame(hubId: String, payload: String = "deadbeef", epoch: Long = 1) =
+        """{"type":"event","v":1,"hubId":"$hubId","kind":1000,"payload":"$payload","epoch":$epoch,"ts":1730000000000,"sig":"ab"}"""
+
+    /**
+     * #2117: the relay seals every frame under an epoch-scoped AAD, so the epoch
+     * the envelope carries must reach the opener. The Rust opener is exercised
+     * against the server's own bytes by `ServerEventInteropTest` (instrumented).
+     */
+    @Test
+    fun `the envelope epoch is handed to the decryptor`() = runBlocking {
+        val crypto = mockk<CryptoService>()
+        every { crypto.decryptServerEventWithStoredKeys("cafe", 20750L) } returns
+            """{"type":"call:ring","callId":"call-1"}"""
+        val service = WebSocketService(
+            cryptoService = crypto,
+            keystoreService = mockk<KeyValueStore>(relaxed = true),
+            hubActivityService = HubActivityService(),
+            apiService = mockk<ApiService>(relaxed = true),
+        )
+
+        val received = async(Dispatchers.Unconfined) { service.typedEvents.first() }
+        service.handleServerMessage(eventFrame("hub-a", payload = "cafe", epoch = 20750))
+
+        assertEquals(LlamenosEvent.CallRing("call-1"), withTimeout(2_000) { received.await() }.event)
+    }
+
+    /** A socket that outlives UTC midnight meets an epoch newer than the stored keys. */
+    @Test
+    fun `a frame no stored key opens is retried once after refreshing the event keys`() = runBlocking {
+        val crypto = mockk<CryptoService>(relaxed = true)
+        every { crypto.decryptServerEventWithStoredKeys("cafe", 20751L) } returnsMany listOf(
+            null,
+            """{"type":"call:ring","callId":"call-2"}""",
+        )
+        val api = mockk<ApiService>(relaxed = true)
+        coEvery { api.getAuthMe() } returns AuthMeEventKeysResponse(
+            serverEventKeyHex = "11".repeat(32),
+            serverEventKeyPrevHex = "22".repeat(32),
+        )
+        val service = WebSocketService(
+            cryptoService = crypto,
+            keystoreService = mockk<KeyValueStore>(relaxed = true),
+            hubActivityService = HubActivityService(),
+            apiService = api,
+        )
+
+        val received = async(Dispatchers.Unconfined) { service.typedEvents.first() }
+        service.handleServerMessage(eventFrame("hub-b", payload = "cafe", epoch = 20751))
+
+        val attributed = withTimeout(5_000) { received.await() }
+        assertEquals("hub-b", attributed.hubId)
+        assertEquals(LlamenosEvent.CallRing("call-2"), attributed.event)
+        verify(exactly = 1) { crypto.setServerEventKeys("11".repeat(32), "22".repeat(32)) }
+    }
+
+    @Test
+    fun `a frame that still fails after the key refresh is dropped`() = runBlocking {
+        val crypto = mockk<CryptoService>(relaxed = true)
+        every { crypto.decryptServerEventWithStoredKeys(any(), any()) } returns null
+        val api = mockk<ApiService>(relaxed = true)
+        coEvery { api.getAuthMe() } returns AuthMeEventKeysResponse(serverEventKeyHex = "11".repeat(32))
+        val activity = HubActivityService()
+        val service = WebSocketService(
+            cryptoService = crypto,
+            keystoreService = mockk<KeyValueStore>(relaxed = true),
+            hubActivityService = activity,
+            apiService = api,
+        )
+
+        val received = async(Dispatchers.Unconfined) { service.typedEvents.first() }
+        service.handleServerMessage(eventFrame("hub-a"))
+
+        assertNull(withTimeoutOrNull(500) { received.await() })
+        assertEquals(0, activity.state("hub-a").activeCallCount)
+        received.cancel()
+    }
 
     /**
      * The regression from #1016: an event arriving from hub B while the UI
@@ -116,6 +195,72 @@ class WebSocketServiceTest {
         service.handleServerMessage("""{"type":"subscribed","hubId":"h","kinds":[1000]}""")
         service.handleServerMessage("""{"type":"pong"}""")
         assertEquals(0, activity.state("h").activeCallCount)
+    }
+
+    // ---- Hub membership gained while connected ----
+
+    private fun authenticatedService(vararg hubs: String): WebSocketService {
+        val service = WebSocketService(
+            cryptoService = mockk<CryptoService>(relaxed = true),
+            keystoreService = mockk<KeyValueStore>(relaxed = true),
+            hubActivityService = HubActivityService(),
+            apiService = mockk<ApiService>(relaxed = true),
+        )
+        service.handleServerMessage(
+            """{"type":"authenticated","hubs":[${hubs.joinToString(",") { "\"$it\"" }}]}""",
+        )
+        assertEquals(WebSocketService.ConnectionState.CONNECTED, service.connectionState.value)
+        return service
+    }
+
+    /**
+     * The relay lists a user's hubs once, at authentication, and never announces a later
+     * membership: a volunteer added to hub B while the app is open hears nothing from B
+     * until the socket re-authenticates.
+     */
+    @Test
+    fun `a hub joined after authentication triggers a re-authentication`() {
+        val service = authenticatedService("hub-a")
+
+        assertTrue(service.syncMemberHubs(listOf("hub-a", "hub-b")))
+    }
+
+    @Test
+    fun `the hubs already subscribed do not trigger a re-authentication`() {
+        val service = authenticatedService("hub-a", "hub-b")
+
+        assertFalse(service.syncMemberHubs(listOf("hub-a", "hub-b")))
+    }
+
+    @Test
+    fun `an unauthenticated socket leaves membership to its next authentication`() {
+        val service = WebSocketService(
+            cryptoService = mockk<CryptoService>(relaxed = true),
+            keystoreService = mockk<KeyValueStore>(relaxed = true),
+            hubActivityService = HubActivityService(),
+            apiService = mockk<ApiService>(relaxed = true),
+        )
+
+        assertFalse(service.syncMemberHubs(listOf("hub-a")))
+    }
+
+    @Test
+    fun `a hub the relay will not list is not re-authenticated for twice`() {
+        val service = authenticatedService("hub-a")
+        assertTrue(service.syncMemberHubs(listOf("hub-a", "hub-b")))
+        // The re-authentication completes; the relay still lists only hub-a.
+        service.handleServerMessage("""{"type":"authenticated","hubs":["hub-a"]}""")
+
+        assertFalse(service.syncMemberHubs(listOf("hub-a", "hub-b")))
+    }
+
+    @Test
+    fun `a second newly joined hub still re-authenticates after an earlier one`() {
+        val service = authenticatedService("hub-a")
+        assertTrue(service.syncMemberHubs(listOf("hub-a", "hub-b")))
+        service.handleServerMessage("""{"type":"authenticated","hubs":["hub-a","hub-b"]}""")
+
+        assertTrue(service.syncMemberHubs(listOf("hub-a", "hub-b", "hub-c")))
     }
 
     // ---- Relay URL resolution (defect 1: was hard-coded to /relay) ----
