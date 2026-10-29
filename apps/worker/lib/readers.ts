@@ -37,8 +37,19 @@ import { resolveEncryptionPubkeys } from './encryption-keys'
 import { adminStateOf, holdsInHub, listHolderPubkeys } from './hub-admin'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from './hpke-recipient'
 
-/** The permission a member must hold IN THE HUB to set or clear its escrow key (A7). */
-export const HUB_ESCROW_MANAGE_PERMISSION = 'hubs:manage-keys'
+/**
+ * What a member must hold IN THE HUB to set, rotate or clear its escrow key.
+ *
+ * A7: "set/rotated by hub admins (`hubs:manage-keys`)". The escrow key reads
+ * every purpose, so installing one hands its holder a reader of everything the
+ * hub seals. Nobody may confer read access they do not hold themselves: the
+ * setter needs `hubs:manage-keys` AND every reader purpose's permissions (which
+ * include the admin minimum). Otherwise a custom role granting only
+ * `hubs:manage-keys` would be a path to reading every note.
+ */
+export const HUB_ESCROW_MANAGE_PERMISSIONS: readonly string[] = [
+  ...new Set(['hubs:manage-keys', ...Object.values(READER_PURPOSE_PERMISSIONS).flat()]),
+]
 
 /** The hub's row as the escrow key needs it; `null` for an unknown hub. */
 async function loadEscrowRow(db: Database, hubId: string): Promise<{ escrowPubkey: string | null } | null> {
@@ -87,7 +98,7 @@ export async function readersFor(db: Database, hubId: string, purpose: ReaderPur
 
 /**
  * Refuse a hub escrow key change by anyone who does not hold
- * {@link HUB_ESCROW_MANAGE_PERMISSION} in that hub's OWN role assignments.
+ * {@link HUB_ESCROW_MANAGE_PERMISSIONS} in that hub's OWN role assignments.
  *
  * The usual route guard resolves hub permissions through
  * `resolveHubPermissions`, which hands a global super-admin `*` in every hub.
@@ -106,10 +117,10 @@ export function assertMayManageHubEscrow(
     status: actor.status ?? 'active',
     hubRoles: actor.hubRoles ?? [],
   })
-  if (!holdsInHub(state, hubId, [HUB_ESCROW_MANAGE_PERMISSION], catalog)) {
+  if (!holdsInHub(state, hubId, HUB_ESCROW_MANAGE_PERMISSIONS, catalog)) {
     throw new ServiceError(
       403,
-      `Setting a hub's escrow key requires ${HUB_ESCROW_MANAGE_PERMISSION} from a role in that hub`,
+      `Managing a hub's escrow key requires ${HUB_ESCROW_MANAGE_PERMISSIONS.join(', ')} from roles in that hub`,
     )
   }
 }

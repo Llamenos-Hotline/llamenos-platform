@@ -645,7 +645,7 @@ When the server receives an inbound message via a messaging webhook (SMS/WhatsAp
 
 1. Server generates a random `message_key`.
 2. Server encrypts the plaintext with AES-256-GCM with **empty AAD** (stored-record format, see the note above).
-3. Server wraps `message_key` for each authorized reader (the assigned volunteer's devices + the admin escrow key `ADMIN_DECRYPTION_PUBKEY`; super-admins are never readers — see the admin invariant in §4.15) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
+3. Server wraps `message_key` for each authorized reader (the assigned volunteer's devices + the instance key `ADMIN_DECRYPTION_PUBKEY`, which is transitional and in no hub reader set — §2.4.2; super-admins are never readers — see the admin invariant in §4.15) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
 4. Plaintext is discarded from memory. The server cannot read stored messages after this point.
 
 ### 2.4.1 Assignee Re-wrap (Client-Mediated)
@@ -784,6 +784,73 @@ session, not for a malicious server. Any further automatic re-wrap of history
 MUST use this same predicate (`mayRewrapHistoryTo`,
 `packages/shared/history-rewrap-gate.ts`).
 
+### 2.4.2 Reader Sets
+
+Every envelope set in §2.3–§2.5 seals one content key to a list of readers.
+Which keys belong on that list is defined once, here, as a function of a hub
+and a **purpose**:
+
+```
+readersFor(hub, purpose) =
+    { d.x25519_pubkey : d a registered device of u,
+                        u an active member of hub with no erasure in flight
+                          and an unrevoked signing key,
+                        u's roles IN hub (users.hub_roles for hub, never the
+                          global users.roles) together grant every permission
+                          in READER_PURPOSE_PERMISSIONS[purpose] }
+  ∪ { hub.escrow_pubkey }   if the hub has one
+```
+
+| Purpose        | Permissions held in the hub                | Operator decision |
+|----------------|--------------------------------------------|-------------------|
+| `admin`        | `settings:manage` + `notes:read-all` (the admin minimum) | D1 |
+| `call-history` | `calls:read-history`                       | D2 |
+
+Rules:
+
+- **Permissions, never roles.** A hub's role catalogue is user-definable, so
+  membership is decided by the permissions a member's roles grant, resolved
+  against the live role definitions (`READER_PURPOSE_PERMISSIONS` in
+  `packages/shared/permissions.ts`, evaluated by `holdsInHub` in
+  `apps/worker/lib/hub-admin.ts`). No role id or name appears in the rule.
+- **The `admin` set is the admin invariant.** Its holders are exactly the
+  admins the hub last-admin invariant (§4.15) refuses to let reach zero, so a
+  hub that keeps an admin keeps an admin reader as soon as that admin registers
+  a device.
+- **Super-admins are not readers** (D1: "Global super-admins are NOT readers of
+  any hub's notes, records, messages or PII by default. A super-admin reads a hub
+  only by being given a role in that hub, like anyone else."). The global
+  `users.roles` is never consulted, so a super-admin's `*` reaches no hub.
+- **The instance-wide `ADMIN_DECRYPTION_PUBKEY` is in no reader set** (D1: "the
+  global `ADMIN_DECRYPTION_PUBKEY` ... [is] removed. A platform-wide decryption
+  key contradicts zero knowledge."). Until every client seals to the reader set,
+  the write guard (§4.7) still *accepts* an envelope addressed to it, as a
+  separately named transitional recipient; it is never returned by
+  `readersFor` and is removed once clients seal to `GET /api/hubs/:hubId/readers`.
+- **The escrow key** is an optional X25519 public key whose secret the hub's
+  admins hold offline (D1: "an optional per-hub escrow/recovery key controlled
+  by the hub"). It reads every purpose (A7). It is set, rotated and removed
+  only by a member holding, in that hub's own role assignments,
+  `hubs:manage-keys` **and** every purpose's permissions — nobody may confer
+  read access they do not hold (`PUT`/`DELETE /api/hubs/:hubId/escrow-key`,
+  §4.15). It may not equal any registered device key or
+  `ADMIN_DECRYPTION_PUBKEY`. Rotation does not re-seal history.
+- **Only X25519 keys.** Every entry is a device encryption key or the escrow
+  key, never an Ed25519 `users.pubkey` (#1021, #1283).
+- **Zero readers is an invariant violation, never a fallback** (A8: "a write
+  with zero readers must never be possible ... refuse, alert the operator, and
+  log loudly. Do NOT add a quarantine or 'store unreadable' fallback."). A
+  writer that finds an empty set refuses the write; the server refuses the
+  escrow removal that would empty a hub's `admin` set.
+- **Readers are fixed at write time.** A reader added later (a new admin, a new
+  device) does not gain earlier records; §2.4.1 describes the one re-wrap that
+  exists.
+
+Clients obtain a hub's set from `GET /api/hubs/:hubId/readers?purpose=<purpose>`
+(§4.15), for the record's own hub — never the active hub, if they differ — and
+seal the author's own device in addition. The purpose is a closed enum: a
+client never names a permission.
+
 ### 2.5 Call Record Metadata Encryption
 
 Active calls remain as plaintext (routing necessity). When a call completes, sensitive metadata is encrypted into an envelope and stored permanently.
@@ -810,7 +877,7 @@ hasVoicemail, hasRecording, recordingSid
 
 #### Algorithm
 
-Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients. A call record has no hub, so the server seals it to the admin escrow key `ADMIN_DECRYPTION_PUBKEY` alone; super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
+Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients. A call record has no hub, so the server seals it to the transitional instance key `ADMIN_DECRYPTION_PUBKEY` alone (in no hub reader set, §2.4.2); super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
 
 ```
 encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
@@ -1855,8 +1922,8 @@ Hub-scoped: `/api/hubs/:hubId/notes/*`
 **Server-side write guards (#2112, #2113).** The server never holds a note's content key, so a malformed write cannot be repaired afterwards; it is refused at the boundary instead:
 
 - `callId` / `conversationId` must name an existing call (live or finished) / conversation **of the hub in the path**. Under `/api/hubs/:hubId` a record of another hub and one that does not exist are both `404` with the same message; on the unscoped mount the record must sit in a hub the caller holds a role in (a record with no hub is global).
-- `adminEnvelopes` must include at least one envelope addressed to a key an admin holds — `ADMIN_DECRYPTION_PUBKEY` or the registered device key of an admin of the note's hub (a member holding an admin role in that hub — the same set the hub last-admin invariant counts; super-admins are never readers). An empty or absent set, or one addressed only to non-admin keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
-- A deployment with **no** resolvable admin recipient at all (no `ADMIN_DECRYPTION_PUBKEY`, no admin of the hub with a registered device) is **refused** with `503` and an operator-visible error log. The hub last-admin invariant guarantees the hub has an admin, so an empty recipient set is a misconfiguration, and storing under it would create a note nobody can ever open. Server-sealed records (inbound messages, call records) are unaffected: the server cannot refuse a caller who has already spoken, so those keep the loud-but-stored contract.
+- `adminEnvelopes` must include at least one envelope addressed to a member of the note's hub's `admin` reader set (§2.4.2: the registered device keys of the members holding the admin minimum in that hub — the same set the hub last-admin invariant counts — and the hub's escrow key; super-admins are never readers), or, transitionally, to `ADMIN_DECRYPTION_PUBKEY`, which shipped clients still seal to and which is in no reader set. An empty or absent set, or one addressed only to other keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
+- A hub with **no** resolvable admin recipient at all (an empty `admin` reader set — no admin of the hub with a registered device and no hub escrow key — and no `ADMIN_DECRYPTION_PUBKEY`) is **refused** with `503` and an operator-visible error log. The hub last-admin invariant guarantees the hub has an admin, so an empty recipient set is a misconfiguration, and storing under it would create a note nobody can ever open. Server-sealed records (inbound messages, call records) are unaffected: the server cannot refuse a caller who has already spoken, so those keep the loud-but-stored contract.
 
 ### 4.8 Calls
 
@@ -2496,22 +2563,22 @@ Response: { "ok": true }
 // global role-super-admin confers no admin authority here, is not counted, and is not a recipient. A
 // super-admin counts only for a hub in which it also holds an admin role in hub_roles, like any member.
 // A hub whose only "admin" is a super-admin therefore has no admin, and its real hub admin cannot leave.
-// The readers of a hub are its admins plus an optional hub-controlled escrow key.
+// The admin readers of a hub are its admins' devices plus its optional escrow key (§2.4.2).
 // POST /hubs creates the hub and its creator's admin assignment atomically, and every change that would
 // leave a hub with none of those -- demoting or removing the member (above), PATCH/DELETE
 // /api/users/:pubkey (deactivate, delete, rewrite hubRoles), editing or deleting the role that confers
 // admin, and account erasure -- is refused with 409 and leaves nothing changed. Erasure of a hub's only
 // admin is deferred, not denied: it succeeds once another admin exists.
 // Envelope guard, same set: POST /notes (and note edit, note replies, client-sealed outbound messages,
-// reports) require at least one envelope addressed to ADMIN_DECRYPTION_PUBKEY (the instance-wide
-// escrow key every shipped client seals to today) or a registered device key of an admin of the
-// RECORD'S hub (422 otherwise). A record with no hub has no hub admins, so only the escrow key reads it.
-// If neither exists -- no ADMIN_DECRYPTION_PUBKEY and no admin device -- the write is REFUSED with 503
-// and an operator-visible error is logged; it is no longer stored.
+// reports) require at least one envelope addressed to a member of the RECORD'S hub's admin reader set
+// (readersFor(hub, admin), §2.4.2: its admins' device keys and its escrow key), or, TRANSITIONALLY, to
+// ADMIN_DECRYPTION_PUBKEY, which every shipped client still seals to and which is in no reader set
+// (422 otherwise). A record with no hub has no reader set, so only the transitional key is accepted.
+// If none exists, the write is REFUSED with 503 and an operator-visible error is logged; it is not stored.
 // What this still does NOT guarantee (tracked in #2190): that a hub admin can open a given note.
-// Clients seal only to ADMIN_DECRYPTION_PUBKEY, so a hub admin reads a note only if its sealer addressed
-// one of their devices. Replacing the instance-wide ADMIN_DECRYPTION_PUBKEY with a per-hub escrow key
-// (B-ADM-CUTOVER) and widening what clients seal to are not yet done.
+// Clients seal only to ADMIN_DECRYPTION_PUBKEY until they seal to GET /api/hubs/:hubId/readers, so a hub
+// admin reads a note only if its sealer addressed one of their devices. Deleting ADMIN_DECRYPTION_PUBKEY
+// from the guard and from every server seal follows the client change.
 // The check is race-free: guards take advisory locks (the role catalog shared, then each affected hub)
 // BEFORE reading role definitions and counting, and a role-definition edit takes the catalog lock exclusively.
 
@@ -2524,6 +2591,33 @@ PUT /api/hubs/:hubId/key
 Permission: system:manage-hubs
 Body: { "envelopes": RecipientKeyEnvelope[] }
 Response: { "ok": true }
+
+GET /api/hubs/:hubId/readers?purpose=admin|call-history
+Auth: Required (hub member)
+Response: { "hubId": string, "purpose": "admin" | "call-history", "recipients": hex64[] }  // HubReadersResponse
+// The hub's reader set for the purpose (§2.4.2): X25519 device keys of every member holding the
+// purpose's permissions in this hub's own role assignments, then the hub escrow key. Never an Ed25519
+// identity key, never ADMIN_DECRYPTION_PUBKEY, never a super-admin's device unless it holds the
+// permissions through a role in this hub. `purpose` outside the enum is 400.
+
+GET /api/hubs/:hubId/escrow-key
+Permission: hubs:read
+Response: { "escrowPubkey"?: hex64 }  // HubEscrowKeyResponse; absent when the hub has none
+
+PUT /api/hubs/:hubId/escrow-key
+Authority: hubs:manage-keys AND every reader purpose's permissions, held through roles IN THIS HUB
+           (users.hub_roles only; a global super-admin's `*` does not count)
+Body: { "escrowPubkey": hex64 }  // SetHubEscrowKeyBody; X25519
+Response: { "ok": true }
+// Installs or rotates the escrow key. 403 without the authority above. 409 when the key is a registered
+// device's X25519 key or equals ADMIN_DECRYPTION_PUBKEY. Audited (hubEscrowKeySet). Rotation does not
+// re-seal history.
+
+DELETE /api/hubs/:hubId/escrow-key
+Authority: as PUT
+Response: { "ok": true }
+// 409 when the escrow key is the hub's only admin reader (no hub admin has a registered device):
+// removing it would empty the admin reader set (A8). Audited (hubEscrowKeyCleared).
 ```
 
 ### 4.16 Setup Wizard
