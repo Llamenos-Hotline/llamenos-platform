@@ -1476,6 +1476,10 @@ async function runReviewGate(): Promise<number> {
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
     // The cache KEY (#2014) — the tree a verdict judged, never the diff.
     headTree: () => ciHeadTree(ctx),
+    // …and the claim half of it (#2336): the title and body the reviewer
+    // judges, from the SAME live read the review set uses below. An
+    // unreadable PR is `undefined`, which means no key and no cache hit.
+    prClaim: async () => facts?.claim,
     requested: request.requested,
     // A push may republish a verdict but never start one (#1284). Passed as
     // its own fact, not inferred from `requested` being false, so the gate
@@ -1877,7 +1881,8 @@ const HANDLERS: Record<string, CommandHandler> = {
     log: ciLog,
     prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
     prDiff: () => ciDiff(ctx),
-    // The cache KEY (#2014) — the same tree the gate step keyed its lookup on.
+    // The cache KEY (#2014) — the same tree the gate step keyed its lookup
+    // on; its claim half is `prClaim` below (#2336).
     headTree: () => ciHeadTree(ctx),
     secondOpinion,
     // The PR's own stated intent, for the `## Pull request` section of every

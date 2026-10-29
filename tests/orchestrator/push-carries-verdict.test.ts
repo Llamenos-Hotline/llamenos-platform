@@ -10,6 +10,7 @@ import {
 } from '../../orchestrator/src/review-cache.js'
 import { REPO } from '../../orchestrator/src/gh.js'
 import { CI_DIFF_FLAGS } from '../../orchestrator/src/ci.js'
+import { claimDigest } from '../../orchestrator/src/review.js'
 
 /**
  * #1394: a push must never start a review. #2014: nor may it conclude green
@@ -38,13 +39,17 @@ const BRANCH = 'fix/fleet-review-not-requested'
 const CURRENT_RUN = 900
 const WORKFLOW_PATH = '.github/workflows/fleet-review.yml'
 const HASH = 'ab'.repeat(32)
+/** The live PR read every scenario shares (`common` below) — the title and
+ *  body the gate keys the cache on alongside the tree (#2336). */
+const CLAIM = { title: 'fix: shift math', body: '' }
+const CLAIM_DIGEST = claimDigest(CLAIM)
 
 interface FakeRun { id: number; head_sha: string; html_url: string; path?: string }
 interface FakeArtifact { id: number; name: string; expired: boolean }
 
 const run = (id: number, sha = `sha${id}`): FakeRun => ({ id, head_sha: sha, html_url: `https://github.com/${REPO}/actions/runs/${id}`, path: WORKFLOW_PATH })
 const record = (id: number, verdict: 'PASS' | 'FAIL', opts: { pr?: string; scope?: string; expired?: boolean } = {}): FakeArtifact => ({
-  id, name: cacheArtifactName(opts.pr ?? PR, HASH, opts.scope, verdict), expired: opts.expired ?? false,
+  id, name: cacheArtifactName(opts.pr ?? PR, HASH, CLAIM_DIGEST, opts.scope, verdict), expired: opts.expired ?? false,
 })
 
 function fakeApi(runs: FakeRun[] | undefined, artifacts: Record<number, FakeArtifact[] | undefined>, failText?: string) {
@@ -221,7 +226,7 @@ interface Route { match: string; status?: number; stdout?: unknown; download?: u
 /** Routes every scenario shares: the live PR read, and a cache MISS for
  *  this diff — so the gate has to decide on the push/request itself. */
 const common: Route[] = [
-  { match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], title: 'fix: shift math', body: '' } },
+  { match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], ...CLAIM } },
   { match: `^api repos/${REPO}/actions/artifacts\\?name=`, stdout: { artifacts: [] } },
 ]
 
@@ -422,13 +427,13 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
   /** A PASS recorded by `fleet-review.yml` for `tree` — the artifact the
    *  real `artifactReviewCache.lookup` lists, and the run it checks. */
   const passRecordedFor = (tree: string): Route[] => [
-    { match: `^api repos/${REPO}/actions/artifacts\\?name=${cacheArtifactName(PR, tree, undefined, 'PASS')}&`, stdout: { artifacts: [{ id: 701, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
+    { match: `^api repos/${REPO}/actions/artifacts\\?name=${cacheArtifactName(PR, tree, CLAIM_DIGEST, undefined, 'PASS')}&`, stdout: { artifacts: [{ id: 701, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
     { match: `^api repos/${REPO}/actions/runs/${JUDGED_RUN}$`, stdout: { path: WORKFLOW_PATH } },
   ]
   /** The same PASS in the run history a push reads (`lastEarnedVerdict`). */
   const earnedOn = (tree: string): Route[] => [
     runsRoute([run(JUDGED_RUN, headSha)]),
-    artifactsRoute(JUDGED_RUN, [{ id: 701, name: cacheArtifactName(PR, tree, undefined, 'PASS'), expired: false }]),
+    artifactsRoute(JUDGED_RUN, [{ id: 701, name: cacheArtifactName(PR, tree, CLAIM_DIGEST, undefined, 'PASS'), expired: false }]),
   ]
 
   it('is the #1975 shape: identical diff text, different trees — so a diff-keyed cache WOULD hit', () => {

@@ -15,12 +15,17 @@ import {
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
-import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
+import { claimDigest, DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { workspaceAliases } from '../../orchestrator/src/verify.js'
 import { knopeVersionedPaths, knopeChangelogPath, releasePrShape } from '../../orchestrator/src/release-shape.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
+
+/** The PR's title and body every cache test below is reviewed against — the
+ *  claim half of the review cache key (#2336). */
+const CLAIM = { title: 'fix(ios): a change', body: 'Changes one thing, described accurately.' }
+const CLAIM_DIGEST = claimDigest(CLAIM)
 
 describe('rail: a live lane must have a write scope', () => {
   // Asserted against a synthetic lane, not the live config: every configured
@@ -1992,20 +1997,30 @@ describe('review-cache: pure key functions', () => {
   const tree = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
 
   it('names an artifact with only characters safe in a URL query param and an Actions artifact name', () => {
-    const name = cacheArtifactName('42', tree)
+    const name = cacheArtifactName('42', tree, CLAIM_DIGEST)
     expect(name).toMatch(/^[a-zA-Z0-9-]+$/)
     expect(name).toContain('42')
   })
 
   it('never names two different PRs\' identical trees the same artifact', () => {
-    expect(cacheArtifactName('1', tree)).not.toBe(cacheArtifactName('2', tree))
+    expect(cacheArtifactName('1', tree, CLAIM_DIGEST)).not.toBe(cacheArtifactName('2', tree, CLAIM_DIGEST))
   })
 
   // #2014: the name states the WHOLE tree it judged, and can never collide
   // with a diff-keyed record from before (24 hex characters, no `tree-`).
   it('names the full judged tree, so no diff-keyed record can ever be found under it', () => {
-    expect(cacheArtifactName('42', tree)).toBe(`fleet-review-pass-pr42-tree-${tree}`)
-    expect(cacheArtifactName('42', tree)).not.toMatch(/-pr42-[0-9a-f]{24}$/)
+    expect(cacheArtifactName('42', tree, CLAIM_DIGEST)).toBe(`fleet-review-pass-pr42-tree-${tree}-claim-${CLAIM_DIGEST.slice(0, 32)}`)
+    expect(cacheArtifactName('42', tree, CLAIM_DIGEST)).not.toMatch(/-pr42-[0-9a-f]{24}$/)
+  })
+
+  // #2336: the name also states the claim it judged, so a record from the
+  // tree-only era (whose name ENDS at the tree) can never be found under it,
+  // and a corrected description is a different name on the same tree.
+  it('names the judged claim too — a different description on the same tree is a different record', () => {
+    const other = claimDigest({ ...CLAIM, body: 'Changes one thing, described differently.' })
+    expect(cacheArtifactName('42', tree, CLAIM_DIGEST)).not.toBe(cacheArtifactName('42', tree, other))
+    expect(cacheArtifactName('42', tree, CLAIM_DIGEST)).not.toMatch(new RegExp(`-tree-${tree}$`))
+    expect(cacheArtifactName('42', tree, CLAIM_DIGEST)).toMatch(/^[a-zA-Z0-9-]+$/)
   })
 })
 
@@ -2038,15 +2053,15 @@ describe('rail: fleet/review reviews exactly once per tree, never twice on an id
   /** An in-memory `ReviewCache`, seeded with zero or one PASS entries — never
    *  the real Actions-backed one, which this suite is not testing. */
   function fakeCache(seed?: { key: ReviewCacheKey; verdict: CachedVerdict }): ReviewCache & { recordCalls: number } {
-    // Keyed exactly as the real one is (`cacheArtifactName`): PR + tree.
+    // Keyed exactly as the real one is (`cacheArtifactName`): PR + tree + claim.
     const store = new Map<string, CachedVerdict>()
-    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.headTree}`, seed.verdict)
+    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.headTree}:${seed.key.claimDigest}`, seed.verdict)
     const cache = {
       recordCalls: 0,
-      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.headTree}`) },
+      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.headTree}:${key.claimDigest}`) },
       async record(key: ReviewCacheKey, verdict: CachedVerdict) {
         cache.recordCalls += 1
-        store.set(`${key.pr}:${key.headTree}`, verdict)
+        store.set(`${key.pr}:${key.headTree}:${key.claimDigest}`, verdict)
       },
     }
     return cache
@@ -2067,6 +2082,7 @@ describe('rail: fleet/review reviews exactly once per tree, never twice on an id
     publishReport: async () => {},
     profileReview: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' })),
     headTree: async () => TREE_A,
+    prClaim: async () => CLAIM,
     ...over,
   })
 
@@ -2080,7 +2096,7 @@ describe('rail: fleet/review reviews exactly once per tree, never twice on an id
   it('re-publishes a cached PASS for an identical diff instead of invoking the engine again', async () => {
     const diff = 'diff --git a/x b/x\n+hello\n'
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE_A },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE_A, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
@@ -2263,13 +2279,14 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // The head tree every gate call below reads — the cache KEY (#2014).
   const TREE = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
   const gateTree = async (): Promise<string> => TREE
+  const gateClaim = async (): Promise<typeof CLAIM> => CLAIM
 
   function fakeCache(seed?: { key: ReviewCacheKey; verdict: CachedVerdict }): ReviewCache {
-    // Keyed exactly as the real one is (`cacheArtifactName`): PR + tree.
+    // Keyed exactly as the real one is (`cacheArtifactName`): PR + tree + claim.
     const store = new Map<string, CachedVerdict>()
-    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.headTree}`, seed.verdict)
+    if (seed !== undefined) store.set(`${seed.key.pr}:${seed.key.headTree}:${seed.key.claimDigest}`, seed.verdict)
     return {
-      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.headTree}`) },
+      async lookup(key: ReviewCacheKey) { return store.get(`${key.pr}:${key.headTree}:${key.claimDigest}`) },
       async record() { /* decideReviewGate never records — only runReviewCi does */ },
     }
   }
@@ -2295,11 +2312,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // reusing the cached PASS.
   it('concludes cache-hit when a prior PASS exists, even when this event did not request a review', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -2309,7 +2326,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes not-requested on a cache miss when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -2319,7 +2336,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes run-engine on a cache miss when this event requested a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -2333,12 +2350,12 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       record: async () => {},
     }
     const requestedOutcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(requestedOutcome.kind).toBe('run-engine')
 
     const unrequestedOutcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(unrequestedOutcome.kind).toBe('not-requested')
   })
@@ -2348,11 +2365,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // identical diff text.
   it('never cross-publishes a cache hit between two different PRs with the identical diff', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: { ...ctx(), pr: '7' }, headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      ctx: { ...ctx(), pr: '7' }, headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -2367,7 +2384,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes low-tier for a docs-only diff, even when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2380,7 +2397,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes low-tier for a verified-inert-data-only diff (Tier 1)', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2400,7 +2417,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a diff touching eslint.config.js never concludes low-tier — lint/format config can alter what a gate enforces', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
@@ -2417,7 +2434,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a diff touching .claude/agents/ never concludes low-tier — it is Tier 2, unconditionally', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
@@ -2434,7 +2451,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   ])('a diff touching %s reaches run-engine once requested — never low-tier', async (f) => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => [f],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => [f],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
@@ -2446,7 +2463,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes low-tier for a docs-only diff even when this event DID request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2457,11 +2474,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // `low-tier` is the SECOND check, not the first.
   it('a cache hit is still checked before the tier — cache-hit wins over an otherwise low-tier diff', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
@@ -2473,7 +2490,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a mixed diff with even one Tier 2 file never concludes low-tier', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff,
       changedFiles: async () => ['docs/epics/EP01-foo.md', 'packages/crypto/src/lib.rs'],
       cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
@@ -2496,11 +2513,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
 
   it('a push with an unchanged diff republishes the cached PASS — the whole point of the trigger', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
@@ -2508,11 +2525,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
 
   it('a push with an unchanged diff republishes a cached FAIL too — republishing is not synthesising a green', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'FAIL', text: 'VERDICT: FAIL — unsafe unwrap' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
@@ -2536,7 +2553,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     it(`a push that changed the tree never reaches run-engine, even when requested is true — ${label}`, async () => {
       const cache = fakeCache()
       const outcome = await decideReviewGate({
-        ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+        ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
         cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
         lastVerdict: async () => last,
       })
@@ -2547,7 +2564,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
 
   it('a push with no last-verdict lookup wired fails closed — never "nothing was earned", which is green', async () => {
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => fakeCache(), requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('carry-unreadable')
@@ -2556,7 +2573,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a review request never pays for the last-verdict lookup', async () => {
     let asked = 0
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => fakeCache(), requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
       lastVerdict: async () => { asked += 1; return { kind: 'none', runsSearched: 0 } },
     })
@@ -2573,7 +2590,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: ['label'],
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
       lastVerdict: async () => ({ kind: 'none', runsSearched: 0 }),
     })
@@ -2586,7 +2603,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a docs-only push still concludes low-tier, ahead of the carry', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
       cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
@@ -2599,7 +2616,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('a Dependabot force-push still takes the bot-authored short-circuit', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: false, republishOnly: true, prAuthor: 'dependabot[bot]',
       prCommits: async () => [{ sha: 'head222', authorLogin: 'dependabot[bot]', committerLogin: 'web-flow', verified: true }],
       reviewSet: generalOnly, log: () => {},
@@ -2613,11 +2630,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   // republished green either.
   it('a push with an unresolvable review set still concludes review-set-unresolved', async () => {
     const cache = fakeCache({
-      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE },
+      key: { pr: '42', diffHash: diffHash(diff), headTree: TREE, claimDigest: CLAIM_DIGEST },
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), headTree: gateTree, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
+      ctx: ctx(), headTree: gateTree, prClaim: gateClaim, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
       requested: false, republishOnly: true,
       reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }),
       log: () => {},
@@ -2646,6 +2663,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
 describe('rail: the knope release PR concludes green without a review, and nothing else can (#1944)', () => {
   const TREE = 'a3655875dd861eb24ebf01708a07f4caa0995b43'
   const gateTree = async (): Promise<string> => TREE
+  const gateClaim = async (): Promise<typeof CLAIM> => CLAIM
   const noCache: ReviewCache = { async lookup() { return undefined }, async record() {} }
   const KNOPE_TOML = readFileSync(join(process.cwd(), 'knope.toml'), 'utf8')
 
@@ -2740,7 +2758,7 @@ describe('rail: the knope release PR concludes green without a review, and nothi
     fromLabels?: string[]; profiles?: string[]; knopeConfig?: (() => Promise<string>) | null; prAuthor?: string
   } = {}) => decideReviewGate({
     ctx: { branch: o.branch ?? 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
-    headTree: gateTree, prDiff: async () => o.diff ?? release.diff, changedFiles: async () => o.files ?? release.files,
+    headTree: gateTree, prClaim: gateClaim, prDiff: async () => o.diff ?? release.diff, changedFiles: async () => o.files ?? release.files,
     cacheFor: () => noCache, requested: o.requested ?? false, republishOnly: o.republishOnly ?? true,
     lastVerdict: async () => earnedPass,
     ...(o.prAuthor === undefined ? {} : { prAuthor: o.prAuthor }),
@@ -2878,7 +2896,7 @@ describe('rail: the knope release PR concludes green without a review, and nothi
   it('(b) an unresolvable review set still fails closed AHEAD of the release path (invariant 4)', async () => {
     const o = await decideReviewGate({
       ctx: { branch: 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
-      headTree: gateTree, prDiff: async () => release.diff, changedFiles: async () => release.files,
+      headTree: gateTree, prClaim: gateClaim, prDiff: async () => release.diff, changedFiles: async () => release.files,
       cacheFor: () => noCache, requested: false, republishOnly: true, knopeConfig: async () => KNOPE_TOML,
       reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }), log: () => {},
     })
