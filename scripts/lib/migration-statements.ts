@@ -5,10 +5,11 @@
  *
  * Shared by `scripts/run-migrations.ts` (which ships inside the image and
  * applies the files) and `scripts/check-migration-safety.ts` (which judges
- * them in CI), so the unit the lint judges is exactly the unit the runner
- * executes. A lint that split files its own way could pass a statement the
+ * them in CI and again before a deploy), so the unit the lint judges is
+ * exactly the unit the runner executes. A lint that split files its own way could pass a statement the
  * runner then runs differently.
  */
+import { createHash } from 'node:crypto'
 import { readdirSync } from 'node:fs'
 
 /** The marker drizzle-kit writes between statements of one migration file. */
@@ -32,4 +33,16 @@ export function splitMigrationStatements(content: string): string[] {
     .split(STATEMENT_BREAKPOINT)
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
+}
+
+/**
+ * The runner's ledger of applied files, keyed by filename. Read by the
+ * pre-deploy check (`check-migration-safety.ts --target`) to learn which
+ * files a deploy will apply, so both agree on the table by construction.
+ */
+export const LEDGER_TABLE = 'llamenos_schema_migrations'
+
+/** The checksum the ledger records for a file: SHA-256 of its UTF-8 text. */
+export function migrationChecksum(content: string): string {
+  return createHash('sha256').update(content, 'utf-8').digest('hex')
 }

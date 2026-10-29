@@ -1,45 +1,74 @@
 #!/usr/bin/env bun
 /**
- * check-migration-safety.ts — reject a migration the previous release cannot
+ * check-migration-safety.ts: reject a migration the previous release cannot
  * run against.
  *
  * Every upgrade runs the previous release (N-1) against the schema the new one
- * (N) migrates: Helm's RollingUpdate keeps the old pod serving while the new
- * pod migrates (deploy/helm/llamenos/templates/deployment-app.yaml), and a
- * rollback boots N-1 on N's schema. Schema changes are therefore
- * expand/contract (docs/runbooks/migrations.md), and this gate enforces it in
- * three parts, all offline:
+ * (N) migrates. Migrations run from the image entrypoint on every container
+ * start (deploy/docker/docker-entrypoint.sh): Helm's RollingUpdate keeps the
+ * old pod serving while the new pod migrates, and a rollback boots N-1 on N's
+ * schema. Schema changes are therefore expand/contract
+ * (docs/runbooks/migrations.md).
  *
- *   1. Release floor. `drizzle/compat/release-floor.json` names N-1: its
- *      version (must equal package.json's), the migration files it shipped,
- *      and its drizzle snapshot (must equal the shipped snapshot file).
+ * ONE gate, fed from one of two places. `judge()` is the only implementation.
+ * The mode decides only where its inputs come from:
  *
- *   2. Destructive-DDL lint. Every migration NOT in the floor is split with
- *      the runner's own splitter (scripts/lib/migration-statements.ts) and
- *      each statement is parsed with the real Postgres grammar (libpg_query,
- *      compiled to WASM). Judging the parse tree, not the text, is the point:
- *      `DROP` inside a comment, a string literal, a COMMENT ON or a function
- *      body is not a drop, and `alter table\n x\n drop\n column y` is. The
- *      shipped destructive files are exempt because they are in the floor,
- *      not because anyone listed them. A finding may be exempted only by a
- *      `drizzle/contract.json` entry, and the entry is VERIFIED: the floor
- *      must no longer declare the object, so N-1 no longer reads it.
+ *   --ci       Diff-only. No database, no network. The pending files are the
+ *              migrations this branch adds (git diff against --base). The
+ *              database they will meet is unknown, so every object they do not
+ *              create themselves is presumed to exist and to be read by N-1.
+ *              Editing or deleting an existing migration or snapshot fails.
  *
- *   3. Schema contract. Every column the floor snapshot declares keeps its
- *      type and nullability in the newest snapshot (widening only:
+ *   --target   Pre-deploy, against the real database DATABASE_URL names (the
+ *              deploy host's own app env; deploy/ansible/playbooks/update.yml
+ *              runs it inside the image about to be deployed). The pending
+ *              files are those the runner's ledger has not applied; the
+ *              database they will meet is read off its catalog. It also
+ *              enforces the mandatory pre-upgrade backup: --backup must name
+ *              a backup taken after the last schema change and recently.
+ *
+ * What is judged, in both modes:
+ *
+ *   1. Order. Every pending file sorts after every file already applied
+ *      (target) or already on the base branch (ci): the runner applies by
+ *      filename, so an upgraded database would run it last but a fresh one
+ *      in the middle.
+ *
+ *   2. Destructive-DDL lint. Each pending statement, split with the runner's
+ *      own splitter (scripts/lib/migration-statements.ts), is parsed with the
+ *      real Postgres grammar (libpg_query, compiled to WASM). Judging the parse
+ *      tree, not the text, is the point: `DROP` inside a comment, a string
+ *      literal, a COMMENT ON or a function body is not a drop, and
+ *      `alter table\n x\n drop\n column y` is. A finding may be allowed only by
+ *      an annotation in the statement itself:
+ *
+ *        -- migration-safety: allow column public.users.team_id because <why>
+ *
+ *      and the annotation is VERIFIED: the snapshot of the release being
+ *      replaced must no longer declare the object, so N-1 no longer reads it.
+ *
+ *   3. Schema contract. Every column the replaced release's snapshot declares
+ *      keeps its type and nullability in the newest snapshot (widening only:
  *      varchar(n) → text, NOT NULL → nullable), enums keep their values, and
- *      every NOT NULL column a floor table gained has a default, so N-1's
+ *      every NOT NULL column a known table gained has a default, so N-1's
  *      INSERTs, which do not name it, still succeed. An object may be
  *      "forgotten" (absent from the newest snapshot) but not dropped: see
  *      compareSchemas.
  *
+ * "The release being replaced" is the newest drizzle snapshot at or before the
+ * last settled file: the last file the ledger applied (target), or the last
+ * file on the base branch (ci). Snapshots are immutable, so it is read from
+ * this tree in both modes.
+ *
  * Usage:
- *   bun scripts/check-migration-safety.ts [--ci] [--root <repo>]
- *   bun run migration:safety --ci
+ *   bun run migration:safety --ci [--base <rev>]            (default base: merge-base with origin/main)
+ *   DATABASE_URL=… bun scripts/check-migration-safety.ts --target --backup '<manifest entry>'
+ *       [--backup-max-age-minutes 60]
+ *   Either mode takes [--root <repo>].
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { isDeepStrictEqual } from 'node:util'
+import { SQL } from 'bun'
 import {
   loadModule,
   parsePlPgSQLSync,
@@ -59,25 +88,215 @@ import {
   type RenameStmt,
   type TruncateStmt,
 } from '@libpg-query/parser'
-import { listMigrationFiles, splitMigrationStatements } from './lib/migration-statements'
 import {
-  type ContractExemption,
-  type DrizzleSnapshot,
-  type MigrationContract,
-  type ReleaseFloor,
-  type SnapshotColumn,
-  latestSnapshotFile,
-  packageVersion,
-  readJson,
-  repoPaths,
-} from './lib/release-floor'
+  LEDGER_TABLE,
+  listMigrationFiles,
+  migrationChecksum,
+  splitMigrationStatements,
+} from './lib/migration-statements'
+
+// ── Drizzle snapshots ────────────────────────────────────────────────────────
+
+export interface SnapshotColumn {
+  name: string
+  type: string
+  primaryKey: boolean
+  notNull: boolean
+  default?: unknown
+  identity?: unknown
+  generated?: unknown
+}
+
+export interface SnapshotTable {
+  name: string
+  schema: string
+  columns: Record<string, SnapshotColumn>
+}
+
+export interface SnapshotEnum {
+  name: string
+  schema: string
+  values: string[]
+}
+
+export interface SnapshotRelation {
+  name: string
+  schema: string
+  columns?: Record<string, SnapshotColumn>
+}
+
+/** The parts of a drizzle-kit (dialect postgresql, version 7) snapshot this gate reads. */
+export interface DrizzleSnapshot {
+  tables: Record<string, SnapshotTable>
+  enums: Record<string, SnapshotEnum>
+  views?: Record<string, SnapshotRelation>
+  sequences?: Record<string, SnapshotRelation>
+  schemas?: Record<string, string>
+}
+
+const EMPTY_SNAPSHOT: DrizzleSnapshot = { tables: {}, enums: {} }
+
+/** `0042_foo.sql` and `0042_snapshot.json` → 42. */
+function prefixOf(file: string): number | undefined {
+  const m = /^(\d+)_/.exec(file)
+  return m ? Number(m[1]) : undefined
+}
+
+/**
+ * The newest `NNNN_snapshot.json` whose number is at most `upTo`'s, or the
+ * newest of all when `upTo` is undefined. Hand-written migrations have no
+ * snapshot of their own, so the newest one at or before a file is what the
+ * schema declared once that file had run.
+ */
+export function snapshotFileAtOrBefore(metaDir: string, upTo?: string): string | undefined {
+  const limit = upTo === undefined ? Number.POSITIVE_INFINITY : (prefixOf(upTo) ?? -1)
+  return readdirSync(metaDir)
+    .filter((f) => f.endsWith('_snapshot.json') && (prefixOf(f) ?? Number.POSITIVE_INFINITY) <= limit)
+    .sort()
+    .at(-1)
+}
+
+/** The snapshot of the release being replaced: the newest at or before the last settled file. */
+function previousSnapshotFile(metaDir: string, settled: string[]): string | undefined {
+  const last = settled.at(-1)
+  return last === undefined ? undefined : snapshotFileAtOrBefore(metaDir, last)
+}
+
+function readSnapshot(metaDir: string, file: string | undefined): DrizzleSnapshot {
+  return file === undefined ? EMPTY_SNAPSHOT : (JSON.parse(readFileSync(join(metaDir, file), 'utf-8')) as DrizzleSnapshot)
+}
+
+// ── The database the pending statements meet ─────────────────────────────────
+
+export interface LiveColumn {
+  notNull: boolean
+}
+
+/**
+ * What exists in the database before the pending migrations run, which is
+ * also what the previous release reads and writes. `--target` reads it off
+ * the catalog; `--ci` cannot see a database and presumes it.
+ */
+export interface LiveSchema {
+  relation(schema: string, name: string): boolean
+  column(schema: string, table: string, column: string): LiveColumn | undefined
+}
+
+/** `--target`: the real catalog of the database about to be migrated. */
+export class CatalogSchema implements LiveSchema {
+  private readonly relations = new Set<string>()
+  private readonly columns = new Map<string, LiveColumn>()
+
+  constructor(
+    relations: { schema: string; name: string }[],
+    columns: { schema: string; table: string; column: string; not_null: boolean }[],
+  ) {
+    for (const r of relations) this.relations.add(`${r.schema}.${r.name}`)
+    for (const c of columns) this.columns.set(`${c.schema}.${c.table}.${c.column}`, { notNull: c.not_null })
+  }
+
+  static async read(sql: SQL): Promise<CatalogSchema> {
+    const userSchemas = `n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'`
+    const relations = (await sql.unsafe(
+      `SELECT n.nspname AS schema, c.relname AS name
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm', 'S') AND ${userSchemas}`,
+    )) as { schema: string; name: string }[]
+    const columns = (await sql.unsafe(
+      `SELECT n.nspname AS schema, c.relname AS table, a.attname AS column, a.attnotnull AS not_null
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND a.attnum > 0 AND NOT a.attisdropped AND ${userSchemas}`,
+    )) as { schema: string; table: string; column: string; not_null: boolean }[]
+    return new CatalogSchema(relations, columns)
+  }
+
+  relation(schema: string, name: string): boolean {
+    return this.relations.has(`${schema}.${name}`)
+  }
+
+  column(schema: string, table: string, column: string): LiveColumn | undefined {
+    return this.columns.get(`${schema}.${table}.${column}`)
+  }
+}
+
+/**
+ * `--ci`: no database, so presume the worst. Every relation and column exists
+ * (N-1 reads it) unless a pending statement creates it. A column's
+ * nullability comes from the replaced release's snapshot when it declares the
+ * column, and is presumed NOT NULL when it does not.
+ */
+export class PresumedSchema implements LiveSchema {
+  private readonly createdRelations = new Set<string>()
+  private readonly createdColumns = new Set<string>()
+
+  constructor(
+    statements: string[],
+    private readonly previous: SchemaView,
+  ) {
+    for (const sql of statements) {
+      let tree: unknown
+      try {
+        tree = parseSync(sql)
+      } catch {
+        continue // judged, and failed, as a parse error by the lint
+      }
+      this.collect(tree)
+    }
+  }
+
+  private collect(value: unknown): void {
+    if (Array.isArray(value)) return value.forEach((v) => this.collect(v))
+    if (value === null || typeof value !== 'object') return
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'CreateStmt') {
+        const s = child as { relation?: RangeVar; tableElts?: Node[] }
+        const t = rel(s.relation)
+        if (t) {
+          this.createdRelations.add(`${t.schema}.${t.name}`)
+          for (const e of s.tableElts ?? []) {
+            if ('ColumnDef' in e && e.ColumnDef.colname) this.createdColumns.add(`${t.schema}.${t.name}.${e.ColumnDef.colname}`)
+          }
+        }
+      } else if (key === 'CreateTableAsStmt' || key === 'ViewStmt') {
+        const s = child as { into?: { rel?: RangeVar }; view?: RangeVar }
+        const t = rel(s.into?.rel ?? s.view)
+        if (t) this.createdRelations.add(`${t.schema}.${t.name}`)
+      } else if (key === 'CreateSeqStmt') {
+        const t = rel((child as { sequence?: RangeVar }).sequence)
+        if (t) this.createdRelations.add(`${t.schema}.${t.name}`)
+      } else if (key === 'AlterTableStmt') {
+        const s = child as AlterTableStmt
+        const t = rel(s.relation)
+        for (const c of s.cmds ?? []) {
+          if (!t || !('AlterTableCmd' in c) || c.AlterTableCmd.subtype !== 'AT_AddColumn') continue
+          const def = c.AlterTableCmd.def
+          if (def && 'ColumnDef' in def && def.ColumnDef.colname) {
+            this.createdColumns.add(`${t.schema}.${t.name}.${def.ColumnDef.colname}`)
+          }
+        }
+      }
+      this.collect(child)
+    }
+  }
+
+  relation(schema: string, name: string): boolean {
+    return !this.createdRelations.has(`${schema}.${name}`)
+  }
+
+  column(schema: string, table: string, column: string): LiveColumn | undefined {
+    if (!this.relation(schema, table) || this.createdColumns.has(`${schema}.${table}.${column}`)) return undefined
+    return { notNull: this.previous.column(schema, table, column)?.notNull ?? true }
+  }
+}
 
 const DEFAULT_SCHEMA = 'public'
 const RUNBOOK = 'docs/runbooks/migrations.md'
 
 // ── Objects ──────────────────────────────────────────────────────────────────
 
-/** A schema object a finding is about, in the form a contract entry names it. */
+/** A schema object a finding is about, in the form an annotation names it. */
 export type ObjectRef =
   | { kind: 'relation'; schema: string; name: string }
   | { kind: 'column'; schema: string; table: string; column: string }
@@ -106,7 +325,7 @@ export function describeObject(ref: ObjectRef): string {
 
 const SERIAL_TYPES = new Set(['serial', 'serial4', 'bigserial', 'serial8', 'smallserial', 'serial2'])
 
-/** Reads one snapshot the way Postgres resolves names. */
+/** Reads one drizzle snapshot the way Postgres resolves names. */
 export class SchemaView {
   constructor(readonly snapshot: DrizzleSnapshot) {}
 
@@ -206,12 +425,14 @@ export interface Finding {
 }
 
 export interface LintContext {
-  floor: SchemaView
-  current: SchemaView
+  /** The database the statements run against, before any of them runs. */
+  live: LiveSchema
+  /** The newest snapshot: what the release being deployed declares. */
+  next: SchemaView
 }
 
-export function lintContext(floor: DrizzleSnapshot, current: DrizzleSnapshot): LintContext {
-  return { floor: new SchemaView(floor), current: new SchemaView(current) }
+export function lintContext(live: LiveSchema, next: DrizzleSnapshot): LintContext {
+  return { live, next: new SchemaView(next) }
 }
 
 // ── Parse-tree helpers ───────────────────────────────────────────────────────
@@ -300,8 +521,8 @@ function lintAlterTable(stmt: AlterTableStmt, ctx: LintContext, out: Finding[]):
   const table = rel(stmt.relation)
   if (!table) return
   const column = (c: string): ObjectRef => ({ kind: 'column', schema: table.schema, table: table.name, column: c })
-  const tableInFloor = ctx.floor.relation(table.schema, table.name) !== undefined
-  const floorColumn = (c: string) => ctx.floor.column(table.schema, table.name, c)
+  const tableExists = ctx.live.relation(table.schema, table.name)
+  const liveColumn = (c: string) => ctx.live.column(table.schema, table.name, c)
 
   for (const node of stmt.cmds ?? []) {
     if (!('AlterTableCmd' in node)) continue
@@ -320,8 +541,8 @@ function lintAlterTable(stmt: AlterTableStmt, ctx: LintContext, out: Finding[]):
       case 'AT_ColumnDefault': {
         // `def` absent is DROP DEFAULT; present is SET DEFAULT, which is safe.
         if (cmd.def) break
-        const was = floorColumn(name)
-        const now = ctx.current.column(table.schema, table.name, name)
+        const was = liveColumn(name)
+        const now = ctx.next.column(table.schema, table.name, name)
         if (was && (was.notNull || now?.notNull)) {
           out.push({ rule: 'drop-default-not-null', object: column(name) })
         }
@@ -329,15 +550,15 @@ function lintAlterTable(stmt: AlterTableStmt, ctx: LintContext, out: Finding[]):
       }
       case 'AT_AddColumn': {
         const def = cmd.def && 'ColumnDef' in cmd.def ? cmd.def.ColumnDef : undefined
-        if (def?.colname && tableInFloor && addsNotNullWithoutDefault(def)) {
+        if (def?.colname && tableExists && addsNotNullWithoutDefault(def)) {
           out.push({ rule: 'add-not-null-column-without-default', object: column(def.colname) })
         }
         break
       }
       case 'AT_AddConstraint': {
         const con = cmd.def && 'Constraint' in cmd.def ? cmd.def.Constraint : undefined
-        if (!con || !tableInFloor) break
-        const hit = existingConstraintColumn(con, floorColumn)
+        if (!con || !tableExists) break
+        const hit = existingConstraintColumn(con, liveColumn)
         if (hit === null) break
         out.push({
           rule: 'add-constraint-existing',
@@ -353,15 +574,15 @@ function lintAlterTable(stmt: AlterTableStmt, ctx: LintContext, out: Finding[]):
 /**
  * Which column the previous release already writes does this constraint bind?
  * A column name; `undefined` when it binds the table as a whole or cannot be
- * told (USING INDEX, EXCLUDE); `null` when it binds only columns the floor
- * does not declare (N-1 leaves those NULL, which UNIQUE, FK and CHECK all
+ * told (USING INDEX, EXCLUDE); `null` when it binds only columns the database
+ * does not have yet (N-1 leaves those NULL, which UNIQUE, FK and CHECK all
  * accept), or the constraint type cannot reject a write.
  */
 function existingConstraintColumn(
   con: Constraint,
-  floorColumn: (c: string) => SnapshotColumn | undefined,
+  liveColumn: (c: string) => LiveColumn | undefined,
 ): string | undefined | null {
-  const firstExisting = (cols: string[]) => cols.find((c) => floorColumn(c) !== undefined) ?? null
+  const firstExisting = (cols: string[]) => cols.find((c) => liveColumn(c) !== undefined) ?? null
   switch (con.contype) {
     case 'CONSTR_UNIQUE':
     case 'CONSTR_PRIMARY':
@@ -434,11 +655,11 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
     case 'IndexStmt': {
       const s = value as IndexStmt
       const t = rel(s.relation)
-      if (!s.unique || !t || !ctx.floor.relation(t.schema, t.name)) return
+      if (!s.unique || !t || !ctx.live.relation(t.schema, t.name)) return
       const cols = (s.indexParams ?? []).flatMap((p) =>
         'IndexElem' in p ? (p.IndexElem.name ? [p.IndexElem.name] : columnRefs(p.IndexElem.expr)) : [],
       )
-      const hit = cols.find((c) => ctx.floor.column(t.schema, t.name, c) !== undefined)
+      const hit = cols.find((c) => ctx.live.column(t.schema, t.name, c) !== undefined)
       if (hit) {
         out.push({ rule: 'unique-index-existing', object: { kind: 'column', schema: t.schema, table: t.name, column: hit } })
       }
@@ -555,6 +776,36 @@ function lintDoBlock(stmt: DoStmt, ctx: LintContext, out: Finding[]): void {
   visit(tree)
 }
 
+
+// ── Annotations ──────────────────────────────────────────────────────────────
+
+/**
+ * `-- migration-safety: allow <object> because <reason>`, where `<object>` is
+ * a finding's object exactly as the gate prints it (`column public.users.team_id`).
+ * It allows findings on that object in the statement (the chunk between
+ * breakpoints) that carries it, and nowhere else.
+ */
+const ANNOTATION_MARK = /^\s*--\s*migration-safety:/
+const ANNOTATION = /^\s*--\s*migration-safety:\s*allow\s+(\S+\s+\S+)\s+because\s+(\S.*)$/
+
+export interface Annotation {
+  object: string
+  reason: string
+}
+
+/** The annotations in one statement, and the lines that look like one but do not parse. */
+export function parseAnnotations(statement: string): { annotations: Annotation[]; malformed: string[] } {
+  const annotations: Annotation[] = []
+  const malformed: string[] = []
+  for (const line of statement.split('\n')) {
+    if (!ANNOTATION_MARK.test(line)) continue
+    const m = ANNOTATION.exec(line)
+    if (m) annotations.push({ object: m[1], reason: m[2].trim() })
+    else malformed.push(line.trim())
+  }
+  return { annotations, malformed }
+}
+
 // ── The gate ─────────────────────────────────────────────────────────────────
 
 export interface Violation {
@@ -563,10 +814,25 @@ export interface Violation {
   message: string
 }
 
+/** Everything `judge()` needs; the two modes differ only in how they fill it. */
+export interface GateInput {
+  /** The repo whose drizzle/migrations/ holds the files. */
+  root: string
+  /** Files already applied (target) or already on the base branch (ci), in order. */
+  settled: string[]
+  /** Files this deploy or branch adds, in order. Each is judged. */
+  pending: string[]
+  /** The database `pending` runs against. */
+  live: LiveSchema
+  /** Problems the source found before judging (ledger, immutability, backup). */
+  preflight: Violation[]
+}
+
 export interface SafetyReport {
-  floorVersion: string
+  /** The snapshot of the release being replaced, or undefined when none exists. */
+  previousSnapshot: string | undefined
   judgedFiles: string[]
-  exempted: number
+  allowed: number
   violations: Violation[]
 }
 
@@ -601,24 +867,24 @@ function filledByDatabase(c: SnapshotColumn): boolean {
 }
 
 /**
- * Part 3: the newest snapshot against the floor's.
+ * Part 3: the newest snapshot against the replaced release's.
  *
- * An object the floor declares may be absent from the newest snapshot: that
- * is "forgetting" it, the step before contracting it. The code stops
- * declaring it while the database keeps it, so the previous release still
- * finds it — part 2 rejects every judged statement that would physically drop
- * or rename it while the floor declares it. Without this, an object that ever
- * shipped could never be dropped: the exemption for its DROP is verified
- * against a floor that must no longer declare it.
+ * An object the replaced release declares may be absent from the newest
+ * snapshot: that is "forgetting" it, the step before contracting it. The code
+ * stops declaring it while the database keeps it, so the previous release
+ * still finds it; part 2 rejects every pending statement that would physically
+ * drop or rename it. Without this, an object that ever shipped could never be
+ * dropped: the annotation for its DROP is verified against a snapshot that
+ * must no longer declare it.
  *
- * What may not happen to an object the floor declares and the newest snapshot
- * still has: a type change other than a listed widening, a nullable column
- * becoming NOT NULL, an enum losing a value.
+ * What may not happen to an object the replaced release declares and the
+ * newest snapshot still has: a type change other than a listed widening, a
+ * nullable column becoming NOT NULL, an enum losing a value.
  */
-export function compareSchemas(floor: DrizzleSnapshot, current: DrizzleSnapshot): string[] {
+export function compareSchemas(previous: DrizzleSnapshot, next: DrizzleSnapshot): string[] {
   const problems: string[] = []
-  for (const [key, table] of Object.entries(floor.tables)) {
-    const cur = current.tables[key]
+  for (const [key, table] of Object.entries(previous.tables)) {
+    const cur = next.tables[key]
     if (!cur) continue
     for (const [name, col] of Object.entries(table.columns)) {
       const c = cur.columns[name]
@@ -644,13 +910,13 @@ export function compareSchemas(floor: DrizzleSnapshot, current: DrizzleSnapshot)
     for (const [name, c] of Object.entries(cur.columns)) {
       if (table.columns[name] || filledByDatabase(c)) continue
       problems.push(
-        `column ${key}.${name} is NOT NULL with no default on a table the release floor declares — ` +
-          "the previous release's INSERTs do not name it",
+        `column ${key}.${name} is NOT NULL with no default on a table the previous release declares; ` +
+          "its INSERTs do not name it",
       )
     }
   }
-  for (const [key, e] of Object.entries(floor.enums)) {
-    const cur = current.enums[key]
+  for (const [key, e] of Object.entries(previous.enums)) {
+    const cur = next.enums[key]
     if (!cur) continue
     for (const v of e.values) {
       if (!cur.values.includes(v)) problems.push(`enum ${key} lost value '${v}'`)
@@ -659,143 +925,331 @@ export function compareSchemas(floor: DrizzleSnapshot, current: DrizzleSnapshot)
   return problems
 }
 
-function validateContract(contract: MigrationContract): string[] {
-  const problems: string[] = []
-  if (!Array.isArray(contract.exemptions)) return ['drizzle/contract.json: `exemptions` must be an array']
-  contract.exemptions.forEach((e: Partial<ContractExemption>, i) => {
-    const at = `drizzle/contract.json exemptions[${i}]`
-    if (typeof e.file !== 'string' || !e.file.endsWith('.sql')) problems.push(`${at}: \`file\` must name a .sql migration`)
-    if (!Number.isInteger(e.statementIndex) || (e.statementIndex ?? -1) < 0) {
-      problems.push(`${at}: \`statementIndex\` must be a non-negative integer`)
-    }
-    if (typeof e.object !== 'string' || e.object.length === 0) problems.push(`${at}: \`object\` is required`)
-    if (typeof e.reason !== 'string' || e.reason.trim().length === 0) problems.push(`${at}: \`reason\` is required`)
-  })
-  return problems
-}
-
-export async function checkMigrationSafety(root: string): Promise<SafetyReport> {
+/** The one gate. Both modes end here; see the file header. */
+export async function judge(input: GateInput): Promise<SafetyReport> {
   await loadModule()
-  const paths = repoPaths(root)
-  const violations: Violation[] = []
+  const migrationsDir = join(input.root, 'drizzle', 'migrations')
+  const metaDir = join(migrationsDir, 'meta')
+  const violations: Violation[] = [...input.preflight]
 
-  // ── 1. Release floor ──────────────────────────────────────────────────────
-  const floor = readJson<ReleaseFloor>(paths.floor)
-  const version = packageVersion(paths.packageJson)
-  if (floor.version !== version) {
-    violations.push({
-      message:
-        `drizzle/compat/release-floor.json records ${floor.version} but package.json is ${version}. ` +
-        "The floor is written by knope's prepare-release (scripts/record-release-floor.ts) in the " +
-        'same commit that bumps the version; never by hand.',
-    })
-  }
-  const files = listMigrationFiles(paths.migrationsDir)
-  const present = new Set(files)
-  for (const f of floor.migrations) {
-    if (!present.has(f)) {
-      violations.push({ file: f, message: `${f} shipped in ${floor.version} but is gone. Shipped migrations are never deleted.` })
-    }
-  }
-  let shippedSnapshot: DrizzleSnapshot | undefined
-  try {
-    shippedSnapshot = readJson<DrizzleSnapshot>(join(paths.metaDir, floor.snapshotFile))
-  } catch {
-    violations.push({ message: `the floor's snapshot file meta/${floor.snapshotFile} is missing` })
-  }
-  if (shippedSnapshot && !isDeepStrictEqual(shippedSnapshot, floor.snapshot)) {
-    violations.push({
-      message:
-        `drizzle/compat/release-floor.json's snapshot differs from meta/${floor.snapshotFile}, the ` +
-        `snapshot ${floor.version} shipped. A released snapshot is as immutable as a released migration.`,
-    })
-  }
-
-  const floorFiles = new Set(floor.migrations)
-  const judgedFiles = files.filter((f) => !floorFiles.has(f))
-  const lastShipped = [...floor.migrations].sort().at(-1) ?? ''
-  for (const f of judgedFiles) {
-    if (f < lastShipped) {
+  // ── 1. Order ───────────────────────────────────────────────────────────────
+  const lastSettled = input.settled.at(-1)
+  for (const f of input.pending) {
+    if (lastSettled !== undefined && f < lastSettled) {
       violations.push({
         file: f,
         message:
-          `${f} sorts before ${lastShipped}, which ${floor.version} already shipped. An upgraded ` +
-          'database would apply it last but a fresh one in the middle; name it after the newest shipped file.',
+          `${f} sorts before ${lastSettled}, which already ran. An upgraded database would apply ` +
+          'it last but a fresh one in the middle; name it after the newest existing file.',
       })
     }
   }
 
-  // ── 2. Destructive-DDL lint ───────────────────────────────────────────────
-  const current = readJson<DrizzleSnapshot>(join(paths.metaDir, latestSnapshotFile(paths.metaDir)))
-  const ctx = lintContext(floor.snapshot, current)
-  const findings: Located[] = []
-  for (const file of judgedFiles) {
-    const statements = splitMigrationStatements(readFileSync(join(paths.migrationsDir, file), 'utf-8'))
+  const previousSnapshot = previousSnapshotFile(metaDir, input.settled)
+  const previous = new SchemaView(readSnapshot(metaDir, previousSnapshot))
+  const next = readSnapshot(metaDir, snapshotFileAtOrBefore(metaDir))
+  const ctx = lintContext(input.live, next)
+
+  // ── 2. Destructive-DDL lint, with verified annotations ─────────────────────
+  let allowed = 0
+  for (const file of input.pending) {
+    const statements = splitMigrationStatements(readFileSync(join(migrationsDir, file), 'utf-8'))
     statements.forEach((sql, statementIndex) => {
-      for (const f of lintSql(sql, ctx)) findings.push({ ...f, file, statementIndex })
+      const findings: Located[] = lintSql(sql, ctx).map((f) => ({ ...f, file, statementIndex }))
+      const { annotations, malformed } = parseAnnotations(sql)
+      const at = `${file} statement ${statementIndex}`
+      for (const line of malformed) {
+        violations.push({
+          file,
+          statementIndex,
+          message: `${at}: unreadable annotation \`${line}\`. The form is \`-- migration-safety: allow <object> because <reason>\`.`,
+        })
+      }
+      const allowedHere = new Set<Located>()
+      for (const a of annotations) {
+        const matches = findings.filter((f) => f.object && describeObject(f.object) === a.object)
+        if (matches.length === 0) {
+          violations.push({
+            file,
+            statementIndex,
+            message: `${at}: the annotation for ${a.object} matches no finding in this statement. Remove it.`,
+          })
+          continue
+        }
+        if (previous.declares(matches[0].object as ObjectRef)) {
+          violations.push({
+            file,
+            statementIndex,
+            message:
+              `${at}: the annotation for ${a.object} is rejected: the release being replaced ` +
+              `(${previousSnapshot}) still declares it, so it still reads it. Stop declaring it in one ` +
+              'release and contract it in a later one.',
+          })
+          continue
+        }
+        for (const m of matches) allowedHere.add(m)
+      }
+      allowed += allowedHere.size
+      for (const f of findings) {
+        if (!allowedHere.has(f)) violations.push({ file, statementIndex, message: findingMessage(f) })
+      }
     })
   }
 
-  const contract = readJson<MigrationContract>(paths.contract)
-  const shapeProblems = validateContract(contract)
-  for (const message of shapeProblems) violations.push({ message })
-  const exempted = new Set<Located>()
-  if (shapeProblems.length === 0) {
-    for (const e of contract.exemptions) {
-      const at = `drizzle/contract.json entry {${e.file}, ${e.statementIndex}, ${e.object}}`
-      if (floorFiles.has(e.file)) {
-        violations.push({ file: e.file, message: `${at}: ${e.file} shipped in ${floor.version}; the entry is stale, remove it.` })
-        continue
+  // ── 3. Schema contract ─────────────────────────────────────────────────────
+  if (input.pending.length > 0) {
+    for (const message of compareSchemas(previous.snapshot, next)) {
+      violations.push({ message: `schema contract vs ${previousSnapshot ?? 'an empty schema'}: ${message}` })
+    }
+  }
+
+  return { previousSnapshot, judgedFiles: input.pending, allowed, violations }
+}
+
+// ── --ci: the branch's diff ──────────────────────────────────────────────────
+
+function git(root: string, ...args: string[]): string {
+  const r = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  if (r.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr.toString().trim()}`)
+  return r.stdout.toString()
+}
+
+/** A shipped file the runner or drizzle-kit treats as immutable. */
+const IMMUTABLE = /^drizzle\/migrations\/(?:[^/]+\.sql|meta\/\d+_snapshot\.json)$/
+
+/**
+ * The migrations the working tree adds relative to `base`, and every edit or
+ * deletion of a file that already existed there. Untracked files count as
+ * added, so a migration not yet committed is judged too.
+ */
+export async function ciInput(root: string, base: string): Promise<GateInput> {
+  await loadModule()
+  const migrationsDir = join(root, 'drizzle', 'migrations')
+  const preflight: Violation[] = []
+  const added = new Set<string>()
+  const diff = git(root, 'diff', '--name-status', '--no-renames', base, '--', 'drizzle/migrations')
+  const untracked = git(root, 'ls-files', '--others', '--exclude-standard', '--', 'drizzle/migrations')
+  const entries = [
+    ...diff.split('\n').filter(Boolean).map((l) => l.split('\t') as [string, string]),
+    ...untracked.split('\n').filter(Boolean).map((p) => ['A', p] as [string, string]),
+  ]
+  for (const [status, path] of entries) {
+    if (!IMMUTABLE.test(path)) continue
+    if (status === 'A') {
+      if (path.endsWith('.sql')) added.add(path.slice('drizzle/migrations/'.length))
+      continue
+    }
+    preflight.push({
+      message:
+        `${path} existed at ${base} and is ${status === 'D' ? 'deleted' : 'edited'} here. A migration ` +
+        'or snapshot that may have shipped is immutable: the runner refuses a file whose checksum ' +
+        'changed. Add a new migration instead.',
+    })
+  }
+  const files = listMigrationFiles(migrationsDir)
+  const settled = files.filter((f) => !added.has(f))
+  const pending = files.filter((f) => added.has(f))
+  const metaDir = join(migrationsDir, 'meta')
+  const previous = new SchemaView(readSnapshot(metaDir, previousSnapshotFile(metaDir, settled)))
+  const statements = pending.flatMap((f) => splitMigrationStatements(readFileSync(join(migrationsDir, f), 'utf-8')))
+  return { root, settled, pending, live: new PresumedSchema(statements, previous), preflight }
+}
+
+// ── --target: the database about to be migrated ──────────────────────────────
+
+/**
+ * One line of the backup manifest `backup-postgres.sh` appends
+ * (deploy/ansible/roles/backup-postgres/templates/backup-postgres.sh.j2):
+ * `postgres|<YYYYMMDD-HHMMSS UTC>|<file>|<bytes>|<sha256 of the dump>|<type>`.
+ */
+const MANIFEST_ENTRY = /^postgres\|(\d{8})-(\d{6})\|(llamenos-postgres-\S+\.dump\.age)\|(\d+)\|([0-9a-f]{64})\|(\w+)$/
+
+export interface BackupProof {
+  takenAt: Date
+  file: string
+  bytes: number
+}
+
+export function parseBackupEntry(entry: string): BackupProof | string {
+  const m = MANIFEST_ENTRY.exec(entry.trim())
+  if (!m) return `--backup is not a backup-postgres.sh manifest entry: "${entry.trim()}"`
+  const [, d, t, file, bytes] = m
+  const iso = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}T${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4)}Z`
+  const takenAt = new Date(iso)
+  if (Number.isNaN(takenAt.getTime())) return `--backup has an impossible timestamp: ${d}-${t}`
+  if (Number(bytes) === 0) return `--backup names an empty file: ${file}`
+  return { takenAt, file, bytes: Number(bytes) }
+}
+
+export interface TargetOptions {
+  root: string
+  databaseUrl: string
+  /** The manifest entry of the pre-upgrade backup, or undefined when none was given. */
+  backup: string | undefined
+  backupMaxAgeMinutes: number
+}
+
+/** A backup clock may run slightly ahead of the database's. */
+const CLOCK_SKEW_MS = 5 * 60_000
+
+/**
+ * Reads the ledger and the catalog of the database about to be migrated. The
+ * files the ledger has not applied are pending; the catalog is what they meet.
+ * A database with neither ledger nor schema is fresh: no previous release runs
+ * against it and there is nothing to back up, so nothing is pending judgement.
+ */
+export async function targetInput(opts: TargetOptions): Promise<GateInput> {
+  const migrationsDir = join(opts.root, 'drizzle', 'migrations')
+  const files = listMigrationFiles(migrationsDir)
+  const sql = new SQL({ url: opts.databaseUrl, max: 1, connectionTimeout: 30 })
+  try {
+    const [{ ledger, schema, now }] = (await sql.unsafe(
+      `SELECT to_regclass('public.${LEDGER_TABLE}') IS NOT NULL AS ledger,
+              to_regclass('public.users') IS NOT NULL AS schema,
+              now() AS now`,
+    )) as { ledger: boolean; schema: boolean; now: Date }[]
+    const live = await CatalogSchema.read(sql)
+    if (!ledger && !schema) {
+      console.log('[migration-safety] fresh database: no previous release runs against it, nothing to judge')
+      return { root: opts.root, settled: files, pending: [], live, preflight: [] }
+    }
+    const preflight: Violation[] = []
+    if (!ledger) {
+      return {
+        root: opts.root,
+        settled: files,
+        pending: [],
+        live,
+        preflight: [
+          {
+            message:
+              `the database has a schema but no ${LEDGER_TABLE}, so which files are pending cannot be ` +
+              'told. It predates the ledger; see the CATCH-UP RUN notes in scripts/run-migrations.ts.',
+          },
+        ],
       }
-      const matches = findings.filter(
-        (f) => f.file === e.file && f.statementIndex === e.statementIndex && f.object && describeObject(f.object) === e.object,
-      )
-      if (matches.length === 0) {
-        violations.push({ file: e.file, message: `${at}: matches no finding. An exemption must name a statement this lint rejects.` })
-        continue
-      }
-      const object = matches[0].object as ObjectRef
-      if (ctx.floor.declares(object)) {
-        violations.push({
-          file: e.file,
-          statementIndex: e.statementIndex,
-          message:
-            `${at}: rejected — release floor ${floor.version} still declares ${e.object}, so the previous ` +
-            'release still reads it. Contract it in a release after the one that stops using it.',
+    }
+
+    const rows = (await sql.unsafe(`SELECT filename, checksum, applied_at FROM ${LEDGER_TABLE}`)) as {
+      filename: string
+      checksum: string | null
+      applied_at: Date | null
+    }[]
+    const present = new Set(files)
+    const applied = new Set<string>()
+    let lastChange: Date | undefined
+    for (const r of rows) {
+      if (r.applied_at === null) {
+        preflight.push({
+          file: r.filename,
+          message: `${r.filename} is reserved for an unfinished catch-up run. Finish it with the release that started it.`,
         })
         continue
       }
-      for (const m of matches) exempted.add(m)
+      applied.add(r.filename)
+      if (lastChange === undefined || r.applied_at > lastChange) lastChange = r.applied_at
+      if (!present.has(r.filename)) {
+        preflight.push({
+          file: r.filename,
+          message: `${r.filename} is applied to this database but absent from this release. Shipped migrations are never deleted.`,
+        })
+        continue
+      }
+      const checksum = migrationChecksum(readFileSync(join(migrationsDir, r.filename), 'utf-8'))
+      if (r.checksum !== checksum) {
+        preflight.push({
+          file: r.filename,
+          message: `${r.filename} was applied with checksum ${r.checksum} but this release's copy hashes to ${checksum}. The runner will refuse to start.`,
+        })
+      }
     }
-  }
-  for (const f of findings) {
-    if (!exempted.has(f)) violations.push({ file: f.file, statementIndex: f.statementIndex, message: findingMessage(f) })
-  }
 
-  // ── 3. Schema contract ────────────────────────────────────────────────────
-  for (const message of compareSchemas(floor.snapshot, current)) {
-    violations.push({ message: `schema contract vs ${floor.version}: ${message}` })
-  }
+    // ── The mandatory pre-upgrade backup ──────────────────────────────────────
+    const proof = opts.backup === undefined ? 'no --backup was given' : parseBackupEntry(opts.backup)
+    if (typeof proof === 'string') {
+      preflight.push({ message: `pre-upgrade backup: ${proof}. Upgrading a database without one is refused (${RUNBOOK}).` })
+    } else {
+      const ageMs = now.getTime() - proof.takenAt.getTime()
+      if (lastChange !== undefined && proof.takenAt.getTime() < lastChange.getTime()) {
+        preflight.push({
+          message:
+            `pre-upgrade backup: ${proof.file} was taken at ${proof.takenAt.toISOString()}, before this ` +
+            `database's last schema change at ${lastChange.toISOString()}. It cannot restore the schema being replaced.`,
+        })
+      } else if (ageMs > opts.backupMaxAgeMinutes * 60_000 || ageMs < -CLOCK_SKEW_MS) {
+        preflight.push({
+          message:
+            `pre-upgrade backup: ${proof.file} was taken at ${proof.takenAt.toISOString()} and the database ` +
+            `clock reads ${now.toISOString()}; it must be from the last ${opts.backupMaxAgeMinutes} minutes.`,
+        })
+      } else {
+        console.log(`[migration-safety] pre-upgrade backup ${proof.file} (${proof.bytes} bytes, ${proof.takenAt.toISOString()})`)
+      }
+    }
 
-  return { floorVersion: floor.version, judgedFiles, exempted: exempted.size, violations }
+    return {
+      root: opts.root,
+      settled: files.filter((f) => applied.has(f)),
+      pending: files.filter((f) => !applied.has(f)),
+      live,
+      preflight,
+    }
+  } finally {
+    await sql.close()
+  }
+}
+
+// ── CLI ──────────────────────────────────────────────────────────────────────
+
+function arg(name: string): string | undefined {
+  const i = process.argv.indexOf(name)
+  if (i === -1) return undefined
+  const v = process.argv[i + 1]
+  if (v === undefined || v.startsWith('--')) {
+    console.error(`${name} needs a value`)
+    process.exit(2)
+  }
+  return v
 }
 
 if (import.meta.main) {
   const ci = process.argv.includes('--ci')
-  const i = process.argv.indexOf('--root')
-  const root = i === -1 ? join(import.meta.dir, '..') : process.argv[i + 1]
-  if (root === undefined) {
-    console.error('--root needs a directory')
+  const target = process.argv.includes('--target')
+  if (ci === target) {
+    console.error('usage: check-migration-safety.ts --ci [--base <rev>] | --target --backup <manifest entry>   [--root <repo>]')
     process.exit(2)
   }
-  const report = await checkMigrationSafety(root)
+  const root = arg('--root') ?? join(import.meta.dir, '..')
+
+  let input: GateInput
+  if (ci) {
+    const base = arg('--base') ?? git(root, 'merge-base', 'origin/main', 'HEAD').trim()
+    input = await ciInput(root, base)
+    console.log(`[migration-safety] --ci: judging the migrations added since ${base}`)
+  } else {
+    const databaseUrl = process.env.DATABASE_URL
+    if (!databaseUrl) {
+      console.error('--target needs DATABASE_URL: the database this deploy is about to migrate')
+      process.exit(2)
+    }
+    const maxAge = Number(arg('--backup-max-age-minutes') ?? '60')
+    if (!Number.isFinite(maxAge) || maxAge <= 0) {
+      console.error('--backup-max-age-minutes must be a positive number')
+      process.exit(2)
+    }
+    input = await targetInput({ root, databaseUrl, backup: arg('--backup'), backupMaxAgeMinutes: maxAge })
+    console.log('[migration-safety] --target: judging the migrations this database has not applied')
+  }
+
+  const report = await judge(input)
   console.log(
-    `[migration-safety] judged ${report.judgedFiles.length} new migration file(s) against release floor ` +
-      `${report.floorVersion}${report.judgedFiles.length ? `: ${report.judgedFiles.join(', ')}` : ''}` +
-      (report.exempted ? `; ${report.exempted} finding(s) exempted by drizzle/contract.json` : ''),
+    `[migration-safety] judged ${report.judgedFiles.length} pending migration file(s) against ` +
+      `${report.previousSnapshot ?? 'no previous snapshot'}` +
+      `${report.judgedFiles.length ? `: ${report.judgedFiles.join(', ')}` : ''}` +
+      (report.allowed ? `; ${report.allowed} finding(s) allowed by verified annotations` : ''),
   )
   for (const v of report.violations) {
-    if (ci) {
+    if (ci && process.env.GITHUB_ACTIONS === 'true') {
       const file = v.file ? ` file=drizzle/migrations/${v.file}` : ''
       console.log(`::error${file}::${v.message}`)
     } else {
@@ -803,7 +1257,7 @@ if (import.meta.main) {
     }
   }
   if (report.violations.length > 0) {
-    console.error(`[migration-safety] FAILED — ${report.violations.length} violation(s)`)
+    console.error(`[migration-safety] FAILED: ${report.violations.length} violation(s)`)
     process.exit(1)
   }
   console.log('[migration-safety] OK')

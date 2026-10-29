@@ -1,4 +1,0 @@
-{
-  "description": "Destructive migration statements whose object the release floor no longer declares. Each entry is verified by scripts/check-migration-safety.ts, never trusted, and is removed once its file ships. See docs/runbooks/migrations.md.",
-  "exemptions": []
-}

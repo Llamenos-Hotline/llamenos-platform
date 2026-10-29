@@ -178,14 +178,6 @@ scripts/regenerate-snapshot.ts      @rhonda-rodododo
 scripts/image-smoke.sh              @rhonda-rodododo
 scripts/verify-runtime.ts           @rhonda-rodododo
 scripts/run-migrations.ts           @rhonda-rodododo
-# The migration safety gate's inputs (scripts/check-migration-safety.ts is
-# owned by the check-* glob). The floor names the release whose files are out
-# of the lint's scope and whose snapshot an exemption is verified against, so
-# editing it, the exemption list, or the script knope runs to write it widens
-# what the gate lets through.
-scripts/record-release-floor.ts     @rhonda-rodododo
-drizzle/compat/                     @rhonda-rodododo
-drizzle/contract.json               @rhonda-rodododo
 # Test runners: exit 0 from any of these is a PASS someone acts on.
 # test-backend-bdd.sh is CI's backend-bdd job (`bun run test:backend:bdd`);
 # test-orchestrator.sh is `test:all`, which aggregates the per-platform
