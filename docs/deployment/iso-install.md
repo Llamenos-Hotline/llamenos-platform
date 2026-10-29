@@ -65,9 +65,12 @@ that don't run DHCP during install):
 bun run build:iso \
   --hostname llamenos-01 \
   --ssh-key ~/.ssh/id_ed25519.pub \
-  --static-ip 93.95.226.10/24 \
-  --gateway 93.95.226.1
+  --static-ip 203.0.113.10/24 \
+  --gateway 203.0.113.1
 ```
+
+(`203.0.113.0/24` is the RFC 5737 documentation range — substitute the address
+and gateway your provider assigned.)
 
 For console unlock instead of dropbear (if your network is unreliable):
 

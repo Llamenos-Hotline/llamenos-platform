@@ -4,8 +4,10 @@
 #   cp inventory-production.example.yml inventory-production.yml   # gitignored
 #   $EDITOR inventory-production.yml
 #
-# Pass it with `-i inventory-production.yml` (deploy-official.sh and the
-# deploy-prod workflow do). Never commit the filled-in copy.
+# Pass it with `-i inventory-production.yml` (deploy-official.sh does). Deploys
+# run from your own machine only — never commit the filled-in copy, and never put
+# it in a CI secret. (The official instance keeps its copy in the operator's OS
+# keyvault and the private llamenos-internal repo.)
 #
 #   llamenos-platform1  full-disk encryption (the FDE installer ISO). App, API,
 #                       PostgreSQL, RustFS, backups, every secret incl. the APNs key.

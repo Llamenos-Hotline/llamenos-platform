@@ -30,10 +30,10 @@ must set:
 ```yaml
 llamenos_ntfy_enabled: true
 # Public name Android devices subscribe through. Must be a subdomain of the
-# pinned domain (llamenos-hotline.org for the official build) with a real DNS
+# domain your Android build pins, with a real DNS
 # record and a valid TLS certificate, reachable from testers' phones (same
 # constraint as the staging host itself, #726 / #954).
-ntfy_domain: "push.<staging host>.llamenos-hotline.org"
+ntfy_domain: "push.<your domain>"
 # Leave ntfy_auth_token unset: the role mints it with `ntfy token add` on
 # first deploy and persists it on the host.
 ```
@@ -61,11 +61,12 @@ verification below moved into `playbooks/deploy.yml` and still fails the run.
    - an anonymous subscriber polling that topic receives the message.
 2. **On the host** — `playbooks/smoke-check.yml` probes
    `http://localhost:2586/v1/health` whenever `llamenos_ntfy_enabled` is true.
-3. **Continuously** — `.github/workflows/verify-release-live.yml`
-   (staging-backend job) requests `<STAGING_NTFY_URL>/v1/health` every 6
-   hours and on demand. It **fails** if the repository variable
-   `STAGING_NTFY_URL` is unset, or the relay is unreachable or not healthy.
-   Set the variable to `https://<ntfy_domain>` when the staging host exists.
+
+There is deliberately **no** continuous check from GitHub Actions: a workflow
+probing the relay would need GitHub to hold the relay's hostname, and
+deployment internals are kept out of GitHub (the operator's OS keyvault and
+`llamenos-internal` hold them). Re-run the checks above from local — a
+`deploy.yml` / `smoke-check.yml` run, or the spot check below.
 
 Manual spot check from any machine:
 
