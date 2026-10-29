@@ -298,8 +298,9 @@ bun run test:backend:bdd                 # Backend BDD against local backend (AP
 
 # Publish the marketing site (run LOCALLY — CI never publishes; see "Publishing vs deploying" below)
 # These touch ONLY the marketing site (Cloudflare Pages). `deploy` is an alias for `deploy:site`.
-# The server is deployed by the Ansible playbooks in `deploy/ansible/`, dispatched from the
-# `deploy-prod.yml` GitHub Actions workflow — there is no `bun run` script for it.
+# The server is deployed from the operator's own machine by running the Ansible playbooks in
+# `deploy/ansible/` (`deploy/scripts/deploy-official.sh`) — never from GitHub Actions, and there
+# is no `bun run` script for it.
 bun run deploy                           # Marketing site (alias for deploy:site)
 bun run deploy:site                      # Marketing site
 
@@ -317,7 +318,7 @@ bun run bootstrap-admin                  # Generate admin keypair
 **Publishing vs deploying — read this before adding a workflow.** Two different things, two different homes:
 
 - **Publishing is LOCAL, never CI.** The marketing site (Cloudflare Pages), the Android/iOS/desktop apps (including store submission), the ISOs and the Docker images are all published from the operator's own machine. **CI builds and gates; it never ships.** Do not add a workflow, job or step that uploads to Cloudflare Pages, an app store, a container registry or any other distribution channel, and do not wire Cloudflare/Docker Hub/store credentials into Actions secrets for one. (`deploy-site.yml` and `docker.yml` were removed for this reason, #2095.)
-- **Deploying the server is CI.** `deploy-prod.yml` dispatches the Ansible playbooks in `deploy/ansible/` against our own VPSes. That is intended and stays.
+- **Deploying the server is LOCAL too.** The operator runs the Ansible playbooks in `deploy/ansible/` against our VPSes from their own machine (`deploy/scripts/deploy-official.sh`, or `ansible-playbook` directly). No workflow deploys to, or live-checks, a VPS — `deploy-prod.yml` was removed for this reason. **GitHub must not know deployment internals**: no hostname, IP, SSH user or key, server path, non-default port, inventory, vault password, or deploy environment may live in an Actions secret, variable, environment or workflow file. Those are kept in the operator's OS keyvault and in `llamenos-internal`. CI may still *test* the playbooks (syntax-check, ansible-lint, the backup/restore round-trip in throwaway containers) — that is gating, not deploying.
 - **Known exceptions that predate this rule — do not extend them:** `release.yml` (the tag and the draft GitHub Release it attaches build outputs to, and the `docker-stable` GHCR image) and `tauri-release.yml` (desktop updater channel). They are tracked for an operator decision, not a precedent for new publish steps.
 - The marketing site is the only thing that may sit on a CDN (Cloudflare Pages, published locally). That is separate from the app-host rule in Gotchas: the app host terminates TLS on the origin and must never be behind a CDN or proxy.
 

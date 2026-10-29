@@ -6,10 +6,6 @@
       "required": true,
       "description": "Latest GitHub Release carries a signed installer per required platform, each matching CHECKSUMS.txt"
     },
-    "staging-backend": {
-      "required": true,
-      "description": "Staging backend health, setup state and ntfy push relay"
-    },
     "play-track": {
       "required": true,
       "description": "Play internal track versionCode matches the latest release"

@@ -61,11 +61,9 @@ verification below moved into `playbooks/deploy.yml` and still fails the run.
    - an anonymous subscriber polling that topic receives the message.
 2. **On the host** — `playbooks/smoke-check.yml` probes
    `http://localhost:2586/v1/health` whenever `llamenos_ntfy_enabled` is true.
-3. **Continuously** — `.github/workflows/verify-release-live.yml`
-   (staging-backend job) requests `<STAGING_NTFY_URL>/v1/health` every 6
-   hours and on demand. It **fails** if the repository variable
-   `STAGING_NTFY_URL` is unset, or the relay is unreachable or not healthy.
-   Set the variable to `https://<ntfy_domain>` when the staging host exists.
+3. **After a deploy, from the operator's machine** — `curl` the relay as below.
+   There is deliberately no GitHub workflow polling it: that would make GitHub
+   hold the relay's hostname, and deployment internals stay out of GitHub.
 
 Manual spot check from any machine:
 

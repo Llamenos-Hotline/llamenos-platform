@@ -16,14 +16,13 @@ Deploy the Llamenos project's production servers: the platform host on 1984 Host
 - **App image:** `llamenos_app_image` set to an image that exists (the vars.yml default `docker.io/llamenos/llamenos:latest` is not published — first-deploy.md, "Getting the app image onto the server")
 - **Ansible Vault:** password shared among maintainers via a secure channel
 
-### Required GitHub Secrets (production environment) — for the CI deploy only
+### Where the deployment inputs live
 
-| Secret | Description |
-|---|---|
-| `PROD_INVENTORY_YML` | Content of `inventory-production.yml` (both hosts: IPs, SSH port/user, `llamenos_disk_encrypted`) |
-| `PROD_VARS_YML_ENCRYPTED` | Content of the vault-encrypted `vars-production.yml` |
-| `ANSIBLE_VAULT_PASSWORD` | Vault decryption password |
-| `PROD_SSH_PRIVATE_KEY` | SSH key for the deploy user — the workflow installs this one key, so it must be authorized on **both** hosts |
+Every deploy runs **from an operator's own machine** — never from GitHub Actions.
+The filled-in `inventory-production.yml` (hosts, SSH port/user), the
+vault-encrypted `vars-production.yml`, the vault password and the deploy SSH key
+are kept in the operator's OS keyvault and in `llamenos-internal`. None of them
+is a GitHub secret, variable or environment, and none belongs in this repository.
 
 ## Steps
 
@@ -47,15 +46,12 @@ first-deploy.md, step 4.
 ./deploy/scripts/deploy-official.sh --tags app   # single service
 ```
 
-Or via CI: run the `Deploy Production` workflow from GitHub Actions. On a **fresh**
-VPS do not start here: `harden.yml` moves sshd off port 22 and the inventory must
-be updated between hardening and deploying (first-deploy.md, step 6).
+On a **fresh** VPS do not start here: `harden.yml` moves sshd off port 22 and the
+inventory must be updated between hardening and deploying (first-deploy.md, step 6).
 
 ### Subsequent updates
 
-Via CI (recommended): GitHub Actions > Deploy Production > Run workflow
-
-Via CLI: `./deploy/scripts/deploy-official.sh`, or the health-gated
+From your machine: `./deploy/scripts/deploy-official.sh`, or the health-gated
 `ansible-playbook playbooks/update.yml -i inventory-production.yml -e @vars-production.yml --ask-vault-pass`
 
 ## Verification

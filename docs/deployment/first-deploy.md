@@ -14,7 +14,7 @@ Companion documents (this one is the map; those hold the detail):
 | Document | Covers |
 |---|---|
 | [`iso-install.md`](iso-install.md) | Building and installing the full-disk-encryption (FDE) installer ISO, LUKS unlock |
-| [`../runbooks/deploy-official.md`](../runbooks/deploy-official.md) | Day-2 deploys of the official profile, GitHub Actions deploy |
+| [`../runbooks/deploy-official.md`](../runbooks/deploy-official.md) | Day-2 deploys of the official profile, run from the operator's machine |
 | [`../runbooks/dns-migration.md`](../runbooks/dns-migration.md) | Moving an existing zone to the new DNS host |
 | [`../runbooks/desktop-update-release.md`](../runbooks/desktop-update-release.md) | Publishing desktop updates to the self-hosted origin |
 | [`../runbooks/disaster-recovery.md`](../runbooks/disaster-recovery.md) | Backups, restore, DR test |
@@ -426,7 +426,7 @@ ansible-vault view    vars-production.yml     # sanity-check it decrypts
 #### What the vault password is for
 
 It is the symmetric key that encrypts `vars-production.yml` **on your machine and
-in git/CI storage** — that file holds every secret in the deployment (database
+wherever the encrypted copy is kept** — that file holds every secret in the deployment (database
 password, HMAC/server secrets, storage keys). It is used only by Ansible on the
 control node to decrypt the vars at run time; it is never sent to the server. On
 the server the secrets exist only as the rendered `0600` `.env` files under
@@ -434,9 +434,9 @@ the server the secrets exist only as the rendered `0600` `.env` files under
 passphrase) and it is not derived from anything: lose it and you cannot decrypt
 `vars-production.yml` (you would regenerate and rotate the secrets). Keep it in a
 password manager, out of the repo and out of shell history; pass it with
-`--ask-vault-pass` interactively or `--vault-password-file` for automation. The
-GitHub `deploy-prod.yml` workflow reads it from the `ANSIBLE_VAULT_PASSWORD`
-environment secret.
+`--ask-vault-pass` interactively or `--vault-password-file` for automation.
+Deploys run only from an operator's machine, so the vault password never becomes
+a GitHub secret.
 
 ### Getting the app image onto the server
 
