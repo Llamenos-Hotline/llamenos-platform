@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
 import { jsonb } from '../bun-jsonb'
 
 // ---------------------------------------------------------------------------
@@ -111,6 +112,13 @@ export const callTokens = pgTable(
  *
  * `recording_sid` is the adapter's handle from `parseRecordingWebhook`; it is
  * opaque here and only ever handed back to the same hub's adapter.
+ *
+ * A NULL `recording_sid` is UNADDRESSABLE residue (#2309 follow-up): the
+ * provider reported a completed recording but its webhook carried no handle
+ * this server could address a deletion by. The audio is at the provider and
+ * nothing here can delete it, so the row is never resolved by a deletion — it
+ * fails every one (retention purge keeps the call record, hub shred refuses)
+ * and is reported by the recording-posture read-back as `addressable: false`.
  */
 export const providerRecordings = pgTable(
   'provider_recordings',
@@ -118,7 +126,7 @@ export const providerRecordings = pgTable(
     id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
     hubId: text('hub_id').notNull().default(''),
     callId: text('call_id').notNull(),
-    recordingSid: text('recording_sid').notNull(),
+    recordingSid: text('recording_sid'),
     /**
      * SHA-256 of the adapter's `providerAccountId()` when the recording was
      * made. Deletion goes only through an adapter for the SAME account — a
@@ -134,6 +142,11 @@ export const providerRecordings = pgTable(
   },
   (table) => [
     uniqueIndex('provider_recordings_hub_recording_idx').on(table.hubId, table.recordingSid),
+    // NULL handles are distinct to the index above, so a redelivered webhook
+    // would duplicate residue; one row per (hub, call, kind) is the dedupe key.
+    uniqueIndex('provider_recordings_unaddressable_idx')
+      .on(table.hubId, table.callId, table.kind)
+      .where(sql`${table.recordingSid} IS NULL`),
     index('provider_recordings_call_idx').on(table.callId),
     index('provider_recordings_kind_created_idx').on(table.kind, table.createdAt),
   ],

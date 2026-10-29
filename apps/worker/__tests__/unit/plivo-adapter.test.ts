@@ -616,6 +616,29 @@ describe('PlivoAdapter', () => {
       expect(result.callSid).toBe('CA123')
     })
 
+    it('recovers the id from RecordUrl when RecordingID is absent', async () => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallUUID=CA123&RecordUrl='
+          + encodeURIComponent('https://media.plivo.com/v1/Account/MA1/Recording/4a5b6c7d-0000-1111-2222-333344445555.mp3'),
+      })
+      const result = await adapter.parseRecordingWebhook(request)
+      expect(result.status).toBe('completed')
+      expect(result.recordingSid).toBe('4a5b6c7d-0000-1111-2222-333344445555')
+    })
+
+    it('yields no handle when RecordingID is absent and RecordUrl names no recording', async () => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordUrl=https://example.com/rec.mp3&CallUUID=CA123',
+      })
+      const result = await adapter.parseRecordingWebhook(request)
+      expect(result.status).toBe('completed')
+      expect(result.recordingSid).toBeUndefined()
+    })
+
     it('parses failed recording when RecordUrl is missing', async () => {
       const request = new Request('https://example.com/webhook', {
         method: 'POST',

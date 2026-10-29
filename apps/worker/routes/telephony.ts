@@ -580,7 +580,22 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
   const parentCallSid = url.searchParams.get('parentCallSid') || ''
   const hubId = (await services.calls.getHubIdForCall(parentCallSid)) || undefined
   const adapter = (await getHubAdapter(c.env, services, hubId))!
-  const { status: recordingStatus, recordingSid } = await adapter.parseRecordingWebhook(c.req.raw)
+  const { status: recordingStatus, recordingSid, callSid: webhookCallSid } = await adapter.parseRecordingWebhook(c.req.raw)
+
+  if (recordingStatus === 'completed') {
+    // #2297: the provider now holds this call's audio. It is kept there for
+    // playback (the hub opted in to call recording), so it is tracked until
+    // the call record's retention purge or a hub shred deletes it — tracked
+    // first, before anything below can throw. Without a handle it is tracked
+    // as unaddressable residue: the audio exists either way, and an untracked
+    // recording is indistinguishable from one that was never made.
+    const callId = parentCallSid || webhookCallSid || ''
+    if (recordingSid) {
+      await services.providerRecordings.track({ hubId: hubId ?? '', callId, recordingSid, kind: 'call', adapter })
+    } else {
+      await services.providerRecordings.trackUnaddressable({ hubId: hubId ?? '', callId, kind: 'call', adapter })
+    }
+  }
 
   if (recordingStatus === 'completed' && parentCallSid) {
     // Get call info before ending (for audit); also resolves pubkey via answeredBy
@@ -604,15 +619,9 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
     }
 
     if (recordingSid) {
-      // #2297: the provider now holds this call's audio. It is kept there for
-      // playback (the hub opted in to call recording), so it is tracked until
-      // the call record's retention purge or a hub shred deletes it.
-      await services.providerRecordings.track({ hubId: hubId ?? '', callId: parentCallSid, recordingSid, kind: 'call', adapter })
       backgroundTask(c,
         maybeTranscribe(parentCallSid, recordingSid, pubkey, c.env, services)
       )
-    } else {
-      logger.error('Call recording webhook carried no recording handle — the provider copy cannot be tracked or deleted', { parentCallSid })
     }
   }
 
@@ -629,6 +638,18 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
   const callSid = url.searchParams.get('callSid') || ''
 
   if (recordingStatus === 'completed') {
+    // #2297: tracked before anything else — markVoicemail below throws for an
+    // unknown call, and the provider holds the audio regardless. Tracked
+    // synchronously so the handle survives even if the background task does
+    // not; the sweep worker finishes a deletion that failed here. Without a
+    // handle the recording cannot be fetched or deleted, so it is tracked as
+    // unaddressable residue rather than lost.
+    if (recordingSid) {
+      await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid, kind: 'voicemail', adapter })
+    } else {
+      await services.providerRecordings.trackUnaddressable({ hubId: hubId ?? '', callId: callSid, kind: 'voicemail', adapter })
+    }
+
     // Throws 404 if there is no call record at all — that would mean a message was left
     // for a call the hotline never recorded, which must be loud, not silent (#1043).
     await services.calls.markVoicemail(hubId ?? '', callSid)
@@ -651,9 +672,6 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
 
     if (recordingSid) {
       // #2297: fetch, transcribe if enabled, then delete the provider's copy.
-      // Tracked synchronously so the handle survives even if the background
-      // task does not; the sweep worker finishes a deletion that failed here.
-      await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid, kind: 'voicemail', adapter })
       backgroundTask(c, processVoicemailRecording({
         env: c.env,
         services,
@@ -666,8 +684,6 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
           logger.error('Voicemail left at the provider: deletion failed, will be retried', { callSid, error: outcome.error })
         }
       }))
-    } else {
-      logger.error('Voicemail recording webhook carried no recording handle — the provider copy cannot be deleted', { callSid })
     }
   }
 

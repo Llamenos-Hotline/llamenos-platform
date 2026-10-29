@@ -905,6 +905,20 @@ describe('BandwidthAdapter', () => {
       expect(result.recordingSid).toBeUndefined()
     })
 
+    it('recovers the handle from mediaUrl when an id is missing', async () => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        body: JSON.stringify({
+          eventType: 'recordComplete',
+          recordingId: 'rec-4',
+          mediaUrl: 'https://voice.bandwidth.com/api/v2/accounts/9900/calls/c-86d0-4b9e/recordings/r-fbe0-4ef9/media',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const result = await adapter.parseRecordingWebhook(request)
+      expect(result.recordingSid).toBe('c-86d0-4b9e/r-fbe0-4ef9')
+    })
+
     it('returns failed for other event types', async () => {
       const request = new Request('https://example.com/webhook', {
         method: 'POST',

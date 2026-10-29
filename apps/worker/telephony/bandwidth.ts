@@ -525,9 +525,11 @@ export class BandwidthAdapter implements TelephonyAdapter {
     if (event.eventType === 'recordingAvailable' || event.eventType === 'recordComplete') {
       return {
         status: 'completed',
+        // mediaUrl (`…/calls/{callId}/recordings/{recordingId}/media`) names
+        // the same pair, so a callback missing either id is still addressable.
         recordingSid: event.recordingId && event.callId
           ? bandwidthRecordingHandle(event.callId, event.recordingId)
-          : undefined,
+          : bandwidthRecordingHandleFromMediaUrl(event.mediaUrl) ?? undefined,
         callSid: event.callId ?? undefined,
       }
     }
@@ -541,6 +543,19 @@ const BANDWIDTH_ID = /^[A-Za-z0-9-]+$/
 /** `callId/recordingId` — the pair Bandwidth addresses a call recording by. */
 export function bandwidthRecordingHandle(callId: string, recordingId: string): string {
   return `${callId}/${recordingId}`
+}
+
+/** The handle a recording's `mediaUrl` names, or null when it names none. */
+export function bandwidthRecordingHandleFromMediaUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  let path: string
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return null
+  }
+  const match = /\/calls\/([A-Za-z0-9-]+)\/recordings\/([A-Za-z0-9-]+)\/media$/.exec(path)
+  return match ? bandwidthRecordingHandle(match[1], match[2]) : null
 }
 
 /** The inverse, refusing anything that could escape the path it is spliced into. */

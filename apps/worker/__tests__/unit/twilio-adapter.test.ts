@@ -722,6 +722,29 @@ describe('TwilioAdapter', () => {
       expect(result.callSid).toBe('CA123')
     })
 
+    it('recovers the sid from RecordingUrl when RecordingSid is absent', async () => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed&CallSid=CA123&RecordingUrl='
+          + encodeURIComponent('https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE0123abcd'),
+      })
+      const result = await adapter.parseRecordingWebhook(request)
+      expect(result.status).toBe('completed')
+      expect(result.recordingSid).toBe('RE0123abcd')
+    })
+
+    it('yields no handle when neither RecordingSid nor a recognisable RecordingUrl is sent', async () => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed&CallSid=CA123&RecordingUrl=' + encodeURIComponent('https://api.twilio.com/elsewhere'),
+      })
+      const result = await adapter.parseRecordingWebhook(request)
+      expect(result.status).toBe('completed')
+      expect(result.recordingSid).toBeUndefined()
+    })
+
     it('parses failed recording', async () => {
       const request = new Request('https://example.com/webhook', {
         method: 'POST',

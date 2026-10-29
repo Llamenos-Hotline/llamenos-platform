@@ -91,6 +91,7 @@ function makeServices(): Services {
     },
     providerRecordings: {
       track: vi.fn().mockResolvedValue(undefined),
+      trackUnaddressable: vi.fn().mockResolvedValue(undefined),
       deleteHeld: vi.fn().mockResolvedValue({ deleted: 1, failed: [] }),
     },
     identity: {
@@ -976,6 +977,25 @@ describe('Telephony routes', () => {
       expect(adapter.emptyResponse).toHaveBeenCalled()
     })
 
+    it('tracks a completed recording that carried no handle as unaddressable residue, never drops it', async () => {
+      // The provider holds this audio but named no handle: before the fix the
+      // route logged and wrote nothing, so the recording was indistinguishable
+      // from one never made.
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'completed', callSid: 'CA-child' })
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/call-recording?parentCallSid=CA-parent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed',
+      })
+      expect(res.status).toBe(200)
+      expect(services.providerRecordings.trackUnaddressable).toHaveBeenCalledWith({
+        hubId: 'hub-1', callId: 'CA-parent', kind: 'call', adapter,
+      })
+      expect(services.providerRecordings.track).not.toHaveBeenCalled()
+    })
+
     it('does not end call on failed recording', async () => {
       adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({
         status: 'failed',
@@ -1060,6 +1080,28 @@ describe('Telephony routes', () => {
       })
       expect(res.status).toBe(404)
       expect(services.calls.endCall).not.toHaveBeenCalled()
+      // The provider holds the audio whether or not the call is known here.
+      expect(services.providerRecordings.track).toHaveBeenCalledWith({
+        hubId: 'hub-1', callId: 'CA-none', recordingSid: 'RE-vm', kind: 'voicemail', adapter,
+      })
+    })
+
+    it('tracks a completed voicemail that carried no handle as unaddressable residue, never drops it', async () => {
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'completed', callSid: 'CA-vm' })
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/voicemail-recording?hub=hub-1&callSid=CA-vm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed',
+      })
+      expect(res.status).toBe(200)
+      expect(services.providerRecordings.trackUnaddressable).toHaveBeenCalledWith({
+        hubId: 'hub-1', callId: 'CA-vm', kind: 'voicemail', adapter,
+      })
+      expect(services.providerRecordings.track).not.toHaveBeenCalled()
+      // Nothing to fetch or delete with: no deletion is attempted, and none reported.
+      expect(services.providerRecordings.deleteHeld).not.toHaveBeenCalled()
     })
 
     it('does nothing on non-completed status', async () => {
@@ -1076,6 +1118,8 @@ describe('Telephony routes', () => {
       })
       expect(res.status).toBe(200)
       expect(services.calls.markVoicemail).not.toHaveBeenCalled()
+      expect(services.providerRecordings.track).not.toHaveBeenCalled()
+      expect(services.providerRecordings.trackUnaddressable).not.toHaveBeenCalled()
     })
   })
 })
