@@ -1,5 +1,6 @@
 import { TwilioAdapter } from './twilio'
 import { buildWebhookUrl } from '../lib/webhook-url'
+import type { ProviderSettingReading } from '@protocol/schemas/settings'
 
 /**
  * SignalWire adapter — extends TwilioAdapter since SignalWire is API-compatible.
@@ -20,6 +21,24 @@ export class SignalWireAdapter extends TwilioAdapter {
 
   protected override getRecordingBaseUrl(): string {
     return `https://${this.space}.signalwire.com/api/laml/2010-04-01/Accounts/${this.accountSid}`
+  }
+
+  protected override get providerLabel(): string {
+    return 'SignalWire'
+  }
+
+  /** SignalWire SIP trunks carry no features — no recording, no call control. */
+  protected override async readTrunkRecording(trunkSid: string): Promise<ProviderSettingReading> {
+    return { state: 'off', evidence: `SignalWire SIP trunk ${trunkSid} has no recording feature` }
+  }
+
+  /**
+   * SignalWire publishes no account-level transcription setting to read: cXML
+   * transcription is per-<Record> (which this server never sets) and SWML
+   * live_transcribe is per-script, covered by the number-routing reading.
+   */
+  protected override async readAccountTranscriptionSettings(): Promise<ProviderSettingReading[]> {
+    return []
   }
 
   override async validateWebhook(request: Request): Promise<boolean> {

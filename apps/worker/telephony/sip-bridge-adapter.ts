@@ -1,7 +1,8 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { getPrompt } from '@shared/voice-prompts'
 import { speechLanguageFor } from '../services/ivr-speech/voices'
-import { AllDialsFailedError } from './adapter'
+import { AllDialsFailedError, ProviderRecordingDeleteError } from './adapter'
+import type { ProviderRecordingPosture } from '@protocol/schemas/settings'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -19,6 +20,7 @@ import type {
   WebhookQueueResult,
   WebhookQueueWait,
   WebhookRecordingStatus,
+  RecordingPostureContext,
 } from './adapter'
 
 /**
@@ -173,7 +175,44 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
   }
 
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
-    return this.fetchRecording(`/recordings/${recordingSid}`)
+    return this.fetchRecording(`/recordings/${encodeURIComponent(recordingSid)}`)
+  }
+
+  /**
+   * The handle is the bridge's recording name (`voicemail-<channel>` /
+   * `call-<channel>`). The bridge answers 200 only once the PBX's stored file
+   * is gone (or was already gone); any other answer is a failure here.
+   */
+  async deleteRecording(recordingSid: string): Promise<void> {
+    try {
+      await this.bridgeRequest('DELETE', `/recordings/${encodeURIComponent(recordingSid)}`)
+    } catch (err) {
+      throw new ProviderRecordingDeleteError(
+        this.getPbxType(),
+        null,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+  }
+
+  /**
+   * The PBX is ours, and the bridge records only on this server's command —
+   * but a recording configured in the PBX's own dialplan (MixMonitor,
+   * record_session) or a speech module never passes through the bridge, so
+   * neither can be read from here. Reported unknown, not assumed off.
+   */
+  async probeRecordingPosture(_context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
+    const pbx = this.getPbxType()
+    return {
+      recording: {
+        state: 'unknown',
+        reason: `recording configured in the ${pbx} dialplan itself does not pass through the bridge and cannot be read from here`,
+      },
+      transcription: {
+        state: 'unknown',
+        reason: `a speech-to-text module loaded in ${pbx} does not pass through the bridge and cannot be read from here`,
+      },
+    }
   }
 
   // --- Webhook validation (shared) ---

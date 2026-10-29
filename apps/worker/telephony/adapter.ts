@@ -1,3 +1,5 @@
+import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
+
 // --- Webhook result types (provider-agnostic) ---
 
 export interface WebhookCallInfo {
@@ -128,8 +130,37 @@ export interface TelephonyAdapter {
 
   /**
    * Get recording audio directly by recording SID.
+   *
+   * `recordingSid` is the handle `parseRecordingWebhook` returned — opaque to
+   * business logic; each adapter decides what it encodes.
    */
   getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null>
+
+  /**
+   * Delete a recording AT THE PROVIDER (#2297). Caller audio on a provider's
+   * disk is outside the E2EE boundary and outside GDPR erasure, so every
+   * recording the provider makes for us is fetched and then deleted there.
+   *
+   * `recordingSid` is the handle `parseRecordingWebhook` returned.
+   *
+   * Resolves only once the provider confirms the recording is gone, or reports
+   * it no longer exists (a 404 — deleted earlier, or expired). MUST reject in
+   * every other case — refused, unreachable, unauthorised, unsupported. A
+   * silent no-op here reads to every caller as "deleted", which is worse than
+   * an error: the caller stops tracking audio the provider still holds.
+   */
+  deleteRecording(recordingSid: string): Promise<void>
+
+  /**
+   * Read, with this hub's provider credentials, whether the provider is
+   * recording or transcribing calls on its own — anything this server did not
+   * request (#1505). Each reading is evidence-backed: a setting this probe
+   * could not read is reported `unknown` with the reason, never `off`.
+   *
+   * MUST NOT throw for a provider-side failure: an unreadable setting is a
+   * reading (`unknown`), not an error.
+   */
+  probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture>
 
   // --- Webhook parsing (provider-specific field names → agnostic types) ---
 
@@ -300,6 +331,108 @@ export interface SpeechUrlBuilder {
    * (#1352): the challenge is the answer, and must not be readable from a log.
    */
   captchaDigit(digit: string, locale: string): string
+}
+
+/** What the recording-posture probe needs to know from this server. */
+export interface RecordingPostureContext {
+  /**
+   * Of these recording handles (in the form `parseRecordingWebhook` returns),
+   * the ones this server requested and still tracks as held at the provider —
+   * across every hub, since hubs may share one provider account.
+   */
+  trackedRecordings(handles: string[]): Promise<Set<string>>
+}
+
+/**
+ * Thrown by `deleteRecording` when the provider did not confirm the deletion.
+ * Carries the provider's own status so the refusal can be recorded verbatim.
+ */
+export class ProviderRecordingDeleteError extends Error {
+  constructor(
+    public readonly provider: string,
+    public readonly status: number | null,
+    detail: string,
+  ) {
+    super(`${provider} recording deletion failed${status !== null ? `: ${status}` : ''}${detail ? ` ${detail.slice(0, 200)}` : ''}`)
+    this.name = 'ProviderRecordingDeleteError'
+  }
+}
+
+/**
+ * Shared post-condition for `TelephonyAdapter.deleteRecording` REST
+ * implementations: a 2xx means the provider deleted it, a 404 means it is
+ * already gone. Anything else throws — the recording must stay tracked.
+ */
+export async function assertRecordingDeleted(res: Response, provider: string): Promise<void> {
+  if (res.ok || res.status === 404) return
+  const detail = await res.text().catch(() => '')
+  throw new ProviderRecordingDeleteError(provider, res.status, detail)
+}
+
+/**
+ * A recording younger than this may simply not have reached our webhook yet,
+ * so the inventory check cannot tell "requested, callback in flight" from
+ * "never requested". It is left out of the comparison and said so.
+ */
+export const RECORDING_IN_FLIGHT_MS = 15 * 60 * 1000
+
+/** A provider-side read that failed, as a reading: `unknown`, with why. */
+export function unreadable(provider: string, what: string, cause: Response | unknown): ProviderSettingReading {
+  const why = cause instanceof Response
+    ? `${provider} answered ${cause.status}`
+    : `${provider} could not be reached (${cause instanceof Error ? cause.message : String(cause)})`
+  return { state: 'unknown', reason: `could not read ${what}: ${why}` }
+}
+
+/**
+ * Compare what the provider holds with what this server requested. Anything
+ * the provider holds that this server did not ask for means the provider is
+ * recording (or transcribing) on its own.
+ */
+export async function inventoryReading(params: {
+  provider: string
+  /** What is being inventoried, e.g. "recordings", "transcriptions". */
+  what: string
+  /** Where it was read from, for the evidence string. */
+  source: string
+  listed: Array<{ handle: string; createdAt?: Date | null }>
+  context: RecordingPostureContext
+  now?: number
+}): Promise<ProviderSettingReading> {
+  const now = params.now ?? Date.now()
+  const settled = params.listed.filter(r => !r.createdAt || now - r.createdAt.getTime() >= RECORDING_IN_FLIGHT_MS)
+  const inFlight = params.listed.length - settled.length
+  const tracked = settled.length > 0 ? await params.context.trackedRecordings(settled.map(r => r.handle)) : new Set<string>()
+  const unrequested = settled.filter(r => !tracked.has(r.handle))
+  const recent = inFlight > 0 ? ` (${inFlight} younger than ${RECORDING_IN_FLIGHT_MS / 60000} min not judged)` : ''
+  if (unrequested.length > 0) {
+    return {
+      state: 'on',
+      evidence: `${params.source}: ${params.provider} holds ${unrequested.length} ${params.what} this server never requested${recent}`,
+    }
+  }
+  return {
+    state: 'off',
+    evidence: `${params.source}: ${settled.length} ${params.what} listed, none this server did not request${recent}`,
+  }
+}
+
+/**
+ * Fold several readings of one setting: any `on` wins; otherwise any `unknown`
+ * makes the whole `unknown` — one unreadable check means the setting was not
+ * fully read, so it cannot be reported `off`.
+ */
+export function combineReadings(readings: ProviderSettingReading[]): ProviderSettingReading {
+  const on = readings.filter((r): r is Extract<ProviderSettingReading, { state: 'on' }> => r.state === 'on')
+  if (on.length > 0) return { state: 'on', evidence: on.map(r => r.evidence).join('; ') }
+  const unknown = readings.filter((r): r is Extract<ProviderSettingReading, { state: 'unknown' }> => r.state === 'unknown')
+  if (unknown.length > 0 || readings.length === 0) {
+    return { state: 'unknown', reason: unknown.length > 0 ? unknown.map(r => r.reason).join('; ') : 'nothing was read' }
+  }
+  return {
+    state: 'off',
+    evidence: readings.map(r => (r as Extract<ProviderSettingReading, { state: 'off' }>).evidence).join('; '),
+  }
 }
 
 /**

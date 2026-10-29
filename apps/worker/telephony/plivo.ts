@@ -1,7 +1,14 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
 import { createLogger } from '../lib/logger'
-import { assertHangupResponse, collectRingResults } from './adapter'
+import {
+  assertHangupResponse,
+  assertRecordingDeleted,
+  collectRingResults,
+  combineReadings,
+  inventoryReading,
+  unreadable,
+} from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -18,7 +25,9 @@ import type {
   WebhookQueueResult,
   WebhookQueueWait,
   WebhookRecordingStatus,
+  RecordingPostureContext,
 } from './adapter'
+import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -366,9 +375,17 @@ export class PlivoAdapter implements TelephonyAdapter {
     return audioRes.arrayBuffer()
   }
 
+  /**
+   * The handle is the `RecordingID` Plivo's record callback sends (see
+   * parseRecordingWebhook) — the id its Recording resource is addressed by,
+   * for the audio and for the deletion alike.
+   */
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
-    // Plivo recording URL is a full URL
-    const audioRes = await safeFetch(recordingSid, {
+    const res = await this.plivoApi(`/Recording/${encodeURIComponent(recordingSid)}/`, { method: 'GET' })
+    if (!res.ok) return null
+    const data = await res.json() as { recording_url?: string }
+    if (!data.recording_url) return null
+    const audioRes = await safeFetch(data.recording_url, {
       headers: {
         'Authorization': 'Basic ' + btoa(`${this.authId}:${this.authToken}`),
       },
@@ -376,6 +393,44 @@ export class PlivoAdapter implements TelephonyAdapter {
     })
     if (!audioRes.ok) return null
     return audioRes.arrayBuffer()
+  }
+
+  async deleteRecording(recordingSid: string): Promise<void> {
+    const res = await this.plivoApi(`/Recording/${encodeURIComponent(recordingSid)}/`, { method: 'DELETE' })
+    await assertRecordingDeleted(res, 'Plivo')
+  }
+
+  async probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
+    return {
+      recording: combineReadings([await this.readRecordingInventory(context)]),
+      // Plivo transcription is requested per <Record> (transcriptionType),
+      // which this server never sets — but Plivo publishes no API that lists
+      // transcriptions or an account-level transcription setting, so whether
+      // anything else requested one cannot be read.
+      transcription: {
+        state: 'unknown',
+        reason: 'Plivo publishes no API listing transcriptions or an account-level transcription setting',
+      },
+    }
+  }
+
+  private async readRecordingInventory(context: RecordingPostureContext): Promise<ProviderSettingReading> {
+    const what = 'the account\'s recordings'
+    let res: Response
+    try {
+      res = await this.plivoApi('/Recording/?limit=20', { method: 'GET' })
+    } catch (err) {
+      return unreadable('Plivo', what, err)
+    }
+    if (!res.ok) return unreadable('Plivo', what, res)
+    const data = await res.json() as { objects?: Array<{ recording_id: string; add_time?: string | null }> }
+    return inventoryReading({
+      provider: 'Plivo',
+      what: 'recordings',
+      source: 'the newest Plivo recordings',
+      listed: (data.objects ?? []).map(r => ({ handle: r.recording_id, createdAt: plivoTime(r.add_time) })),
+      context,
+    })
   }
 
   // --- Webhook parsing ---
@@ -458,4 +513,11 @@ export class PlivoAdapter implements TelephonyAdapter {
   emptyResponse(): TelephonyResponse {
     return this.plivoXml('')
   }
+}
+
+/** Plivo timestamps look like `2023-04-03 17:08:45.583463+05:30`. */
+function plivoTime(value: string | null | undefined): Date | null {
+  if (!value) return null
+  const parsed = new Date(value.replace(' ', 'T'))
+  return Number.isNaN(parsed.getTime()) ? null : parsed
 }

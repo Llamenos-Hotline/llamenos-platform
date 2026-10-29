@@ -1,6 +1,14 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { createLogger } from '../lib/logger'
-import { assertHangupResponse, collectRingResults } from './adapter'
+import {
+  ProviderRecordingDeleteError,
+  assertHangupResponse,
+  assertRecordingDeleted,
+  collectRingResults,
+  combineReadings,
+  inventoryReading,
+  unreadable,
+} from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -17,7 +25,9 @@ import type {
   WebhookQueueResult,
   WebhookQueueWait,
   WebhookRecordingStatus,
+  RecordingPostureContext,
 } from './adapter'
+import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -332,14 +342,73 @@ export class BandwidthAdapter implements TelephonyAdapter {
     const data = (await res.json()) as Array<{ recordingId: string; mediaUrl?: string }>
     if (!data.length) return null
 
-    const recordingId = data[0].recordingId
-    return this.getRecordingAudio(recordingId)
+    return this.getRecordingAudio(bandwidthRecordingHandle(callSid, data[0].recordingId))
   }
 
+  /**
+   * Bandwidth addresses a recording by call AND recording id
+   * (/calls/{callId}/recordings/{recordingId}), so the handle carries both —
+   * see bandwidthRecordingHandle.
+   */
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
-    const audioRes = await this.bandwidthApi(`/recordings/${recordingSid}/media`, { method: 'GET' })
+    const ref = parseBandwidthRecordingHandle(recordingSid)
+    if (!ref) return null
+    const audioRes = await this.bandwidthApi(`/calls/${ref.callId}/recordings/${ref.recordingId}/media`, { method: 'GET' })
     if (!audioRes.ok) return null
     return audioRes.arrayBuffer()
+  }
+
+  /**
+   * Deletes the recording's metadata, media and transcription. Bandwidth
+   * returns 204 at once and finishes destroying the media within 24–48 h; from
+   * the 204 on, nothing can retrieve it.
+   */
+  async deleteRecording(recordingSid: string): Promise<void> {
+    const ref = parseBandwidthRecordingHandle(recordingSid)
+    if (!ref) throw new ProviderRecordingDeleteError('Bandwidth', null, `unrecognised recording handle ${JSON.stringify(recordingSid)}`)
+    const res = await this.bandwidthApi(`/calls/${ref.callId}/recordings/${ref.recordingId}`, { method: 'DELETE' })
+    await assertRecordingDeleted(res, 'Bandwidth')
+  }
+
+  /**
+   * One account-wide listing answers both questions: every recording, and
+   * whether Bandwidth transcribed it (a transcription only exists attached to
+   * a recording, and this server never requests one).
+   */
+  async probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
+    const what = 'the account\'s recordings'
+    let res: Response
+    try {
+      res = await this.bandwidthApi('/recordings', { method: 'GET' })
+    } catch (err) {
+      const reading = unreadable('Bandwidth', what, err)
+      return { recording: reading, transcription: reading }
+    }
+    if (!res.ok) {
+      const reading = unreadable('Bandwidth', what, res)
+      return { recording: reading, transcription: reading }
+    }
+    const listed = await res.json() as Array<{
+      callId: string
+      recordingId: string
+      startTime?: string | null
+      transcription?: { status?: string } | null
+    }>
+    const recording = await inventoryReading({
+      provider: 'Bandwidth',
+      what: 'recordings',
+      source: 'the account\'s Bandwidth recordings',
+      listed: listed.map(r => ({
+        handle: bandwidthRecordingHandle(r.callId, r.recordingId),
+        createdAt: r.startTime ? new Date(r.startTime) : null,
+      })),
+      context,
+    })
+    const transcribed = listed.filter(r => r.transcription && r.transcription.status !== 'none')
+    const transcription: ProviderSettingReading = transcribed.length > 0
+      ? { state: 'on', evidence: `${transcribed.length} Bandwidth recording(s) carry a transcription; this server never requests one` }
+      : { state: 'off', evidence: `none of the ${listed.length} Bandwidth recording(s) listed carries a transcription` }
+    return { recording: combineReadings([recording]), transcription }
   }
 
   // --- Webhook Validation ---
@@ -452,13 +521,29 @@ export class BandwidthAdapter implements TelephonyAdapter {
     if (event.eventType === 'recordingAvailable' || event.eventType === 'recordComplete') {
       return {
         status: 'completed',
-        recordingSid: event.recordingId ?? undefined,
+        recordingSid: event.recordingId && event.callId
+          ? bandwidthRecordingHandle(event.callId, event.recordingId)
+          : undefined,
         callSid: event.callId ?? undefined,
       }
     }
 
     return { status: 'failed' }
   }
+}
+
+const BANDWIDTH_ID = /^[A-Za-z0-9-]+$/
+
+/** `callId/recordingId` — the pair Bandwidth addresses a call recording by. */
+export function bandwidthRecordingHandle(callId: string, recordingId: string): string {
+  return `${callId}/${recordingId}`
+}
+
+/** The inverse, refusing anything that could escape the path it is spliced into. */
+export function parseBandwidthRecordingHandle(handle: string): { callId: string; recordingId: string } | null {
+  const parts = handle.split('/')
+  if (parts.length !== 2 || !parts.every(part => BANDWIDTH_ID.test(part))) return null
+  return { callId: parts[0], recordingId: parts[1] }
 }
 
 function mapBandwidthDisconnectCause(cause: string): WebhookCallStatus['status'] {
