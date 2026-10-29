@@ -58,7 +58,7 @@
 import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
-import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, rolesConferHubAdmin, type RoleCatalog } from '@shared/permissions'
+import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
 import { ServiceError } from '../services/settings'
 import { isRevokedSigningKey } from './revoked-signing-keys'
 
@@ -160,14 +160,34 @@ function canAct(state: AdminState): boolean {
   return state.active && state.status === 'active'
 }
 
-/** The hubs `state` holds admin authority in. Empty for a user who is inactive or erased. */
-function hubsWhereHubAdmin(state: AdminState, catalog: RoleCatalog): string[] {
+/**
+ * The hubs in which `state`'s roles, together, grant every permission in
+ * `required` — read from `hubRoles` only, never from the global `roles`, so a
+ * super-admin's `*` reaches no hub. Empty for a user who is inactive or erased.
+ */
+function hubsWhereGranted(state: AdminState, catalog: RoleCatalog, required: readonly string[]): string[] {
   if (!canAct(state)) return []
   const roleIdsByHub = new Map<string, string[]>()
   for (const { hubId, roleIds } of state.hubRoles) {
     roleIdsByHub.set(hubId, [...(roleIdsByHub.get(hubId) ?? []), ...roleIds])
   }
-  return [...roleIdsByHub].filter(([, roleIds]) => rolesConferHubAdmin(roleIds, catalog)).map(([hubId]) => hubId)
+  return [...roleIdsByHub].filter(([, roleIds]) => rolesGrantAll(roleIds, required, catalog)).map(([hubId]) => hubId)
+}
+
+/** The hubs `state` holds admin authority in. Empty for a user who is inactive or erased. */
+function hubsWhereHubAdmin(state: AdminState, catalog: RoleCatalog): string[] {
+  return hubsWhereGranted(state, catalog, HUB_ADMIN_PERMISSIONS)
+}
+
+/**
+ * True when `state` holds, IN `hubId` (its `hubRoles` there, never its global
+ * roles), every permission in `required`. The general form of
+ * {@link administersHub}: `holdsInHub(state, hubId, HUB_ADMIN_PERMISSIONS, c)`
+ * is the same answer. Reader sets and hub-controlled settings (the escrow key)
+ * use it so that a global super-admin gains nothing in a hub it has no role in.
+ */
+export function holdsInHub(state: AdminState, hubId: string, required: readonly string[], catalog: RoleCatalog): boolean {
+  return hubsWhereGranted(state, catalog, required).includes(hubId)
 }
 
 /**
@@ -276,10 +296,25 @@ async function countAdminsByHub(
  * as it was, and the departure is what the guards police.
  */
 export async function listAdminPubkeys(db: Executor, hubId: string | undefined): Promise<string[]> {
+  return listHolderPubkeys(db, hubId, HUB_ADMIN_PERMISSIONS)
+}
+
+/**
+ * The pubkeys (Ed25519 auth keys) of every member of `hubId` who holds, in that
+ * hub, every permission in `required` and could act on it: the same candidate
+ * filter as the admin count (active, un-erased, no erasure in flight, signing
+ * key not revoked). `listAdminPubkeys` is this with the admin minimum. None
+ * when `hubId` is undefined.
+ */
+export async function listHolderPubkeys(
+  db: Executor,
+  hubId: string | undefined,
+  required: readonly string[],
+): Promise<string[]> {
   if (hubId === undefined) return []
   const catalog = await loadRoleCatalog(db)
   const candidates = await loadCandidateAdmins(db, [hubId])
-  return candidates.filter(candidate => administersHub(candidate, hubId, catalog)).map(candidate => candidate.pubkey)
+  return candidates.filter(candidate => holdsInHub(candidate, hubId, required, catalog)).map(candidate => candidate.pubkey)
 }
 
 /**

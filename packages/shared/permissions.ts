@@ -7,6 +7,8 @@
  * Wildcard "*" grants all permissions; "domain:*" grants all within domain.
  */
 
+import type { ReaderPurpose } from '@protocol/schemas/hubs'
+
 // --- Permission Catalog ---
 
 export const PERMISSION_CATALOG = {
@@ -455,9 +457,37 @@ function permissionsOfRole(roleId: string, catalog: RoleCatalog): readonly strin
  * so nothing may decide "admin" by a role's id or name.
  */
 export function rolesConferHubAdmin(roleIds: readonly string[], catalog: RoleCatalog): boolean {
-  const granted = roleIds.flatMap(id => permissionsOfRole(id, catalog))
-  return HUB_ADMIN_PERMISSIONS.every(permission => permissionGranted(granted, permission))
+  return rolesGrantAll(roleIds, HUB_ADMIN_PERMISSIONS, catalog)
 }
+
+/**
+ * True when `roleIds`, together, grant every permission in `required`, resolved
+ * against `catalog` (default roles missing from it resolve through
+ * DEFAULT_ROLES). The general form of {@link rolesConferHubAdmin}; reader sets
+ * use it with a purpose's permissions ({@link READER_PURPOSE_PERMISSIONS}).
+ */
+export function rolesGrantAll(roleIds: readonly string[], required: readonly string[], catalog: RoleCatalog): boolean {
+  const granted = roleIds.flatMap(id => permissionsOfRole(id, catalog))
+  return required.every(permission => permissionGranted(granted, permission))
+}
+
+// --- Reader purposes (PROTOCOL §2.4.2) ---
+
+/**
+ * What makes a hub member a reader of each purpose's content: the permissions
+ * they must hold, IN THAT HUB, to receive an envelope. ONE table, so the admin
+ * readers (operator decision D1) and the call-history readers (D2) are two rows
+ * of the same mechanism, and nothing anywhere decides a reader by role id or
+ * name. The `admin` row IS the admin minimum, so the admin readers of a hub are
+ * exactly the admins the last-admin invariant guarantees exist.
+ *
+ * Keys are the protocol's closed `ReaderPurpose` enum: a client names a
+ * purpose, never a permission.
+ */
+export const READER_PURPOSE_PERMISSIONS = {
+  admin: HUB_ADMIN_PERMISSIONS,
+  'call-history': ['calls:read-history'],
+} as const satisfies Record<ReaderPurpose, readonly Permission[]>
 
 /**
  * Get the "primary" role for display purposes — the highest-privilege role.

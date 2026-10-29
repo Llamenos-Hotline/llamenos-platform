@@ -9,6 +9,9 @@ import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
+import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey } from '../lib/readers'
+import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
+import type { ReaderPurpose } from '@protocol/schemas/hubs'
 import type { Database } from '../db'
 import {
   users,
@@ -50,7 +53,7 @@ import {
   type Role,
 } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
-import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, mergeHubRole, type HubRoleAssignment } from '../lib/hub-admin'
+import { adminStateOf, assertHubsKeepAnAdmin, mergeHubRole, type HubRoleAssignment } from '../lib/hub-admin'
 
 const log = createLogger('services.identity')
 
@@ -400,19 +403,49 @@ export class IdentityService {
   }
 
   /**
-   * Every admin X25519 recipient for an envelope set: `adminDecryptionPubkey`
-   * (`ADMIN_DECRYPTION_PUBKEY`, the escrow key) plus the registered device keys
-   * of every admin of `hubId` — the members holding an admin role in it, the
-   * same predicate the last-admin invariant counts with (`lib/hub-admin.ts`).
-   * Super-admins are never recipients (D1, #2190): they are zero-knowledge. A
-   * record with no hub, or a server-sealed one with no hub of its own, has no hub
-   * admins, so only the escrow key.
+   * The reader set of `hubId` for `purpose` (PROTOCOL §2.4.2): the device X25519
+   * keys of every member holding the purpose's permissions in that hub, plus the
+   * hub's escrow key. See `lib/readers.ts`.
+   */
+  async readersFor(hubId: string, purpose: ReaderPurpose): Promise<HpkeRecipientPubkey[]> {
+    return readersFor(this.db, hubId, purpose)
+  }
+
+  /** The hub's escrow key, or `undefined` when it has none (404 for an unknown hub). */
+  async getHubEscrowKey(hubId: string): Promise<HpkeRecipientPubkey | undefined> {
+    return getHubEscrowKey(this.db, hubId)
+  }
+
+  /** Install or rotate the hub's escrow key. See `lib/readers.ts` for what is refused. */
+  async setHubEscrowKey(hubId: string, escrowPubkey: HpkeRecipientPubkey, instanceKey: HpkeRecipientPubkey | undefined): Promise<void> {
+    return setHubEscrowKey(this.db, hubId, escrowPubkey, instanceKey)
+  }
+
+  /** Remove the hub's escrow key, unless it is the hub's only admin reader. */
+  async clearHubEscrowKey(hubId: string): Promise<void> {
+    return clearHubEscrowKey(this.db, hubId)
+  }
+
+  /**
+   * Every key an admin envelope may be addressed to for a record of `hubId`:
+   * the hub's `admin` reader set (its admins' devices and its escrow key, see
+   * {@link readersFor}), plus `transitionalInstanceKey`.
+   *
+   * `transitionalInstanceKey` is the instance-wide `ADMIN_DECRYPTION_PUBKEY`.
+   * It is NOT a reader of any hub (D1: "the global ADMIN_DECRYPTION_PUBKEY ...
+   * [is] removed"); it is listed here only because every shipped client still
+   * seals to it and nothing else, so refusing it would refuse every note. It is
+   * deleted, with this parameter, once the clients seal to the reader set.
+   * Super-admins are never recipients. A record with no hub has no reader set,
+   * so only the transitional key.
    *
    * The one definition of "a key an admin holds": server-sealed records are
    * wrapped to it, and client-sealed ones are checked against it.
    */
-  async listAdminEnvelopeRecipients(adminDecryptionPubkey: string | undefined, hubId?: string): Promise<string[]> {
-    return buildReaderPubkeys(this.db, adminDecryptionPubkey, await listAdminPubkeys(this.db, hubId))
+  async listAdminEnvelopeRecipients(transitionalInstanceKey: string | undefined, hubId?: string): Promise<string[]> {
+    const readers: string[] = hubId === undefined ? [] : await readersFor(this.db, hubId, 'admin')
+    const instance = hpkeRecipientPubkey(transitionalInstanceKey?.trim().toLowerCase())
+    return instance && !readers.includes(instance) ? [instance, ...readers] : readers
   }
 
   /**

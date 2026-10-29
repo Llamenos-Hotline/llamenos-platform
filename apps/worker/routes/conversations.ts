@@ -19,7 +19,7 @@ import { incCounter } from './metrics'
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
-import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
@@ -349,7 +349,7 @@ conversations.post('/:id/messages',
       // populated), so it cannot substitute the right one — and must not invent
       // one. Clients that hold their own device key send `encryptedContent` and
       // `readerEnvelopes` instead and take the branch above; the desktop does.
-      const adminDecryptionPubkey = adminHpkeRecipient(c.env)
+      const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
       // `pubkey` is the sender's Ed25519 *identity* key, not a recipient key.
       // Resolve the X25519 keys of the devices they actually registered.
       const authorRecipients = await c.get('services').identity.getHpkeRecipients(pubkey)

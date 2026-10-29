@@ -35,6 +35,7 @@ const EXCLUDED_SCHEMAS = new Set([
   'listDeliveriesQuerySchema',
   'listIncidentsQuerySchema',
   'callHistoryQuerySchema',
+  'hubReadersQuerySchema',
   'analyticsDateRangeQuerySchema',
 
   // Primitive validator schemas — string refinements, not standalone types

@@ -6,7 +6,9 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { resolveHubPermissions } from '@shared/permissions'
-import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema } from '@protocol/schemas/hubs'
+import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
+import { assertMayManageHubEscrow } from '../lib/readers'
+import { hpkeRecipientPubkey, transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import type { Hub } from '@shared/types'
@@ -452,6 +454,127 @@ routes.put('/:hubId/key',
       const status = (err as { status?: number }).status ?? 500
       const message = err instanceof Error ? err.message : 'Failed to set hub key'
       return c.json({ error: message }, status as 404 | 500)
+    }
+  },
+)
+
+// --- Reader sets (PROTOCOL §2.4.2; operator decisions D1, D2, A7) ---
+
+// The keys a client must seal a purpose's content to, for THIS hub: the device
+// X25519 keys of every member holding the purpose's permissions in the hub's own
+// role assignments, plus the hub's escrow key. Any member may ask — every member
+// writes records an admin must be able to read. The purpose is a closed enum;
+// the permissions behind it are fixed server-side.
+routes.get('/:hubId/readers',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: "List the hub's reader set for a purpose",
+    responses: {
+      200: {
+        description: 'X25519 recipient keys to seal this purpose to',
+        content: { 'application/json': { schema: resolver(hubReadersResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
+  validator('query', hubReadersQuerySchema),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    const { purpose } = c.req.valid('query')
+    const recipients = await c.get('services').identity.readersFor(hubId, purpose)
+    return c.json({ hubId, purpose, recipients })
+  },
+)
+
+routes.get('/:hubId/escrow-key',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: "Get the hub's escrow key",
+    responses: {
+      200: {
+        description: 'The escrow key, absent when the hub has none',
+        content: { 'application/json': { schema: resolver(hubEscrowKeyResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
+  requirePermission('hubs:read'),
+  async (c) => {
+    const escrowPubkey = await c.get('services').identity.getHubEscrowKey(c.req.param('hubId'))
+    return c.json(escrowPubkey ? { escrowPubkey } : {})
+  },
+)
+
+// Install or rotate the escrow key. Authority comes from the hub's OWN role
+// assignments (assertMayManageHubEscrow), not from requirePermission: that
+// resolves a global super-admin to `*` in every hub, and whoever sets the escrow
+// key holds a reader of every purpose (D1: super-admins read no hub).
+routes.put('/:hubId/escrow-key',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: "Set or rotate the hub's escrow key",
+    responses: {
+      200: {
+        description: 'Escrow key set',
+        content: { 'application/json': { schema: resolver(okResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
+  validator('json', setHubEscrowKeyBodySchema),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    const services = c.get('services')
+    const actor = c.get('pubkey')
+    try {
+      assertMayManageHubEscrow(c.get('user'), hubId, c.get('allRoles'))
+      const escrowPubkey = hpkeRecipientPubkey(c.req.valid('json').escrowPubkey)
+      if (!escrowPubkey) return c.json({ error: 'escrowPubkey must be 64 lowercase hex characters' }, 400)
+      await services.identity.setHubEscrowKey(hubId, escrowPubkey, transitionalInstanceRecipient(c.env))
+      await audit(services.audit, 'hubEscrowKeySet', actor, { escrowPubkey }, undefined, hubId)
+      return c.json({ ok: true })
+    } catch (err) {
+      if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
+        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+      }
+      throw err
+    }
+  },
+)
+
+routes.delete('/:hubId/escrow-key',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: "Remove the hub's escrow key",
+    responses: {
+      200: {
+        description: 'Escrow key removed',
+        content: { 'application/json': { schema: resolver(okResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    const services = c.get('services')
+    try {
+      assertMayManageHubEscrow(c.get('user'), hubId, c.get('allRoles'))
+      await services.identity.clearHubEscrowKey(hubId)
+      await audit(services.audit, 'hubEscrowKeyCleared', c.get('pubkey'), {}, undefined, hubId)
+      return c.json({ ok: true })
+    } catch (err) {
+      if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
+        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+      }
+      throw err
     }
   },
 )
