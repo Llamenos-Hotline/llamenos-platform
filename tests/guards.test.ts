@@ -30,6 +30,19 @@
 // signature: `bun install` died `Killed: 9` (exit 137) 40 ms in, before any
 // test, in merge group 40438235535, 25 ms after the other runner's tar wrote
 // the file. A setup-bun step with HOME under runner.temp gets its own copy.
+//
+// ── Playwright jobs run on a fixed runner image ──────────────────────────────
+//
+// Playwright keeps a browser build and an apt dependency list per OS release
+// and refuses a release it has no entry for. GitHub moved `ubuntu-latest` to
+// 26.04 under us; @playwright/test 1.59.1 has no 26.04 entry, so `playwright
+// install --with-deps chromium` died with `Playwright does not support
+// chromium on ubuntu26.04-x64` and ejected four merge groups in a day
+// (#2315), while `desktop-e2e`, pinned to 24.04, passed in the same runs.
+// Those jobs only run in the merge queue, so nothing on a PR would have
+// shown it. This guard runs on every PR: a job that installs a Playwright
+// browser must name a fixed Ubuntu image, so the OS only moves in a reviewed
+// diff that also has to carry a Playwright version supporting it.
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -45,6 +58,7 @@ interface Step {
 interface Job {
   'runs-on'?: unknown
   env?: Record<string, unknown>
+  strategy?: { matrix?: Record<string, unknown> }
   steps?: Step[]
 }
 interface Workflow {
@@ -245,5 +259,119 @@ describe('the setup-bun HOME check rejects the defect it was written for', () =>
   test('a per-runner HOME passes, and hosted jobs are out of scope', () => {
     expect(one({ 'runs-on': mac, steps: [isolated] })).toEqual([])
     expect(one({ 'runs-on': 'macos-15', steps: [shared] })).toEqual([])
+  })
+})
+
+/** Does this step fetch a Playwright browser or its OS packages? */
+export function installsPlaywright(step: Step): boolean {
+  return /\bplaywright\s+install(-deps)?\b/.test(step.run ?? '')
+}
+
+/**
+ * Every runner label this job can be scheduled with. A `${{ matrix.X }}`
+ * expression is expanded from the job's own matrix (`X: [...]` and
+ * `include: [{ X }]`); any other expression is returned verbatim, so it fails
+ * the fixed-image check below instead of being waved through unread.
+ */
+export function runnerLabels(job: Job): string[] {
+  const runsOn = job['runs-on']
+  if (Array.isArray(runsOn)) return runsOn.map(String)
+  const label = String(runsOn ?? '')
+  const key = label.match(/^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$/)?.[1]
+  if (key === undefined) return [label]
+  const matrix = job.strategy?.matrix ?? {}
+  const axis = Array.isArray(matrix[key]) ? (matrix[key] as unknown[]) : []
+  const include = Array.isArray(matrix.include) ? (matrix.include as Record<string, unknown>[]) : []
+  const values = [...axis, ...include.map((row) => row[key]).filter((v) => v !== undefined)].map(String)
+  return values.length > 0 ? values : [label]
+}
+
+/** A GitHub-hosted Ubuntu image named by its release, e.g. `ubuntu-24.04`. */
+export function isFixedUbuntuImage(label: string): boolean {
+  return /^ubuntu-\d{2}\.\d{2}(-arm)?$/.test(label)
+}
+
+const PLAYWRIGHT_RANGE = (() => {
+  const pkg = JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')) as {
+    devDependencies?: Record<string, string>
+    dependencies?: Record<string, string>
+  }
+  return pkg.devDependencies?.['@playwright/test'] ?? pkg.dependencies?.['@playwright/test'] ?? '(not declared)'
+})()
+
+/** Every job that installs a Playwright browser on a runner image that can move under it. */
+export function playwrightRunnerViolations(workflows: Map<string, Workflow>): { checked: string[]; violations: Violation[] } {
+  const checked: string[] = []
+  const violations: Violation[] = []
+  for (const [file, wf] of workflows) {
+    for (const [id, job] of Object.entries(wf.jobs ?? {})) {
+      if (!(job.steps ?? []).some(installsPlaywright)) continue
+      const where = `${file}:${id}`
+      checked.push(where)
+      for (const label of runnerLabels(job).filter((l) => !isFixedUbuntuImage(l))) {
+        violations.push({
+          job: where,
+          problem:
+            `installs a Playwright browser on runs-on \`${label}\`, which is not a fixed ubuntu-NN.NN image. ` +
+            `@playwright/test ${PLAYWRIGHT_RANGE} only installs on OS releases it has a build for; ` +
+            `pin the image and move it together with a Playwright version that supports the new one (#2315)`,
+        })
+      }
+    }
+  }
+  return { checked, violations }
+}
+
+describe('Playwright jobs run on a fixed runner image', () => {
+  const workflows = loadWorkflows()
+
+  test('finds every job that installs a Playwright browser (an empty scan would pass vacuously)', () => {
+    const { checked } = playwrightRunnerViolations(workflows)
+    expect(checked).toEqual(
+      expect.arrayContaining([
+        'ci.yml:e2e',
+        'ci.yml:desktop-e2e',
+        'ci.yml:backend-bdd',
+        'ci.yml:backend-bdd-opt-in',
+        'main-canary.yml:e2e',
+      ]),
+    )
+  })
+
+  test('each names a fixed Ubuntu image', () => {
+    const { violations } = playwrightRunnerViolations(workflows)
+    expect(violations).toEqual([])
+  })
+})
+
+describe('the Playwright runner check rejects the defect it was written for', () => {
+  const install: Step = { name: 'Install Playwright browsers', run: 'bunx playwright install --with-deps chromium' }
+  const deps: Step = { name: 'Install Playwright deps (cached)', run: 'bunx playwright install-deps chromium' }
+  const one = (job: Job) => playwrightRunnerViolations(new Map([['w.yml', { jobs: { j: job } }]])).violations
+
+  test("`ubuntu-latest` — the four ejected merge groups' shape — is rejected, naming the label and the Playwright version", () => {
+    const [v] = one({ 'runs-on': 'ubuntu-latest', steps: [install] })
+    expect(v?.problem).toContain('`ubuntu-latest`')
+    expect(v?.problem).toContain(`@playwright/test ${PLAYWRIGHT_RANGE}`)
+  })
+
+  test('the cached-browser branch (`install-deps` only) is in scope too', () => {
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [deps] })).toHaveLength(1)
+  })
+
+  test('a matrix runs-on is expanded, and one floating row is enough to reject', () => {
+    const matrix = { include: [{ platform: 'ubuntu-24.04' }, { platform: 'ubuntu-latest' }] }
+    const job: Job = { 'runs-on': '${{ matrix.platform }}', strategy: { matrix }, steps: [install] }
+    expect(one(job).map((v) => v.problem)).toEqual([expect.stringContaining('`ubuntu-latest`')])
+  })
+
+  test('an expression the check cannot expand is rejected, not passed unread', () => {
+    expect(one({ 'runs-on': "${{ inputs.runner || 'ubuntu-24.04' }}", steps: [install] })).toHaveLength(1)
+  })
+
+  test('a fixed image passes, and jobs that install no browser are out of scope', () => {
+    expect(one({ 'runs-on': 'ubuntu-24.04', steps: [install, deps] })).toEqual([])
+    expect(one({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { os: ['ubuntu-24.04'] } }, steps: [install] })).toEqual([])
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [{ run: 'bunx playwright test --project=bdd' }] })).toEqual([])
   })
 })
