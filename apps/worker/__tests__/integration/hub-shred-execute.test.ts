@@ -76,7 +76,7 @@ describe('HubShredService.execute', () => {
     const before = await fresh.db.select().from(schema.notes).where(eq(schema.notes.id, note.id))
     expect(() => openEnvelope(admin.secret, (before[0]!.adminEnvelopes as { enc: string; ct: string }[])[0]!)).not.toThrow()
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     const after = await fresh.db.select().from(schema.notes).where(eq(schema.notes.id, note.id))
     expect(
@@ -94,7 +94,7 @@ describe('HubShredService.execute', () => {
     await seedReadableNote(fresh.db, hubId)
     const [before] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     const [after] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
     expect(after!.status).toBe('shredded')
@@ -122,7 +122,7 @@ describe('HubShredService.execute', () => {
     expect(readSealed(msgReader.secret, sealed.readerEnvelopes[0]!, sealed.encryptedContent))
       .toBe('hub B note')
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     const [after] = await fresh.db
       .select()
@@ -152,7 +152,7 @@ describe('HubShredService.execute', () => {
     expect(readSealed(admin.secret, sealed.adminEnvelopes[0]!, sealed.encryptedContent, label))
       .toContain('5555')
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     const [after] = await fresh.db
       .select()
@@ -193,7 +193,7 @@ describe('HubShredService.execute', () => {
     expect(readSealed(fileReader.secret, mirrored[0]!, sealed.encryptedContent))
       .toBe('attachment contents')
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     const [after] = await fresh.db.select().from(schema.files).where(eq(schema.files.id, file!.id))
     expect(after!.recipientEnvelopes).toEqual([])
@@ -228,7 +228,7 @@ describe('HubShredService.execute', () => {
       })
       .returning()
 
-    await expect(fresh.shred.execute(hubId, EXECUTOR, fresh.audit)).rejects.toMatchObject({
+    await expect(fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)).rejects.toMatchObject({
       status: 500,
     })
     const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
@@ -237,7 +237,73 @@ describe('HubShredService.execute', () => {
 
   it('404s for a hub that does not exist', async () => {
     await expect(
-      fresh.shred.execute('hub-nope', EXECUTOR, fresh.audit),
+      fresh.shred.execute('hub-nope', EXECUTOR, fresh.audit, fresh.providerMedia),
     ).rejects.toMatchObject({ status: 404 })
+  })
+
+  // #2297: caller audio the telephony provider holds is plaintext on a third
+  // party's disk — no key the shred destroys protects it.
+  describe('provider-held recordings', () => {
+    const account = { providerAccountId: () => 'twilio:AC-test' }
+    it('deletes them at the provider before the shred, through the hub adapter', async () => {
+      const hubId = await createHub()
+      await fresh.recordings.track({ hubId, callId: 'call-a', recordingSid: 'RE-vm', kind: 'voicemail', adapter: account })
+      await fresh.recordings.track({ hubId, callId: 'call-b', recordingSid: 'RE-call', kind: 'call', adapter: account })
+      const deleted: string[] = []
+      fresh.useTelephonyAdapter({ ...account, deleteRecording: async (sid) => { deleted.push(sid) } })
+      try {
+        await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
+      } finally {
+        fresh.useTelephonyAdapter(null)
+      }
+      expect(deleted.sort()).toEqual(['RE-call', 'RE-vm'])
+      expect(await fresh.recordings.listHeld(hubId)).toEqual([])
+      const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
+      expect(hub!.status).toBe('shredded')
+    })
+
+    it('refuses to shred while the provider will not delete, and keeps the handle', async () => {
+      const hubId = await createHub()
+      await fresh.recordings.track({ hubId, callId: 'call-c', recordingSid: 'RE-stuck', kind: 'call', adapter: account })
+      fresh.useTelephonyAdapter({ ...account, deleteRecording: async () => { throw new Error('Twilio recording deletion failed: 503') } })
+      try {
+        await expect(fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)).rejects.toMatchObject({
+          status: 502,
+        })
+      } finally {
+        fresh.useTelephonyAdapter(null)
+      }
+      const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
+      expect(hub!.status, 'a shred that leaves caller audio at the provider must not report success').toBe('active')
+      const held = await fresh.recordings.listHeld(hubId)
+      expect(held).toHaveLength(1)
+      expect(held[0]!.deleteAttempts).toBe(1)
+      expect(held[0]!.lastError).toContain('503')
+    })
+
+    it('an emergency shred proceeds anyway, and records what the provider still holds', async () => {
+      const hubId = await createHub()
+      await fresh.recordings.track({ hubId, callId: 'call-e', recordingSid: 'RE-stuck-e', kind: 'call', adapter: account })
+      fresh.useTelephonyAdapter({ ...account, deleteRecording: async () => { throw new Error('provider down') } })
+      try {
+        await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia, { emergencyOverride: true })
+      } finally {
+        fresh.useTelephonyAdapter(null)
+      }
+      const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
+      expect(hub!.status, 'a provider outage must not keep a hub readable under an emergency override').toBe('shredded')
+      const { entries } = await fresh.audit.list(undefined)
+      const remaining = entries.find(e => e.action === 'hubShredProviderMediaRemaining' && (e.details as { hubId?: string }).hubId === hubId)
+      expect(remaining, 'what is left at the provider must be on the platform chain').toBeDefined()
+    })
+
+    it('refuses to shred when no provider is configured to ask', async () => {
+      const hubId = await createHub()
+      await fresh.recordings.track({ hubId, callId: 'call-d', recordingSid: 'RE-orphan', kind: 'voicemail', adapter: account })
+      await expect(fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)).rejects.toMatchObject({
+        status: 502,
+      })
+      expect(await fresh.recordings.listHeld(hubId)).toHaveLength(1)
+    })
   })
 })

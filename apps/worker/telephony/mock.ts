@@ -49,10 +49,20 @@ import type {
   WebhookQueueResult,
   WebhookQueueWait,
   WebhookRecordingStatus,
+  RecordingPostureContext,
 } from './adapter'
+import { ProviderRecordingDeleteError } from './adapter'
+import type { ProviderRecordingPosture } from '@protocol/schemas/settings'
 
 /** Value stored in `provider_configs.provider_type` when a hub uses the mock. */
 export const MOCK_PROVIDER_TYPE = 'mock'
+
+/**
+ * A recording handle with this prefix is one the mock REFUSES to delete — it
+ * stands in for a provider that refuses or cannot be reached, so the
+ * fail-loud deletion path can be driven end to end.
+ */
+export const MOCK_UNDELETABLE_RECORDING_PREFIX = 'mock-undeletable-'
 
 /** Prefix of every call SID minted by the mock — lets routes refuse to touch real calls. */
 export const MOCK_CALL_SID_PREFIX = 'mock-call-'
@@ -98,6 +108,7 @@ export type MockTelephonyAction =
   | { type: 'ring'; callSid: string; legs: number }
   | { type: 'hangup'; callSid: string }
   | { type: 'cancel-ringing'; callSids: string[]; exceptSid?: string }
+  | { type: 'delete-recording'; recordingSid: string }
 
 const MAX_RECORDED_ACTIONS = 100
 
@@ -191,6 +202,24 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
 
   async getRecordingAudio(_recordingSid: string): Promise<ArrayBuffer | null> {
     return null
+  }
+
+  providerAccountId(): string {
+    return `mock:${this.phoneNumber}`
+  }
+
+  async deleteRecording(recordingSid: string): Promise<void> {
+    if (recordingSid.startsWith(MOCK_UNDELETABLE_RECORDING_PREFIX)) {
+      throw new ProviderRecordingDeleteError('mock', 503, 'the mock provider refuses to delete this recording')
+    }
+    this.record({ type: 'delete-recording', recordingSid })
+  }
+
+  async probeRecordingPosture(_context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
+    return {
+      recording: { state: 'off', evidence: 'the mock provider has no media path: it cannot record a call' },
+      transcription: { state: 'off', evidence: 'the mock provider has no media path: it cannot transcribe a call' },
+    }
   }
 
   async parseIncomingWebhook(request: Request): Promise<WebhookCallInfo> {

@@ -515,6 +515,41 @@ describe('SipBridgeAdapter', () => {
       expect(url).toBe(`${bridgeCallbackUrl}/recordings/rec-1`)
     })
   })
+
+  // #2297: the PBX's stored file is deleted through the bridge — fail loudly.
+  describe('deleteRecording', () => {
+    it('sends a signed DELETE for the recording name and resolves on 200', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ ok: true }),
+      } as unknown as Response)
+      await expect(adapter.deleteRecording('voicemail-chan.1')).resolves.toBeUndefined()
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${bridgeCallbackUrl}/recordings/voicemail-chan.1`)
+      expect((init as RequestInit).method).toBe('DELETE')
+      expect((init as RequestInit).headers).toMatchObject({ 'X-Bridge-Signature': expect.any(String) })
+    })
+
+    it('rejects when the bridge could not delete', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({ error: 'Command failed' }),
+      } as unknown as Response)
+      await expect(adapter.deleteRecording('voicemail-chan.1')).rejects.toThrow(/recording deletion failed/)
+    })
+  })
+
+  describe('probeRecordingPosture', () => {
+    it('reports both unknown: PBX dialplan recording does not pass through the bridge', async () => {
+      const posture = await adapter.probeRecordingPosture({ trackedRecordings: async () => new Set() })
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('AsteriskAdapter', () => {

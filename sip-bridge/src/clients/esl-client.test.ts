@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EslClient } from './esl-client'
+import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import type { BridgeEvent } from '../bridge-client'
 
 // ---- Fake FreeSWITCH Event Socket -------------------------------------------------
@@ -258,5 +261,35 @@ describe('EslClient', () => {
     const empty = client.listChannels()
     sock.apiResponse('{"row_count":0}')
     await expect(empty).resolves.toEqual([])
+  })
+
+  // #2297: the worker stops tracking caller audio once this resolves.
+  describe('deleteRecording', () => {
+    it('removes the file, and treats an already-missing file as deleted', async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), 'esl-rec-'))
+      try {
+        const file = path.join(dir, 'voicemail-1.wav')
+        await writeFile(file, 'audio')
+        await expect(client.deleteRecording(file)).resolves.toBeUndefined()
+        await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
+        await expect(client.deleteRecording(file)).resolves.toBeUndefined()
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('rejects when the file is still there and cannot be removed', async () => {
+      if (process.getuid?.() === 0) return // root ignores directory permissions
+      const dir = await mkdtemp(path.join(tmpdir(), 'esl-rec-'))
+      const file = path.join(dir, 'voicemail-2.wav')
+      await writeFile(file, 'audio')
+      await chmod(dir, 0o500)
+      try {
+        await expect(client.deleteRecording(file)).rejects.toMatchObject({ code: 'EACCES' })
+      } finally {
+        await chmod(dir, 0o700)
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
   })
 })

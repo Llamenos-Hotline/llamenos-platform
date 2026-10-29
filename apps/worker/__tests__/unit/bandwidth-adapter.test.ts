@@ -498,13 +498,16 @@ describe('BandwidthAdapter', () => {
   })
 
   describe('getRecordingAudio', () => {
-    it('returns ArrayBuffer on success', async () => {
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    it('fetches the media of the recording on its call', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response(new ArrayBuffer(4), { status: 200 }),
       )
 
-      const result = await adapter.getRecordingAudio('rec-1')
+      const result = await adapter.getRecordingAudio('c-1/r-1')
       expect(result).toBeInstanceOf(ArrayBuffer)
+      expect(String(fetchSpy.mock.calls[0]![0])).toBe(
+        `https://voice.bandwidth.com/api/v2/accounts/${accountId}/calls/c-1/recordings/r-1/media`,
+      )
     })
 
     it('returns null on non-ok response', async () => {
@@ -512,8 +515,73 @@ describe('BandwidthAdapter', () => {
         new Response('Not Found', { status: 404 }),
       )
 
-      const result = await adapter.getRecordingAudio('rec-1')
+      const result = await adapter.getRecordingAudio('c-1/r-1')
       expect(result).toBeNull()
+    })
+
+    it('refuses a handle that could escape its path, without a request', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      expect(await adapter.getRecordingAudio('../../accounts/other')).toBeNull()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  // #2297: provider-side deletion — fail loudly, never a silent no-op.
+  describe('deleteRecording', () => {
+    it('DELETEs the recording on its call and resolves on 204', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+      await expect(adapter.deleteRecording('c-1/r-1')).resolves.toBeUndefined()
+      expect(String(fetchSpy.mock.calls[0]![0])).toBe(
+        `https://voice.bandwidth.com/api/v2/accounts/${accountId}/calls/c-1/recordings/r-1`,
+      )
+      expect((fetchSpy.mock.calls[0]![1] as RequestInit).method).toBe('DELETE')
+    })
+
+    it('treats 404 as already deleted', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }))
+      await expect(adapter.deleteRecording('c-1/r-1')).resolves.toBeUndefined()
+    })
+
+    it('rejects when Bandwidth refuses', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 403 }))
+      await expect(adapter.deleteRecording('c-1/r-1')).rejects.toThrow(/Bandwidth recording deletion failed: 403/)
+    })
+
+    it('rejects an unaddressable handle instead of pretending', async () => {
+      await expect(adapter.deleteRecording('r-1')).rejects.toThrow(/unrecognised recording handle/)
+    })
+  })
+
+  describe('probeRecordingPosture', () => {
+    const context = (tracked: string[]) => ({ trackedRecordings: async (h: string[]) => new Set(h.filter(x => tracked.includes(x))) })
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+
+    it('reports recording off when every listed recording was requested, with evidence', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([{ callId: 'c-1', recordingId: 'r-1', startTime: old }]))
+      const posture = await adapter.probeRecordingPosture(context(['c-1/r-1']))
+      expect(posture.recording.state).toBe('off')
+      expect(posture.transcription.state).toBe('off')
+    })
+
+    it('reports recording on for a recording this server never requested', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([{ callId: 'c-9', recordingId: 'r-9', startTime: old }]))
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'on' })
+    })
+
+    it('reports transcription on when a recording carries one', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([
+        { callId: 'c-1', recordingId: 'r-1', startTime: old, transcription: { status: 'available' } },
+      ]))
+      const posture = await adapter.probeRecordingPosture(context(['c-1/r-1']))
+      expect(posture.transcription).toMatchObject({ state: 'on' })
+    })
+
+    it('reports unknown — never off — when the account cannot be read', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 401 }))
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
     })
   })
 
@@ -810,20 +878,31 @@ describe('BandwidthAdapter', () => {
 
       const result = await adapter.parseRecordingWebhook(request)
       expect(result.status).toBe('completed')
-      expect(result.recordingSid).toBe('rec-1')
+      // Bandwidth addresses a recording by call AND recording id.
+      expect(result.recordingSid).toBe('call-1/rec-1')
       expect(result.callSid).toBe('call-1')
     })
 
     it('returns completed for recordComplete', async () => {
       const request = new Request('https://example.com/webhook', {
         method: 'POST',
-        body: JSON.stringify({ eventType: 'recordComplete', recordingId: 'rec-2' }),
+        body: JSON.stringify({ eventType: 'recordComplete', recordingId: 'rec-2', callId: 'call-2' }),
         headers: { 'Content-Type': 'application/json' },
       })
 
       const result = await adapter.parseRecordingWebhook(request)
       expect(result.status).toBe('completed')
-      expect(result.recordingSid).toBe('rec-2')
+      expect(result.recordingSid).toBe('call-2/rec-2')
+    })
+
+    it('yields no handle when the call id is missing — the recording cannot be addressed', async () => {
+      const request = new Request('https://example.com/webhook', {
+        method: 'POST',
+        body: JSON.stringify({ eventType: 'recordComplete', recordingId: 'rec-3' }),
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const result = await adapter.parseRecordingWebhook(request)
+      expect(result.recordingSid).toBeUndefined()
     })
 
     it('returns failed for other event types', async () => {

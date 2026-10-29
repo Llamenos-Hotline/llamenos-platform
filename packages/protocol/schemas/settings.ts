@@ -333,3 +333,48 @@ export const cleanupMetricsResponseSchema = z.object({
 })
 
 export const ttlOverridesResponseSchema = z.record(z.string(), z.number())
+
+// --- Provider-side recording posture (#1505, #2297) ---
+
+/**
+ * One provider-side setting, as READ from the provider. `off` and `on` carry the
+ * evidence they were read from; a setting that could not be read is `unknown`
+ * with the reason. There is deliberately no way to say "off" without evidence:
+ * reporting healthy when the provider could not be asked is the failure mode
+ * this exists to prevent.
+ */
+export const providerSettingReadingSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('off'), evidence: z.string().min(1) }),
+  z.object({ state: z.literal('on'), evidence: z.string().min(1) }),
+  z.object({ state: z.literal('unknown'), reason: z.string().min(1) }),
+])
+export type ProviderSettingReading = z.infer<typeof providerSettingReadingSchema>
+
+/**
+ * What the telephony provider does with caller audio on its own: recording or
+ * transcription this server did NOT request. Recordings this server did request
+ * (voicemail, opted-in call recording) are listed separately as `heldAtProvider`.
+ */
+export const providerRecordingPostureSchema = z.object({
+  recording: providerSettingReadingSchema,
+  transcription: providerSettingReadingSchema,
+})
+export type ProviderRecordingPosture = z.infer<typeof providerRecordingPostureSchema>
+
+/** A recording this server knows the provider holds, until the provider confirms it deleted it. */
+export const heldProviderRecordingSchema = z.object({
+  callId: z.string(),
+  kind: z.enum(['voicemail', 'call']),
+  createdAt: z.string(),
+  deleteAttempts: z.number().int(),
+  lastAttemptAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+})
+export type HeldProviderRecording = z.infer<typeof heldProviderRecordingSchema>
+
+export const recordingPostureResponseSchema = providerRecordingPostureSchema.extend({
+  /** The provider type the posture was read from, or 'mock' for the test provider. */
+  provider: z.string(),
+  heldAtProvider: z.array(heldProviderRecordingSchema),
+})
+export type RecordingPostureResponse = z.infer<typeof recordingPostureResponseSchema>

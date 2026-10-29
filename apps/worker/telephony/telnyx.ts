@@ -16,13 +16,30 @@ import type {
   WebhookQueueResult,
   WebhookQueueWait,
   WebhookRecordingStatus,
+  RecordingPostureContext,
 } from './adapter'
-import { collectRingResults } from './adapter'
+import {
+  ProviderRecordingDeleteError,
+  assertRecordingDeleted,
+  collectRingResults,
+  combineReadings,
+  inventoryReading,
+  unreadable,
+} from './adapter'
+import type { ProviderRecordingPosture, ProviderSettingReading } from '@protocol/schemas/settings'
 import { DEFAULT_LANGUAGE } from '@shared/languages'
 import { getPrompt } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
 const TELNYX_API_BASE = 'https://api.telnyx.com/v2'
+
+/** A recording resource from GET /v2/recordings. */
+interface TelnyxRecording {
+  id: string
+  call_leg_id?: string
+  created_at?: string
+  download_urls?: { mp3?: string; wav?: string }
+}
 
 /**
  * Telnyx TTS voices (AWS Polly via Telnyx) — the explicit, ordered list of
@@ -138,6 +155,14 @@ class TelnyxCallControlClient {
       throw new Error(`Telnyx API error (getRecording): ${res.status}`)
     }
     return res.arrayBuffer()
+  }
+
+  /** An authenticated request against the v2 REST API. Network failures reject. */
+  async api(method: 'GET' | 'DELETE', path: string): Promise<Response> {
+    return safeFetch(`${TELNYX_API_BASE}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    })
   }
 
   async getPublicKey(): Promise<string> {
@@ -520,11 +545,123 @@ export class TelnyxAdapter implements TelephonyAdapter {
     return null
   }
 
+  /**
+   * The recording handle is the recorded call LEG's id. `call.recording.saved`
+   * carries no recording id (Telnyx call-control OpenAPI: call_leg_id,
+   * call_session_id, connection_id, client_state, recording_urls, …) and its
+   * URLs expire after ten minutes, so the leg is the only durable key; the
+   * recordings API filters on it.
+   */
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
     try {
-      return await this.client.getRecording(recordingSid)
+      const recordings = await this.listLegRecordings(recordingSid)
+      const url = recordings[0]?.download_urls?.mp3 ?? recordings[0]?.download_urls?.wav
+      if (!url) return null
+      return await this.client.getRecording(url)
     } catch {
       return null
+    }
+  }
+
+  /**
+   * Delete every recording of the call leg. An empty listing means there is
+   * nothing left to delete — the same answer a 404 gives — because this only
+   * runs after `call.recording.saved`, by which time the recording is listed.
+   */
+  /**
+   * The Call Control application (connection) id: not a secret, and a
+   * connection belongs to exactly one Telnyx account. Never the API key.
+   */
+  providerAccountId(): string {
+    return `telnyx:${this.connectionId}`
+  }
+
+  async deleteRecording(recordingSid: string): Promise<void> {
+    let recordings: TelnyxRecording[]
+    try {
+      recordings = await this.listLegRecordings(recordingSid)
+    } catch (err) {
+      if (err instanceof ProviderRecordingDeleteError) throw err
+      throw new ProviderRecordingDeleteError('Telnyx', null, err instanceof Error ? err.message : String(err))
+    }
+    for (const recording of recordings) {
+      const res = await this.client.api('DELETE', `/recordings/${encodeURIComponent(recording.id)}`)
+      await assertRecordingDeleted(res, 'Telnyx')
+    }
+  }
+
+  private async listLegRecordings(callLegId: string): Promise<TelnyxRecording[]> {
+    const res = await this.client.api('GET', `/recordings?filter[call_leg_id]=${encodeURIComponent(callLegId)}&page[size]=50`)
+    if (!res.ok) {
+      throw new ProviderRecordingDeleteError('Telnyx', res.status, await res.text().catch(() => ''))
+    }
+    const body = await res.json() as { data?: TelnyxRecording[] }
+    return body.data ?? []
+  }
+
+  async probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
+    const [numberSetting, inventory, transcripts] = await Promise.all([
+      this.readNumberRecordingSetting(),
+      this.readRecordingInventory(context),
+      this.readTranscriptionInventory(),
+    ])
+    return {
+      recording: combineReadings([numberSetting, inventory]),
+      transcription: transcripts,
+    }
+  }
+
+  /** Telnyx records every inbound call to a number when its voice settings say so. */
+  private async readNumberRecordingSetting(): Promise<ProviderSettingReading> {
+    const what = `the voice settings of ${this.phoneNumber}`
+    try {
+      const listRes = await this.client.api('GET', `/phone_numbers?filter[phone_number]=${encodeURIComponent(this.phoneNumber)}`)
+      if (!listRes.ok) return unreadable('Telnyx', what, listRes)
+      const list = await listRes.json() as { data?: Array<{ id: string }> }
+      const id = list.data?.[0]?.id
+      if (!id) return { state: 'unknown', reason: `${this.phoneNumber} is not a number on this Telnyx account` }
+      const voiceRes = await this.client.api('GET', `/phone_numbers/${encodeURIComponent(id)}/voice`)
+      if (!voiceRes.ok) return unreadable('Telnyx', what, voiceRes)
+      const voice = await voiceRes.json() as { data?: { call_recording?: { inbound_call_recording_enabled?: boolean } } }
+      const enabled = voice.data?.call_recording?.inbound_call_recording_enabled
+      if (enabled === undefined) return { state: 'unknown', reason: `${what} did not include call_recording` }
+      return enabled
+        ? { state: 'on', evidence: `${this.phoneNumber} has inbound call recording enabled` }
+        : { state: 'off', evidence: `${this.phoneNumber} has inbound call recording disabled` }
+    } catch (err) {
+      return unreadable('Telnyx', what, err)
+    }
+  }
+
+  private async readRecordingInventory(context: RecordingPostureContext): Promise<ProviderSettingReading> {
+    try {
+      const res = await this.client.api('GET', '/recordings?page[size]=50')
+      if (!res.ok) return unreadable('Telnyx', 'the account\'s recordings', res)
+      const body = await res.json() as { data?: TelnyxRecording[] }
+      return inventoryReading({
+        provider: 'Telnyx',
+        what: 'recordings',
+        source: 'the newest Telnyx recordings',
+        listed: (body.data ?? []).map(r => ({ handle: r.call_leg_id ?? r.id, createdAt: r.created_at ? new Date(r.created_at) : null })),
+        context,
+      })
+    } catch (err) {
+      return unreadable('Telnyx', 'the account\'s recordings', err)
+    }
+  }
+
+  /** This server never starts a Telnyx transcription, so any is one it did not request. */
+  private async readTranscriptionInventory(): Promise<ProviderSettingReading> {
+    try {
+      const res = await this.client.api('GET', '/recording_transcriptions')
+      if (!res.ok) return unreadable('Telnyx', 'the account\'s recording transcriptions', res)
+      const body = await res.json() as { data?: unknown[] }
+      const count = body.data?.length ?? 0
+      return count > 0
+        ? { state: 'on', evidence: `Telnyx holds ${count} recording transcription(s); this server never requests one` }
+        : { state: 'off', evidence: 'Telnyx holds no recording transcriptions' }
+    } catch (err) {
+      return unreadable('Telnyx', 'the account\'s recording transcriptions', err)
     }
   }
 
@@ -638,7 +775,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
     if (recordingUrls?.mp3) {
       return {
         status: 'completed',
-        recordingSid: recordingUrls.mp3,
+        // The leg id, not the URL: the URL expires in ten minutes and cannot
+        // address a deletion (see getRecordingAudio).
+        recordingSid: (payload?.call_leg_id as string) || undefined,
         callSid: (payload?.call_control_id as string) ?? undefined,
       }
     }

@@ -594,11 +594,14 @@ export class EslClient implements BridgeClient {
     const filePath = recordingName.startsWith('/')
       ? recordingName
       : `/tmp/recordings/${recordingName}`
+    const { unlink } = await import('node:fs/promises')
     try {
-      const { unlink } = await import('node:fs/promises')
       await unlink(filePath)
-    } catch {
-      // Already deleted or doesn't exist
+    } catch (err) {
+      // Already gone is deleted. Anything else (EACCES, EBUSY, EIO) means the
+      // caller audio is still on disk and must not read as deleted (#2297).
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
     }
   }
 

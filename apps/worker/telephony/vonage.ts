@@ -1,6 +1,11 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { createLogger } from '../lib/logger'
-import { assertHangupResponse, collectRingResults } from './adapter'
+import {
+  ProviderRecordingDeleteError,
+  assertHangupResponse,
+  assertRecordingDeleted,
+  collectRingResults,
+} from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -17,7 +22,9 @@ import type {
   WebhookQueueResult,
   WebhookQueueWait,
   WebhookRecordingStatus,
+  RecordingPostureContext,
 } from './adapter'
+import type { ProviderRecordingPosture } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
@@ -406,13 +413,62 @@ export class VonageAdapter implements TelephonyAdapter {
   }
 
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
-    // Vonage recording URLs are full URLs, not SIDs
-    const audioRes = await safeFetch(recordingSid, {
+    // Vonage recording URLs are full URLs, not SIDs. The handle comes from a
+    // webhook body, so it must name a Vonage file before this adapter's
+    // credentials are sent to it.
+    const ref = parseVonageRecordingUrl(recordingSid)
+    if (!ref) return null
+    const audioRes = await safeFetch(`${ref.origin}/v1/files/${ref.id}`, {
       headers: { 'Authorization': `Basic ${btoa(`${this.apiKey}:${this.apiSecret}`)}` },
       timeoutMs: 60_000,
     })
     if (!audioRes.ok) return null
     return audioRes.arrayBuffer()
+  }
+
+  /**
+   * The handle is the `recording_url` from the record webhook —
+   * `https://api.nexmo.com/v1/files/<id>` (or a regional api-*.nexmo.com host).
+   * The file is a Media API item; `DELETE /v3/media/<id>` on the same host
+   * destroys it (Media API reference, which accepts the key:secret Basic
+   * credentials this adapter uses). Vonage would otherwise keep it 30 days.
+   */
+  /**
+   * Recordings belong to the Vonage application that made them; its id is a
+   * globally unique UUID and not a credential. Never the API key or secret.
+   */
+  providerAccountId(): string {
+    return `vonage:${this.applicationId}`
+  }
+
+  async deleteRecording(recordingSid: string): Promise<void> {
+    const ref = parseVonageRecordingUrl(recordingSid)
+    if (!ref) throw new ProviderRecordingDeleteError('Vonage', null, `unrecognised recording handle ${JSON.stringify(recordingSid)}`)
+    const res = await safeFetch(`${ref.origin}/v3/media/${ref.id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Basic ${btoa(`${this.apiKey}:${this.apiSecret}`)}` },
+    })
+    await assertRecordingDeleted(res, 'Vonage')
+  }
+
+  /**
+   * Vonage records only on an NCCO `record` action and transcribes only when
+   * that action asks — but it publishes neither an account-level setting nor an
+   * API listing an account's call recordings or transcripts, so neither can be
+   * READ. Both are reported unknown rather than inferred from this server's
+   * own NCCO.
+   */
+  async probeRecordingPosture(_context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
+    return {
+      recording: {
+        state: 'unknown',
+        reason: 'Vonage publishes no account-level recording setting and no API listing an account\'s call recordings',
+      },
+      transcription: {
+        state: 'unknown',
+        reason: 'Vonage publishes no account-level transcription setting and no API listing an account\'s transcripts',
+      },
+    }
   }
 
   // --- Webhook parsing ---
@@ -496,4 +552,21 @@ export class VonageAdapter implements TelephonyAdapter {
   emptyResponse(): TelephonyResponse {
     return this.ncco([])
   }
+}
+
+const VONAGE_FILE_ID = /^[0-9a-fA-F-]{8,64}$/
+
+/** Split a Vonage recording URL into the host it lives on and its Media API id. */
+export function parseVonageRecordingUrl(url: string): { origin: string; id: string } | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:') return null
+  if (!/^api(-[a-z0-9-]+)?\.nexmo\.com$/.test(parsed.hostname)) return null
+  const match = /^\/v1\/files\/([^/]+)$/.exec(parsed.pathname)
+  if (!match || !VONAGE_FILE_ID.test(match[1])) return null
+  return { origin: parsed.origin, id: match[1] }
 }

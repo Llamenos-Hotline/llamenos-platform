@@ -89,6 +89,10 @@ function makeServices(): Services {
       addCall: vi.fn().mockResolvedValue({ callId: 'CA-test' }),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
     },
+    providerRecordings: {
+      track: vi.fn().mockResolvedValue(undefined),
+      deleteHeld: vi.fn().mockResolvedValue({ deleted: 1, failed: [] }),
+    },
     identity: {
       getUser: vi.fn().mockResolvedValue({ name: 'Volunteer' }),
       getUsers: vi.fn().mockResolvedValue({ users: [] }),
@@ -965,6 +969,10 @@ describe('Telephony routes', () => {
       })
       expect(res.status).toBe(200)
       expect(services.calls.endCall).toHaveBeenCalledWith('hub-1', 'CA-parent')
+      // #2297: the provider now holds this call's audio — tracked until its record goes.
+      expect(services.providerRecordings.track).toHaveBeenCalledWith({
+        hubId: 'hub-1', callId: 'CA-parent', recordingSid: 'RE123', kind: 'call', adapter,
+      })
       expect(adapter.emptyResponse).toHaveBeenCalled()
     })
 
@@ -1003,7 +1011,26 @@ describe('Telephony routes', () => {
       expect(services.calls.markVoicemail).toHaveBeenCalledWith('hub-1', 'CA-vm')
       // The call is closed so it lands in history as unanswered + hasVoicemail (#1043)
       expect(services.calls.endCall).toHaveBeenCalledWith('hub-1', 'CA-vm')
+      // #2297: tracked BEFORE the response, so the handle survives the background task.
+      expect(services.providerRecordings.track).toHaveBeenCalledWith({
+        hubId: 'hub-1', callId: 'CA-vm', recordingSid: 'RE-vm', kind: 'voicemail', adapter,
+      })
       expect(adapter.emptyResponse).toHaveBeenCalled()
+    })
+
+    it('deletes the voicemail at the provider through the hub adapter (#2297)', async () => {
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'completed', recordingSid: 'RE-vm', callSid: 'CA-vm' })
+
+      const app = await createTestApp(adapter, services)
+      await app.request('/api/telephony/voicemail-recording?hub=hub-1&callSid=CA-vm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed&RecordingSid=RE-vm',
+      })
+      await vi.waitFor(() => expect(services.providerRecordings.deleteHeld).toHaveBeenCalled())
+      const [resolve, filter] = vi.mocked(services.providerRecordings.deleteHeld).mock.calls[0]!
+      expect(await resolve('hub-1')).toBe(adapter)
+      expect(filter).toEqual({ hubId: 'hub-1', callIds: ['CA-vm'], kind: 'voicemail' })
     })
 
     it('tolerates the call having already ended', async () => {

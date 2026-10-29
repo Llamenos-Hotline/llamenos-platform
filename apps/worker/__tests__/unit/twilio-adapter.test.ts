@@ -784,6 +784,122 @@ describe('TwilioAdapter', () => {
     })
   })
 
+  // #2297: provider-side deletion — fail loudly, never a silent no-op.
+  describe('deleteRecording', () => {
+    it('DELETEs the Recording and resolves on 204', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await expect(adapter.deleteRecording('RE123')).resolves.toBeUndefined()
+      expect(fetchMock.mock.calls[0]![0]).toBe('https://api.twilio.com/2010-04-01/Accounts/AC1234567890/Recordings/RE123.json')
+      expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe('DELETE')
+    })
+
+    it('treats 404 as already deleted', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }))
+      await expect(adapter.deleteRecording('RE123')).resolves.toBeUndefined()
+    })
+
+    it('rejects when Twilio refuses (e.g. a recording still in progress)', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{"code":20009}', { status: 400 }))
+      await expect(adapter.deleteRecording('RE123')).rejects.toThrow(/Twilio recording deletion failed: 400/)
+    })
+
+    it('rejects when Twilio is unreachable', async () => {
+      fetchMock.mockRejectedValueOnce(new Error('ETIMEDOUT'))
+      await expect(adapter.deleteRecording('RE123')).rejects.toThrow(/ETIMEDOUT/)
+    })
+  })
+
+  describe('probeRecordingPosture', () => {
+    const context = (tracked: string[]) => ({ trackedRecordings: async (h: string[]) => new Set(h.filter(x => tracked.includes(x))) })
+    const old = new Date(Date.now() - 60 * 60 * 1000).toUTCString()
+
+    function route(map: Record<string, Response>) {
+      fetchMock.mockImplementation(async (url: string) => {
+        for (const [needle, res] of Object.entries(map)) {
+          if (String(url).includes(needle)) return res.clone()
+        }
+        return new Response('unexpected', { status: 599 })
+      })
+    }
+
+    const healthy = {
+      '/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ voice_url: 'https://hotline.example/api/telephony/incoming' }] }),
+      '/Recordings.json': Response.json({ recordings: [{ sid: 'RE1', date_created: old }] }),
+      '/Transcriptions.json': Response.json({ transcriptions: [] }),
+      'intelligence.twilio.com': Response.json({ services: [] }),
+    }
+
+    it('reports off/off, with evidence, when everything read says so', async () => {
+      route(healthy)
+      const posture = await adapter.probeRecordingPosture(context(['RE1']))
+      expect(posture.recording.state).toBe('off')
+      expect(posture.transcription.state).toBe('off')
+    })
+
+    it('reports recording on for a recording this server never requested', async () => {
+      route(healthy)
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'on' })
+    })
+
+    it('does not judge a recording younger than the webhook grace period', async () => {
+      route({ ...healthy, '/Recordings.json': Response.json({ recordings: [{ sid: 'RE2', date_created: new Date().toUTCString() }] }) })
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording.state).toBe('off')
+    })
+
+    it('reports transcription on when an Intelligence service auto-transcribes', async () => {
+      route({ ...healthy, 'intelligence.twilio.com': Response.json({ services: [{ sid: 'GA1', unique_name: 'qa', auto_transcribe: true }] }) })
+      const posture = await adapter.probeRecordingPosture(context(['RE1']))
+      expect(posture.transcription).toMatchObject({ state: 'on' })
+    })
+
+    it('reports recording on for a trunk that records', async () => {
+      route({
+        ...healthy,
+        '/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ trunk_sid: 'TK1' }] }),
+        'trunking.twilio.com': Response.json({ recording: { mode: 'record-from-answer' } }),
+      })
+      const posture = await adapter.probeRecordingPosture(context(['RE1']))
+      expect(posture.recording).toMatchObject({ state: 'on' })
+    })
+
+    it('reports unknown — never off — when a setting cannot be read', async () => {
+      route({ ...healthy, 'intelligence.twilio.com': new Response('', { status: 403 }) })
+      const posture = await adapter.probeRecordingPosture(context(['RE1']))
+      expect(posture.recording.state).toBe('off')
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
+    })
+
+    it('reports unknown when the number routes somewhere else', async () => {
+      route({ ...healthy, '/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ voice_url: 'https://elsewhere.example/twiml' }] }) })
+      const posture = await adapter.probeRecordingPosture(context(['RE1']))
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
+    })
+
+    it('reports unknown for everything when the credentials are refused', async () => {
+      fetchMock.mockResolvedValue(new Response('', { status: 401 }))
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
+    })
+
+    it('SignalWire reads its own space and has no Intelligence check', async () => {
+      const sw = new SignalWireAdapter('proj', 'tok', '+15551234567', 'myspace')
+      route({
+        '/IncomingPhoneNumbers.json': Response.json({ incoming_phone_numbers: [{ voice_url: 'https://hotline.example/api/telephony/incoming' }] }),
+        '/Recordings.json': Response.json({ recordings: [] }),
+        '/Transcriptions.json': Response.json({ transcriptions: [] }),
+      })
+      const posture = await sw.probeRecordingPosture(context([]))
+      expect(posture.recording.state).toBe('off')
+      expect(posture.transcription.state).toBe('off')
+      const urls = fetchMock.mock.calls.map(c => String(c[0]))
+      expect(urls.every(u => u.startsWith('https://myspace.signalwire.com/'))).toBe(true)
+    })
+  })
+
   describe('handleVoicemailComplete', () => {
     it('returns thank you message and hangup', () => {
       const res = adapter.handleVoicemailComplete('en')

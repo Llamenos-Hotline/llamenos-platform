@@ -31,6 +31,8 @@ import { IdentityService } from '../../services/identity'
 import { AuditService } from '../../services/audit'
 import { ErasureService } from '../../services/erasure'
 import { HubShredService } from '../../services/hub-shred'
+import { ProviderRecordingsService, type ProviderMediaEraser } from '../../services/provider-recordings'
+import type { TelephonyAdapter } from '../../telephony/adapter'
 import { notes } from '../../db/schema'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
@@ -137,8 +139,14 @@ export interface FreshHubDb {
   audit: AuditService
   erasure: ErasureService
   shred: HubShredService
+  /** The provider-recording ledger (#2297), on this database. */
+  recordings: ProviderRecordingsService
+  /** What `HubShredService.execute` deletes provider-held audio through; resolves the adapter set by useTelephonyAdapter. */
+  providerMedia: ProviderMediaEraser
   /** Attach a blob store after construction, before use. */
   useBlobStorage(blob: { delete(key: string): Promise<void> }): void
+  /** The adapter every hub's provider-held recordings are deleted through (default: none configured). */
+  useTelephonyAdapter(adapter: Pick<TelephonyAdapter, 'deleteRecording' | 'providerAccountId'> | null): void
   setup(): Promise<void>
   teardown(): Promise<void>
 }
@@ -151,6 +159,7 @@ export function freshHubDb(name: string): FreshHubDb {
   const DB_NAME = `${name}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   let sql: ReturnType<typeof postgres> | undefined
   let blobStorage: { delete(key: string): Promise<void> } | undefined
+  let telephonyAdapter: Pick<TelephonyAdapter, 'deleteRecording' | 'providerAccountId'> | null = null
 
   const dbRef: FreshHubDb = {
     db: undefined as unknown as Database,
@@ -160,8 +169,13 @@ export function freshHubDb(name: string): FreshHubDb {
     audit: undefined as unknown as AuditService,
     erasure: undefined as unknown as ErasureService,
     shred: undefined as unknown as HubShredService,
+    recordings: undefined as unknown as ProviderRecordingsService,
+    providerMedia: undefined as unknown as ProviderMediaEraser,
     useBlobStorage(blob) {
       blobStorage = blob
+    },
+    useTelephonyAdapter(adapter) {
+      telephonyAdapter = adapter
     },
     async setup() {
       const admin = postgres(DATABASE_URL, { max: 1 })
@@ -206,6 +220,8 @@ export function freshHubDb(name: string): FreshHubDb {
       dbRef.identity = identity
       dbRef.audit = audit
       dbRef.erasure = erasure
+      dbRef.recordings = new ProviderRecordingsService(db, audit)
+      dbRef.providerMedia = dbRef.recordings.eraser(async () => telephonyAdapter as TelephonyAdapter | null)
     },
     async teardown() {
       await sql?.end()

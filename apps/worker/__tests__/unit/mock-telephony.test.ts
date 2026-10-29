@@ -98,6 +98,18 @@ describe('MockTelephonyAdapter', () => {
     expect(await adapter.parseIncomingWebhook(req)).toEqual({ callSid: 'c1', callerNumber: '+15550001111', calledNumber: '+15555550100' })
   })
 
+  it('deletes a recording, and refuses the undeletable ones loudly (#2297)', async () => {
+    await adapter.deleteRecording('mock-rec-1')
+    expect(adapter.actions).toContainEqual({ type: 'delete-recording', recordingSid: 'mock-rec-1' })
+    await expect(adapter.deleteRecording('mock-undeletable-1')).rejects.toThrow(/refuses to delete/)
+  })
+
+  it('reports its recording posture with evidence, never a bare off', async () => {
+    const posture = await adapter.probeRecordingPosture({ trackedRecordings: async () => new Set() })
+    expect(posture.recording).toMatchObject({ state: 'off', evidence: expect.any(String) })
+    expect(posture.transcription).toMatchObject({ state: 'off', evidence: expect.any(String) })
+  })
+
   it('returns non-Twilio, JSON mock responses', () => {
     expect(adapter.rejectCall().contentType).toBe('application/json')
     expect(JSON.parse(adapter.emptyResponse().body)).toMatchObject({ mock: true })

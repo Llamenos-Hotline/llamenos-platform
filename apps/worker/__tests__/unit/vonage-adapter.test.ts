@@ -576,24 +576,64 @@ describe('VonageAdapter', () => {
   })
 
   describe('getRecordingAudio', () => {
-    it('fetches audio from full URL and returns array buffer', async () => {
+    const URL_ = 'https://api.nexmo.com/v1/files/aaaaaaaa-bbbb-cccc-dddd-0123456789ab'
+
+    it('fetches audio from the Vonage file URL and returns array buffer', async () => {
       const mockFetch = vi.mocked(globalThis.fetch)
       mockFetch.mockResolvedValueOnce(new Response(new ArrayBuffer(2048), { status: 200 }))
 
-      const result = await adapter.getRecordingAudio('https://example.com/recording.mp3')
+      const result = await adapter.getRecordingAudio(URL_)
 
       expect(result).not.toBeNull()
       expect(result?.byteLength).toBe(2048)
-      expect(mockFetch.mock.calls[0][0]).toBe('https://example.com/recording.mp3')
+      expect(mockFetch.mock.calls[0][0]).toBe(URL_)
     })
 
     it('returns null when fetch fails', async () => {
       const mockFetch = vi.mocked(globalThis.fetch)
       mockFetch.mockResolvedValueOnce(new Response('Error', { status: 500 }))
 
-      const result = await adapter.getRecordingAudio('https://example.com/recording.mp3')
+      const result = await adapter.getRecordingAudio(URL_)
 
       expect(result).toBeNull()
+    })
+
+    it('never sends credentials to a URL that is not a Vonage file', async () => {
+      const mockFetch = vi.mocked(globalThis.fetch)
+      expect(await adapter.getRecordingAudio('https://attacker.example/v1/files/aaaaaaaa-bbbb')).toBeNull()
+      expect(await adapter.getRecordingAudio('http://api.nexmo.com/v1/files/aaaaaaaa-bbbb-cccc')).toBeNull()
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+  })
+
+  // #2297: provider-side deletion through the Media API — fail loudly.
+  describe('deleteRecording', () => {
+    const URL_ = 'https://api-eu.nexmo.com/v1/files/aaaaaaaa-bbbb-cccc-dddd-0123456789ab'
+
+    it('DELETEs the file as a Media API item on the same host', async () => {
+      const mockFetch = vi.mocked(globalThis.fetch)
+      mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await expect(adapter.deleteRecording(URL_)).resolves.toBeUndefined()
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api-eu.nexmo.com/v3/media/aaaaaaaa-bbbb-cccc-dddd-0123456789ab')
+      expect((mockFetch.mock.calls[0][1] as RequestInit).method).toBe('DELETE')
+    })
+
+    it('rejects when Vonage refuses', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('denied', { status: 401 }))
+      await expect(adapter.deleteRecording(URL_)).rejects.toThrow(/Vonage recording deletion failed: 401/)
+    })
+
+    it('rejects a handle that is not a Vonage file URL, without a request', async () => {
+      await expect(adapter.deleteRecording('https://example.com/recording.mp3')).rejects.toThrow(/unrecognised recording handle/)
+      expect(globalThis.fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('probeRecordingPosture', () => {
+    it('reports both unknown: Vonage publishes nothing to read', async () => {
+      const posture = await adapter.probeRecordingPosture({ trackedRecordings: async () => new Set() })
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
     })
   })
 

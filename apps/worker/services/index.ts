@@ -33,6 +33,7 @@ import { HubOnboardService } from './provider-setup/hub-onboard'
 import { ErasureService } from './erasure'
 import { RetentionService } from './retention'
 import { HubShredService } from './hub-shred'
+import { ProviderRecordingsService } from './provider-recordings'
 import { RingGroupsService } from './ring-groups'
 import { ShiftOverridesService } from './shift-overrides'
 import { ActiveShiftsService } from './active-shifts'
@@ -76,6 +77,8 @@ export interface Services {
   retention: RetentionService
   /** The hub crypto-shred executor (spec §4). Takes the blob-storage binding at construction. */
   hubShred: HubShredService
+  /** Caller audio the telephony provider still holds, until the provider confirms deleting it (#2297). */
+  providerRecordings: ProviderRecordingsService
   ringGroups: RingGroupsService
   shiftOverrides: ShiftOverridesService
   activeShifts: ActiveShiftsService
@@ -192,6 +195,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     erasure,
     retention: new RetentionService(db),
     hubShred,
+    providerRecordings: new ProviderRecordingsService(db, audit),
     ringGroups: new RingGroupsService(db),
     shiftOverrides: new ShiftOverridesService(db),
     activeShifts: new ActiveShiftsService(db),

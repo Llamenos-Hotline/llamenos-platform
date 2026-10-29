@@ -19,6 +19,7 @@ import {
   type HubScope,
 } from './hub-shred-targets'
 import type { AuditService } from './audit'
+import type { ProviderMediaEraser } from './provider-recordings'
 import { ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
 
@@ -70,11 +71,46 @@ export class HubShredService {
     hubId: string,
     executedBy: string,
     audit: AuditService,
+    providerMedia: ProviderMediaEraser,
+    options: {
+      /**
+       * A co-approved emergency shred destroys the keys even when the provider
+       * will not delete its recordings: a third party's outage must not keep a
+       * hub readable under the threat the override exists for. What is left at
+       * the provider is recorded on the PLATFORM audit chain, which outlives
+       * the shred, so it is never silently forgotten.
+       */
+      emergencyOverride?: boolean
+    } = {},
   ): Promise<{ rowsAffected: number }> {
     const [hub] = await this.db.execute(
       sql`SELECT id, status FROM hubs WHERE id = ${hubId}`,
     )
     if (!hub) throw new ServiceError(404, 'Hub not found')
+
+    // Caller audio the telephony provider still holds is plaintext on a third
+    // party's disk: no key this shred destroys protects it, so it has to be
+    // deleted THERE (#2297). It goes first, because the transaction below
+    // deletes provider_configs — after which the hub's provider could no longer
+    // be asked. A shred that cannot reach that audio is not reported done.
+    const media = await providerMedia.deleteForHub(hubId)
+    if (media.failed.length > 0) {
+      if (!options.emergencyOverride) {
+        throw new ServiceError(
+          502,
+          `Hub shred refused: the telephony provider still holds ${media.failed.length} recording(s) it did not delete — ${media.failed[0].error}`,
+        )
+      }
+      logger.error('Emergency hub shred proceeding with caller audio still held at the provider', {
+        hubId,
+        remaining: media.failed.length,
+      })
+      await audit.log('hubShredProviderMediaRemaining', executedBy, {
+        hubId,
+        remaining: media.failed.length,
+        calls: media.failed.map(f => ({ callId: f.callId, kind: f.kind, error: f.error.slice(0, 200) })),
+      }, undefined)
+    }
 
     // The scope predicate still resolves before the transaction: collect the
     // file ids now, because routes/uploads.ts mirrors every file's envelopes

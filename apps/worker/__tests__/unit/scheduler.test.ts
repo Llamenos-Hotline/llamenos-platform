@@ -55,6 +55,11 @@ vi.mock('@worker/lib/stale-call-reaper-worker', () => ({
   stopStaleCallReaperWorker: vi.fn(),
 }))
 
+vi.mock('@worker/lib/provider-recording-sweep-worker', () => ({
+  startProviderRecordingSweepWorker: vi.fn(),
+  stopProviderRecordingSweepWorker: vi.fn(),
+}))
+
 import { startBlastWorker, stopBlastWorker } from '@worker/lib/blast-delivery-worker'
 import { startScheduledBlastPoller, stopScheduledBlastPoller } from '@worker/lib/blast-scheduled-poller'
 import { startRetentionPurgeWorker, stopRetentionPurgeWorker } from '@worker/lib/retention-purge-worker'
@@ -68,6 +73,10 @@ import {
   stopSignalQueueDrainWorker,
 } from '@worker/lib/signal-queue-drain-worker'
 import { startStaleCallReaperWorker, stopStaleCallReaperWorker } from '@worker/lib/stale-call-reaper-worker'
+import {
+  startProviderRecordingSweepWorker,
+  stopProviderRecordingSweepWorker,
+} from '@worker/lib/provider-recording-sweep-worker'
 
 /**
  * Every worker the scheduler owns, with the dependency whose absence used to
@@ -85,6 +94,7 @@ const WORKERS = [
   { name: 'periodic cleanup', start: startPeriodicCleanupWorker, stop: stopPeriodicCleanupWorker, dep: 'identityService' },
   { name: 'signal queue drain', start: startSignalQueueDrainWorker, stop: stopSignalQueueDrainWorker, dep: 'resolveAdapter' },
   { name: 'stale call reaper', start: startStaleCallReaperWorker, stop: stopStaleCallReaperWorker, dep: 'callsService' },
+  { name: 'provider recording sweep', start: startProviderRecordingSweepWorker, stop: stopProviderRecordingSweepWorker, dep: 'providerMedia' },
 ] as const
 
 /** Distinguishable sentinels, so a mis-wired field is visible in the assertion. */
@@ -106,6 +116,7 @@ function deps() {
     ...serviceDeps(),
     resolveAdapter: async () => null,
     resolveIdentifier: async () => null,
+    providerMedia: { __svc: 'providerMedia' } as never,
   }
 }
 
@@ -163,6 +174,19 @@ describe('TaskScheduler', () => {
       expect(startErasureExpiryWorker).toHaveBeenCalledWith(
         expect.objectContaining({ hubShred: d.hubShred }),
       )
+    })
+
+    it('hands the provider-media eraser to every worker that deletes caller audio (#2297)', () => {
+      const { scheduler } = setup()
+      const d = deps()
+
+      scheduler.start(d)
+
+      // Purging a call record, shredding a hub and retrying a voicemail each
+      // delete audio the telephony provider holds; without the eraser none could.
+      expect(startRetentionPurgeWorker).toHaveBeenCalledWith(expect.objectContaining({ providerMedia: d.providerMedia }))
+      expect(startErasureExpiryWorker).toHaveBeenCalledWith(expect.objectContaining({ providerMedia: d.providerMedia }))
+      expect(startProviderRecordingSweepWorker).toHaveBeenCalledWith(d.providerMedia)
     })
 
     it('reports every registered worker as started — a future dep addition without wiring must fail loudly, not silently skip one', () => {

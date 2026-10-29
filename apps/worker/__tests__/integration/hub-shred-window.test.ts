@@ -91,6 +91,7 @@ async function runExpiryOnce(): Promise<void> {
         erasureService: fresh.erasure,
         auditService: fresh.audit,
         hubShred: fresh.shred,
+        providerMedia: fresh.providerMedia,
       })
     } catch {
       await fresh.erasure.markFailed(request.id)

@@ -79,6 +79,11 @@ describe('KamailioClient', () => {
     it('listBridges throws', async () => {
       await expect(client.listBridges()).rejects.toThrow('SIP proxy')
     })
+
+    // #2297: a delete that resolves without deleting reads as "gone" to the worker.
+    it('deleteRecording throws — the media lives on the PBX behind the proxy', async () => {
+      await expect(client.deleteRecording('voicemail-ch-1')).rejects.toThrow('SIP proxy')
+    })
   })
 
   describe('lifecycle', () => {
