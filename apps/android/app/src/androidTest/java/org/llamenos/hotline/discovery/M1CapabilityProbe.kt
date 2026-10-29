@@ -100,6 +100,31 @@ class M1CapabilityProbe {
         TestPermissions.grant()
     }
 
+    /**
+     * Every flow is a fresh install, so it starts as a fresh client of the invite routes.
+     *
+     * `GET /api/invites/validate/:code` and `POST /api/invites/redeem` are each capped at 5
+     * per minute per client IP (apps/worker/routes/invites.ts), and every flow the gate runs
+     * reaches the server from the same emulator address. Each enrolment spends one validate,
+     * so the sixth enrolling flow inside a minute was refused with "Too many attempts" — the
+     * gate measuring its own earlier flows, not the flow under test (#2127: `hubs`, sixth in
+     * the ratchet, failed that way on all four shards while every Cucumber scenario passed).
+     *
+     * Only those two buckets are cleared, and only between flows: inside a flow the limiter
+     * is fully in force, so an app that spent more than its budget on one enrolment would
+     * still be refused, and the `write`-tier and every other limit are untouched.
+     * `DELETE /api/test-rate-limits` is the dev surface's existing reset for this
+     * (apps/worker/routes/dev.ts), gated by the same secret as every other backdoor here.
+     */
+    @Before
+    fun freshInviteClient() {
+        for (bucket in listOf("invite-validate:", "invite-redeem:")) {
+            http("setup", "DELETE", "/api/test-rate-limits?prefix=$bucket", null, "BACKDOOR") {
+                setRequestProperty("X-Test-Secret", testSecret)
+            }
+        }
+    }
+
     @After
     fun tearDown() {
         scenario?.close()
