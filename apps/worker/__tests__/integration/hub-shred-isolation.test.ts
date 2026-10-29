@@ -137,7 +137,7 @@ describe('hub isolation', () => {
       .from(schema.hubKeys)
       .where(eq(schema.hubKeys.hubId, hubB))
 
-    await fresh.shred.execute(hubA, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubA, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     // The user can still really decrypt their hub B note, end to end.
     await expectNoteReadable(fresh.db, noteB.note.id, user.secret, 'hub B note')
@@ -172,7 +172,7 @@ describe('hub isolation', () => {
   it('destroys the recovery shares that could reconstruct the hub key', async () => {
     const hubId = await createHub()
     await seedRecoveryGroup(hubId, { threshold: 3, totalShares: 5 })
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
     expect(
       await fresh.db
         .select()
@@ -197,7 +197,7 @@ describe('hub isolation', () => {
       .from(schema.hubKeys)
       .where(eq(schema.hubKeys.hubId, hubId))
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     await expect(
       fresh.settings.setHubKeyEnvelopes(hubId, {
@@ -223,7 +223,7 @@ describe('audit chain', () => {
     expect(before.valid).toBe(true)
     expect(before.totalEntries).toBe(3)
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     const after = await fresh.audit.verifyFullChain(hubId)
     expect(after.valid, 'shredding broke the hash chain').toBe(true)
@@ -262,7 +262,7 @@ describe('erasure orthogonality (spec §6.2)', () => {
     await seedReadableNote(fresh.db, hubId, user)
     const request = await fresh.erasure.createSelfRequest(user.pubkey, hubId)
 
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     // The person's request survives the hub, untouched and still scheduled.
     const [after] = await fresh.db
@@ -286,7 +286,7 @@ describe('erasure orthogonality (spec §6.2)', () => {
   it('completes a re-encryption job targeting a shredded hub as a no-op', async () => {
     const hubId = await createHub()
     const user = reader()
-    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
     const [job] = await fresh.db
       .insert(schema.reEncryptionJobs)
       .values({ userId: user.pubkey, hubId, status: 'queued' })

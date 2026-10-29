@@ -227,5 +227,9 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
 
   // --- Class F: hub bearer tokens -----------------------------------------
   { kind: 'delete-rows', table: 'call_tokens', scope: BY_HUB },
+  // Handles of provider-held caller audio. The executor deletes the audio at
+  // the provider BEFORE this transaction and refuses to shred if it cannot, so
+  // by here every row is one the provider confirmed — this is the backstop.
+  { kind: 'delete-rows', table: 'provider_recordings', scope: BY_HUB },
   { kind: 'delete-rows', table: 'invite_codes', scope: BY_HUB },
 ] as const

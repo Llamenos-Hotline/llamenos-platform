@@ -7,6 +7,7 @@
 import type { ErasureService } from '../services/erasure'
 import type { AuditService } from '../services/audit'
 import type { HubShredService } from '../services/hub-shred'
+import type { ProviderMediaEraser } from '../services/provider-recordings'
 import { getConnectionManager } from './ws-manager'
 import { createLogger } from './logger'
 
@@ -29,6 +30,11 @@ interface ErasureExpiryWorkerOpts {
    * request it cannot execute is a privacy promise it cannot keep.
    */
   hubShred: HubShredService
+  /**
+   * Deletes the hub's provider-held recordings before the shred (#2297): the
+   * shred deletes the hub's provider credentials, after which nothing could.
+   */
+  providerMedia: ProviderMediaEraser
 }
 
 type ExpiredRequest = Awaited<ReturnType<ErasureService['getExpiredPendingRequests']>>[number]
@@ -62,7 +68,7 @@ export async function processExpiredRequest(
       }
     }
 
-    await opts.hubShred.execute(request.hubId, 'system', opts.auditService)
+    await opts.hubShred.execute(request.hubId, 'system', opts.auditService, opts.providerMedia)
     await opts.erasureService.markCompleted(request.id)
 
     logger.info('Hub shred executed', { requestId: request.id, hubId: request.hubId })

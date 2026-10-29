@@ -4,7 +4,7 @@
  * Per-hub retention settings with platform-enforced minimums.
  * Daily purge deletes records older than the configured retention period.
  */
-import { eq, and, sql, lt, inArray } from 'drizzle-orm'
+import { eq, and, sql, lt, inArray, notInArray } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   retentionSettings,
@@ -15,6 +15,7 @@ import {
 } from '../db/schema'
 import { ServiceError } from './settings'
 import type { AuditService } from './audit'
+import type { ProviderMediaEraser } from './provider-recordings'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.retention')
@@ -122,8 +123,15 @@ export class RetentionService {
   // Purge execution
   // ---------------------------------------------------------------------------
 
+  /**
+   * @param providerMedia deletes, at the telephony provider, the recordings of
+   *   purged call records (#2297). Required: purging the row that holds a
+   *   recording's handle without deleting the recording would leave the caller
+   *   audio at the provider with nothing left to find it by.
+   */
   async executePurge(
     auditService: AuditService,
+    providerMedia: ProviderMediaEraser,
   ): Promise<{ hubId: string; category: string; deletedCount: number }[]> {
     const allSettings = await this.db.select().from(retentionSettings)
     const results: { hubId: string; category: string; deletedCount: number }[] = []
@@ -139,15 +147,26 @@ export class RetentionService {
         case 'call_records': {
           // Only purge terminal-state records — never delete active/ringing calls
           const TERMINAL_STATUSES = ['ended', 'missed', 'no-answer', 'rejected']
+          const expired = and(
+            eq(callRecords.hubId, setting.hubId),
+            lt(callRecords.createdAt, cutoff),
+            inArray(callRecords.status, TERMINAL_STATUSES),
+          )
+          // The provider's copies go first. A call whose recording the
+          // provider would not delete keeps its record — and with it the
+          // handle — so the next purge retries instead of orphaning the audio.
+          const candidates = await this.db.select({ callId: callRecords.callId }).from(callRecords).where(expired)
+          const media = await providerMedia.deleteForCalls(setting.hubId, candidates.map(r => r.callId))
+          const kept = [...new Set(media.failed.map(f => f.callId))]
+          if (kept.length > 0) {
+            logger.error('Retention purge kept call records whose provider recordings could not be deleted', {
+              hubId: setting.hubId,
+              kept: kept.length,
+            })
+          }
           const result = await this.db
             .delete(callRecords)
-            .where(
-              and(
-                eq(callRecords.hubId, setting.hubId),
-                lt(callRecords.createdAt, cutoff),
-                inArray(callRecords.status, TERMINAL_STATUSES),
-              ),
-            )
+            .where(kept.length > 0 ? and(expired, notInArray(callRecords.callId, kept)) : expired)
             .returning()
           deletedCount = result.length
           break

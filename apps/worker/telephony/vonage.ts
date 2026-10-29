@@ -413,8 +413,12 @@ export class VonageAdapter implements TelephonyAdapter {
   }
 
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
-    // Vonage recording URLs are full URLs, not SIDs
-    const audioRes = await safeFetch(recordingSid, {
+    // Vonage recording URLs are full URLs, not SIDs. The handle comes from a
+    // webhook body, so it must name a Vonage file before this adapter's
+    // credentials are sent to it.
+    const ref = parseVonageRecordingUrl(recordingSid)
+    if (!ref) return null
+    const audioRes = await safeFetch(`${ref.origin}/v1/files/${ref.id}`, {
       headers: { 'Authorization': `Basic ${btoa(`${this.apiKey}:${this.apiSecret}`)}` },
       timeoutMs: 60_000,
     })

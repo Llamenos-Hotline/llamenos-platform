@@ -5,6 +5,7 @@
 import type { RetentionService } from '../services/retention'
 import type { AuditService } from '../services/audit'
 import type { SettingsService } from '../services/settings'
+import type { ProviderMediaEraser } from '../services/provider-recordings'
 import { createLogger } from './logger'
 
 const logger = createLogger('lib.retention-purge')
@@ -19,6 +20,8 @@ interface RetentionPurgeWorkerOpts {
   retentionService: RetentionService
   auditService: AuditService
   settingsService: SettingsService
+  /** Deletes purged calls' recordings at the provider first (#2297). */
+  providerMedia: ProviderMediaEraser
 }
 
 export function startRetentionPurgeWorker(opts: RetentionPurgeWorkerOpts): void {
@@ -47,6 +50,7 @@ export function startRetentionPurgeWorker(opts: RetentionPurgeWorkerOpts): void 
         logger.info('Executing retention purge', { cronHour, today })
         const results = await opts.retentionService.executePurge(
           opts.auditService,
+          opts.providerMedia,
         )
         logger.info('Retention purge complete', {
           results: results.length,

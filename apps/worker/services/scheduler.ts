@@ -48,6 +48,11 @@ import {
   startStaleCallReaperWorker,
   stopStaleCallReaperWorker,
 } from '../lib/stale-call-reaper-worker'
+import {
+  startProviderRecordingSweepWorker,
+  stopProviderRecordingSweepWorker,
+} from '../lib/provider-recording-sweep-worker'
+import type { ProviderMediaEraser } from './provider-recordings'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
@@ -76,6 +81,7 @@ export const SCHEDULER_WORKER_NAMES = [
   'periodic-cleanup',
   'signal-queue-drain',
   'stale-call-reaper',
+  'provider-recording-sweep',
 ] as const
 
 export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
@@ -103,6 +109,12 @@ export type TaskSchedulerServiceDeps = {
 
 export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
   resolveAdapter: AdapterResolver
+  /**
+   * Deletes provider-held caller audio through each hub's TelephonyAdapter
+   * (#2297) — for the retention purge, the hub shred and the voicemail sweep.
+   * Built by the entrypoint, which alone can resolve a hub's adapter.
+   */
+  providerMedia: ProviderMediaEraser
   resolveIdentifier: (subscriberId: string) => Promise<string | null>
   onBlastProgress?: BlastProgressCallback
   onBlastStatusChange?: BlastStatusCallback
@@ -158,6 +170,7 @@ export class TaskScheduler {
       retentionService: deps.retentionService,
       auditService: deps.auditService,
       settingsService: deps.settingsService,
+      providerMedia: deps.providerMedia,
     })
     started.push('retention-purge')
 
@@ -171,6 +184,7 @@ export class TaskScheduler {
       erasureService: deps.erasureService,
       auditService: deps.auditService,
       hubShred: deps.hubShred,
+      providerMedia: deps.providerMedia,
     })
     started.push('erasure-expiry')
 
@@ -212,6 +226,11 @@ export class TaskScheduler {
     startStaleCallReaperWorker(deps.callsService)
     started.push('stale-call-reaper')
 
+    // Voicemail recordings whose provider-side deletion failed are retried
+    // until the provider confirms (#2297).
+    startProviderRecordingSweepWorker(deps.providerMedia)
+    started.push('provider-recording-sweep')
+
     this.startedWorkers = started
 
     const missing = SCHEDULER_WORKER_NAMES.filter((name) => !started.includes(name))
@@ -243,6 +262,7 @@ export class TaskScheduler {
     stopPeriodicCleanupWorker()
     stopSignalQueueDrainWorker()
     stopStaleCallReaperWorker()
+    stopProviderRecordingSweepWorker()
 
     logger.info('Stopped')
   }

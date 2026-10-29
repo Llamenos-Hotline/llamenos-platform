@@ -15,7 +15,7 @@ import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readine
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
 import { validateConfig, readSecretFile } from '../../apps/worker/lib/config'
-import { getMessagingAdapterFromService } from '../../apps/worker/lib/service-factories'
+import { getHubTelephonyFromService, getMessagingAdapterFromService } from '../../apps/worker/lib/service-factories'
 import { publishEvent, setEventOutbox, drainOutbox, cleanupOutbox } from '../../apps/worker/lib/ws-events'
 import {
   initConnectionManager,
@@ -256,6 +256,9 @@ console.log('[llamenos] Event outbox initialized (drain: 30s, cleanup: 5m)')
 // readable past its deadline while the request reported as scheduled (#1566).
 services.scheduler.start({
   ...schedulerServiceDeps(services),
+  // #2297: provider-held caller audio is deleted through the hub's own adapter.
+  providerMedia: services.providerRecordings.eraser((hubId) =>
+    getHubTelephonyFromService(env as unknown as Env, services.settings, hubId)),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
       return await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression)

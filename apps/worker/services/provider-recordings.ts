@@ -48,6 +48,21 @@ export interface HeldRecordingFilter {
   createdBefore?: Date
 }
 
+/**
+ * Provider-side deletion bound to the hub→adapter resolver, for callers that
+ * run outside a request (retention purge, hub shred, the sweep worker). It is a
+ * REQUIRED dependency of each of them: an eraser that could be omitted is a
+ * deletion that silently never runs (the #1127 / #1566 failure class).
+ */
+export interface ProviderMediaEraser {
+  /** Delete every tracked recording of these calls (any kind). */
+  deleteForCalls(hubId: string, callIds: string[]): Promise<ProviderDeletionResult>
+  /** Delete every tracked recording of the hub. */
+  deleteForHub(hubId: string): Promise<ProviderDeletionResult>
+  /** Retry voicemail deletions still outstanding after `olderThanMs`, in every hub. */
+  retryPendingVoicemails(olderThanMs: number): Promise<ProviderDeletionResult>
+}
+
 type Row = typeof providerRecordings.$inferSelect
 
 export class ProviderRecordingsService {
@@ -134,6 +149,26 @@ export class ProviderRecordingsService {
       result.failed.push({ callId: row.callId, kind: row.kind as ProviderRecordingKind, error })
     }
     return result
+  }
+
+  /** Bind deletion to a hub→adapter resolver — see ProviderMediaEraser. */
+  eraser(resolveAdapter: TelephonyAdapterForHub): ProviderMediaEraser {
+    return {
+      deleteForCalls: (hubId, callIds) => callIds.length === 0
+        ? Promise.resolve({ deleted: 0, failed: [] })
+        : this.deleteHeld(resolveAdapter, { hubId, callIds }),
+      deleteForHub: (hubId) => this.deleteHeld(resolveAdapter, { hubId }),
+      retryPendingVoicemails: async (olderThanMs) => {
+        const before = new Date(Date.now() - olderThanMs)
+        const total: ProviderDeletionResult = { deleted: 0, failed: [] }
+        for (const hubId of await this.hubsWithPendingVoicemails(before)) {
+          const result = await this.deleteHeld(resolveAdapter, { hubId, kind: 'voicemail', createdBefore: before })
+          total.deleted += result.deleted
+          total.failed.push(...result.failed)
+        }
+        return total
+      },
+    }
   }
 
   /** Delete one recording at the provider; null on confirmed deletion, else the error. */

@@ -682,16 +682,18 @@ describe('PlivoAdapter', () => {
   })
 
   describe('getRecordingAudio', () => {
-    it('fetches audio by full URL', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(512),
-      } as Response)
+    // The handle is the RecordingID from the record callback; its URL comes
+    // from Plivo's own Recording resource, never from the webhook body.
+    it('looks the recording up by id, then fetches its audio', async () => {
+      fetchMock
+        .mockResolvedValueOnce(Response.json({ recording_id: 'rec-1', recording_url: 'https://media.plivo.com/rec-1.mp3' }))
+        .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 200 }))
 
-      const result = await adapter.getRecordingAudio('https://example.com/rec.mp3')
+      const result = await adapter.getRecordingAudio('rec-1')
       expect(result).not.toBeNull()
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://example.com/rec.mp3',
+      expect(fetchMock.mock.calls[0]![0]).toBe('https://api.plivo.com/v1/Account/auth-id-123/Recording/rec-1/')
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'https://media.plivo.com/rec-1.mp3',
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: expect.stringContaining('Basic'),
@@ -700,14 +702,59 @@ describe('PlivoAdapter', () => {
       )
     })
 
-    it('returns null when fetch fails', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      } as Response)
-
-      const result = await adapter.getRecordingAudio('https://example.com/rec.mp3')
+    it('returns null when the recording is not found', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }))
+      const result = await adapter.getRecordingAudio('rec-1')
       expect(result).toBeNull()
+    })
+  })
+
+  // #2297: provider-side deletion — fail loudly, never a silent no-op.
+  describe('deleteRecording', () => {
+    it('DELETEs the Recording resource and resolves on 204', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await expect(adapter.deleteRecording('rec-1')).resolves.toBeUndefined()
+      expect(fetchMock.mock.calls[0]![0]).toBe('https://api.plivo.com/v1/Account/auth-id-123/Recording/rec-1/')
+      expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe('DELETE')
+    })
+
+    it('treats 404 as already deleted', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }))
+      await expect(adapter.deleteRecording('rec-1')).resolves.toBeUndefined()
+    })
+
+    it('rejects when Plivo refuses', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('server error', { status: 500 }))
+      await expect(adapter.deleteRecording('rec-1')).rejects.toThrow(/Plivo recording deletion failed: 500/)
+    })
+
+    it('rejects when Plivo is unreachable', async () => {
+      fetchMock.mockRejectedValueOnce(new Error('ECONNRESET'))
+      await expect(adapter.deleteRecording('rec-1')).rejects.toThrow(/ECONNRESET/)
+    })
+  })
+
+  describe('probeRecordingPosture', () => {
+    const context = (tracked: string[]) => ({ trackedRecordings: async (h: string[]) => new Set(h.filter(x => tracked.includes(x))) })
+    const old = '2020-01-01 10:00:00.000000+00:00'
+
+    it('reports recording on for a recording this server never requested', async () => {
+      fetchMock.mockResolvedValueOnce(Response.json({ objects: [{ recording_id: 'rec-x', add_time: old }] }))
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'on' })
+    })
+
+    it('reports recording off with evidence when all were requested', async () => {
+      fetchMock.mockResolvedValueOnce(Response.json({ objects: [{ recording_id: 'rec-1', add_time: old }] }))
+      const posture = await adapter.probeRecordingPosture(context(['rec-1']))
+      expect(posture.recording.state).toBe('off')
+    })
+
+    it('reports unknown when the recordings cannot be listed, and transcription as unknown (nothing to read)', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('', { status: 401 }))
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
     })
   })
 

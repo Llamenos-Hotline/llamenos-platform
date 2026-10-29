@@ -158,6 +158,9 @@ async function runSchedulerUntil(
     ...schedulerServiceDeps(services),
     resolveAdapter: async () => null,
     resolveIdentifier: async () => null,
+    // The registry's own ledger, as the entrypoint wires it; these hubs track no
+    // provider recordings, so no adapter is ever asked.
+    providerMedia: services.providerRecordings.eraser(async () => null),
   })
   try {
     const deadline = Date.now() + timeoutMs

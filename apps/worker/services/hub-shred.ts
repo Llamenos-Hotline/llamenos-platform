@@ -19,6 +19,7 @@ import {
   type HubScope,
 } from './hub-shred-targets'
 import type { AuditService } from './audit'
+import type { ProviderMediaEraser } from './provider-recordings'
 import { ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
 
@@ -70,11 +71,25 @@ export class HubShredService {
     hubId: string,
     executedBy: string,
     audit: AuditService,
+    providerMedia: ProviderMediaEraser,
   ): Promise<{ rowsAffected: number }> {
     const [hub] = await this.db.execute(
       sql`SELECT id, status FROM hubs WHERE id = ${hubId}`,
     )
     if (!hub) throw new ServiceError(404, 'Hub not found')
+
+    // Caller audio the telephony provider still holds is plaintext on a third
+    // party's disk: no key this shred destroys protects it, so it has to be
+    // deleted THERE (#2297). It goes first, because the transaction below
+    // deletes provider_configs — after which the hub's provider could no longer
+    // be asked. A shred that cannot reach that audio is not reported done.
+    const media = await providerMedia.deleteForHub(hubId)
+    if (media.failed.length > 0) {
+      throw new ServiceError(
+        502,
+        `Hub shred refused: the telephony provider still holds ${media.failed.length} recording(s) it did not delete — ${media.failed[0].error}`,
+      )
+    }
 
     // The scope predicate still resolves before the transaction: collect the
     // file ids now, because routes/uploads.ts mirrors every file's envelopes

@@ -376,16 +376,19 @@ describe('TelnyxAdapter', () => {
     })
   })
 
+  // The handle is the recorded call LEG: call.recording.saved carries no
+  // recording id, and its URLs expire in ten minutes (#2297).
   describe('getRecordingAudio', () => {
-    it('fetches audio from URL', async () => {
+    it('lists the leg\'s recordings, then fetches the first one\'s audio', async () => {
       const buffer = new ArrayBuffer(8)
-      fetchSpy.mockResolvedValue(
-        new Response(buffer, { status: 200 }),
-      )
+      fetchSpy
+        .mockResolvedValueOnce(Response.json({ data: [{ id: 'rec-1', call_leg_id: 'leg-1', download_urls: { mp3: 'https://recording.url/audio.mp3' } }] }))
+        .mockResolvedValueOnce(new Response(buffer, { status: 200 }))
 
-      const result = await adapter.getRecordingAudio('https://recording.url/audio.mp3')
+      const result = await adapter.getRecordingAudio('leg-1')
       expect(result).toStrictEqual(buffer)
-      expect(fetchSpy).toHaveBeenCalledWith(
+      expect(String(fetchSpy.mock.calls[0]![0])).toBe('https://api.telnyx.com/v2/recordings?filter[call_leg_id]=leg-1&page[size]=50')
+      expect(fetchSpy).toHaveBeenLastCalledWith(
         'https://recording.url/audio.mp3',
         expect.objectContaining({
           headers: { Authorization: `Bearer ${API_KEY}` },
@@ -395,8 +398,98 @@ describe('TelnyxAdapter', () => {
 
     it('returns null on error', async () => {
       fetchSpy.mockResolvedValue(new Response('Not Found', { status: 404 }))
-      const result = await adapter.getRecordingAudio('https://recording.url/audio.mp3')
+      const result = await adapter.getRecordingAudio('leg-1')
       expect(result).toBeNull()
+    })
+  })
+
+  // #2297: provider-side deletion — fail loudly, never a silent no-op.
+  describe('deleteRecording', () => {
+    it('deletes every recording of the leg', async () => {
+      fetchSpy
+        .mockResolvedValueOnce(Response.json({ data: [{ id: 'rec-1' }, { id: 'rec-2' }] }))
+        .mockResolvedValueOnce(Response.json({ data: {} }))
+        .mockResolvedValueOnce(Response.json({ data: {} }))
+      await expect(adapter.deleteRecording('leg-1')).resolves.toBeUndefined()
+      const deletes = fetchSpy.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === 'DELETE').map(c => String(c[0]))
+      expect(deletes).toEqual(['https://api.telnyx.com/v2/recordings/rec-1', 'https://api.telnyx.com/v2/recordings/rec-2'])
+    })
+
+    it('resolves when the leg has no recording left', async () => {
+      fetchSpy.mockResolvedValueOnce(Response.json({ data: [] }))
+      await expect(adapter.deleteRecording('leg-1')).resolves.toBeUndefined()
+    })
+
+    it('rejects when the recordings cannot be listed', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('unauthorized', { status: 401 }))
+      await expect(adapter.deleteRecording('leg-1')).rejects.toThrow(/Telnyx recording deletion failed: 401/)
+    })
+
+    it('rejects when Telnyx refuses a deletion', async () => {
+      fetchSpy
+        .mockResolvedValueOnce(Response.json({ data: [{ id: 'rec-1' }] }))
+        .mockResolvedValueOnce(new Response('boom', { status: 500 }))
+      await expect(adapter.deleteRecording('leg-1')).rejects.toThrow(/Telnyx recording deletion failed: 500/)
+    })
+  })
+
+  describe('probeRecordingPosture', () => {
+    const context = (tracked: string[]) => ({ trackedRecordings: async (h: string[]) => new Set(h.filter(x => tracked.includes(x))) })
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+
+    function route(map: Record<string, Response>) {
+      fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+        const u = String(url)
+        for (const [prefix, res] of Object.entries(map)) {
+          if (u.startsWith(prefix)) return res.clone()
+        }
+        return new Response('unexpected', { status: 599 })
+      })
+    }
+
+    it('reports recording on when the number records every inbound call', async () => {
+      route({
+        'https://api.telnyx.com/v2/phone_numbers?': Response.json({ data: [{ id: 'pn-1' }] }),
+        'https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: true } } }),
+        'https://api.telnyx.com/v2/recordings?': Response.json({ data: [] }),
+        'https://api.telnyx.com/v2/recording_transcriptions': Response.json({ data: [] }),
+      })
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'on' })
+      expect(posture.transcription.state).toBe('off')
+    })
+
+    it('reports recording off only when the setting AND the inventory say so', async () => {
+      route({
+        'https://api.telnyx.com/v2/phone_numbers?': Response.json({ data: [{ id: 'pn-1' }] }),
+        'https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: false } } }),
+        'https://api.telnyx.com/v2/recordings?': Response.json({ data: [{ id: 'r', call_leg_id: 'leg-1', created_at: old }] }),
+        'https://api.telnyx.com/v2/recording_transcriptions': Response.json({ data: [] }),
+      })
+      const posture = await adapter.probeRecordingPosture(context(['leg-1']))
+      expect(posture.recording.state).toBe('off')
+    })
+
+    it('reports unknown — never off — when the number settings cannot be read', async () => {
+      route({
+        'https://api.telnyx.com/v2/phone_numbers?': new Response('', { status: 403 }),
+        'https://api.telnyx.com/v2/recordings?': Response.json({ data: [] }),
+        'https://api.telnyx.com/v2/recording_transcriptions': new Response('', { status: 403 }),
+      })
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.recording).toMatchObject({ state: 'unknown' })
+      expect(posture.transcription).toMatchObject({ state: 'unknown' })
+    })
+
+    it('reports transcription on when Telnyx holds a transcription', async () => {
+      route({
+        'https://api.telnyx.com/v2/phone_numbers?': Response.json({ data: [{ id: 'pn-1' }] }),
+        'https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: false } } }),
+        'https://api.telnyx.com/v2/recordings?': Response.json({ data: [] }),
+        'https://api.telnyx.com/v2/recording_transcriptions': Response.json({ data: [{ id: 't' }] }),
+      })
+      const posture = await adapter.probeRecordingPosture(context([]))
+      expect(posture.transcription).toMatchObject({ state: 'on' })
     })
   })
 
@@ -786,6 +879,7 @@ describe('TelnyxAdapter', () => {
         data: {
           payload: {
             call_control_id: 'call-015',
+            call_leg_id: 'leg-015',
             recording_urls: { mp3: 'https://rec.url/file.mp3' },
           },
         },
@@ -793,7 +887,8 @@ describe('TelnyxAdapter', () => {
 
       const result = await adapter.parseRecordingWebhook(request)
       expect(result.status).toBe('completed')
-      expect(result.recordingSid).toBe('https://rec.url/file.mp3')
+      // The leg, not the URL: the URL expires in ten minutes and cannot address a deletion.
+      expect(result.recordingSid).toBe('leg-015')
       expect(result.callSid).toBe('call-015')
     })
 
