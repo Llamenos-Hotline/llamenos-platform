@@ -363,6 +363,10 @@ export class BandwidthAdapter implements TelephonyAdapter {
    * returns 204 at once and finishes destroying the media within 24–48 h; from
    * the 204 on, nothing can retrieve it.
    */
+  providerAccountId(): string {
+    return `bandwidth:${this.accountId}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     const ref = parseBandwidthRecordingHandle(recordingSid)
     if (!ref) throw new ProviderRecordingDeleteError('Bandwidth', null, `unrecognised recording handle ${JSON.stringify(recordingSid)}`)

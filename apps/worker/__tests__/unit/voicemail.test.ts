@@ -52,7 +52,7 @@ describe('processVoicemailRecording', () => {
     await expect(run()).resolves.toEqual({ recordingDeletion: 'deleted' })
 
     expect(calls).toEqual(['track', 'createNote', 'deleteHeld'])
-    expect(services.providerRecordings.track).toHaveBeenCalledWith({ hubId: 'hub-1', callId: 'call-1', recordingSid: 'RE1', kind: 'voicemail' })
+    expect(services.providerRecordings.track).toHaveBeenCalledWith({ hubId: 'hub-1', callId: 'call-1', recordingSid: 'RE1', kind: 'voicemail', adapter })
     expect(adapter.getRecordingAudio).toHaveBeenCalledWith('RE1')
     // Admin-only reader list, and it is the X25519 key — not ADMIN_PUBKEY (#1283).
     const readers = vi.mocked(encryptMessageForStorage).mock.calls[0][1]

@@ -25,6 +25,7 @@ import type { TelephonyAdapter } from '../telephony/adapter'
 import type { HeldProviderRecording } from '@protocol/schemas/settings'
 import type { AuditService } from './audit'
 import { createLogger } from '../lib/logger'
+import { createHash } from 'node:crypto'
 
 const logger = createLogger('services.provider-recordings')
 
@@ -65,17 +66,32 @@ export interface ProviderMediaEraser {
 
 type Row = typeof providerRecordings.$inferSelect
 
+/** The stored form of an adapter's account: a hash, never the identifier itself. */
+export function providerAccountFingerprint(adapter: Pick<TelephonyAdapter, 'providerAccountId'>): string {
+  return createHash('sha256').update(adapter.providerAccountId()).digest('hex')
+}
+
 export class ProviderRecordingsService {
   constructor(
     protected db: Database,
     private readonly audit: AuditService,
   ) {}
 
-  /** Record that the provider holds this recording. Idempotent per (hub, handle). */
-  async track(input: { hubId: string; callId: string; recordingSid: string; kind: ProviderRecordingKind }): Promise<void> {
+  /**
+   * Record that the provider holds this recording, bound to the account of the
+   * adapter whose webhook reported it. Idempotent per (hub, handle).
+   */
+  async track(input: {
+    hubId: string
+    callId: string
+    recordingSid: string
+    kind: ProviderRecordingKind
+    adapter: Pick<TelephonyAdapter, 'providerAccountId'>
+  }): Promise<void> {
+    const { adapter, ...row } = input
     await this.db
       .insert(providerRecordings)
-      .values(input)
+      .values({ ...row, providerAccount: providerAccountFingerprint(adapter) })
       .onConflictDoNothing({ target: [providerRecordings.hubId, providerRecordings.recordingSid] })
   }
 
@@ -97,16 +113,19 @@ export class ProviderRecordingsService {
   }
 
   /**
-   * Of these handles, the ones this server requested and still tracks — across
-   * every hub, because hubs may share one provider account. Used by the
+   * Of these handles, the ones this server requested on this adapter's account
+   * and still tracks — across every hub, because hubs may share one account. Used by the
    * recording-posture probe to tell requested recordings from unrequested ones.
    */
-  async trackedAmong(handles: string[]): Promise<Set<string>> {
+  async trackedAmong(handles: string[], adapter: Pick<TelephonyAdapter, 'providerAccountId'>): Promise<Set<string>> {
     if (handles.length === 0) return new Set()
     const rows = await this.db
       .select({ recordingSid: providerRecordings.recordingSid })
       .from(providerRecordings)
-      .where(inArray(providerRecordings.recordingSid, handles))
+      .where(and(
+        inArray(providerRecordings.recordingSid, handles),
+        eq(providerRecordings.providerAccount, providerAccountFingerprint(adapter)),
+      ))
     return new Set(rows.map(r => r.recordingSid))
   }
 
@@ -173,6 +192,11 @@ export class ProviderRecordingsService {
 
   /** Delete one recording at the provider; null on confirmed deletion, else the error. */
   private async deleteOne(adapter: TelephonyAdapter, row: Row): Promise<string | null> {
+    if (providerAccountFingerprint(adapter) !== row.providerAccount) {
+      // Another account cannot delete it, and would answer 404 — "already
+      // deleted" — for a handle it never issued.
+      return 'the hub\'s telephony provider account has changed since this recording was made; it is still held at the previous account'
+    }
     try {
       await adapter.deleteRecording(row.recordingSid)
     } catch (err) {

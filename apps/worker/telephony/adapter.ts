@@ -152,6 +152,17 @@ export interface TelephonyAdapter {
   deleteRecording(recordingSid: string): Promise<void>
 
   /**
+   * A stable identifier of the provider ACCOUNT this adapter talks to (an
+   * account SID, auth id, account id, bridge URL). A recording is bound to the
+   * account that made it: deleting through a different account would get a
+   * 404 for a handle it never issued and report "already deleted" while the
+   * audio stays where it was. It is only ever stored as a SHA-256 hash, so a
+   * provider with no non-secret account id (Telnyx) may return its
+   * high-entropy API key here.
+   */
+  providerAccountId(): string
+
+  /**
    * Read, with this hub's provider credentials, whether the provider is
    * recording or transcribing calls on its own — anything this server did not
    * request (#1505). Each reading is evidence-backed: a setting this probe

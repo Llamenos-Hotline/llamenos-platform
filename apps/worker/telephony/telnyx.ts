@@ -568,6 +568,14 @@ export class TelnyxAdapter implements TelephonyAdapter {
    * nothing left to delete — the same answer a 404 gives — because this only
    * runs after `call.recording.saved`, by which time the recording is listed.
    */
+  /**
+   * The API key is the only account-scoped value this adapter holds; it is a
+   * secret, so it is only ever stored hashed (see providerAccountId's contract).
+   */
+  providerAccountId(): string {
+    return `telnyx:${this.apiKey}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     let recordings: TelnyxRecording[]
     try {

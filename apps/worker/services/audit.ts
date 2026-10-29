@@ -88,7 +88,7 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
     'callAnswered', 'callEnded', 'callMissed',
     'spamReported', 'voicemailReceived',
     'callSimulated', 'simulatedCallerHungUp',
-    'providerRecordingDeleteFailed',
+    'providerRecordingDeleteFailed', 'hubShredProviderMediaRemaining',
   ],
   settings: [
     'settingsUpdated', 'telephonyConfigured', 'transcriptionToggled',

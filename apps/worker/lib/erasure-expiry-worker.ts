@@ -68,7 +68,9 @@ export async function processExpiredRequest(
       }
     }
 
-    await opts.hubShred.execute(request.hubId, 'system', opts.auditService, opts.providerMedia)
+    await opts.hubShred.execute(request.hubId, 'system', opts.auditService, opts.providerMedia, {
+      emergencyOverride: request.emergencyOverride === true,
+    })
     await opts.erasureService.markCompleted(request.id)
 
     logger.info('Hub shred executed', { requestId: request.id, hubId: request.hubId })

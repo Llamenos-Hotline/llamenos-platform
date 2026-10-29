@@ -971,7 +971,7 @@ describe('Telephony routes', () => {
       expect(services.calls.endCall).toHaveBeenCalledWith('hub-1', 'CA-parent')
       // #2297: the provider now holds this call's audio — tracked until its record goes.
       expect(services.providerRecordings.track).toHaveBeenCalledWith({
-        hubId: 'hub-1', callId: 'CA-parent', recordingSid: 'RE123', kind: 'call',
+        hubId: 'hub-1', callId: 'CA-parent', recordingSid: 'RE123', kind: 'call', adapter,
       })
       expect(adapter.emptyResponse).toHaveBeenCalled()
     })
@@ -1013,7 +1013,7 @@ describe('Telephony routes', () => {
       expect(services.calls.endCall).toHaveBeenCalledWith('hub-1', 'CA-vm')
       // #2297: tracked BEFORE the response, so the handle survives the background task.
       expect(services.providerRecordings.track).toHaveBeenCalledWith({
-        hubId: 'hub-1', callId: 'CA-vm', recordingSid: 'RE-vm', kind: 'voicemail',
+        hubId: 'hub-1', callId: 'CA-vm', recordingSid: 'RE-vm', kind: 'voicemail', adapter,
       })
       expect(adapter.emptyResponse).toHaveBeenCalled()
     })
@@ -1028,7 +1028,7 @@ describe('Telephony routes', () => {
         body: 'RecordingStatus=completed&RecordingSid=RE-vm',
       })
       await vi.waitFor(() => expect(services.providerRecordings.deleteHeld).toHaveBeenCalled())
-      const [resolve, filter] = services.providerRecordings.deleteHeld.mock.calls[0]
+      const [resolve, filter] = vi.mocked(services.providerRecordings.deleteHeld).mock.calls[0]!
       expect(await resolve('hub-1')).toBe(adapter)
       expect(filter).toEqual({ hubId: 'hub-1', callIds: ['CA-vm'], kind: 'voicemail' })
     })

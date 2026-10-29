@@ -1,5 +1,5 @@
 {
-  "id": "226dbf60-60ae-4a63-87b7-4bc02dde61f0",
+  "id": "72b6b32e-acfe-464c-8893-08dbfbe9b860",
   "prevId": "e9eb39fe-6523-43c5-8402-47c07707f819",
   "version": "7",
   "dialect": "postgresql",
@@ -918,6 +918,12 @@
         },
         "recording_sid": {
           "name": "recording_sid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_account": {
+          "name": "provider_account",
           "type": "text",
           "primaryKey": false,
           "notNull": true

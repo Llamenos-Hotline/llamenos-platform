@@ -72,6 +72,16 @@ export class HubShredService {
     executedBy: string,
     audit: AuditService,
     providerMedia: ProviderMediaEraser,
+    options: {
+      /**
+       * A co-approved emergency shred destroys the keys even when the provider
+       * will not delete its recordings: a third party's outage must not keep a
+       * hub readable under the threat the override exists for. What is left at
+       * the provider is recorded on the PLATFORM audit chain, which outlives
+       * the shred, so it is never silently forgotten.
+       */
+      emergencyOverride?: boolean
+    } = {},
   ): Promise<{ rowsAffected: number }> {
     const [hub] = await this.db.execute(
       sql`SELECT id, status FROM hubs WHERE id = ${hubId}`,
@@ -85,10 +95,21 @@ export class HubShredService {
     // be asked. A shred that cannot reach that audio is not reported done.
     const media = await providerMedia.deleteForHub(hubId)
     if (media.failed.length > 0) {
-      throw new ServiceError(
-        502,
-        `Hub shred refused: the telephony provider still holds ${media.failed.length} recording(s) it did not delete — ${media.failed[0].error}`,
-      )
+      if (!options.emergencyOverride) {
+        throw new ServiceError(
+          502,
+          `Hub shred refused: the telephony provider still holds ${media.failed.length} recording(s) it did not delete — ${media.failed[0].error}`,
+        )
+      }
+      logger.error('Emergency hub shred proceeding with caller audio still held at the provider', {
+        hubId,
+        remaining: media.failed.length,
+      })
+      await audit.log('hubShredProviderMediaRemaining', executedBy, {
+        hubId,
+        remaining: media.failed.length,
+        calls: media.failed.map(f => ({ callId: f.callId, kind: f.kind, error: f.error.slice(0, 200) })),
+      }, undefined)
     }
 
     // The scope predicate still resolves before the transaction: collect the

@@ -44,7 +44,7 @@ export async function processVoicemailRecording(params: {
 }): Promise<VoicemailRecordingOutcome> {
   const { env, services, adapter, hubId, callSid, recordingSid } = params
 
-  await services.providerRecordings.track({ hubId, callId: callSid, recordingSid, kind: 'voicemail' })
+  await services.providerRecordings.track({ hubId, callId: callSid, recordingSid, kind: 'voicemail', adapter })
 
   try {
     await transcribeVoicemail({ env, services, adapter, callSid, recordingSid })

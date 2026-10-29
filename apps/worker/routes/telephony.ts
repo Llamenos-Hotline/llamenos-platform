@@ -607,7 +607,7 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
       // #2297: the provider now holds this call's audio. It is kept there for
       // playback (the hub opted in to call recording), so it is tracked until
       // the call record's retention purge or a hub shred deletes it.
-      await services.providerRecordings.track({ hubId: hubId ?? '', callId: parentCallSid, recordingSid, kind: 'call' })
+      await services.providerRecordings.track({ hubId: hubId ?? '', callId: parentCallSid, recordingSid, kind: 'call', adapter })
       backgroundTask(c,
         maybeTranscribe(parentCallSid, recordingSid, pubkey, c.env, services)
       )
@@ -653,7 +653,7 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
       // #2297: fetch, transcribe if enabled, then delete the provider's copy.
       // Tracked synchronously so the handle survives even if the background
       // task does not; the sweep worker finishes a deletion that failed here.
-      await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid, kind: 'voicemail' })
+      await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid, kind: 'voicemail', adapter })
       backgroundTask(c, processVoicemailRecording({
         env: c.env,
         services,

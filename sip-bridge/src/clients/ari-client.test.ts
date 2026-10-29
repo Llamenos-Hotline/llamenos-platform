@@ -486,6 +486,27 @@ describe('AriClient', () => {
       await expect(client.getRecordingFile('missing')).resolves.toBeNull()
     })
 
+    // #2297: the worker stops tracking caller audio once this resolves, so it
+    // must resolve only when Asterisk no longer holds the file.
+    it('deleteRecording resolves on 204 and on 404, and rejects on anything else', async () => {
+      ari = fakeAri([
+        (req) => (req.path === '/recordings/stored/gone' ? json({ message: 'Recording not found' }, 404) : undefined),
+        (req) => (req.path === '/recordings/stored/stuck' ? json({ message: 'boom' }, 500) : undefined),
+        () => new Response(null, { status: 204 }),
+      ])
+      vi.stubGlobal('fetch', ari.fetchImpl)
+
+      await expect(client.deleteRecording('voicemail-ch-1')).resolves.toBeUndefined()
+      expect(`${ari.requests[0].method} ${ari.requests[0].path}`).toBe('DELETE /recordings/stored/voicemail-ch-1')
+      await expect(client.deleteRecording('gone')).resolves.toBeUndefined()
+      await expect(client.deleteRecording('stuck')).rejects.toThrow('failed: 500')
+    })
+
+    it('deleteRecording rejects when Asterisk is unreachable', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
+      await expect(client.deleteRecording('voicemail-ch-1')).rejects.toThrow('ECONNREFUSED')
+    })
+
     it('a failed request surfaces the status and ARI message', async () => {
       ari = fakeAri([() => json({ message: 'Channel not in Stasis application' }, 409)])
       vi.stubGlobal('fetch', ari.fetchImpl)

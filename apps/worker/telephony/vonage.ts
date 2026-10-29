@@ -433,6 +433,11 @@ export class VonageAdapter implements TelephonyAdapter {
    * destroys it (Media API reference, which accepts the key:secret Basic
    * credentials this adapter uses). Vonage would otherwise keep it 30 days.
    */
+  /** Recordings belong to the Vonage application that made them. */
+  providerAccountId(): string {
+    return `vonage:${this.apiKey}:${this.applicationId}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     const ref = parseVonageRecordingUrl(recordingSid)
     if (!ref) throw new ProviderRecordingDeleteError('Vonage', null, `unrecognised recording handle ${JSON.stringify(recordingSid)}`)

@@ -513,7 +513,7 @@ settings.get('/telephony-provider/recording-posture',
     const config = await resolveHubTelephonyConfig(c.env, services.settings, hubId)
     const [posture, heldAtProvider] = await Promise.all([
       adapter.probeRecordingPosture({
-        trackedRecordings: (handles) => services.providerRecordings.trackedAmong(handles),
+        trackedRecordings: (handles) => services.providerRecordings.trackedAmong(handles, adapter),
       }),
       services.providerRecordings.listHeld(hubId),
     ])

@@ -620,12 +620,21 @@ export class AriClient implements BridgeClient {
     return res.arrayBuffer()
   }
 
+  /**
+   * Delete a stored recording. Resolves when Asterisk deleted it (204) or no
+   * longer has it (404); rejects on every other answer and on a network
+   * failure. Swallowing those used to make a refused deletion read as done to
+   * the worker (#2297), which then stopped tracking caller audio still on disk.
+   */
   async deleteRecording(recordingName: string): Promise<void> {
-    try {
-      await this.request('DELETE', `/recordings/stored/${recordingName}`)
-    } catch {
-      // Recording may already be deleted
-    }
+    const res = await fetch(`${this.config.ariRestUrl}/recordings/stored/${encodeURIComponent(recordingName)}`, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader },
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (res.ok || res.status === 404) return
+    const text = await res.text().catch(() => '')
+    throw new Error(`ARI DELETE /recordings/stored/${recordingName} failed: ${res.status} ${text}`)
   }
 
   // ---- Asterisk Operations ----

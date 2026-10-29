@@ -411,7 +411,7 @@ describe('TelnyxAdapter', () => {
         .mockResolvedValueOnce(Response.json({ data: {} }))
         .mockResolvedValueOnce(Response.json({ data: {} }))
       await expect(adapter.deleteRecording('leg-1')).resolves.toBeUndefined()
-      const deletes = fetchSpy.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === 'DELETE').map(c => String(c[0]))
+      const deletes = (fetchSpy.mock.calls as Array<[unknown, RequestInit | undefined]>).filter(c => c[1]?.method === 'DELETE').map(c => String(c[0]))
       expect(deletes).toEqual(['https://api.telnyx.com/v2/recordings/rec-1', 'https://api.telnyx.com/v2/recordings/rec-2'])
     })
 

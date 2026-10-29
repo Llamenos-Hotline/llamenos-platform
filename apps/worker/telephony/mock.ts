@@ -204,6 +204,10 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
     return null
   }
 
+  providerAccountId(): string {
+    return `mock:${this.phoneNumber}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     if (recordingSid.startsWith(MOCK_UNDELETABLE_RECORDING_PREFIX)) {
       throw new ProviderRecordingDeleteError('mock', 503, 'the mock provider refuses to delete this recording')

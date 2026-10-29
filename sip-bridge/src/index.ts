@@ -284,6 +284,26 @@ async function main(): Promise<void> {
         }
       }
 
+      // Delete a stored recording (#2297): the worker deletes the PBX's copy of
+      // caller audio once it has fetched it. 200 only once the PBX no longer
+      // holds the file; any failure is a 500 the worker records and retries.
+      if (path.startsWith('/recordings/') && method === 'DELETE') {
+        if (!verifyRequest(webhook, request, url, '')) {
+          return new Response('Forbidden', { status: 403 })
+        }
+        const name = decodeURIComponent(path.slice('/recordings/'.length))
+        if (name === '' || name.includes('/') || name.includes('..') || name.startsWith('call/')) {
+          return new Response('Bad Request: invalid recording name', { status: 400 })
+        }
+        try {
+          await client.deleteRecording(name)
+          return Response.json({ ok: true })
+        } catch (err) {
+          logger.error('[bridge]', 'Recording delete error', err)
+          return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
+        }
+      }
+
       return new Response('Not Found', { status: 404 })
     },
   })

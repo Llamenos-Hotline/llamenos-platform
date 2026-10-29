@@ -183,6 +183,10 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
    * `call-<channel>`). The bridge answers 200 only once the PBX's stored file
    * is gone (or was already gone); any other answer is a failure here.
    */
+  providerAccountId(): string {
+    return `${this.getPbxType().toLowerCase()}:${this.bridgeCallbackUrl}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     try {
       await this.bridgeRequest('DELETE', `/recordings/${encodeURIComponent(recordingSid)}`)

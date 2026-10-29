@@ -395,6 +395,10 @@ export class PlivoAdapter implements TelephonyAdapter {
     return audioRes.arrayBuffer()
   }
 
+  providerAccountId(): string {
+    return `plivo:${this.authId}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     const res = await this.plivoApi(`/Recording/${encodeURIComponent(recordingSid)}/`, { method: 'DELETE' })
     await assertRecordingDeleted(res, 'Plivo')

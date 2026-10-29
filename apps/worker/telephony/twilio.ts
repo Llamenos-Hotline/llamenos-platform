@@ -399,6 +399,10 @@ export class TwilioAdapter implements TelephonyAdapter {
     return 'Twilio'
   }
 
+  providerAccountId(): string {
+    return `${this.providerLabel.toLowerCase()}:${this.getApiBaseUrl()}`
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     const res = await this.twilioApi(`/Recordings/${encodeURIComponent(recordingSid)}.json`, { method: 'DELETE' })
     await assertRecordingDeleted(res, this.providerLabel)

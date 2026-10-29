@@ -146,7 +146,7 @@ export interface FreshHubDb {
   /** Attach a blob store after construction, before use. */
   useBlobStorage(blob: { delete(key: string): Promise<void> }): void
   /** The adapter every hub's provider-held recordings are deleted through (default: none configured). */
-  useTelephonyAdapter(adapter: Pick<TelephonyAdapter, 'deleteRecording'> | null): void
+  useTelephonyAdapter(adapter: Pick<TelephonyAdapter, 'deleteRecording' | 'providerAccountId'> | null): void
   setup(): Promise<void>
   teardown(): Promise<void>
 }
@@ -159,7 +159,7 @@ export function freshHubDb(name: string): FreshHubDb {
   const DB_NAME = `${name}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   let sql: ReturnType<typeof postgres> | undefined
   let blobStorage: { delete(key: string): Promise<void> } | undefined
-  let telephonyAdapter: Pick<TelephonyAdapter, 'deleteRecording'> | null = null
+  let telephonyAdapter: Pick<TelephonyAdapter, 'deleteRecording' | 'providerAccountId'> | null = null
 
   const dbRef: FreshHubDb = {
     db: undefined as unknown as Database,

@@ -38,10 +38,13 @@ async function createHub(): Promise<string> {
   return id
 }
 
+const ACCOUNT = { providerAccountId: () => 'twilio:AC-one' }
+
 /** A provider that deletes everything except the handles it is told to refuse. */
-function provider(refuse: string[] = []) {
+function provider(refuse: string[] = [], account = ACCOUNT) {
   const deleted: string[] = []
   const adapter = {
+    ...account,
     deleteRecording: async (sid: string) => {
       if (refuse.includes(sid)) throw new Error(`refused ${sid}: 500`)
       deleted.push(sid)
@@ -53,10 +56,10 @@ function provider(refuse: string[] = []) {
 describe('ProviderRecordingsService', () => {
   it('removes a row only once the provider confirms, and records a refusal', async () => {
     const hubId = await createHub()
-    await fresh.recordings.track({ hubId, callId: 'c1', recordingSid: 'ok-1', kind: 'voicemail' })
-    await fresh.recordings.track({ hubId, callId: 'c2', recordingSid: 'no-1', kind: 'voicemail' })
+    await fresh.recordings.track({ hubId, callId: 'c1', recordingSid: 'ok-1', kind: 'voicemail', adapter: ACCOUNT })
+    await fresh.recordings.track({ hubId, callId: 'c2', recordingSid: 'no-1', kind: 'voicemail', adapter: ACCOUNT })
     // Tracking twice is harmless — the webhook route and the processor both track.
-    await fresh.recordings.track({ hubId, callId: 'c1', recordingSid: 'ok-1', kind: 'voicemail' })
+    await fresh.recordings.track({ hubId, callId: 'c1', recordingSid: 'ok-1', kind: 'voicemail', adapter: ACCOUNT })
 
     const { deleted, resolve } = provider(['no-1'])
     const result = await fresh.recordings.deleteHeld(resolve, { hubId })
@@ -74,7 +77,7 @@ describe('ProviderRecordingsService', () => {
 
   it('treats a hub with no provider configured as a failure, never as deleted', async () => {
     const hubId = await createHub()
-    await fresh.recordings.track({ hubId, callId: 'c3', recordingSid: 'orphan', kind: 'call' })
+    await fresh.recordings.track({ hubId, callId: 'c3', recordingSid: 'orphan', kind: 'call', adapter: ACCOUNT })
     const result = await fresh.recordings.deleteHeld(async () => null, { hubId })
     expect(result.deleted).toBe(0)
     expect(result.failed).toHaveLength(1)
@@ -84,8 +87,8 @@ describe('ProviderRecordingsService', () => {
   it('never reaches another hub', async () => {
     const hubA = await createHub()
     const hubB = await createHub()
-    await fresh.recordings.track({ hubId: hubA, callId: 'a', recordingSid: 'shared-handle', kind: 'voicemail' })
-    await fresh.recordings.track({ hubId: hubB, callId: 'b', recordingSid: 'shared-handle', kind: 'voicemail' })
+    await fresh.recordings.track({ hubId: hubA, callId: 'a', recordingSid: 'shared-handle', kind: 'voicemail', adapter: ACCOUNT })
+    await fresh.recordings.track({ hubId: hubB, callId: 'b', recordingSid: 'shared-handle', kind: 'voicemail', adapter: ACCOUNT })
     const { deleted, resolve } = provider()
     await fresh.recordings.deleteHeld(resolve, { hubId: hubA })
     expect(deleted).toEqual(['shared-handle'])
@@ -95,16 +98,28 @@ describe('ProviderRecordingsService', () => {
 
   it('reports which handles it tracks, across hubs', async () => {
     const hubId = await createHub()
-    await fresh.recordings.track({ hubId, callId: 'c4', recordingSid: 'tracked-x', kind: 'call' })
-    const tracked = await fresh.recordings.trackedAmong(['tracked-x', 'never-requested'])
+    await fresh.recordings.track({ hubId, callId: 'c4', recordingSid: 'tracked-x', kind: 'call', adapter: ACCOUNT })
+    const tracked = await fresh.recordings.trackedAmong(['tracked-x', 'never-requested'], ACCOUNT)
     expect([...tracked]).toEqual(['tracked-x'])
+    // The same handle on another account is not one this server requested there.
+    expect([...await fresh.recordings.trackedAmong(['tracked-x'], { providerAccountId: () => 'twilio:AC-two' })]).toEqual([])
+  })
+
+  it('refuses to delete through a different provider account — its 404 would read as deleted', async () => {
+    const hubId = await createHub()
+    await fresh.recordings.track({ hubId, callId: 'moved', recordingSid: 'RE-moved', kind: 'call', adapter: ACCOUNT })
+    const { deleted, resolve } = provider([], { providerAccountId: () => 'twilio:AC-new' })
+    const result = await fresh.recordings.deleteHeld(resolve, { hubId })
+    expect(deleted, 'the other account must not even be asked').toEqual([])
+    expect(result.failed[0]!.error).toMatch(/account has changed/)
+    expect(await fresh.recordings.listHeld(hubId)).toHaveLength(1)
   })
 
   it('the sweep retries only voicemails older than the grace period', async () => {
     const hubId = await createHub()
-    await fresh.recordings.track({ hubId, callId: 'old', recordingSid: 'vm-old', kind: 'voicemail' })
-    await fresh.recordings.track({ hubId, callId: 'new', recordingSid: 'vm-new', kind: 'voicemail' })
-    await fresh.recordings.track({ hubId, callId: 'rec', recordingSid: 'call-old', kind: 'call' })
+    await fresh.recordings.track({ hubId, callId: 'old', recordingSid: 'vm-old', kind: 'voicemail', adapter: ACCOUNT })
+    await fresh.recordings.track({ hubId, callId: 'new', recordingSid: 'vm-new', kind: 'voicemail', adapter: ACCOUNT })
+    await fresh.recordings.track({ hubId, callId: 'rec', recordingSid: 'call-old', kind: 'call', adapter: ACCOUNT })
     const hourAgo = new Date(Date.now() - 60 * 60 * 1000)
     await fresh.db.update(schema.providerRecordings).set({ createdAt: hourAgo })
       .where(eq(schema.providerRecordings.recordingSid, 'vm-old'))
@@ -136,7 +151,7 @@ describe('RetentionService.executePurge — call records', () => {
         recordingSid: `RE-${callId}`,
         hasRecording: true,
       })
-      await fresh.recordings.track({ hubId, callId, recordingSid: `RE-${callId}`, kind: 'call' })
+      await fresh.recordings.track({ hubId, callId, recordingSid: `RE-${callId}`, kind: 'call', adapter: ACCOUNT })
     }
     await fresh.db.insert(schema.retentionSettings).values({ hubId, category: 'call_records', retentionDays: 30, updatedBy: 'test' })
 

@@ -119,6 +119,12 @@ export const providerRecordings = pgTable(
     hubId: text('hub_id').notNull().default(''),
     callId: text('call_id').notNull(),
     recordingSid: text('recording_sid').notNull(),
+    /**
+     * SHA-256 of the adapter's `providerAccountId()` when the recording was
+     * made. Deletion goes only through an adapter for the SAME account — a
+     * different account would answer 404 and read as "already deleted".
+     */
+    providerAccount: text('provider_account').notNull(),
     /** 'voicemail' — deleted as soon as fetched; 'call' — opted-in call recording, kept for playback until the call record goes. */
     kind: text('kind').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

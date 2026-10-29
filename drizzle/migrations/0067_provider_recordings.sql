@@ -3,6 +3,7 @@ CREATE TABLE "provider_recordings" (
 	"hub_id" text DEFAULT '' NOT NULL,
 	"call_id" text NOT NULL,
 	"recording_sid" text NOT NULL,
+	"provider_account" text NOT NULL,
 	"kind" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"delete_attempts" integer DEFAULT 0 NOT NULL,
