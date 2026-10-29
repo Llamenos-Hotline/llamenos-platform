@@ -24,9 +24,23 @@ export const noteStoredResponseSchema = z.object({
   note: noteResponseSchema,
 })
 
+/**
+ * A note reply as the server serialises it: a `note_replies` row. NOT a note —
+ * a reply has no `updatedAt`, no `authorEnvelope`/`adminEnvelopes`, and is
+ * readable through `readerEnvelopes` (what `createReplyBodySchema` accepts).
+ */
+export const noteReplyResponseSchema = z.object({
+  id: z.uuid(),
+  noteId: z.uuid(),
+  authorPubkey: pubkeySchema,
+  encryptedContent: z.string(),
+  readerEnvelopes: z.array(recipientEnvelopeSchema),
+  createdAt: z.string(),
+})
+
 /** What `POST /notes/:id/replies` (201) answers: the stored reply, wrapped under `reply` — never bare. */
 export const noteReplyStoredResponseSchema = z.object({
-  reply: noteResponseSchema,
+  reply: noteReplyResponseSchema,
 })
 
 // --- List/wrapper response schemas ---

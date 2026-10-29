@@ -75,7 +75,7 @@ import { healthResponseSchema, livenessResponseSchema, readinessResponseSchema }
 import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { configResponseSchema } from '@protocol/schemas/config'
 import { activeCallsResponseSchema, todayCountResponseSchema, callPresenceResponseSchema } from '@protocol/schemas/calls'
-import type { activeCalls } from '../../db/schema'
+import type { activeCalls, noteReplies } from '../../db/schema'
 import { hubListResponseSchema, hubDetailResponseSchema } from '@protocol/schemas/hubs'
 import { noteListResponseSchema, noteStoredResponseSchema, noteReplyStoredResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
@@ -559,15 +559,26 @@ describe('Notes Routes — response conformance', () => {
   })
 
   // POST /notes/:id/replies answers `{ reply }` and DECLARED the bare
-  // `noteResponseSchema` — so the OpenAPI snapshot and the Swift/Kotlin types
-  // generated from it described a body the server has never sent (#1641). The
-  // declaration was the wrong half; this pins the response to what it now
-  // declares.
+  // `noteResponseSchema` — so the OpenAPI document and the Swift/Kotlin types
+  // generated from it described a body the server has never sent (#1641). Not
+  // only the wrapper was wrong: a reply is a `note_replies` row, with no
+  // `updatedAt` and `readerEnvelopes` instead of `adminEnvelopes`, so even
+  // `{ reply: noteResponseSchema }` fails against the real body. The fixture is
+  // therefore the ROW the service returns, not something shaped like the
+  // schema (#1362), so a route that leaked or dropped a column would show here.
   it('POST /notes/:id/replies — conforms to noteReplyStoredResponseSchema', async () => {
     const adminKey = 'a'.repeat(64)
+    const replyRow: typeof noteReplies.$inferSelect = {
+      id: 'b2c3d4e5-f6a7-4890-8bcd-ef1234567890',
+      noteId: mockNote.id,
+      authorPubkey: MOCK_PUBKEY,
+      encryptedContent: 'encrypted-reply-base64',
+      readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
+      createdAt: new Date(),
+    }
     const mockRecords = {
       getNote: vi.fn().mockResolvedValue({ ...mockNote, hubId: DEFAULT_HUB_ID }),
-      createReply: vi.fn().mockResolvedValue(mockNote),
+      createReply: vi.fn().mockResolvedValue(replyRow),
     }
     const { app, env } = buildApp('/notes', notesRoutes, {
       services: {
@@ -584,7 +595,9 @@ describe('Notes Routes — response conformance', () => {
       expectedStatus: 201,
       env,
     })
-    expect(result.parsed.reply.id).toBe(mockNote.id)
+    expect(result.parsed.reply.id).toBe(replyRow.id)
+    expect(result.parsed.reply.noteId).toBe(mockNote.id)
+    expect(result.parsed.reply.readerEnvelopes).toHaveLength(1)
     expect(mockRecords.createReply).toHaveBeenCalledWith(mockNote.id, expect.objectContaining({ authorPubkey: MOCK_PUBKEY }))
   })
 })
