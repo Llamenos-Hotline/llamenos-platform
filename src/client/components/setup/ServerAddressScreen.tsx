@@ -21,13 +21,14 @@ import { ServerAddressForm } from './ServerAddressForm'
  */
 export function ServerAddressScreen({ onConfigured }: { onConfigured: (base: string) => void }) {
   const { t } = useTranslation()
-  // Read once, then consumed: a staged change gets one automatic attempt, and
-  // on failure it stays in the input for the user to correct rather than
-  // re-submitting on every reload.
+  // A staged change gets one automatic attempt; on failure it stays in the
+  // input for the user to correct rather than re-submitting on every reload.
+  // It is cleared only once that attempt has SETTLED (or by setApiBase on
+  // success), never on mount: leaveServer() stages it and then reloads, and the
+  // document being unloaded can still render this screen — once the old
+  // address is gone — before it goes. Clearing on that mount handed the
+  // reloaded document nothing to verify.
   const [staged] = useState(() => peekPendingServerAddress())
-  useEffect(() => {
-    if (staged) clearPendingServerAddress()
-  }, [staged])
 
   // No server is configured, so no session can belong to one (#1166).
   // leaveServer() has already ended it on the way here, but other ways in have
@@ -59,6 +60,7 @@ export function ServerAddressScreen({ onConfigured }: { onConfigured: (base: str
           submitLabel={t('serverAddress.connect')}
           initialValue={staged ?? HOSTED_SERVER_ADDRESS}
           autoSubmit={!!staged}
+          onAutoSubmitSettled={clearPendingServerAddress}
           verify
           onConfirm={async (origin) => {
             await setApiBase(origin)

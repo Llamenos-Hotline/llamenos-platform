@@ -18,6 +18,8 @@ interface ServerAddressFormProps {
   verify: boolean
   /** Submit the value in `initialValue` once on mount (a staged server change). */
   autoSubmit?: boolean
+  /** Called once that automatic attempt has finished, whatever its outcome. */
+  onAutoSubmitSettled?: () => void
   /** Called with the validated canonical origin (after a successful probe when `verify`). */
   onConfirm: (origin: string) => Promise<void>
   submitLabel: string
@@ -35,6 +37,7 @@ export function ServerAddressForm({
   initialValue = '',
   verify,
   autoSubmit = false,
+  onAutoSubmitSettled,
   onConfirm,
   submitLabel,
   testIdPrefix,
@@ -75,7 +78,7 @@ export function ServerAddressForm({
     // Rust rate-limit window would be refused.
     if (!autoSubmit || autoSubmitted.current || !initialValue) return
     autoSubmitted.current = true
-    void submit(initialValue)
+    void submit(initialValue).finally(() => onAutoSubmitSettled?.())
     // Mount-only by design: a staged address is submitted once, not on every change.
   }, [])
 

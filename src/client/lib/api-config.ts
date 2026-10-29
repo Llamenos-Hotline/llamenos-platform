@@ -127,6 +127,10 @@ export async function setApiBase(url: string): Promise<void> {
   } else {
     cachedApiBase = origin
   }
+  // A server is configured now, so any address staged for the first-run
+  // screen has been used (or overtaken) — never leave it to be auto-submitted
+  // the next time that screen appears.
+  clearPendingServerAddress()
 }
 
 /**
