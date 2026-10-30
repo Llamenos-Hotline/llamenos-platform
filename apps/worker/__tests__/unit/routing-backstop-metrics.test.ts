@@ -210,6 +210,22 @@ describe('recordTelephonyWebhookRejection', () => {
     expect(await rejected('signature_invalid', 'unattributed')).toBe(other + 1)
   })
 
+  it('unattributed noise from the provider\'s own /24 cannot use up the slot an own_account event needs', async () => {
+    const ownBefore = await rejected('signature_invalid', 'own_account')
+    const noiseBefore = await rejected('signature_invalid', 'unattributed')
+    const send = (accountSid: string) =>
+      recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.77', accountSid }), {
+        reason: 'signature_invalid',
+        adapter: twilio,
+        providerAddressVerified: true,
+      })
+    await send('ACattacker') // a customer of the same provider, same egress /24
+    await send('ACattacker')
+    await send('ACown')
+    expect(await rejected('signature_invalid', 'unattributed')).toBe(noiseBefore + 1)
+    expect(await rejected('signature_invalid', 'own_account')).toBe(ownBefore + 1)
+  })
+
   it('counts a source /24 at most once a minute, and another /24 independently', async () => {
     vi.useFakeTimers({ now: 1_000_000 })
     try {

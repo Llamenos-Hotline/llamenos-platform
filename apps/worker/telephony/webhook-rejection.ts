@@ -12,7 +12,7 @@ import { getClientIp } from '../lib/client-ip'
 import { recordWebhookRejected, type WebhookAttribution, type WebhookRejectReason } from '../routes/metrics'
 import type { TelephonyAdapter } from './adapter'
 
-/** One counted refusal per source prefix per minute (a /24 for IPv4, a /48 for IPv6). */
+/** One counted refusal per source prefix, reason and attribution per minute (a /24 for IPv4, a /48 for IPv6). */
 const SOURCE_WINDOW_MS = 60_000
 /** Bound on the in-memory table; past it, expired entries go first, then everything. */
 const MAX_TRACKED_SOURCES = 4096
@@ -38,9 +38,9 @@ export function sourcePrefix(ip: string): string {
   return ip
 }
 
-/** Whether this source prefix may add to the counter now; admitting it starts its minute. */
-function admitSource(prefix: string, now: number): boolean {
-  const last = lastCountedAt.get(prefix)
+/** Whether this bucket may add to the counter now; admitting it starts its minute. */
+function admitSource(bucket: string, now: number): boolean {
+  const last = lastCountedAt.get(bucket)
   if (last !== undefined && now - last < SOURCE_WINDOW_MS) return false
   if (lastCountedAt.size >= MAX_TRACKED_SOURCES) {
     for (const [key, at] of lastCountedAt) {
@@ -48,7 +48,7 @@ function admitSource(prefix: string, now: number): boolean {
     }
     if (lastCountedAt.size >= MAX_TRACKED_SOURCES) lastCountedAt.clear()
   }
-  lastCountedAt.set(prefix, now)
+  lastCountedAt.set(bucket, now)
   return true
 }
 
@@ -82,12 +82,16 @@ export interface WebhookRejection {
  * nothing; every other combination is `unattributed`.
  */
 export async function recordTelephonyWebhookRejection(req: Request, rejection: WebhookRejection): Promise<void> {
-  if (!admitSource(sourcePrefix(getClientIp(req)), Date.now())) return
-
   let attribution: WebhookAttribution = 'unattributed'
   if (rejection.reason === 'signature_invalid' && rejection.providerAddressVerified && rejection.adapter?.webhookNamesOwnAccount) {
     // Classification is observability: it must never turn a 403 into a 500.
     attribution = (await rejection.adapter.webhookNamesOwnAccount(req).catch(() => false)) ? 'own_account' : 'unattributed'
   }
-  recordWebhookRejected(rejection.reason, attribution)
+
+  // Damp AFTER classifying and per (prefix, reason, attribution). A provider's
+  // egress is shared by all its customers, so an attacker inside our provider's
+  // /24 must not be able to spend the slot an `own_account` event needs: the
+  // noise lands in the `unattributed` bucket and the real event in its own.
+  const bucket = `${sourcePrefix(getClientIp(req))}|${rejection.reason}|${attribution}`
+  if (admitSource(bucket, Date.now())) recordWebhookRejected(rejection.reason, attribution)
 }
