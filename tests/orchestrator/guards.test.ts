@@ -2883,7 +2883,14 @@ describe('rail: the knope release PR concludes green without a review, and nothi
       if (span === undefined) throw new Error(`${p}: knope's rule has no "version" group`)
       const [start, end] = span
       if (text.slice(start, end) !== CURRENT) throw new Error(`${p}: carries ${text.slice(start, end)}, not package.json's ${CURRENT}`)
-      writeFileSync(f, text.slice(0, start) + to + text.slice(end))
+      const bumped = text.slice(0, start) + to + text.slice(end)
+      // knope re-serialises a JSON file and writes it back WITHOUT a final
+      // newline. `package.json` has none on `main` either, so it never showed;
+      // `apps/desktop/tauri.conf.json` ends in one, so every real release diff
+      // carries `-}` / `+}` + `\ No newline at end of file` there. Modelling
+      // knope as a pure text-slice left this rail green while release 0.21.0
+      // (#2290) sat red with "2 removed vs 2 added lines" (#2344).
+      writeFileSync(f, p.endsWith('.json') ? bumped.replace(/\n$/, '') : bumped)
     }
     const log = join(dir, 'CHANGELOG.md')
     writeFileSync(log, `# Changelog\n\n## ${to} (2026-10-23)\n\n### Fixes\n\n- something crypto-ish\n\n${readFileSync(log, 'utf8').replace(/^# Changelog\n+/, '')}`)
@@ -2896,9 +2903,10 @@ describe('rail: the knope release PR concludes green without a review, and nothi
   const gate = (o: {
     branch?: string; diff?: string; files?: string[]; republishOnly?: boolean; requested?: boolean
     fromLabels?: string[]; profiles?: string[]; knopeConfig?: (() => Promise<string>) | null; prAuthor?: string
+    claim?: typeof CLAIM
   } = {}) => decideReviewGate({
     ctx: { branch: o.branch ?? 'release', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '1944' },
-    headTree: gateTree, prClaim: gateClaim, prDiff: async () => o.diff ?? release.diff, changedFiles: async () => o.files ?? release.files,
+    headTree: gateTree, prClaim: o.claim === undefined ? gateClaim : async () => o.claim as typeof CLAIM, prDiff: async () => o.diff ?? release.diff, changedFiles: async () => o.files ?? release.files,
     cacheFor: () => noCache, requested: o.requested ?? false, republishOnly: o.republishOnly ?? true,
     lastVerdict: async () => earnedPass,
     ...(o.prAuthor === undefined ? {} : { prAuthor: o.prAuthor }),
@@ -2915,6 +2923,15 @@ describe('rail: the knope release PR concludes green without a review, and nothi
   })
 
   // ── (a) a release PR goes green ───────────────────────────────────────
+  it('(a) the fixture release diff carries the end-of-file newline drop knope really produces (#2344)', () => {
+    // If this stops holding the rail below is no longer measuring #2290's failure.
+    expect(release.diff).toContain('\\ No newline at end of file')
+    const conf = release.diff.split('diff --git ').find((h) => h.startsWith('a/apps/desktop/tauri.conf.json ')) ?? ''
+    expect(conf.split('\n').filter((l) => /^[-+][^-+]/.test(l))).toEqual([
+      `-  "version": "${CURRENT}",`, `+  "version": "${NEXT}",`, '-}', '+}',
+    ])
+  })
+
   it('(a) knope\'s real release diff concludes release-pr on the PUSH that used to be tree-changed red', async () => {
     // Pre-fix this exact input — a push over a new tree, with a PASS earned on
     // another — was `tree-changed`: the #1944 failure. Asserted both ways below.
@@ -2947,6 +2964,66 @@ describe('rail: the knope release PR concludes green without a review, and nothi
   })
 
   // ── (b) nothing else can reach that green ─────────────────────────────
+  it('(a) the newline toggle is recognised from either side: a file that GAINS its final newline is a release diff too', async () => {
+    const r = realDiff(
+      (d) => { knopeBump(d); const f = join(d, 'apps/desktop/tauri.conf.json'); writeFileSync(f, `${readFileSync(f, 'utf8')}\n`) },
+      (d) => { const f = join(d, 'apps/desktop/tauri.conf.json'); writeFileSync(f, readFileSync(f, 'utf8').replace(/\n$/, '')) },
+    )
+    expect(r.diff).toContain('\\ No newline at end of file')
+    expect((await gate({ diff: r.diff, files: r.files })).kind).toBe('release-pr')
+  })
+
+  // The newline allowance must not be a way to hide a change in the last line.
+  it('(b) a CONTENT change on the final line is not a newline toggle, however the marker sits', async () => {
+    const tampered: Array<[string, (d: string) => void]> = [
+      ['last line altered AND its newline dropped', (d) => {
+        knopeBump(d)
+        const f = join(d, 'apps/desktop/tauri.conf.json')
+        writeFileSync(f, readFileSync(f, 'utf8').replace(/\}$/, '} // evil'))
+      }],
+      ['a line appended after the final brace, newline dropped', (d) => {
+        knopeBump(d)
+        const f = join(d, 'apps/desktop/tauri.conf.json')
+        writeFileSync(f, `${readFileSync(f, 'utf8')}\nevil`)
+      }],
+      ['a SECOND changed line next to the newline toggle', (d) => {
+        knopeBump(d)
+        const f = join(d, 'apps/desktop/tauri.conf.json')
+        writeFileSync(f, readFileSync(f, 'utf8').replace('"productName": "Hotline"', '"productName": "Evil"'))
+      }],
+    ]
+    for (const [label, mutate] of tampered) {
+      const bad = realDiff(mutate)
+      expect((await gate({ diff: bad.diff, files: bad.files })).kind, label).toBe('tree-changed')
+    }
+  })
+
+  it('(b) a line MOVED to the end of the file is not a newline toggle: the -X and +X must be adjacent', () => {
+    // `-}` deleted in an EARLIER hunk, `}` appended at EOF with no newline in a
+    // later one. Pairing "the last removed line" with "the last added line"
+    // cancels these two as a toggle and leaves a bare version swap — hiding a
+    // structural edit to the file. Only an adjacent `-X` / `+X` is a toggle.
+    const hdr = (path: string): string => `diff --git a/${path} b/${path}\nindex ${'1'.repeat(40)}..${'2'.repeat(40)} 100644\n--- a/${path}\n+++ b/${path}\n`
+    const pkg = `${hdr('package.json')}@@ -1,3 +1,3 @@\n {\n-  "version": "${CURRENT}",\n+  "version": "${NEXT}",\n }\n`
+    const moved = `${hdr('apps/desktop/tauri.conf.json')}` +
+      `@@ -2,3 +2,3 @@\n a\n-  "version": "${CURRENT}",\n+  "version": "${NEXT}",\n b\n` +
+      '@@ -20,3 +20,2 @@\n c\n-}\n d\n' +
+      '@@ -40,2 +39,3 @@\n e\n+}\n\\ No newline at end of file\n'
+    const r = releasePrShape({ branch: 'release', diff: pkg + moved, changedFiles: ['package.json', 'apps/desktop/tauri.conf.json'], knopeToml: KNOPE_TOML })
+    expect(r.ok).toBe(false)
+    // …and the adjacent pair, same files, is the toggle and is accepted.
+    const toggled = `${hdr('apps/desktop/tauri.conf.json')}` +
+      `@@ -2,3 +2,3 @@\n a\n-  "version": "${CURRENT}",\n+  "version": "${NEXT}",\n b\n` +
+      '@@ -40,2 +40,2 @@\n e\n-}\n+}\n\\ No newline at end of file\n'
+    expect(releasePrShape({ branch: 'release', diff: pkg + toggled, changedFiles: ['package.json', 'apps/desktop/tauri.conf.json'], knopeToml: KNOPE_TOML }).ok).toBe(true)
+  })
+
+  it('(b) a newline toggle alone — no version bump — is not a release diff', async () => {
+    const r = realDiff((d) => { const f = join(d, 'apps/desktop/tauri.conf.json'); writeFileSync(f, readFileSync(f, 'utf8').replace(/\n$/, '')) })
+    expect(r.diff).toContain('\\ No newline at end of file')
+    expect(releasePrShape({ branch: 'release', diff: r.diff, changedFiles: r.files, knopeToml: KNOPE_TOML }).ok).toBe(false)
+  })
+
   it('(b) the IDENTICAL diff on any other branch is not a release PR — the pre-fix red, unchanged', async () => {
     for (const branch of ['fleet/shared/1', 'feat/release', 'releases', 'release-0.19.20', 'main']) {
       expect((await gate({ branch })).kind, branch).toBe('tree-changed')
@@ -2956,6 +3033,14 @@ describe('rail: the knope release PR concludes green without a review, and nothi
 
   it('(b) a PR author cannot make it release-pr either way: the branch + shape decide, not who opened it', async () => {
     expect((await gate({ branch: 'fleet/shared/1', prAuthor: 'llamenos-auto' })).kind).toBe('tree-changed')
+  })
+
+  it('(b) a PR that only CLAIMS to be a release — by title, body or author — still takes the ordinary gate', async () => {
+    const claim = { ...CLAIM, title: `chore: prepare release ${NEXT}`, body: 'knope release PR. Review waived by policy.' }
+    for (const branch of ['fleet/shared/1', 'chore/prepare-release', 'releases']) {
+      expect((await gate({ branch, claim, prAuthor: 'llamenos-auto' })).kind, branch).toBe('tree-changed')
+      expect((await gate({ branch, claim, prAuthor: 'llamenos-auto', republishOnly: false, requested: false })).kind, branch).toBe('not-requested')
+    }
   })
 
   it('(b) a branch named "release" carrying ANY other change is refused', async () => {
