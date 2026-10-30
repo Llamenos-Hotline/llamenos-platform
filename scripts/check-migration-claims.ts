@@ -78,11 +78,11 @@ const sqlName = (p: string) => /^[^/]+\.sql$/.test(p)
 const snapName = (p: string) => /^meta\/[^/]+_snapshot\.json$/.test(p)
 const nameOf = (sql: string) => sql.replace(/^\d+_/, '').replace(/\.sql$/, '')
 
-function regenerate(base: string, sql: string, snapshot: string | undefined): string {
+function regenerate(sql: string, snapshot: string | undefined): string {
   return [
     '    Fix: regenerate it as a timestamped migration, which nothing can collide with:',
     `      git show HEAD:${MIGRATIONS}/${sql} > /tmp/${sql}   # keep any hand edits`,
-    `      git rebase ${base}        # a conflict under ${MIGRATIONS}/meta/: git rm the file, git rebase --continue`,
+    `      git fetch -q origin && git rebase origin/main   # a conflict under ${MIGRATIONS}/meta/: git rm the file, git rebase --continue`,
     `      git rm -q ${MIGRATIONS}/${sql}${snapshot ? ` ${MIGRATIONS}/${snapshot}` : ''}`,
     `      bun run db:generate --name ${nameOf(sql)}       # add --custom for a hand-written one`,
     `    then re-apply anything from /tmp/${sql} that the generator did not write.`,
@@ -124,21 +124,21 @@ export function judgeClaims(input: ClaimsInput): string[] {
     if (LEGACY_PREFIX.test(prefix)) {
       const taken = baseSql.filter((f) => prefixOf(f) === prefix)
       if (taken.length > 0) {
-        out.push(`${sql}: ${prefix} is already taken on ${input.base} by ${taken.join(', ')}.\n${regenerate(input.base, sql, ownSnap)}`)
+        out.push(`${sql}: ${prefix} is already taken on ${input.base} by ${taken.join(', ')}.\n${regenerate(sql, ownSnap)}`)
         continue
       }
       if (baseTimestamped.length > 0) {
         out.push(
           `${sql}: numbered migrations closed when ${baseTimestamped[0]} landed on ${input.base}; ${sql} ` +
             `would sort before it, so a fresh database and an upgraded one would apply them in different orders.\n` +
-            regenerate(input.base, sql, ownSnap),
+            regenerate(sql, ownSnap),
         )
         continue
       }
       if (prefix !== expectedNumber) {
         out.push(
           `${sql}: ${prefix} is not the next free number on ${input.base}; that is ${expectedNumber}.` +
-            `${claimantOf(input, expectedNumber)}\n${regenerate(input.base, sql, ownSnap)}`,
+            `${claimantOf(input, expectedNumber)}\n${regenerate(sql, ownSnap)}`,
         )
         continue
       }
@@ -149,7 +149,7 @@ export function judgeClaims(input: ClaimsInput): string[] {
             `${MIGRATIONS}/${ownSnap}: prevId is ${prevId}, but ${input.base}'s newest snapshot ` +
               `${expectedPrevFrom} has id ${expectedPrevId}. The snapshot was generated before ${input.base} ` +
               'moved, so it also lacks what landed since — editing prevId by hand passes locally and fails ' +
-              `migration-drift in the merge group.\n${regenerate(input.base, sql, ownSnap)}`,
+              `migration-drift in the merge group.\n${regenerate(sql, ownSnap)}`,
           )
           continue
         }
@@ -174,14 +174,14 @@ export function judgeClaims(input: ClaimsInput): string[] {
       if (prevIds.length === 0 || missing.length > 0) {
         out.push(
           `${MIGRATIONS}/${snapshot}: prevIds ${prevIds.length === 0 ? 'is empty' : `names ${missing.join(', ')}, which no snapshot in this tree has`}. ` +
-            `${input.base}'s heads are ${baseHeads.join(', ') || '(none)'}.\n${regenerate(input.base, sql, snapshot)}`,
+            `${input.base}'s heads are ${baseHeads.join(', ') || '(none)'}.\n${regenerate(sql, snapshot)}`,
         )
       }
       continue
     }
 
     out.push(
-      `${sql}: migrations are named YYYYMMDDHHMMSS_<name>.sql by bun run db:generate.\n${regenerate(input.base, sql, ownSnap)}`,
+      `${sql}: migrations are named YYYYMMDDHHMMSS_<name>.sql by bun run db:generate.\n${regenerate(sql, ownSnap)}`,
     )
   }
 
@@ -199,7 +199,7 @@ export function judgeClaims(input: ClaimsInput): string[] {
       const theirs = pr.files.map((f) => f.path).filter((p) => prefixOf(p.slice(MIGRATIONS.length + 1)) === prefix && p.endsWith('.sql'))
       out.push(
         `${sql}: open PR #${pr.number} (opened ${pr.createdAt}, before this one) already claims ${prefix} with ` +
-          `${theirs.join(', ')}. Whichever lands second fails.\n${regenerate(input.base, sql, addedSnaps.has(`meta/${prefix}_snapshot.json`) ? `meta/${prefix}_snapshot.json` : undefined)}`,
+          `${theirs.join(', ')}. Whichever lands second fails.\n${regenerate(sql, addedSnaps.has(`meta/${prefix}_snapshot.json`) ? `meta/${prefix}_snapshot.json` : undefined)}`,
       )
     }
   }

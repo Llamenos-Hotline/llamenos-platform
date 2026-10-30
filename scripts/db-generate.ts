@@ -112,7 +112,7 @@ async function main() {
   }
   const sql = custom
     ? `-- ${tag}: hand-written migration. Separate statements with a line reading\n-- ${STATEMENT_BREAKPOINT}\n`
-    : `${statements.join(`\n${STATEMENT_BREAKPOINT}\n`)}\n`
+    : statements.join(`${STATEMENT_BREAKPOINT}\n`) // byte for byte what drizzle-kit generate writes
 
   writeFileSync(join(META_DIR, `${prefix}_snapshot.json`), `${JSON.stringify(snapshot, null, 2)}\n`)
   writeFileSync(join(MIGRATIONS_DIR, `${tag}.sql`), sql)
