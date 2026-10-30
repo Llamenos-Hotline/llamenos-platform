@@ -176,7 +176,7 @@ export interface DeviceRecord {
   lastSeenAt: string
 }
 
-export type PushNotificationType = 'message' | 'voicemail' | 'shift_reminder' | 'assignment'
+export type PushNotificationType = 'message' | 'voicemail' | 'shift_reminder' | 'assignment' | 'incident'
 
 /** Wake-tier payload — decryptable without PIN (minimal metadata) */
 export interface WakePayload {

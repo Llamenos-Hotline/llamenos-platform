@@ -45,6 +45,7 @@ import { RecoveryGroupService } from './recovery-group'
 import { TeamsService } from './teams'
 import { TagsService } from './tags'
 import { IvrSpeechService } from './ivr-speech'
+import { IncidentService } from './incidents'
 import { parseSignalQueueRetentionDays } from '../messaging/signal/queue'
 import { webhookOrigin } from '../lib/provider-webhook-urls'
 
@@ -92,6 +93,8 @@ export interface Services {
   teams: TeamsService
   tags: TagsService
   ivrSpeech: IvrSpeechService
+  /** Live, aggregate-only hub incidents every automatic defence reports through (#2341). */
+  incidents: IncidentService
 }
 
 export interface ServicesOpts {
@@ -212,6 +215,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
+    incidents: new IncidentService(db, audit),
   }
 
   // Only create firehose agent if seal key is configured
@@ -251,6 +255,7 @@ export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDe
     identityService: services.identity,
     hubShred: services.hubShred,
     callsService: services.calls,
+    incidents: services.incidents,
   }
 }
 
@@ -260,6 +265,7 @@ export {
   RetentionService,
   TeamsService,
   TagsService,
+  IncidentService,
   IdentityService,
   SettingsService,
   RecordsService,

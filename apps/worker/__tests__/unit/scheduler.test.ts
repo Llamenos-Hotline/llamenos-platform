@@ -60,6 +60,16 @@ vi.mock('@worker/lib/provider-recording-sweep-worker', () => ({
   stopProviderRecordingSweepWorker: vi.fn(),
 }))
 
+vi.mock('@worker/lib/incident-checks-worker', () => ({
+  startIncidentChecksWorker: vi.fn(),
+  stopIncidentChecksWorker: vi.fn(),
+}))
+
+vi.mock('@worker/lib/incident-closer-worker', () => ({
+  startIncidentCloserWorker: vi.fn(),
+  stopIncidentCloserWorker: vi.fn(),
+}))
+
 import { startBlastWorker, stopBlastWorker } from '@worker/lib/blast-delivery-worker'
 import { startScheduledBlastPoller, stopScheduledBlastPoller } from '@worker/lib/blast-scheduled-poller'
 import { startRetentionPurgeWorker, stopRetentionPurgeWorker } from '@worker/lib/retention-purge-worker'
@@ -77,6 +87,8 @@ import {
   startProviderRecordingSweepWorker,
   stopProviderRecordingSweepWorker,
 } from '@worker/lib/provider-recording-sweep-worker'
+import { startIncidentChecksWorker, stopIncidentChecksWorker } from '@worker/lib/incident-checks-worker'
+import { startIncidentCloserWorker, stopIncidentCloserWorker } from '@worker/lib/incident-closer-worker'
 
 /**
  * Every worker the scheduler owns, with the dependency whose absence used to
@@ -95,6 +107,8 @@ const WORKERS = [
   { name: 'signal queue drain', start: startSignalQueueDrainWorker, stop: stopSignalQueueDrainWorker, dep: 'resolveAdapter' },
   { name: 'stale call reaper', start: startStaleCallReaperWorker, stop: stopStaleCallReaperWorker, dep: 'callsService' },
   { name: 'provider recording sweep', start: startProviderRecordingSweepWorker, stop: stopProviderRecordingSweepWorker, dep: 'providerMedia' },
+  { name: 'incident checks', start: startIncidentChecksWorker, stop: stopIncidentChecksWorker, dep: 'incidents' },
+  { name: 'incident closer', start: startIncidentCloserWorker, stop: stopIncidentCloserWorker, dep: 'incidents' },
 ] as const
 
 /** Distinguishable sentinels, so a mis-wired field is visible in the assertion. */
@@ -108,6 +122,7 @@ function serviceDeps(): TaskSchedulerServiceDeps {
     identityService: { __svc: 'identity' } as never,
     hubShred: { __svc: 'hubShred' } as never,
     callsService: { __svc: 'calls' } as never,
+    incidents: { __svc: 'incidents', setNotifier: vi.fn() } as never,
   }
 }
 
@@ -117,6 +132,7 @@ function deps() {
     resolveAdapter: async () => null,
     resolveIdentifier: async () => null,
     providerMedia: { __svc: 'providerMedia' } as never,
+    incidentNotifier: { __svc: 'incidentNotifier' } as never,
   }
 }
 
@@ -187,6 +203,22 @@ describe('TaskScheduler', () => {
       expect(startRetentionPurgeWorker).toHaveBeenCalledWith(expect.objectContaining({ providerMedia: d.providerMedia }))
       expect(startErasureExpiryWorker).toHaveBeenCalledWith(expect.objectContaining({ providerMedia: d.providerMedia }))
       expect(startProviderRecordingSweepWorker).toHaveBeenCalledWith(d.providerMedia)
+    })
+
+    it('binds the incident notifier before any worker starts, and hands both incident workers the service (#2341)', () => {
+      const { scheduler } = setup()
+      const d = deps()
+      const setNotifier = (d.incidents as unknown as { setNotifier: ReturnType<typeof vi.fn> }).setNotifier
+
+      scheduler.start(d)
+
+      expect(setNotifier).toHaveBeenCalledWith(d.incidentNotifier)
+      // Bound before the first worker could produce an announcement.
+      expect(setNotifier.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(startBlastWorker).mock.invocationCallOrder[0]!,
+      )
+      expect(startIncidentChecksWorker).toHaveBeenCalledWith(d.incidents)
+      expect(startIncidentCloserWorker).toHaveBeenCalledWith(d.incidents)
     })
 
     it('reports every registered worker as started — a future dep addition without wiring must fail loudly, not silently skip one', () => {

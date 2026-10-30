@@ -29,6 +29,8 @@ import reportsRoutes from './routes/reports'
 import setupRoutes from './routes/setup'
 import provisioningRoutes from './routes/provisioning'
 import hubRoutes from './routes/hubs'
+import incidentsRoutes from './routes/incidents'
+import incidentsDevRoutes from './routes/incidents-dev'
 import blastsRoutes from './routes/blasts'
 import devicesRoutes from './routes/devices'
 import sessionRoutes from './routes/sessions'
@@ -187,6 +189,7 @@ api.use('/messaging/*', rateLimit('webhook'))
 // Public routes (no auth)
 api.route('/config', configRoutes)
 api.route('/', devRoutes)
+api.route('/', incidentsDevRoutes)
 api.route('/auth', authRoutes)
 api.route('/webauthn', webauthnRoutes)
 api.route('/invites', invitesRoutes)
@@ -328,6 +331,7 @@ hubScoped.route('/onboard', hubOnboardRoutes)
 hubScoped.route('/ring-groups', ringGroupsRoutes)
 hubScoped.route('/teams', teamsRoutes)
 hubScoped.route('/tags', tagsRoutes)
+hubScoped.route('/incidents', incidentsRoutes)
 hubScoped.route('/simulated-telephony', simulatedTelephonyRoutes)
 
 authenticated.route('/hubs/:hubId', hubScoped)

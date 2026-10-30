@@ -1373,6 +1373,7 @@ Llamenos uses a built-in WebSocket endpoint on the API server for real-time even
 | 1011 | `KIND_CONVERSATION_ASSIGNED` | Conversation assignment changed |
 | 1020 | `KIND_SHIFT_UPDATE` | Shift schedule changed |
 | 1030 | `KIND_SETTINGS_CHANGED` | Settings changed (global or hub-scoped) |
+| 1050 | `KIND_HUB_INCIDENT` | A hub incident opened, updated or closed. Content is `{incidentId, state}` ONLY (see §4.39) |
 
 #### Ephemeral Events (Not Persisted, Broadcast Only)
 
@@ -4746,6 +4747,46 @@ The following endpoints are also implemented. See `apps/worker/routes/` for full
 - **`/api/settings/platform/*`** — Platform-level settings
 - **`/api/signal-notification/*`** — Signal notifier integration
 - **`/api/hubs/:hubId/onboard/*`** — Hub onboarding flows
+
+### 4.39 Hub Incidents
+
+Every automatic defence (CAPTCHA, rate limiting, the over-limit message, ban
+matches, provider-media deletion, erasure deadlines, ban expiry) reports
+through ONE aggregate incident per hub and category while it is acting, so the
+people responsible know it is happening. An incident never names a caller, a
+number, a provider call id or any record id.
+
+```
+GET /api/hubs/:hubId/incidents?open=true
+Auth: Required (any hub member)
+Response: {
+  "incidents": HubIncident[]   // only the categories the caller's permissions in this hub reach
+}
+HubIncident: {
+  "id": string, "hubId": string,
+  "category": "spam" | "provider-media" | "erasure-deadline" | "ban-expiry",   // extensible: render an unknown value generically
+  "severity": "notify" | "record",
+  "openedAt": iso8601, "lastSignalAt": iso8601, "closedAt": iso8601 | null,
+  "counts": { [kind: string]: integer }, "totalCount": integer,
+  "peakPerMinute": integer, "oldestAgeSeconds": integer | null
+}
+```
+
+Reach is a permission per category — never a role:
+
+| Category | Permission |
+|----------|------------|
+| `spam` | `settings:manage-spam` |
+| `provider-media` | `telephony:manage-providers` |
+| `erasure-deadline` | `erasure:admin` |
+| `ban-expiry` | `system:view-bans` |
+
+Delivery:
+
+- **Relay** — `KIND_HUB_INCIDENT` (1050), content exactly `{"incidentId": string, "state": "opened" | "updated" | "closed"}`. The relay fans out to every hub member, so it carries no category, counts or severity. A client holding any category permission refetches the GET above; a client holding none ignores it.
+- **Push** — `notify` incidents only, to permission holders who are members of the hub. Wake payload `{"hubId": string, "type": "incident"}` and nothing else; the app shows `incident.push` and opens the incident view.
+- **Signal** — `notify` incidents only, to permission holders whose alert channel is Signal: the localized `incident.signalAlert` (category + state).
+- **Rate** — one announcement on open, at most one `updated` per category window, one on close. `record` incidents are visible (relay, banner, GET) but never push or alert. A `record` incident escalating to `notify` interrupts once, as "opened".
 
 ---
 

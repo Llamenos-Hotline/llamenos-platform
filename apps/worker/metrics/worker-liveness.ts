@@ -54,6 +54,8 @@ export const WORKER_TICK_INTERVAL_MS = {
   'signal-queue-drain': 30_000,
   'stale-call-reaper': 2 * MINUTE_MS,
   'provider-recording-sweep': 15 * MINUTE_MS,
+  'incident-checks': 5 * MINUTE_MS,
+  'incident-closer': MINUTE_MS,
 } as const satisfies Record<SchedulerWorkerName, number>
 
 export const WORKER_LAST_SUCCESS_METRIC = 'llamenos_worker_last_success_timestamp_seconds'

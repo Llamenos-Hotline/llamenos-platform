@@ -34,6 +34,8 @@ import {
   startProviderRecordingSweepWorker,
   stopProviderRecordingSweepWorker,
 } from '@worker/lib/provider-recording-sweep-worker'
+import { startIncidentChecksWorker, stopIncidentChecksWorker } from '@worker/lib/incident-checks-worker'
+import { startIncidentCloserWorker, stopIncidentCloserWorker } from '@worker/lib/incident-closer-worker'
 import metricsRoutes from '@worker/routes/metrics'
 
 /**
@@ -118,6 +120,14 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
         retryPending: async () => ({ deleted: 0, failed: [] }),
       } as never),
     stop: stopProviderRecordingSweepWorker,
+  },
+  'incident-checks': {
+    start: () => startIncidentChecksWorker({ runChecks: async () => ({ evaluated: 0, failed: 0 }) }),
+    stop: stopIncidentChecksWorker,
+  },
+  'incident-closer': {
+    start: () => startIncidentCloserWorker({ closeQuiet: async () => ({ closed: 0, updated: 0 }) }),
+    stop: stopIncidentCloserWorker,
   },
 }
 

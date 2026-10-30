@@ -48,6 +48,8 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { createServices, schedulerServiceDeps, type Services } from '../../services'
 import { TaskScheduler } from '../../services/scheduler'
+import { IncidentDelivery } from '../../services/incidents-delivery'
+import type { Env } from '../../types'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
@@ -161,6 +163,15 @@ async function runSchedulerUntil(
     // The registry's own ledger, as the entrypoint wires it; these hubs track no
     // provider recordings, so no adapter is ever asked.
     providerMedia: services.providerRecordings.eraser(async () => null),
+    // The entrypoint's delivery, over an env with no relay key or push
+    // transport: nothing in these tests opens an incident.
+    incidentNotifier: new IncidentDelivery({
+      env: {} as Env,
+      identity: services.identity,
+      settings: services.settings,
+      shifts: services.shifts,
+      userNotifications: services.userNotifications,
+    }),
   })
   try {
     const deadline = Date.now() + timeoutMs

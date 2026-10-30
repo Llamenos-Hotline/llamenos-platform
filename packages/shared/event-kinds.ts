@@ -70,6 +70,16 @@ export const KIND_SHIFT_REQUEST_RECEIVED = 1043
 /** Shift join/leave request reviewed (approved or denied) */
 export const KIND_SHIFT_REQUEST_REVIEWED = 1044
 
+// --- Incident Events (regular, persisted) ---
+
+/**
+ * A hub incident opened, updated or closed (B-INCIDENTS, #2341). The content
+ * is `{ incidentId, state }` and NOTHING else — see hubIncidentRelayEventSchema:
+ * the relay fans out to every hub member, so category and counts are only
+ * available from the permission-filtered `GET /hubs/:hubId/incidents`.
+ */
+export const KIND_HUB_INCIDENT = 1050
+
 // --- Ephemeral Events (not persisted, broadcast only) ---
 
 /** Volunteer presence update — online counts, availability */
@@ -77,3 +87,4 @@ export const KIND_PRESENCE_UPDATE = 20000
 
 /** Typing indicator from external messaging channel */
 export const KIND_TYPING_INDICATOR = 20001
+

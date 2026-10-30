@@ -52,7 +52,16 @@ import {
   startProviderRecordingSweepWorker,
   stopProviderRecordingSweepWorker,
 } from '../lib/provider-recording-sweep-worker'
+import {
+  startIncidentChecksWorker,
+  stopIncidentChecksWorker,
+} from '../lib/incident-checks-worker'
+import {
+  startIncidentCloserWorker,
+  stopIncidentCloserWorker,
+} from '../lib/incident-closer-worker'
 import type { ProviderMediaEraser } from './provider-recordings'
+import type { IncidentNotifier, IncidentService } from './incidents'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
@@ -82,6 +91,8 @@ export const SCHEDULER_WORKER_NAMES = [
   'signal-queue-drain',
   'stale-call-reaper',
   'provider-recording-sweep',
+  'incident-checks',
+  'incident-closer',
 ] as const
 
 export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
@@ -105,6 +116,7 @@ export type TaskSchedulerServiceDeps = {
   identityService: IdentityService
   hubShred: HubShredService
   callsService: CallsService
+  incidents: IncidentService
 }
 
 export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
@@ -116,6 +128,13 @@ export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
    */
   providerMedia: ProviderMediaEraser
   resolveIdentifier: (subscriberId: string) => Promise<string | null>
+  /**
+   * Delivers incident announcements (relay, push, Signal) — built by the
+   * entrypoint, which alone holds the request env. Required, and bound before
+   * any worker starts, so an incident can never be recorded with nobody told
+   * because the channel was not wired (#2341).
+   */
+  incidentNotifier: IncidentNotifier
   onBlastProgress?: BlastProgressCallback
   onBlastStatusChange?: BlastStatusCallback
 }
@@ -150,6 +169,8 @@ export class TaskScheduler {
     this.started = true
 
     const started: SchedulerWorkerName[] = []
+
+    deps.incidents.setNotifier(deps.incidentNotifier)
 
     // No `if (deps.x)` gates: every dependency is required, so a worker that
     // is listed here always runs. A missing one cannot reach this method.
@@ -231,6 +252,14 @@ export class TaskScheduler {
     startProviderRecordingSweepWorker(deps.providerMedia)
     started.push('provider-recording-sweep')
 
+    // Incident checks run in their OWN worker, never inside the worker whose
+    // backlog they measure (#2323, #2341).
+    startIncidentChecksWorker(deps.incidents)
+    started.push('incident-checks')
+
+    startIncidentCloserWorker(deps.incidents)
+    started.push('incident-closer')
+
     this.startedWorkers = started
 
     const missing = SCHEDULER_WORKER_NAMES.filter((name) => !started.includes(name))
@@ -263,6 +292,8 @@ export class TaskScheduler {
     stopSignalQueueDrainWorker()
     stopStaleCallReaperWorker()
     stopProviderRecordingSweepWorker()
+    stopIncidentChecksWorker()
+    stopIncidentCloserWorker()
 
     logger.info('Stopped')
   }
