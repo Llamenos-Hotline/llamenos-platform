@@ -104,7 +104,7 @@ describe('per-user audit key — wired', () => {
     const admin = reader()
     const audit = wiredAudit([admin.pubkey])
     const user = 'aa'.repeat(32)
-    const details = { noteId: 'n-secret-1', callId: 'call-xyz' }
+    const details = { noteId: 'n-secret-1', topic: 'call-xyz' }
 
     const entry = await audit.log('noteCreated', user, details, 'hub-ak-1')
 
@@ -130,7 +130,7 @@ describe('per-user audit key — wired', () => {
     const audit = wiredAudit([admin.pubkey])
     const user = 'bb'.repeat(32)
 
-    const entry = await audit.log('callAnswered', user, { callId: 'call-secret-2' }, 'hub-ak-1')
+    const entry = await audit.log('callAnswered', user, { topic: 'call-secret-2' }, 'hub-ak-1')
 
     const key = await keyRow(user)
     const envelopes = key!.adminEnvelopes as Array<{ pubkey: string; enc: string; ct: string }>
@@ -140,7 +140,7 @@ describe('per-user audit key — wired', () => {
     const stored = await rawEntry(entry.id)
     const marker = (stored!.details as Record<string, string>)[MARKER]!
     const plaintext = openDetails(auditKey, marker, user, entry.id)
-    expect(JSON.parse(plaintext)).toEqual({ callId: 'call-secret-2' })
+    expect(JSON.parse(plaintext)).toEqual({ topic: 'call-secret-2' })
   })
 
   it('list() returns decrypted details; entryHash commits to the plaintext', async () => {
@@ -179,7 +179,7 @@ describe('per-user audit key — wired', () => {
 
     await audit.log('userAdded', user, { name: 'secret-name-4' }, 'hub-ak-3')
     await audit.log('login', user, {}, 'hub-ak-3')
-    await audit.log('callMissed', 'system', { callSid: 'sys-1' }, 'hub-ak-3')
+    await audit.log('callMissed', 'system', { topic: 'sys-1' }, 'hub-ak-3')
 
     const result = await audit.verifyFullChain('hub-ak-3')
     expect(result.valid).toBe(true)
@@ -278,10 +278,10 @@ describe('per-user audit key — wired', () => {
     const admin = reader()
     const audit = wiredAudit([admin.pubkey])
 
-    const entry = await audit.log('callMissed', 'system', { callSid: 'sys-secret-6' }, 'hub-ak-5')
+    const entry = await audit.log('callMissed', 'system', { topic: 'sys-secret-6' }, 'hub-ak-5')
 
     const stored = await rawEntry(entry.id)
-    expect(stored!.details).toEqual({ callSid: 'sys-secret-6' })
+    expect(stored!.details).toEqual({ topic: 'sys-secret-6' })
     expect(await keyRow('system')).toBeUndefined()
   })
 

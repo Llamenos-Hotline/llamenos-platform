@@ -115,6 +115,8 @@ COPY --chown=llamenos:llamenos scripts/lib/migration-statements.ts scripts/lib/m
 COPY --chown=llamenos:llamenos scripts/check-migration-safety.ts scripts/check-migration-safety.ts
 # Startup invariant check for Bun's native text layer (run by the entrypoint)
 COPY --chown=llamenos:llamenos scripts/verify-runtime.ts scripts/verify-runtime.ts
+# Operator lookup: a provider's call id -> the ref our logs carry in its place (#2333)
+COPY --chown=llamenos:llamenos scripts/provider-ref.ts scripts/provider-ref.ts
 
 # Copy entrypoint (runs migrations then starts the app)
 COPY --chown=llamenos:llamenos deploy/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
