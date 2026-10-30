@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Einladung",
+    "validHeading": "Du wurdest eingeladen",
+    "validBody": "Installiere die App, falls du sie noch nicht hast, und öffne diese Einladung dann darin.",
+    "openInApp": "In der App öffnen",
+    "downloadApp": "App herunterladen",
+    "qrLabel": "Scannen, um diese Einladung auf deinem Telefon zu öffnen",
+    "invalidHeading": "Dieser Link kann nicht verwendet werden",
+    "invalidBody": "Der Link ist ungültig oder abgelaufen. Bitte die Person, die ihn geschickt hat, um einen neuen.",
+    "rateLimitedHeading": "Zu viele Versuche",
+    "rateLimitedBody": "Bitte warte eine Minute und versuche es erneut."
+  },
   "ivr": {
     "selfAnnouncement": "Für Deutsch, drücken Sie [N].",
     "title": "IVR Language Menu",

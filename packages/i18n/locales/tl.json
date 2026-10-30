@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Imbitasyon",
+    "validHeading": "Inimbitahan ka",
+    "validBody": "I-install ang app kung wala ka pa nito, at buksan dito ang imbitasyong ito.",
+    "openInApp": "Buksan sa app",
+    "downloadApp": "Kunin ang app",
+    "qrLabel": "I-scan para buksan ang imbitasyong ito sa iyong telepono",
+    "invalidHeading": "Hindi magagamit ang link na ito",
+    "invalidBody": "Hindi wasto o nag-expire na ang link. Humingi ng bago sa taong nagpadala nito.",
+    "rateLimitedHeading": "Masyadong maraming pagsubok",
+    "rateLimitedBody": "Maghintay ng isang minuto at subukan muli."
+  },
   "ivr": {
     "selfAnnouncement": "Para sa Tagalog, pindutin ang [N].",
     "title": "IVR Language Menu",

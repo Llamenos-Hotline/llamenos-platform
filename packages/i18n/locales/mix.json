@@ -722,6 +722,18 @@
     "phoneHelp": "The main hotline number for this hub. Used for call routing.",
     "slugHelp": "The slug is used in URLs and API references. It is generated from the name."
   },
+  "invitePage": {
+    "title": "Invitation",
+    "validHeading": "You have been invited",
+    "validBody": "Install the app if you do not have it yet, then open this invitation in it.",
+    "openInApp": "Open in app",
+    "downloadApp": "Get the app",
+    "qrLabel": "Scan to open this invitation on your phone",
+    "invalidHeading": "This link cannot be used",
+    "invalidBody": "The link is not valid or has expired. Ask the person who sent it for a new one.",
+    "rateLimitedHeading": "Too many attempts",
+    "rateLimitedBody": "Please wait a minute and try again."
+  },
   "ivr": {
     "selfAnnouncement": "Tu'un savi ndáto, chu̱ʼun [N].",
     "title": "IVR Language Menu",

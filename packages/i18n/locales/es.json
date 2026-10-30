@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Invitación",
+    "validHeading": "Te han invitado",
+    "validBody": "Instala la aplicación si aún no la tienes y luego abre esta invitación en ella.",
+    "openInApp": "Abrir en la aplicación",
+    "downloadApp": "Obtener la aplicación",
+    "qrLabel": "Escanea para abrir esta invitación en tu teléfono",
+    "invalidHeading": "Este enlace no se puede usar",
+    "invalidBody": "El enlace no es válido o ha caducado. Pide uno nuevo a la persona que te lo envió.",
+    "rateLimitedHeading": "Demasiados intentos",
+    "rateLimitedBody": "Espera un minuto e inténtalo de nuevo."
+  },
   "ivr": {
     "selfAnnouncement": "Para español, marque [N].",
     "title": "IVR Language Menu",

@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "초대",
+    "validHeading": "초대를 받았습니다",
+    "validBody": "앱이 없다면 먼저 설치한 다음, 앱에서 이 초대를 여세요.",
+    "openInApp": "앱에서 열기",
+    "downloadApp": "앱 받기",
+    "qrLabel": "스캔하여 휴대폰에서 이 초대 열기",
+    "invalidHeading": "이 링크는 사용할 수 없습니다",
+    "invalidBody": "링크가 유효하지 않거나 만료되었습니다. 보낸 사람에게 새 링크를 요청하세요.",
+    "rateLimitedHeading": "시도 횟수가 너무 많습니다",
+    "rateLimitedBody": "1분 후에 다시 시도해 주세요."
+  },
   "ivr": {
     "selfAnnouncement": "한국어는 [N] 번을 눌러주세요.",
     "title": "IVR Language Menu",
