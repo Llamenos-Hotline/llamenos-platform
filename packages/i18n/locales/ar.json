@@ -489,6 +489,8 @@
       "adminPromoted": "تمت ترقية المسؤول",
       "callAnswered": "تم الرد على المكالمة",
       "callEnded": "انتهت المكالمة",
+      "incidentClosed": "أُغلق حادث",
+      "incidentOpened": "فُتح حادث",
       "ivrAudioDeleted": "تم حذف صوت IVR",
       "ivrAudioUploaded": "تم رفع صوت IVR",
       "ivrLanguagesUpdated": "تم تحديث لغات IVR",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "تم تغيير إعداد مكافحة البريد المزعج",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "تم تغيير إعداد النسخ",
+      "underAttackModeChanged": "تم تغيير وضع التعرض للهجوم",
       "userAdded": "تمت إضافة متطوع",
       "userAvailable": "متطوع متاح",
       "userOnBreak": "متطوع في استراحة",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "تفعيل نسخ المكالمات لجميع المتطوعين؟ يستخدم هذا الذكاء الاصطناعي لنسخ المكالمات في الوقت الفعلي.",
     "transcriptionTitle": "تغيير إعداد النسخ",
     "biometricDisable": "إيقاف فتح القفل البيومتري؟ ستظل قادرًا على فتح القفل باستخدام رقم PIN.",
-    "biometricDisableTitle": "إيقاف فتح القفل البيومتري"
+    "biometricDisableTitle": "إيقاف فتح القفل البيومتري",
+    "underAttackTitle": "تغيير وضع التعرض للهجوم",
+    "underAttackEnable": "تفعيل وضع التعرض للهجوم؟ سيتعين على كل متصل بهذا المركز اجتياز CAPTCHA الصوتي قبل الاتصال.",
+    "underAttackDisable": "إيقاف وضع التعرض للهجوم؟ ستعود معالجة المكالمات وفق إعدادات الحماية المعتادة لهذا المركز."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "طُلب منهم CAPTCHA",
+    "activityCountsOnly": "أعداد فقط. لا تُسجَّل أرقام المتصلين أبدًا.",
+    "activityFailed": "فشلوا في CAPTCHA",
+    "activityPassed": "اجتازوا CAPTCHA",
+    "activityRateLimited": "تجاوزوا حد المعدل",
+    "activityRepeated": "طلبوا سماع الأرقام مرة أخرى",
+    "activityTimedOut": "لم يجيبوا على CAPTCHA",
+    "activityTitle": "نشاط المكالمات المزعجة",
+    "autoEnable": "التفعيل التلقائي",
+    "autoEnableDescription": "يفعّل وضع التعرض للهجوم عندما تفشل مكالمات كثيرة في اجتياز CAPTCHA أو تنتهي مهلتها أو تتجاوز حد المعدل، ويوقفه مجددًا بعد فترة هدوء. التفعيل اليدوي لا يُوقف تلقائيًا أبدًا.",
+    "autoQuietMinutes": "فترة الهدوء قبل الإيقاف (دقائق)",
+    "autoThresholdCount": "عدد المكالمات المشبوهة",
+    "autoWindowMinutes": "خلال (دقائق)",
     "blockDuration": "مدة الحظر (دقائق)",
     "disabled": "معطل",
     "enabled": "مفعل",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "تحديد المعدل",
     "rateLimitingDescription": "تحديد المكالمات المتكررة من نفس الرقم",
     "title": "الحماية من البريد المزعج",
+    "underAttack": "وضع التعرض للهجوم",
+    "underAttackBanner": "وضع التعرض للهجوم مفعّل. يجب على كل متصل اجتياز CAPTCHA الصوتي.",
+    "underAttackDescription": "أثناء تفعيله، يجب على كل متصل بهذا المركز اجتياز CAPTCHA الصوتي قبل الاتصال. استخدمه عندما يغمر الخط سيل من المكالمات غير المرغوب فيها.",
+    "underAttackSince": "مفعّل منذ {{time}}",
+    "underAttackSourceAuto": "فُعّل تلقائيًا",
+    "underAttackSourceManual": "فُعّل يدويًا",
     "voiceCaptcha": "CAPTCHA صوتي",
     "voiceCaptchaDescription": "يتطلب من المتصلين إدخال رقم عشوائي قبل الاتصال"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "مكالمتك مهمة بالنسبة لنا. يرجى الانتظار بينما نقوم بتوصيلك بمتطوع.",
     "unavailableMessage": "نأسف، لا يوجد أحد متاح للرد على مكالمتك في الوقت الحالي. يرجى المحاولة مرة أخرى لاحقاً. مع السلامة.",
     "voicemailPrompt": "لا يوجد أحد متاح للرد على مكالمتك الآن. يرجى ترك رسالة بعد النغمة.",
-    "voicemailThanks": "شكراً لرسالتك. مع السلامة."
+    "voicemailThanks": "شكراً لرسالتك. مع السلامة.",
+    "captchaRepeatHint": "لسماع الأرقام مرة أخرى، اضغط على زر النجمة."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "حظر على وشك الانتهاء",
+      "erasureDeadline": "طلبات حذف متأخرة",
+      "providerMedia": "تسجيلات متبقية لدى مزود الهاتف",
+      "spam": "مكالمات مزعجة وغير مرغوب فيها"
+    },
+    "closed": "انتهى",
+    "ongoing": "{{count}} حدث منذ {{time}}",
+    "opened": "يحدث الآن",
+    "push": "هناك نشاط على خطك الساخن يحتاج إلى نظرة.",
+    "signalAlert": "تنبيه الخط الساخن — {{category}}: {{state}}. افتح التطبيق لمعرفة التفاصيل."
   }
 }

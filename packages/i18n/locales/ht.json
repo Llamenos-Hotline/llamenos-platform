@@ -489,6 +489,8 @@
       "adminPromoted": "Administratè Promouvwa",
       "callAnswered": "Apèl Reponn",
       "callEnded": "Apèl Fini",
+      "incidentClosed": "Ensidan Fèmen",
+      "incidentOpened": "Ensidan Louvri",
       "ivrAudioDeleted": "Odyo IVR efase",
       "ivrAudioUploaded": "Odyo IVR telechaje",
       "ivrLanguagesUpdated": "Lang IVR yo mete ajou",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "Paramèt Anti-Spam Chanje",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "Paramèt Transkripsyon Chanje",
+      "underAttackModeChanged": "Mòd Anba Atak Chanje",
       "userAdded": "Volontè Ajoute",
       "userAvailable": "Volontè Disponib",
       "userOnBreak": "Volontè an Pòz",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "Aktive transkripsyon apèl pou tout volontè? Sa a itilize IA pou transkri apèl an tan reyèl.",
     "transcriptionTitle": "Chanje Paramèt Transkripsyon",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "Chanje Mòd Anba Atak",
+    "underAttackEnable": "Aktive mòd anba atak? Chak moun ki rele hub sa a ap dwe pase CAPTCHA vwa a avan yo konekte.",
+    "underAttackDisable": "Dezaktive mòd anba atak? Apèl yo ap trete ankò dapre paramèt anti-spam abityèl hub sa a."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "Resevwa CAPTCHA a",
+    "activityCountsOnly": "Se kantite sèlman. Nimewo moun ki rele yo pa janm anrejistre.",
+    "activityFailed": "Echwe CAPTCHA a",
+    "activityPassed": "Pase CAPTCHA a",
+    "activityRateLimited": "Rive nan limit frekans",
+    "activityRepeated": "Mande pou tande chif yo ankò",
+    "activityTimedOut": "Pa reponn CAPTCHA a",
+    "activityTitle": "Aktivite spam",
+    "autoEnable": "Aktive otomatikman",
+    "autoEnableDescription": "Aktive mòd anba atak lè anpil apèl echwe CAPTCHA a, pa reponn atan oswa rive nan limit frekans lan, epi dezaktive l ankò apre yon peryòd kalm. Yon aktivasyon alamen pa janm dezaktive otomatikman.",
+    "autoQuietMinutes": "Peryòd kalm avan li dezaktive (minit)",
+    "autoThresholdCount": "Kantite apèl sispèk",
+    "autoWindowMinutes": "Nan (minit)",
     "blockDuration": "Dire blokaj (minit)",
     "disabled": "Dezaktive",
     "enabled": "Aktive",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "Limitasyon Frekans",
     "rateLimitingDescription": "Limite apèl repete nan menm nimewo a",
     "title": "Pwoteksyon Anti-Spam",
+    "underAttack": "Mòd anba atak",
+    "underAttackBanner": "Mòd anba atak aktive. Chak moun ki rele dwe pase CAPTCHA vwa a.",
+    "underAttackDescription": "Pandan li aktive, chak moun ki rele hub sa a dwe pase CAPTCHA vwa a avan yo konekte. Sèvi avè l lè liy lan plen ak apèl moun pa vle.",
+    "underAttackSince": "Aktive depi {{time}}",
+    "underAttackSourceAuto": "Aktive otomatikman",
+    "underAttackSourceManual": "Aktive alamen",
     "voiceCaptcha": "CAPTCHA Vwa",
     "voiceCaptchaDescription": "Egzije moun ki rele yo antre yon nimewo owaza avan yo konekte"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "Apèl ou enpòtan pou nou. Tanpri tann pandan n ap konekte ou ak yon volontè.",
     "unavailableMessage": "Nou regrèt, pa gen moun disponib pou reponn apèl ou a kounye a. Tanpri eseye ankò pita. Orevwa.",
     "voicemailPrompt": "Pa gen moun disponib pou pran apèl ou kounye a. Tanpri kite yon mesaj apre son an.",
-    "voicemailThanks": "Mèsi pou mesaj ou. Orevwa."
+    "voicemailThanks": "Mèsi pou mesaj ou. Orevwa.",
+    "captchaRepeatHint": "Pou tande chif yo ankò, peze etwal."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Entèdiksyon ki pral ekspire",
+      "erasureDeadline": "Demann efasman ki an reta",
+      "providerMedia": "Anrejistreman ki rete kay founisè telefòn nan",
+      "spam": "Spam ak apèl moun pa vle"
+    },
+    "closed": "Fini",
+    "ongoing": "{{count}} evènman depi {{time}}",
+    "opened": "Ap pase kounye a",
+    "push": "Gen aktivite sou liy dirèk ou a ki bezwen yon koutje.",
+    "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo."
   }
 }

@@ -489,6 +489,8 @@
       "adminPromoted": "Đã thăng quản trị viên",
       "callAnswered": "Cuộc gọi đã trả lời",
       "callEnded": "Cuộc gọi đã kết thúc",
+      "incidentClosed": "Sự cố đã đóng",
+      "incidentOpened": "Sự cố đã mở",
       "ivrAudioDeleted": "Đã xóa âm thanh IVR",
       "ivrAudioUploaded": "Đã tải lên âm thanh IVR",
       "ivrLanguagesUpdated": "Đã cập nhật ngôn ngữ IVR",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "Cài đặt chống spam đã thay đổi",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "Cài đặt phiên âm đã thay đổi",
+      "underAttackModeChanged": "Chế độ bị tấn công đã thay đổi",
       "userAdded": "Tình nguyện viên đã thêm",
       "userAvailable": "Tình nguyện viên sẵn sàng",
       "userOnBreak": "Tình nguyện viên đang nghỉ",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "Bật phiên âm cuộc gọi cho tất cả tình nguyện viên? Tính năng này sử dụng AI để phiên âm cuộc gọi theo thời gian thực.",
     "transcriptionTitle": "Thay đổi cài đặt phiên âm",
     "biometricDisable": "Tắt mở khóa sinh trắc học? Bạn vẫn có thể mở khóa bằng mã PIN.",
-    "biometricDisableTitle": "Tắt Mở Khóa Sinh Trắc Học"
+    "biometricDisableTitle": "Tắt Mở Khóa Sinh Trắc Học",
+    "underAttackTitle": "Thay đổi chế độ bị tấn công",
+    "underAttackEnable": "Bật chế độ bị tấn công? Mọi người gọi đến trung tâm này sẽ phải vượt qua CAPTCHA giọng nói trước khi được kết nối.",
+    "underAttackDisable": "Tắt chế độ bị tấn công? Cuộc gọi sẽ lại được xử lý theo cài đặt chống spam thông thường của trung tâm này."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "Được yêu cầu CAPTCHA",
+    "activityCountsOnly": "Chỉ có số lượng. Số điện thoại người gọi không bao giờ được ghi lại.",
+    "activityFailed": "Không vượt qua CAPTCHA",
+    "activityPassed": "Vượt qua CAPTCHA",
+    "activityRateLimited": "Bị giới hạn tần suất",
+    "activityRepeated": "Yêu cầu nghe lại các số",
+    "activityTimedOut": "Không trả lời CAPTCHA",
+    "activityTitle": "Hoạt động spam",
+    "autoEnable": "Tự động bật",
+    "autoEnableDescription": "Bật chế độ bị tấn công khi nhiều cuộc gọi không vượt qua CAPTCHA, hết thời gian hoặc bị giới hạn tần suất, và tắt lại sau một khoảng thời gian yên tĩnh. Chế độ được bật thủ công không bao giờ bị tắt tự động.",
+    "autoQuietMinutes": "Thời gian yên tĩnh trước khi tắt (phút)",
+    "autoThresholdCount": "Số cuộc gọi đáng ngờ",
+    "autoWindowMinutes": "Trong vòng (phút)",
     "blockDuration": "Thời gian chặn (phút)",
     "disabled": "Đã tắt",
     "enabled": "Đã bật",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "Giới hạn tần suất",
     "rateLimitingDescription": "Giới hạn cuộc gọi lặp lại từ cùng một số",
     "title": "Bảo vệ chống spam",
+    "underAttack": "Chế độ bị tấn công",
+    "underAttackBanner": "Chế độ bị tấn công đang bật. Mọi người gọi phải vượt qua CAPTCHA giọng nói.",
+    "underAttackDescription": "Khi bật, mọi người gọi đến trung tâm này phải vượt qua CAPTCHA giọng nói trước khi được kết nối. Dùng khi đường dây bị tràn ngập cuộc gọi không mong muốn.",
+    "underAttackSince": "Bật từ {{time}}",
+    "underAttackSourceAuto": "Bật tự động",
+    "underAttackSourceManual": "Bật thủ công",
     "voiceCaptcha": "CAPTCHA giọng nói",
     "voiceCaptchaDescription": "Yêu cầu người gọi nhập số ngẫu nhiên trước khi kết nối"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "Cuộc gọi của bạn rất quan trọng với chúng tôi. Xin vui lòng chờ trong khi chúng tôi kết nối bạn với tình nguyện viên.",
     "unavailableMessage": "Xin lỗi, hiện không có ai sẵn sàng nhận cuộc gọi của bạn. Vui lòng thử lại sau. Tạm biệt.",
     "voicemailPrompt": "Hiện không có ai có thể nhận cuộc gọi của bạn. Vui lòng để lại tin nhắn sau tiếng bíp.",
-    "voicemailThanks": "Cảm ơn tin nhắn của bạn. Tạm biệt."
+    "voicemailThanks": "Cảm ơn tin nhắn của bạn. Tạm biệt.",
+    "captchaRepeatHint": "Để nghe lại các số, vui lòng bấm phím sao."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Lệnh chặn sắp hết hạn",
+      "erasureDeadline": "Yêu cầu xóa đã quá hạn",
+      "providerMedia": "Bản ghi âm còn lưu tại nhà cung cấp điện thoại",
+      "spam": "Spam và cuộc gọi không mong muốn"
+    },
+    "closed": "Đã kết thúc",
+    "ongoing": "{{count}} sự kiện kể từ {{time}}",
+    "opened": "Đang diễn ra",
+    "push": "Có hoạt động trên đường dây nóng của bạn cần được xem xét.",
+    "signalAlert": "Cảnh báo đường dây nóng — {{category}}: {{state}}. Mở ứng dụng để xem chi tiết."
   }
 }

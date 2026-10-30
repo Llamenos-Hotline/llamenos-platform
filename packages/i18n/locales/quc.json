@@ -166,7 +166,10 @@
       "userOnBreak": "Aj Samajel Pa Uxlanem",
       "userAdded": "Aj Samajel Xtz'aqatisax",
       "userRemoved": "Aj Samajel Xeleq'ax",
-      "userAvailable": "Aj Samajel K'o"
+      "userAvailable": "Aj Samajel K'o",
+      "underAttackModeChanged": "Under Attack Mode Changed",
+      "incidentOpened": "Incident Opened",
+      "incidentClosed": "Incident Closed"
     },
     "noEntries": "Majun taq b'antajik pa ri ucholajil tz'etoj",
     "search": "Titzukux pa ucholajil tz'etoj...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "¿Tijaqax ri rutz'ib'axik ch'ab'al rech oyonik chi ke ronojel aj samajela'? Kakojo' retal winaq rech katz'ib'ax ri oyonik pa ramaj.",
     "transcriptionTitle": "Tijalwachix Uchojmixik Rutz'ib'axik Ch'ab'al",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "Change Under Attack Mode",
+    "underAttackEnable": "Turn on under attack mode? Every caller to this hub will have to pass the voice CAPTCHA before connecting.",
+    "underAttackDisable": "Turn off under attack mode? Callers will be handled by this hub's usual spam settings again."
   },
   "contacts": {
     "noContacts": "Majun taq winaq k'o",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "Challenged with the CAPTCHA",
+    "activityCountsOnly": "Counts only. Caller numbers are never recorded.",
+    "activityFailed": "Failed the CAPTCHA",
+    "activityPassed": "Passed the CAPTCHA",
+    "activityRateLimited": "Rate limited",
+    "activityRepeated": "Asked to hear the digits again",
+    "activityTimedOut": "Did not answer the CAPTCHA",
+    "activityTitle": "Spam activity",
+    "autoEnable": "Turn on automatically",
+    "autoEnableDescription": "Turn on under attack mode when many calls fail the CAPTCHA, time out or are rate limited, and turn it off again after a quiet period. A manual switch-on is never turned off automatically.",
+    "autoQuietMinutes": "Quiet period before turning off (minutes)",
+    "autoThresholdCount": "Number of suspicious calls",
+    "autoWindowMinutes": "Within (minutes)",
     "blockDuration": "Ramaj rech q'atoj (minutos)",
     "disabled": "Tztapital",
     "enabled": "Jaqatal",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "Ruch'uyik Jachike",
     "rateLimitingDescription": "Tich'uyux ri k'ïy oyonik pa ri junam ajilab'al",
     "title": "Ruchajixik Itzel Taqonem",
+    "underAttack": "Under attack mode",
+    "underAttackBanner": "Under attack mode is on. Every caller must pass the voice CAPTCHA.",
+    "underAttackDescription": "While this is on, every caller to this hub must pass the voice CAPTCHA before connecting. Use it when the hotline is flooded with unwanted calls.",
+    "underAttackSince": "On since {{time}}",
+    "underAttackSourceAuto": "Turned on automatically",
+    "underAttackSourceManual": "Turned on manually",
     "voiceCaptcha": "CAPTCHA rech Ch'ab'al",
     "voiceCaptchaDescription": "Tib'an chi ke ri oyonela' ketz'ib'aj jun xak ajilab'al chuwach kekojoq"
   },
@@ -4711,7 +4736,8 @@
     "waitMessage": "Nïm uq'ij ri oyonem awäch chiqawäch. Tab'ana' choyob'a' ka qak'äm awäch rik'in jun to'onël.",
     "unavailableMessage": "Kojonik, man k'o ta jun chik chuyak' ri oyonem awäch wakami. Tab'ana' tachajij jun chik mul. Chawila'.",
     "voicemailPrompt": "Man k'o ta jun chik chuyak' ri oyonem awäch wakami. Tab'ana' taya' jun tzijob'äl chirij ri ch'ab'äl.",
-    "voicemailThanks": "Maltiox rech ri atzijob'äl. Chawila'."
+    "voicemailThanks": "Maltiox rech ri atzijob'äl. Chawila'.",
+    "captchaRepeatHint": "To hear the numbers again, press star."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4750,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Bans about to expire",
+      "erasureDeadline": "Overdue erasure requests",
+      "providerMedia": "Recordings left at the phone provider",
+      "spam": "Spam and unwanted calls"
+    },
+    "closed": "Ended",
+    "ongoing": "{{count}} events since {{time}}",
+    "opened": "Happening now",
+    "push": "There is activity on your hotline that needs a look.",
+    "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details."
   }
 }

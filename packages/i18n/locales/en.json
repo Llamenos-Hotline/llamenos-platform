@@ -479,6 +479,8 @@
       "adminPromoted": "Admin Promoted",
       "callAnswered": "Call Answered",
       "callEnded": "Call Ended",
+      "incidentClosed": "Incident Closed",
+      "incidentOpened": "Incident Opened",
       "ivrAudioDeleted": "IVR Audio Deleted",
       "ivrAudioUploaded": "IVR Audio Uploaded",
       "ivrLanguagesUpdated": "IVR Languages Updated",
@@ -492,6 +494,7 @@
       "spamMitigationToggled": "Spam Mitigation Toggled",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "Transcription Setting Changed",
+      "underAttackModeChanged": "Under Attack Mode Changed",
       "userAdded": "Volunteer Added",
       "userAvailable": "Volunteer Available",
       "userOnBreak": "Volunteer On Break",
@@ -1479,7 +1482,10 @@
     "rateLimitTitle": "Change Rate Limiting",
     "transcriptionDisable": "Disable call transcription? Volunteers will no longer have calls transcribed automatically.",
     "transcriptionEnable": "Enable call transcription for all volunteers? This uses AI to transcribe calls in real-time.",
-    "transcriptionTitle": "Change Transcription Setting"
+    "transcriptionTitle": "Change Transcription Setting",
+    "underAttackDisable": "Turn off under attack mode? Callers will be handled by this hub's usual spam settings again.",
+    "underAttackEnable": "Turn on under attack mode? Every caller to this hub will have to pass the voice CAPTCHA before connecting.",
+    "underAttackTitle": "Change Under Attack Mode"
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4091,6 +4097,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "Challenged with the CAPTCHA",
+    "activityCountsOnly": "Counts only. Caller numbers are never recorded.",
+    "activityFailed": "Failed the CAPTCHA",
+    "activityPassed": "Passed the CAPTCHA",
+    "activityRateLimited": "Rate limited",
+    "activityRepeated": "Asked to hear the digits again",
+    "activityTimedOut": "Did not answer the CAPTCHA",
+    "activityTitle": "Spam activity",
+    "autoEnable": "Turn on automatically",
+    "autoEnableDescription": "Turn on under attack mode when many calls fail the CAPTCHA, time out or are rate limited, and turn it off again after a quiet period. A manual switch-on is never turned off automatically.",
+    "autoQuietMinutes": "Quiet period before turning off (minutes)",
+    "autoThresholdCount": "Number of suspicious calls",
+    "autoWindowMinutes": "Within (minutes)",
     "blockDuration": "Block duration (minutes)",
     "disabled": "Disabled",
     "enabled": "Enabled",
@@ -4098,6 +4117,12 @@
     "rateLimiting": "Rate Limiting",
     "rateLimitingDescription": "Limit repeated calls from the same number",
     "title": "Spam Mitigation",
+    "underAttack": "Under attack mode",
+    "underAttackBanner": "Under attack mode is on. Every caller must pass the voice CAPTCHA.",
+    "underAttackDescription": "While this is on, every caller to this hub must pass the voice CAPTCHA before connecting. Use it when the hotline is flooded with unwanted calls.",
+    "underAttackSince": "On since {{time}}",
+    "underAttackSourceAuto": "Turned on automatically",
+    "underAttackSourceManual": "Turned on manually",
     "voiceCaptcha": "Voice CAPTCHA",
     "voiceCaptchaDescription": "Require callers to enter a random number before connecting"
   },
@@ -4711,7 +4736,8 @@
     "waitMessage": "Your call is important to us. Please hold while we connect you with a volunteer.",
     "unavailableMessage": "We are sorry, no one is available to take your call at this time. Please try again later. Goodbye.",
     "voicemailPrompt": "No one is available to take your call right now. Please leave a message after the tone and we will get back to you.",
-    "voicemailThanks": "Thank you for your message. Goodbye."
+    "voicemailThanks": "Thank you for your message. Goodbye.",
+    "captchaRepeatHint": "To hear the numbers again, press star."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4750,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Bans about to expire",
+      "erasureDeadline": "Overdue erasure requests",
+      "providerMedia": "Recordings left at the phone provider",
+      "spam": "Spam and unwanted calls"
+    },
+    "closed": "Ended",
+    "ongoing": "{{count}} events since {{time}}",
+    "opened": "Happening now",
+    "push": "There is activity on your hotline that needs a look.",
+    "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details."
   }
 }

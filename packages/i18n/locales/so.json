@@ -166,7 +166,10 @@
       "userRemoved": "Mutadawwic La Saaray",
       "userOnBreak": "Mutadawwic Nasasho ku jira",
       "userAvailable": "Mutadawwic Diyaar",
-      "userAdded": "Mutadawwic La Daray"
+      "userAdded": "Mutadawwic La Daray",
+      "underAttackModeChanged": "Habka Weerarka La Bedelay",
+      "incidentOpened": "Dhacdo La Furay",
+      "incidentClosed": "Dhacdo La Xiray"
     },
     "noEntries": "Qoraallo diiwaaneed ma jiraan",
     "search": "Raadi diiwaanka hubinta...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "U shid qoraal u rogidda wicitaannada dhammaan mutadawwiciinta? Tani waxay isticmaashaa AI si ay u qoraal u rogto wicitaannada wakhtiga dhabta ah.",
     "transcriptionTitle": "Bedel Dejinta Qoraal u Rogidda",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "Bedel Habka Weerarka",
+    "underAttackEnable": "Ma shidaa habka weerarka? Qof kasta oo waca xaruntan waa inuu ka gudbaa CAPTCHA codeedka ka hor inta aan la isku xirin.",
+    "underAttackDisable": "Ma demiyaa habka weerarka? Wicitaannada waxaa mar kale loo maarayn doonaa sida dejinta spam-ka caadiga ah ee xaruntan."
   },
   "contacts": {
     "noContacts": "Xiriiriyayaal ma jiraan wali",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "Loo diray CAPTCHA",
+    "activityCountsOnly": "Tirada kaliya. Lambarada wacayaasha weligood lama diiwaangeliyo.",
+    "activityFailed": "Ku guuldarraystay CAPTCHA",
+    "activityPassed": "Ka gudbay CAPTCHA",
+    "activityRateLimited": "Xadka tirada lagu joojiyay",
+    "activityRepeated": "Codsaday inay mar kale maqlaan lambarada",
+    "activityTimedOut": "Kama jawaabin CAPTCHA",
+    "activityTitle": "Dhaqdhaqaaqa spam-ka",
+    "autoEnable": "Si toos ah u shid",
+    "autoEnableDescription": "Wuxuu shidaa habka weerarka marka wicitaano badan ay ku guuldarraystaan CAPTCHA, wakhtigoodu dhammaado ama gaaraan xadka tirada, wuxuuna dib u demiyaa kadib muddo xasilloon. Habka gacanta lagu shiday weligiis si toos ah looma demiyo.",
+    "autoQuietMinutes": "Muddada xasilloon ka hor intaan la demin (daqiiqado)",
+    "autoThresholdCount": "Tirada wicitaannada laga shakisan yahay",
+    "autoWindowMinutes": "Gudaha (daqiiqado)",
     "blockDuration": "Muddada xannibidda (daqiiqo)",
     "disabled": "Waa la damiyay",
     "enabled": "Waa la shidday",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "Xadaynta Tirada",
     "rateLimitingDescription": "Xannibi wicitaannada soo noqnoqda ee lambar isku mid ah",
     "title": "Ka Hortagga Spam-ka",
+    "underAttack": "Habka weerarka",
+    "underAttackBanner": "Habka weerarka waa shidan yahay. Qof kasta oo wacaya waa inuu ka gudbaa CAPTCHA codeedka.",
+    "underAttackDescription": "Inta uu shidan yahay, qof kasta oo waca xaruntan waa inuu ka gudbaa CAPTCHA codeedka ka hor inta aan la isku xirin. Isticmaal marka khadka ay buux dhaafiyaan wicitaano aan la rabin.",
+    "underAttackSince": "Shidan tan iyo {{time}}",
+    "underAttackSourceAuto": "Si toos ah ayaa loo shiday",
+    "underAttackSourceManual": "Gacanta lagu shiday",
     "voiceCaptcha": "CAPTCHA Codeed",
     "voiceCaptchaDescription": "Ka dalbo wacayaasha inay geliyaan lambar random ah ka hor inta aan la isku xirin"
   },
@@ -4711,7 +4736,8 @@
     "waitMessage": "Wicitaankaagu waa muhiim. Fadlan sug inta aan kugu xireyno mutadawac.",
     "unavailableMessage": "Waan ka xunnahay, hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan dib u isku day habeenkii dambe. Nabad gelyo.",
     "voicemailPrompt": "Hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan ka dib fariin dhig dhawaaqa kadib.",
-    "voicemailThanks": "Waad ku mahadsan tahay fariintaada. Nabad gelyo."
+    "voicemailThanks": "Waad ku mahadsan tahay fariintaada. Nabad gelyo.",
+    "captchaRepeatHint": "Si aad mar kale u maqasho lambarada, riix xiddigta."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4750,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Mamnuucyo dhawaan dhacaya",
+      "erasureDeadline": "Codsiyo tirtirid oo dib u dhacay",
+      "providerMedia": "Duubisyo ku haray bixiyaha telefoonka",
+      "spam": "Spam iyo wicitaano aan la rabin"
+    },
+    "closed": "Dhammaaday",
+    "ongoing": "{{count}} dhacdo tan iyo {{time}}",
+    "opened": "Hadda ayuu socdaa",
+    "push": "Khadkaaga waxaa ka jira dhaqdhaqaaq u baahan in la eego.",
+    "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta."
   }
 }

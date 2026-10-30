@@ -489,6 +489,8 @@
       "adminPromoted": "已提升为管理员",
       "callAnswered": "通话已接听",
       "callEnded": "通话已结束",
+      "incidentClosed": "事件已关闭",
+      "incidentOpened": "事件已开启",
       "ivrAudioDeleted": "IVR音频已删除",
       "ivrAudioUploaded": "IVR音频已上传",
       "ivrLanguagesUpdated": "IVR语言已更新",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "垃圾电话防护已更改",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "转录设置已更改",
+      "underAttackModeChanged": "遭受攻击模式已更改",
       "userAdded": "志愿者已添加",
       "userAvailable": "志愿者可用",
       "userOnBreak": "志愿者休息中",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "为所有志愿者启用通话转录？这将使用AI实时转录通话。",
     "transcriptionTitle": "更改转录设置",
     "biometricDisable": "关闭生物识别解锁？您仍然可以使用PIN码解锁。",
-    "biometricDisableTitle": "关闭生物识别解锁"
+    "biometricDisableTitle": "关闭生物识别解锁",
+    "underAttackTitle": "更改遭受攻击模式",
+    "underAttackEnable": "开启遭受攻击模式？每位拨打此中心的来电者都必须先通过语音验证码才能接通。",
+    "underAttackDisable": "关闭遭受攻击模式？来电将重新按此中心的常规防护设置处理。"
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "接受验证码挑战",
+    "activityCountsOnly": "仅统计数量。来电号码从不记录。",
+    "activityFailed": "未通过验证码",
+    "activityPassed": "通过验证码",
+    "activityRateLimited": "被频率限制",
+    "activityRepeated": "要求重听数字",
+    "activityTimedOut": "未回应验证码",
+    "activityTitle": "垃圾电话活动",
+    "autoEnable": "自动开启",
+    "autoEnableDescription": "当大量来电未通过验证码、超时或触发频率限制时，自动开启遭受攻击模式，并在一段平静期后再次关闭。手动开启的模式永远不会被自动关闭。",
+    "autoQuietMinutes": "关闭前的平静期（分钟）",
+    "autoThresholdCount": "可疑来电数量",
+    "autoWindowMinutes": "时间范围（分钟）",
     "blockDuration": "封禁时长（分钟）",
     "disabled": "已禁用",
     "enabled": "已启用",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "频率限制",
     "rateLimitingDescription": "限制同一号码的重复来电",
     "title": "垃圾电话防护",
+    "underAttack": "遭受攻击模式",
+    "underAttackBanner": "遭受攻击模式已开启。每位来电者都必须通过语音验证码。",
+    "underAttackDescription": "开启后，每位拨打此中心的来电者都必须先通过语音验证码才能接通。当热线被大量骚扰电话淹没时使用。",
+    "underAttackSince": "自 {{time}} 起开启",
+    "underAttackSourceAuto": "自动开启",
+    "underAttackSourceManual": "手动开启",
     "voiceCaptcha": "语音验证码",
     "voiceCaptchaDescription": "要求来电者在接通前输入随机数字"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "您的来电对我们非常重要。请稍候，我们正在为您转接志愿者。",
     "unavailableMessage": "抱歉，目前没有人可以接听您的电话。请稍后再试。再见。",
     "voicemailPrompt": "目前没有人能接听您的电话。请在提示音后留言，我们会尽快回复您。",
-    "voicemailThanks": "感谢您的留言。再见。"
+    "voicemailThanks": "感谢您的留言。再见。",
+    "captchaRepeatHint": "如需再听一遍数字，请按星号键。"
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "即将到期的封禁",
+      "erasureDeadline": "逾期的删除请求",
+      "providerMedia": "电话服务商处遗留的录音",
+      "spam": "垃圾及骚扰电话"
+    },
+    "closed": "已结束",
+    "ongoing": "自 {{time}} 起 {{count}} 个事件",
+    "opened": "正在发生",
+    "push": "您的热线有需要查看的活动。",
+    "signalAlert": "热线警报 — {{category}}：{{state}}。请打开应用查看详情。"
   }
 }

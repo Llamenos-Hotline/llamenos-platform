@@ -489,6 +489,8 @@
       "adminPromoted": "Administrator befördert",
       "callAnswered": "Anruf angenommen",
       "callEnded": "Anruf beendet",
+      "incidentClosed": "Vorfall geschlossen",
+      "incidentOpened": "Vorfall eröffnet",
       "ivrAudioDeleted": "IVR-Audio gelöscht",
       "ivrAudioUploaded": "IVR-Audio hochgeladen",
       "ivrLanguagesUpdated": "IVR-Sprachen aktualisiert",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "Spam-Schutz geändert",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "Transkriptionseinstellung geändert",
+      "underAttackModeChanged": "Angriffsmodus geändert",
       "userAdded": "Freiwilliger hinzugefügt",
       "userAvailable": "Freiwilliger verfügbar",
       "userOnBreak": "Freiwilliger in Pause",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "Anruftranskription für alle Freiwilligen aktivieren? Dabei wird KI verwendet, um Anrufe in Echtzeit zu transkribieren.",
     "transcriptionTitle": "Transkriptionseinstellung ändern",
     "biometricDisable": "Biometrische Entsperrung deaktivieren? Sie können weiterhin mit Ihrer PIN entsperren.",
-    "biometricDisableTitle": "Biometrische Entsperrung deaktivieren"
+    "biometricDisableTitle": "Biometrische Entsperrung deaktivieren",
+    "underAttackTitle": "Angriffsmodus ändern",
+    "underAttackEnable": "Angriffsmodus einschalten? Jede Person, die diesen Hub anruft, muss vor der Verbindung das Sprach-CAPTCHA bestehen.",
+    "underAttackDisable": "Angriffsmodus ausschalten? Anrufe werden wieder nach den üblichen Spam-Einstellungen dieses Hubs behandelt."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "Mit CAPTCHA geprüft",
+    "activityCountsOnly": "Nur Zählwerte. Die Nummern der Anrufenden werden nie gespeichert.",
+    "activityFailed": "CAPTCHA nicht bestanden",
+    "activityPassed": "CAPTCHA bestanden",
+    "activityRateLimited": "Durch Ratenbegrenzung abgewiesen",
+    "activityRepeated": "Ziffern erneut angefordert",
+    "activityTimedOut": "Keine Antwort auf das CAPTCHA",
+    "activityTitle": "Spam-Aktivität",
+    "autoEnable": "Automatisch einschalten",
+    "autoEnableDescription": "Schaltet den Angriffsmodus ein, wenn viele Anrufe am CAPTCHA scheitern, ablaufen oder die Ratenbegrenzung erreichen, und nach einer ruhigen Phase wieder aus. Ein manuell eingeschalteter Modus wird nie automatisch ausgeschaltet.",
+    "autoQuietMinutes": "Ruhige Phase vor dem Ausschalten (Minuten)",
+    "autoThresholdCount": "Anzahl verdächtiger Anrufe",
+    "autoWindowMinutes": "Innerhalb von (Minuten)",
     "blockDuration": "Sperrdauer (Minuten)",
     "disabled": "Deaktiviert",
     "enabled": "Aktiviert",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "Ratenbegrenzung",
     "rateLimitingDescription": "Wiederholte Anrufe von derselben Nummer begrenzen",
     "title": "Spam-Schutz",
+    "underAttack": "Angriffsmodus",
+    "underAttackBanner": "Der Angriffsmodus ist aktiv. Alle Anrufenden müssen das Sprach-CAPTCHA bestehen.",
+    "underAttackDescription": "Solange er aktiv ist, muss jede Person, die diesen Hub anruft, vor der Verbindung das Sprach-CAPTCHA bestehen. Verwenden Sie ihn, wenn die Hotline mit unerwünschten Anrufen überflutet wird.",
+    "underAttackSince": "Aktiv seit {{time}}",
+    "underAttackSourceAuto": "Automatisch eingeschaltet",
+    "underAttackSourceManual": "Manuell eingeschaltet",
     "voiceCaptcha": "Sprach-CAPTCHA",
     "voiceCaptchaDescription": "Anrufer müssen vor der Verbindung eine zufällige Nummer eingeben"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "Ihr Anruf ist uns wichtig. Bitte warten Sie, während wir Sie mit einem Freiwilligen verbinden.",
     "unavailableMessage": "Es tut uns leid, im Moment ist niemand erreichbar. Bitte versuchen Sie es später erneut. Auf Wiederhören.",
     "voicemailPrompt": "Im Moment ist niemand verfügbar, um Ihren Anruf entgegenzunehmen. Bitte hinterlassen Sie eine Nachricht nach dem Signalton.",
-    "voicemailThanks": "Vielen Dank für Ihre Nachricht. Auf Wiederhören."
+    "voicemailThanks": "Vielen Dank für Ihre Nachricht. Auf Wiederhören.",
+    "captchaRepeatHint": "Um die Ziffern noch einmal zu hören, drücken Sie die Sterntaste."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Bald ablaufende Sperren",
+      "erasureDeadline": "Überfällige Löschanfragen",
+      "providerMedia": "Beim Telefonanbieter verbliebene Aufnahmen",
+      "spam": "Spam und unerwünschte Anrufe"
+    },
+    "closed": "Beendet",
+    "ongoing": "{{count}} Ereignisse seit {{time}}",
+    "opened": "Läuft gerade",
+    "push": "Auf Ihrer Hotline gibt es Aktivität, die Sie sich ansehen sollten.",
+    "signalAlert": "Hotline-Warnung — {{category}}: {{state}}. Details finden Sie in der App."
   }
 }

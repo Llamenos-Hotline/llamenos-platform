@@ -166,7 +166,10 @@
       "userOnBreak": "Xwebexş di Bêhnvedanê de",
       "userAdded": "Xwebexş Hat Zêdekirin",
       "userAvailable": "Xwebexş Amade ye",
-      "userRemoved": "Xwebexş Hat Rakirin"
+      "userRemoved": "Xwebexş Hat Rakirin",
+      "underAttackModeChanged": "Moda di Bin Êrîşê de Hat Guhertin",
+      "incidentOpened": "Bûyer Hat Vekirin",
+      "incidentClosed": "Bûyer Hat Girtin"
     },
     "noEntries": "Tu têketinên çavdêriyê tune",
     "search": "Li têketina çavdêriyê bigere...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "Transkrîpsîyona bangê ji bo hemû xwebexşan çalak bikî? Ev AI bikar tîne da ku bangan di wextê rast de transkrîbe bike.",
     "transcriptionTitle": "Mîhenga Transkrîpsîyonê Biguherîne",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "Moda di Bin Êrîşê de Biguherîne",
+    "underAttackEnable": "Moda di bin êrîşê de çalak bikî? Her kesê ku li vê navendê digere dê berî girêdanê CAPTCHA yê dengî derbas bike.",
+    "underAttackDisable": "Moda di bin êrîşê de bigirî? Bang dê dîsa li gorî mîhengên spamê yên asayî yên vê navendê werin birêvebirin."
   },
   "contacts": {
     "noContacts": "Hêj tu têkilî tune",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "CAPTCHA ji wan hat xwestin",
+    "activityCountsOnly": "Tenê hejmar. Hejmarên bangkeran qet nayên tomarkirin.",
+    "activityFailed": "Di CAPTCHA de têk çûn",
+    "activityPassed": "CAPTCHA derbas kirin",
+    "activityRateLimited": "Bi sînorê rêjeyê hatin rawestandin",
+    "activityRepeated": "Xwestin ku hejmaran dîsa bibihîzin",
+    "activityTimedOut": "Bersiva CAPTCHA nedan",
+    "activityTitle": "Çalakiya spamê",
+    "autoEnable": "Bixweber çalak bike",
+    "autoEnableDescription": "Dema ku gelek bang di CAPTCHA de têk diçin, dema wan diqede an jî digihîjin sînorê rêjeyê, moda di bin êrîşê de çalak dike û piştî demeke aram dîsa digire. Moda ku bi destan hatiye çalakkirin qet bixweber nayê girtin.",
+    "autoQuietMinutes": "Dema aram berî girtinê (deqîqe)",
+    "autoThresholdCount": "Hejmara bangên gumanbar",
+    "autoWindowMinutes": "Di nav (deqîqe)",
     "blockDuration": "Maweya astengkirinê (deqîqe)",
     "disabled": "Neçalak",
     "enabled": "Çalak",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "Sînorkirina Rêjeyê",
     "rateLimitingDescription": "Bangên dubare yên ji heman jimareyê sînordar bike",
     "title": "Parastina li dijî Spam",
+    "underAttack": "Moda di bin êrîşê de",
+    "underAttackBanner": "Moda di bin êrîşê de çalak e. Divê her bangker CAPTCHA yê dengî derbas bike.",
+    "underAttackDescription": "Heta ku ev çalak be, her kesê ku li vê navendê digere divê berî girêdanê CAPTCHA yê dengî derbas bike. Dema ku xet bi bangên nexwestî tije dibe bikar bînin.",
+    "underAttackSince": "Ji {{time}} ve çalak e",
+    "underAttackSourceAuto": "Bixweber hat çalakkirin",
+    "underAttackSourceManual": "Bi destan hat çalakkirin",
     "voiceCaptcha": "CAPTCHA yê Dengî",
     "voiceCaptchaDescription": "Ji bangkeran bixwaze ku berî girêdanê jimareyeke tesadufî binivîsin"
   },
@@ -4711,7 +4736,8 @@
     "waitMessage": "Banga we ji bo me girîng e. Ji kerema xwe bisekinin dema em we bi dilxwazekî re girêdidin.",
     "unavailableMessage": "Bibore, niha kes tune ku banga we bibersivîne. Ji kerema xwe paşê dîsa biceribînin. Bi xatirê te.",
     "voicemailPrompt": "Niha kes tune ku banga we bibersivîne. Ji kerema xwe piştî dengê bîpê peyamek bihêlin.",
-    "voicemailThanks": "Spas ji bo peyama we. Bi xatirê te."
+    "voicemailThanks": "Spas ji bo peyama we. Bi xatirê te.",
+    "captchaRepeatHint": "Ji bo ku hejmaran dîsa bibihîzin, li stêrkê bixin."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4750,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Qedexeyên ku nêzîkî dawiyê ne",
+      "erasureDeadline": "Daxwazên jêbirinê yên derengmayî",
+      "providerMedia": "Tomarên ku li cem dabînkerê telefonê man",
+      "spam": "Spam û bangên nexwestî"
+    },
+    "closed": "Bi dawî bû",
+    "ongoing": "Ji {{time}} ve {{count}} bûyer",
+    "opened": "Niha diqewime",
+    "push": "Li ser xeta we çalakiyek heye ku divê lê were nêrîn.",
+    "signalAlert": "Hişyariya xetê — {{category}}: {{state}}. Ji bo hûrguliyan sepanê vekin."
   }
 }

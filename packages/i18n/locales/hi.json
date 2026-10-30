@@ -489,6 +489,8 @@
       "adminPromoted": "एडमिन पदोन्नत",
       "callAnswered": "कॉल का उत्तर दिया",
       "callEnded": "कॉल समाप्त",
+      "incidentClosed": "घटना बंद हुई",
+      "incidentOpened": "घटना खुली",
       "ivrAudioDeleted": "IVR ऑडियो हटाया गया",
       "ivrAudioUploaded": "IVR ऑडियो अपलोड किया गया",
       "ivrLanguagesUpdated": "IVR भाषाएं अपडेट की गईं",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "स्पैम सुरक्षा सेटिंग बदली",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "ट्रांसक्रिप्शन सेटिंग बदली",
+      "underAttackModeChanged": "हमला मोड बदला गया",
       "userAdded": "स्वयंसेवक जोड़ा",
       "userAvailable": "स्वयंसेवक उपलब्ध",
       "userOnBreak": "स्वयंसेवक ब्रेक पर",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "सभी स्वयंसेवकों के लिए कॉल ट्रांसक्रिप्शन सक्षम करें? यह AI का उपयोग करके कॉल को रियल-टाइम में ट्रांसक्राइब करता है।",
     "transcriptionTitle": "ट्रांसक्रिप्शन सेटिंग बदलें",
     "biometricDisable": "बायोमेट्रिक अनलॉक बंद करें? आप अभी भी अपने पिन से अनलॉक कर सकेंगे।",
-    "biometricDisableTitle": "बायोमेट्रिक अनलॉक बंद करें"
+    "biometricDisableTitle": "बायोमेट्रिक अनलॉक बंद करें",
+    "underAttackTitle": "हमला मोड बदलें",
+    "underAttackEnable": "हमला मोड चालू करें? इस हब को कॉल करने वाले हर व्यक्ति को कनेक्ट होने से पहले वॉइस CAPTCHA पास करना होगा।",
+    "underAttackDisable": "हमला मोड बंद करें? कॉल फिर से इस हब की सामान्य स्पैम सेटिंग के अनुसार संभाली जाएँगी।"
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "CAPTCHA दिया गया",
+    "activityCountsOnly": "केवल गिनती। कॉल करने वालों के नंबर कभी दर्ज नहीं किए जाते।",
+    "activityFailed": "CAPTCHA में विफल",
+    "activityPassed": "CAPTCHA पास किया",
+    "activityRateLimited": "दर सीमित",
+    "activityRepeated": "अंक दोबारा सुनने को कहा",
+    "activityTimedOut": "CAPTCHA का जवाब नहीं दिया",
+    "activityTitle": "स्पैम गतिविधि",
+    "autoEnable": "अपने आप चालू करें",
+    "autoEnableDescription": "जब कई कॉल CAPTCHA में विफल हों, समय सीमा पार करें या दर सीमा से टकराएँ, तब हमला मोड चालू करें, और शांत अवधि के बाद फिर से बंद करें। मैन्युअल रूप से चालू किया गया मोड कभी अपने आप बंद नहीं होता।",
+    "autoQuietMinutes": "बंद होने से पहले शांत अवधि (मिनट)",
+    "autoThresholdCount": "संदिग्ध कॉल की संख्या",
+    "autoWindowMinutes": "अवधि (मिनट)",
     "blockDuration": "ब्लॉक अवधि (मिनट)",
     "disabled": "अक्षम",
     "enabled": "सक्षम",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "दर सीमा",
     "rateLimitingDescription": "एक ही नंबर से बार-बार कॉल सीमित करें",
     "title": "स्पैम सुरक्षा",
+    "underAttack": "हमला मोड",
+    "underAttackBanner": "हमला मोड चालू है। हर कॉल करने वाले को वॉइस CAPTCHA पास करना होगा।",
+    "underAttackDescription": "चालू रहने पर, इस हब को कॉल करने वाले हर व्यक्ति को कनेक्ट होने से पहले वॉइस CAPTCHA पास करना होगा। इसका उपयोग तब करें जब हॉटलाइन पर अनचाही कॉल की बाढ़ आ जाए।",
+    "underAttackSince": "{{time}} से चालू",
+    "underAttackSourceAuto": "अपने आप चालू हुआ",
+    "underAttackSourceManual": "मैन्युअल रूप से चालू किया गया",
     "voiceCaptcha": "वॉइस CAPTCHA",
     "voiceCaptchaDescription": "कनेक्ट होने से पहले कॉलर को रैंडम नंबर दर्ज करने की आवश्यकता"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "आपकी कॉल हमारे लिए महत्वपूर्ण है। कृपया प्रतीक्षा करें, हम आपको एक स्वयंसेवक से जोड़ रहे हैं।",
     "unavailableMessage": "क्षमा करें, इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें। अलविदा।",
     "voicemailPrompt": "इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बीप के बाद एक संदेश छोड़ें।",
-    "voicemailThanks": "आपके संदेश के लिए धन्यवाद। अलविदा।"
+    "voicemailThanks": "आपके संदेश के लिए धन्यवाद। अलविदा।",
+    "captchaRepeatHint": "अंक दोबारा सुनने के लिए स्टार दबाएँ।"
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "जल्द समाप्त होने वाले प्रतिबंध",
+      "erasureDeadline": "समय सीमा पार कर चुके मिटाने के अनुरोध",
+      "providerMedia": "फ़ोन प्रदाता के पास छूटी रिकॉर्डिंग",
+      "spam": "स्पैम और अनचाही कॉल"
+    },
+    "closed": "समाप्त",
+    "ongoing": "{{time}} से {{count}} घटनाएँ",
+    "opened": "अभी जारी है",
+    "push": "आपकी हॉटलाइन पर ऐसी गतिविधि है जिसे देखने की ज़रूरत है।",
+    "signalAlert": "हॉटलाइन अलर्ट — {{category}}: {{state}}। विवरण के लिए ऐप खोलें।"
   }
 }

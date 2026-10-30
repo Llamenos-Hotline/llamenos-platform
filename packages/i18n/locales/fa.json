@@ -166,7 +166,10 @@
       "userAdded": "داوطلب اضافه شد",
       "userRemoved": "داوطلب حذف شد",
       "userAvailable": "داوطلب در دسترس",
-      "userOnBreak": "داوطلب در استراحت"
+      "userOnBreak": "داوطلب در استراحت",
+      "underAttackModeChanged": "حالت مقابله با حمله تغییر کرد",
+      "incidentOpened": "رخداد باز شد",
+      "incidentClosed": "رخداد بسته شد"
     },
     "noEntries": "رویدادی در گزارش بازرسی نیست",
     "search": "جستجو در گزارش بازرسی...",
@@ -468,7 +471,10 @@
     "transcriptionEnable": "رونویسی تماس برای همه داوطلبان فعال شود؟ این از هوش مصنوعی برای رونویسی آنی تماس‌ها استفاده می‌کند.",
     "transcriptionTitle": "تغییر تنظیمات رونویسی",
     "biometricDisable": "باز کردن قفل بیومتریک غیرفعال شود؟ همچنان می‌توانید با پین قفل را باز کنید.",
-    "biometricDisableTitle": "غیرفعال کردن باز کردن قفل بیومتریک"
+    "biometricDisableTitle": "غیرفعال کردن باز کردن قفل بیومتریک",
+    "underAttackTitle": "تغییر حالت مقابله با حمله",
+    "underAttackEnable": "حالت مقابله با حمله روشن شود؟ هر کسی که با این مرکز تماس می‌گیرد باید پیش از اتصال از CAPTCHA صوتی عبور کند.",
+    "underAttackDisable": "حالت مقابله با حمله خاموش شود؟ تماس‌ها دوباره طبق تنظیمات معمول ضد هرزنامه این مرکز رسیدگی می‌شوند."
   },
   "contacts": {
     "noContacts": "هنوز مخاطبی نیست",
@@ -1667,6 +1673,19 @@
     "verifyCodeButton": "Verify Code"
   },
   "spam": {
+    "activityChallenged": "با CAPTCHA بررسی شدند",
+    "activityCountsOnly": "فقط شمارش. شماره تماس‌گیرندگان هرگز ثبت نمی‌شود.",
+    "activityFailed": "در CAPTCHA رد شدند",
+    "activityPassed": "از CAPTCHA عبور کردند",
+    "activityRateLimited": "محدود شده با نرخ",
+    "activityRepeated": "خواستند اعداد را دوباره بشنوند",
+    "activityTimedOut": "به CAPTCHA پاسخ ندادند",
+    "activityTitle": "فعالیت هرزنامه",
+    "autoEnable": "روشن‌شدن خودکار",
+    "autoEnableDescription": "وقتی تماس‌های زیادی در CAPTCHA رد می‌شوند، مهلتشان تمام می‌شود یا به محدودیت نرخ می‌خورند، حالت مقابله با حمله را روشن می‌کند و پس از یک دوره آرامش دوباره خاموش می‌کند. حالتی که دستی روشن شده هرگز خودکار خاموش نمی‌شود.",
+    "autoQuietMinutes": "دوره آرامش پیش از خاموش‌شدن (دقیقه)",
+    "autoThresholdCount": "تعداد تماس‌های مشکوک",
+    "autoWindowMinutes": "در بازه (دقیقه)",
     "blockDuration": "مدت مسدودیت (دقیقه)",
     "disabled": "غیرفعال",
     "enabled": "فعال",
@@ -1674,6 +1693,12 @@
     "rateLimiting": "محدودسازی نرخ",
     "rateLimitingDescription": "محدود کردن تماس‌های مکرر از یک شماره",
     "title": "مقابله با هرزنامه",
+    "underAttack": "حالت مقابله با حمله",
+    "underAttackBanner": "حالت مقابله با حمله روشن است. هر تماس‌گیرنده باید از CAPTCHA صوتی عبور کند.",
+    "underAttackDescription": "تا زمانی که روشن است، هر کسی که با این مرکز تماس می‌گیرد باید پیش از اتصال از CAPTCHA صوتی عبور کند. وقتی خط زیر سیل تماس‌های ناخواسته است از آن استفاده کنید.",
+    "underAttackSince": "روشن از {{time}}",
+    "underAttackSourceAuto": "به‌صورت خودکار روشن شد",
+    "underAttackSourceManual": "به‌صورت دستی روشن شد",
     "voiceCaptcha": "CAPTCHA صوتی",
     "voiceCaptchaDescription": "الزام تماس‌گیرندگان به وارد کردن عدد تصادفی قبل از اتصال"
   },
@@ -4711,7 +4736,8 @@
     "waitMessage": "تماس شما برای ما مهم است. لطفاً صبر کنید تا شما را به یک داوطلب وصل کنیم.",
     "unavailableMessage": "متاسفانه در حال حاضر کسی برای پاسخگویی به تماس شما در دسترس نیست. لطفاً بعداً دوباره تلاش کنید. خداحافظ.",
     "voicemailPrompt": "در حال حاضر کسی برای پاسخگویی به تماس شما در دسترس نیست. لطفاً بعد از صدای بوق پیام بگذارید.",
-    "voicemailThanks": "از پیام شما سپاسگزاریم. خداحافظ."
+    "voicemailThanks": "از پیام شما سپاسگزاریم. خداحافظ.",
+    "captchaRepeatHint": "برای شنیدن دوباره اعداد، دکمه ستاره را فشار دهید."
   },
   "enroll": {
     "redeeming": "Joining the hub…",
@@ -4724,5 +4750,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "مسدودسازی‌های رو به پایان",
+      "erasureDeadline": "درخواست‌های حذف معوق",
+      "providerMedia": "ضبط‌های باقی‌مانده نزد ارائه‌دهنده تلفن",
+      "spam": "هرزنامه و تماس‌های ناخواسته"
+    },
+    "closed": "پایان یافت",
+    "ongoing": "{{count}} رویداد از {{time}}",
+    "opened": "در حال وقوع",
+    "push": "در خط تلفن شما فعالیتی هست که باید نگاهی به آن بیندازید.",
+    "signalAlert": "هشدار خط تلفن — {{category}}: {{state}}. برای جزئیات برنامه را باز کنید."
   }
 }

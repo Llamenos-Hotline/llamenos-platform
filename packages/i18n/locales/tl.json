@@ -489,6 +489,8 @@
       "adminPromoted": "Na-promote bilang Admin",
       "callAnswered": "Sinagot ang Tawag",
       "callEnded": "Natapos ang Tawag",
+      "incidentClosed": "Naisara ang Insidente",
+      "incidentOpened": "Nabuksan ang Insidente",
       "ivrAudioDeleted": "Natanggal ang IVR audio",
       "ivrAudioUploaded": "Na-upload ang IVR audio",
       "ivrLanguagesUpdated": "Na-update ang mga wika ng IVR",
@@ -502,6 +504,7 @@
       "spamMitigationToggled": "Nabago ang Spam Mitigation",
       "telephonyProviderChanged": "Telephony Provider Changed",
       "transcriptionToggled": "Nabago ang Setting ng Transkripsyon",
+      "underAttackModeChanged": "Nabago ang Mode Habang Inaatake",
       "userAdded": "Naidagdag ang Boluntaryo",
       "userAvailable": "Available ang Boluntaryo",
       "userOnBreak": "Naka-break ang Boluntaryo",
@@ -1491,7 +1494,10 @@
     "transcriptionEnable": "I-enable ang transkripsyon ng tawag para sa lahat ng boluntaryo? Gumagamit ito ng AI para ma-transcribe ang mga tawag sa real-time.",
     "transcriptionTitle": "Baguhin ang Setting ng Transkripsyon",
     "biometricDisable": "Turn off biometric unlock? You'll still be able to unlock with your PIN.",
-    "biometricDisableTitle": "Turn Off Biometric Unlock"
+    "biometricDisableTitle": "Turn Off Biometric Unlock",
+    "underAttackTitle": "Baguhin ang Mode Habang Inaatake",
+    "underAttackEnable": "I-on ang mode habang inaatake? Kailangang pumasa sa voice CAPTCHA ang bawat tumatawag sa hub na ito bago makakonekta.",
+    "underAttackDisable": "I-off ang mode habang inaatake? Muling hahawakan ang mga tawag ayon sa karaniwang spam settings ng hub na ito."
   },
   "connectWithOauth": "Connect with OAuth",
   "connectionFailed": "Connection failed",
@@ -4246,6 +4252,19 @@
   "signalStatusLabel": "Signal Status",
   "smsWebhook": "SMS Webhook",
   "spam": {
+    "activityChallenged": "Binigyan ng CAPTCHA",
+    "activityCountsOnly": "Bilang lamang. Hindi kailanman itinatala ang mga numero ng tumatawag.",
+    "activityFailed": "Hindi pumasa sa CAPTCHA",
+    "activityPassed": "Pumasa sa CAPTCHA",
+    "activityRateLimited": "Na-rate limit",
+    "activityRepeated": "Humiling na marinig muli ang mga numero",
+    "activityTimedOut": "Hindi sumagot sa CAPTCHA",
+    "activityTitle": "Aktibidad ng spam",
+    "autoEnable": "Awtomatikong i-on",
+    "autoEnableDescription": "I-on ang mode habang inaatake kapag maraming tawag ang hindi pumasa sa CAPTCHA, nag-time out o na-rate limit, at i-off ito muli pagkatapos ng tahimik na panahon. Ang manwal na pag-on ay hindi kailanman awtomatikong ino-off.",
+    "autoQuietMinutes": "Tahimik na panahon bago i-off (minuto)",
+    "autoThresholdCount": "Bilang ng kahina-hinalang tawag",
+    "autoWindowMinutes": "Sa loob ng (minuto)",
     "blockDuration": "Tagal ng pagka-block (minuto)",
     "disabled": "Naka-disable",
     "enabled": "Naka-enable",
@@ -4253,6 +4272,12 @@
     "rateLimiting": "Rate Limiting",
     "rateLimitingDescription": "Limitahan ang paulit-ulit na tawag mula sa parehong numero",
     "title": "Spam Mitigation",
+    "underAttack": "Mode habang inaatake",
+    "underAttackBanner": "Naka-on ang mode habang inaatake. Kailangang pumasa sa voice CAPTCHA ang bawat tumatawag.",
+    "underAttackDescription": "Habang naka-on ito, kailangang pumasa sa voice CAPTCHA ang bawat tumatawag sa hub na ito bago makakonekta. Gamitin ito kapag binabaha ng hindi gustong tawag ang hotline.",
+    "underAttackSince": "Naka-on mula {{time}}",
+    "underAttackSourceAuto": "Awtomatikong in-on",
+    "underAttackSourceManual": "Manwal na in-on",
     "voiceCaptcha": "Voice CAPTCHA",
     "voiceCaptchaDescription": "Kailangan ng mga tumatawag na maglagay ng random na numero bago makakonekta"
   },
@@ -4706,7 +4731,8 @@
     "waitMessage": "Mahalaga sa amin ang iyong tawag. Pakihintay habang kinokonekta ka namin sa isang boluntaryo.",
     "unavailableMessage": "Paumanhin, walang available na sumagot sa iyong tawag sa ngayon. Pakisubukan muli mamaya. Paalam.",
     "voicemailPrompt": "Walang available na makasagot ng iyong tawag ngayon. Mangyaring mag-iwan ng mensahe pagkatapos ng tono.",
-    "voicemailThanks": "Salamat sa iyong mensahe. Paalam."
+    "voicemailThanks": "Salamat sa iyong mensahe. Paalam.",
+    "captchaRepeatHint": "Para marinig muli ang mga numero, pindutin ang star."
   },
   "biometricUnlockTitle": "Unlock Llamenos",
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
@@ -4726,5 +4752,18 @@
     "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
+  },
+  "incident": {
+    "category": {
+      "banExpiry": "Mga ban na malapit nang mag-expire",
+      "erasureDeadline": "Mga lampas-taning na kahilingang magbura",
+      "providerMedia": "Mga recording na naiwan sa phone provider",
+      "spam": "Spam at hindi gustong tawag"
+    },
+    "closed": "Natapos na",
+    "ongoing": "{{count}} pangyayari mula {{time}}",
+    "opened": "Nangyayari ngayon",
+    "push": "May aktibidad sa iyong hotline na kailangang tingnan.",
+    "signalAlert": "Alerto sa hotline — {{category}}: {{state}}. Buksan ang app para sa mga detalye."
   }
 }
