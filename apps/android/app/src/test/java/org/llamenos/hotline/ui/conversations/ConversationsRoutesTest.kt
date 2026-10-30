@@ -246,4 +246,22 @@ class ConversationsRoutesTest {
             assertNotNull(vm.uiState.value.conversations.single().assignedTo)
             assertEquals(volunteer, vm.uiState.value.conversations.single().assignedTo)
         }
+
+    @Test
+    fun `with no hub selected the list is empty and nothing falls back to the unscoped route`() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The server serves conversations only under /api/hubs/:hubId (#2381); the
+            // unscoped GET /api/conversations used to return every hub's waiting queue.
+            server.hubFlow.value = null
+            val vm = viewModel()
+            vm.refresh()
+            advanceUntilIdle()
+
+            assertTrue(
+                "no conversations request may leave without a hub: ${routes.seen()}",
+                routes.seen().none { it.contains("/conversations") },
+            )
+            assertTrue(vm.uiState.value.conversations.isEmpty())
+            assertNull(vm.uiState.value.error)
+        }
 }

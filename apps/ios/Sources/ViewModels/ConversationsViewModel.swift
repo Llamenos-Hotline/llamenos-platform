@@ -85,11 +85,19 @@ final class ConversationsViewModel {
     /// gone, so nothing can race it. Not observed — no view reads it.
     @ObservationIgnored nonisolated(unsafe) private var eventTask: Task<Void, Never>?
 
-    /// The hub whose conversations this view model last loaded. `APIService` scopes every
-    /// `/api/conversations…` call to the active hub, so the data on screen belongs to this
-    /// hub; an event from any other member hub says nothing about it. Read at load time
-    /// rather than per event, so a hub switch cannot make a stale thread follow it.
+    /// The hub whose conversations this view model last loaded. Conversations are served
+    /// only under `/api/hubs/{hubId}/conversations…` (#2381), and every call here is scoped
+    /// to this hub, so the data on screen belongs to it; an event from any other member hub
+    /// says nothing about it. Read at load time rather than per event, so a hub switch
+    /// cannot make a stale thread follow it.
     @ObservationIgnored private var loadedHubId: String?
+
+    /// `path` under the hub whose data is on screen. Nil when no hub is selected: there is
+    /// no unscoped conversations route to fall back to.
+    private func conversationsPath(_ path: String) -> String? {
+        guard let hubId = loadedHubId else { return nil }
+        return APIService.hubPath(hubId, "/api/conversations\(path)")
+    }
 
     // MARK: - Initialization
 
@@ -109,11 +117,18 @@ final class ConversationsViewModel {
         isLoading = true
         errorMessage = nil
         loadedHubId = hubContext.activeHubId
+        guard let path = conversationsPath("") else {
+            // No hub selected — nothing to list.
+            allConversations = []
+            applyFilter()
+            isLoading = false
+            return
+        }
 
         do {
             let response: ConversationsListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations"
+                path: path
             )
             allConversations = response.conversations.sorted { lhs, rhs in
                 // Sort by last message time, newest first
@@ -161,10 +176,11 @@ final class ConversationsViewModel {
     /// Re-read the viewed conversation's record (status, assignee).
     func loadConversation(_ conversationId: String) async {
         loadedHubId = hubContext.activeHubId
+        guard let path = conversationsPath("/\(conversationId)") else { return }
         do {
             let loaded: AppConversation = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations/\(conversationId)"
+                path: path
             )
             guard currentConversationId == conversationId else { return }
             currentConversation = loaded
@@ -183,12 +199,13 @@ final class ConversationsViewModel {
     func loadMessages(for conversationId: String) async {
         focus(conversationId)
         loadedHubId = hubContext.activeHubId
+        guard let path = conversationsPath("/\(conversationId)/messages") else { return }
         isLoadingMessages = true
 
         do {
             let response: ConversationMessagesResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations/\(conversationId)/messages"
+                path: path
             )
 
             guard currentConversationId == conversationId else { return }
@@ -218,14 +235,14 @@ final class ConversationsViewModel {
     /// Only ever called from the explicit Claim control. Replying never claims: a send
     /// to a conversation the sender does not hold is the server's 403 to give.
     func claimConversation(_ conversationId: String) async {
-        guard !isClaiming else { return }
+        guard !isClaiming, let path = conversationsPath("/\(conversationId)/claim") else { return }
         isClaiming = true
         claimErrorMessage = nil
 
         do {
             let claimed: AppConversation = try await apiService.request(
                 method: "POST",
-                path: "/api/conversations/\(conversationId)/claim"
+                path: path
             )
             if currentConversationId == conversationId {
                 currentConversation = claimed
@@ -249,7 +266,8 @@ final class ConversationsViewModel {
 
     /// Encrypt and send a reply message in the current conversation.
     func sendReply() async {
-        guard let conversationId = currentConversationId else { return }
+        guard let conversationId = currentConversationId,
+              let path = conversationsPath("/\(conversationId)/messages") else { return }
         let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -285,7 +303,7 @@ final class ConversationsViewModel {
 
             let _: ConversationMessage = try await apiService.request(
                 method: "POST",
-                path: "/api/conversations/\(conversationId)/messages",
+                path: path,
                 body: request
             )
 
