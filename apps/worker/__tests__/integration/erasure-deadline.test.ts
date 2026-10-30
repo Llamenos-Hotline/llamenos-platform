@@ -278,7 +278,17 @@ describe('erasure-expiry worker failure hook (L2, #2323)', () => {
 describe('who sees the erasure-deadline incident (#2323)', () => {
   const ROLES: Role[] = [
     ...DEFAULT_ROLES.map((r) => ({ ...r, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' })),
-    { id: 'role-erasure-desk', name: 'Erasure desk', slug: 'erasure-desk', permissions: ['erasure:admin'] },
+    {
+      id: 'role-erasure-desk',
+      name: 'Erasure desk',
+      slug: 'erasure-desk',
+      permissions: ['erasure:admin'],
+      isDefault: false,
+      isSystem: false,
+      description: 'Holds erasure:admin and nothing else',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    },
   ]
 
   /** The incidents router mounted as app.ts mounts it, behind the real hubContext. */

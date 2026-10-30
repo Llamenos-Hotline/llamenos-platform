@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WORKER_TICK_INTERVAL_MS } from '@worker/metrics/worker-liveness'
 import { erasureDeadlineCheck } from '@worker/services/erasure'
 import { INCIDENT_CATEGORIES } from '@worker/services/incidents-categories'
+import type { IncidentService } from '@worker/services/incidents'
 import { startErasureExpiryWorker, stopErasureExpiryWorker } from '@worker/lib/erasure-expiry-worker'
 
 const ROOT = path.resolve(__dirname, '../../../..')
@@ -99,14 +100,14 @@ describe('the erasure-expiry worker never runs the check that measures it', () =
 
   it('a failing poll reaches runWorkerTick as a throw, so the L2 streak counts it', async () => {
     const thrown: unknown[] = []
-    const runWorkerTick = vi.fn(async <T>(_name: string, _category: string, fn: () => Promise<T>) => {
+    const runWorkerTick: Pick<IncidentService, 'runWorkerTick'>['runWorkerTick'] = async (_name, _category, fn) => {
       try {
         return await fn()
       } catch (err) {
         thrown.push(err)
         throw err
       }
-    })
+    }
     startErasureExpiryWorker({
       erasureService: {
         getExpiredPendingRequests: async () => {
