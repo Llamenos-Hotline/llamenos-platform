@@ -17,6 +17,7 @@ import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 import { DEFAULT_ROLES, PERMISSION_CATALOG, type Role } from '@shared/permissions'
 import { incidentCategorySchema, type IncidentCategory } from '@protocol/schemas/incidents'
 import { locales } from '@llamenos/i18n'
+import { IncidentService } from '@worker/services/incidents'
 import { IncidentDelivery, resolveIncidentHolders } from '@worker/services/incidents-delivery'
 import {
   INCIDENT_CATEGORIES,
@@ -102,6 +103,16 @@ describe('incident categories', () => {
     // A level check re-observes every tick; a shorter quiet period would close
     // a standing backlog between ticks and re-open it (re-notifying) each time.
     expect(policy.quietPeriodMs).toBeGreaterThan(2 * WORKER_TICK_INTERVAL_MS['incident-checks'])
+  })
+
+  // The wire schema leaves `category` an open string so an old client survives a new
+  // category, which makes the WRITE side the only guard against a typo'd one — a
+  // typo'd category would be an incident no permission reaches and no client can label.
+  it('refuses to open an incident in a category the table does not declare', async () => {
+    const service = new IncidentService({} as never, {} as never)
+    const typo = 'provider-medai' as IncidentCategory
+    await expect(service.signal(HUB, typo, 'fail')).rejects.toThrow('Unknown incident category "provider-medai"')
+    await expect(service.observe(HUB, typo, 'fail', { count: 1, oldestAgeSeconds: null })).rejects.toThrow('Unknown incident category')
   })
 
   it('erasure-deadline is NOT reached by erasure:request-self, which every volunteer holds', () => {
