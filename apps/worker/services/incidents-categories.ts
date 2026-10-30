@@ -72,14 +72,17 @@ export const INCIDENT_CATEGORIES = {
       [WORKER_FAILING_KIND]: 'notify',
     },
   },
-  // Erasure requests past their deadline (#2323 supplies the check). Reaches
-  // `erasure:admin` — NOT `erasure:request-self`, which every member holds.
+  // Erasure requests past their deadline (#2323) or that failed outright
+  // (#2347 — a `failed` request is by construction never overdue, and nothing
+  // else picks it up). Reaches `erasure:admin` — NOT `erasure:request-self`,
+  // which every member holds.
   'erasure-deadline': {
     permission: 'erasure:admin',
     quietPeriodMs: 30 * MINUTE_MS,
     updateWindowMs: 60 * MINUTE_MS,
     kinds: {
       overdue: 'notify',
+      failed: 'notify',
       [WORKER_FAILING_KIND]: 'notify',
     },
   },
@@ -94,6 +97,15 @@ export const INCIDENT_CATEGORIES = {
     },
   },
 } as const satisfies Record<IncidentCategory, IncidentCategoryPolicy>
+
+/**
+ * The ONE permission that reads, and is paged for, PLATFORM-scope incidents —
+ * things that concern the instance rather than any hub (an erasure whose
+ * subject belongs to no hub, #2347). Instance-level, like the platform-wide
+ * ban retention and its super-admin notification: a permission, never a role.
+ * Hub roles do not grant it, so a hub's erasure admins do not see these.
+ */
+export const PLATFORM_INCIDENT_PERMISSION: Permission = 'system:manage-instance'
 
 export type IncidentKind<C extends IncidentCategory> = keyof (typeof INCIDENT_CATEGORIES)[C]['kinds'] & string
 

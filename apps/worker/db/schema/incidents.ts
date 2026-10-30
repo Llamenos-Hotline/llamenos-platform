@@ -26,9 +26,13 @@ export const hubIncidents = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    hubId: text('hub_id')
-      .notNull()
-      .references(() => hubs.id, { onDelete: 'cascade' }),
+    /**
+     * The hub the incident belongs to. NULL is the PLATFORM scope: something
+     * that concerns the instance rather than any hub (an erasure whose subject
+     * belongs to no hub — #2347). Only `signalPlatform` / `observePlatform`
+     * write it, and only holders of the platform permission read it.
+     */
+    hubId: text('hub_id').references(() => hubs.id, { onDelete: 'cascade' }),
     /** IncidentCategory — text, not a pg enum, so new categories need no migration. */
     category: text('category').notNull(),
     /** IncidentSeverity: 'notify' | 'record'. Escalates while open, never downgrades. */
@@ -54,8 +58,16 @@ export const hubIncidents = pgTable(
     uniqueIndex('hub_incidents_open_unique')
       .on(table.hubId, table.category)
       .where(sql`${table.closedAt} IS NULL`),
+    // Nulls are distinct in a unique index, so the platform scope (hub_id NULL)
+    // needs its own: at most one OPEN platform incident per category.
+    uniqueIndex('hub_incidents_open_platform_unique')
+      .on(table.category)
+      .where(sql`${table.closedAt} IS NULL AND ${table.hubId} IS NULL`),
     index('hub_incidents_hub_opened_idx').on(table.hubId, table.openedAt),
   ],
 )
 
 export type HubIncidentRow = typeof hubIncidents.$inferSelect
+
+/** A row in the platform scope (`hubId` NULL). */
+export type PlatformIncidentRow = HubIncidentRow & { hubId: null }

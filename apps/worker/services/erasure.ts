@@ -64,6 +64,39 @@ export const ERASURE_DEADLINE_GRACE_MS = 3 * WORKER_TICK_INTERVAL_MS['erasure-ex
  */
 const UNFINISHED_ERASURE_STATUSES = ['pending', 'executing'] as const
 
+/** `failed` is terminal for the worker: only an operator's retry or abandon moves it (#2347). */
+const FAILED_ERASURE_STATUSES = ['failed'] as const
+
+/**
+ * SQL predicate over `erasure_requests er`: the request concerns `hubId` — a
+ * hub-scope shred of it, or a person's erasure whose subject is a member of it.
+ */
+function concernsHub(hubId: string): SQL {
+  return sql`(
+    (er.scope = 'hub' AND er.hub_id = ${hubId})
+    OR (er.scope = 'user' AND EXISTS (
+      SELECT 1 FROM users u, jsonb_array_elements(u.hub_roles) AS hr
+      WHERE u.pubkey = er.user_id AND hr->>'hubId' = ${hubId}
+    ))
+  )`
+}
+
+/**
+ * SQL predicate over `erasure_requests er`: the request concerns NO hub that
+ * exists — a person who belongs to none (or whose row is gone), or a shred of a
+ * hub that is no longer there. The per-hub checks enumerate the `hubs` table,
+ * so these are the requests every per-hub count misses (#2347).
+ */
+function concernsNoHub(): SQL {
+  return sql`(
+    (er.scope = 'hub' AND NOT EXISTS (SELECT 1 FROM hubs h WHERE h.id = er.hub_id))
+    OR (er.scope = 'user' AND NOT EXISTS (
+      SELECT 1 FROM users u, jsonb_array_elements(u.hub_roles) AS hr, hubs h
+      WHERE u.pubkey = er.user_id AND h.id = hr->>'hubId'
+    ))
+  )`
+}
+
 /**
  * SQL predicate: `column` (a jsonb array of HPKE envelopes) holds an envelope
  * addressed to `pubkey`.
@@ -813,9 +846,49 @@ export class ErasureService {
     asOf: Date,
     graceMs: number = ERASURE_DEADLINE_GRACE_MS,
   ): Promise<IncidentCheckResult> {
+    return this.countRequests(UNFINISHED_ERASURE_STATUSES, concernsHub(hubId), asOf, graceMs)
+  }
+
+  /**
+   * {@link countOverdueForHub} for requests whose subject belongs to NO hub
+   * (see {@link concernsNoHub}). The per-hub check enumerates hubs, so these
+   * are counted by nobody unless asked for here — the platform scope's
+   * incident (#2347).
+   */
+  async countOverdueWithoutHub(asOf: Date, graceMs: number = ERASURE_DEADLINE_GRACE_MS): Promise<IncidentCheckResult> {
+    return this.countRequests(UNFINISHED_ERASURE_STATUSES, concernsNoHub(), asOf, graceMs)
+  }
+
+  /**
+   * How many requests concerning `hubId` are `failed` right now, and how long
+   * ago the oldest one's deadline passed (#2347). A `failed` request is not
+   * overdue by the definition above (it is no longer `pending`), so without
+   * this it reaches nobody and nothing ever picks it up again. A LEVEL, not an
+   * event count: retrying or abandoning a request takes it out of the count,
+   * which is how the incident ends.
+   */
+  async countFailedForHub(hubId: string, asOf: Date): Promise<IncidentCheckResult> {
+    return this.countRequests(FAILED_ERASURE_STATUSES, concernsHub(hubId), asOf, 0)
+  }
+
+  /** {@link countFailedForHub} for requests whose subject belongs to no hub. */
+  async countFailedWithoutHub(asOf: Date): Promise<IncidentCheckResult> {
+    return this.countRequests(FAILED_ERASURE_STATUSES, concernsNoHub(), asOf, 0)
+  }
+
+  /**
+   * Aggregate over requests in `statuses` that matched `attribution` and whose
+   * `execute_at` is more than `graceMs` before `asOf`. Counts only.
+   */
+  private async countRequests(
+    statusList: readonly string[],
+    attribution: SQL,
+    asOf: Date,
+    graceMs: number,
+  ): Promise<IncidentCheckResult> {
     const asOfIso = asOf.toISOString()
     const cutoffIso = new Date(asOf.getTime() - graceMs).toISOString()
-    const statuses = sql.join(UNFINISHED_ERASURE_STATUSES.map((s) => sql`${s}`), sql`, `)
+    const statuses = sql.join(statusList.map((s) => sql`${s}`), sql`, `)
     const rows = (await this.db.execute(sql`
       SELECT
         COUNT(*)::int AS count,
@@ -823,22 +896,41 @@ export class ErasureService {
       FROM erasure_requests er
       WHERE er.status IN (${statuses})
         AND er.execute_at < ${cutoffIso}::timestamptz
-        AND (
-          (er.scope = 'hub' AND er.hub_id = ${hubId})
-          OR (er.scope = 'user' AND EXISTS (
-            SELECT 1 FROM users u, jsonb_array_elements(u.hub_roles) AS hr
-            WHERE u.pubkey = er.user_id AND hr->>'hubId' = ${hubId}
-          ))
-        )
+        AND ${attribution}
     `)) as unknown as { count: number | string; oldest_age_seconds: number | string | null }[]
     const row = rows[0]
     if (!row) throw new Error('erasure-deadline check: aggregate query returned no row')
     const n = Number(row.count)
     if (n === 0) return { count: 0, oldestAgeSeconds: null }
     if (row.oldest_age_seconds === null) {
-      throw new Error('erasure-deadline check: overdue requests with no oldest age')
+      throw new Error('erasure-deadline check: matching requests with no oldest age')
     }
     return { count: n, oldestAgeSeconds: Number(row.oldest_age_seconds) }
+  }
+
+  async getRequest(requestId: string): Promise<typeof erasureRequests.$inferSelect | null> {
+    const [row] = await this.db.select().from(erasureRequests).where(eq(erasureRequests.id, requestId)).limit(1)
+    return row ?? null
+  }
+
+  /**
+   * The hubs a request concerns — the same attribution the incident checks
+   * use, as ids: the hub of a shred, or the hubs a person belongs to. Empty
+   * when the subject belongs to no hub, which is exactly the platform scope.
+   */
+  async hubsConcerning(request: Pick<typeof erasureRequests.$inferSelect, 'scope' | 'hubId' | 'userId'>): Promise<string[]> {
+    if (request.scope === 'hub') {
+      if (!request.hubId) return []
+      const rows = await this.db.select({ id: hubs.id }).from(hubs).where(eq(hubs.id, request.hubId))
+      return rows.map((r) => r.id)
+    }
+    if (!request.userId) return []
+    const rows = (await this.db.execute(sql`
+      SELECT DISTINCT h.id
+      FROM users u, jsonb_array_elements(u.hub_roles) AS hr, hubs h
+      WHERE u.pubkey = ${request.userId} AND h.id = hr->>'hubId'
+    `)) as unknown as { id: string }[]
+    return rows.map((r) => r.id)
   }
 
   /**
@@ -866,6 +958,98 @@ export class ErasureService {
       .update(erasureRequests)
       .set({ status: 'completed', executedAt: new Date() })
       .where(eq(erasureRequests.id, requestId))
+  }
+
+  /**
+   * Put a `failed` request back in the queue (#2347). Its `execute_at` is long
+   * past, so the next `erasure-expiry` tick claims it again. Refused unless the
+   * request is `failed`, and refused while another request for the same
+   * subject is already in flight — retrying must not produce two.
+   *
+   * `hubId` is the audit chain the entry lands on (the acting hub, or null for
+   * the platform chain); the entry carries the request's own id, no subject.
+   */
+  async retryFailed(
+    requestId: string,
+    actorPubkey: string,
+    auditService: Pick<AuditService, 'log'>,
+    hubId: string | null,
+  ): Promise<typeof erasureRequests.$inferSelect> {
+    const row = await this.db.transaction(async (tx) => {
+      const [request] = await tx.select().from(erasureRequests).where(eq(erasureRequests.id, requestId)).for('update').limit(1)
+      if (!request) throw new ServiceError(404, 'Erasure request not found')
+      if (request.status !== 'failed') {
+        throw new ServiceError(409, `Only a failed erasure request can be retried (this one is ${request.status})`)
+      }
+      const subject =
+        request.scope === 'hub'
+          ? and(eq(erasureRequests.scope, 'hub'), eq(erasureRequests.hubId, request.hubId ?? ''))
+          : and(eq(erasureRequests.scope, 'user'), eq(erasureRequests.userId, request.userId ?? ''))
+      const [inFlight] = await tx
+        .select({ id: erasureRequests.id })
+        .from(erasureRequests)
+        .where(and(subject, ne(erasureRequests.id, request.id), sql`${erasureRequests.status} IN ('pending', 'executing')`))
+        .limit(1)
+      if (inFlight) {
+        throw new ServiceError(409, 'Another erasure request for this subject is already in flight')
+      }
+      const [updated] = await tx
+        .update(erasureRequests)
+        .set({ status: 'pending' })
+        .where(and(eq(erasureRequests.id, request.id), eq(erasureRequests.status, 'failed')))
+        .returning()
+      return updated!
+    })
+    await auditService.log('erasureRetried', actorPubkey, { requestId: row.id, scope: row.scope }, hubId)
+    return row
+  }
+
+  /**
+   * Give up on a `failed` request — explicitly, with who and why recorded on
+   * the row (`abandoned_*`) and in the audit chain. `abandoned` is not
+   * `completed`: `executed_at` stays NULL because nothing was erased, so the
+   * two can never be confused. A hub shred that abandons also thaws the hub
+   * (restoring its pre-shred status) — otherwise it would sit `shred_pending`
+   * forever behind a request that will never run.
+   */
+  async abandonFailed(
+    requestId: string,
+    actorPubkey: string,
+    justification: string,
+    auditService: Pick<AuditService, 'log'>,
+    hubId: string | null,
+  ): Promise<typeof erasureRequests.$inferSelect> {
+    const row = await this.db.transaction(async (tx) => {
+      const [request] = await tx.select().from(erasureRequests).where(eq(erasureRequests.id, requestId)).for('update').limit(1)
+      if (!request) throw new ServiceError(404, 'Erasure request not found')
+      if (request.status !== 'failed') {
+        throw new ServiceError(409, `Only a failed erasure request can be abandoned (this one is ${request.status})`)
+      }
+      const [updated] = await tx
+        .update(erasureRequests)
+        .set({
+          status: 'abandoned',
+          abandonedAt: new Date(),
+          abandonedBy: actorPubkey,
+          abandonJustification: justification,
+        })
+        .where(and(eq(erasureRequests.id, request.id), eq(erasureRequests.status, 'failed')))
+        .returning()
+      if (request.scope === 'hub' && request.hubId) {
+        await tx
+          .update(hubs)
+          .set({ status: request.previousStatus ?? 'active', updatedAt: new Date() })
+          .where(and(eq(hubs.id, request.hubId), eq(hubs.status, 'shred_pending')))
+      }
+      return updated!
+    })
+    await auditService.log(
+      'erasureAbandoned',
+      actorPubkey,
+      { requestId: row.id, scope: row.scope, justification },
+      hubId,
+    )
+    return row
   }
 
   // ---------------------------------------------------------------------------
@@ -1204,13 +1388,37 @@ export class ErasureService {
  * hub, by the `incident-checks` scheduler worker — independently of
  * `erasure-expiry`, so a stopped or failing erasure worker is itself what
  * opens the incident. Reach (`erasure:admin`) and severity are the category's
- * (services/incidents-categories.ts).
+ * (services/incidents-categories.ts). Its `platform` variant covers requests
+ * whose subject belongs to no hub.
  */
-export function erasureDeadlineCheck(erasure: Pick<ErasureService, 'countOverdueForHub'>): IncidentCheck {
+export function erasureDeadlineCheck(
+  erasure: Pick<ErasureService, 'countOverdueForHub' | 'countOverdueWithoutHub'>,
+): IncidentCheck {
   return {
     category: 'erasure-deadline',
     kind: 'overdue',
     name: 'erasure-deadline',
     check: (hubId, now) => erasure.countOverdueForHub(hubId, now),
+    platform: (now) => erasure.countOverdueWithoutHub(now),
+  }
+}
+
+/**
+ * The L1 `erasure-deadline` / `failed` check (#2347): requests the worker gave
+ * up on. `erasureDeadlineCheck` cannot see them — a `failed` request is no
+ * longer `pending` — and nothing else ever re-reads one, so without this a
+ * caller's erasure request silently stops existing. Same category, so it reaches
+ * the same `erasure:admin` holders; a subject with no hub reaches the platform
+ * scope instead. Cleared by retrying or abandoning the request.
+ */
+export function erasureFailedCheck(
+  erasure: Pick<ErasureService, 'countFailedForHub' | 'countFailedWithoutHub'>,
+): IncidentCheck {
+  return {
+    category: 'erasure-deadline',
+    kind: 'failed',
+    name: 'erasure-failed',
+    check: (hubId, now) => erasure.countFailedForHub(hubId, now),
+    platform: (now) => erasure.countFailedWithoutHub(now),
   }
 }

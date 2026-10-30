@@ -13,10 +13,14 @@ import {
   reEncryptionJobListResponseSchema,
   erasureConfigResponseSchema,
   updateErasureConfigBodySchema,
+  abandonErasureBodySchema,
 } from '@protocol/schemas/erasure'
 import { platformSettingsSchema } from '@protocol/schemas/platform-settings'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { ServiceError } from '../services/settings'
+import { permissionGranted } from '@shared/permissions'
+import { PLATFORM_INCIDENT_PERMISSION } from '../services/incidents-categories'
 import { getConnectionManager } from '../lib/ws-manager'
 import { revokeVolunteerSipIdentity } from '../telephony/registrar'
 
@@ -34,6 +38,53 @@ function serializeConfig(config: EffectiveErasureConfig) {
     updatedAt: config.updatedAt?.toISOString() ?? null,
     updatedBy: config.updatedBy,
   }
+}
+
+type ErasureRequestRow = Awaited<ReturnType<AppEnv['Variables']['services']['erasure']['getRequest']>> & {}
+
+function serializeRequest(r: ErasureRequestRow) {
+  return {
+    id: r.id,
+    userId: r.userId,
+    status: r.status,
+    requestedBy: r.requestedBy,
+    requestedAt: r.requestedAt?.toISOString() ?? '',
+    executeAt: r.executeAt?.toISOString() ?? '',
+    executedAt: r.executedAt?.toISOString() ?? null,
+    justification: r.justification,
+    emergencyOverride: r.emergencyOverride,
+    coApproverPubkey: r.coApproverPubkey,
+    cancelledAt: r.cancelledAt?.toISOString() ?? null,
+  }
+}
+
+/**
+ * May the caller retry or abandon this request (#2347)? Decided from the
+ * request's own attribution, by permission string only:
+ *  - a request that concerns a hub is for that hub's `erasure:admin` holders,
+ *    acting inside that hub (`permissions` is hub-resolved on the hub-scoped
+ *    mount, so this cannot be satisfied from a foreign hub);
+ *  - a request whose subject belongs to NO hub is for holders of the platform
+ *    permission — the same ones the platform incident reaches.
+ * Returns the audit chain the action belongs to (the acting hub, or null for
+ * the platform chain), or the status to refuse with.
+ */
+async function authorizeRequestAction(
+  c: { get: <K extends 'services' | 'permissions' | 'hubId'>(key: K) => AppEnv['Variables'][K] },
+  request: ErasureRequestRow,
+): Promise<{ ok: true; auditHubId: string | null } | { ok: false; status: 403 }> {
+  const permissions = c.get('permissions')
+  const concerned = await c.get('services').erasure.hubsConcerning(request)
+  if (concerned.length === 0) {
+    return permissionGranted(permissions, PLATFORM_INCIDENT_PERMISSION)
+      ? { ok: true, auditHubId: null }
+      : { ok: false, status: 403 }
+  }
+  const hubId = c.get('hubId')
+  if (hubId && concerned.includes(hubId) && permissionGranted(permissions, 'erasure:admin')) {
+    return { ok: true, auditHubId: hubId }
+  }
+  return { ok: false, status: 403 }
 }
 
 // --- Self-service routes ---
@@ -265,21 +316,82 @@ erasure.get(
     })
 
     return c.json({
-      requests: requests.map((r) => ({
-        id: r.id,
-        userId: r.userId,
-        status: r.status,
-        requestedBy: r.requestedBy,
-        requestedAt: r.requestedAt?.toISOString() ?? '',
-        executeAt: r.executeAt?.toISOString() ?? '',
-        executedAt: r.executedAt?.toISOString() ?? null,
-        justification: r.justification,
-        emergencyOverride: r.emergencyOverride,
-        coApproverPubkey: r.coApproverPubkey,
-        cancelledAt: r.cancelledAt?.toISOString() ?? null,
-      })),
+      requests: requests.map(serializeRequest),
       total,
     })
+  },
+)
+
+erasure.post(
+  '/requests/:id/retry',
+  describeRoute({
+    tags: ['Erasure'],
+    summary: 'Retry a failed erasure request',
+    description:
+      'Puts a failed request back in the queue; the erasure worker claims it on its next tick. Allowed for ' +
+      'erasure:admin holders of a hub the request concerns, or — when the subject belongs to no hub — for holders ' +
+      'of the platform permission.',
+    responses: {
+      200: {
+        description: 'The request, queued again',
+        content: { 'application/json': { schema: resolver(erasureRequestResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  async (c) => {
+    const services = c.get('services')
+    const request = await services.erasure.getRequest(c.req.param('id'))
+    if (!request) return c.json({ error: 'Erasure request not found' }, 404)
+    const decision = await authorizeRequestAction(c, request)
+    if (!decision.ok) return c.json({ error: 'Forbidden' }, decision.status)
+    try {
+      const updated = await services.erasure.retryFailed(request.id, c.get('pubkey'), services.audit, decision.auditHubId)
+      return c.json({ request: serializeRequest(updated) })
+    } catch (err) {
+      if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 404 | 409)
+      throw err
+    }
+  },
+)
+
+erasure.post(
+  '/requests/:id/abandon',
+  describeRoute({
+    tags: ['Erasure'],
+    summary: 'Abandon a failed erasure request',
+    description:
+      'Gives up on a failed request, recording who, when and why on the request and in the audit log. The request ' +
+      'becomes abandoned — distinct from completed: nothing was erased. Same authorisation as retry.',
+    responses: {
+      200: {
+        description: 'The request, abandoned',
+        content: { 'application/json': { schema: resolver(erasureRequestResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  validator('json', abandonErasureBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const request = await services.erasure.getRequest(c.req.param('id'))
+    if (!request) return c.json({ error: 'Erasure request not found' }, 404)
+    const decision = await authorizeRequestAction(c, request)
+    if (!decision.ok) return c.json({ error: 'Forbidden' }, decision.status)
+    const { justification } = c.req.valid('json')
+    try {
+      const updated = await services.erasure.abandonFailed(
+        request.id,
+        c.get('pubkey'),
+        justification,
+        services.audit,
+        decision.auditHubId,
+      )
+      return c.json({ request: serializeRequest(updated) })
+    } catch (err) {
+      if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 404 | 409)
+      throw err
+    }
   },
 )
 

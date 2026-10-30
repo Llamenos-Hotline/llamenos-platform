@@ -9,6 +9,9 @@ export const erasureRequestStatusSchema = z.enum([
   'executing',
   'completed',
   'failed',
+  // An erasure admin gave up on a `failed` request (#2347). Not `completed`:
+  // nothing was erased, and the row says who stopped it and why.
+  'abandoned',
 ])
 
 export type ErasureRequestStatus = z.infer<typeof erasureRequestStatusSchema>
@@ -68,6 +71,13 @@ export const createEmergencySelfErasureBodySchema = z.object({
 
 export const adminErasureBodySchema = z.object({
   justification: z.string().min(1).max(2000),
+})
+
+// --- Abandon a failed erasure request ---
+
+/** Abandoning is a decision about someone's erasure; the reason is part of the record. */
+export const abandonErasureBodySchema = z.object({
+  justification: z.string().trim().min(1).max(2000),
 })
 
 // --- Re-encryption job ---
