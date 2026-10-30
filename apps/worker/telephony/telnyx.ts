@@ -36,6 +36,7 @@ import type {
 import { DEFAULT_LANGUAGE } from '@shared/languages'
 import { getPrompt } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { holdMusicUrl } from './hold-music'
 
 const TELNYX_API_BASE = 'https://api.telnyx.com/v2'
 
@@ -303,6 +304,17 @@ export class TelnyxAdapter implements TelephonyAdapter {
     return this.emptyResponse()
   }
 
+  /** Loop the worker's own hold track on the caller's leg (#2298) */
+  private async startHoldMusic(callSid: string, audioUrls: AudioUrlMap | undefined, clientState: string): Promise<void> {
+    const holdMusic = holdMusicUrl(audioUrls)
+    if (!holdMusic) return
+    await this.client.command(callSid, 'playback_start', {
+      audio_url: holdMusic,
+      loop: 'infinity',
+      client_state: clientState,
+    })
+  }
+
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
     const { voice, language } = getTelnyxVoice(lang)
@@ -367,11 +379,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
       client_state: queueState,
     })
 
-    await this.client.command(params.callSid, 'playback_start', {
-      audio_url: 'https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3',
-      loop: 'infinity',
-      client_state: queueState,
-    })
+    await this.startHoldMusic(params.callSid, params.audioUrls, queueState)
 
     return this.emptyResponse()
   }
@@ -396,11 +404,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
         client_state: queueState,
       })
 
-      await this.client.command(params.callSid, 'playback_start', {
-        audio_url: 'https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3',
-        loop: 'infinity',
-        client_state: queueState,
-      })
+      await this.startHoldMusic(params.callSid, params.audioUrls, queueState)
 
       return this.emptyResponse()
     }

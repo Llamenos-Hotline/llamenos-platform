@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { PlivoAdapter } from '@worker/telephony/plivo'
 import { getVoicemailThanks } from '@shared/voice-prompts'
+import { holdMusicEntry } from '@worker/telephony/hold-music'
+
+const HOLD_ORIGIN = 'https://hotline.example.org'
+const HOLD = holdMusicEntry(HOLD_ORIGIN)
+const HOLD_URL = `${HOLD_ORIGIN}/api/ivr-audio/hold-music.wav`
 
 describe('PlivoAdapter', () => {
   let adapter: PlivoAdapter
@@ -202,9 +207,8 @@ describe('PlivoAdapter', () => {
     })
 
     it('returns wait music with audio URL when within timeout', async () => {
-      const res = await adapter.handleWaitMusic('en', undefined, 30, 90)
-      expect(res.body).toContain('<Play>')
-      expect(res.body).toContain('twilio.music')
+      const res = await adapter.handleWaitMusic('en', HOLD, 30, 90)
+      expect(res.body).toContain(`<Play>${HOLD_URL}</Play>`)
     })
 
     it('uses custom audio URL for wait message when provided', async () => {

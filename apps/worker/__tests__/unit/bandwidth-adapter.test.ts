@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { BandwidthAdapter } from '@worker/telephony/bandwidth'
 import { DEFAULT_LANGUAGE } from '@shared/languages'
+import { holdMusicEntry } from '@worker/telephony/hold-music'
+
+const HOLD_ORIGIN = 'https://hotline.example.org'
+const HOLD = holdMusicEntry(HOLD_ORIGIN)
+const HOLD_URL = `${HOLD_ORIGIN}/api/ivr-audio/hold-music.wav`
 
 describe('BandwidthAdapter', () => {
   let adapter: BandwidthAdapter
@@ -245,10 +250,10 @@ describe('BandwidthAdapter', () => {
 
   describe('handleWaitMusic', () => {
     it('returns wait music BXML under timeout', async () => {
-      const result = await adapter.handleWaitMusic('en', undefined, 30, 90)
+      const result = await adapter.handleWaitMusic('en', HOLD, 30, 90)
       expect(result.contentType).toBe('application/xml')
       expect(result.body).toContain('Your call is important to us')
-      expect(result.body).toContain('<PlayAudio>https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3</PlayAudio>')
+      expect(result.body).toContain(`<PlayAudio>${HOLD_URL}</PlayAudio>`)
       expect(result.body).toContain('<Redirect')
     })
 

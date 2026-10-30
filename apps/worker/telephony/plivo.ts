@@ -35,6 +35,7 @@ import type {
 } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { holdMusicUrl } from './hold-music'
 
 /**
  * Plivo `<Speak language>` codes (Polly voices) — the explicit, ordered list of
@@ -240,9 +241,10 @@ export class PlivoAdapter implements TelephonyAdapter {
     }
 
     const waitXml = sayOrPlay('waitMessage', lang, audioUrls)
+    const holdMusic = holdMusicUrl(audioUrls)
     return this.plivoXml(`
       ${waitXml}
-      <Play>https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3</Play>
+      ${holdMusic ? play(holdMusic) : ''}
     `)
   }
 
