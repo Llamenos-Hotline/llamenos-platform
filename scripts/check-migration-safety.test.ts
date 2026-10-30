@@ -203,6 +203,72 @@ describe('passes what the previous release can run against', () => {
   })
 })
 
+/**
+ * A unique index whose predicate matches no row the table holds is safe: the
+ * set it constrains is empty. The gate proves that for one shape only, `col IS
+ * NULL` on a column that is NOT NULL before the migration, alone or as a
+ * conjunct. It is a proof, not a trust in partial indexes: a predicate that
+ * might match an existing row fails like an unconditional index does.
+ *
+ * `status` is NOT NULL and `team_id` is nullable in PREVIOUS.
+ */
+describe('a unique index over a provably empty predicate', () => {
+  const index = (where?: string) => `CREATE UNIQUE INDEX users_uq ON users USING btree (team_id)${where ? ` WHERE ${where}` : ''}`
+
+  test.each([
+    ['status IS NULL'],
+    ['users.status IS NULL'],
+    ['public.users.status IS NULL'],
+    // drizzle's own rendering, and #2361's statement 4 shape.
+    ['"users"."status" IS NULL'],
+    ['display_name IS NULL AND status IS NULL'],
+    ['status IS NULL AND display_name IS NULL AND team_id IS NULL'],
+  ])('passes WHERE %s, a NOT NULL column that cannot be NULL', (where) => {
+    expect(lintSql(index(where), CTX)).toEqual([])
+  })
+
+  test.each([
+    ['no predicate', undefined],
+    ['a nullable column, which existing rows can satisfy', 'team_id IS NULL'],
+    ['a nullable conjunct only', 'display_name IS NULL AND team_id IS NULL'],
+    ['IS NOT NULL on a NOT NULL column, which every row satisfies', 'status IS NOT NULL'],
+    ['an OR, which the nullable side can satisfy', 'status IS NULL OR team_id IS NULL'],
+    ['a negation', 'NOT (status IS NULL)'],
+    ['a comparison, which the gate does not read', "status = 'active'"],
+    ['a NOT NULL column of another table', 'notes.body IS NULL'],
+    ['a column the snapshot does not declare', 'mystery IS NULL'],
+  ] as const)('still fails with %s', (_why, where) => {
+    expect(lintSql(index(where), CTX).map((f) => f.rule)).toEqual(['unique-index-existing'])
+  })
+
+  test('judges the predicate against the schema before the migration, not after it', () => {
+    // The migration is what makes the column nullable; the gate reads the
+    // database it meets, where the column is still NOT NULL.
+    const ctx = lintContext(catalogOf(PREVIOUS), snapshot([table('users', [col('team_id', 'text', false), col('status', 'text', false)])]))
+    expect(lintSql(index('status IS NULL'), ctx)).toEqual([])
+  })
+
+  test('--ci proves NOT NULL from the replaced release snapshot, and presumes nothing for an undeclared column', () => {
+    const ctx = lintContext(new PresumedSchema([], new SchemaView(PREVIOUS)), PREVIOUS)
+    expect(lintSql(index('status IS NULL'), ctx)).toEqual([])
+    // Declared nullable: existing rows may match.
+    expect(lintSql(index('team_id IS NULL'), ctx).map((f) => f.rule)).toEqual(['unique-index-existing'])
+    // Undeclared: presumed NOT NULL for the other rules, but a presumption is not a proof.
+    expect(lintSql(index('mystery IS NULL'), ctx).map((f) => f.rule)).toEqual(['unique-index-existing'])
+  })
+
+  test('#2361 statement 4: hub_id was NOT NULL until that migration, so the index constrains no row', () => {
+    const incidents = (hubIdNotNull: boolean) =>
+      snapshot([table('hub_incidents', [col('category', 'text', true), col('closed_at', 'timestamp'), col('hub_id', 'text', hubIdNotNull)])])
+    const statement =
+      'CREATE UNIQUE INDEX "hub_incidents_open_platform_unique" ON "hub_incidents" USING btree ("category") WHERE "hub_incidents"."closed_at" IS NULL AND "hub_incidents"."hub_id" IS NULL'
+    const judged = (prev: DrizzleSnapshot) =>
+      lintSql(statement, lintContext(new PresumedSchema([], new SchemaView(prev)), prev)).map((f) => f.rule)
+    expect(judged(incidents(true))).toEqual([])
+    expect(judged(incidents(false))).toEqual(['unique-index-existing'])
+  })
+})
+
 describe('schema contract', () => {
   const withUsers = (columns: SnapshotColumn[], enums?: Record<string, string[]>) =>
     snapshot([table('users', columns), PREVIOUS.tables['public.notes'] as ReturnType<typeof table>], enums ?? { role: ['admin', 'member'] })
