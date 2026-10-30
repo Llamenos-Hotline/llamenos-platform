@@ -14,10 +14,20 @@
  *   - the erasure worker's own poll failing three times raises `worker_failing`
  *     (L2) — previously a log line and nothing else.
  *
+ * And who sees it, through the real `hubContext` and incidents route: a holder
+ * of `erasure:admin` does; a member of the SAME hub without it (a volunteer,
+ * who holds `erasure:request-self` — the permission the routes split from
+ * `erasure:admin`) does not.
+ *
  * Requires postgres at DATABASE_URL; creates and drops its own database.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, isNull, sql } from 'drizzle-orm'
+import { Hono } from 'hono'
+import { DEFAULT_ROLES, type Role } from '@shared/permissions'
+import type { AppEnv } from '../../types'
+import { hubContext } from '../../middleware/hub'
+import incidentsRoutes from '../../routes/incidents'
 import * as schema from '../../db/schema'
 import type { HubIncidentRow } from '../../db/schema/incidents'
 import type { IncidentState } from '@protocol/schemas/incidents'
@@ -262,5 +272,53 @@ describe('erasure-expiry worker failure hook (L2, #2323)', () => {
       }
     })
     expect(await openIncident(hubA)).toBeNull()
+  })
+})
+
+describe('who sees the erasure-deadline incident (#2323)', () => {
+  const ROLES: Role[] = [
+    ...DEFAULT_ROLES.map((r) => ({ ...r, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' })),
+    { id: 'role-erasure-desk', name: 'Erasure desk', slug: 'erasure-desk', permissions: ['erasure:admin'] },
+  ]
+
+  /** The incidents router mounted as app.ts mounts it, behind the real hubContext. */
+  async function listAs(hubRoles: { hubId: string; roleIds: string[] }[], hubId: string) {
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.set('pubkey', 'f'.repeat(64))
+      c.set('user', { pubkey: 'f'.repeat(64), roles: [], hubRoles } as unknown as AppEnv['Variables']['user'])
+      c.set('allRoles', ROLES)
+      c.set('permissions', [])
+      c.set('services', services as unknown as AppEnv['Variables']['services'])
+      await next()
+    })
+    const hubScoped = new Hono<AppEnv>()
+    hubScoped.use('*', hubContext)
+    hubScoped.route('/incidents', incidentsRoutes)
+    app.route('/api/hubs/:hubId', hubScoped)
+    const res = await app.request(`/api/hubs/${hubId}/incidents?open=true`, {}, { ENVIRONMENT: 'test' })
+    return { status: res.status, body: (await res.json()) as { incidents?: { category: string; counts: Record<string, number> }[] } }
+  }
+
+  it('an erasure:admin holder sees it; a member of the same hub without that permission does not', async () => {
+    const hubId = await createHub()
+    const otherHub = await createHub()
+    await userRequest(await memberOf([hubId]), 2 * HOUR)
+    await services.incidents.runChecks()
+
+    for (const roleId of ['role-erasure-desk', 'role-hub-admin']) {
+      const holder = await listAs([{ hubId, roleIds: [roleId] }], hubId)
+      expect(holder.status).toBe(200)
+      expect(holder.body.incidents!.map((i) => [i.category, i.counts])).toEqual([['erasure-deadline', { overdue: 1 }]])
+    }
+
+    // The negative case: same hub, holds erasure:request-self, not erasure:admin.
+    const volunteer = await listAs([{ hubId, roleIds: ['role-volunteer'] }], hubId)
+    expect(volunteer.status).toBe(200)
+    expect(volunteer.body.incidents).toEqual([])
+
+    // An erasure admin of another hub is not admitted to this one at all.
+    const outsider = await listAs([{ hubId: otherHub, roleIds: ['role-erasure-desk'] }], hubId)
+    expect(outsider.status).toBe(403)
   })
 })
