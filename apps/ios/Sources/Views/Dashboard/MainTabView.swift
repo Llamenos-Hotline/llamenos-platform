@@ -98,7 +98,7 @@ struct MainTabView: View {
             RejectedWritesBanner()
         }
         .accessibilityIdentifier("main-tab-view")
-        .task {
+        .task(id: appState.hubContext.activeHubId) {
             await fetchUnreadCount()
         }
     }
@@ -108,7 +108,10 @@ struct MainTabView: View {
     /// Fetch the unread conversation count for the tab badge — the active hub's, the same
     /// list the Conversations tab shows. Conversations are hub-scoped only (#2381).
     private func fetchUnreadCount() async {
-        guard let hubId = appState.apiService.activeHubId else { return }
+        guard let hubId = appState.apiService.activeHubId else {
+            await MainActor.run { appState.unreadConversationCount = 0 }
+            return
+        }
         do {
             let response: ConversationsListResponse = try await appState.apiService.request(
                 method: "GET",
