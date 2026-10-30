@@ -10,6 +10,7 @@ import {
 } from '../../orchestrator/src/review-cache.js'
 import { REPO } from '../../orchestrator/src/gh.js'
 import { CI_DIFF_FLAGS } from '../../orchestrator/src/ci.js'
+import { claimDigest } from '../../orchestrator/src/review.js'
 
 /**
  * #1394: a push must never start a review. #2014: nor may it conclude green
@@ -38,13 +39,17 @@ const BRANCH = 'fix/fleet-review-not-requested'
 const CURRENT_RUN = 900
 const WORKFLOW_PATH = '.github/workflows/fleet-review.yml'
 const HASH = 'ab'.repeat(32)
+/** The live PR read every scenario shares (`common` below) — the title and
+ *  body the gate keys the cache on alongside the tree (#2336). */
+const CLAIM = { title: 'fix: shift math', body: '' }
+const CLAIM_DIGEST = claimDigest(CLAIM)
 
 interface FakeRun { id: number; head_sha: string; html_url: string; path?: string }
 interface FakeArtifact { id: number; name: string; expired: boolean }
 
 const run = (id: number, sha = `sha${id}`): FakeRun => ({ id, head_sha: sha, html_url: `https://github.com/${REPO}/actions/runs/${id}`, path: WORKFLOW_PATH })
 const record = (id: number, verdict: 'PASS' | 'FAIL', opts: { pr?: string; scope?: string; expired?: boolean } = {}): FakeArtifact => ({
-  id, name: cacheArtifactName(opts.pr ?? PR, HASH, opts.scope, verdict), expired: opts.expired ?? false,
+  id, name: cacheArtifactName(opts.pr ?? PR, HASH, CLAIM_DIGEST, opts.scope, verdict), expired: opts.expired ?? false,
 })
 
 function fakeApi(runs: FakeRun[] | undefined, artifacts: Record<number, FakeArtifact[] | undefined>, failText?: string) {
@@ -221,7 +226,7 @@ interface Route { match: string; status?: number; stdout?: unknown; download?: u
 /** Routes every scenario shares: the live PR read, and a cache MISS for
  *  this diff — so the gate has to decide on the push/request itself. */
 const common: Route[] = [
-  { match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], title: 'fix: shift math', body: '' } },
+  { match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], ...CLAIM } },
   { match: `^api repos/${REPO}/actions/artifacts\\?name=`, stdout: { artifacts: [] } },
 ]
 
@@ -422,13 +427,13 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
   /** A PASS recorded by `fleet-review.yml` for `tree` — the artifact the
    *  real `artifactReviewCache.lookup` lists, and the run it checks. */
   const passRecordedFor = (tree: string): Route[] => [
-    { match: `^api repos/${REPO}/actions/artifacts\\?name=${cacheArtifactName(PR, tree, undefined, 'PASS')}&`, stdout: { artifacts: [{ id: 701, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
+    { match: `^api repos/${REPO}/actions/artifacts\\?name=${cacheArtifactName(PR, tree, CLAIM_DIGEST, undefined, 'PASS')}&`, stdout: { artifacts: [{ id: 701, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
     { match: `^api repos/${REPO}/actions/runs/${JUDGED_RUN}$`, stdout: { path: WORKFLOW_PATH } },
   ]
   /** The same PASS in the run history a push reads (`lastEarnedVerdict`). */
   const earnedOn = (tree: string): Route[] => [
     runsRoute([run(JUDGED_RUN, headSha)]),
-    artifactsRoute(JUDGED_RUN, [{ id: 701, name: cacheArtifactName(PR, tree, undefined, 'PASS'), expired: false }]),
+    artifactsRoute(JUDGED_RUN, [{ id: 701, name: cacheArtifactName(PR, tree, CLAIM_DIGEST, undefined, 'PASS'), expired: false }]),
   ]
 
   it('is the #1975 shape: identical diff text, different trees — so a diff-keyed cache WOULD hit', () => {
@@ -499,5 +504,68 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
     const g = reviewGate({ action: 'review_requested', requestedReviewer: 'llamenos-auto', head: noopRebase, routes: passRecordedFor(tree1) })
     expect(g.status, g.out).toBe(0)
     expect(g.outputs['outcome']).toBe('cache-hit')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #2336 — through the real CLI, the real `artifactReviewCache` and its real
+// artifact names. #2332 was FAILed for a body claiming 36 keys where its diff
+// delivered 35, had ONLY its body corrected, and the re-request replayed the
+// cached FAIL in 23 seconds with no new verdict: the gate's cache was keyed on
+// the tree, and the tree had (correctly) not changed.
+// ---------------------------------------------------------------------------
+
+describe('#2336: review-gate reuses a verdict only for the identical tree AND description', () => {
+  const JUDGED_RUN = 88
+  const MISDESCRIBED = { title: 'feat(i18n): land 36 strings', body: 'Adds 36 keys, including `voice.overLimitMessage`.' }
+  const CORRECTED = { title: 'feat(i18n): land 35 strings', body: 'Adds 35 keys. `voice.overLimitMessage` was dropped.' }
+  const REASON = 'VERDICT: FAIL — the PR claims 36 keys but delivers 35'
+  let tree: string
+  beforeAll(() => { tree = git('rev-parse', `${headSha}^{tree}`) })
+
+  const describedAs = (claim: { title: string; body: string }): Route =>
+    ({ match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], ...claim } })
+  /** A substantive FAIL `fleet-review.yml` recorded under `name`. */
+  const failRecordedAs = (name: string): Route[] => [
+    { match: `^api repos/${REPO}/actions/artifacts\\?name=${name}&`, stdout: { artifacts: [{ id: 801, expired: false, workflow_run: { id: JUDGED_RUN } }] } },
+    { match: `^api repos/${REPO}/actions/runs/${JUDGED_RUN}$`, stdout: { path: WORKFLOW_PATH } },
+    { match: `^run download ${JUDGED_RUN} `, download: { verdict: 'FAIL', text: REASON } },
+  ]
+  const failedFor = (claim: { title: string; body: string }) =>
+    failRecordedAs(cacheArtifactName(PR, tree, claimDigest(claim), undefined, 'FAIL'))
+  const lookups = (g: GateRun) => g.ghCalls.map((c) => c.join(' ')).filter((c) => c.includes('/actions/artifacts?name='))
+  const request = (routes: Route[]) => reviewGate({ action: 'review_requested', requestedReviewer: 'llamenos-auto', routes })
+
+  it('re-requesting with nothing changed replays the cached FAIL — the cache still serves (check 3)', () => {
+    const g = request([describedAs(MISDESCRIBED), ...failedFor(MISDESCRIBED)])
+    expect(g.status, g.out).toBe(1)
+    expect(g.outputs['outcome']).toBe('cache-hit')
+    expect(g.out).toContain('delivers 35')
+    // The replay names BOTH ways out, so a description finding is never read
+    // as "push something to the tree".
+    expect(g.out).toContain('correct the description')
+  })
+
+  it('re-requesting after ONLY the body was corrected reaches the engine — a new verdict, not a replay (check 2)', () => {
+    const g = request([describedAs(CORRECTED), ...failedFor(MISDESCRIBED)])
+    expect(g.status, g.out).toBe(0)
+    expect(g.outputs['outcome'], 'a body-only fix replayed the cached FAIL — the #2332 deadlock').toBe('run-engine')
+    // Looked up under the SAME tree and the CORRECTED claim, never the one the FAIL judged.
+    const seen = lookups(g)
+    expect(seen.length).toBeGreaterThan(0)
+    for (const l of seen) {
+      expect(l).toContain(`tree-${tree}-claim-${claimDigest(CORRECTED).slice(0, 32)}`)
+      expect(l).not.toContain(claimDigest(MISDESCRIBED).slice(0, 32))
+    }
+  })
+
+  // The literal #2332 state: a FAIL recorded under the tree-only name from
+  // before #2336. The tree-keyed gate found it for any description; this one
+  // never asks for it.
+  it('a tree-only FAIL from before #2336 is never found, whatever the description now says', () => {
+    const oldName = `fleet-review-fail-pr${PR}-tree-${tree}`
+    const g = request([describedAs(CORRECTED), ...failRecordedAs(oldName)])
+    expect(g.outputs['outcome']).toBe('run-engine')
+    expect(lookups(g).some((l) => new RegExp(`name=${oldName}&`).test(l))).toBe(false)
   })
 })

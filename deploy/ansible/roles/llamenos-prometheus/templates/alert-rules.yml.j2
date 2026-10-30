@@ -10,6 +10,96 @@ groups:
           summary: "Llamenos app is down"
           description: "The Llamenos application has been down for more than 1 minute."
 
+      # ── WorkerStalled: scheduler-worker liveness, judged out of process ──
+      #
+      # A check that runs inside a worker cannot report that worker being down:
+      # if erasure-expiry simply stops, a caller-erasure deadline passes with no
+      # artefact anywhere (#2323). So the app only PUBLISHES two gauges per
+      # scheduler worker (apps/worker/metrics/worker-liveness.ts) and this rule,
+      # in a different process, decides:
+      #
+      #   llamenos_worker_tick_interval_seconds{worker}           published for every
+      #                                                           registered worker from boot
+      #   llamenos_worker_last_success_timestamp_seconds{worker}  published only once a
+      #                                                           tick has completed
+      #
+      # Threshold: 3 x the worker's own tick interval, floored at 10 minutes so a
+      # sub-minute worker's single long tick (a rate-limited blast batch) does not
+      # page. The floor is derived here, from the published interval, so it can
+      # never drift from the period the worker actually runs on.
+      #
+      # Three rules share the alert name, one per way "no evidence of work" can
+      # look, distinguished by `reason`. NO DATA IS A FAILURE STATE: the second
+      # and third exist precisely so that a gauge that was never published can
+      # not read as healthy, which a staleness-only rule would do.
+      #
+      # Honest limit: this reaches whoever OPERATES the deployment, through the
+      # existing Alertmanager receiver (filled at deploy time, never committed).
+      # It does NOT tell hub members anything — when the process or scheduler is
+      # down, the app cannot. While the app is unscrapable these stay silent and
+      # AppDown carries the page instead. Selectors are by job and label only.
+      - alert: WorkerStalled
+        # Published, but its last completed tick is older than the threshold.
+        expr: >-
+          (time() - llamenos_worker_last_success_timestamp_seconds{job="llamenos-app"})
+          > on(instance, job, worker)
+          clamp_min(3 * llamenos_worker_tick_interval_seconds{job="llamenos-app"}, 600)
+        for: 2m
+        labels:
+          severity: critical
+          reason: stale
+        annotations:
+          summary: "A Llamenos scheduler worker has stopped completing ticks"
+          description: >-
+            The worker named in the `worker` label has not completed a tick for
+            more than 3 of its intervals (10 minutes minimum). The work it does
+            (erasure deadlines, retention purge, Signal retries, blast delivery,
+            ...) is not happening. Check the app logs for that worker. Hub
+            members are NOT notified of this by the app.
+
+      - alert: WorkerStalled
+        # Registered, but has not completed a single tick since the process
+        # started, for longer than its threshold. Covers a worker that never
+        # started, and one whose first tick hangs or throws every time.
+        expr: >-
+          (
+            clamp_min(3 * llamenos_worker_tick_interval_seconds{job="llamenos-app"}, 600)
+            unless on(instance, job, worker)
+            llamenos_worker_last_success_timestamp_seconds{job="llamenos-app"}
+          )
+          < on(instance, job) group_left()
+          llamenos_uptime_seconds{job="llamenos-app"}
+        for: 2m
+        labels:
+          severity: critical
+          reason: never_succeeded
+        annotations:
+          summary: "A Llamenos scheduler worker has never completed a tick"
+          description: >-
+            The worker named in the `worker` label has published no successful
+            tick since the app process started, for longer than 3 of its
+            intervals (10 minutes minimum). It is either not running or failing
+            on every tick. Hub members are NOT notified of this by the app.
+
+      - alert: WorkerStalled
+        # The app answers scrapes but publishes no worker-liveness data at all,
+        # so not one worker can be judged. Treated as a failure, never as fine.
+        expr: >-
+          up{job="llamenos-app"} == 1
+          unless on(instance, job)
+          llamenos_worker_tick_interval_seconds{job="llamenos-app"}
+        for: 2m
+        labels:
+          severity: critical
+          reason: no_liveness_metrics
+        annotations:
+          summary: "Llamenos app publishes no scheduler-worker liveness metrics"
+          description: >-
+            The app is up and scraped, but exports no
+            llamenos_worker_tick_interval_seconds series, so no scheduler worker
+            can be checked. Treat every background job as unverified until this
+            clears.
+
       - alert: HighMemoryUsage
         expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 85
         for: 5m

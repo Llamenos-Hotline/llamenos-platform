@@ -297,6 +297,24 @@ describe('HubShredService.execute', () => {
       expect(remaining, 'what is left at the provider must be on the platform chain').toBeDefined()
     })
 
+    it('refuses to shred while a recording the provider holds has no handle, even with a working provider', async () => {
+      const hubId = await createHub()
+      await fresh.recordings.trackUnaddressable({ hubId, callId: 'call-u', kind: 'voicemail', adapter: account })
+      const deleted: string[] = []
+      fresh.useTelephonyAdapter({ ...account, deleteRecording: async (sid) => { deleted.push(sid) } })
+      try {
+        await expect(fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)).rejects.toMatchObject({
+          status: 502,
+        })
+      } finally {
+        fresh.useTelephonyAdapter(null)
+      }
+      expect(deleted, 'there is no handle to hand the provider').toEqual([])
+      const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
+      expect(hub!.status, 'audio nothing can address is not shredded by pretending it is not there').toBe('active')
+      expect(await fresh.recordings.listHeld(hubId)).toMatchObject([{ callId: 'call-u', addressable: false }])
+    })
+
     it('refuses to shred when no provider is configured to ask', async () => {
       const hubId = await createHub()
       await fresh.recordings.track({ hubId, callId: 'call-d', recordingSid: 'RE-orphan', kind: 'voicemail', adapter: account })

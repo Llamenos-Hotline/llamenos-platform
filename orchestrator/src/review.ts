@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
 import { chmod, copyFile, cp, link, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs'
@@ -1413,6 +1413,63 @@ function singleLine(text: string): string {
 }
 
 /**
+ * The author's title and body exactly as a reviewer is shown them: collapsed
+ * to one line (title), trimmed (body), fence-neutralised, then clamped.
+ * Sanitise FIRST, clamp second: the clamp must count the characters that
+ * will actually be rendered, and `fenceSafe` can only ever lengthen its
+ * input (a marker becomes a longer notice), so clamping first would let a
+ * body of exactly the cap grow past it.
+ *
+ * ONE function for both consumers — `prClaimSection`, which renders it, and
+ * `claimDigest`, which keys the review cache on it (#2336) — so the cache can
+ * never be keyed on a different text than the one the reviewer judged.
+ */
+function renderClaim(claim: PrClaim | undefined): { title: string; body: string; neutralised: number } {
+  if (claim === undefined) return { title: '', body: '', neutralised: 0 }
+  const safeTitle = fenceSafe(singleLine(claim.title))
+  const safeBody = fenceSafe(claim.body.trim())
+  return {
+    title: clampClaimText(safeTitle.text, PR_CLAIM_TITLE_MAX_CHARS, 'title'),
+    body: clampClaimText(safeBody.text, PR_CLAIM_BODY_MAX_CHARS, 'description'),
+    neutralised: safeTitle.count + safeBody.count,
+  }
+}
+
+/**
+ * `sha256` (hex) of the PR's title and body AS THE REVIEWER READS THEM — the
+ * half of the review cache key that is not the tree (`ReviewCacheKey.
+ * claimDigest`, review-cache.ts; #2336).
+ *
+ * WHY THE CLAIM IS KEYED AT ALL. The reviewer is told to test the
+ * description against the diff and to FAIL a mismatch (`prClaimSection`). A
+ * verdict is therefore a judgement of (tree, claim), and a cache keyed on
+ * the tree alone replays it after the claim changes. #2332 is the measured
+ * cost: FAILed because its body claimed 36 keys where the diff delivered 35,
+ * its body was corrected with the tree deliberately untouched, and the
+ * re-request finished in 23 seconds with no new verdict — the cached FAIL,
+ * replayed, with no legitimate way to clear it.
+ *
+ * WHY THE RENDERED TEXT, NOT THE RAW FIELDS. What a reviewer cannot see
+ * cannot have changed its verdict: leading or trailing whitespace, a title's
+ * line breaks. Keying on `renderClaim`'s output re-judges exactly when the
+ * judged input moved and not otherwise. (Past `PR_CLAIM_BODY_MAX_CHARS` the
+ * truncation notice states the body's full length, so a longer or shorter
+ * body is a visible change and is re-judged.)
+ *
+ * WHY NOT THE LABELS. No label text reaches any reviewer's prompt; a label's
+ * only effect on a review is which PROFILES run, and that is already in the
+ * key as the review-set namespace (`reviewSetTag`). Keying on them again
+ * would only throw away hits for a label nobody reviews.
+ *
+ * Fixed framing is part of the hash input: a JSON pair cannot be confused
+ * across the title/body boundary the way a plain concatenation could.
+ */
+export function claimDigest(claim: PrClaim): string {
+  const { title, body } = renderClaim(claim)
+  return createHash('sha256').update(JSON.stringify([title, body])).digest('hex')
+}
+
+/**
  * The `## Pull request` section of every reviewer prompt — the generalist's
  * (`buildReviewPrompt`) and every profile's (`buildProfileReviewPrompt`,
  * specialist.ts). ONE copy, so a profile can never be judging against a
@@ -1458,16 +1515,7 @@ function singleLine(text: string): string {
  */
 export function prClaimSection(pr: string, claim?: PrClaim): string {
   const heading = `## Pull request\n\n${pr}\n\n### What the author says this PR does\n\n`
-  // Sanitise FIRST, clamp second: the clamp must count the characters that
-  // will actually be rendered, and `fenceSafe` can only ever lengthen its
-  // input (a marker becomes a longer notice), so clamping first would let a
-  // body of exactly the cap grow past it.
-  const safeTitle = claim === undefined
-    ? { text: '', count: 0 }
-    : fenceSafe(singleLine(claim.title))
-  const safeBody = claim === undefined ? { text: '', count: 0 } : fenceSafe(claim.body.trim())
-  const title = clampClaimText(safeTitle.text, PR_CLAIM_TITLE_MAX_CHARS, 'title')
-  const body = clampClaimText(safeBody.text, PR_CLAIM_BODY_MAX_CHARS, 'description')
+  const { title, body, neutralised } = renderClaim(claim)
   if (title === '' && body === '') {
     // No description (or no PR read at all). Said out loud, because a
     // reviewer that silently notices nothing under the heading may invent a
@@ -1476,7 +1524,6 @@ export function prClaimSection(pr: string, claim?: PrClaim): string {
     return `${heading}This pull request has no title and no description. Judge the diff on its own ` +
       'terms; the absence of a stated claim is not itself a defect and is not grounds for a FAIL.'
   }
-  const neutralised = safeTitle.count + safeBody.count
   // Told to the reviewer, not swallowed: a description that writes this
   // section's own delimiter is not an accident, and the reviewer is the one
   // who should weigh what it means.

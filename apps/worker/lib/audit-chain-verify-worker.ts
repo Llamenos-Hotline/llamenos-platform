@@ -9,11 +9,12 @@
 import type { AuditService } from '../services/audit'
 import type { IdentityService } from '../services/identity'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.audit-chain-verify')
 
 /** Verify every chain hourly. */
-export const AUDIT_VERIFY_INTERVAL_MS = 60 * 60 * 1000
+export const AUDIT_VERIFY_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['audit-chain-verify']
 /** First pass shortly after boot, so a tampered log is flagged without waiting an hour. */
 const INITIAL_DELAY_MS = 60 * 1000
 
@@ -85,7 +86,7 @@ export function startAuditChainVerifyWorker(opts: AuditChainVerifyWorkerOpts): v
   logger.info('Started audit chain verify worker')
 
   const run = () => {
-    verifyAllAuditChains(opts).catch((err) => {
+    trackWorkerTick('audit-chain-verify', () => verifyAllAuditChains(opts)).catch((err) => {
       logger.error('Audit chain verification run failed', { error: err })
     })
   }

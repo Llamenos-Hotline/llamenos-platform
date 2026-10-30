@@ -15,6 +15,7 @@
  */
 import type { CallsService } from '../services/calls'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.stale-call-reaper')
 
@@ -22,7 +23,7 @@ const logger = createLogger('lib.stale-call-reaper')
  * Check interval: every 2 minutes — tighter than the 3-minute ringing TTL so a
  * ringing call that nobody answered is reaped within one interval of going stale.
  */
-const CHECK_INTERVAL_MS = 2 * 60 * 1000
+const CHECK_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['stale-call-reaper']
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
@@ -31,16 +32,15 @@ export function startStaleCallReaperWorker(callsService: CallsService): void {
 
   logger.info('Started stale call reaper worker')
 
-  const check = async () => {
-    try {
+  const check = () =>
+    trackWorkerTick('stale-call-reaper', async () => {
       const reaped = await callsService.reapStaleCalls()
       if (reaped > 0) {
         logger.info('Reaped stale call(s)', { count: reaped })
       }
-    } catch (err) {
+    }).catch((err) => {
       logger.error('Stale call reap failed', { error: err })
-    }
-  }
+    })
 
   check()
 

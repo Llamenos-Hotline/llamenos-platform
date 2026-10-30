@@ -13,6 +13,7 @@
 import type { IdentityService } from '../services/identity'
 import type { SettingsService } from '../services/settings'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.periodic-cleanup')
 
@@ -20,7 +21,7 @@ const logger = createLogger('lib.periodic-cleanup')
  * Every 5 minutes — matches the shortest TTL being purged (auth nonces,
  * WebAuthn challenges both expire on a 5-minute window).
  */
-export const CLEANUP_INTERVAL_MS = 5 * 60 * 1000
+export const CLEANUP_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['periodic-cleanup']
 
 export interface PeriodicCleanupWorkerOpts {
   identityService: IdentityService
@@ -66,7 +67,7 @@ export function startPeriodicCleanupWorker(opts: PeriodicCleanupWorkerOpts): voi
   logger.info('Started periodic cleanup worker')
 
   const run = () => {
-    runPeriodicCleanup(opts).catch((err) => {
+    trackWorkerTick('periodic-cleanup', () => runPeriodicCleanup(opts)).catch((err) => {
       logger.error('Periodic cleanup run failed', { error: err })
     })
   }

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { claimDigest } from '../../orchestrator/src/review.js'
 import {
   artifactReviewCache, cacheArtifactName, reviewSetTag,
   CACHE_ARTIFACT_OUTPUT, CACHE_ARTIFACT_OUTPUT_SCOPED,
@@ -41,6 +42,8 @@ function steps(): Step[] {
 
 /** The tree a verdict judged — the cache key since #2014. */
 const TREE = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+/** The claim half of the key (#2336). */
+const CLAIM_DIGEST = claimDigest({ title: 'fix: a change', body: 'Changes one thing.' })
 
 const dirs: string[] = []
 const saved = process.env['GITHUB_OUTPUT']
@@ -58,7 +61,7 @@ async function recordBothNamespaces(scope: string): Promise<{ outputs: Map<strin
   const out = join(root, 'github-output')
   const cacheDir = join(root, 'review-cache')
   process.env['GITHUB_OUTPUT'] = out
-  const key = { pr: '1170', diffHash: 'b4cc12c676f607c3'.padEnd(64, '0'), headTree: TREE }
+  const key = { pr: '1170', diffHash: 'b4cc12c676f607c3'.padEnd(64, '0'), headTree: TREE, claimDigest: CLAIM_DIGEST }
   for (const s of [scope, undefined]) {
     await artifactReviewCache(cacheDir, () => {}, s).record(key, { verdict: 'PASS', text: 'VERDICT: PASS' })
   }
@@ -78,11 +81,11 @@ describe('rail: every namespace a verdict is recorded under is uploaded under th
 
   it('record() names each namespace under its own output key — neither overwrites the other', async () => {
     const { outputs, files } = await recordBothNamespaces(scope)
-    expect(outputs.get(CACHE_ARTIFACT_OUTPUT_SCOPED)).toBe(cacheArtifactName('1170', hash, scope, 'PASS'))
-    expect(outputs.get(CACHE_ARTIFACT_OUTPUT)).toBe(cacheArtifactName('1170', hash, undefined, 'PASS'))
+    expect(outputs.get(CACHE_ARTIFACT_OUTPUT_SCOPED)).toBe(cacheArtifactName('1170', hash, CLAIM_DIGEST, scope, 'PASS'))
+    expect(outputs.get(CACHE_ARTIFACT_OUTPUT)).toBe(cacheArtifactName('1170', hash, CLAIM_DIGEST, undefined, 'PASS'))
     expect(files.sort()).toEqual([
-      `${cacheArtifactName('1170', hash, scope, 'PASS')}.json`,
-      `${cacheArtifactName('1170', hash, undefined, 'PASS')}.json`,
+      `${cacheArtifactName('1170', hash, CLAIM_DIGEST, scope, 'PASS')}.json`,
+      `${cacheArtifactName('1170', hash, CLAIM_DIGEST, undefined, 'PASS')}.json`,
     ].sort())
   })
 
@@ -123,12 +126,13 @@ describe('rail: the review cache is keyed on the judged tree, and has no key wit
   it('records the judged tree in the artifact name and in the record itself', async () => {
     const { cacheDir } = scratch()
     await artifactReviewCache(cacheDir, () => {}).record(
-      { pr: '1975', diffHash: 'ab'.repeat(32), headTree: TREE }, { verdict: 'PASS', text: 'VERDICT: PASS' },
+      { pr: '1975', diffHash: 'ab'.repeat(32), headTree: TREE, claimDigest: CLAIM_DIGEST }, { verdict: 'PASS', text: 'VERDICT: PASS' },
     )
     const files = readdirSync(cacheDir)
-    expect(files).toEqual([`fleet-review-pass-pr1975-tree-${TREE}.json`])
-    const record = JSON.parse(readFileSync(join(cacheDir, files[0] ?? ''), 'utf8')) as { headTree?: string }
+    expect(files).toEqual([`fleet-review-pass-pr1975-tree-${TREE}-claim-${CLAIM_DIGEST.slice(0, 32)}.json`])
+    const record = JSON.parse(readFileSync(join(cacheDir, files[0] ?? ''), 'utf8')) as { headTree?: string; claimDigest?: string }
     expect(record.headTree).toBe(TREE)
+    expect(record.claimDigest).toBe(CLAIM_DIGEST)
   })
 
   for (const [label, headTree] of [['unreadable', undefined], ['not a tree id', 'ab'.repeat(12)]] as const) {
@@ -136,13 +140,30 @@ describe('rail: the review cache is keyed on the judged tree, and has no key wit
       const { out, cacheDir } = scratch()
       const logs: string[] = []
       const cache = artifactReviewCache(cacheDir, (m) => logs.push(m))
-      const key = { pr: '1975', diffHash: 'ab'.repeat(32), headTree }
+      const key = { pr: '1975', diffHash: 'ab'.repeat(32), headTree, claimDigest: CLAIM_DIGEST }
       await cache.record(key, { verdict: 'PASS', text: 'VERDICT: PASS' })
       expect(() => readdirSync(cacheDir), 'a verdict with no tree was recorded').toThrow()
       expect(() => readFileSync(out, 'utf8'), 'a cache artifact name was emitted for no tree').toThrow()
       // Returns before any `gh` call — a miss that never left this process.
       expect(await cache.lookup(key)).toBeUndefined()
       expect(logs.some((m) => m.includes('no readable head tree'))).toBe(true)
+    })
+  }
+
+  // #2336: the claim is the other half of the key, under the same rule — a
+  // verdict formed against an unreadable description is never recorded, and
+  // nothing is looked up under a guessed one.
+  for (const [label, claimDigest] of [['unreadable', undefined], ['not a sha256', 'ab'.repeat(16)]] as const) {
+    it(`records nothing, and looks nothing up, when the PR description is ${label}`, async () => {
+      const { out, cacheDir } = scratch()
+      const logs: string[] = []
+      const cache = artifactReviewCache(cacheDir, (m) => logs.push(m))
+      const key = { pr: '1975', diffHash: 'ab'.repeat(32), headTree: TREE, claimDigest }
+      await cache.record(key, { verdict: 'FAIL', text: 'VERDICT: FAIL' })
+      expect(() => readdirSync(cacheDir), 'a verdict with no claim was recorded').toThrow()
+      expect(() => readFileSync(out, 'utf8'), 'a cache artifact name was emitted for no claim').toThrow()
+      expect(await cache.lookup(key)).toBeUndefined()
+      expect(logs.some((m) => m.includes('PR description'))).toBe(true)
     })
   }
 })

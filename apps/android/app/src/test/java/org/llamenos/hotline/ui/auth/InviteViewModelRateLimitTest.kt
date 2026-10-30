@@ -28,6 +28,7 @@ import org.llamenos.hotline.crypto.AuthToken
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.service.DeviceRegistrationManager
 
 /**
  * What onboarding tells a volunteer when the server rate-limits them.
@@ -78,7 +79,9 @@ class InviteViewModelRateLimitTest {
         coEvery {
             cryptoService.createAuthTokenWithoutNonce("POST", "/api/invites/redeem")
         } returns AuthToken("ab".repeat(32), 1_700_000_000_000L, "cd".repeat(64), null)
-        viewModel = InviteViewModel(InviteRepository(apiService, cryptoService))
+        val deviceRegistration = mockk<DeviceRegistrationManager>()
+        coEvery { deviceRegistration.register() } returns Result.success(Unit)
+        viewModel = InviteViewModel(InviteRepository(apiService, cryptoService), deviceRegistration)
     }
 
     @After

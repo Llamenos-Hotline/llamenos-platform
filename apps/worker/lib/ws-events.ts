@@ -103,8 +103,11 @@ function padToBucket(plaintext: Uint8Array): Uint8Array {
 /**
  * Encrypt event content with AES-256-GCM using an epoch-scoped key.
  * Returns hex-encoded ciphertext (nonce + ciphertext + tag).
+ *
+ * Exported so `packages/crypto/scripts/gen-server-event-vectors.ts` can record
+ * the bytes the relay really sends; no other caller should need it.
  */
-function encryptEventContent(
+export function encryptEventContent(
   content: Record<string, unknown>,
   serverSecret: string,
   epoch: number,

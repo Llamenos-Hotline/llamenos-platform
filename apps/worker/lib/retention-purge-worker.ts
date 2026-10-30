@@ -7,11 +7,12 @@ import type { AuditService } from '../services/audit'
 import type { SettingsService } from '../services/settings'
 import type { ProviderMediaEraser } from '../services/provider-recordings'
 import { createLogger } from './logger'
+import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
 const logger = createLogger('lib.retention-purge')
 
 /** Check interval: every 30 minutes */
-const CHECK_INTERVAL_MS = 30 * 60 * 1000
+const CHECK_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['retention-purge']
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 let lastPurgeDate: string | null = null
@@ -29,8 +30,8 @@ export function startRetentionPurgeWorker(opts: RetentionPurgeWorkerOpts): void 
 
   logger.info('Started retention purge worker')
 
-  const check = async () => {
-    try {
+  const check = () =>
+    trackWorkerTick('retention-purge', async () => {
       const platformSettings = await opts.settingsService.getPlatformSettings()
       const retentionPurge = (platformSettings as Record<string, unknown>)
         .retentionPurge as
@@ -57,10 +58,9 @@ export function startRetentionPurgeWorker(opts: RetentionPurgeWorkerOpts): void 
           totalDeleted: results.reduce((s, r) => s + r.deletedCount, 0),
         })
       }
-    } catch (err) {
+    }).catch((err) => {
       logger.error('Retention purge check failed', { error: err })
-    }
-  }
+    })
 
   check()
 

@@ -623,6 +623,8 @@ describe('rail: runReviewCi names the result of every return path', () => {
     profileReview: verdict('PASS'),
     recordResult: vi.fn(async () => {}),
     headTree: async () => '4eeb09ad75c143b8a9e7b23df601af79f0379647',
+    // The claim half of the cache key (#2336) — without it nothing is ever a cache hit.
+    prClaim: async () => ({ title: 'fix: a change', body: 'Changes one thing.' }),
     ...over,
   })
 

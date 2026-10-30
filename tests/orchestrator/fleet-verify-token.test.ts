@@ -272,6 +272,8 @@ describe('behaviour: an unreadable PR read never turns either fleet gate green',
       changedFiles: async () => [HIGH_IMPACT],
       // The head tree the cached PASS was recorded under (#2014).
       headTree: async () => 'f3655875dd861eb24ebf01708a07f4caa0995b43',
+      // …and the PR description it was judged against (#2336).
+      prClaim: async () => ({ title: 'fix(orch): a change', body: '' }),
       cacheFor: () => ({ async lookup() { return { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } }, async record() {} }),
       requested: true, republishOnly: false,
       // Wired exactly as `runReviewGate` (cli.ts) wires it: `facts?.labels`

@@ -9,7 +9,7 @@ import {
 import {
   decideReviewSet, reviewIsRequested, REVIEW_REQUEST_LOGIN, RELEASE_REVIEW_REQUEST_LOGIN,
 } from '../../orchestrator/src/ci.js'
-import { VERDICT_CONTRACT, READ_ONLY_CONTRACT } from '../../orchestrator/src/review.js'
+import { claimDigest, VERDICT_CONTRACT, READ_ONLY_CONTRACT } from '../../orchestrator/src/review.js'
 import { cacheArtifactName, reviewSetTag } from '../../orchestrator/src/review-cache.js'
 import { COMMANDS } from '../../orchestrator/src/cli.js'
 import { parse as parseYaml } from 'yaml'
@@ -299,29 +299,31 @@ describe('reviewIsRequested', () => {
 describe('reviewSetTag / cacheArtifactName namespacing', () => {
   // A head tree — the cache key since #2014.
   const h = 'f3655875dd861eb24ebf01708a07f4caa0995b43'
+  // …and the claim it was judged against, part of the key since #2336.
+  const c = claimDigest({ title: 'fix: a change', body: 'Changes one thing.' })
   it('gives the general reviewer\'s own name no set prefix at all', () => {
     expect(reviewSetTag([])).toBeUndefined()
-    expect(cacheArtifactName('42', h, reviewSetTag([]))).toBe(`fleet-review-pass-pr42-tree-${h}`)
+    expect(cacheArtifactName('42', h, c, reviewSetTag([]))).toBe(`fleet-review-pass-pr42-tree-${h}-claim-${c.slice(0, 32)}`)
   })
   it('gives a set with a profile a different name from the general reviewer\'s', () => {
-    expect(cacheArtifactName('42', h, reviewSetTag([CRYPTO]))).not.toBe(cacheArtifactName('42', h))
+    expect(cacheArtifactName('42', h, c, reviewSetTag([CRYPTO]))).not.toBe(cacheArtifactName('42', h, c))
   })
   it('gives different sets different names, and the same set one name regardless of order', () => {
     expect(reviewSetTag([CRYPTO, 'a-reviewer'])).toBe(reviewSetTag(['a-reviewer', CRYPTO]))
     expect(reviewSetTag([CRYPTO])).not.toBe(reviewSetTag([CRYPTO, 'a-reviewer']))
   })
   it('produces a name inside the safe subset (no separators, no escaping needed)', () => {
-    const name = cacheArtifactName('42', h, reviewSetTag([CRYPTO, 'a-reviewer']))
+    const name = cacheArtifactName('42', h, c, reviewSetTag([CRYPTO, 'a-reviewer']))
     expect(name).toMatch(/^[A-Za-z0-9-]+$/)
   })
 
   // #1158: the VERDICT is in the name too, so a PASS lookup can never find a
   // FAIL record or the reverse.
   it('encodes the verdict', () => {
-    expect(cacheArtifactName('42', h)).toBe(`fleet-review-pass-pr42-tree-${h}`)
-    expect(cacheArtifactName('42', h, undefined, 'PASS')).toBe(cacheArtifactName('42', h))
-    expect(cacheArtifactName('42', h, undefined, 'FAIL')).toBe(`fleet-review-fail-pr42-tree-${h}`)
-    expect(cacheArtifactName('42', h, undefined, 'FAIL')).not.toBe(cacheArtifactName('42', h, undefined, 'PASS'))
+    expect(cacheArtifactName('42', h, c)).toBe(`fleet-review-pass-pr42-tree-${h}-claim-${c.slice(0, 32)}`)
+    expect(cacheArtifactName('42', h, c, undefined, 'PASS')).toBe(cacheArtifactName('42', h, c))
+    expect(cacheArtifactName('42', h, c, undefined, 'FAIL')).toBe(`fleet-review-fail-pr42-tree-${h}-claim-${c.slice(0, 32)}`)
+    expect(cacheArtifactName('42', h, c, undefined, 'FAIL')).not.toBe(cacheArtifactName('42', h, c, undefined, 'PASS'))
   })
 })
 

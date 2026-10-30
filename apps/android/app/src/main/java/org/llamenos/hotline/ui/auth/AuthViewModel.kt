@@ -22,6 +22,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.model.InviteCodeParser
+import org.llamenos.hotline.service.DeviceRegistrationManager
 import org.llamenos.hotline.service.PushRegistrationManager
 import java.io.IOException
 import javax.inject.Inject
@@ -130,6 +131,7 @@ class AuthViewModel @Inject constructor(
     private val keystoreService: KeyValueStore,
     private val biometricKeyStore: BiometricKeyStore,
     private val inviteRepository: InviteRepository,
+    private val deviceRegistrationManager: DeviceRegistrationManager,
     private val pushRegistrationManager: PushRegistrationManager,
 ) : ViewModel() {
 
@@ -214,6 +216,7 @@ class AuthViewModel @Inject constructor(
                             isAuthenticated = true,
                         )
                     }
+                    onIdentityKnownToServer()
                     onAuthenticated()
                 }
                 .onFailure { e ->
@@ -250,6 +253,17 @@ class AuthViewModel @Inject constructor(
      */
     private fun onAuthenticated() {
         pushRegistrationManager.ensureRegistered()
+    }
+
+    /**
+     * The server knows this identity: register the device keys it seals to,
+     * independent of push (#2119). Only called where that is true — after a
+     * redemption succeeded or the stored keys unlocked. The PIN-set path cannot
+     * call it: the invite is redeemed *after* PIN set (see [InviteViewModel]),
+     * and an unknown pubkey is refused.
+     */
+    private fun onIdentityKnownToServer() {
+        deviceRegistrationManager.ensureRegistered()
     }
 
     private fun classifyRedeemFailure(e: Throwable): EnrollmentError = when (e) {
@@ -448,6 +462,7 @@ class AuthViewModel @Inject constructor(
                         failedAttempts = 0,
                     )
                 }
+                onIdentityKnownToServer()
                 onAuthenticated()
             } catch (e: Exception) {
                 // Record failed attempt for lockout tracking

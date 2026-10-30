@@ -295,12 +295,18 @@ re-posts nothing.
 owed. A FAIL clears nothing — that is what makes the next review request
 re-run it.
 
-**Verdicts are cached per diff.** A PASS *and* a substantive FAIL are both
-recorded against `sha256(diff)`, so a rebase that does not change the diff
-never re-spends a review to reach the same conclusion — push a fix and the
-hash changes, which reviews afresh. An infrastructure failure (timeout,
-quota, unparseable response) is **never** cached, so it is always retried.
-Adding or removing a `-reviewer` label cannot orphan either verdict.
+**Verdicts are cached per judged tree and description.** A PASS *and* a
+substantive FAIL are both recorded against the head commit's **tree** (#2014)
+and a digest of the PR's **title and body** as the reviewer was shown them
+(`claimDigest`, #2336), so a no-op rebase or a plain re-request never
+re-spends a review to reach the same conclusion. Change either half and the
+next review request judges afresh: push a fix to the code, or — when the
+verdict faulted the description, which the reviewer is told to test against
+the diff — correct the description and request the review again. Labels are
+not in the key beyond the review set they select (no label text reaches a
+reviewer). An infrastructure failure (timeout, quota, unparseable response)
+is **never** cached, so it is always retried. Adding or removing a
+`-reviewer` label cannot orphan either verdict.
 
 **`llamenos-fleet review-and-merge` runs the WHOLE set too (#1637).** It
 calls the same `decideReviewSet` from the same base code, resolves each
