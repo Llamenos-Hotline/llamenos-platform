@@ -4776,9 +4776,12 @@
       "spam": "Spam und unerwünschte Anrufe"
     },
     "closed": "Beendet",
+    "inHub": "Im Hub {{hub}}",
     "ongoing": "{{count}} Ereignisse seit {{time}}",
     "opened": "Läuft gerade",
+    "otherHub": "In einem anderen Hub",
     "push": "Auf Ihrer Hotline gibt es Aktivität, die Sie sich ansehen sollten.",
-    "signalAlert": "Hotline-Warnung — {{category}}: {{state}}. Details finden Sie in der App."
+    "signalAlert": "Hotline-Warnung — {{category}}: {{state}}. Details finden Sie in der App.",
+    "title": "Aktive Vorfälle"
   }
 }

@@ -4776,9 +4776,12 @@
       "spam": "Spam ak apèl moun pa vle"
     },
     "closed": "Fini",
+    "inHub": "Nan {{hub}}",
     "ongoing": "{{count}} evènman depi {{time}}",
     "opened": "Ap pase kounye a",
+    "otherHub": "Nan yon lòt sant",
     "push": "Gen aktivite sou liy dirèk ou a ki bezwen yon koutje.",
-    "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo."
+    "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo.",
+    "title": "Ensidan ki aktif"
   }
 }

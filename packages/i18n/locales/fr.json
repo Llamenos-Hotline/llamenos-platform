@@ -4776,9 +4776,12 @@
       "spam": "Spam et appels indésirables"
     },
     "closed": "Terminé",
+    "inHub": "Dans {{hub}}",
     "ongoing": "{{count}} événements depuis {{time}}",
     "opened": "En cours",
+    "otherHub": "Dans un autre centre",
     "push": "Une activité sur votre ligne d'écoute demande votre attention.",
-    "signalAlert": "Alerte de la ligne — {{category}} : {{state}}. Ouvrez l'application pour les détails."
+    "signalAlert": "Alerte de la ligne — {{category}} : {{state}}. Ouvrez l'application pour les détails.",
+    "title": "Incidents en cours"
   }
 }
