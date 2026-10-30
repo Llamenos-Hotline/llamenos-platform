@@ -33,7 +33,10 @@ import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
  *     `"version": "A"` → `"version": "B"` (semver, B > A), every other
  *     versioned file changes by exactly ONE line, a bare version-key line,
  *     swapping A for B and otherwise byte-identical, and the changelog only
- *     gains lines. A PR on a
+ *     gains lines. The one thing set aside before counting is an end-of-file
+ *     NEWLINE toggle on a line whose content is byte-identical on both sides
+ *     (knope's JSON writer drops `tauri.conf.json`'s final newline on every
+ *     release, #2344) — whitespace, never a change to the line. A PR on a
  *     branch named `release` that touches anything else — a dependency, a
  *     script, a workflow — fails (3) and gets the ordinary gate.
  *
@@ -103,6 +106,9 @@ function parseDiff(diff: string): FileChange[] | string {
   const out: FileChange[] = []
   let cur: FileChange | undefined
   let inHunk = false
+  /** The previous raw diff line inside the current hunk — what the EOF
+   *  marker is allowed to pair against. Cleared by anything else. */
+  let prev: { kind: '-' | '+' | 'marker'; text: string; pairedWithPrevMinus?: boolean } | undefined
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git ')) {
       const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
@@ -110,6 +116,7 @@ function parseDiff(diff: string): FileChange[] | string {
       cur = { path: m[1] as string, removed: [], added: [] }
       out.push(cur)
       inHunk = false
+      prev = undefined
       continue
     }
     if (cur === undefined) {
@@ -122,10 +129,50 @@ function parseDiff(diff: string): FileChange[] | string {
       if (line.startsWith('index ') || line.startsWith('--- a/') || line.startsWith('+++ b/') || line.length === 0) continue
       return `${cur.path}: not a plain in-place edit (${line.slice(0, 80)})`
     }
-    if (line.startsWith('@@')) continue
-    if (line.startsWith('-')) cur.removed.push(line.slice(1))
-    else if (line.startsWith('+')) cur.added.push(line.slice(1))
-    // ' ' context and '\ No newline at end of file' carry no change.
+    if (line.startsWith('@@')) { prev = undefined; continue }
+    if (line.startsWith('-')) {
+      const text = line.slice(1)
+      cur.removed.push(text)
+      prev = { kind: '-', text }
+    } else if (line.startsWith('+')) {
+      const text = line.slice(1)
+      if (prev?.kind === 'marker' && prev.text === text) {
+        // `-X`, marker, `+X`: the old side lacked its final newline and this
+        // identical line gained it — the toggle seen from the other direction.
+        cur.removed.pop()
+        prev = undefined
+      } else {
+        cur.added.push(text)
+        prev = { kind: '+', text, pairedWithPrevMinus: prev?.kind === '-' && prev.text === text }
+      }
+    } else if (line.startsWith('\\ No newline at end of file')) {
+      // git prints this marker after the LAST line of the side that has no
+      // trailing newline, so what it follows is an end-of-file newline toggle:
+      // the final line `X` on one side and `X` + newline on the other. That
+      // is whitespace, not a change to the line, and knope's JSON writer
+      // does exactly this to `apps/desktop/tauri.conf.json` (the file ends
+      // in a newline on `main`, knope rewrites it without one) — which made
+      // `-}` / `+}` read as two changed lines and every release PR fall to
+      // the ordinary gate (#2344, measured on #2290).
+      //
+      // Cancelled ONLY for an ADJACENT, byte-identical `-X` / `+X` pair. Not
+      // "the last removed line vs the last added one": those can be a `}`
+      // deleted in an earlier hunk and a `}` appended at EOF, a structural
+      // edit that would otherwise cancel into a bare version swap. A marker
+      // next to a line whose CONTENT changed, or beside a multi-line change
+      // block, cancels nothing and is counted like any other change.
+      if (prev?.kind === '+' && prev.pairedWithPrevMinus === true) {
+        cur.removed.pop(); cur.added.pop()
+        prev = undefined
+      } else if (prev?.kind === '-') {
+        prev = { kind: 'marker', text: prev.text }
+      } else {
+        prev = undefined
+      }
+    } else {
+      prev = undefined
+    }
+    // ' ' context carries no change.
   }
   return out
 }
