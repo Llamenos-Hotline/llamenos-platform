@@ -112,8 +112,7 @@ jobs:
   # because paths-ignore above already decided this push is relevant.
   e2e:
     needs: build
-    # Fixed image for Playwright's browser install — see ci.yml's `e2e` job (#2315).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 30

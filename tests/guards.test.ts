@@ -31,7 +31,7 @@
 // test, in merge group 40438235535, 25 ms after the other runner's tar wrote
 // the file. A setup-bun step with HOME under runner.temp gets its own copy.
 //
-// ── Playwright jobs run on a fixed runner image ──────────────────────────────
+// ── The installed Playwright must support the image its job runs on ─────────
 //
 // Playwright keeps a browser build and an apt dependency list per OS release
 // and refuses a release it has no entry for. GitHub moved `ubuntu-latest` to
@@ -40,9 +40,13 @@
 // chromium on ubuntu26.04-x64` and ejected four merge groups in a day
 // (#2315), while `desktop-e2e`, pinned to 24.04, passed in the same runs.
 // Those jobs only run in the merge queue, so nothing on a PR would have
-// shown it. This guard runs on every PR: a job that installs a Playwright
-// browser must name a fixed Ubuntu image, so the OS only moves in a reviewed
-// diff that also has to carry a Playwright version supporting it.
+// shown it. #2320 answered with a pin; #2324 upgraded Playwright and inverted
+// this guard: a job that installs a Playwright browser may run on any image
+// (`ubuntu-latest` included) as long as the declared @playwright/test floor
+// is at least the first release that has a build for it. `ubuntu-latest` is
+// resolved from the runner this guard itself runs on (docs-guard is on
+// `ubuntu-latest`), so the next LTS rollout turns every PR red — not a merge
+// group — until PLAYWRIGHT_FIRST_SUPPORTING gains an entry for it.
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -286,9 +290,66 @@ export function runnerLabels(job: Job): string[] {
   return values.length > 0 ? values : [label]
 }
 
-/** A GitHub-hosted Ubuntu image named by its release, e.g. `ubuntu-24.04`. */
-export function isFixedUbuntuImage(label: string): boolean {
-  return /^ubuntu-\d{2}\.\d{2}(-arm)?$/.test(label)
+/**
+ * First @playwright/test release whose registry has a browser build and apt
+ * dependency list for each Ubuntu release (checked against the
+ * `playwright-core` tarballs: 1.44.0 has no `ubuntu24.04-x64`, 1.45.0 does;
+ * 1.60.0 has no `ubuntu26.04-x64`, 1.61.0 does). An Ubuntu release absent
+ * from this table is unsupported until someone reads Playwright's release
+ * notes and adds it — which is the point: the next LTS fails here, on a PR.
+ */
+export const PLAYWRIGHT_FIRST_SUPPORTING: Readonly<Record<string, string>> = {
+  '24.04': '1.45.0',
+  '26.04': '1.61.0',
+}
+
+/** What `ubuntu-latest` meant when this guard was last updated. */
+const UBUNTU_LATEST_KNOWN = '26.04'
+
+const versionParts = (v: string): number[] => v.split('.').map(Number)
+
+/** `a` is at least `b`; both are plain `x.y.z`. */
+export function atLeast(a: string, b: string): boolean {
+  const [x, y] = [versionParts(a), versionParts(b)]
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0)
+    if (d !== 0) return d > 0
+  }
+  return true
+}
+
+/**
+ * What `ubuntu-latest` resolves to *now*: the newer of the recorded value and
+ * the OS of a GitHub-hosted runner, so a rollout is seen by the first PR that
+ * lands on the new image. Off a hosted runner (a laptop, the self-hosted Mac)
+ * the host OS says nothing about `ubuntu-latest`, so only the record is used.
+ */
+export function ubuntuLatest(
+  env: Record<string, string | undefined> = process.env,
+  osRelease: () => string = () => readFileSync('/etc/os-release', 'utf8'),
+): string {
+  if (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted') return UBUNTU_LATEST_KNOWN
+  let text: string
+  try {
+    text = osRelease()
+  } catch {
+    return UBUNTU_LATEST_KNOWN
+  }
+  const id = text.match(/^ID=("?)(\w+)\1$/m)?.[2]
+  const version = text.match(/^VERSION_ID="?(\d+\.\d+)"?$/m)?.[1]
+  if (id !== 'ubuntu' || version === undefined) return UBUNTU_LATEST_KNOWN
+  return atLeast(version, UBUNTU_LATEST_KNOWN) ? version : UBUNTU_LATEST_KNOWN
+}
+
+/** The Ubuntu release a runner label names, or undefined when it names none we can read. */
+export function ubuntuRelease(label: string, latest: string = ubuntuLatest()): string | undefined {
+  if (label === 'ubuntu-latest') return latest
+  return label.match(/^ubuntu-(\d{2}\.\d{2})(-arm)?$/)?.[1]
+}
+
+/** The lowest version a semver range admits, e.g. `^1.64.1` → `1.64.1`; undefined for `*`, `latest`, tags. */
+export function rangeFloor(range: string): string | undefined {
+  return range.match(/^[\^~>=\s]*(\d+\.\d+\.\d+)(?![\w.-])/)?.[1]
 }
 
 const PLAYWRIGHT_RANGE = (() => {
@@ -299,30 +360,57 @@ const PLAYWRIGHT_RANGE = (() => {
   return pkg.devDependencies?.['@playwright/test'] ?? pkg.dependencies?.['@playwright/test'] ?? '(not declared)'
 })()
 
-/** Every job that installs a Playwright browser on a runner image that can move under it. */
-export function playwrightRunnerViolations(workflows: Map<string, Workflow>): { checked: string[]; violations: Violation[] } {
+/**
+ * Every job that installs a Playwright browser on an image the declared
+ * Playwright floor does not support. `range` and `latest` are parameters so
+ * the rejection tests can exercise the next-LTS case without waiting for it.
+ */
+export function playwrightRunnerViolations(
+  workflows: Map<string, Workflow>,
+  range: string = PLAYWRIGHT_RANGE,
+  latest: string = ubuntuLatest(),
+): { checked: string[]; violations: Violation[] } {
   const checked: string[] = []
   const violations: Violation[] = []
+  const floor = rangeFloor(range)
   for (const [file, wf] of workflows) {
     for (const [id, job] of Object.entries(wf.jobs ?? {})) {
       if (!(job.steps ?? []).some(installsPlaywright)) continue
       const where = `${file}:${id}`
       checked.push(where)
-      for (const label of runnerLabels(job).filter((l) => !isFixedUbuntuImage(l))) {
-        violations.push({
-          job: where,
-          problem:
-            `installs a Playwright browser on runs-on \`${label}\`, which is not a fixed ubuntu-NN.NN image. ` +
-            `@playwright/test ${PLAYWRIGHT_RANGE} only installs on OS releases it has a build for; ` +
-            `pin the image and move it together with a Playwright version that supports the new one (#2315)`,
-        })
+      for (const label of runnerLabels(job)) {
+        const release = ubuntuRelease(label, latest)
+        const resolved = label === 'ubuntu-latest' ? `\`ubuntu-latest\` (= ubuntu ${release})` : `\`${label}\``
+        const base = `installs a Playwright browser on runs-on ${resolved}; @playwright/test ${range}`
+        if (release === undefined) {
+          violations.push({
+            job: where,
+            problem: `${base} cannot be checked against an image this guard cannot read (not ubuntu-latest or ubuntu-NN.NN); use a label it can resolve`,
+          })
+          continue
+        }
+        const first = PLAYWRIGHT_FIRST_SUPPORTING[release]
+        if (first === undefined) {
+          violations.push({
+            job: where,
+            problem:
+              `${base} has no known build for ubuntu ${release}. Find the first Playwright release that ships ` +
+              `one (its release notes, or \`ubuntu${release}-x64\` in playwright-core's registry), upgrade to it, ` +
+              `and add it to PLAYWRIGHT_FIRST_SUPPORTING (#2324)`,
+          })
+        } else if (floor === undefined || !atLeast(floor, first)) {
+          violations.push({
+            job: where,
+            problem: `${base} declares a floor of ${floor ?? '(unparseable)'}, but ubuntu ${release} needs >= ${first}; raise the range in package.json (#2324)`,
+          })
+        }
       }
     }
   }
   return { checked, violations }
 }
 
-describe('Playwright jobs run on a fixed runner image', () => {
+describe('the installed Playwright supports the image each Playwright job runs on', () => {
   const workflows = loadWorkflows()
 
   test('finds every job that installs a Playwright browser (an empty scan would pass vacuously)', () => {
@@ -338,40 +426,108 @@ describe('Playwright jobs run on a fixed runner image', () => {
     )
   })
 
-  test('each names a fixed Ubuntu image', () => {
+  test('every one runs on an image the declared Playwright floor has a build for', () => {
     const { violations } = playwrightRunnerViolations(workflows)
     expect(violations).toEqual([])
+  })
+
+  test('the table covers every release the repo names, so the check cannot pass by skipping one', () => {
+    for (const [file, wf] of workflows) {
+      for (const [id, job] of Object.entries(wf.jobs ?? {})) {
+        if (!(job.steps ?? []).some(installsPlaywright)) continue
+        for (const label of runnerLabels(job)) {
+          expect(ubuntuRelease(label), `${file}:${id} runs-on ${label}`).toBeDefined()
+        }
+      }
+    }
   })
 })
 
 describe('the Playwright runner check rejects the defect it was written for', () => {
   const install: Step = { name: 'Install Playwright browsers', run: 'bunx playwright install --with-deps chromium' }
   const deps: Step = { name: 'Install Playwright deps (cached)', run: 'bunx playwright install-deps chromium' }
-  const one = (job: Job) => playwrightRunnerViolations(new Map([['w.yml', { jobs: { j: job } }]])).violations
+  const one = (job: Job, range = '^1.64.1', latest = '26.04') =>
+    playwrightRunnerViolations(new Map([['w.yml', { jobs: { j: job } }]]), range, latest).violations
 
-  test("`ubuntu-latest` — the four ejected merge groups' shape — is rejected, naming the label and the Playwright version", () => {
-    const [v] = one({ 'runs-on': 'ubuntu-latest', steps: [install] })
-    expect(v?.problem).toContain('`ubuntu-latest`')
-    expect(v?.problem).toContain(`@playwright/test ${PLAYWRIGHT_RANGE}`)
+  test("#2315's shape — `ubuntu-latest` = 26.04 with Playwright 1.59.1 — is rejected, naming the image and the needed version", () => {
+    const [v] = one({ 'runs-on': 'ubuntu-latest', steps: [install] }, '^1.59.1')
+    expect(v?.problem).toContain('`ubuntu-latest` (= ubuntu 26.04)')
+    expect(v?.problem).toContain('@playwright/test ^1.59.1')
+    expect(v?.problem).toContain('needs >= 1.61.0')
+  })
+
+  test('the next LTS is rejected until the table learns it — no human has to remember', () => {
+    const [v] = one({ 'runs-on': 'ubuntu-latest', steps: [install] }, '^1.64.1', '28.04')
+    expect(v?.problem).toContain('ubuntu-latest')
+    expect(v?.problem).toContain('no known build for ubuntu 28.04')
+    expect(one({ 'runs-on': 'ubuntu-28.04', steps: [install] })).toHaveLength(1)
+  })
+
+  test('a floating label is fine while the floor supports what it resolves to', () => {
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [install] })).toEqual([])
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [install] }, '~1.61.0')).toEqual([])
+    expect(one({ 'runs-on': 'ubuntu-24.04-arm', steps: [install] }, '1.45.0')).toEqual([])
   })
 
   test('the cached-browser branch (`install-deps` only) is in scope too', () => {
-    expect(one({ 'runs-on': 'ubuntu-latest', steps: [deps] })).toHaveLength(1)
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [deps] }, '^1.59.1')).toHaveLength(1)
   })
 
-  test('a matrix runs-on is expanded, and one floating row is enough to reject', () => {
+  test('a matrix runs-on is expanded, and one unsupported row is enough to reject', () => {
     const matrix = { include: [{ platform: 'ubuntu-24.04' }, { platform: 'ubuntu-latest' }] }
     const job: Job = { 'runs-on': '${{ matrix.platform }}', strategy: { matrix }, steps: [install] }
-    expect(one(job).map((v) => v.problem)).toEqual([expect.stringContaining('`ubuntu-latest`')])
+    expect(one(job, '^1.50.0').map((v) => v.problem)).toEqual([expect.stringContaining('`ubuntu-latest`')])
   })
 
-  test('an expression the check cannot expand is rejected, not passed unread', () => {
+  test('an expression or label the check cannot read is rejected, not passed unread', () => {
     expect(one({ 'runs-on': "${{ inputs.runner || 'ubuntu-24.04' }}", steps: [install] })).toHaveLength(1)
+    expect(one({ 'runs-on': 'macos-latest', steps: [install] })).toHaveLength(1)
   })
 
-  test('a fixed image passes, and jobs that install no browser are out of scope', () => {
-    expect(one({ 'runs-on': 'ubuntu-24.04', steps: [install, deps] })).toEqual([])
-    expect(one({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { os: ['ubuntu-24.04'] } }, steps: [install] })).toEqual([])
-    expect(one({ 'runs-on': 'ubuntu-latest', steps: [{ run: 'bunx playwright test --project=bdd' }] })).toEqual([])
+  test('a range with no readable floor is rejected', () => {
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [install] }, 'latest')).toHaveLength(1)
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [install] }, '(not declared)')).toHaveLength(1)
+  })
+
+  test('jobs that install no browser are out of scope', () => {
+    expect(one({ 'runs-on': 'ubuntu-latest', steps: [{ run: 'bunx playwright test --project=bdd' }] }, '^1.0.0')).toEqual([])
+  })
+})
+
+describe('`ubuntu-latest` is resolved from the hosted runner the guard runs on', () => {
+  const hosted = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }
+  const os = (id: string, version: string) => () => `NAME="x"\nID=${id}\nVERSION_ID="${version}"\n`
+
+  test('a newer hosted image than the record wins — this is what makes the next LTS visible', () => {
+    expect(ubuntuLatest(hosted, os('ubuntu', '28.04'))).toBe('28.04')
+  })
+
+  test('an older or equal hosted image (mid-rollout) never lowers the record', () => {
+    expect(ubuntuLatest(hosted, os('ubuntu', '24.04'))).toBe('26.04')
+    expect(ubuntuLatest(hosted, os('ubuntu', '26.04'))).toBe('26.04')
+  })
+
+  test('off a hosted runner the host OS is ignored', () => {
+    expect(ubuntuLatest({}, os('ubuntu', '28.04'))).toBe('26.04')
+    expect(ubuntuLatest({ GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted' }, os('ubuntu', '28.04'))).toBe('26.04')
+  })
+
+  test('a non-Ubuntu or unreadable os-release falls back to the record', () => {
+    expect(ubuntuLatest(hosted, os('debian', '13.0'))).toBe('26.04')
+    expect(
+      ubuntuLatest(hosted, () => {
+        throw new Error('ENOENT')
+      }),
+    ).toBe('26.04')
+  })
+
+  test('range floors', () => {
+    expect([rangeFloor('^1.64.1'), rangeFloor('~1.61.0'), rangeFloor('>=1.45.0'), rangeFloor('1.64.1')]).toEqual([
+      '1.64.1',
+      '1.61.0',
+      '1.45.0',
+      '1.64.1',
+    ])
+    expect([rangeFloor('latest'), rangeFloor('*'), rangeFloor('1.64.1-beta.1')]).toEqual([undefined, undefined, undefined])
   })
 })

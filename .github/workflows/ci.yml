@@ -631,16 +631,14 @@ jobs:
     # Playwright E2E exercises the desktop web frontend against a live
     # backend — relevant if either side changed (#664).
     if: needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')
-    # A fixed image, never `ubuntu-latest`, on every job that installs a
-    # Playwright browser (#2315). Playwright ships a browser build and an apt
-    # dependency list per OS release and refuses any release it has no table
-    # entry for. When `ubuntu-latest` moved to 26.04, @playwright/test 1.59.1
-    # had none: `Playwright does not support chromium on ubuntu26.04-x64`, and
-    # every Playwright job here ejected its merge group while `desktop-e2e`,
-    # already pinned to 24.04, passed in the same runs. Move this pin only
-    # together with a Playwright version that supports the target image;
-    # tests/guards.test.ts fails on a floating label here.
-    runs-on: ubuntu-24.04
+    # Playwright ships a browser build and an apt dependency list per OS
+    # release and refuses any release it has no table entry for. When
+    # `ubuntu-latest` moved to 26.04, @playwright/test 1.59.1 had none and every
+    # Playwright job here ejected its merge group (#2315); #2320 pinned the image
+    # until Playwright caught up (#2324). It has, so these jobs float again.
+    # tests/guards.test.ts fails if the installed Playwright floor does not
+    # support the image a job resolves to, so the next Ubuntu LTS is caught on a PR.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 30
@@ -982,8 +980,7 @@ jobs:
   backend-bdd:
     needs: [changes]
     if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
-    # Fixed image for Playwright's browser install — see the `e2e` job (#2315).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 30
@@ -1104,8 +1101,7 @@ jobs:
   backend-bdd-opt-in:
     needs: [changes]
     if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
-    # Fixed image for Playwright's browser install — see the `e2e` job (#2315).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 20
