@@ -2877,6 +2877,22 @@ jobs:
       - name: Check migration drift
         run: bun run migration:check --ci
 
+      # The previous release runs against every schema this tree migrates
+      # (Helm's rolling update, and any rollback), so a migration that drops,
+      # renames, narrows or retypes something it still reads is rejected
+      # here. Diff-only: it judges the migrations this change adds, from
+      # their SQL, with no database. The same gate runs again before a deploy
+      # against the real database (--target); docs/runbooks/migrations.md.
+      - name: Check migration safety (diff-only)
+        env:
+          MIGRATION_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$MIGRATION_BASE"
+          bun run migration:safety --ci --base "$MIGRATION_BASE"
+
+      - name: Test the migration safety gate
+        run: bun test scripts/check-migration-safety.test.ts
+
   docs-guard:
     needs: changes
     # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.

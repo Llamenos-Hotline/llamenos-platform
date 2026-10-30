@@ -29,9 +29,14 @@
  * the correct sequence and needs no change to either file.
  */
 import { SQL } from 'bun'
-import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  LEDGER_TABLE,
+  listMigrationFiles,
+  migrationChecksum,
+  splitMigrationStatements,
+} from './lib/migration-statements'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -45,9 +50,6 @@ if (!databaseUrl) {
 // broken file. Nothing in the deploy path sets it.
 const migrationsDir =
   process.env.LLAMENOS_MIGRATIONS_DIR ?? join(import.meta.dir, '..', 'drizzle', 'migrations')
-
-/** Ledger of applied migrations. Keyed by filename, the same key used to sort. */
-const LEDGER_TABLE = 'llamenos_schema_migrations'
 
 /**
  * Advisory lock held for the whole run so concurrent boots serialise.
@@ -63,9 +65,7 @@ const ADVISORY_LOCK_KEY = 7_742_010_914_551
  */
 const SCHEMA_SENTINEL_TABLE = 'users'
 
-const files = readdirSync(migrationsDir)
-  .filter((f) => f.endsWith('.sql'))
-  .sort()
+const files = listMigrationFiles(migrationsDir)
 
 if (files.length === 0) {
   console.log('[migrate] No migration files found')
@@ -374,10 +374,6 @@ async function cleanUpResurrectedTables(
   }
 }
 
-function checksumOf(content: string): string {
-  return createHash('sha256').update(content, 'utf-8').digest('hex')
-}
-
 const sql = new SQL({ url: databaseUrl, max: 1, connectionTimeout: 30 })
 
 let lockHeld = false
@@ -451,7 +447,7 @@ try {
 
   for (const file of files) {
     const content = readFileSync(join(migrationsDir, file), 'utf-8')
-    const checksum = checksumOf(content)
+    const checksum = migrationChecksum(content)
 
     const row = ledger.get(file)
     if (row?.applied_at != null) {
@@ -474,10 +470,7 @@ try {
     // and is applied strictly, even on a database that was caught up earlier.
     const catchUp = row !== undefined
 
-    const statements = content
-      .split('--> statement-breakpoint')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
+    const statements = splitMigrationStatements(content)
 
     const skippedSql: string[] = []
 

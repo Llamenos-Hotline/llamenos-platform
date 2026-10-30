@@ -125,6 +125,8 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'scripts/check-label-count.sh',
   'scripts/check-migration-drift.sh',
   'scripts/check-migration-drift.ts',
+  'scripts/check-migration-safety.ts',
+  'scripts/check-migration-safety.test.ts',
   'scripts/check-unique-test-names.ts',
   'scripts/typecheck-tests-gate.ts',
   'scripts/eslint-rules/',

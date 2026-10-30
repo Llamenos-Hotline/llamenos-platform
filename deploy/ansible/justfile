@@ -54,7 +54,9 @@ update *ARGS:
 update-app *ARGS:
     ansible-playbook playbooks/update.yml --ask-vault-pass -e update_services=app {{ARGS}}
 
-# Quick update: skip pre-update backup for faster deploys
+# Quick update: skip the pre-update backup. The migration safety gate still
+# refuses to migrate without a backup from the last hour, so this only helps an
+# update that migrates nothing, or one right after `just backup`.
 update-quick *ARGS:
     ansible-playbook playbooks/update.yml --ask-vault-pass -e update_skip_backup=true {{ARGS}}
 
