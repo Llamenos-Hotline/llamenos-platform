@@ -264,7 +264,7 @@ async function fetchStoredMessageAs(
 
   const { status, data } = await apiGet<{ messages: StoredMessage[] }>(
     request,
-    `/conversations/${scenario.conversationId}/messages`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${scenario.conversationId}/messages`,
     authSeedHex,
   )
   expect(status, `${readerLabel} could not list the conversation's messages`).toBe(200)
@@ -326,10 +326,11 @@ When('a message {string} is encrypted for volunteer and admin', async ({ request
     senderNumber: sender,
     body: 'opening contact',
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
   const assigned = await apiPatch(
     request,
-    `/conversations/${opening.conversationId}`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${opening.conversationId}`,
     { assignedTo: state.volunteerKeypair!.pubkey },
   )
   expect(assigned.status, `could not assign the conversation: ${JSON.stringify(assigned.data)}`).toBe(200)
@@ -338,6 +339,7 @@ When('a message {string} is encrypted for volunteer and admin', async ({ request
     senderNumber: sender,
     body: messageText,
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
   expect(result.conversationId).toBe(opening.conversationId)
 

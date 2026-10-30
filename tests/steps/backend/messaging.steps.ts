@@ -109,7 +109,7 @@ Then('the conversation should be assigned to a volunteer', async ({ request, wor
   expect(getScenarioState(world).conversationId).toBeDefined()
   const { status, data } = await apiGet<{ assignedTo?: string }>(
     request,
-    `/conversations/${getScenarioState(world).conversationId}`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${getScenarioState(world).conversationId}`,
   )
   expect(status).toBe(200)
   // Auto-assignment may be async — check the conversation exists
@@ -147,7 +147,7 @@ Then(
     expect(getScenarioState(world).conversationId).toBeDefined()
     const { status, data } = await apiGet<{ assignedTo?: string }>(
       request,
-      `/conversations/${getScenarioState(world).conversationId}`,
+      `/hubs/${getScenarioState(world).hubId}/conversations/${getScenarioState(world).conversationId}`,
     )
     expect(status).toBe(200)
     expect(data).toBeTruthy()
@@ -182,14 +182,14 @@ Then('each conversation should have the correct channel type', async ({ request,
 
   const smsConvo = await apiGet<{ channelType: string }>(
     request,
-    `/conversations/${smsId}`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${smsId}`,
   )
   expect(smsConvo.status).toBe(200)
   expect(smsConvo.data.channelType).toBe('sms')
 
   const waConvo = await apiGet<{ channelType: string }>(
     request,
-    `/conversations/${waId}`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${waId}`,
   )
   expect(waConvo.status).toBe(200)
   expect(waConvo.data.channelType).toBe('whatsapp')
@@ -208,7 +208,7 @@ Given('a conversation with status {string}', async ({ request, world }, targetSt
   getScenarioState(world).conversationId = result.conversationId
 
   if (targetStatus === 'closed') {
-    await apiPatch(request, `/conversations/${result.conversationId}`, { status: 'closed' })
+    await apiPatch(request, `/hubs/${getScenarioState(world).hubId}/conversations/${result.conversationId}`, { status: 'closed' })
   }
 
   getScenarioState(world).lastApiResponse = { status: 200, data: { senderNumber: sender } }
@@ -230,7 +230,7 @@ Then('the conversation status should change to {string}', async ({ request, worl
   expect(getScenarioState(world).conversationId).toBeDefined()
   const { status, data } = await apiGet<{ status: string }>(
     request,
-    `/conversations/${getScenarioState(world).conversationId}`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${getScenarioState(world).conversationId}`,
   )
   expect(status).toBe(200)
   expect(data.status).toBe(expectedStatus)

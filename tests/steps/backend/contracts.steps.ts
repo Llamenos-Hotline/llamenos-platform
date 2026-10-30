@@ -7,7 +7,7 @@
  */
 import { expect } from '@playwright/test'
 import { When, Then, Given, Before } from './fixtures'
-import { setLastResponse } from './shared-state'
+import { resolvePathParams, setLastResponse } from './shared-state'
 import {
   apiGet,
   apiPost,
@@ -63,8 +63,9 @@ When('an admin sends {string} to {string} with body:', async (
 
 // ── Generic admin GET/POST/PATCH (no body) ──────────────────────────
 
-When('an admin sends {string} to {string}', async ({ request, world }, method: string, path: string) => {
-  const apiPath = path.startsWith('/api') ? path.slice(4) : path
+When('an admin sends {string} to {string}', async ({ request, world, workerHub }, method: string, path: string) => {
+  const resolved = resolvePathParams(world, path, workerHub)
+  const apiPath = resolved.startsWith('/api') ? resolved.slice(4) : resolved
   switch (method) {
     case 'GET':
       setLastResponse(world, await apiGet(request, apiPath, ADMIN_NSEC))
