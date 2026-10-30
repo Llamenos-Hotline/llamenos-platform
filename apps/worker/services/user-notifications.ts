@@ -14,6 +14,8 @@ import type { SignalContactsService } from './signal-contacts'
 import type { SecurityPrefsService } from './security-prefs'
 import type { AuditService } from './audit'
 import { ServiceError } from './settings'
+import { getLocaleString } from '@llamenos/i18n'
+import type { IncidentCategory, IncidentState } from '@protocol/schemas/incidents'
 
 const log = createLogger('services.user-notifications')
 
@@ -37,6 +39,12 @@ export type AlertInput =
       alertCount: number
       failedCount: number
     }
+  /**
+   * A hub incident opened or closed (B-INCIDENTS, #2341). Category and state
+   * only — never counts, a number, or anything that identifies a caller; the
+   * app shows the detail to whoever holds the permission.
+   */
+  | { type: 'hub_incident'; category: IncidentCategory; state: IncidentState }
 
 // ---------------------------------------------------------------------------
 // Message rendering
@@ -46,7 +54,42 @@ export function formatDisappearingTimerSeconds(days: number): number {
   return days * 86400
 }
 
-export function renderAlertMessage(input: AlertInput): string {
+/** The camelCase locale key segment for each incident category (`incident.category.<key>`). */
+const INCIDENT_CATEGORY_LOCALE_KEY: Record<IncidentCategory, string> = {
+  spam: 'spam',
+  'provider-media': 'providerMedia',
+  'erasure-deadline': 'erasureDeadline',
+  'ban-expiry': 'banExpiry',
+}
+
+/** `incident.opened` reads "Happening now"; an update is still happening. */
+const INCIDENT_STATE_LOCALE_KEY: Record<IncidentState, string> = {
+  opened: 'incident.opened',
+  updated: 'incident.opened',
+  closed: 'incident.closed',
+}
+
+/** A key from `locale`, falling back to English — every incident key exists in en.json. */
+function localized(locale: string, key: string): string {
+  const value = getLocaleString(locale, key) ?? getLocaleString('en', key)
+  if (value === undefined) throw new Error(`Missing locale key ${key}`)
+  return value
+}
+
+function renderIncidentAlert(
+  input: Extract<AlertInput, { type: 'hub_incident' }>,
+  locale: string,
+): string {
+  return localized(locale, 'incident.signalAlert')
+    .replace('{{category}}', localized(locale, `incident.category.${INCIDENT_CATEGORY_LOCALE_KEY[input.category]}`))
+    .replace('{{state}}', localized(locale, INCIDENT_STATE_LOCALE_KEY[input.state]))
+}
+
+/**
+ * Render an alert's Signal text. `locale` is the recipient's UI language; the
+ * incident alert is localized from `incident.*`, the older alerts are English.
+ */
+export function renderAlertMessage(input: AlertInput, locale = 'en'): string {
   switch (input.type) {
     case 'new_device':
       return `🔔 New sign-in detected from ${input.city}, ${input.country} (${input.userAgent}). If this wasn't you, revoke the session and rotate your PIN.`
@@ -66,6 +109,8 @@ export function renderAlertMessage(input: AlertInput): string {
       return `🚨 ${input.eventCount} client(s) reported a TLS certificate pin mismatch. This may be an active network attack or an unexpected certificate rotation. Review the admin security events log.`
     case 'digest':
       return `📊 Summary (last ${input.periodDays} days): ${input.loginCount} login(s), ${input.alertCount} alert(s), ${input.failedCount} failed attempt(s).`
+    case 'hub_incident':
+      return renderIncidentAlert(input, locale)
   }
 }
 
@@ -123,7 +168,9 @@ export class UserNotificationsService {
 
   async sendAlert(
     userPubkey: string,
-    alert: AlertInput
+    alert: AlertInput,
+    /** The recipient's UI language, for alerts that are localized. */
+    locale = 'en',
   ): Promise<{ delivered: boolean }> {
     const prefs = await this.prefs.get(userPubkey)
 
@@ -148,7 +195,7 @@ export class UserNotificationsService {
     const contact = await this.signalContacts.findByUser(userPubkey)
     if (!contact) return { delivered: false }
 
-    const message = renderAlertMessage(alert)
+    const message = renderAlertMessage(alert, locale)
     const timer = formatDisappearingTimerSeconds(prefs.disappearingTimerDays)
 
     let lastErr = ''

@@ -12,6 +12,7 @@ import { eq, count } from 'drizzle-orm'
 import { cleanupExpiredNonces } from '../../apps/worker/services/webhook-replay'
 import { createServices, schedulerServiceDeps, type Services } from '../../apps/worker/services'
 import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
+import { IncidentDelivery } from '../../apps/worker/services/incidents-delivery'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
 import { validateConfig, readSecretFile } from '../../apps/worker/lib/config'
@@ -273,6 +274,15 @@ services.scheduler.start({
   },
   resolveIdentifier: (subscriberId: string) =>
     services.blasts.resolveSubscriberIdentifier(subscriberId),
+  // #2341: incident announcements — relay (every member, detail-free), push and
+  // Signal (permission holders only) — need the request env, so they are built here.
+  incidentNotifier: new IncidentDelivery({
+    env: env as unknown as Env,
+    identity: services.identity,
+    settings: services.settings,
+    shifts: services.shifts,
+    userNotifications: services.userNotifications,
+  }),
   onBlastProgress: (blastId, hubId, stats) => {
     publishEvent(env as unknown as Env, KIND_BLAST_PROGRESS, {
       type: 'blast:progress',
