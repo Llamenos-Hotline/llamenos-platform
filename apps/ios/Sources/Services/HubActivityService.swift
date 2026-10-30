@@ -87,7 +87,7 @@ final class HubActivityService {
             // Keys for messages already counted — no new conversation or message.
             break
 
-        case .noteCreated, .voicemailNew, .presenceSummary, .presenceDetail, .deviceWipe, .unknown:
+        case .noteCreated, .voicemailNew, .presenceSummary, .presenceDetail, .deviceWipe, .hubIncident, .unknown:
             break
         }
 

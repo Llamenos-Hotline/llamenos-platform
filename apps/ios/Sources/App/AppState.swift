@@ -40,6 +40,8 @@ final class AppState {
     let offlineQueue: OfflineQueue
     let hubActivityService: HubActivityService
     let hubMembershipService: HubMembershipService
+    /// Open incidents across every member hub, behind the persistent banner (rule V).
+    let incidentService: IncidentService
     let linphoneService: LinphoneService
     let wipeService: WipeService
     let permissionService: PermissionService
@@ -133,6 +135,7 @@ final class AppState {
             cryptoService: crypto,
             hubContext: hubContext
         )
+        self.incidentService = IncidentService(apiService: api)
         self.linphoneService = linphone
         self.permissionService = permission
         let authMe = AuthMeLoader(apiService: api, permissionService: permission)
@@ -487,6 +490,7 @@ final class AppState {
         membershipLoadTask?.cancel()
         membershipLoadTask = nil
         hubMembershipService.reset()
+        incidentService.reset()
         shiftClockService.reset()
         inviteEnrollment.reset()
         authService.logout()
@@ -521,9 +525,21 @@ final class AppState {
         }
         #endif
         membershipLoadTask?.cancel()
-        membershipLoadTask = Task { [hubMembershipService] in
+        membershipLoadTask = Task { [hubMembershipService, incidentService] in
+            await hubMembershipService.loadMembership()
+            guard !Task.isCancelled else { return }
+            // Incidents from every member hub, as soon as membership is known (rule V).
+            await incidentService.refreshAll(hubs: hubMembershipService.memberHubs)
+        }
+    }
+
+    /// Re-read every member hub's open incidents — when the incident view opens, which is
+    /// also what tapping the content-free incident push does.
+    func refreshIncidents() async {
+        if !hubMembershipService.hasLoaded {
             await hubMembershipService.loadMembership()
         }
+        await incidentService.refreshAll(hubs: hubMembershipService.memberHubs)
     }
 
     #if DEBUG
@@ -609,8 +625,8 @@ final class AppState {
     }
 
     /// Relay event kinds subscribed on every member hub: call ring/update/voicemail,
-    /// new message, conversation assigned, presence. Mirrors the desktop client.
-    static let relayEventKinds = [1000, 1001, 1002, 1010, 1011, 20000]
+    /// new message, conversation assigned, hub incident, presence. Mirrors the desktop client.
+    static let relayEventKinds = [1000, 1001, 1002, 1010, 1011, WebSocketService.kindHubIncident, 20000]
 
     /// Connect WebSocket to the relay if a hub URL is configured.
     ///
@@ -629,6 +645,8 @@ final class AppState {
             guard let self else { return }
             for await attributed in webSocketService.attributedEvents {
                 hubActivityService.handle(attributed)
+                // Off the event loop: a ring must never wait behind an incident fetch.
+                Task { await incidentService.handle(attributed) }
             }
         }
 
