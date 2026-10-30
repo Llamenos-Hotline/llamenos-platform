@@ -1143,9 +1143,10 @@ final class AdminViewModel {
             let stored: SpamSettings = try await apiService.request(
                 method: "PATCH",
                 path: "/api/settings/spam",
-                body: SpamSettings(
+                body: SpamSettingsPatch(
                     blockDurationMinutes: spamBlockDurationMinutes,
                     maxCallsPerMinute: spamMaxCallsPerMinute,
+                    overLimitAction: nil,
                     rateLimitEnabled: spamRateLimitEnabled,
                     voiceCAPTCHAEnabled: spamVoiceCaptchaEnabled
                 )

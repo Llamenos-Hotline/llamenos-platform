@@ -92,7 +92,9 @@
       "schema": "spamSettingsSchema",
       "swiftType": "SpamSettings",
       "swiftFile": "packages/protocol/generated/swift/Types.swift",
-      "requiredSwiftKeys": [],
+      "requiredSwiftKeys": [
+        "overLimitAction"
+      ],
       "absentFromServer": [
         "maxCallsPerHour",
         "knownNumberBypass"
@@ -179,7 +181,8 @@
       "voiceCaptchaEnabled": false,
       "rateLimitEnabled": true,
       "maxCallsPerMinute": 3,
-      "blockDurationMinutes": 30
+      "blockDurationMinutes": 30,
+      "overLimitAction": "message"
     },
     "ivrLanguages": {
       "enabledLanguages": [

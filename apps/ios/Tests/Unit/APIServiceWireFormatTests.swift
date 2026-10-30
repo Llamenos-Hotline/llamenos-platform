@@ -317,12 +317,14 @@ final class APIServiceWireFormatTests: XCTestCase {
                 globalEnabled: true
             )),
 
-            // PATCH /api/settings/spam — spamSettingsSchema, all four optional.
-            // `voiceCAPTCHAEnabled` carries an explicit CodingKey of
-            // "voiceCaptchaEnabled", so this is also a generated-CodingKeys case.
-            ("patchSpamSettings", SpamSettings(
+            // PATCH /api/settings/spam — spamSettingsPatchSchema, all five optional
+            // (the PATCH body has no defaults: #1643). `voiceCAPTCHAEnabled` carries
+            // an explicit CodingKey of "voiceCaptchaEnabled", so this is also a
+            // generated-CodingKeys case.
+            ("patchSpamSettings", SpamSettingsPatch(
                 blockDurationMinutes: 45,
                 maxCallsPerMinute: 7,
+                overLimitAction: .voicemail,
                 rateLimitEnabled: true,
                 voiceCAPTCHAEnabled: true
             )),

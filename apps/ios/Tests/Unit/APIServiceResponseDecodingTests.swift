@@ -210,6 +210,7 @@ final class APIServiceResponseDecodingTests: XCTestCase {
         XCTAssertEqual(settings.blockDurationMinutes, 30)
         XCTAssertEqual(settings.rateLimitEnabled, true)
         XCTAssertEqual(settings.voiceCAPTCHAEnabled, false)
+        XCTAssertEqual(settings.overLimitAction, .message)
     }
 
     /// #2204: both shift screens read this one answer. The hand-written dashboard struct it
