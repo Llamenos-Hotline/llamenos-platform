@@ -116,7 +116,7 @@ dev.post('/test-reset', async (c) => {
   }
   await services.records.reset()
   await services.shifts.reset('')
-  await services.calls.reset('')
+  await services.calls.reset('', services.callRecordings)
   await services.conversations.reset()
   await services.blasts.reset()
   await services.contacts.reset(env, secret)
@@ -154,7 +154,7 @@ dev.post('/test-reset-no-admin', async (c) => {
   await services.settings.reset(env, secret)
   await services.records.reset()
   await services.shifts.reset('')
-  await services.calls.reset('')
+  await services.calls.reset('', services.callRecordings)
   await services.conversations.reset()
   await services.blasts.reset()
   await services.contacts.reset(env, secret)
@@ -189,7 +189,7 @@ dev.post('/test-reset-records', async (c) => {
   const secret = c.req.header('X-Test-Secret')
   await services.records.reset()
   await services.shifts.reset('')
-  await services.calls.reset('')
+  await services.calls.reset('', services.callRecordings)
   await services.conversations.reset()
   await services.contacts.reset(env, secret)
   await services.cases.reset(env, secret)
@@ -790,7 +790,7 @@ dev.delete('/test-seed-sample', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  await services.settings.purgeHub(SAMPLE_HUB.id)
+  await services.settings.purgeHub(SAMPLE_HUB.id, services.callRecordings)
   for (const account of sampleIdentities(c.env)) {
     await services.identity.deleteUser(account.pubkey).catch(() => {})
   }
