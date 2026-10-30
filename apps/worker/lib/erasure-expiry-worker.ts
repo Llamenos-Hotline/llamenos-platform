@@ -3,11 +3,23 @@
  * shred (hub-scope) requests that have passed their execute_at deadline and
  * executes them. The deadline is compared with the DATABASE clock, so a
  * worker whose wall clock is ahead can never execute a request early.
+ *
+ * Failure visibility (#2323) is split across two layers, and neither is
+ * evaluated here:
+ *  - L2: every tick runs inside `IncidentService.runWorkerTick`, so three
+ *    consecutive ticks that throw (the poll itself failing — previously a log
+ *    line and nothing else) raise `erasure-deadline` / `worker_failing`.
+ *  - L1: requests left unfinished past their deadline are counted by the
+ *    `erasure-deadline` check (`erasureDeadlineCheck`, services/erasure.ts),
+ *    which the SEPARATE `incident-checks` worker runs. It must never be run
+ *    from this module: a check inside the worker it measures cannot report
+ *    this worker being stopped (asserted in erasure-deadline.test.ts).
  */
 import type { ErasureService } from '../services/erasure'
 import type { AuditService } from '../services/audit'
 import type { HubShredService } from '../services/hub-shred'
 import type { ProviderMediaEraser } from '../services/provider-recordings'
+import type { IncidentService } from '../services/incidents'
 import { getConnectionManager } from './ws-manager'
 import { createLogger } from './logger'
 import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
@@ -36,6 +48,11 @@ interface ErasureExpiryWorkerOpts {
    * shred deletes the hub's provider credentials, after which nothing could.
    */
   providerMedia: ProviderMediaEraser
+  /**
+   * The L2 worker-failure hook only — deliberately not the whole service, so
+   * this worker has no way to run the incident checks that measure it.
+   */
+  incidents: Pick<IncidentService, 'runWorkerTick'>
 }
 
 type ExpiredRequest = Awaited<ReturnType<ErasureService['getExpiredPendingRequests']>>[number]
@@ -47,7 +64,7 @@ type ExpiredRequest = Awaited<ReturnType<ErasureService['getExpiredPendingReques
  */
 export async function processExpiredRequest(
   request: ExpiredRequest,
-  opts: ErasureExpiryWorkerOpts,
+  opts: Omit<ErasureExpiryWorkerOpts, 'incidents'>,
 ): Promise<void> {
   if (request.scope === 'hub' || request.userId === null) {
     // Hub-scoped requests are crypto-shreds, not person erasures: they have
@@ -110,13 +127,14 @@ export async function processExpiredRequest(
   })
 }
 
-export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
-  if (intervalId) return
-
-  logger.info('Started erasure expiry worker')
-
-  const check = () =>
-    trackWorkerTick('erasure-expiry', async () => {
+/**
+ * One erasure-expiry tick. Throws when the poll (or marking a request failed)
+ * throws, after `runWorkerTick` has counted it; per-request execution failures
+ * are caught and marked `failed` without failing the tick.
+ */
+export function erasureExpiryTick(opts: ErasureExpiryWorkerOpts): Promise<void> {
+  return trackWorkerTick('erasure-expiry', () =>
+    opts.incidents.runWorkerTick('erasure-expiry', 'erasure-deadline', async () => {
       const expired = await opts.erasureService.getExpiredPendingRequests()
       if (expired.length === 0) return
 
@@ -135,7 +153,17 @@ export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
           await opts.erasureService.markFailed(request.id)
         }
       }
-    }).catch((err) => {
+    }),
+  )
+}
+
+export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
+  if (intervalId) return
+
+  logger.info('Started erasure expiry worker')
+
+  const check = () =>
+    erasureExpiryTick(opts).catch((err) => {
       logger.error('Erasure expiry check failed', { error: err })
     })
 

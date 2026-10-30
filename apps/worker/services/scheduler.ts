@@ -206,6 +206,7 @@ export class TaskScheduler {
       auditService: deps.auditService,
       hubShred: deps.hubShred,
       providerMedia: deps.providerMedia,
+      incidents: deps.incidents,
     })
     started.push('erasure-expiry')
 
