@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "Entèdiksyon ki pral ekspire",
+      "channelDisabled": "Kontak yo refize sou yon kanal ki etenn",
       "erasureDeadline": "Demann efasman ki an reta",
       "providerMedia": "Anrejistreman ki rete kay founisè telefòn nan",
       "spam": "Spam ak apèl moun pa vle"

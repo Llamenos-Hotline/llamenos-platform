@@ -17,6 +17,7 @@ import type { SignalWebhookPayload } from './signal/types'
 import { SignalIdentityService } from './signal/identity'
 import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
+import { refuseIfChannelDisabled } from './channel-guard'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
@@ -165,6 +166,15 @@ messaging.post('/:channel/webhook',
     } catch {
       // Not a status update, continue to parse as message
     }
+  }
+
+  // The hub's own switch for this channel (#2384). Everything below is inbound
+  // contact — a message, a reaction, a typing indicator — and a hub that has
+  // turned the channel off must not process any of it. Delivery receipts for
+  // messages we already sent were reconciled above and are not contact. The
+  // refusal is signalled to the hub (record-severity incident), never silent.
+  if (await refuseIfChannelDisabled(services, hubId, channel)) {
+    return c.json({ error: `${channel} is not enabled for this hub` }, 403)
   }
 
   // Signal-specific: handle reactions and typing indicators
