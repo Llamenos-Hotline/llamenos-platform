@@ -31,7 +31,7 @@ import { SignalRegistrationService } from './provider-setup/signal-registration'
 import { A2pRegistrationService } from './provider-setup/a2p-registration'
 import { ProviderTemplateService } from './provider-setup/templates'
 import { HubOnboardService } from './provider-setup/hub-onboard'
-import { ErasureService, erasureDeadlineCheck } from './erasure'
+import { ErasureService, erasureDeadlineCheck, erasureFailedCheck } from './erasure'
 import { routingIncidentChecks } from './routing-readiness'
 import { RetentionService } from './retention'
 import { HubShredService } from './hub-shred'
@@ -224,6 +224,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   // exists; RUN only by the `incident-checks` scheduler worker — never by the
   // worker whose backlog a check measures.
   services.incidents.registerCheck(erasureDeadlineCheck(erasure))
+  services.incidents.registerCheck(erasureFailedCheck(erasure))
   // #2330: a hotline that rings nobody, or that nobody answers, says so.
   for (const check of routingIncidentChecks(services)) services.incidents.registerCheck(check)
 
