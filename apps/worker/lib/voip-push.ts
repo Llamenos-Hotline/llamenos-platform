@@ -7,7 +7,10 @@
  *
  * VoIP push is separate from regular push (push-dispatch.ts) because:
  * 1. iOS VoIP push uses a different APNs topic (bundleId.voip)
- * 2. The payload is minimal — just callId + hubId + type
+ * 2. The payload is minimal — just a call reference + hubId + type. The reference is
+ *    the call's `pushRef` (services/calls.ts), never its id: the call id IS the telephony
+ *    provider's identifier, a key into the provider's CDR, and a push leaves our systems
+ *    (APNs, ntfy) (#2374)
  * 3. It must be delivered with maximum priority to wake the native SIP stack
  * 4. Regular push goes through two-tier HPKE encryption
  */
@@ -22,12 +25,27 @@ import { getApnsVoipTopic } from './apns-topic'
 const logger = createLogger('voip-push')
 
 /**
+ * The one payload both transports send. Everything in it is ours: the call's `pushRef`
+ * (random, unrelated to the provider's identifier), the hub, and a type. No provider
+ * identifier, and nothing about the caller — a caller's last digits next to a provider's
+ * CDR would be an identification Apple could assemble. The wire key stays `call-id`
+ * because the clients and liblinphone read that key; its value is the opaque ref, which
+ * a client matches against `pushRef` on the calls API.
+ */
+export function voipPushPayload(pushRef: string, hubId: string): {
+  type: 'incoming_call'
+  'call-id': string
+  'hub-id': string
+} {
+  return { type: 'incoming_call', 'call-id': pushRef, 'hub-id': hubId }
+}
+
+/**
  * Dispatch VoIP push using IdentityService instead of DO stubs.
  */
 export async function dispatchVoipPushFromService(
   volunteerPubkeys: string[],
-  callId: string,
-  callerDisplay: string,
+  pushRef: string,
   hubId: string,
   env: Env,
   identityService: IdentityService,
@@ -41,15 +59,15 @@ export async function dispatchVoipPushFromService(
   const { devices: deviceList } = await identityService.getVoipTokens(volunteerPubkeys)
   if (deviceList.length === 0) return
 
-  logger.debug('Dispatching VoIP push', { devices: deviceList.length, callId })
+  logger.debug('Dispatching VoIP push', { devices: deviceList.length })
 
   const promises: Promise<void>[] = []
 
   for (const device of deviceList) {
     if (device.platform === 'ios' && hasApns) {
-      promises.push(sendApnsVoipPush(device.voipToken, callId, callerDisplay, hubId, env))
+      promises.push(sendApnsVoipPush(device.voipToken, pushRef, hubId, env))
     } else if (device.platform === 'android' && hasNtfy) {
-      promises.push(sendNtfyVoipPush(device.voipToken, callId, hubId, env))
+      promises.push(sendNtfyVoipPush(device.voipToken, pushRef, hubId, env))
     }
   }
 
@@ -63,8 +81,7 @@ export async function dispatchVoipPushFromService(
  */
 async function sendApnsVoipPush(
   deviceToken: string,
-  callId: string,
-  callerDisplay: string,
+  pushRef: string,
   hubId: string,
   env: Env,
 ): Promise<void> {
@@ -85,12 +102,7 @@ async function sendApnsVoipPush(
       type: PushType.voip,
       priority: Priority.immediate,
       expiration: Math.floor(Date.now() / 1000) + 30, // 30 second TTL
-      data: {
-        'call-id': callId,
-        'caller': callerDisplay,
-        'hub-id': hubId,
-        'type': 'incoming_call',
-      },
+      data: voipPushPayload(pushRef, hubId),
     })
 
     await client.send(notification)
@@ -102,23 +114,19 @@ async function sendApnsVoipPush(
 /**
  * Send ntfy high-priority message for VoIP (Android via UnifiedPush).
  * The voipToken for Android is the UnifiedPush endpoint URL.
- * Payload is minimal: call-id, hub-id, type. No caller display name
- * (that's PII — the app fetches it from the server after waking).
+ * Payload is {@link voipPushPayload}: no caller display name (that's PII — the
+ * app fetches it from the server after waking).
  */
 async function sendNtfyVoipPush(
   pushEndpoint: string,
-  callId: string,
+  pushRef: string,
   hubId: string,
   env: Env,
 ): Promise<void> {
   try {
     const ntfyClient = new NtfyClient(env.NTFY_URL!, env.NTFY_AUTH_TOKEN, ntfyOriginPolicyFromEnv(env))
 
-    const payload = JSON.stringify({
-      type: 'incoming_call',
-      'call-id': callId,
-      'hub-id': hubId,
-    })
+    const payload = JSON.stringify(voipPushPayload(pushRef, hubId))
 
     await ntfyClient.send({
       endpoint: pushEndpoint,

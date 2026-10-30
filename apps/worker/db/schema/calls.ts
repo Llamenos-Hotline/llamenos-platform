@@ -22,6 +22,14 @@ export const activeCalls = pgTable(
   'active_calls',
   {
     callId: text('call_id').primaryKey(),
+    // Our own name for this call outside our systems (#2374). `call_id` is the telephony
+    // provider's identifier — a key into the provider's CDR, which holds the caller's number —
+    // so it must never reach APNs or ntfy. This is random, unrelated to `call_id`, and
+    // meaningless anywhere but here: the VoIP push carries it, and an authenticated client
+    // resolves it back to the call through the calls API.
+    // Nullable so the previous release, which inserts no ref, runs against this schema
+    // (expand/contract); a call it created has no push ref and simply cannot be matched to a push.
+    pushRef: text('push_ref').unique(),
     hubId: text('hub_id'),
     // The caller's number, sealed with SERVER_KEK and bound to `call_id`, held only so
     // the answering volunteer can ban a live caller without ever seeing the digits.

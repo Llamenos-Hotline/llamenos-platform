@@ -99,7 +99,7 @@ function makeServices(rosters: Record<string, string[]>): Services {
       }),
     },
     calls: {
-      addCall: vi.fn().mockResolvedValue(undefined),
+      addCall: vi.fn().mockResolvedValue({ pushRef: 'push-ref-test' }),
       createCallToken: vi.fn(),
       // Nobody is mid-call in these scenarios; ringing consults this to skip
       // volunteers already on a live call in any hub (#1018).
