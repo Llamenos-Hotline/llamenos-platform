@@ -548,7 +548,8 @@ jobs:
       contents: read
     # Measured on ubuntu-latest: 3.4 min with no rust-cache hit (the test
     # run itself is ~2.5 min of that). Self-hosted, warm: 2.5-5.6 min.
-    timeout-minutes: 15
+    # The Kotlin-binding check adds one more cold build (uniffi-bindgen feature set).
+    timeout-minutes: 25
     env:
       # packages/crypto/rust-toolchain.toml pins `stable` plus eleven extra
       # targets (mobile, wasm, macOS, Windows) that rustup would install on
@@ -581,6 +582,14 @@ jobs:
 
       - name: Format check
         run: cargo fmt --manifest-path packages/crypto/Cargo.toml --check
+
+      # apps/android/.../llamenos_core.kt is tracked generated output (Android-only
+      # jobs have no Rust toolchain). Regenerate it from the crate and fail on any
+      # difference, naming the symbols that drifted (#2325: mobileEncrypt/DecryptHubField
+      # sat missing while everything compiled). The `crypto` flag already covers
+      # packages/crypto/ and apps/android/, so a Rust change and a hand-edit both land here.
+      - name: Android UniFFI Kotlin binding is current
+        run: packages/crypto/scripts/kotlin-bindings.sh check
 
   # ─── Dependency Vulnerability Scan ───────────────────────────
   audit:
