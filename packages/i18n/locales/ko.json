@@ -4761,9 +4761,12 @@
       "spam": "스팸 및 원치 않는 전화"
     },
     "closed": "종료됨",
+    "inHub": "{{hub}}에서",
     "ongoing": "{{time}} 이후 {{count}}건",
     "opened": "진행 중",
+    "otherHub": "다른 허브에서",
     "push": "핫라인에 확인이 필요한 활동이 있습니다.",
-    "signalAlert": "핫라인 알림 — {{category}}: {{state}}. 자세한 내용은 앱을 여세요."
+    "signalAlert": "핫라인 알림 — {{category}}: {{state}}. 자세한 내용은 앱을 여세요.",
+    "title": "진행 중인 사건"
   }
 }

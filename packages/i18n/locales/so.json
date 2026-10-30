@@ -4759,9 +4759,12 @@
       "spam": "Spam iyo wicitaano aan la rabin"
     },
     "closed": "Dhammaaday",
+    "inHub": "Gudaha {{hub}}",
     "ongoing": "{{count}} dhacdo tan iyo {{time}}",
     "opened": "Hadda ayuu socdaa",
+    "otherHub": "Xarun kale gudaheeda",
     "push": "Khadkaaga waxaa ka jira dhaqdhaqaaq u baahan in la eego.",
-    "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta."
+    "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta.",
+    "title": "Dhacdooyinka socda"
   }
 }

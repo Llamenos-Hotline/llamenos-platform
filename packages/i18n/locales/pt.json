@@ -4761,9 +4761,12 @@
       "spam": "Spam e chamadas indesejadas"
     },
     "closed": "Encerrado",
+    "inHub": "Em {{hub}}",
     "ongoing": "{{count}} eventos desde {{time}}",
     "opened": "Acontecendo agora",
+    "otherHub": "Em outro centro",
     "push": "Há atividade na sua linha que precisa de atenção.",
-    "signalAlert": "Alerta da linha — {{category}}: {{state}}. Abra o aplicativo para ver os detalhes."
+    "signalAlert": "Alerta da linha — {{category}}: {{state}}. Abra o aplicativo para ver os detalhes.",
+    "title": "Incidentes ativos"
   }
 }
