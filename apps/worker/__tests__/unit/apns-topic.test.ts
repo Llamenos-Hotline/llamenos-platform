@@ -215,8 +215,7 @@ describe('outgoing apns-topic header — VoIP push (voip-push.ts)', () => {
 
     await dispatchVoipPushFromService(
       ['volunteer-pubkey'],
-      'call-1',
-      'Caller',
+      'push-ref-1',
       'hub-1',
       env,
       identityService,
@@ -247,8 +246,7 @@ describe('outgoing apns-topic header — VoIP push (voip-push.ts)', () => {
 
     await dispatchVoipPushFromService(
       ['volunteer-pubkey'],
-      'call-1',
-      'Caller',
+      'push-ref-1',
       'hub-1',
       env,
       identityService,
