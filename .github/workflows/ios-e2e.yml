@@ -1220,8 +1220,13 @@ jobs:
       - name: Report (shard ${{ matrix.shard }})
         if: always()
         run: |
+          # --host lets the report say when ci-timings.json no longer prices a
+          # class the way this host ran it — the packer balances the shards by
+          # those prices, and shard 2 ran 45 minutes against 30 on stale ones
+          # (#2339).
           python3 apps/ios/scripts/ui-tests.py report "$RUNNER_TEMP/xcodebuild-test.log" \
-            --json "$RUNNER_TEMP/ui-test-results-shard-${{ matrix.shard }}.json" | tee -a "$GITHUB_STEP_SUMMARY"
+            --json "$RUNNER_TEMP/ui-test-results-shard-${{ matrix.shard }}.json" \
+            --host ${{ matrix.host }} | tee -a "$GITHUB_STEP_SUMMARY"
 
       # How much headroom did four concurrent shards actually leave? A hosted
       # macOS runner gives a shard 3 cores and 7 GB to itself; four shards on

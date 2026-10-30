@@ -27,7 +27,7 @@
         Fail unless every quarantine entry names an existing test method and
         the issue that owns its failure.
 
-    ui-tests.py report LOG [--json OUT]
+    ui-tests.py report LOG [--json OUT] [--host mac|hosted]
         Parse a raw `xcodebuild test` log and print a Markdown summary: every
         test case with its result and duration, per-class totals, and the
         slowest tests. Exits 1 if the log shows zero executed test cases —
@@ -468,7 +468,37 @@ def execute_failed_verdict(failed: list[dict]) -> str:
             "failed for a reason other than an assertion (a crashed runner, a lost simulator, a signal).")
 
 
-def report(log_path: Path, json_out: Path | None) -> int:
+# A class whose observed seconds per test differ from its price by more than
+# this is stale. Wide enough that one contended hosted VM (±30% on the same
+# classes) does not cry wolf, narrow enough to catch the drift #2339 was: the
+# two heaviest classes of one shard priced 40% and 36% under what they cost.
+DRIFT_TOLERANCE = 0.35
+
+
+def timing_drift(cases: list[dict], host: str,
+                 prices: dict[str, dict[str, float]]) -> list[tuple[str, float, float]]:
+    """Classes whose seconds per passed test on `host` are further than
+    DRIFT_TOLERANCE from what ci-timings.json charges the packer for them.
+
+    The packer balances shards by those prices, so a stale price is a shard
+    that finishes late and holds every other job in the merge group (#2339:
+    CaseManagementUITests priced 28.7s, costing 48.0s). Returns
+    (class, observed, priced) for the classes that drifted, worst first.
+    """
+    by_class: dict[str, list[float]] = defaultdict(list)
+    for c in cases:
+        if c["status"] == "passed":
+            by_class[c["class"]].append(c["seconds"])
+    drifted = []
+    for cls, secs in by_class.items():
+        observed = sum(secs) / len(secs)
+        priced = expected_seconds(prices, cls, host)
+        if abs(observed - priced) > DRIFT_TOLERANCE * priced:
+            drifted.append((cls, observed, priced))
+    return sorted(drifted, key=lambda d: -abs(d[1] - d[2]) / d[2])
+
+
+def report(log_path: Path, json_out: Path | None, host: str | None = None) -> int:
     if not log_path.is_file():
         print(f"**No test log at `{log_path}`** — the test step never ran (see the failed step above).")
         return 1
@@ -539,6 +569,22 @@ def report(log_path: Path, json_out: Path | None) -> int:
     print("#### Slowest 15")
     for c in sorted(cases, key=lambda c: -c["seconds"])[:15]:
         print(f"- `{c['class']}.{c['test']}` {c['status']} {c['seconds']:.1f}s")
+
+    if host:
+        drifted = timing_drift(cases, host, load_timings())
+        if drifted:
+            print()
+            print(f"#### Stale shard-packing prices ({host})")
+            print("| class | priced s/test | observed s/test |")
+            print("|---|---:|---:|")
+            for cls, observed, priced in drifted:
+                print(f"| {cls} | {priced:.1f} | {observed:.1f} |")
+            print()
+            names = ", ".join(cls for cls, _, _ in drifted)
+            print(f"::warning::ci-timings.json prices {names} more than {DRIFT_TOLERANCE:.0%} away from what they "
+                  f"cost on a {host} runner, so the shards are no longer balanced. Refresh with "
+                  f"`ui-tests.py timings --host {host} <ui-test-results-shard-N.json of the shards that ran on {host}>` "
+                  f"(the nightly run uploads them as ios-e2e-results-json-shard-N).")
 
     # Report a failure for anything that failed the RUN, not only anything that
     # failed an assertion. Without this a timeout or a crash-restart is
@@ -662,6 +708,9 @@ def main() -> int:
     r = sub.add_parser("report")
     r.add_argument("log", type=Path)
     r.add_argument("--json", type=Path)
+    r.add_argument("--host", choices=HOSTS,
+                   help="the kind of runner this shard ran on; adds the classes whose "
+                        "ci-timings.json price no longer matches what they cost")
     n = sub.add_parser("nightly-report", help="Markdown issue body for a scheduled run's failures")
     n.add_argument("results_dir", type=Path)
     n.add_argument("--shards", type=int, required=True, help="how many ui shards the run had")
@@ -691,7 +740,7 @@ def main() -> int:
         print(nightly_report(args.results_dir, args.shards,
                              [j for j in args.failed_jobs.split("|") if j], args.run_url), end="")
         return 0
-    return report(args.log, args.json)
+    return report(args.log, args.json, args.host)
 
 
 if __name__ == "__main__":
