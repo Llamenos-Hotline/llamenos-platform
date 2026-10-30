@@ -244,15 +244,11 @@ async function signalProviderAuthRejection(
     const target = await rejectionHub(c, adapter, hubId, bodyBounded)
     if (!target) return
     const incidents = c.get('services').incidents
-    if (providerAuthMonitor.admitSignal(target, kind)) {
-      await incidents.signal(target, 'provider-auth', kind)
-    }
-    if (
-      UNATTRIBUTED_REJECTIONS.has(kind)
-      && providerAuthMonitor.trafficStopped(target)
-      && providerAuthMonitor.admitSignal(target, 'traffic_stopped')
-    ) {
-      await incidents.signal(target, 'provider-auth', 'traffic_stopped')
+    const n = providerAuthMonitor.admitSignal(target, kind)
+    if (n > 0) await incidents.signal(target, 'provider-auth', kind, n)
+    if (UNATTRIBUTED_REJECTIONS.has(kind) && providerAuthMonitor.trafficStopped(target)) {
+      const stopped = providerAuthMonitor.admitSignal(target, 'traffic_stopped')
+      if (stopped > 0) await incidents.signal(target, 'provider-auth', 'traffic_stopped', stopped)
     }
   } catch (err) {
     logger.error('Could not record a provider-auth incident', { kind, error: err })

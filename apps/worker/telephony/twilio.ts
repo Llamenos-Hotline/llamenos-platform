@@ -459,10 +459,15 @@ export class TwilioAdapter implements TelephonyAdapter {
     return `${this.providerLabel.toLowerCase()}:${this.getApiBaseUrl()}`
   }
 
-  /** Twilio (and SignalWire, with the project id) fills `AccountSid` in every voice webhook. */
+  /**
+   * Twilio (and SignalWire, with the project id) fills `AccountSid` in every
+   * voice webhook. Exactly one must be present: a body repeating the field is
+   * not one the provider wrote, and `get` would read only the first.
+   */
   async webhookNamesOwnAccount(request: Request): Promise<boolean> {
     try {
-      return new URLSearchParams(await request.clone().text()).get('AccountSid') === this.accountSid
+      const sids = new URLSearchParams(await request.clone().text()).getAll('AccountSid')
+      return sids.length === 1 && sids[0] === this.accountSid
     } catch {
       return false
     }
