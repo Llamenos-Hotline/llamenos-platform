@@ -3,7 +3,7 @@
 // expressed in factory config. All CRUD handlers remain hand-written.
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
-import type { AppEnv } from '../types'
+import type { AppEnv, Env } from '../types'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { resolveHubPermissions } from '@shared/permissions'
 import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema } from '@protocol/schemas/hubs'
@@ -16,6 +16,7 @@ import { encryptStorageCredential } from '../lib/crypto'
 import { hubContext } from '../middleware/hub'
 import { checkRoleGrant } from '../lib/hub-scope'
 import type { StorageManager } from '../lib/storage-manager'
+import { getHubTelephonyFromService } from '../lib/service-factories'
 import { revokeSipIdentityIfRoleless } from '../telephony/registrar'
 import { createLogger } from '../lib/logger'
 import { getConnectionManager } from '../lib/ws-manager'
@@ -341,9 +342,12 @@ routes.delete('/:hubId',
     const services = c.get('services')
 
     try {
-      // Destroy hub-scoped storage buckets and IAM before deleting the hub
+      // Destroy hub-scoped storage buckets and IAM before deleting the hub —
+      // but only once the provider has deleted the hub's caller audio
+      // (#2364): a refusal must leave the buckets, like everything else, intact.
       const storageManager = (c.env as unknown as Record<string, unknown>).STORAGE_MANAGER as StorageManager | undefined
-      if (storageManager) {
+      const destroyHubStorage = async () => {
+        if (!storageManager) return
         const creds = await services.settings.getHubStorageCredentials(hubId)
         await storageManager.destroyHub(hubId, creds?.userName)
       }
@@ -361,7 +365,12 @@ routes.delete('/:hubId',
         logger.error('Hub deletion: member roster unreadable — SIP endpoints may linger', { hubId, err })
       }
 
-      await services.settings.deleteHub(hubId)
+      await services.settings.deleteHub(
+        hubId,
+        services.providerRecordings.eraser((id) =>
+          getHubTelephonyFromService(c.env as unknown as Env, services.settings, id)),
+        { beforeDrop: destroyHubStorage },
+      )
 
       for (const member of members) {
         await revokeSipIdentityIfRoleless(services, c.env.SERVER_KEK, member, c.get('allRoles'))
@@ -369,7 +378,7 @@ routes.delete('/:hubId',
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 500)
+        return c.json({ error: err.message }, err.status as 404 | 500 | 502)
       }
       const message = err instanceof Error ? err.message : 'Failed to delete hub'
       return c.json({ error: message }, 500)
