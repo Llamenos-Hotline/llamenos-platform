@@ -1,5 +1,6 @@
 import CommonCrypto
 import Foundation
+import os
 
 // MARK: - APIError
 
@@ -233,6 +234,33 @@ final class APIService: @unchecked Sendable {
     private let wireEncoder = APIService.makeWireEncoder()
     private let decoder: JSONDecoder
 
+    /// Request timing, for reading what the app was doing when a UI test stalls (#2283):
+    /// CI captures this subsystem from the simulator and uploads it with each shard.
+    private static let requestLog = Logger(subsystem: "org.llamenos.hotline", category: "HTTP")
+
+    /// Every request goes through here. DEBUG builds (the simulator, the UI-test build)
+    /// log method, path, status and elapsed time; a release build logs nothing, so a
+    /// seized phone's log holds no record of which hub, call or note it touched and when.
+    /// The query string is never logged.
+    private static func data(for request: URLRequest, on session: URLSession) async throws -> (Data, URLResponse) {
+        #if DEBUG
+        let label = "\(request.httpMethod ?? "GET") \(request.url?.path ?? "?")"
+        let started = ContinuousClock.now
+        requestLog.debug("-> \(label, privacy: .public)")
+        do {
+            let result = try await session.data(for: request)
+            let status = (result.1 as? HTTPURLResponse)?.statusCode ?? 0
+            requestLog.debug("<- \(label, privacy: .public) \(status, privacy: .public) after \(ContinuousClock.now - started, privacy: .public)")
+            return result
+        } catch {
+            requestLog.debug("x  \(label, privacy: .public) after \(ContinuousClock.now - started, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+        #else
+        return try await session.data(for: request)
+        #endif
+    }
+
     /// Offline write queue. Set by AppState after initialization.
     /// When a write request fails with a network error, the operation is
     /// automatically enqueued for replay when connectivity is restored.
@@ -459,7 +487,7 @@ final class APIService: @unchecked Sendable {
         var request = URLRequest(url: healthURL, timeoutInterval: 5)
         request.httpMethod = "GET"
         do {
-            let (_, response) = try await session.data(for: request)
+            let (_, response) = try await Self.data(for: request, on: session)
             if let httpResponse = response as? HTTPURLResponse {
                 return (200...499).contains(httpResponse.statusCode)
             }
@@ -513,7 +541,7 @@ final class APIService: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await Self.data(for: urlRequest, on: session)
         } catch {
             // On network error for write operations, enqueue for offline replay
             if OfflineQueue.isQueueableMethod(method) {
@@ -596,7 +624,7 @@ final class APIService: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await Self.data(for: urlRequest, on: session)
         } catch {
             // On network error for write operations, enqueue for offline replay
             if OfflineQueue.isQueueableMethod(method) {
@@ -655,7 +683,7 @@ final class APIService: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await Self.data(for: urlRequest, on: session)
         } catch {
             throw APIError.networkError(error)
         }
@@ -809,7 +837,7 @@ final class APIService: @unchecked Sendable {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await bootstrapSession.data(for: request)
+        let (data, response) = try await Self.data(for: request, on: bootstrapSession)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
         }
@@ -859,7 +887,7 @@ final class APIService: @unchecked Sendable {
             urlRequest.httpBody = body.data(using: .utf8)
         }
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await Self.data(for: urlRequest, on: session)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
@@ -982,7 +1010,7 @@ extension APIService {
             urlRequest.setValue("Bearer \(authJSON)", forHTTPHeaderField: "Authorization")
         }
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await Self.data(for: urlRequest, on: session)
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
             let bodyString = String(data: data, encoding: .utf8) ?? "<binary>"

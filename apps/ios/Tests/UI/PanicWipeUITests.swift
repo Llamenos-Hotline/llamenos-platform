@@ -64,8 +64,7 @@ final class PanicWipeUITests: BaseUITest {
             // Type "WIPE" in the confirmation field (friction gate)
             let confirmInput = find("panic-wipe-confirmation-input")
             XCTAssertTrue(confirmInput.waitForExistence(timeout: 5), "Confirmation input should exist")
-            confirmInput.tap()
-            confirmInput.typeText("WIPE")
+            typeText("WIPE", into: confirmInput)
 
             // Tap the confirm button (now enabled)
             let confirmButton = find("confirm-panic-wipe")

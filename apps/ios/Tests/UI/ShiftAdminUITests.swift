@@ -160,8 +160,7 @@ final class ShiftAdminUITests: BaseUITest {
             find("ring-group-create-button").tap()
             let nameInput = find("ring-group-name-input")
             XCTAssertTrue(nameInput.waitForExistence(timeout: 5))
-            nameInput.tap()
-            nameInput.typeText(groupName)
+            typeText(groupName, into: nameInput)
             find("ring-group-save-button").tap()
         }
         then("the group is listed by the server") {

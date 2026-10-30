@@ -82,12 +82,10 @@ final class RecoveryGroupUITests: BaseUITest {
         )
         XCTAssertFalse(startButton.isEnabled, "Recovery cannot start with no hub and no identifier")
 
-        hubInput.tap()
-        hubInput.typeText("https://test.example.org")
+        typeText("https://test.example.org", into: hubInput)
         XCTAssertFalse(startButton.isEnabled, "A hub alone is not enough to start recovery")
 
-        identifierInput.tap()
-        identifierInput.typeText("+15551234567")
+        typeText("+15551234567", into: identifierInput)
         XCTAssertTrue(startButton.isEnabled, "Recovery can start once the hub and identifier are filled")
     }
 }

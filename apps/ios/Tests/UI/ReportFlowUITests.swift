@@ -341,15 +341,13 @@ final class ReportFlowUITests: BaseUITest {
         let container = scrollToVisible(identifier)
         let input = container.textFields.firstMatch.exists ? container.textFields.firstMatch : container
         XCTAssertTrue(input.exists, "\(identifier) should be on the form")
-        input.tap()
-        input.typeText(text)
+        typeText(text, into: input)
     }
 
     private func fillTextArea(_ identifier: String, with text: String) {
         let container = scrollToVisible(identifier)
         let input = container.textViews.firstMatch.exists ? container.textViews.firstMatch : container
         XCTAssertTrue(input.exists, "\(identifier) should be on the form")
-        input.tap()
-        input.typeText(text)
+        typeText(text, into: input)
     }
 }

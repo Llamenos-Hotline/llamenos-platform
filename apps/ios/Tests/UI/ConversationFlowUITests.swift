@@ -127,8 +127,7 @@ final class ConversationFlowUITests: BaseUITest {
 
             let replyField = find("reply-text-field")
             XCTAssertTrue(replyField.waitForExistence(timeout: 5), "Reply field should exist")
-            replyField.tap()
-            replyField.typeText("Test message from UI test - \(Date().timeIntervalSince1970)")
+            typeText("Test message from UI test - \(Date().timeIntervalSince1970)", into: replyField)
 
             XCTAssertTrue(sendButton.isEnabled, "Send should be enabled once there is a message to send")
         }

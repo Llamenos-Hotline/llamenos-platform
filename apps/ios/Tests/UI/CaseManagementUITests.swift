@@ -273,8 +273,7 @@ final class CaseManagementUITests: BaseUITest {
 
         let titleInput = find("case-title-input")
         XCTAssertTrue(titleInput.waitForExistence(timeout: 5))
-        titleInput.tap()
-        titleInput.typeText(title)
+        typeText(title, into: titleInput)
         // `typeText` returns once the key events are synthesized, not once the field has
         // consumed them, and a tap on Create reads the field as it is at that instant. A
         // run that submitted while only "Seeded ca" of "Seeded case 3632D769" had arrived
@@ -688,8 +687,7 @@ final class CaseManagementUITests: BaseUITest {
             XCTAssertTrue(submit.waitForExistence(timeout: 5), "Comment sheet should contain a submit button")
             XCTAssertFalse(submit.isEnabled, "Submit should be disabled while the comment is empty")
 
-            sheetInput.tap()
-            sheetInput.typeText(comment)
+            typeText(comment, into: sheetInput)
             XCTAssertTrue(submit.isEnabled, "Submit should be enabled once there is text")
             submit.tap()
         }

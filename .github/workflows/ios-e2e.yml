@@ -1117,6 +1117,29 @@ jobs:
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee "$RUNNER_TEMP/shard-args.txt"
           test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
+      # The app's own log, for the whole test run (#2283). Until this existed a UI
+      # test that timed out waiting for an element left only the SERVER's side of
+      # the story: run 40490961468's shard 2 showed the app going 25 s without
+      # issuing a request, and nothing could say what it was doing. This streams
+      # the app's `org.llamenos.hotline` subsystem — every request's method, path,
+      # status and elapsed time (category HTTP) and the dashboard's call flow
+      # (category CallFlow), both logged by DEBUG builds only — plus any error or
+      # fault from any process in the simulator. Uploaded with the shard's results.
+      #
+      # `log stream`, not a `log show` after the fact: debug-level entries are never
+      # persisted to the log store, so only a live stream sees them. It writes line
+      # by line, so a shard that times out still has everything up to the stall.
+      # `xcrun` execs `simctl` in place, so $! is the stream; SIGINT stops it and
+      # its in-simulator `log` child (checked on the Mac mini), and the simulator's
+      # deletion below would end it regardless.
+      - name: Start the app log capture
+        run: |
+          xcrun simctl spawn "${{ steps.sim.outputs.udid }}" log stream \
+            --level debug --style compact \
+            --predicate 'subsystem == "org.llamenos.hotline" OR messageType == error OR messageType == fault' \
+            >"$RUNNER_TEMP/app-shard-${{ matrix.shard }}.log" 2>&1 &
+          echo "APP_LOG_PID=$!" >> "$GITHUB_ENV"
+
       # Inside the job's 65: leaves room for setup (5-7 min) and the always()
       # report/upload steps. Shards are balanced by measured time (ui-tests.py
       # shard) at ~37 min per-PR; the nightly adds the quarantined tests. At 45 the
@@ -1185,6 +1208,13 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult" \
             $(cat "$RUNNER_TEMP/shard-args.txt") \
             2>&1 | tee "$RUNNER_TEMP/xcodebuild-test.log"
+
+      - name: Stop the app log capture
+        if: always() && env.APP_LOG_PID != ''
+        run: |
+          kill -INT "$APP_LOG_PID" 2>/dev/null || true
+          app_log="$RUNNER_TEMP/app-shard-${{ matrix.shard }}.log"
+          echo "app log: $(wc -l <"$app_log" | tr -d ' ') lines, $(grep -c 'org.llamenos.hotline' "$app_log" || true) from the app ($app_log)"
 
       # always(): a shard that hits its timeout must still report what ran.
       - name: Report (shard ${{ matrix.shard }})
@@ -1262,6 +1292,7 @@ jobs:
             ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
             ${{ runner.temp }}/llamenos-native-backend/server.log
             ${{ runner.temp }}/llamenos-native-backend/watchdog.log
+            ${{ runner.temp }}/app-shard-${{ matrix.shard }}.log
           retention-days: 7
 
       # The same per-test results, WITHOUT the ~80 MB .xcresult, so the nightly

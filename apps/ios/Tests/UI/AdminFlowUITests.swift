@@ -80,8 +80,7 @@ final class AdminFlowUITests: BaseUITest {
 
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 10), "The volunteers screen should have a search field")
-        search.tap()
-        search.typeText("alice")
+        typeText("alice", into: search)
         XCTAssertEqual(
             search.value as? String, "alice",
             "The search field should accept the query that filters the list"
@@ -110,8 +109,7 @@ final class AdminFlowUITests: BaseUITest {
         XCTAssertFalse(submit.isEnabled, "Submission should stay disabled until an identifier is entered")
 
         let identifierInput = app.textFields["ban-hash-input"]
-        guard focusTextField(identifierInput) else { return }
-        identifierInput.typeText(String(repeating: "a", count: 64))
+        typeText(String(repeating: "a", count: 64), into: identifierInput)
 
         // `typeText` returns once the key events are synthesized, not once the binding behind the
         // field has consumed them, so wait on the button the identifier is meant to enable.

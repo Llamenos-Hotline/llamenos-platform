@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - RecentNotePreview
 
@@ -63,6 +64,13 @@ final class DashboardViewModel {
     /// the note, locks or logs out. Never written to disk.
     private(set) var endedCall: CallReference?
 
+    /// Calls the relay has announced are over. A call id is never reused, and the server
+    /// publishes the end only after closing the call row, so a `calls/active` answer that
+    /// still lists one of these was read before the end and is stale: it must not put the
+    /// call back on screen (or re-raise a "Call Ended" prompt the volunteer dismissed).
+    /// In memory only, cleared with every other call on lock / logout.
+    private var endedCallIds: Set<String> = []
+
     /// Rings the server refused to answer in the app (422: the hub has no in-app leg for
     /// this volunteer), which can only be answered on the phone.
     private(set) var answerOnPhoneCallIds: Set<String> = []
@@ -107,6 +115,19 @@ final class DashboardViewModel {
 
     /// Bumped once a second while ringing so the elapsed-time display re-evaluates.
     private var tick: Int = 0
+
+    /// Call-flow trace, for reading what the dashboard did when a UI test stalls (#2283):
+    /// CI captures this subsystem from the simulator and uploads it with each shard.
+    private static let log = Logger(subsystem: "org.llamenos.hotline", category: "CallFlow")
+
+    /// DEBUG builds only (the simulator, the UI-test build). A release build traces
+    /// nothing, so a seized phone's log holds no record of when its volunteer took calls.
+    private static func trace(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        let text = message()
+        log.debug("\(text, privacy: .public)")
+        #endif
+    }
 
     /// Nonisolated: it only stores its arguments, so the model can be built anywhere —
     /// every state change after construction still happens on the main actor.
@@ -163,7 +184,7 @@ final class DashboardViewModel {
             guard let self else { return }
             for await attributed in self.webSocketService.attributedEvents {
                 guard !Task.isCancelled else { break }
-                await self.handleTypedEvent(attributed)
+                self.handleTypedEvent(attributed)
             }
         }
     }
@@ -178,18 +199,18 @@ final class DashboardViewModel {
     /// Handle a decrypted, hub-attributed event and refresh only relevant data.
     private func handleTypedEvent(_ attributed: AttributedHubEvent) {
         switch attributed.event {
-        case .callRing, .callAnswered, .callUpdate, .voicemailNew, .presenceSummary, .presenceDetail:
-            // Call/presence events on any member hub affect shift status and the active call.
-            Task {
-                await fetchShiftStatus(hubIds: [attributed.hubId])
-                await fetchActiveCall()
+        case .callRing, .callAnswered, .callUpdate, .callEnded, .voicemailNew, .presenceSummary, .presenceDetail:
+            // A call the event says is over is shown as over NOW, from the event (#2283).
+            // The fetches below reconcile shift status and the call list; they confirm or
+            // correct what is on screen and are never the precondition for it. Before,
+            // the Call Ended / Add Note prompt appeared only once `shifts/my-status` and
+            // then `calls/active` had both answered, so a volunteer on a slow or flapping
+            // connection ended a call and got no prompt to write its note.
+            Self.trace("relay: \(attributed.event.rawValue) call=\(attributed.callId ?? "-") status=\(attributed.callStatus?.rawValue ?? "-") hub=\(attributed.hubId)")
+            if let ended = attributed.endedCallId {
+                callIsOver(ended, hubId: attributed.hubId)
             }
-        case .callEnded:
-            // The event does not say which call ended; the hub's call list does.
-            Task {
-                await fetchShiftStatus(hubIds: [attributed.hubId])
-                await fetchActiveCall()
-            }
+            reconcileCalls(hubId: attributed.hubId)
         case .shiftStarted, .shiftEnded, .shiftUpdate:
             Task { await fetchShiftStatus(hubIds: [attributed.hubId]) }
         case .noteCreated:
@@ -201,6 +222,16 @@ final class DashboardViewModel {
             break
         case .deviceWipe, .unknown:
             break
+        }
+    }
+
+    /// Re-read where the volunteer stands on `hubId` and the calls on every member hub.
+    /// The two reads are independent, so neither waits for the other.
+    private func reconcileCalls(hubId: String) {
+        Task {
+            async let status: Void = fetchShiftStatus(hubIds: [hubId])
+            async let calls: Void = fetchActiveCall()
+            _ = await (status, calls)
         }
     }
 
@@ -311,14 +342,28 @@ final class DashboardViewModel {
         currentCall = nil
         ringingCalls = []
         endedCall = nil
+        endedCallIds = []
         answerOnPhoneCallIds = []
         answeringCallIds = []
     }
 
     /// This volunteer's `call` is over: swap the call card for the "Call Ended" prompt.
     private func finish(_ call: ActiveCall) {
+        endedCallIds.insert(call.id)
         if currentCall?.id == call.id { currentCall = nil }
         endedCall = call.reference(phase: .ended)
+    }
+
+    /// The relay said call `callId` on `hubId` is over. If it was this volunteer's call it
+    /// becomes the "Call Ended" prompt; if it was ringing them it stops ringing. Needs no
+    /// network: everything it uses is already held.
+    private func callIsOver(_ callId: String, hubId: String) {
+        endedCallIds.insert(callId)
+        ringingCalls.removeAll { $0.id == callId && $0.hubId == hubId }
+        if let mine = currentCall, mine.id == callId, mine.hubId == hubId {
+            Self.trace("call \(callId): Call Ended prompt raised from the relay event")
+            finish(mine)
+        }
     }
 
     // MARK: - Private Helpers
@@ -345,6 +390,8 @@ final class DashboardViewModel {
             activeCallCount = 0
             return
         }
+        Self.trace("calls/active: requesting \(hubIds.count) hub(s)")
+        let started = ContinuousClock.now
         var callsByHub: [String: ProtocolActiveCallsResponse] = [:]
         await withTaskGroup(of: (String, ProtocolActiveCallsResponse?).self) { group in
             for hubId in hubIds {
@@ -361,12 +408,17 @@ final class DashboardViewModel {
                 if let response { callsByHub[hubId] = response }
             }
         }
-        activeCallCount = callsByHub.values.reduce(0) { $0 + $1.calls.count }
+        Self.trace("calls/active: \(callsByHub.count)/\(hubIds.count) hub(s) answered after \(ContinuousClock.now - started)")
 
+        // A call the relay already said is over stays over: this answer was read before.
+        let ended = endedCallIds
         let me = cryptoService.signingPubkeyHex
         let live = hubIds.flatMap { hubId in
-            (callsByHub[hubId]?.calls ?? []).map { (hubId: hubId, call: $0) }
+            (callsByHub[hubId]?.calls ?? [])
+                .filter { !ended.contains($0.id) }
+                .map { (hubId: hubId, call: $0) }
         }
+        activeCallCount = live.count
 
         // A hub that did not answer keeps what it showed: its calls may well still be there.
         let ringing = live
@@ -387,13 +439,16 @@ final class DashboardViewModel {
         // Gone from a hub that answered: the call ended (hung up by the caller, the other
         // side, or the server).
         if let previous, callsByHub[previous.hubId] != nil, !mine.contains(where: { $0.id == previous.id }) {
-            endedCall = previous.reference(phase: .ended)
+            finish(previous)
         }
     }
 
     /// Ask the server where this volunteer stands on `hubIds` (every member hub by default).
     private func fetchShiftStatus(hubIds: [String]? = nil) async {
+        Self.trace("shifts/my-status: requesting")
+        let started = ContinuousClock.now
         let failure = await shiftClockService.refresh(hubIds: hubIds ?? callHubIds)
+        Self.trace("shifts/my-status: answered after \(ContinuousClock.now - started)")
         syncTimer()
         if let failure {
             if case APIError.noBaseURL = failure {

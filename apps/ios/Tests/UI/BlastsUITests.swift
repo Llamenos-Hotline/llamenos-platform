@@ -133,12 +133,10 @@ final class BlastsUITests: BaseUITest {
             XCTAssertFalse(find("blast-send-button").isEnabled, "Send Now should be off while the form is empty")
 
             let name = find("blast-name-input")
-            name.tap()
-            name.typeText("Evening update")
+            typeText("Evening update", into: name)
             XCTAssertFalse(find("blast-send-button").isEnabled, "A name alone is not a blast")
             let message = find("blast-message-input")
-            message.tap()
-            message.typeText("Rally moved to 6pm")
+            typeText("Rally moved to 6pm", into: message)
             XCTAssertTrue(find("blast-send-button").isEnabled, "A name, a message and a channel make a sendable blast")
 
             find("blast-channel-sms").switches.firstMatch.tap()
@@ -179,8 +177,7 @@ final class BlastsUITests: BaseUITest {
             hubId = launchOnFreshHub()
             openCreateSheet()
             let input = find("blast-name-input")
-            input.tap()
-            input.typeText(name)
+            typeText(name, into: input)
         }
         when("I cancel") {
             app.buttons["cancel-blast-create"].tap()

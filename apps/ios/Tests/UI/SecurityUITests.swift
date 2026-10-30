@@ -232,8 +232,7 @@ final class SecurityUITests: BaseUITest {
         when("I enter an HTTP hub URL and try to create identity") {
             let hubInput = find("hub-url-input")
             XCTAssertTrue(hubInput.waitForExistence(timeout: 5), "The hub URL field should exist on the login screen")
-            hubInput.tap()
-            hubInput.typeText("http://insecure.example.org")
+            typeText("http://insecure.example.org", into: hubInput)
 
             dismissKeyboard()
 
@@ -401,8 +400,7 @@ final class SecurityUITests: BaseUITest {
                 XCTFail("Hub URL input should exist")
                 return
             }
-            hubInput.tap()
-            hubInput.typeText("https://test.example.org")
+            typeText("https://test.example.org", into: hubInput)
             dismissKeyboard()
 
             let createButton = find("create-identity")
@@ -417,8 +415,7 @@ final class SecurityUITests: BaseUITest {
                 XCTFail("PIN input field should appear after creating a new identity")
                 return
             }
-            pinInput.tap()
-            pinInput.typeText("12345678")
+            typeText("12345678", into: pinInput)
 
             let submitButton = find("pin-submit")
             guard submitButton.waitForExistence(timeout: 3) else {
@@ -455,8 +452,7 @@ final class SecurityUITests: BaseUITest {
                 XCTFail("Hub URL input should exist")
                 return
             }
-            hubInput.tap()
-            hubInput.typeText("https://test.example.org")
+            typeText("https://test.example.org", into: hubInput)
             dismissKeyboard()
 
             let createButton = find("create-identity")
@@ -471,8 +467,7 @@ final class SecurityUITests: BaseUITest {
                 XCTFail("PIN input field should appear after creating a new identity")
                 return
             }
-            pinInput.tap()
-            pinInput.typeText("12345678")
+            typeText("12345678", into: pinInput)
 
             // Cancel out via the PIN set screen's back button (PINSetView.swift),
             // returning to the login screen without completing identity creation.
@@ -496,8 +491,7 @@ final class SecurityUITests: BaseUITest {
                 XCTFail("Hub URL input should exist")
                 return
             }
-            hubInput.tap()
-            hubInput.typeText("https://test.example.org")
+            typeText("https://test.example.org", into: hubInput)
             dismissKeyboard()
 
             let createButton = find("create-identity")

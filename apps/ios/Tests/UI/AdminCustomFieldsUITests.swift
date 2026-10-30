@@ -115,8 +115,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
             navigateToCustomFields()
             openFieldEditor()
             let input = find("field-label-input")
-            input.tap()
-            input.typeText(label)
+            typeText(label, into: input)
         }
         when("I cancel") {
             app.buttons["cancel-field-edit"].tap()
@@ -139,8 +138,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
         }
         when("I give the field a label and save it") {
             let input = find("field-label-input")
-            input.tap()
-            input.typeText(label)
+            typeText(label, into: input)
             let save = app.buttons["field-save-button"]
             XCTAssertTrue(save.isEnabled, "Save should be available once the field has a label")
             save.tap()
