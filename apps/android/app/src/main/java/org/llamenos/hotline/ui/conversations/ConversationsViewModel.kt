@@ -91,6 +91,19 @@ class ConversationsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ConversationsUiState())
     val uiState: StateFlow<ConversationsUiState> = _uiState.asStateFlow()
 
+    /**
+     * The hub whose list is on screen. Conversations are served only under
+     * `/api/hubs/{hubId}/conversations…` (#2381) — the server has no unscoped route to
+     * fall back to — so every thread action goes to the hub its conversation was listed
+     * from, not whichever hub is active by the time the user taps.
+     */
+    private var loadedHubId: String? = null
+
+    private fun conversationsPath(path: String = ""): String {
+        val hubId = checkNotNull(loadedHubId) { "Conversations are hub-scoped, but no hub is loaded" }
+        return apiService.hubPath(hubId, "/api/conversations$path")
+    }
+
     init {
         activeHubState.activeHubId
             .filterNotNull()
@@ -132,6 +145,15 @@ class ConversationsViewModel @Inject constructor(
      * Load conversations from the API, filtered by the current status filter.
      */
     fun loadConversations() {
+        val hubId = activeHubState.activeHubId.value
+        loadedHubId = hubId
+        if (hubId == null) {
+            // No hub selected — nothing to list.
+            _uiState.update {
+                it.copy(conversations = emptyList(), totalConversations = 0, isLoading = false, isRefreshing = false)
+            }
+            return
+        }
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -145,7 +167,7 @@ class ConversationsViewModel @Inject constructor(
                 val filter = _uiState.value.filter
                 val response = apiService.request<ConversationListResponse>(
                     "GET",
-                    apiService.hp("/api/conversations") + "?status=${filter.queryParam}",
+                    conversationsPath() + "?status=${filter.queryParam}",
                 )
 
                 _uiState.update {
@@ -221,7 +243,7 @@ class ConversationsViewModel @Inject constructor(
             try {
                 val response = apiService.request<MessageListResponse>(
                     "GET",
-                    apiService.hp("/api/conversations/$conversationId/messages"),
+                    conversationsPath("/$conversationId/messages"),
                 )
 
                 val channelType = _uiState.value.selectedConversation?.channelType.orEmpty()
@@ -290,7 +312,7 @@ class ConversationsViewModel @Inject constructor(
 
                 apiService.request<Message>(
                     "POST",
-                    apiService.hp("/api/conversations/${conversation.id}/messages"),
+                    conversationsPath("/${conversation.id}/messages"),
                     request,
                 )
 
@@ -349,7 +371,7 @@ class ConversationsViewModel @Inject constructor(
     // used to POST to `/:id/close`, `/:id/reopen` and `/:id/assign`, which 404 (#1730).
 
     private suspend fun patchSelectedConversation(conversationId: String, body: UpdateConversationBody) {
-        apiService.requestNoContent("PATCH", apiService.hp("/api/conversations/$conversationId"), body)
+        apiService.requestNoContent("PATCH", conversationsPath("/$conversationId"), body)
     }
 
     /**
