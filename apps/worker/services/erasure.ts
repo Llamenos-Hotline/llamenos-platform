@@ -65,6 +65,47 @@ export const ERASURE_DEADLINE_GRACE_MS = 3 * WORKER_TICK_INTERVAL_MS['erasure-ex
 const UNFINISHED_ERASURE_STATUSES = ['pending', 'executing'] as const
 
 /**
+ * SQL predicate over `erasure_requests er`: the request concerns `hubId` — a
+ * hub-scope shred of it, or a person's erasure whose subject is a member of it.
+ */
+function concernsHub(hubId: string): SQL {
+  return sql`(
+    (er.scope = 'hub' AND er.hub_id = ${hubId})
+    OR (er.scope = 'user' AND EXISTS (
+      SELECT 1 FROM users u, jsonb_array_elements(u.hub_roles) AS hr
+      WHERE u.pubkey = er.user_id AND hr->>'hubId' = ${hubId}
+    ))
+  )`
+}
+
+/**
+ * SQL predicate over `erasure_requests er`: the request concerns NO hub that
+ * exists — a person who belongs to none (or whose row is gone), or a shred of a
+ * hub that is no longer there. The per-hub checks enumerate the `hubs` table,
+ * so these are the requests every per-hub count misses (#2347).
+ */
+function concernsNoHub(): SQL {
+  return sql`(
+    (er.scope = 'hub' AND NOT EXISTS (SELECT 1 FROM hubs h WHERE h.id = er.hub_id))
+    OR (er.scope = 'user' AND NOT EXISTS (
+      SELECT 1 FROM users u, jsonb_array_elements(u.hub_roles) AS hr, hubs h
+      WHERE u.pubkey = er.user_id AND h.id = hr->>'hubId'
+    ))
+  )`
+}
+
+/**
+ * Whose erasure requests a listing may show (#2363). Required, never defaulted:
+ * an unfiltered list is a roster of every organisation's callers who asked to
+ * be forgotten, and the omission of a filter is exactly how one leaked.
+ *  - `hub`: the requests that concern this hub — what an `erasure:admin` holder
+ *    inside it may read;
+ *  - `platform`: only the requests that concern no hub, which have no hub admin
+ *    to read them. Never the requests of a hub.
+ */
+export type ErasureAudience = { kind: 'hub'; hubId: string } | { kind: 'platform' }
+
+/**
  * SQL predicate: `column` (a jsonb array of HPKE envelopes) holds an envelope
  * addressed to `pubkey`.
  *
@@ -547,14 +588,19 @@ export class ErasureService {
   }
 
   async listRequests(
+    audience: ErasureAudience,
     filters: { status?: string; limit?: number; offset?: number } = {},
   ): Promise<{
     requests: (typeof erasureRequests.$inferSelect)[]
     total: number
   }> {
     const { status, limit = 50, offset = 0 } = filters
-    const conditions = status ? [eq(erasureRequests.status, status)] : []
-    const where = conditions.length > 0 ? and(...conditions) : undefined
+    const attribution = audience.kind === 'hub' ? concernsHub(audience.hubId) : concernsNoHub()
+    const conditions: SQL[] = [
+      sql`${erasureRequests.id} IN (SELECT er.id FROM erasure_requests er WHERE ${attribution})`,
+    ]
+    if (status) conditions.push(eq(erasureRequests.status, status))
+    const where = and(...conditions)
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -571,6 +617,19 @@ export class ErasureService {
     ])
 
     return { requests: rows, total: Number(total) }
+  }
+
+  /**
+   * The hubs that exist and `userId` belongs to. A person's erasure reaches
+   * every one of them, so authority to erase them must be held in each.
+   */
+  async hubsOfUser(userId: string): Promise<string[]> {
+    const rows = (await this.db.execute(sql`
+      SELECT DISTINCT h.id
+      FROM users u, jsonb_array_elements(u.hub_roles) AS hr, hubs h
+      WHERE u.pubkey = ${userId} AND h.id = hr->>'hubId'
+    `)) as unknown as { id: string }[]
+    return rows.map((r) => r.id)
   }
 
   // ---------------------------------------------------------------------------
@@ -873,15 +932,13 @@ export class ErasureService {
   // ---------------------------------------------------------------------------
 
   async listReEncryptionJobs(
+    hubId: string,
     userId?: string,
   ): Promise<(typeof reEncryptionJobs.$inferSelect)[]> {
-    const condition = userId
-      ? eq(reEncryptionJobs.userId, userId)
-      : undefined
     return this.db
       .select()
       .from(reEncryptionJobs)
-      .where(condition)
+      .where(and(eq(reEncryptionJobs.hubId, hubId), userId ? eq(reEncryptionJobs.userId, userId) : undefined))
       .orderBy(desc(reEncryptionJobs.createdAt))
   }
 
