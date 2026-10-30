@@ -250,6 +250,50 @@ export class CallsService {
     return (activeResult?.total ?? 0) + (historyResult?.total ?? 0)
   }
 
+  /**
+   * Inbound calls to `hubId` that started at or after `since` AND have an
+   * outcome, and how many of them a volunteer answered (the `routing/no_answers`
+   * check, #2330).
+   *
+   * Answered-ness is recorded in both tables already: a live call is answered
+   * once `answerCall` sets `answered_at`; a finished one is `completed` (an
+   * answered call) rather than `unanswered`. A call still ringing or queued has
+   * no outcome yet and is not counted either way. Counts only — no id, number
+   * or volunteer leaves this method.
+   */
+  async answerOutcomesSince(
+    hubId: string,
+    since: Date,
+  ): Promise<{ inbound: number; answered: number; oldestUnansweredAt: Date | null }> {
+    const [finished] = await this.db
+      .select({
+        inbound: count(),
+        answered: sql<number>`count(*) filter (where ${callRecords.status} = 'completed')`.mapWith(Number),
+        oldestUnanswered: sql<Date | null>`min(${callRecords.startedAt}) filter (where ${callRecords.status} <> 'completed')`
+          .mapWith((v: string | Date | null) => (v === null ? null : new Date(v))),
+      })
+      .from(callRecords)
+      .where(and(eq(callRecords.hubId, hubId), gte(callRecords.startedAt, since)))
+
+    const [live] = await this.db
+      .select({ answered: count() })
+      .from(activeCalls)
+      .where(
+        and(
+          eq(activeCalls.hubId, hubId),
+          gte(activeCalls.startedAt, since),
+          sql`${activeCalls.answeredAt} IS NOT NULL`,
+        ),
+      )
+
+    const liveAnswered = live?.answered ?? 0
+    return {
+      inbound: (finished?.inbound ?? 0) + liveAnswered,
+      answered: (finished?.answered ?? 0) + liveAnswered,
+      oldestUnansweredAt: finished?.oldestUnanswered ?? null,
+    }
+  }
+
   // =========================================================================
   // Call Lifecycle
   // =========================================================================

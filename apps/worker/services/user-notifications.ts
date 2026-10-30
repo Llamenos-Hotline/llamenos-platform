@@ -60,6 +60,8 @@ const INCIDENT_CATEGORY_LOCALE_KEY: Record<IncidentCategory, string> = {
   'provider-media': 'providerMedia',
   'erasure-deadline': 'erasureDeadline',
   'ban-expiry': 'banExpiry',
+  routing: 'routing',
+  'provider-auth': 'providerAuth',
 }
 
 /** `incident.opened` reads "Happening now"; an update is still happening. */

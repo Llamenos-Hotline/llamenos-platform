@@ -17,6 +17,7 @@
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
 import { resolveRingableVolunteers } from './ringing'
+import { EMPTY_CHECK_RESULT, type IncidentCheck, type IncidentCheckResult } from './incidents'
 
 const logger = createLogger('routing-readiness')
 
@@ -153,4 +154,115 @@ export async function currentRingDecision(
     clockedIn: activeShifts.length,
     pubkeys,
   }
+}
+
+// ---------------------------------------------------------------------------
+// The same questions, asked continuously: `routing` incidents (#2330)
+// ---------------------------------------------------------------------------
+//
+// Both checks below are L1 detectors (spec §5.6): registered with
+// `IncidentService.registerCheck` by the service registry and evaluated per
+// hub by the `incident-checks` scheduler worker — never by the ringing path,
+// so a ringing path that has stopped working is still reported. Each returns
+// a LEVEL: `{count: 0, oldestAgeSeconds: null}` when healthy, and THROWS when
+// it cannot answer (a failing check raises `worker_failing`, never a zero).
+// Counts only — neither result names a volunteer, a caller or a call.
+
+/** Look-back for `no_answers`. Matches the instance-level `InboundButNoAnswers` rule's window. */
+export const ROUTING_NO_ANSWER_WINDOW_MS = 30 * 60_000
+
+/**
+ * Inbound calls with an outcome in the window before `no_answers` is raised
+ * with none answered. Below it, a quiet line where one or two callers hung up
+ * in the queue is ordinary; three unanswered in a row with not one pickup is a
+ * hotline nobody is answering.
+ */
+export const ROUTING_NO_ANSWER_MIN_INBOUND = 3
+
+/**
+ * Can this hub receive a call at all? Only an active hub with a number is
+ * routed to (`SettingsService.getHubByPhone`); a hub without one — mid-setup,
+ * or messaging-only — expects no calls, so neither check has anything to say.
+ */
+async function hubTakesCalls(services: Pick<Services, 'settings'>, hubId: string): Promise<boolean> {
+  const { hub } = await services.settings.getHub(hubId)
+  return hub.status === 'active' && !!hub.phoneNumber
+}
+
+/**
+ * `routing/nobody_would_ring`: a call arriving now, during a period the hub
+ * expects coverage, would ring nobody.
+ *
+ * The answer comes from `currentRingDecision`, i.e. from the real resolver —
+ * never a restatement of the eligibility rule. "Expects coverage" comes from
+ * the hub's own schedule and fallback group:
+ *
+ *  - a shift names somebody right now — the schedule promises an answer now;
+ *  - the fallback group names somebody — it exists to answer whenever the
+ *    schedule does not, so it promises an answer at every hour;
+ *  - NOTHING names anybody — no shift on any day and an empty fallback group.
+ *    The hub cannot ring at any hour, so this is a standing incident that
+ *    stays open until an admin rosters somebody, not a one-off.
+ *
+ * What it deliberately does NOT raise: a hub whose only shift is 09:00–17:00,
+ * with no fallback group, at 03:00. That is the schedule working as written
+ * (see `HubRoutingReadiness.canEverRing`).
+ *
+ * Volunteers all being on other calls also reads as "nobody would ring": a
+ * caller arriving then is not answered either, and the ringing path already
+ * treats it as an emergency (`reportUnroutableCall`, no-available-volunteers).
+ */
+export async function nobodyWouldRingCount(services: Services, hubId: string): Promise<IncidentCheckResult> {
+  if (!(await hubTakesCalls(services, hubId))) return EMPTY_CHECK_RESULT
+  const decision = await currentRingDecision(services, hubId)
+  if (decision.wouldRing) return EMPTY_CHECK_RESULT
+
+  const readiness = await hubRoutingReadiness(services, hubId)
+  const expectsCoverage =
+    !readiness.canEverRing || readiness.fallbackVolunteers > 0 || decision.scheduledNow > 0
+  return expectsCoverage ? { count: 1, oldestAgeSeconds: null } : EMPTY_CHECK_RESULT
+}
+
+/**
+ * `routing/no_answers`: in the last {@link ROUTING_NO_ANSWER_WINDOW_MS}, at
+ * least {@link ROUTING_NO_ANSWER_MIN_INBOUND} inbound calls reached an outcome
+ * and none was answered.
+ *
+ * The source is the hub's own call records — `active_calls.answered_at` for a
+ * call still in progress, `call_records.status = 'completed'` for a finished
+ * one (`CallsService.answerOutcomesSince`) — not Prometheus, whose counters
+ * carry no hub and vanish with the process. The count is the unanswered calls;
+ * the age is how long ago the oldest of them started.
+ */
+export async function noAnswersCount(
+  services: Pick<Services, 'settings' | 'calls'>,
+  hubId: string,
+  now: Date,
+): Promise<IncidentCheckResult> {
+  if (!(await hubTakesCalls(services, hubId))) return EMPTY_CHECK_RESULT
+  const since = new Date(now.getTime() - ROUTING_NO_ANSWER_WINDOW_MS)
+  const outcomes = await services.calls.answerOutcomesSince(hubId, since)
+  if (outcomes.answered > 0 || outcomes.inbound < ROUTING_NO_ANSWER_MIN_INBOUND) return EMPTY_CHECK_RESULT
+  const oldestAgeSeconds = outcomes.oldestUnansweredAt
+    ? Math.max(0, Math.floor((now.getTime() - outcomes.oldestUnansweredAt.getTime()) / 1000))
+    : null
+  return { count: outcomes.inbound, oldestAgeSeconds }
+}
+
+/** The two `routing` L1 checks, as registered by the service registry. */
+export function routingIncidentChecks(services: Services): IncidentCheck[] {
+  return [
+    {
+      category: 'routing',
+      kind: 'nobody_would_ring',
+      name: 'routing-nobody-would-ring',
+      check: (hubId) => nobodyWouldRingCount(services, hubId),
+    },
+    {
+      category: 'routing',
+      kind: 'no_answers',
+      name: 'routing-no-answers',
+      check: (hubId, now) => noAnswersCount(services, hubId, now),
+    },
+  ]
 }

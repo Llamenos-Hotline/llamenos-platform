@@ -4755,7 +4755,9 @@
     "category": {
       "banExpiry": "Bans about to expire",
       "erasureDeadline": "Overdue erasure requests",
+      "providerAuth": "Phone provider requests being refused",
       "providerMedia": "Recordings left at the phone provider",
+      "routing": "Calls reaching nobody",
       "spam": "Spam and unwanted calls"
     },
     "closed": "Ended",

@@ -4757,7 +4757,9 @@
     "category": {
       "banExpiry": "Bald ablaufende Sperren",
       "erasureDeadline": "Überfällige Löschanfragen",
+      "providerAuth": "Abgewiesene Anfragen des Telefonanbieters",
       "providerMedia": "Beim Telefonanbieter verbliebene Aufnahmen",
+      "routing": "Anrufe, die niemanden erreichen",
       "spam": "Spam und unerwünschte Anrufe"
     },
     "closed": "Beendet",
