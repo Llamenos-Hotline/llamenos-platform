@@ -326,11 +326,6 @@ private fun CallHeader(call: ActiveCall) {
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Text(
-                text = call.callerNumber ?: stringResource(R.string.calls_unknown_caller),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
 
         // Elapsed timer

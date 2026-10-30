@@ -10,7 +10,7 @@ typealias CallHistoryRecord = org.llamenos.protocol.SharedCall
 /**
  * Active call — a call currently ringing or in progress, as `/calls/active` sends it.
  * The server keys it `id`, like the generated `SharedCall` (#1129). It never sends the
- * caller's number or its HMAC, only `callerLast4`, so `callerNumber` is always null.
+ * caller's number, its HMAC, or any digits of it: a call is named by its id, its hub and its times.
  *
  * `hubId` is not on the wire: the client sets it to the hub the call was fetched from,
  * because a call on a member hub need not be on the hub being browsed.
@@ -18,8 +18,6 @@ typealias CallHistoryRecord = org.llamenos.protocol.SharedCall
 @Serializable
 data class ActiveCall(
     val id: String,
-    val callerLast4: String? = null,
-    val callerNumber: String? = null,
     val answeredBy: String? = null,
     val startedAt: String,
     val status: String,

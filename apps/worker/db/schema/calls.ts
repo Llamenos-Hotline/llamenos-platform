@@ -27,7 +27,6 @@ export const activeCalls = pgTable(
     // the answering volunteer can ban a live caller without ever seeing the digits.
     // No hash of the number is kept. NULL once the call has ended or been archived.
     callerNumberSealed: text('caller_number_sealed'),
-    callerLast4: text('caller_last4'),
     answeredBy: text('answered_by'),
     status: text('status').notNull().default('ringing'),
     hasTranscription: boolean('has_transcription').default(false),
@@ -57,7 +56,6 @@ export const callRecords = pgTable(
   {
     callId: text('call_id').primaryKey(),
     hubId: text('hub_id'),
-    callerLast4: text('caller_last4'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
     endedAt: timestamp('ended_at', { withTimezone: true }),
     duration: integer('duration'),

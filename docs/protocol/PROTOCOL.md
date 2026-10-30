@@ -802,9 +802,11 @@ While the call is live the server holds the number only as `active_calls.caller_
 #### What Stays in Plaintext
 
 ```
-callerLast4, startedAt, endedAt, duration, status, hasTranscription,
+startedAt, endedAt, duration, status, hasTranscription,
 hasVoicemail, hasRecording, recordingSid
 ```
+
+No part of the caller's number is on this list: the last four digits are not stored, sent, or displayed (#2262). `callRecordResponseSchema` has no field for them. A client titles a call by its hub, its times, its outcome and, for an admin whose envelope opens, the decrypted number.
 
 `hasRecording` is true only once the server holds its OWN sealed copy of the call's recording (see §4.8 "Call recording storage"); `recordingSid` is never used to reach the provider for playback.
 
@@ -1422,7 +1424,7 @@ The `content` field is always encrypted:
 The plaintext content is a JSON string with a `type` field identifying the event type:
 
 ```json
-{"type": "call:ring", "callId": "abc123", "callerLast4": "5678"}
+{"type": "call:ring", "callId": "abc123"}
 {"type": "call:answered", "callId": "abc123", "answeredBy": "pubkey_hex"}
 {"type": "call:end", "callId": "abc123"}
 {"type": "presence:update", "onlineCount": 5}

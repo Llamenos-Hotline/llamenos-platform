@@ -717,7 +717,7 @@ describe('Telephony routes', () => {
       services.calls.resolveCallToken = vi.fn().mockResolvedValue(leg)
       services.calls.answerCallWithToken = vi.fn().mockResolvedValue(leg)
       services.calls.getActiveCalls = vi.fn().mockResolvedValue([
-        { callId: 'CA-parent', callerLast4: '1111', startedAt: new Date().toISOString() },
+        { callId: 'CA-parent', startedAt: new Date().toISOString() },
       ])
     }
     const answer = async (body = 'CallSid=LEG-2', token = 'valid-token') => {
@@ -763,7 +763,7 @@ describe('Telephony routes', () => {
       validToken()
       const res = await answer()
       expect(res.status).toBe(200)
-      expect(services.audit.log).toHaveBeenCalledWith('callAnswered', 'pk-vol-1', { callerLast4: '1111' }, 'hub-1')
+      expect(services.audit.log).toHaveBeenCalledWith('callAnswered', 'pk-vol-1', {}, 'hub-1')
       const bridged = vi.mocked(adapter.handleCallAnswered).mock.invocationCallOrder[0]
       const audited = vi.mocked(services.audit.log).mock.invocationCallOrder[0]
       expect(bridged).toBeLessThan(audited)
@@ -866,7 +866,7 @@ describe('Telephony routes', () => {
         hubId: 'hub-1',
       })
       services.calls.getActiveCalls = vi.fn().mockResolvedValue([
-        { callId: 'CA-parent', callerLast4: '1111', answeredBy: 'pk-vol-1', startedAt: new Date(Date.now() - 60000).toISOString() },
+        { callId: 'CA-parent', answeredBy: 'pk-vol-1', startedAt: new Date(Date.now() - 60000).toISOString() },
       ])
       adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'completed' })
 
@@ -888,7 +888,7 @@ describe('Telephony routes', () => {
         hubId: 'hub-1',
       })
       services.calls.getActiveCalls = vi.fn().mockResolvedValue([
-        { callId: 'CA-parent', callerLast4: '1111', answeredBy: 'pk-vol-1', startedAt: new Date(Date.now() - 60000).toISOString() },
+        { callId: 'CA-parent', answeredBy: 'pk-vol-1', startedAt: new Date(Date.now() - 60000).toISOString() },
       ])
       adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'completed' })
 
@@ -1097,7 +1097,7 @@ describe('Telephony routes', () => {
         callSid: 'CA-parent',
       })
       services.calls.getActiveCalls = vi.fn().mockResolvedValue([
-        { callId: 'CA-parent', answeredBy: 'pk-vol-1', callerLast4: '1111' },
+        { callId: 'CA-parent', answeredBy: 'pk-vol-1' },
       ])
 
       const app = await createTestApp(adapter, services)

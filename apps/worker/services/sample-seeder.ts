@@ -156,13 +156,12 @@ export async function seedSampleDataset(
     const callId = `sample-${call.key}`
     const answerer = call.answeredBy ? reader(call.answeredBy) : null
     const meta = sealForReaders(
-      JSON.stringify({ answeredBy: answerer?.pubkey ?? null, callerNumber: `+1555555${call.callerLast4}` }),
+      JSON.stringify({ answeredBy: answerer?.pubkey ?? null, callerNumber: call.callerNumber }),
       answerer ? [cast.admin, answerer] : [cast.admin],
       LABEL_CALL_META,
     )
     await services.calls.recordHistoricalCall(hubId, {
       callId,
-      callerLast4: call.callerLast4,
       startedAt,
       durationSeconds: call.durationSeconds,
       answeredBy: answerer?.pubkey ?? null,
