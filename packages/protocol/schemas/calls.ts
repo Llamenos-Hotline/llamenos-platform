@@ -15,6 +15,12 @@ export const callStatusSchema = z.enum(['ringing', 'in-progress', 'completed', '
  */
 export const callRecordResponseSchema = z.object({
   id: z.string(),
+  /**
+   * The opaque reference the VoIP push carries in place of the call's id (#2374). `id` is the
+   * telephony provider's identifier for the call, which a push must never expose; a client
+   * woken by a push resolves it to the call by matching this field. Present on active calls only.
+   */
+  pushRef: z.string().optional(),
   hubId: z.string().optional(),
   callerLast4: z.string().optional(),
   answeredBy: z.string().nullable().optional(),

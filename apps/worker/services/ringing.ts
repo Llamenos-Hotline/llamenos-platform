@@ -361,7 +361,7 @@ export async function startParallelRinging(
     // The number is held sealed (SERVER_KEK, bound to this call) for the call's life only,
     // so the answering volunteer can ban the caller without seeing it. It is never hashed
     // here: a hash of an ordinary caller would be a stable identifier the server keeps.
-    await services.calls.addCall(hubId, {
+    const { pushRef } = await services.calls.addCall(hubId, {
       callId: callSid,
       callerNumberSealed: sealCallerNumber(callerNumber, callSid, env.SERVER_KEK),
       callerLast4: callerNumber.slice(-4),
@@ -406,18 +406,16 @@ export async function startParallelRinging(
     // to no hub sends neither, so its browser/VoIP volunteers were not notified at all.
     const notifiedOutOfBand = hubId === '' ? 0 : browserVoip.length
 
-    const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
       // Publish the ring to the hub that owns the call. Every member of that hub
       // whose relay socket subscribes to it rings — including members whose
       // active hub in the UI is a different one (multi-hub routing axiom).
-      publishEvent(env, KIND_CALL_RING, { type: 'call:ring', callId: callSid }, hubId)
+      publishEvent(env, KIND_CALL_RING, { type: 'call:ring', callId: callSid, pushRef }, hubId)
 
       // Dispatch VoIP push notifications to mobile volunteers with registered VoIP tokens.
       dispatchVoipPushFromService(
         browserVoip.map(v => v.pubkey),
-        callSid,
-        callerLast4,
+        pushRef,
         hubId,
         env,
         services.identity,

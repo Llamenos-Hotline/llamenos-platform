@@ -142,7 +142,7 @@ function makeServices(overrides: {
       getUsers: vi.fn().mockResolvedValue({ users: allUsers }),
     },
     calls: {
-      addCall: vi.fn().mockResolvedValue({ callId: 'CA-test' }),
+      addCall: vi.fn().mockResolvedValue({ callId: 'CA-test', pushRef: 'push-ref-test' }),
       getBusyPubkeys: vi.fn().mockResolvedValue(new Set(busyPubkeys)),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
     },
@@ -608,7 +608,7 @@ describe('startParallelRinging', () => {
     expect(publishEvent).toHaveBeenCalledWith(
       expect.anything(),
       KIND_CALL_RING,
-      { type: 'call:ring', callId: 'CA-ring' },
+      { type: 'call:ring', callId: 'CA-ring', pushRef: 'push-ref-test' },
       'hub-1',
     )
   })
@@ -662,7 +662,7 @@ describe('startParallelRinging', () => {
   it('creates the call record before consulting shifts or users', async () => {
     const order: string[] = []
     const services = makeServices({ onShiftPubkeys: [] })
-    ;(services.calls.addCall as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('addCall') })
+    ;(services.calls.addCall as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('addCall'); return { pushRef: 'push-ref-test' } })
     ;(services.shifts.getCurrentVolunteers as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('shifts'); return [] })
 
     await startParallelRinging('CA-order', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')

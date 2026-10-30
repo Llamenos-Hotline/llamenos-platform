@@ -344,6 +344,7 @@ describe('Calls Routes — response conformance', () => {
   const mockActiveCalls: (typeof activeCalls.$inferSelect)[] = [
     {
       callId: 'call-1',
+      pushRef: 'push-ref-1',
       hubId: 'hub-1',
       callerNumberSealed: 'f'.repeat(64),
       callerLast4: '4567',
