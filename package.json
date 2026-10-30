@@ -59,6 +59,7 @@
     "crypto:build:server": "packages/crypto/scripts/build-server.sh",
     "i18n:codegen": "bun run packages/i18n/tools/i18n-codegen.ts",
     "i18n:validate": "bun run packages/i18n/tools/i18n-codegen.ts --validate",
+    "i18n:untranslated": "bun run packages/i18n/tools/check-untranslated.ts",
     "i18n:validate:android": "bun run packages/i18n/tools/validate-strings.ts android",
     "i18n:validate:ios": "bun run packages/i18n/tools/validate-strings.ts ios",
     "i18n:validate:desktop": "bun run packages/i18n/tools/validate-strings.ts desktop",

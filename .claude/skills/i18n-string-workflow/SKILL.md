@@ -68,7 +68,10 @@ snake_case keys in en.json.
    ```
 
 2. **Propagate to all locale files** — add the same key to every locale JSON:
-   - Copy the English value as a placeholder (it will be translated later)
+   - Provide a real translation in every locale. A new or changed value that is verbatim English fails
+     `bun run i18n:untranslated` (CI) even if it is recorded in `deferred.json`. If the English text is
+     genuinely correct in a locale (brand name, protocol term), list the key in that locale's top-level
+     `_same_as_en` array instead
    - Maintain the same nested position in every file
    - Every locale MUST have the key (`bun run i18n:validate` fails loudly on missing keys)
 
