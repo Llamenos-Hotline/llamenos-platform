@@ -184,3 +184,210 @@ tests:
             exp_annotations:
               summary: "Llamenos app is down"
               description: "The Llamenos application has been down for more than 1 minute."
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Routing backstops (#2330): WebhookAuthOutage and InboundButNoAnswers
+  #
+  # Every counter is published as 0 from process start (metrics.ts seeds them),
+  # so each case below starts its series at 0 rather than letting them appear
+  # at their first event: increase() reports nothing for a series born at 1.
+  # Healthy-traffic cases use inbound +1/min and answered +1/min.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  # ── 500 forged webhooks, hub traffic healthy: SILENT ──────────────────────
+  # An attacker who does not hold our account id lands in `unattributed`.
+  # 500 of them arrive at minute 20 while calls keep entering the queue and
+  # being answered. A rule on the raw rejection count would page here.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x120'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="own_account",job="llamenos-app",instance="app-under-test"}'
+        values: '0x120'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="unattributed",job="llamenos-app",instance="app-under-test"}'
+        values: '0x20 500x100'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="ip_not_allowed",attribution="unattributed",job="llamenos-app",instance="app-under-test"}'
+        values: '0x120'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0+1x120'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: InboundButNoAnswers
+        exp_alerts: []
+
+  # ── ONE own-account rejection: fires at once ──────────────────────────────
+  # Provider egress + our account id + a bad signature: a rotated secret. It
+  # does not wait for inbound to stop (other numbers may still be fine), so
+  # inbound here keeps flowing. It clears once it leaves the 15m window.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x60'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="own_account",job="llamenos-app",instance="app-under-test"}'
+        values: '0x20 1x40'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="unattributed",job="llamenos-app",instance="app-under-test"}'
+        values: '0x60'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0+1x60'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: WebhookAuthOutage
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: own_account
+              job: llamenos-app
+              instance: app-under-test
+            exp_annotations:
+              summary: "Our telephony provider's webhooks are failing signature checks"
+              description: "Webhooks from the telephony provider's own addresses, naming this deployment's account, are being refused for a bad signature. Calls are most likely not reaching the app. The usual cause is a rotated or mistyped provider auth token / signing secret. See the \"Provider webhook rejections\" runbook (docs/runbooks)."
+      - eval_time: 45m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+
+  # ── Attacker noise DURING a real outage: STILL FIRES ──────────────────────
+  # Real calls stop at minute 30 (a stale secret or allowlist) and the provider
+  # keeps retrying; an attacker adds noise on top, 10 forged webhooks a minute.
+  # All of it is `unattributed`. At minute 70 the last 30 minutes had no
+  # inbound and the 30 before it did: fires. The noise cannot suppress it.
+  # (It resolves once BOTH windows are flat, at minute 90: by then it has been
+  # firing for 20 minutes, and the runbook says so.)
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x120'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="own_account",job="llamenos-app",instance="app-under-test"}'
+        values: '0x120'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="unattributed",job="llamenos-app",instance="app-under-test"}'
+        values: '0x30 10+10x89'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0+1x30 30x89'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0+1x30 30x89'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: WebhookAuthOutage
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: inbound_flat
+              job: llamenos-app
+              instance: app-under-test
+            exp_annotations:
+              summary: "Inbound calls stopped while provider webhooks are being refused"
+              description: "Calls were reaching the queue in the previous window and none have in this one, while provider webhooks are being refused. Two causes look the same from here: a rotated or wrong signing secret, and an out-of-date provider IP allowlist (TELEPHONY_WEBHOOK_IPS). See the \"Provider webhook rejections\" runbook (docs/runbooks)."
+
+  # ── Noise on a quiet hotline: SILENT ──────────────────────────────────────
+  # No inbound for hours is not an outage the traffic discriminator can see:
+  # there was no flow to lose. The attacker's noise alone must not page.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x120'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="own_account",job="llamenos-app",instance="app-under-test"}'
+        values: '0x120'
+      - series: 'llamenos_telephony_webhook_rejected_total{reason="signature_invalid",attribution="unattributed",job="llamenos-app",instance="app-under-test"}'
+        values: '0+50x120'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x120'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: WebhookAuthOutage
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: InboundButNoAnswers
+        exp_alerts: []
+
+  # ── Calls come in and nobody answers: fires ───────────────────────────────
+  # First call at minute 11, never answered. `for: 5m` lets a call that has
+  # only just entered the queue be picked up first.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x60'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x10 1+1x49'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: InboundButNoAnswers
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: InboundButNoAnswers
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: llamenos-app
+              instance: app-under-test
+            exp_annotations:
+              summary: "Calls are coming in and nobody is answering them"
+              description: "Calls entered the queue in the last window and none was answered, on any hub. Check the shift schedules and fallback groups, the telephony provider, and that volunteers' apps are receiving calls. Hub members are NOT notified of this by the app."
+      - eval_time: 45m
+        alertname: InboundButNoAnswers
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: llamenos-app
+              instance: app-under-test
+            exp_annotations:
+              summary: "Calls are coming in and nobody is answering them"
+              description: "Calls entered the queue in the last window and none was answered, on any hub. Check the shift schedules and fallback groups, the telephony provider, and that volunteers' apps are receiving calls. Hub members are NOT notified of this by the app."
+
+  # ── Calls come in and are answered: SILENT ────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x60'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x10 1+1x49'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x11 1+1x48'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: InboundButNoAnswers
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: InboundButNoAnswers
+        exp_alerts: []
+
+  # ── A call answered inside the pending period never pages ─────────────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="llamenos-app",instance="app-under-test"}'
+        values: '1x60'
+      - series: 'llamenos_calls_inbound_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x10 1x49'
+      - series: 'llamenos_calls_answered_total{job="llamenos-app",instance="app-under-test"}'
+        values: '0x13 1x46'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: InboundButNoAnswers
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: InboundButNoAnswers
+        exp_alerts: []

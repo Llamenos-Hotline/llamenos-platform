@@ -25,6 +25,7 @@ import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
 import type { IncidentKind } from '../services/incidents-categories'
 import type { OverLimitAction } from '@protocol/schemas/settings'
+import { recordTelephonyWebhookRejection } from '../telephony/webhook-rejection'
 
 const logger = createLogger('telephony')
 
@@ -154,6 +155,7 @@ telephony.use('*', webhookAuth({
   provider: 'telephony',
   allowedContentTypes: ['application/x-www-form-urlencoded', 'application/json'],
   skipReplay: true,
+  onIpRejected: (req) => recordTelephonyWebhookRejection(req, { reason: 'ip_not_allowed', providerAddressVerified: false }),
 }))
 
 /**
@@ -197,16 +199,19 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   // If no telephony provider is configured, reject with 403 — same as
   // signature validation failure. Never reveal whether telephony is set up.
   if (!adapter) {
+    await recordTelephonyWebhookRejection(c.req.raw, { reason: 'no_provider', providerAddressVerified: false })
     return c.json({ error: 'Forbidden' }, 403)
   }
 
   // W05-H03: IP allowlist (opt-in via TELEPHONY_WEBHOOK_IPS env var)
   const cidrs = (env as unknown as Record<string, string | undefined>).TELEPHONY_WEBHOOK_IPS
+  const providerAddressVerified = Boolean(cidrs)
   if (cidrs) {
     const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
     const clientIp = getClientIp(c.req.raw)
     if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
       logger.warn('Telephony webhook IP not in allowlist', { clientIp })
+      await recordTelephonyWebhookRejection(c.req.raw, { reason: 'ip_not_allowed', providerAddressVerified: false })
       return c.json({ error: 'Forbidden' }, 403)
     }
   }
@@ -215,6 +220,7 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   const isValid = await adapter.validateWebhook(c.req.raw)
   if (!isValid) {
     logger.error(`Webhook signature FAILED for ${url.pathname}`)
+    await recordTelephonyWebhookRejection(c.req.raw, { reason: 'signature_invalid', adapter, providerAddressVerified })
     return c.json({ error: 'Forbidden' }, 403)
   }
 

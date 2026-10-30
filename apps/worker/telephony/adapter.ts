@@ -140,6 +140,19 @@ export interface TelephonyAdapter {
   webhookReplayKey(request: Request): Promise<string>
 
   /**
+   * Whether a webhook names OUR provider account in the part of the request the
+   * provider itself fills in (e.g. Twilio's `AccountSid`). Used only to
+   * classify a request whose signature already failed (#2330): the identifier
+   * is public, so it is evidence of attribution, never of authenticity.
+   *
+   * Optional, and absent where the provider puts no account identifier in its
+   * webhooks. A missing method reads as "no": such requests are `unattributed`,
+   * which the alert rules still cover through the inbound-traffic backstop.
+   * Must be cheap and must not read an unbounded body.
+   */
+  webhookNamesOwnAccount?(request: Request): Promise<boolean>
+
+  /**
    * Get call recording/audio for transcription by call SID.
    */
   getCallRecording(callSid: string): Promise<ArrayBuffer | null>
