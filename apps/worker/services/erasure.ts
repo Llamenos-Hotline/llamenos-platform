@@ -33,6 +33,8 @@ import { SIP_REVOCATION_EVENT } from '../telephony/registrar'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
+import { WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
+import type { IncidentCheck, IncidentCheckResult } from './incidents'
 
 const logger = createLogger('services.erasure')
 
@@ -44,6 +46,23 @@ export const DEFAULT_ERASURE_DELAY_HOURS = 72
 export const DEFAULT_EMERGENCY_OVERRIDE_ENABLED = true
 /** The undo window before a hub crypto-shred executes, when no config row exists. */
 export const DEFAULT_HUB_SHRED_DELAY_HOURS = 48
+
+/**
+ * How long a request may sit past `execute_at` before it is OVERDUE (#2323).
+ * Three `erasure-expiry` ticks: a healthy worker claims a due request within
+ * one, so a request still unclaimed after three is not "about to run" — the
+ * worker is stopped, wedged or failing.
+ */
+export const ERASURE_DEADLINE_GRACE_MS = 3 * WORKER_TICK_INTERVAL_MS['erasure-expiry']
+
+/**
+ * The statuses that mean "the deadline is a promise not yet kept": still
+ * waiting (`pending`), or claimed by a worker that never finished it
+ * (`executing` — a process that died between the CAS claim and
+ * `markCompleted`/`markFailed` strands the request there, and
+ * `getExpiredPendingRequests` never offers it again).
+ */
+const UNFINISHED_ERASURE_STATUSES = ['pending', 'executing'] as const
 
 /**
  * SQL predicate: `column` (a jsonb array of HPKE envelopes) holds an envelope
@@ -771,6 +790,58 @@ export class ErasureService {
   }
 
   /**
+   * The L1 `erasure-deadline` check's query (#2323): how many erasure
+   * requests concerning `hubId` are unfinished more than `graceMs` after
+   * their deadline, and how far past it the oldest is — as of `asOf`.
+   *
+   * "Concerning a hub": a hub-scope shred of that hub, or a person's erasure
+   * whose subject is a member of it (a person's request carries no hub; their
+   * data lives in every hub they belong to, so each of those hubs' erasure
+   * admins is responsible for it). Members are read from `users.hub_roles`,
+   * which the request leaves untouched until it executes.
+   *
+   * Counts only — never an id, never a subject. An empty result is
+   * `{count: 0, oldestAgeSeconds: null}`; a query that fails THROWS, so the
+   * incident-checks runner counts the failure instead of reading it as zero.
+   *
+   * Read by the `incident-checks` worker through `erasureDeadlineCheck`, NEVER
+   * by `erasure-expiry`: a check inside the worker it measures cannot report
+   * that worker being down.
+   */
+  async countOverdueForHub(
+    hubId: string,
+    asOf: Date,
+    graceMs: number = ERASURE_DEADLINE_GRACE_MS,
+  ): Promise<IncidentCheckResult> {
+    const asOfIso = asOf.toISOString()
+    const cutoffIso = new Date(asOf.getTime() - graceMs).toISOString()
+    const statuses = sql.join(UNFINISHED_ERASURE_STATUSES.map((s) => sql`${s}`), sql`, `)
+    const rows = (await this.db.execute(sql`
+      SELECT
+        COUNT(*)::int AS count,
+        FLOOR(EXTRACT(EPOCH FROM (${asOfIso}::timestamptz - MIN(er.execute_at))))::int AS oldest_age_seconds
+      FROM erasure_requests er
+      WHERE er.status IN (${statuses})
+        AND er.execute_at < ${cutoffIso}::timestamptz
+        AND (
+          (er.scope = 'hub' AND er.hub_id = ${hubId})
+          OR (er.scope = 'user' AND EXISTS (
+            SELECT 1 FROM users u, jsonb_array_elements(u.hub_roles) AS hr
+            WHERE u.pubkey = er.user_id AND hr->>'hubId' = ${hubId}
+          ))
+        )
+    `)) as unknown as { count: number | string; oldest_age_seconds: number | string | null }[]
+    const row = rows[0]
+    if (!row) throw new Error('erasure-deadline check: aggregate query returned no row')
+    const n = Number(row.count)
+    if (n === 0) return { count: 0, oldestAgeSeconds: null }
+    if (row.oldest_age_seconds === null) {
+      throw new Error('erasure-deadline check: overdue requests with no oldest age')
+    }
+    return { count: n, oldestAgeSeconds: Number(row.oldest_age_seconds) }
+  }
+
+  /**
    * Atomically claim a pending request for execution.
    * Returns true if this caller won the race; false if already claimed by another worker.
    */
@@ -1124,5 +1195,22 @@ export class ErasureService {
     tx?: Pick<Database, 'delete'>,
   ): Promise<void> {
     await (tx ?? this.db).delete(auditUserKeys).where(eq(auditUserKeys.userPubkey, userPubkey))
+  }
+}
+
+/**
+ * The L1 `erasure-deadline` incident check (#2323). Registered with
+ * `IncidentService.registerCheck` by the service registry and evaluated, per
+ * hub, by the `incident-checks` scheduler worker — independently of
+ * `erasure-expiry`, so a stopped or failing erasure worker is itself what
+ * opens the incident. Reach (`erasure:admin`) and severity are the category's
+ * (services/incidents-categories.ts).
+ */
+export function erasureDeadlineCheck(erasure: Pick<ErasureService, 'countOverdueForHub'>): IncidentCheck {
+  return {
+    category: 'erasure-deadline',
+    kind: 'overdue',
+    name: 'erasure-deadline',
+    check: (hubId, now) => erasure.countOverdueForHub(hubId, now),
   }
 }

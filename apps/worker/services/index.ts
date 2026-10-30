@@ -31,7 +31,7 @@ import { SignalRegistrationService } from './provider-setup/signal-registration'
 import { A2pRegistrationService } from './provider-setup/a2p-registration'
 import { ProviderTemplateService } from './provider-setup/templates'
 import { HubOnboardService } from './provider-setup/hub-onboard'
-import { ErasureService } from './erasure'
+import { ErasureService, erasureDeadlineCheck } from './erasure'
 import { RetentionService } from './retention'
 import { HubShredService } from './hub-shred'
 import { ProviderRecordingsService } from './provider-recordings'
@@ -217,6 +217,11 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     tags: new TagsService(db),
     incidents: new IncidentService(db, audit),
   }
+
+  // L1 incident checks (#2323). Registered here, where every domain service
+  // exists; RUN only by the `incident-checks` scheduler worker — never by the
+  // worker whose backlog a check measures.
+  services.incidents.registerCheck(erasureDeadlineCheck(erasure))
 
   // Only create firehose agent if seal key is configured
   if (opts?.firehoseSealKey) {

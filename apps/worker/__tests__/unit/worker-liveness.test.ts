@@ -84,6 +84,7 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
         auditService: {} as never,
         hubShred: {} as never,
         providerMedia: {} as never,
+        incidents: { runWorkerTick: (_name, _category, fn) => fn() },
       }),
     stop: stopErasureExpiryWorker,
   },
