@@ -376,6 +376,37 @@ describe('the failed state reaches erasure:admin (#2347 part 1)', () => {
     expect(await fresh.db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'erasureRetried'))).toHaveLength(0)
   })
 
+  it('a person\'s erasure may be retried by a hub\'s erasure admin but abandoned only by the platform permission', async () => {
+    const hubA = await createHub()
+    const hubB = await createHub()
+    const subject = await user([hubA, hubB])
+    const requestId = await userRequest(subject, HOUR, 'failed')
+
+    // The subject's data lives in both hubs: neither hub's admin can give up on it for the other.
+    for (const hub of [hubA, hubB]) {
+      const res = await postAs(erasureDesk(hub), `/api/hubs/${hub}/erasure/requests/${requestId}/abandon`, { justification: 'not mine to drop' })
+      expect(res.status, `hub ${hub}`).toBe(403)
+    }
+    expect((await statusOf(requestId)).status).toBe('failed')
+
+    // A role INSIDE a hub that carries the platform permission does not confer platform authority.
+    const rogue: Caller = { hubRoles: [{ hubId: hubA, roleIds: ['role-erasure-desk', 'role-super-admin'] }] }
+    const viaHubRole = await postAs(rogue, `/api/hubs/${hubA}/erasure/requests/${requestId}/abandon`, { justification: 'x' })
+    expect(viaHubRole.status).toBe(403)
+
+    // Retry is the subject's own request going again: a concerned hub's erasure admin may.
+    const retry = await postAs(erasureDesk(hubA), `/api/hubs/${hubA}/erasure/requests/${requestId}/retry`)
+    expect(retry.status).toBe(200)
+    await fresh.db.update(schema.erasureRequests).set({ status: 'failed' }).where(eq(schema.erasureRequests.id, requestId))
+
+    const abandon = await postAs(platformOperator, `/api/erasure/requests/${requestId}/abandon`, { justification: 'Subject asked us to stop' })
+    expect(abandon.status).toBe(200)
+    expect((await statusOf(requestId)).status).toBe('abandoned')
+    // Written to the platform chain and to every hub the erasure concerned.
+    const entries = await fresh.db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'erasureAbandoned'))
+    expect(entries.map((e) => e.hubId).sort()).toEqual([hubA, hubB, null].sort())
+  })
+
   it('refuses to retry a request that is not failed, or when another request for the subject is in flight', async () => {
     const hubId = await createHub()
     const subject = await user([hubId])
