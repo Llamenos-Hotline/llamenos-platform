@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import conversationsRouter from '../../routes/conversations'
+import { ServiceError } from '../../services/settings'
 import { publishEvent } from '../../lib/ws-events'
 import { KIND_CONVERSATION_ASSIGNED } from '@shared/event-kinds'
 
@@ -43,10 +44,14 @@ function makeApp(opts: { permissions?: string[]; callerHubId?: string; convHubId
     getByIdForHub: vi.fn(),
   }
   // Hub binding (#2011) is pinned against real rows in
-  // integration-bun/hub-resource-binding.test.ts. Here the router-level guard
-  // reads through this test's own `getById`, so these tests stay about who may
-  // reach the endpoint and the handler's own hub check.
-  mockConversations.getByIdForHub.mockImplementation((id: string) => mockConversations.getById(id))
+  // integration-bun/hub-resource-binding.test.ts. Here `getByIdForHub` reads
+  // through this test's own `getById` and answers a row of another hub the way
+  // the service does — as a missing one.
+  mockConversations.getByIdForHub.mockImplementation(async (id: string, hubId: string) => {
+    const row = await mockConversations.getById(id)
+    if (row.hubId !== hubId) throw new ServiceError(404, 'Conversation not found')
+    return row
+  })
 
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
