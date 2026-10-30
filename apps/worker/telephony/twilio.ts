@@ -37,6 +37,7 @@ import type {
 } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { holdMusicUrl } from './hold-music'
 
 /**
  * Whether Twilio's `AnsweredBy` (sent on the answer URL because legs are
@@ -256,10 +257,11 @@ export class TwilioAdapter implements TelephonyAdapter {
     }
 
     const waitTwiml = sayOrPlay('waitMessage', lang, audioUrls)
+    const holdMusic = holdMusicUrl(audioUrls)
     return this.twiml(`
       <Response>
         ${waitTwiml}
-        <Play>https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3</Play>
+        ${holdMusic ? `<Play>${escapeXml(holdMusic)}</Play>` : ''}
       </Response>
     `)
   }

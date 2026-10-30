@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { VonageAdapter } from '@worker/telephony/vonage'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
+import { holdMusicEntry } from '@worker/telephony/hold-music'
+
+const HOLD_ORIGIN = 'https://hotline.example.org'
+const HOLD = holdMusicEntry(HOLD_ORIGIN)
+const HOLD_URL = `${HOLD_ORIGIN}/api/ivr-audio/hold-music.wav`
 
 describe('VonageAdapter', () => {
   let adapter: VonageAdapter
@@ -314,17 +319,17 @@ describe('VonageAdapter', () => {
     })
 
     it('returns wait message + music when within timeout', async () => {
-      const response = await adapter.handleWaitMusic('en', undefined, 30, 90)
+      const response = await adapter.handleWaitMusic('en', HOLD, 30, 90)
 
       const ncco = parseNcco(response)
       expect(ncco).toHaveLength(2)
       expect(ncco[0].action).toBe('talk')
       expect(ncco[1].action).toBe('stream')
-      expect(ncco[1].streamUrl[0]).toContain('twilio.music')
+      expect(ncco[1].streamUrl).toEqual([HOLD_URL])
     })
 
     it('returns wait message + music when no queue time provided', async () => {
-      const response = await adapter.handleWaitMusic('en')
+      const response = await adapter.handleWaitMusic('en', HOLD)
 
       const ncco = parseNcco(response)
       expect(ncco).toHaveLength(2)

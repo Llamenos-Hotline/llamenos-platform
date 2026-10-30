@@ -10,6 +10,7 @@ import { Hono, type Context } from 'hono'
 import type { AppEnv } from '../types'
 import { IVR_HUB_ID_PATTERN, IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '../lib/helpers'
 import { verifyIvrMediaPath } from '../lib/ivr-media-url'
+import { HOLD_MUSIC_ROUTE, holdMusicWav } from '../telephony/hold-music'
 
 const ivrMedia = new Hono<AppEnv>()
 
@@ -40,6 +41,20 @@ const uploadedPrompt = (hubSegment: boolean) => async (c: Context<AppEnv>) => {
   // Uploads are validated as PCM WAV (ivrAudioFormatError), so the type is true.
   return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
 }
+
+/**
+ * The hold track every adapter plays a queued caller (#2298): synthesised by
+ * the worker, identical for every call and hub, so it needs no signature — the
+ * URL names nothing. The bytes change only with the source, so a day's caching
+ * is safe.
+ */
+ivrMedia.get(HOLD_MUSIC_ROUTE, (c) => {
+  const wav = holdMusicWav()
+  return c.body(wav, 200, {
+    'Content-Type': 'audio/wav',
+    'Cache-Control': 'public, max-age=86400',
+  })
+})
 
 ivrMedia.get('/ivr-audio/:promptType/:language', uploadedPrompt(false))
 ivrMedia.get('/ivr-audio/:hubId/:promptType/:language', uploadedPrompt(true))
