@@ -21,6 +21,14 @@ const desktopStepDirs = [
 // linked issue; `bun run test-specs:validate` rejects the tag without one.
 const MISSING_STEPS = "fail-on-gen";
 
+// playwright-bdd 9 (required by Playwright >= 1.61, which the ubuntu-26.04 runner
+// image needs — #2324) rejects any step definition whose function takes fewer
+// parameters than its Gherkin pattern captures. 34 existing steps do — they accept
+// a `{string}`/`{int}` and ignore it (e.g. "the deletion should fail with a {int}
+// error" always asserts 403). Failing generation on them is the right end state, but
+// fixing 34 steps is its own change; until it lands, keep 8.x's behaviour.
+const ARITY_CHECK = false;
+
 /**
  * The one resolver for "which backend is under test" (#1792).
  *
@@ -165,6 +173,7 @@ const playwrightConfig = defineConfig({
         featuresRoot: "packages/test-specs/features",
         tags: "@desktop and not @backend and not @wip and not @fixme and not @requires-camera and not @requires-live-calls",
         missingSteps: MISSING_STEPS,
+        arityCheck: ARITY_CHECK,
       }),
       use: { ...devices["Desktop Chrome"] },
       fullyParallel: true,
@@ -181,6 +190,7 @@ const playwrightConfig = defineConfig({
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and not @wip and not @fixme and not @global-setting and not @simulated-telephony and not @signed-webhooks",
         missingSteps: MISSING_STEPS,
+        arityCheck: ARITY_CHECK,
       }),
       use: BACKEND_PROJECT_USE,
       fullyParallel: true,
@@ -210,6 +220,7 @@ const playwrightConfig = defineConfig({
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @global-setting and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
+        arityCheck: ARITY_CHECK,
       }),
       use: BACKEND_PROJECT_USE,
       fullyParallel: false,
@@ -231,6 +242,7 @@ const playwrightConfig = defineConfig({
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @simulated-telephony and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
+        arityCheck: ARITY_CHECK,
       }),
       use: BACKEND_PROJECT_USE,
       fullyParallel: false,
@@ -251,6 +263,7 @@ const playwrightConfig = defineConfig({
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @signed-webhooks and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
+        arityCheck: ARITY_CHECK,
       }),
       use: BACKEND_PROJECT_USE,
       fullyParallel: false,
