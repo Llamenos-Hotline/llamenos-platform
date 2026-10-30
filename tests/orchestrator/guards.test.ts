@@ -2814,6 +2814,17 @@ describe('rail: the knope release PR concludes green without a review, and nothi
   const CURRENT = (JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string }).version
   const NEXT = CURRENT.replace(/\d+$/, (n) => String(Number(n) + 1))
 
+  /**
+   * Versioned files that END IN A NEWLINE on `main`. The fixture's base must
+   * say so itself rather than inherit it from the checkout: knope drops that
+   * newline when it releases, so on the release branch — and on `main` once
+   * the release merges — the checked-out file has none, and the base copy
+   * then carries no newline for the fixture to drop. That made both newline
+   * tests below fail on release 0.21.0 (#2290) with "no newline marker" /
+   * "nothing to commit", and would have failed on `main` after the merge.
+   */
+  const ENDS_IN_NEWLINE_ON_MAIN = ['apps/desktop/tauri.conf.json']
+
   /** Real repo, real version files, real diff: base commit (after `seed`), then `mutate`. */
   function realDiff(mutate: (dir: string) => void, seed: (dir: string) => void = () => {}): { diff: string; files: string[] } {
     const dir = mkdtempSync(join(tmpdir(), 'release-pr-rail-'))
@@ -2823,7 +2834,8 @@ describe('rail: the knope release PR concludes green without a review, and nothi
       for (const p of base) {
         const dest = join(dir, p)
         execFileSync('mkdir', ['-p', dirname(dest)])
-        writeFileSync(dest, readFileSync(join(process.cwd(), p)))
+        const text = readFileSync(join(process.cwd(), p), 'utf8')
+        writeFileSync(dest, ENDS_IN_NEWLINE_ON_MAIN.includes(p) ? text.replace(/\n*$/, '\n') : text)
       }
       seed(dir)
       sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base')
