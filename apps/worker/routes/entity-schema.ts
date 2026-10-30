@@ -37,7 +37,15 @@ import { loadBundledTemplates } from '../lib/template-loader'
 import { isValidPermission } from '@shared/permissions'
 import { createEntityRouter } from '../lib/entity-router'
 
+/**
+ * Mounted at `/api/settings/cms` and at `/api/hubs/:hubId/settings/cms`. As in
+ * `settings.ts`, the scope a handler writes is fixed by the router it is on
+ * (#2367): `entitySchema` carries what a hub has its own value of and is mounted
+ * on both; `deployment` carries the server-wide switches and the global role
+ * table, and is mounted only unscoped, so a hub's permissions never reach it.
+ */
 const entitySchema = new Hono<AppEnv>()
+const deployment = new Hono<AppEnv>()
 
 // --- Case Management Feature Toggle ---
 
@@ -135,7 +143,7 @@ entitySchema.put('/auto-assignment',
 
 // --- Cross-Hub Sharing (Epic 328) ---
 
-entitySchema.get('/cross-hub',
+deployment.get('/cross-hub',
   describeRoute({
     tags: ['Case Management'],
     summary: 'Get cross-hub sharing status',
@@ -155,7 +163,7 @@ entitySchema.get('/cross-hub',
   },
 )
 
-entitySchema.put('/cross-hub',
+deployment.put('/cross-hub',
   describeRoute({
     tags: ['Case Management'],
     summary: 'Enable or disable cross-hub sharing',
@@ -173,7 +181,7 @@ entitySchema.put('/cross-hub',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.setCrossHubSharingEnabled(body)
-    await audit(services.audit, 'crossHubSharingToggled', c.get('pubkey'), body, undefined, c.get('hubId') ?? null)
+    await audit(services.audit, 'crossHubSharingToggled', c.get('pubkey'), body, undefined, null)
     return c.json(result)
   },
 )
@@ -473,13 +481,16 @@ entitySchema.post('/templates/apply',
       await services.settings.bulkSetCmsReportTypes({ reportTypes: mergedReportTypes, hubId })
     }
 
-    // Track applied template
+    // Track applied template. This list is still server-wide (a record carries
+    // no hub), and it is load-bearing as such: a new member's default role is
+    // resolved from it (`lib/hub-default-role.ts`). Narrowing both is #1446.
     const { appliedTemplates = [] } = await services.settings.getAppliedTemplates() as { appliedTemplates: unknown[] }
     appliedTemplates.push(result.appliedRecord)
     await services.settings.setAppliedTemplates({ appliedTemplates })
 
-    // Enable case management
-    await services.settings.setCaseManagementEnabled({ enabled: true })
+    // Enable case management where the template was applied: under a hub that
+    // is the hub's own switch, never the deployment default every hub inherits.
+    await services.settings.setCaseManagementEnabled({ enabled: true }, c.get('hubId'))
 
     await audit(services.audit, 'templateApplied', c.get('pubkey'), {
       templateId,
@@ -502,7 +513,7 @@ entitySchema.post('/templates/apply',
 
 // --- Create roles from template suggestions (Epic 321) ---
 
-entitySchema.post('/roles/from-template',
+deployment.post('/roles/from-template',
   describeRoute({
     tags: ['Case Management'],
     summary: 'Create custom roles from template suggested roles',
@@ -555,7 +566,7 @@ entitySchema.post('/roles/from-template',
       await audit(services.audit, 'roleCreatedFromTemplate', pubkey, {
         roleId: role.id,
         roleName: role.name,
-      }, undefined, c.get('hubId') ?? null)
+      }, undefined, null)
     }
 
     return c.json({ created, count: created.length }, 201)
@@ -620,4 +631,12 @@ const reportTypeRouter = createEntityRouter({
 })
 entitySchema.route('/report-types', reportTypeRouter)
 
-export default entitySchema
+/** `/api/settings/cms` — the per-hub CMS settings (platform bucket) plus the deployment-wide ones. */
+const entitySchemaRoutes = new Hono<AppEnv>()
+entitySchemaRoutes.route('/', entitySchema)
+entitySchemaRoutes.route('/', deployment)
+export default entitySchemaRoutes
+
+/** `/api/hubs/:hubId/settings/cms` — only what a hub has its own value of. */
+export const hubEntitySchemaRoutes = new Hono<AppEnv>()
+hubEntitySchemaRoutes.route('/', entitySchema)

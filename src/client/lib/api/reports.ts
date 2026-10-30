@@ -79,8 +79,10 @@ export async function getReportTypes() {
   return request<{ reportTypes: import('@shared/types').ReportType[] }>(hp('/reports/types'))
 }
 
+// The admin report-type vocabulary is deployment-wide: it exists only at the
+// unscoped `/settings/report-types`, never under a hub (#2367).
 export async function getReportTypesAdmin() {
-  return request<{ reportTypes: import('@shared/types').ReportType[] }>(hp('/settings/report-types'))
+  return request<{ reportTypes: import('@shared/types').ReportType[] }>('/settings/report-types')
 }
 
 export async function createReportType(data: {
@@ -90,21 +92,21 @@ export async function createReportType(data: {
   fields?: import('@shared/types').CustomFieldDefinition[]
   isDefault?: boolean
 }) {
-  return request<import('@shared/types').ReportType>(hp('/settings/report-types'), {
+  return request<import('@shared/types').ReportType>('/settings/report-types', {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
 export async function updateReportType(id: string, data: Partial<import('@shared/types').ReportType>) {
-  return request<import('@shared/types').ReportType>(hp(`/settings/report-types/${id}`), {
+  return request<import('@shared/types').ReportType>(`/settings/report-types/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
 
 export async function archiveReportType(id: string) {
-  return request<{ ok: boolean }>(hp(`/settings/report-types/${id}`), {
+  return request<{ ok: boolean }>(`/settings/report-types/${id}`, {
     method: 'DELETE',
   })
 }

@@ -9,6 +9,7 @@ import { setActiveHub, ApiError } from './client'
 import { getRecoveryGroup } from './recovery'
 import { updateDirectoryContact, uploadEntityFile } from './directory'
 import { createRolesFromTemplate } from './cms'
+import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
 
 const registerCredential = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/webauthn', () => ({ registerCredential }))
@@ -74,10 +75,25 @@ describe('directory', () => {
   })
 })
 
-describe('case-management roles', () => {
-  it('creates roles from a template under settings/cms', async () => {
+// Deployment-wide settings exist only on the unscoped mount (#2367): a hub
+// being active must not move these calls under /hubs/:hubId, where they 404.
+describe('deployment-wide settings', () => {
+  it('creates roles from a template on the unscoped settings/cms route', async () => {
     await createRolesFromTemplate([])
-    expect(calls).toEqual([{ method: 'POST', url: '/api/hubs/hub-1/settings/cms/roles/from-template' }])
+    expect(calls).toEqual([{ method: 'POST', url: '/api/settings/cms/roles/from-template' }])
+  })
+
+  it('manages the admin report-type vocabulary on the unscoped settings route', async () => {
+    await getReportTypesAdmin()
+    await createReportType({ name: 'x' })
+    await updateReportType('rt-1', {})
+    await archiveReportType('rt-1')
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/settings/report-types' },
+      { method: 'POST', url: '/api/settings/report-types' },
+      { method: 'PATCH', url: '/api/settings/report-types/rt-1' },
+      { method: 'DELETE', url: '/api/settings/report-types/rt-1' },
+    ])
   })
 })
 

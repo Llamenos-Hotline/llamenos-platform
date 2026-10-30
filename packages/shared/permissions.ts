@@ -304,7 +304,10 @@ export const DEFAULT_ROLES: Omit<Role, 'createdAt' | 'updatedAt'>[] = [
       'teams:*', 'tags:*',
       'metrics:read', 'system:view-roles',
       'erasure:*', 'retention:manage',
-      'bans:read-platform', 'bans:create-platform', 'bans:delete-platform',
+      // No `bans:*-platform`: a platform ban applies to every hub, which is not
+      // a hub's to decide. It was inert only because /bans/platform is mounted
+      // unscoped, and would have gone live the moment this role was granted
+      // globally (#2367).
     ],
     isDefault: true,
     isSystem: false,
