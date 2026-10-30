@@ -12,6 +12,7 @@ import webauthnRoutes from './routes/webauthn'
 import usersRoutes from './routes/users'
 import identityRoutes from './routes/identity'
 import invitesRoutes from './routes/invites'
+import invitePageRoutes from './routes/invite-page'
 import shiftsRoutes from './routes/shifts'
 import bansRoutes from './routes/bans'
 import notesRoutes from './routes/notes'
@@ -350,6 +351,10 @@ api.route('/', authenticated)
 
 // Mount API under /api
 app.route('/api', api)
+
+// The page an https invite link opens in a browser (#2385). Mounted before the
+// catch-all, outside /api: it is unbranded and carries no API middleware.
+app.route('/onboarding', invitePageRoutes)
 
 // Catch-all — no web frontend served here (Tauri desktop embeds its own)
 app.all('*', (c) => c.json({ error: 'Not Found' }, 404))

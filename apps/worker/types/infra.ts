@@ -62,6 +62,8 @@ export interface Env {
 
   HOTLINE_NAME: string
   ENVIRONMENT: string
+  /** https URL the invite page offers for installing the client (a store listing or download page). Omitted: the page offers no link. Must not name the organisation. */
+  APP_DOWNLOAD_URL?: string
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
   CORS_ALLOWED_ORIGINS?: string   // Comma-separated allowed origins (overrides hardcoded defaults)
   /** Hashing key ONLY (phone/IP hashes, signed URLs). Encrypts nothing. */

@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Envitasyon",
+    "validHeading": "Yo envite ou",
+    "validBody": "Enstale aplikasyon an si ou poko genyen l, epi louvri envitasyon sa a ladan l.",
+    "openInApp": "Louvri nan aplikasyon an",
+    "downloadApp": "Pran aplikasyon an",
+    "qrLabel": "Eskane pou louvri envitasyon sa a sou telefòn ou",
+    "invalidHeading": "Pa ka itilize lyen sa a",
+    "invalidBody": "Lyen an pa valid oswa li ekspire. Mande moun ki voye l la yon nouvo.",
+    "rateLimitedHeading": "Twòp tantativ",
+    "rateLimitedBody": "Tanpri tann yon minit epi eseye ankò."
+  },
   "ivr": {
     "selfAnnouncement": "Pou Kreyòl, peze [N].",
     "title": "IVR Language Menu",

@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Convite",
+    "validHeading": "Você foi convidado(a)",
+    "validBody": "Instale o aplicativo, se ainda não o tiver, e depois abra este convite nele.",
+    "openInApp": "Abrir no aplicativo",
+    "downloadApp": "Obter o aplicativo",
+    "qrLabel": "Escaneie para abrir este convite no seu celular",
+    "invalidHeading": "Este link não pode ser usado",
+    "invalidBody": "O link não é válido ou expirou. Peça um novo a quem o enviou.",
+    "rateLimitedHeading": "Tentativas demais",
+    "rateLimitedBody": "Aguarde um minuto e tente novamente."
+  },
   "ivr": {
     "selfAnnouncement": "Para português, pressione [N].",
     "title": "IVR Language Menu",
