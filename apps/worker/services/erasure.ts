@@ -620,14 +620,20 @@ export class ErasureService {
   }
 
   /**
-   * The hubs that exist and `userId` belongs to. A person's erasure reaches
-   * every one of them, so authority to erase them must be held in each.
+   * Every existing hub an erasure of `userId` reaches: where they hold a role,
+   * and — the same sources `executeErasure` cascades through — where they hold
+   * a hub key or have authored a note. A former member's residue in a hub
+   * counts: that hub's admin must have a say before it is destroyed.
    */
   async hubsOfUser(userId: string): Promise<string[]> {
     const rows = (await this.db.execute(sql`
-      SELECT DISTINCT h.id
-      FROM users u, jsonb_array_elements(u.hub_roles) AS hr, hubs h
-      WHERE u.pubkey = ${userId} AND h.id = hr->>'hubId'
+      SELECT h.id FROM hubs h WHERE h.id IN (
+        SELECT hr->>'hubId' FROM users u, jsonb_array_elements(u.hub_roles) AS hr WHERE u.pubkey = ${userId}
+        UNION
+        SELECT hub_id FROM hub_keys WHERE recipient_pubkey = ${userId}
+        UNION
+        SELECT hub_id FROM notes WHERE author_pubkey = ${userId}
+      )
     `)) as unknown as { id: string }[]
     return rows.map((r) => r.id)
   }

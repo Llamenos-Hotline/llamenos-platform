@@ -24,7 +24,7 @@ import { inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
-import { erasureRequests, hubs, reEncryptionJobs, users } from '../../db/schema'
+import { erasureRequests, hubKeys, hubs, reEncryptionJobs, users } from '../../db/schema'
 import { ErasureService } from '../../services/erasure'
 import erasureRoutes from '../../routes/erasure'
 import { hubContext } from '../../middleware/hub'
@@ -85,11 +85,13 @@ const IN_A_AND_B = actor('d3', [], [
   { hubId: HUB_B, roleIds: ['role-volunteer'] },
 ])
 const IN_NO_HUB = actor('d4', [], [])
+/** A member of hub A on paper, but still holding hub B's key — a hub an erasure would also reach. */
+const FORMER_B_MEMBER = actor('d6', [], [{ hubId: HUB_A, roleIds: ['role-volunteer'] }])
 /** Belongs only to a hub that no longer exists. */
 const IN_GONE_HUB = actor('d5', [], [{ hubId: GONE_HUB, roleIds: ['role-volunteer'] }])
 
 const ACTORS = [SUPER_ADMIN, HUB_A_ADMIN, HUB_B_ADMIN, A_ADMIN_B_VOLUNTEER, PLATFORM_READER]
-const SUBJECTS = [IN_A, IN_B, IN_A_AND_B, IN_NO_HUB, IN_GONE_HUB]
+const SUBJECTS = [IN_A, IN_B, IN_A_AND_B, IN_NO_HUB, IN_GONE_HUB, FORMER_B_MEMBER]
 const ownPubkeys = [...ACTORS, ...SUBJECTS].map(a => a.pubkey)
 
 /** request id by label, filled in `beforeAll`. */
@@ -148,6 +150,7 @@ beforeAll(async () => {
       active: true,
     })),
   )
+  await db.insert(hubKeys).values({ hubId: HUB_B, recipientPubkey: FORMER_B_MEMBER.pubkey, enc: 'aa', ct: 'bb' })
   const executeAt = new Date(Date.now() + 72 * 3600_000)
   const person = (label: keyof typeof REQ, subject: Actor) => ({ label, row: { scope: 'user', userId: subject.pubkey, status: 'pending', requestedBy: subject.pubkey, executeAt } })
   const shred = (label: keyof typeof REQ, hubId: string) => ({ label, row: { scope: 'hub', hubId, status: 'pending', requestedBy: HUB_A_ADMIN.pubkey, executeAt } })
@@ -166,6 +169,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await db.delete(hubKeys).where(inArray(hubKeys.recipientPubkey, [FORMER_B_MEMBER.pubkey]))
   await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.id, Object.values(JOB)))
   await db.delete(erasureRequests).where(inArray(erasureRequests.id, Object.values(REQ)))
   await db.delete(users).where(inArray(users.pubkey, ownPubkeys))
@@ -310,6 +314,13 @@ describe('POST /erasure/:userId/wipe-device/:devicePubkey — only on a person t
 
   it('refuses a super-admin outside a hub a person who belongs to one', async () => {
     expect((await wipe(SUPER_ADMIN, IN_A)).status).toBe(403)
+  })
+
+  it('counts a hub whose key the person still holds, though their role there is gone', async () => {
+    // Erasure cascades through hub keys and authored notes, not just roles: hub A's admin
+    // cannot destroy what the person holds in hub B on the strength of hub A alone.
+    expect((await wipe(HUB_A_ADMIN, FORMER_B_MEMBER, HUB_A)).status).toBe(403)
+    expect((await wipe(SUPER_ADMIN, FORMER_B_MEMBER, HUB_A)).status).toBe(200)
   })
 
   it('lets a super-admin act on a hub’s member from inside that hub', async () => {
