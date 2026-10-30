@@ -33,7 +33,12 @@
  *   1. Order. Every pending file sorts after every file already applied
  *      (target) or already on the base branch (ci): the runner applies by
  *      filename, so an upgraded database would run it last but a fresh one
- *      in the middle.
+ *      in the middle. The one exception is a timestamped migration that is
+ *      CONCURRENT with every settled file it sorts before — written on another
+ *      branch, so neither descends from the other in the snapshot graph
+ *      (scripts/lib/migration-graph.ts). `migration:order`
+ *      (scripts/check-migration-order.ts) proves in a real database that each
+ *      such pair builds the same schema in either order (#2391).
  *
  *   2. Destructive-DDL lint. Each pending statement, split with the runner's
  *      own splitter (scripts/lib/migration-statements.ts), is parsed with the
@@ -56,10 +61,11 @@
  *      "forgotten" (absent from the newest snapshot) but not dropped: see
  *      compareSchemas.
  *
- * "The release being replaced" is the newest drizzle snapshot at or before the
- * last settled file: the last file the ledger applied (target), or the last
- * file on the base branch (ci). Snapshots are immutable, so it is read from
- * this tree in both modes.
+ * "The release being replaced" is the schema the settled files build: the
+ * files the ledger applied (target), or the files on the base branch (ci) —
+ * the merge of the snapshot heads among them (one head is simply the newest
+ * snapshot). "The newest snapshot" is the same merge over every snapshot in the
+ * tree. Snapshots are immutable, so both are read from this tree in both modes.
  *
  * Usage:
  *   bun run migration:safety --ci [--base <rev>]            (default base: merge-base with origin/main)
@@ -67,7 +73,7 @@
  *       [--backup-max-age-minutes 60]
  *   Either mode takes [--root <repo>].
  */
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { SQL } from 'bun'
 import {
@@ -89,6 +95,7 @@ import {
   type RenameStmt,
   type TruncateStmt,
 } from '@libpg-query/parser'
+import { MigrationGraph } from './lib/migration-graph'
 import {
   LEDGER_TABLE,
   listMigrationFiles,
@@ -137,34 +144,23 @@ export interface DrizzleSnapshot {
 
 const EMPTY_SNAPSHOT: DrizzleSnapshot = { tables: {}, enums: {} }
 
-/** `0042_foo.sql` and `0042_snapshot.json` → 42. */
-function prefixOf(file: string): number | undefined {
-  const m = /^(\d+)_/.exec(file)
-  return m ? Number(m[1]) : undefined
-}
-
 /**
- * The newest `NNNN_snapshot.json` whose number is at most `upTo`'s, or the
- * newest of all when `upTo` is undefined. Hand-written migrations have no
- * snapshot of their own, so the newest one at or before a file is what the
- * schema declared once that file had run.
+ * What a set of migration files builds: the merge of the snapshot heads among
+ * them and their ancestors (scripts/lib/migration-graph.ts). `settled`
+ * undefined means every snapshot in the tree — what the release being deployed
+ * declares. The label names the head snapshot(s), for messages.
  */
-export function snapshotFileAtOrBefore(metaDir: string, upTo?: string): string | undefined {
-  const limit = upTo === undefined ? Number.POSITIVE_INFINITY : (prefixOf(upTo) ?? -1)
-  return readdirSync(metaDir)
-    .filter((f) => f.endsWith('_snapshot.json') && (prefixOf(f) ?? Number.POSITIVE_INFINITY) <= limit)
-    .sort()
-    .at(-1)
-}
-
-/** The snapshot of the release being replaced: the newest at or before the last settled file. */
-function previousSnapshotFile(metaDir: string, settled: string[]): string | undefined {
-  const last = settled.at(-1)
-  return last === undefined ? undefined : snapshotFileAtOrBefore(metaDir, last)
-}
-
-function readSnapshot(metaDir: string, file: string | undefined): DrizzleSnapshot {
-  return file === undefined ? EMPTY_SNAPSHOT : (JSON.parse(readFileSync(join(metaDir, file), 'utf-8')) as DrizzleSnapshot)
+export function builtSchema(
+  graph: MigrationGraph,
+  settled?: readonly string[],
+): { label: string | undefined; snapshot: DrizzleSnapshot; conflicts: string[] } {
+  const subset = settled === undefined ? undefined : graph.builtBy(settled)
+  const { heads, schema, conflicts } = graph.state(subset)
+  return {
+    label: heads.length === 0 ? undefined : heads.map((h) => h.file).join(' + '),
+    snapshot: heads.length === 0 ? EMPTY_SNAPSHOT : (schema as unknown as DrizzleSnapshot),
+    conflicts,
+  }
 }
 
 // ── The database the pending statements meet ─────────────────────────────────
@@ -930,9 +926,11 @@ export interface GateInput {
 }
 
 export interface SafetyReport {
-  /** The snapshot of the release being replaced, or undefined when none exists. */
+  /** The snapshot(s) of the release being replaced, or undefined when none exists. */
   previousSnapshot: string | undefined
   judgedFiles: string[]
+  /** Pending files allowed to sort before settled ones because they are concurrent with them. */
+  outOfOrder: string[]
   allowed: number
   violations: Violation[]
 }
@@ -1033,22 +1031,45 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
   const metaDir = join(migrationsDir, 'meta')
   const violations: Violation[] = [...input.preflight]
 
+  const graph = MigrationGraph.load(metaDir)
+  for (const problem of graph.problems) violations.push({ message: `snapshots: ${problem}` })
+
   // ── 1. Order ───────────────────────────────────────────────────────────────
-  const lastSettled = input.settled.at(-1)
+  // A pending file that sorts before a settled one runs last on an upgraded
+  // database but in the middle on a fresh one. That is only allowed between
+  // two migrations written without knowledge of each other — concurrent in
+  // the snapshot graph, so neither can depend on the other — and
+  // `migration:order` proves in a real database that every such pair builds
+  // the same schema in both orders (#2391). Anything else is history being
+  // rewritten.
+  const outOfOrder: string[] = []
   for (const f of input.pending) {
-    if (lastSettled !== undefined && f < lastSettled) {
-      violations.push({
-        file: f,
-        message:
-          `${f} sorts before ${lastSettled}, which already ran. An upgraded database would apply ` +
-          'it last but a fresh one in the middle; name it after the newest existing file.',
-      })
+    const later = input.settled.filter((s) => s > f)
+    if (later.length === 0) continue
+    const own = graph.nodeForMigration(f)
+    const dependent = later.filter((s) => {
+      const other = graph.nodeForMigration(s)
+      return !own || own.kind !== 'timestamped' || !other || !graph.concurrent(own.file, other.file)
+    })
+    if (dependent.length === 0) {
+      outOfOrder.push(`${f} (before ${later.join(', ')})`)
+      continue
     }
+    violations.push({
+      file: f,
+      message:
+        `${f} sorts before ${dependent.at(-1)}, which already ran and is not a concurrent migration (one ` +
+        'descends from the other, or one has no timestamped snapshot). An upgraded database would apply ' +
+        'it last but a fresh one in the middle; regenerate it on top: bun run db:generate --name <description>.',
+    })
   }
 
-  const previousSnapshot = previousSnapshotFile(metaDir, input.settled)
-  const previous = new SchemaView(readSnapshot(metaDir, previousSnapshot))
-  const next = readSnapshot(metaDir, snapshotFileAtOrBefore(metaDir))
+  const replaced = builtSchema(graph, input.settled)
+  const previousSnapshot = replaced.label
+  const previous = new SchemaView(replaced.snapshot)
+  const deployed = builtSchema(graph)
+  for (const c of [...replaced.conflicts, ...deployed.conflicts]) violations.push({ message: `snapshots conflict: ${c}` })
+  const next = deployed.snapshot
   const pendingStatements = input.pending.flatMap((f) => splitMigrationStatements(readFileSync(join(migrationsDir, f), 'utf-8')))
   const ctx = lintContext(new RelaxedSchema(input.live, pendingStatements), next)
 
@@ -1105,7 +1126,7 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
     }
   }
 
-  return { previousSnapshot, judgedFiles: input.pending, allowed, violations }
+  return { previousSnapshot, judgedFiles: input.pending, outOfOrder, allowed, violations }
 }
 
 // ── --ci: the branch's diff ──────────────────────────────────────────────────
@@ -1151,8 +1172,7 @@ export async function ciInput(root: string, base: string): Promise<GateInput> {
   const files = listMigrationFiles(migrationsDir)
   const settled = files.filter((f) => !added.has(f))
   const pending = files.filter((f) => added.has(f))
-  const metaDir = join(migrationsDir, 'meta')
-  const previous = new SchemaView(readSnapshot(metaDir, previousSnapshotFile(metaDir, settled)))
+  const previous = new SchemaView(builtSchema(MigrationGraph.load(join(migrationsDir, 'meta')), settled).snapshot)
   const statements = pending.flatMap((f) => splitMigrationStatements(readFileSync(join(migrationsDir, f), 'utf-8')))
   return { root, settled, pending, live: new PresumedSchema(statements, previous), preflight }
 }
@@ -1356,6 +1376,12 @@ if (import.meta.main) {
       `${report.judgedFiles.length ? `: ${report.judgedFiles.join(', ')}` : ''}` +
       (report.allowed ? `; ${report.allowed} finding(s) allowed by verified annotations` : ''),
   )
+  for (const o of report.outOfOrder) {
+    console.log(
+      `[migration-safety] ${o}: concurrent migrations, written without knowledge of each other; ` +
+        'migration:order proves they build the same schema in either order',
+    )
+  }
   for (const v of report.violations) {
     if (ci && process.env.GITHUB_ACTIONS === 'true') {
       const file = v.file ? ` file=drizzle/migrations/${v.file}` : ''

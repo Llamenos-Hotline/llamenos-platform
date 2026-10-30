@@ -196,7 +196,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
       'scripts/typecheck-tests-gate.ts',
       'scripts/run-migrations.ts',
       'scripts/eslint-rules/no-inline-api-shape.js',
-      'scripts/regenerate-snapshot.ts',
+      'scripts/db-generate.ts',
       'scripts/image-smoke.sh',
       'scripts/verify-runtime.ts',
       'scripts/lib/test-reporter.sh',

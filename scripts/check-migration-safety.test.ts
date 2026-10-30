@@ -17,7 +17,8 @@
  *     previous release still reads) and to reject an annotation claimed for it.
  */
 import { beforeAll, describe, expect, test } from 'bun:test'
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadModule } from '@libpg-query/parser'
@@ -34,9 +35,10 @@ import {
   lintContext,
   lintSql,
   parseAnnotations,
+  builtSchema,
   parseBackupEntry,
-  snapshotFileAtOrBefore,
 } from './check-migration-safety'
+import { MigrationGraph } from './lib/migration-graph'
 import { listMigrationFiles } from './lib/migration-statements'
 
 const ROOT = join(import.meta.dir, '..')
@@ -494,6 +496,25 @@ function migrationsOf(root: string): string {
   return join(root, 'drizzle', 'migrations')
 }
 
+function newestSnapshotFile(metaDir: string): string {
+  return readdirSync(metaDir).filter((f) => f.endsWith('_snapshot.json')).sort().at(-1) as string
+}
+
+/**
+ * A timestamped migration as `bun run db:generate` writes it: its SQL, and a
+ * snapshot whose `prevIds` name `parents` (default: the tree's newest).
+ */
+function addGenerated(root: string, prefix: string, name: string, sql: string, parents?: string[]): string {
+  const meta = join(migrationsOf(root), 'meta')
+  const parentFiles = parents ?? [newestSnapshotFile(meta)]
+  const parentSnaps = parentFiles.map((f) => JSON.parse(readFileSync(join(meta, f), 'utf-8')) as { id: string })
+  const id = randomUUID()
+  const body = { ...parentSnaps[0], id, prevId: parentSnaps[0].id, prevIds: parentSnaps.map((p) => p.id) }
+  writeFileSync(join(meta, `${prefix}_snapshot.json`), JSON.stringify(body))
+  writeFileSync(join(migrationsOf(root), `${prefix}_${name}.sql`), sql)
+  return `${prefix}_snapshot.json`
+}
+
 /** A new migration. Left untracked: the gate judges uncommitted files too. */
 function addMigration(root: string, name: string, sql: string): void {
   writeFileSync(join(migrationsOf(root), name), sql)
@@ -529,13 +550,14 @@ describe('--ci end to end, with no database', () => {
     })
   })
 
-  test('the replaced release is the newest snapshot at or before the last settled file', () => {
-    const meta = join(ROOT, 'drizzle', 'migrations', 'meta')
+  test('the replaced release is what the settled files build: the newest legacy snapshot at or before the last one', () => {
+    const graph = MigrationGraph.load(join(ROOT, 'drizzle', 'migrations', 'meta'))
     const files = listMigrationFiles(join(ROOT, 'drizzle', 'migrations'))
-    expect(snapshotFileAtOrBefore(meta, files.at(-1))).toBe(snapshotFileAtOrBefore(meta))
+    expect(builtSchema(graph, files).label).toBe(builtSchema(graph).label as string)
     // 0030-0032 are hand-written and have no snapshot of their own.
-    expect(snapshotFileAtOrBefore(meta, '0031_remove_phone_plain.sql')).toMatch(/^00(2\d|3[01])_snapshot\.json$/)
-    expect(snapshotFileAtOrBefore(meta, '0000_a.sql')).toBe('0000_snapshot.json')
+    expect(builtSchema(graph, ['0031_remove_phone_plain.sql']).label).toMatch(/^00(2\d|3[01])_snapshot\.json$/)
+    expect(builtSchema(graph, ['0000_a.sql']).label).toBe('0000_snapshot.json')
+    expect(builtSchema(graph, []).label).toBeUndefined()
   })
 
   test('GATE THE GATE: a new migration dropping a column the previous release declares fails', () => {
@@ -581,7 +603,8 @@ describe('--ci end to end, with no database', () => {
   test('expand/contract lifecycle: forget a column, ship it, then drop it with an annotation', () => {
     withRepo((root, base) => {
       const meta = join(migrationsOf(root), 'meta')
-      const latest = JSON.parse(readFileSync(join(meta, snapshotFileAtOrBefore(meta) as string), 'utf-8')) as DrizzleSnapshot
+      const latest = JSON.parse(readFileSync(join(meta, newestSnapshotFile(meta)), 'utf-8')) as DrizzleSnapshot & { id: string }
+      latest.id = randomUUID()
       delete latest.tables['public.users'].columns.team_id
       // Release N forgets users.team_id: the drizzle schema stops declaring
       // it and the migration drizzle-kit generated has its DROP removed.
@@ -659,6 +682,49 @@ describe('--ci end to end, with no database', () => {
     })
   })
 
+  test('a concurrent migration may land after one that sorts later (#2391)', () => {
+    withRepo((root) => {
+      // Two branches each generate a migration on 0069. The later-named one
+      // lands first; the earlier-named one is then judged against it.
+      const fork = newestSnapshotFile(join(migrationsOf(root), 'meta'))
+      addGenerated(root, '20261030120000', 'branch_b', 'CREATE TABLE branch_b (x text);', [fork])
+      git(root, 'add', '-A')
+      git(root, 'commit', '-q', '-m', 'B lands')
+      const afterB = git(root, 'rev-parse', 'HEAD')
+      addGenerated(root, '20261030110000', 'branch_a', 'CREATE TABLE branch_a (x text);', [fork])
+      const r = runCi(root, afterB)
+      expect(r.out).toContain('20261030110000_branch_a.sql (before 20261030120000_branch_b.sql): concurrent migrations')
+      expect(r.code).toBe(0)
+    })
+  })
+
+  test('a migration that sorts before one it descends from is rejected', () => {
+    withRepo((root) => {
+      const b = addGenerated(root, '20261030120000', 'parent', 'CREATE TABLE parent_t (x text);')
+      git(root, 'add', '-A')
+      git(root, 'commit', '-q', '-m', 'parent lands')
+      const base = git(root, 'rev-parse', 'HEAD')
+      // A child of 20261030120000 named to sort before it.
+      addGenerated(root, '20261030110000', 'child', 'CREATE TABLE child_t (x text);', [b])
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain('sorts before its own parent 20261030120000_snapshot.json')
+    })
+  })
+
+  test('a numbered file landing after a timestamped one is not concurrent with it, and is rejected', () => {
+    withRepo((root) => {
+      addGenerated(root, '20261030120000', 'ts', 'CREATE TABLE ts_t (x text);')
+      git(root, 'add', '-A')
+      git(root, 'commit', '-q', '-m', 'timestamped lands')
+      const base = git(root, 'rev-parse', 'HEAD')
+      addMigration(root, '0070_numbered.sql', 'CREATE TABLE numbered_t (x text);')
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain('0070_numbered.sql sorts before 20261030120000_ts.sql')
+    })
+  })
+
   test('history cannot be rewritten: edited or deleted files, out-of-order names, stray annotations', () => {
     const cases: [string, (root: string) => void, string][] = [
       ['an existing migration edited', (root) => writeFileSync(join(migrationsOf(root), '0024_ep03_teams_tags.sql'), 'SELECT 1;'), 'is edited here'],
@@ -666,7 +732,7 @@ describe('--ci end to end, with no database', () => {
       [
         'an existing snapshot edited to forget a column',
         (root) => {
-          const p = join(migrationsOf(root), 'meta', snapshotFileAtOrBefore(join(migrationsOf(root), 'meta')) as string)
+          const p = join(migrationsOf(root), 'meta', newestSnapshotFile(join(migrationsOf(root), 'meta')))
           const s = JSON.parse(readFileSync(p, 'utf-8')) as DrizzleSnapshot
           delete s.tables['public.users'].columns.team_id
           writeFileSync(p, JSON.stringify(s))

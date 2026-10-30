@@ -3,22 +3,23 @@
  * check-migration-drift.ts — Detect Drizzle schema changes without corresponding migrations.
  *
  * Uses drizzle-kit's programmatic API to generate a snapshot from the current schema,
- * then compares it against the last committed snapshot. If the table/column structure
- * differs, the schema has drifted from the committed migrations.
+ * then compares it against the schema the committed migrations build: the merge of
+ * the snapshot heads (scripts/lib/migration-graph.ts — one head is just the newest
+ * snapshot). If the table/column structure differs, the schema has drifted from the
+ * committed migrations. Snapshots that do not merge — two migrations from different
+ * branches changing one object differently — fail too.
  *
  * Usage:
  *   bun scripts/check-migration-drift.ts          # run drift check
  *   bun scripts/check-migration-drift.ts --ci     # CI mode (show detailed diff)
  */
 
-import { generateDrizzleJson } from 'drizzle-kit/api'
-import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Glob } from 'bun'
+import { declaredSchemaSnapshot } from './lib/drizzle-schema'
+import { MigrationGraph } from './lib/migration-graph'
 
 const CI_MODE = process.argv.includes('--ci')
-const MIGRATIONS_DIR = 'drizzle/migrations'
-const SCHEMA_GLOB = 'apps/worker/db/schema/*.ts'
+const META_DIR = join('drizzle', 'migrations', 'meta')
 
 type SnapshotTable = {
   name: string
@@ -33,30 +34,6 @@ type Snapshot = {
   tables: Record<string, SnapshotTable>
   enums: Record<string, unknown>
   sequences: Record<string, unknown>
-}
-
-async function loadSchemaModules(): Promise<Record<string, unknown>> {
-  const glob = new Glob(SCHEMA_GLOB)
-  const modules: Record<string, unknown> = {}
-  for await (const path of glob.scan('.')) {
-    const mod = await import(join(process.cwd(), path))
-    Object.assign(modules, mod)
-  }
-  return modules
-}
-
-async function getLatestSnapshot(): Promise<Snapshot | null> {
-  const metaDir = join(MIGRATIONS_DIR, 'meta')
-  const files = await readdir(metaDir)
-  const snapshots = files
-    .filter(f => f.endsWith('_snapshot.json'))
-    .sort()
-
-  if (snapshots.length === 0) return null
-
-  const latest = snapshots[snapshots.length - 1]
-  const content = await readFile(join(metaDir, latest), 'utf-8')
-  return JSON.parse(content) as Snapshot
 }
 
 /** Normalize a snapshot to only the structurally significant parts for comparison */
@@ -153,19 +130,34 @@ function describeDiff(prev: Snapshot, curr: Snapshot): string[] {
 }
 
 async function main() {
-  // 1. Load current schema from source code
-  const schemaModules = await loadSchemaModules()
+  // 1. The schema the source code declares
+  const currentSnapshot = (await declaredSchemaSnapshot()) as unknown as Snapshot
 
-  // 2. Generate a fresh snapshot from the current schema
-  const currentSnapshot = generateDrizzleJson(schemaModules) as unknown as Snapshot
-
-  // 3. Load the last committed snapshot
-  const previousSnapshot = await getLatestSnapshot()
-  if (!previousSnapshot) {
+  // 2. The schema the committed migrations build: the merge of the snapshot
+  //    heads (scripts/lib/migration-graph.ts). With one head this is simply
+  //    the newest snapshot; with two — two migration PRs that landed without
+  //    knowing about each other — it is both of their changes.
+  const graph = MigrationGraph.load(META_DIR)
+  if (graph.nodes.length === 0) {
     console.error('No existing migration snapshot found in drizzle/migrations/meta/')
-    console.error('Run `bunx drizzle-kit generate --name initial` to create the initial migration.')
+    console.error('Run `bun run db:generate --name initial` to create the initial migration.')
     process.exit(1)
   }
+  const { heads, schema, conflicts } = graph.state()
+  if (graph.problems.length > 0 || conflicts.length > 0) {
+    console.error('')
+    console.error('MIGRATION SNAPSHOTS DO NOT FORM ONE SCHEMA')
+    for (const p of graph.problems) console.error(`  ${p}`)
+    for (const c of conflicts) console.error(`  conflict: ${c}`)
+    console.error('')
+    console.error('A conflict means two migrations written on different branches changed the same')
+    console.error('object differently, so the order they apply in decides the result. Rebase onto')
+    console.error('origin/main, delete THIS branch\'s migration + snapshot, and regenerate it on top:')
+    console.error('  bun run db:generate --name <description>')
+    process.exit(1)
+  }
+  const previousSnapshot = schema as unknown as Snapshot
+  if (CI_MODE) console.log(`Migrations build: ${heads.map((h) => h.file).join(' + ')}`)
 
   // 4. Compare normalized snapshots
   const prevNorm = normalizeSnapshot(previousSnapshot)
@@ -188,8 +180,8 @@ async function main() {
   console.error('║  Your Drizzle schema has changes not captured in a          ║')
   console.error('║  migration file. This will break CI and production.        ║')
   console.error('║                                                            ║')
-  console.error("║  Fix: run 'bunx drizzle-kit generate --name <description>' ║")
-  console.error('║  and commit the resulting SQL file.                        ║')
+  console.error("║  Fix: run 'bun run db:generate --name <description>'       ║")
+  console.error('║  and commit the resulting SQL file and snapshot.           ║')
   console.error('╚══════════════════════════════════════════════════════════════╝')
   console.error('')
 

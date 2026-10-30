@@ -84,7 +84,7 @@ describe('schemaHash', () => {
     for (const [name, sql] of Object.entries(files)) {
       if (name !== 'runner' && name !== 'splitter') writeFileSync(join(root, 'drizzle', 'migrations', name), sql)
     }
-    writeFileSync(join(root, 'drizzle', 'migrations', 'meta', '_journal.json'), '{}')
+    writeFileSync(join(root, 'drizzle', 'migrations', 'meta', '0000_snapshot.json'), '{}')
     return root
   }
 
