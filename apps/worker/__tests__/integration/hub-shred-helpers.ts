@@ -33,6 +33,7 @@ import { ErasureService } from '../../services/erasure'
 import { HubShredService } from '../../services/hub-shred'
 import { ProviderRecordingsService, type ProviderMediaEraser } from '../../services/provider-recordings'
 import { CallRecordingsService } from '../../services/call-recordings'
+import { IncidentService } from '../../services/incidents'
 import type { BlobStorage } from '../../types'
 import type { TelephonyAdapter } from '../../telephony/adapter'
 import { notes } from '../../db/schema'
@@ -143,6 +144,8 @@ export interface FreshHubDb {
   shred: HubShredService
   /** The provider-recording ledger (#2297), on this database. */
   recordings: ProviderRecordingsService
+  /** Hub incidents (#2341); the provider-recording ledger signals them on a failed deletion. */
+  incidents: IncidentService
   /** The server's sealed call-recording copies (#2309), kept in an in-memory object store. */
   callRecordings: CallRecordingsService
   /** What `HubShredService.execute` deletes provider-held audio through; resolves the adapter set by useTelephonyAdapter. */
@@ -193,6 +196,7 @@ export function freshHubDb(name: string): FreshHubDb {
     erasure: undefined as unknown as ErasureService,
     shred: undefined as unknown as HubShredService,
     recordings: undefined as unknown as ProviderRecordingsService,
+    incidents: undefined as unknown as IncidentService,
     callRecordings: undefined as unknown as CallRecordingsService,
     providerMedia: undefined as unknown as ProviderMediaEraser,
     useBlobStorage(blob) {
@@ -245,7 +249,8 @@ export function freshHubDb(name: string): FreshHubDb {
       dbRef.audit = audit
       dbRef.erasure = erasure
       dbRef.callRecordings = new CallRecordingsService(db, recordingStore, 'ab'.repeat(32))
-      dbRef.recordings = new ProviderRecordingsService(db, audit, dbRef.callRecordings)
+      dbRef.incidents = new IncidentService(db, audit)
+      dbRef.recordings = new ProviderRecordingsService(db, audit, dbRef.callRecordings, dbRef.incidents)
       dbRef.providerMedia = dbRef.recordings.eraser(async () => telephonyAdapter as TelephonyAdapter | null)
     },
     async teardown() {

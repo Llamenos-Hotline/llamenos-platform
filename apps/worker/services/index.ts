@@ -148,6 +148,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
         keyStore: erasure,
       }
     : undefined)
+  const incidents = new IncidentService(db, audit)
 
   const conversations = new ConversationsService(db, opts?.serverKek)
   const firehose = new FirehoseService(db)
@@ -204,7 +205,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     erasure,
     retention: new RetentionService(db),
     hubShred,
-    providerRecordings: new ProviderRecordingsService(db, audit, callRecordings),
+    providerRecordings: new ProviderRecordingsService(db, audit, callRecordings, incidents),
     callRecordings,
     ringGroups: new RingGroupsService(db),
     shiftOverrides: new ShiftOverridesService(db),
@@ -215,7 +216,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
-    incidents: new IncidentService(db, audit),
+    incidents,
   }
 
   // L1 incident checks (#2323). Registered here, where every domain service
