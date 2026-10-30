@@ -377,6 +377,16 @@ export class PlivoAdapter implements TelephonyAdapter {
     return result === 0
   }
 
+  /**
+   * Plivo V3 signs the URL without its query, the POST params and a per-request
+   * nonce: the nonce is what tells two identical bodies apart.
+   */
+  async webhookReplayKey(request: Request): Promise<string> {
+    const url = buildWebhookUrl(request, this.webhookBaseUrl)
+    const nonce = request.headers.get('X-Plivo-Signature-V3-Nonce') ?? ''
+    return `${url.origin}${url.pathname}\n${nonce}\n${await request.clone().text()}`
+  }
+
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {
     // Plivo recording lookup by call UUID
     const res = await this.plivoApi(`/Recording/?call_uuid=${callSid}`, { method: 'GET' })

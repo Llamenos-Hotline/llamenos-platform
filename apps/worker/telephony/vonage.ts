@@ -414,6 +414,11 @@ export class VonageAdapter implements TelephonyAdapter {
     return result === 0
   }
 
+  /** Vonage signs every query parameter (a timestamp among them); the body rides along. */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return `${new URL(request.url).search}\n${await request.clone().text()}`
+  }
+
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {
     // Vonage provides recording URL in the recording webhook
     // Fetch from the Vonage recordings API

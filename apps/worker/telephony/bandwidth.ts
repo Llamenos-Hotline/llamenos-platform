@@ -501,6 +501,14 @@ export class BandwidthAdapter implements TelephonyAdapter {
     }
   }
 
+  /**
+   * Basic auth authenticates the sender, not the request, so only the body can
+   * key a replay. Bandwidth's event bodies carry their own `eventTime`.
+   */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return request.clone().text()
+  }
+
   // --- Webhook Parsing ---
 
   async parseIncomingWebhook(request: Request): Promise<WebhookCallInfo> {

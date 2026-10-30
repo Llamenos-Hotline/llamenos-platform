@@ -129,6 +129,17 @@ export interface TelephonyAdapter {
   validateWebhook(request: Request): Promise<boolean>
 
   /**
+   * The request material this provider's signature authenticates, as the key
+   * replay protection records. A replay repeats it exactly; two genuinely
+   * separate events differ in it — even when their bodies are byte-identical,
+   * as Twilio's and Plivo's are for two CAPTCHA timeouts on one call.
+   *
+   * Never include anything the signature does not cover: an attacker could
+   * vary it to make a captured request look new.
+   */
+  webhookReplayKey(request: Request): Promise<string>
+
+  /**
    * Get call recording/audio for transcription by call SID.
    */
   getCallRecording(callSid: string): Promise<ArrayBuffer | null>

@@ -769,6 +769,11 @@ export class TelnyxAdapter implements TelephonyAdapter {
     }
   }
 
+  /** Telnyx signs the timestamp header and the raw body. */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return `${request.headers.get('telnyx-timestamp') ?? ''}\n${await request.clone().text()}`
+  }
+
   // --- Webhook Parsing ---
 
   async parseIncomingWebhook(request: Request): Promise<WebhookCallInfo> {

@@ -204,6 +204,10 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
     return false
   }
 
+  async webhookReplayKey(request: Request): Promise<string> {
+    return request.clone().text()
+  }
+
   async getCallRecording(_callSid: string): Promise<ArrayBuffer | null> {
     return null
   }

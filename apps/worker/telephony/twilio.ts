@@ -381,6 +381,11 @@ export class TwilioAdapter implements TelephonyAdapter {
     return result === 0
   }
 
+  /** Twilio signs the full URL, query included, and the POST params. */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return `${buildWebhookUrl(request, this.webhookBaseUrl).toString()}\n${await request.clone().text()}`
+  }
+
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {
     const res = await this.twilioApi(`/Calls/${callSid}/Recordings.json`, {
       method: 'GET',

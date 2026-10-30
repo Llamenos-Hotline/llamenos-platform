@@ -45,6 +45,8 @@ function makeMockAdapter(overrides?: Partial<TelephonyAdapter>): TelephonyAdapte
     ringVolunteers: vi.fn().mockResolvedValue([]),
     cancelRinging: vi.fn().mockResolvedValue(undefined),
     validateWebhook: vi.fn().mockResolvedValue(true),
+    // Twilio's rule: the signed URL, query included, and the body.
+    webhookReplayKey: vi.fn(async (req: Request) => `${req.url}\n${await req.clone().text()}`),
     getCallRecording: vi.fn().mockResolvedValue(null),
     getRecordingAudio: vi.fn().mockResolvedValue(null),
     parseIncomingWebhook: vi.fn().mockResolvedValue({ callSid: 'CA-incoming', callerNumber: '+15551111111', calledNumber: '+15551234567' }),
@@ -205,7 +207,7 @@ describe('Telephony routes', () => {
     })
 
     describe('replay protection (#1036)', () => {
-      // The real nonce table is unique on sha256(provider + URL + body). Model it with a
+      // The real nonce table is unique on sha256(provider + the adapter's replay key). Model it with a
       // Set so a second insert of the same key reports "not first" exactly like
       // Postgres does — the always-true default mock hid the double-insert bug.
       function useStatefulReplayStore() {

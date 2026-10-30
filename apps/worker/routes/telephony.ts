@@ -220,12 +220,13 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
 
   // W05-H02: Replay protection — hash body to detect duplicate deliveries.
   // Returns idempotent 200 for replays (provider retries stop on 2xx).
-  // Keyed on the signed URL as well as the body: Twilio and Plivo send
-  // byte-identical bodies for two genuinely separate events on one call (two
-  // CAPTCHA timeouts, the same wrong answer twice), which differ only in the
-  // callback URL's `round`. A true replay repeats both.
-  const bodyText = await c.req.raw.clone().text()
-  const isFirst = await checkWebhookReplay(getDb(), 'telephony', `${url.pathname}${url.search}\n${bodyText}`, 300)
+  // Keyed on exactly what the provider's signature authenticates, never more:
+  // Twilio and Plivo send byte-identical bodies for two genuinely separate
+  // events on one call (two CAPTCHA timeouts, the same wrong answer twice),
+  // told apart by Twilio's signed URL (its `round`) and Plivo's signed nonce.
+  // Anything unsigned in the key would let a captured request be replayed with
+  // that part changed.
+  const isFirst = await checkWebhookReplay(getDb(), 'telephony', await adapter.webhookReplayKey(c.req.raw), 300)
   if (!isFirst) {
     logger.info('Telephony webhook replay detected, returning idempotent 200')
     return c.text('OK', 200)

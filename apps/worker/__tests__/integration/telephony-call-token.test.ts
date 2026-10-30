@@ -120,6 +120,8 @@ function makeAdapter(): TelephonyAdapter {
   const xml = (body: string) => ({ contentType: 'text/xml', body })
   return {
     validateWebhook: vi.fn().mockResolvedValue(true),
+    // Twilio's rule: the signed URL, query included, and the body.
+    webhookReplayKey: vi.fn(async (req: Request) => `${req.url}\n${await req.clone().text()}`),
     handleCallAnswered: vi.fn().mockResolvedValue(xml('<Response><Dial><Queue/></Dial></Response>')),
     parseCallStatusWebhook: vi.fn().mockImplementation(async (req: Request) => {
       const form = new URLSearchParams(await req.clone().text())
