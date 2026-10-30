@@ -27,6 +27,7 @@ import {
   type SnapshotColumn,
   CatalogSchema,
   PresumedSchema,
+  RelaxedSchema,
   SchemaView,
   compareSchemas,
   describeObject,
@@ -266,6 +267,85 @@ describe('a unique index over a provably empty predicate', () => {
       lintSql(statement, lintContext(new PresumedSchema([], new SchemaView(prev)), prev)).map((f) => f.rule)
     expect(judged(incidents(true))).toEqual([])
     expect(judged(incidents(false))).toEqual(['unique-index-existing'])
+  })
+})
+
+/**
+ * The exemption's premise is that N-1 cannot write a NULL where the index
+ * looks for one. A pending `DROP NOT NULL` on that column falsifies it, so the
+ * column loses the exemption wherever in the pending set the drop is: before
+ * the index, after it, or in another file. The drop alone disqualifies; no
+ * UPDATE is read.
+ */
+describe('a pending DROP NOT NULL takes the column out of the exemption', () => {
+  const DROP_STATUS = 'ALTER TABLE users ALTER COLUMN status DROP NOT NULL'
+  const BACKFILL = 'UPDATE users SET status = NULL WHERE team_id IS NULL'
+  const INDEX = 'CREATE UNIQUE INDEX users_uq ON users USING btree (team_id) WHERE team_id IS NULL AND status IS NULL'
+  // `--target` judges against the catalog, `--ci` against the presumed schema.
+  const modes = {
+    '--target': () => catalogOf(PREVIOUS),
+    '--ci': () => new PresumedSchema([], new SchemaView(PREVIOUS)),
+  }
+  const judged = (live: () => CatalogSchema | PresumedSchema, pending: string[], judge: string) =>
+    lintSql(judge, lintContext(new RelaxedSchema(live(), pending), PREVIOUS)).map((f) => f.rule)
+
+  describe.each(Object.entries(modes))('%s', (_mode, live) => {
+    test('the reviewer’s sequence fails: DROP NOT NULL, backfill NULLs, then the index', () => {
+      const pending = [DROP_STATUS, BACKFILL, INDEX]
+      expect(judged(live, pending, INDEX)).toEqual(['unique-index-existing'])
+    })
+
+    test('reordered, the index first, it still fails', () => {
+      const pending = [INDEX, BACKFILL, DROP_STATUS]
+      expect(judged(live, pending, INDEX)).toEqual(['unique-index-existing'])
+    })
+
+    test('the drop alone disqualifies: no UPDATE needs to appear', () => {
+      expect(judged(live, [DROP_STATUS, INDEX], INDEX)).toEqual(['unique-index-existing'])
+    })
+
+    test('the drop is column-scoped: another column dropped, a still-NOT NULL column in the predicate, passes', () => {
+      const dropOther = 'ALTER TABLE users ALTER COLUMN team_id DROP NOT NULL'
+      expect(judged(live, [dropOther, INDEX], INDEX)).toEqual([])
+    })
+
+    test('the drop is table-scoped: the same column name on another table does not disqualify', () => {
+      const dropNotesStatus = 'ALTER TABLE notes ALTER COLUMN status DROP NOT NULL'
+      expect(judged(live, [dropNotesStatus, INDEX], INDEX)).toEqual([])
+    })
+
+    test('a schema-qualified and a multi-command drop are both seen', () => {
+      expect(judged(live, ['ALTER TABLE public.users ALTER COLUMN status DROP NOT NULL'], INDEX)).toEqual(['unique-index-existing'])
+      expect(
+        judged(live, ['ALTER TABLE users ADD COLUMN scratch text, ALTER COLUMN status DROP NOT NULL, DROP COLUMN scratch'], INDEX),
+      ).toEqual(['unique-index-existing'])
+    })
+
+    test('a DO block that drops NOT NULL cannot be attributed to a column, so it disqualifies them all', () => {
+      const doBlock = 'DO $$ BEGIN ALTER TABLE users ALTER COLUMN status DROP NOT NULL; END $$'
+      expect(judged(live, [doBlock], INDEX)).toEqual(['unique-index-existing'])
+    })
+
+    test('with no drop in the pending set the exemption stands', () => {
+      expect(judged(live, ['ALTER TABLE users ADD COLUMN scratch text'], INDEX)).toEqual([])
+    })
+
+    test('only provenNotNull is withdrawn: the other rules still read the column as NOT NULL', () => {
+      const ctx = lintContext(new RelaxedSchema(live(), [DROP_STATUS]), PREVIOUS)
+      expect(ctx.live.column('public', 'users', 'status')).toMatchObject({ notNull: true, provenNotNull: false })
+    })
+  })
+
+  test('#2361 statement 4 where hub_id’s NOT NULL is dropped by the same migration fails; without that drop it passes', () => {
+    const incidents = snapshot([
+      table('hub_incidents', [col('category', 'text', true), col('closed_at', 'timestamp'), col('hub_id', 'text', true)]),
+    ])
+    const statement =
+      'CREATE UNIQUE INDEX "hub_incidents_open_platform_unique" ON "hub_incidents" USING btree ("category") WHERE "hub_incidents"."closed_at" IS NULL AND "hub_incidents"."hub_id" IS NULL'
+    const drop = 'ALTER TABLE "hub_incidents" ALTER COLUMN "hub_id" DROP NOT NULL'
+    const ctx = (pending: string[]) => lintContext(new RelaxedSchema(new PresumedSchema(pending, new SchemaView(incidents)), pending), incidents)
+    expect(lintSql(statement, ctx([drop, statement])).map((f) => f.rule)).toEqual(['unique-index-existing'])
+    expect(lintSql(statement, ctx([statement])).map((f) => f.rule)).toEqual([])
   })
 })
 
@@ -528,6 +608,20 @@ describe('--ci end to end, with no database', () => {
       expect(r.out).toContain('against 9990_snapshot.json')
       expect(r.out).toContain('1 finding(s) allowed by verified annotations')
       expect(r.code).toBe(0)
+    })
+  })
+
+  test('GATE THE GATE: a DROP NOT NULL in one pending file takes the column out of the exemption in a later one', () => {
+    withRepo((root, base) => {
+      const index =
+        'CREATE UNIQUE INDEX "users_open_uq" ON "users" USING btree ("team_id") WHERE "users"."team_id" IS NULL AND "users"."status" IS NULL;'
+      addMigration(root, '9999_index.sql', index)
+      expect(runCi(root, base).code).toBe(0)
+
+      addMigration(root, '9998_relax.sql', 'ALTER TABLE "users" ALTER COLUMN "status" DROP NOT NULL;')
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain('9999_index.sql statement 0: unique-index-existing column public.users.team_id')
     })
   })
 

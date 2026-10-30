@@ -300,6 +300,69 @@ export class PresumedSchema implements LiveSchema {
   }
 }
 
+/**
+ * The live schema as the pending migrations leave it for N-1, as far as
+ * "is this column proven NOT NULL" goes. The gate judges every statement
+ * against the schema before the migration, so a `DROP NOT NULL` elsewhere in
+ * the pending set would otherwise go unseen: from then on N-1 can write the
+ * NULL that a `WHERE col IS NULL` unique index is exempt for never seeing.
+ *
+ * A `DROP NOT NULL` anywhere in the pending set disqualifies the column,
+ * whatever the statement order or file: a migration's statements are no place
+ * to infer temporal safety. It removes only `provenNotNull`; `notNull` stays
+ * the pre-migration fact the other rules read. A DO block that mentions
+ * `DROP NOT NULL` cannot be attributed to a column and disqualifies them all.
+ */
+export class RelaxedSchema implements LiveSchema {
+  private readonly relaxed = new Set<string>()
+  private relaxesAny = false
+
+  constructor(
+    private readonly inner: LiveSchema,
+    statements: string[],
+  ) {
+    for (const sql of statements) {
+      let tree: unknown
+      try {
+        tree = parseSync(sql)
+      } catch {
+        continue // judged, and failed, as a parse error by the lint
+      }
+      this.collect(tree)
+    }
+  }
+
+  private collect(value: unknown): void {
+    if (Array.isArray(value)) return value.forEach((v) => this.collect(v))
+    if (value === null || typeof value !== 'object') return
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'AlterTableStmt') {
+        const s = child as AlterTableStmt
+        const t = rel(s.relation)
+        for (const c of s.cmds ?? []) {
+          if (!('AlterTableCmd' in c) || c.AlterTableCmd.subtype !== 'AT_DropNotNull') continue
+          if (t && c.AlterTableCmd.name) this.relaxed.add(`${t.schema}.${t.name}.${c.AlterTableCmd.name}`)
+          else this.relaxesAny = true // a form this gate cannot attribute
+        }
+      } else if (key === 'DoStmt') {
+        const body = (child as DoStmt).args?.flatMap((a) => ('DefElem' in a ? [str(a.DefElem.arg) ?? ''] : [])) ?? []
+        if (body.some((b) => /drop\s+not\s+null/i.test(b))) this.relaxesAny = true
+      }
+      this.collect(child)
+    }
+  }
+
+  relation(schema: string, name: string): boolean {
+    return this.inner.relation(schema, name)
+  }
+
+  column(schema: string, table: string, column: string): LiveColumn | undefined {
+    const live = this.inner.column(schema, table, column)
+    if (!live || !(this.relaxesAny || this.relaxed.has(`${schema}.${table}.${column}`))) return live
+    return { ...live, provenNotNull: false }
+  }
+}
+
 const DEFAULT_SCHEMA = 'public'
 const RUNBOOK = 'docs/runbooks/migrations.md'
 
@@ -986,7 +1049,8 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
   const previousSnapshot = previousSnapshotFile(metaDir, input.settled)
   const previous = new SchemaView(readSnapshot(metaDir, previousSnapshot))
   const next = readSnapshot(metaDir, snapshotFileAtOrBefore(metaDir))
-  const ctx = lintContext(input.live, next)
+  const pendingStatements = input.pending.flatMap((f) => splitMigrationStatements(readFileSync(join(migrationsDir, f), 'utf-8')))
+  const ctx = lintContext(new RelaxedSchema(input.live, pendingStatements), next)
 
   // ── 2. Destructive-DDL lint, with verified annotations ─────────────────────
   let allowed = 0
