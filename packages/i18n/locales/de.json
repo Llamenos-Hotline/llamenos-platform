@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "Bald ablaufende Sperren",
+      "channelDisabled": "Abgewiesene Kontakte auf einem abgeschalteten Kanal",
       "erasureDeadline": "Überfällige Löschanfragen",
       "providerMedia": "Beim Telefonanbieter verbliebene Aufnahmen",
       "spam": "Spam und unerwünschte Anrufe"

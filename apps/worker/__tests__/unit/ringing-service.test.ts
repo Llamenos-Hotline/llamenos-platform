@@ -136,6 +136,7 @@ function makeServices(overrides: {
     },
     settings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: fallbackPubkeys }),
+      isHubChannelEnabled: vi.fn().mockResolvedValue(true),
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
     },
     identity: {

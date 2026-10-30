@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "即将到期的封禁",
+      "channelDisabled": "在已关闭渠道上被拒绝的联系",
       "erasureDeadline": "逾期的删除请求",
       "providerMedia": "电话服务商处遗留的录音",
       "spam": "垃圾及骚扰电话"

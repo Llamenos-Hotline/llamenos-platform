@@ -26,6 +26,7 @@ import { webhookAuth } from '../middleware/webhook-auth'
 import type { IncidentKind } from '../services/incidents-categories'
 import type { OverLimitAction } from '@protocol/schemas/settings'
 import { recordTelephonyWebhookRejection } from '../telephony/webhook-rejection'
+import { refuseIfChannelDisabled } from '../messaging/channel-guard'
 
 const logger = createLogger('telephony')
 
@@ -279,6 +280,14 @@ telephony.post('/incoming',
   // webhook — banned calls included — and deleted once the call has ended.
   if (adapter.deleteCallLog) {
     await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid: callSid, kind: 'call-log', adapter })
+  }
+
+  // The hub's own voice switch (#2384). Refused before anything rings or is
+  // greeted; the caller's network is told the call was rejected (no answer, no
+  // charge), and the refusal is signalled to the hub's incident panel. Calls
+  // already in progress are not touched: only this first webhook decides.
+  if (await refuseIfChannelDisabled(services, hubId, 'voice')) {
+    return telephonyResponse(adapter.rejectCall())
   }
 
   const banned = await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)

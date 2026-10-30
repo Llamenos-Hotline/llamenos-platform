@@ -41,6 +41,7 @@ Feature: Hub incidents — every automatic defence is visible to the people resp
       | provider-media   | delete_failed | telephony:manage-providers |
       | erasure-deadline | overdue       | erasure:admin              |
       | ban-expiry       | expiring      | system:view-bans           |
+      | channel-disabled | sms           | hubs:configure             |
 
   @backend
   Scenario: A member without the permission learns only that an incident changed

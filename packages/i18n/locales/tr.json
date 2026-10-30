@@ -4754,6 +4754,7 @@
   "incident": {
     "category": {
       "banExpiry": "Süresi dolmak üzere olan engellemeler",
+      "channelDisabled": "Kapatılmış bir kanalda reddedilen iletişimler",
       "erasureDeadline": "Süresi geçmiş silme talepleri",
       "providerMedia": "Telefon sağlayıcısında kalan kayıtlar",
       "spam": "Spam ve istenmeyen aramalar"
