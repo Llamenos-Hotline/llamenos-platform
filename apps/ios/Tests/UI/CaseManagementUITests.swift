@@ -331,7 +331,10 @@ final class CaseManagementUITests: BaseUITest {
         given("case management is on in a hub with no cases") {
             guard let hubId = TestAdminAPI.createHub(
                 name: "ios-cases-empty-\(UUID().uuidString.prefix(8))", baseURL: testHubURL
-            ) else { return }
+            ) else {
+                XCTFail("The dedicated empty hub could not be created through the admin API")
+                return
+            }
             TestAdminAPI.setCaseManagement(enabled: true, hubId: hubId, baseURL: testHubURL)
             TestAdminAPI.applyTemplate("jail-support", hubId: hubId, baseURL: testHubURL)
             launchAsAdminWithAPI(hubId: hubId)
@@ -663,16 +666,30 @@ final class CaseManagementUITests: BaseUITest {
             XCTAssertTrue(timelineTab.waitForExistence(timeout: 5))
             timelineTab.tap()
 
+            XCTAssertTrue(
+                find("case-comment-input").waitForExistence(timeout: 10),
+                "The inline comment input should be visible on the timeline tab"
+            )
+            XCTAssertFalse(
+                find("case-comment-submit").exists,
+                "There is nothing to submit while the comment field is empty"
+            )
             let expand = find("case-comment-expand")
             XCTAssertTrue(expand.waitForExistence(timeout: 10), "The timeline should offer the full comment sheet")
             expand.tap()
 
             XCTAssertTrue(find("add-comment-sheet").waitForExistence(timeout: 5), "The comment sheet should open")
             let sheetInput = find("comment-input")
-            XCTAssertTrue(sheetInput.waitForExistence(timeout: 3))
+            // The submit control is a SwiftUI toolbar Button — query the button itself so
+            // isEnabled reflects the control, not a label child (a StaticText always
+            // reports isEnabled = true, which made an enabled-after-typing check unable to fail).
+            let submit = app.buttons["comment-submit"]
+            XCTAssertTrue(sheetInput.waitForExistence(timeout: 5), "Comment sheet should contain a text input")
+            XCTAssertTrue(submit.waitForExistence(timeout: 5), "Comment sheet should contain a submit button")
+            XCTAssertFalse(submit.isEnabled, "Submit should be disabled while the comment is empty")
+
             sheetInput.tap()
             sheetInput.typeText(comment)
-            let submit = find("comment-submit")
             XCTAssertTrue(submit.isEnabled, "Submit should be enabled once there is text")
             submit.tap()
         }
