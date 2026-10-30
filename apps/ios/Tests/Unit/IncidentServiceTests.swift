@@ -135,6 +135,17 @@ struct IncidentServiceTests {
         #expect(service.rows(activeHubId: "hub-A").map(\.incident.id) == ["inc-A"])
     }
 
+    @Test func aDoorbellFetchStillInFlightAtLogoutDoesNotRepopulateTheNextSession() async {
+        let api = LogoutDuringFetchAPI()
+        let service = IncidentService(apiService: api)
+        api.onRequest = { service.reset() }
+
+        await service.handle(AttributedHubEvent(hubId: "hub-A", event: .hubIncident))
+
+        #expect(api.requestCount == 1)
+        #expect(service.incidentsByHub.isEmpty)
+    }
+
     @Test func anUnknownCategoryIsLabelledWithTheGenericTitle() {
         #expect(IncidentRowContent.categoryLabel("routing") == NSLocalizedString("incident_title", comment: ""))
         #expect(IncidentRowContent.categoryLabel("spam") == NSLocalizedString("incident_category_spam", comment: ""))
@@ -169,6 +180,27 @@ struct IncidentDoorbellParsingTests {
 }
 
 // MARK: - Helpers
+
+/// Ends the session (via `onRequest`, on the main actor) while the incident read is on
+/// the wire, then answers with an incident the next session must never see.
+private final class LogoutDuringFetchAPI: HubAPIServiceProtocol, @unchecked Sendable {
+    var onRequest: (@MainActor () -> Void)?
+    private(set) var requestCount = 0
+
+    func getHubKey(_ hubId: String) async throws -> HubKeyEnvelopeResponse { throw URLError(.unsupportedURL) }
+    func hp(_ path: String) -> String { path }
+
+    func request<T: Decodable>(method: String, path: String, body: (any Encodable)?) async throws -> T {
+        await MainActor.run {
+            requestCount += 1
+            onRequest?()
+        }
+        guard let response = HubIncidentListResponse(incidents: [makeIncident(id: "inc-A", hubId: "hub-A")]) as? T else {
+            throw URLError(.cannotDecodeContentData)
+        }
+        return response
+    }
+}
 
 private func makeIncidentHub(id: String, name: String) -> SharedHub {
     SharedHub(
