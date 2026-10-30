@@ -52,8 +52,9 @@ Given(
       senderNumber,
       body: 'Need help',
       channel: 'signal',
+      hubId: getScenarioState(world).hubId,
     })
-    const { status } = await apiPost(request, `/conversations/${inbound.conversationId}/messages`, {
+    const { status } = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/conversations/${inbound.conversationId}/messages`, {
       body: 'We can help you',
       externalId: timestamp,
     })
