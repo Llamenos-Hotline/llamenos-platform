@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - ConnectionState
 
@@ -106,6 +107,11 @@ enum HubEventType: String, Sendable {
     /// device keys (`POST /conversations/:id/assignee-envelopes`, #1512). Ids and a count only.
     case conversationEnvelopesAdded = "conversation:envelopes-added"
     case deviceWipe = "device:wipe"
+    /// A hub incident opened, updated or closed (`KIND_HUB_INCIDENT`, 1050). A DOORBELL:
+    /// the wire payload is exactly `{incidentId, state}` with no `type` field, so it is
+    /// recognised by its envelope kind and given this client-side tag. Nothing is taken
+    /// from it — the subscriber re-reads the permission-filtered incident GET.
+    case hubIncident = "hub:incident"
     case unknown
 }
 
@@ -205,6 +211,8 @@ final class WebSocketService {
     /// Kinds to subscribe on every member hub after each authentication, or nil when
     /// `subscribeToMemberHubs(kinds:)` has not been called.
     private var memberHubKinds: [Int]?
+
+    private let logger = Logger(subsystem: "org.llamenos.hotline", category: "Relay")
 
     /// Guarded by `typedContinuationsLock`, not by the main actor: a stream's
     /// `onTermination` handler removes its entry from whichever thread cancels the consumer.
@@ -530,7 +538,7 @@ final class WebSocketService {
 
     private func handleEvent(_ msg: WsEventMessage) {
         eventCount += 1
-        if let attributed = decryptPayload(msg.payload, epoch: Int(msg.epoch), hubId: msg.hubID) {
+        if let attributed = decryptPayload(msg.payload, epoch: Int(msg.epoch), hubId: msg.hubID, kind: Int(msg.kind)) {
             emit(attributed)
         }
     }
@@ -545,7 +553,7 @@ final class WebSocketService {
 
     /// Decrypt an event payload and return a typed attributed event.
     /// In DEBUG builds, `decryptionHandler` is tried first to allow test injection.
-    internal func decryptPayload(_ payload: String, epoch: Int, hubId: String) -> AttributedHubEvent? {
+    internal func decryptPayload(_ payload: String, epoch: Int, hubId: String, kind: Int? = nil) -> AttributedHubEvent? {
         let json: String?
         #if DEBUG
         json = decryptionHandler(payload, epoch)
@@ -554,7 +562,28 @@ final class WebSocketService {
         json = cryptoService.decryptServerEvent(ciphertextHex: payload, epoch: epoch)
         #endif
         guard let json else { return nil }
+        if kind == Self.kindHubIncident {
+            guard Self.isIncidentDoorbell(json) else {
+                logger.warning("Dropped a hub incident event that does not match its schema")
+                return nil
+            }
+            return AttributedHubEvent(hubId: hubId, event: .hubIncident)
+        }
         return Self.parseHubEvent(json, hubId: hubId)
+    }
+
+    /// `KIND_HUB_INCIDENT` (packages/shared/event-kinds.ts).
+    static let kindHubIncident = 1050
+
+    /// Strict check of the doorbell's shape: exactly `{incidentId, state}` (the server's
+    /// `.strict()` schema). Anything more is a contract break and is dropped, never shown.
+    static func isIncidentDoorbell(_ json: String) -> Bool {
+        guard
+            let data = json.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            Set(obj.keys) == ["incidentId", "state"]
+        else { return false }
+        return (try? JSONDecoder().decode(HubIncidentRelayEvent.self, from: data)) != nil
     }
 
     /// Decode decrypted event content. The `type` decides the event; `callId` and `status`

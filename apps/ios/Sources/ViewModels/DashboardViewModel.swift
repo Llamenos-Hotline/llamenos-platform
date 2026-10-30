@@ -220,7 +220,7 @@ final class DashboardViewModel {
         case .messageNew, .messageStatus, .conversationNew, .conversationAssigned, .conversationClosed, .conversationEnvelopesAdded:
             // Message events don't affect dashboard — handled by ConversationsViewModel
             break
-        case .deviceWipe, .unknown:
+        case .deviceWipe, .hubIncident, .unknown:
             break
         }
     }

@@ -175,4 +175,35 @@ final class PushRoutingTests: XCTestCase {
             "Push without hubId must not modify active hub"
         )
     }
+
+    // MARK: - Incident push (B-INCIDENTS)
+
+    /// The content-free incident push names its hub for routing only. Receiving it must not
+    /// switch the active hub, and must not present anything without a tap.
+    func testIncidentPushDoesNotSwitchActiveHub() throws {
+        let payloadDict: [String: String] = ["type": "incident", "hubId": "hub-B"]
+        let jsonData = try XCTUnwrap(try? JSONSerialization.data(withJSONObject: payloadDict))
+        let jsonString = try XCTUnwrap(String(data: jsonData, encoding: .utf8))
+        let expectation = XCTestExpectation(description: "completionHandler called")
+
+        appDelegate.application(
+            UIApplication.shared,
+            didReceiveRemoteNotification: ["encrypted": "json:\(jsonString)"]
+        ) { _ in expectation.fulfill() }
+
+        wait(for: [expectation], timeout: 5)
+
+        XCTAssertEqual(hubContext.activeHubId, "hub-A", "An incident push must not switch the active hub")
+        XCTAssertFalse(appState.incidentService.isIncidentViewPresented,
+                       "Receiving the push presents nothing; only the user's tap opens the view")
+    }
+
+    /// Tapping the incident push opens the incident view — which lists every member hub —
+    /// and switches no hub, even if a hubId were present.
+    func testIncidentPushTapOpensIncidentViewWithoutSwitchingHub() {
+        appDelegate.handleNotificationResponse(userInfo: ["deepLinkType": "incident", "hubId": "hub-B"])
+
+        XCTAssertTrue(appState.incidentService.isIncidentViewPresented)
+        XCTAssertEqual(hubContext.activeHubId, "hub-A")
+    }
 }
