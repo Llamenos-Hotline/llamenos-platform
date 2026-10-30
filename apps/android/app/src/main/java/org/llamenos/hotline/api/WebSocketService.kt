@@ -22,6 +22,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -37,6 +38,7 @@ import org.llamenos.hotline.hub.HubActivityService
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.protocol.CryptoLabels
+import org.llamenos.protocol.HubIncidentRelayEvent
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -75,11 +77,17 @@ class WebSocketService @Inject constructor(
     }
 
     companion object {
+        /** `KIND_HUB_INCIDENT` (packages/shared/event-kinds.ts): the incident doorbell. */
+        const val KIND_HUB_INCIDENT = 1050
+
         /**
          * Relay event kinds subscribed on every member hub: call ring/update/voicemail,
-         * new message, conversation assigned, presence. Mirrors desktop and iOS.
+         * new message, conversation assigned, hub incident, presence. Mirrors desktop and iOS.
          */
-        val RELAY_EVENT_KINDS = listOf(1000, 1001, 1002, 1010, 1011, 20000)
+        val RELAY_EVENT_KINDS = listOf(1000, 1001, 1002, 1010, 1011, KIND_HUB_INCIDENT, 20000)
+
+        /** Strict: an incident doorbell carrying anything beyond `{incidentId, state}` is dropped. */
+        private val strictJson = Json { ignoreUnknownKeys = false }
 
         /**
          * Defensive filter for the server's pseudo-hub. The current server never
@@ -450,10 +458,11 @@ class WebSocketService @Inject constructor(
         val hubId = obj["hubId"]?.jsonPrimitive?.content ?: return
         val payload = obj["payload"]?.jsonPrimitive?.content ?: return
         val epoch = obj["epoch"]?.jsonPrimitive?.longOrNull ?: return
+        val kind = obj["kind"]?.jsonPrimitive?.intOrNull ?: return
 
         val plaintext = cryptoService.decryptServerEventWithStoredKeys(payload, epoch)
         if (plaintext != null) {
-            dispatchEvent(hubId, plaintext)
+            dispatchEvent(hubId, kind, plaintext)
             return
         }
         // The stored keys cover the current and previous UTC day as of the last
@@ -461,7 +470,7 @@ class WebSocketService @Inject constructor(
         scope.launch {
             if (refreshServerEventKeys()) {
                 cryptoService.decryptServerEventWithStoredKeys(payload, epoch)?.let {
-                    dispatchEvent(hubId, it)
+                    dispatchEvent(hubId, kind, it)
                     return@launch
                 }
             }
@@ -469,8 +478,8 @@ class WebSocketService @Inject constructor(
         }
     }
 
-    private fun dispatchEvent(hubId: String, plaintext: String) {
-        val event = parseTypedEvent(plaintext) ?: return
+    private fun dispatchEvent(hubId: String, kind: Int, plaintext: String) {
+        val event = parseTypedEvent(plaintext, kind) ?: return
         val attributed = AttributedHubEvent(hubId = hubId, event = event)
 
         // In-memory per-hub activity tracking is cheap and synchronous so tests
@@ -504,8 +513,20 @@ class WebSocketService @Inject constructor(
     /**
      * Parse the decrypted event content JSON into a typed [LlamenosEvent].
      * Returns null for unparseable content (graceful forward compatibility).
+     *
+     * The incident doorbell is discriminated by its envelope [kind], not a `type`
+     * field — its payload is exactly `{incidentId, state}` — and is decoded strictly.
      */
-    private fun parseTypedEvent(content: String): LlamenosEvent? {
+    private fun parseTypedEvent(content: String, kind: Int): LlamenosEvent? {
+        if (kind == KIND_HUB_INCIDENT) {
+            return try {
+                val doorbell = strictJson.decodeFromString<HubIncidentRelayEvent>(content)
+                LlamenosEvent.HubIncidentChanged(doorbell.incidentID, doorbell.state.value)
+            } catch (_: Exception) {
+                android.util.Log.w("WebSocketService", "Dropped a hub incident event that does not match its schema")
+                null
+            }
+        }
         return try {
             val obj = json.parseToJsonElement(content).jsonObject
             val type = obj["type"]?.jsonPrimitive?.content ?: return null

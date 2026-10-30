@@ -6,6 +6,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dagger.hilt.android.AndroidEntryPoint
 import org.llamenos.hotline.api.NetworkMonitor
 import org.llamenos.hotline.api.VersionChecker
@@ -45,8 +48,12 @@ class MainActivity : ComponentActivity() {
 
     private var backgroundTimestamp: Long? = null
 
-    /** Pending deep link destination, consumed by LlamenosNavigation on composition. */
-    internal var pendingDeepLink: DeepLinkDestination? = null
+    /**
+     * Pending deep link destination, consumed by LlamenosNavigation. Compose state, so a
+     * link delivered to the running activity (`onNewIntent` — e.g. tapping the incident
+     * push while the app is open) is navigated to, not only one that launched it.
+     */
+    internal var pendingDeepLink: DeepLinkDestination? by mutableStateOf(null)
         private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,6 +118,7 @@ class MainActivity : ComponentActivity() {
          * - `llamenos://reports` / `llamenos://reports/{id}`
          * - `llamenos://settings`
          * - `llamenos://admin`
+         * - `llamenos://incidents`
          */
         fun parseDeepLink(uri: Uri): DeepLinkDestination? {
             if (uri.scheme != "llamenos") return null
@@ -145,6 +153,7 @@ class MainActivity : ComponentActivity() {
                 }
                 "settings" -> DeepLinkDestination.Settings
                 "admin" -> DeepLinkDestination.Admin
+                "incidents" -> DeepLinkDestination.Incidents
                 else -> null
             }
         }

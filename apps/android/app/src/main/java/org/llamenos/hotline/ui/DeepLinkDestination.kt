@@ -18,4 +18,6 @@ sealed interface DeepLinkDestination {
     data class ReportDetail(val id: String) : DeepLinkDestination
     data object Settings : DeepLinkDestination
     data object Admin : DeepLinkDestination
+    /** The incident view — opened by tapping the content-free incident push. */
+    data object Incidents : DeepLinkDestination
 }
