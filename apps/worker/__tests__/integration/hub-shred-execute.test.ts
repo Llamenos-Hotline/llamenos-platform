@@ -135,7 +135,7 @@ describe('HubShredService.execute', () => {
   it('destroys the call-record content key', async () => {
     const hubId = await createHub()
     const admin = reader()
-    const sealed = encryptCallRecordForStorage({ callerLast4: '5555' }, [admin.pubkey])
+    const sealed = encryptCallRecordForStorage({ callerNumber: '+15555550142' }, [admin.pubkey])
     const [record] = await fresh.db
       .insert(schema.callRecords)
       .values({

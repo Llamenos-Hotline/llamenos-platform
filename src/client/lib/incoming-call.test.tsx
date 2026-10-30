@@ -31,12 +31,11 @@ import { IncomingCallCard } from '@/components/call/incoming-call-card'
 import { useKeyboardShortcuts } from './use-keyboard-shortcuts'
 
 function ringing(id: string, hubId: string, hubName: string | null = null): IncomingCall {
-  // The relay delivers the caller's last four digits with the ring; they must stay off the screen reader.
+  // Nothing about the caller's number reaches the client with the ring; the card names the hub only.
   const call = {
     id,
     hubId,
     callerNumber: '[redacted]',
-    callerLast4: '4821',
     answeredBy: null,
     startedAt: '2026-01-01T00:00:00Z',
     status: 'ringing',

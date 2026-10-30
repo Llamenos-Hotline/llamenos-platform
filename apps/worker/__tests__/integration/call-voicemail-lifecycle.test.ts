@@ -32,7 +32,6 @@ const DDL = `
     push_ref TEXT UNIQUE,
     hub_id TEXT,
     caller_number_sealed TEXT,
-    caller_last4 TEXT,
     answered_by TEXT,
     status TEXT NOT NULL DEFAULT 'ringing',
     has_transcription BOOLEAN DEFAULT FALSE,
@@ -48,7 +47,6 @@ const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.call_records (
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
-    caller_last4 TEXT,
     started_at TIMESTAMPTZ NOT NULL,
     ended_at TIMESTAMPTZ,
     duration INTEGER,
@@ -124,7 +122,7 @@ const HUB = 'hub-vm'
 
 describe('voicemail on a call nobody could be rung for', () => {
   it('flags the active call, and ending it lands in history as unanswered with hasVoicemail', async () => {
-    await calls.addCall(HUB, { callId: 'CA-vm-1', callerNumberSealed: null, callerLast4: '4567' })
+    await calls.addCall(HUB, { callId: 'CA-vm-1', callerNumberSealed: null })
 
     await calls.markVoicemail(HUB, 'CA-vm-1')
     const active = await calls.getActiveCallById(HUB, 'CA-vm-1')

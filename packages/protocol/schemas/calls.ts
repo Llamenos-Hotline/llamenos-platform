@@ -22,7 +22,6 @@ export const callRecordResponseSchema = z.object({
    */
   pushRef: z.string().optional(),
   hubId: z.string().optional(),
-  callerLast4: z.string().optional(),
   answeredBy: z.string().nullable().optional(),
   startedAt: z.string(),
   endedAt: z.string().optional(),

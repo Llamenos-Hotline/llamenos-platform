@@ -216,7 +216,7 @@ flowchart TB
 |---------|------|------------|
 | User → Admin escalation | Role modification | Safe-fields allowlist on self-update; `roles` requires `volunteers:update` permission |
 | User → Other user's notes | Note content theft | E2EE — server has no plaintext; `notes:read-own` permission scoping; per-note HPKE wrapping |
-| User → Caller identification | PII exposure | Caller numbers hashed; only `callerLast4` sent to answering volunteer; redacted for others |
+| User → Caller identification | PII exposure | No part of the caller's number (no last-four digits) is stored or sent to any volunteer; the number is sealed server-side for the life of the call and then only in the admin envelope |
 | Admin → Excessive data access | Insider threat | Audit logging of all admin actions; admin notes are separately encrypted |
 | WebSocket event injection | Fake call events | Server-signed events (clients verify server pubkey) + authenticated connections + hub key encryption |
 | Device compromise → Other devices | Lateral movement | Sigchain-based device authorization — compromised device can be deauthorized without affecting others |

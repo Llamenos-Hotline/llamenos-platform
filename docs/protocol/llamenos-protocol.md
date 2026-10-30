@@ -565,7 +565,6 @@ nonce = random(24 bytes)
 encryptedContent = XChaCha20-Poly1305(eventKey, nonce, JSON.stringify({
   type: "call:ring",  // Actual event type is INSIDE encrypted content
   callId: "...",
-  callerLast4: "1234",
   ...
 }))
 
