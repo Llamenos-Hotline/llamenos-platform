@@ -36,11 +36,13 @@ Feature: Hub incidents — every automatic defence is visible to the people resp
     And the volunteer sees no incidents
 
     Examples:
-      | category         | kind          | permission                 |
-      | spam             | fail          | settings:manage-spam       |
-      | provider-media   | delete_failed | telephony:manage-providers |
-      | erasure-deadline | overdue       | erasure:admin              |
-      | ban-expiry       | expiring      | system:view-bans           |
+      | category         | kind              | permission                 |
+      | spam             | fail              | settings:manage-spam       |
+      | provider-media   | delete_failed     | telephony:manage-providers |
+      | erasure-deadline | overdue           | erasure:admin              |
+      | ban-expiry       | expiring          | system:view-bans           |
+      | routing          | nobody_would_ring | shifts:manage-fallback     |
+      | provider-auth    | signature_invalid | telephony:manage-providers |
 
   @backend
   Scenario: A member without the permission learns only that an incident changed

@@ -962,3 +962,20 @@ describe('TelnyxAdapter', () => {
     })
   })
 })
+
+describe('TelnyxAdapter.webhookNamesOwnAccount (#2330)', () => {
+  const adapter = new TelnyxAdapter('test-api-key', 'conn-123', '+15551234567')
+  const json = (body: string) => new Request('http://localhost/api/telephony/incoming', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  })
+
+  it('reads the provider-populated connection_id; a malformed body is not ours', async () => {
+    const event = (connection_id: string) => JSON.stringify({ data: { event_type: 'call.initiated', payload: { connection_id } } })
+    expect(await adapter.webhookNamesOwnAccount(json(event('conn-123')))).toBe(true)
+    expect(await adapter.webhookNamesOwnAccount(json(event('conn-999')))).toBe(false)
+    expect(await adapter.webhookNamesOwnAccount(json('[]'))).toBe(false)
+    expect(await adapter.webhookNamesOwnAccount(json('{not json'))).toBe(false)
+  })
+})

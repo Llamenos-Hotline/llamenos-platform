@@ -22,6 +22,14 @@
  *
  * Everything else is `record`: visible in the incident panel, wakes nobody.
  *
+ * The conjunction raises the cost of a forged page, it does not make one
+ * impossible: a provider feature that sends arbitrary HTTP from the provider's
+ * own network, with a body naming our (public) account id, would satisfy it.
+ * What that buys an attacker is bounded — one `notify` incident under the
+ * category's rate rules (one interruption on open, at most one update per
+ * window), never an accepted request — which is why attribution only ever
+ * decides how loudly a refusal is announced.
+ *
  * The pre-auth work is bounded (amendment 4): a body cap before any hashing,
  * read with a streaming limit; and per-source damping — one rejection per
  * minute per /24 (IPv4) or /48 (IPv6) source — which, for a source the IP
@@ -37,6 +45,7 @@
  * that raises replicas — the same constraint the caller rate limiter has.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { CLIENT_FINGERPRINT_PREFIX } from '../lib/client-ip'
 
 /**
  * The largest webhook body read before any signature work. Legitimate
@@ -61,11 +70,25 @@ export const REJECTION_DAMPING_MS = 60_000
  */
 export const PROVIDER_AUTH_TRAFFIC_WINDOW_MS = 15 * 60_000
 
-/** At most one incident signal per (hub, kind) per this interval — bounds DB writes under a distributed flood. */
+/**
+ * At most one incident write per (hub, kind) per this interval — bounds DB
+ * writes under a flood spread across many sources. Rejections in between are
+ * held and carried by the next write, so the count is not lost, only batched.
+ */
 export const SIGNAL_MIN_INTERVAL_MS = 1_000
 
 /** Damping entries held before the oldest is evicted. */
 const DAMPING_TABLE_LIMIT = 4096
+
+/**
+ * Instance-wide ceiling on IP-refused requests whose signature is evaluated,
+ * per {@link REJECTION_DAMPING_MS}. The per-prefix damping bounds one source;
+ * this bounds a flood spread across many prefixes, so rotating sources (or
+ * filling the damping table) can never lift the bound on pre-auth hashing.
+ * Ten a second of ≤ 64 KiB HMACs is negligible work, and a stale allowlist
+ * needs exactly one admitted request to be diagnosed.
+ */
+export const IP_REFUSED_CLASSIFICATIONS_PER_WINDOW = 600
 
 /** The damping classes. `ip` is decided before any hashing, so it covers every kind the IP gate refuses. */
 export type DampingClass = 'ip' | 'signature_invalid' | 'own_account_signature_invalid'
@@ -76,6 +99,9 @@ export type DampingClass = 'ip' | 'signature_invalid' | 'own_account_signature_i
  * its own prefix.
  */
 export function sourcePrefix(ip: string): string {
+  // No network address at all: getClientIp's fingerprint is built from
+  // request headers the client chooses, so every such source shares ONE bucket.
+  if (ip.startsWith(CLIENT_FINGERPRINT_PREFIX)) return CLIENT_FINGERPRINT_PREFIX
   const v4 = ip.startsWith('::ffff:') && ip.includes('.') ? ip.slice(7) : ip
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v4)) return `${v4.split('.').slice(0, 3).join('.')}.0/24`
   if (ip.includes(':')) {
@@ -101,8 +127,10 @@ export interface ProviderAuthMonitorOpts {
 export class ProviderAuthMonitor {
   private readonly salt = randomBytes(16)
   private readonly damping = new Map<string, number>()
-  private readonly signals = new Map<string, number>()
+  private readonly signals = new Map<string, { at: number; held: number }>()
   private readonly lastAccepted = new Map<string, number>()
+  private ipWindowStart = 0
+  private ipWindowCount = 0
   private readonly now: () => number
 
   constructor(opts: ProviderAuthMonitorOpts = {}) {
@@ -116,10 +144,19 @@ export class ProviderAuthMonitor {
    *
    * A full table evicts its oldest entry rather than refusing: refusing would
    * let a flood across many prefixes silence a real diagnosis, and the body
-   * cap already bounds what an admitted rejection costs.
+   * cap already bounds what an admitted rejection costs. For `ip` (refused
+   * before any hashing) the instance-wide
+   * {@link IP_REFUSED_CLASSIFICATIONS_PER_WINDOW} applies on top.
    */
   admit(sourceIp: string, cls: DampingClass): boolean {
     const now = this.now()
+    if (cls === 'ip') {
+      if (now - this.ipWindowStart >= REJECTION_DAMPING_MS) {
+        this.ipWindowStart = now
+        this.ipWindowCount = 0
+      }
+      if (this.ipWindowCount >= IP_REFUSED_CLASSIFICATIONS_PER_WINDOW) return false
+    }
     const key = createHash('sha256').update(this.salt).update(`${cls}|${sourcePrefix(sourceIp)}`).digest('base64')
     const last = this.damping.get(key)
     if (last !== undefined && now - last < REJECTION_DAMPING_MS) return false
@@ -130,17 +167,25 @@ export class ProviderAuthMonitor {
       if (oldest !== undefined) this.damping.delete(oldest)
     }
     this.damping.set(key, now)
+    if (cls === 'ip') this.ipWindowCount++
     return true
   }
 
-  /** True when no signal of `kind` was recorded for `hubId` in the last {@link SIGNAL_MIN_INTERVAL_MS}. */
-  admitSignal(hubId: string, kind: string): boolean {
+  /**
+   * One more rejection of `kind` for `hubId`. Returns how many to write now —
+   * this one plus any held since the last write — or 0 when a write for the
+   * pair happened under {@link SIGNAL_MIN_INTERVAL_MS} ago (this one is held).
+   */
+  admitSignal(hubId: string, kind: string): number {
     const now = this.now()
     const key = `${hubId}|${kind}`
-    const last = this.signals.get(key)
-    if (last !== undefined && now - last < SIGNAL_MIN_INTERVAL_MS) return false
-    this.signals.set(key, now)
-    return true
+    const entry = this.signals.get(key)
+    if (entry && now - entry.at < SIGNAL_MIN_INTERVAL_MS) {
+      entry.held++
+      return 0
+    }
+    this.signals.set(key, { at: now, held: 0 })
+    return (entry?.held ?? 0) + 1
   }
 
   /** A webhook for `hubId` passed authentication. */
@@ -167,6 +212,8 @@ export class ProviderAuthMonitor {
     this.damping.clear()
     this.signals.clear()
     this.lastAccepted.clear()
+    this.ipWindowStart = 0
+    this.ipWindowCount = 0
   }
 
   private sweep(now: number): void {
@@ -202,7 +249,9 @@ export async function bodyWithinLimit(request: Request, limit = WEBHOOK_BODY_LIM
       if (done) return true
       total += value.byteLength
       if (total > limit) {
-        await reader.cancel().catch(() => {})
+        // Not awaited: cancelling one branch of a tee settles only once the
+        // other branch is cancelled too, and the original is never read.
+        reader.cancel().catch(() => {})
         return false
       }
     }
