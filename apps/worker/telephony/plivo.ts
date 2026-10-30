@@ -340,20 +340,9 @@ export class PlivoAdapter implements TelephonyAdapter {
     // 2. HMAC-SHA256 with auth token
     // 3. Compare with X-Plivo-Signature-V3 header
     const signature = request.headers.get('X-Plivo-Signature-V3')
-    const nonce = request.headers.get('X-Plivo-Signature-V3-Nonce')
-    if (!signature || !nonce) return false
+    if (!signature || !request.headers.get('X-Plivo-Signature-V3-Nonce')) return false
 
-    const url = buildWebhookUrl(request, this.webhookBaseUrl)
-    const body = await request.clone().text()
-    const params = new URLSearchParams(body)
-
-    // Build validation string: URL + sorted params + nonce
-    let dataString = url.origin + url.pathname
-    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
-    for (const [key, value] of sortedEntries) {
-      dataString += key + value
-    }
-    dataString += '.' + nonce
+    const dataString = await this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
@@ -378,13 +367,24 @@ export class PlivoAdapter implements TelephonyAdapter {
   }
 
   /**
-   * Plivo V3 signs the URL without its query, the POST params and a per-request
-   * nonce: the nonce is what tells two identical bodies apart.
+   * The canonical string Plivo V3 signs: the URL WITHOUT its query, the POST
+   * params sorted by name and decoded, then the per-request nonce. Shared by
+   * `validateWebhook` and `webhookReplayKey`: the nonce tells two identical
+   * bodies apart, and the unsigned query can never vary the key.
    */
-  async webhookReplayKey(request: Request): Promise<string> {
+  private async signingInput(request: Request): Promise<string> {
     const url = buildWebhookUrl(request, this.webhookBaseUrl)
-    const nonce = request.headers.get('X-Plivo-Signature-V3-Nonce') ?? ''
-    return `${url.origin}${url.pathname}\n${nonce}\n${await request.clone().text()}`
+    const params = new URLSearchParams(await request.clone().text())
+    let dataString = url.origin + url.pathname
+    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
+    for (const [key, value] of sortedEntries) {
+      dataString += key + value
+    }
+    return dataString + '.' + (request.headers.get('X-Plivo-Signature-V3-Nonce') ?? '')
+  }
+
+  async webhookReplayKey(request: Request): Promise<string> {
+    return this.signingInput(request)
   }
 
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {

@@ -64,6 +64,19 @@ describe('webhookReplayKey', () => {
     expect(await plivo.webhookReplayKey(first)).not.toBe(await plivo.webhookReplayKey(second))
   })
 
+  it('Twilio: a captured request with its params re-encoded and reordered still validates — and is the same key', async () => {
+    const twilio = new TwilioAdapter('AC1', 'tw-token', '+15550000000')
+    const url = 'https://hotline.example/api/telephony/captcha?callSid=CA123&lang=en&round=1'
+    const captured = twilioSigned(url, 'tw-token')
+    const reshaped = new Request(url, {
+      method: 'POST',
+      headers: { ...FORM, 'X-Twilio-Signature': captured.headers.get('X-Twilio-Signature') ?? '' },
+      body: 'To=%2B15550000000&From=%2b15551111111&Call%53id=CA123',
+    })
+    expect(await twilio.validateWebhook(reshaped)).toBe(true)
+    expect(await twilio.webhookReplayKey(reshaped)).toBe(await twilio.webhookReplayKey(captured))
+  })
+
   it('Bandwidth: basic auth binds nothing in the URL, so the key is the body alone', async () => {
     const bandwidth = new BandwidthAdapter('acct', 'user', 'pass', 'app', '+15550000000')
     const auth = { Authorization: `Basic ${btoa('user:pass')}`, 'Content-Type': 'application/json' }

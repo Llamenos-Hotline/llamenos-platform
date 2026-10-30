@@ -380,15 +380,7 @@ export class VonageAdapter implements TelephonyAdapter {
     const sig = url.searchParams.get('sig')
     if (!sig) return false
 
-    // Reconstruct signing input: sort all query params (excluding sig), concatenate
-    const params = Array.from(url.searchParams.entries())
-      .filter(([key]) => key !== 'sig')
-      .sort(([a], [b]) => a.localeCompare(b))
-
-    let sigInput = ''
-    for (const [key, value] of params) {
-      sigInput += `&${key}=${value}`
-    }
+    const sigInput = this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
@@ -414,9 +406,30 @@ export class VonageAdapter implements TelephonyAdapter {
     return result === 0
   }
 
-  /** Vonage signs every query parameter (a timestamp among them); the body rides along. */
+  /**
+   * The canonical string Vonage signs: every query parameter but `sig`, sorted
+   * by name and decoded (a timestamp among them). Shared by `validateWebhook`
+   * and `webhookReplayKey`.
+   */
+  private signingInput(request: Request): string {
+    const params = Array.from(new URL(request.url).searchParams.entries())
+      .filter(([key]) => key !== 'sig')
+      .sort(([a], [b]) => a.localeCompare(b))
+    let sigInput = ''
+    for (const [key, value] of params) {
+      sigInput += `&${key}=${value}`
+    }
+    return sigInput
+  }
+
+  /**
+   * The canonical signed query, plus the body. The body is unsigned — anyone
+   * holding a valid query could already send any body, so including it opens
+   * nothing — and it keeps two different events that share a signed query
+   * (same callback, same second) from colliding.
+   */
   async webhookReplayKey(request: Request): Promise<string> {
-    return `${new URL(request.url).search}\n${await request.clone().text()}`
+    return `${this.signingInput(request)}\n${await request.clone().text()}`
   }
 
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {

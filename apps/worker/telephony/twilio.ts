@@ -349,15 +349,7 @@ export class TwilioAdapter implements TelephonyAdapter {
     const signature = request.headers.get('X-Twilio-Signature')
     if (!signature) return false
 
-    const url = buildWebhookUrl(request, this.webhookBaseUrl)
-    const body = await request.clone().text()
-    const params = new URLSearchParams(body)
-
-    let dataString = url.toString()
-    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
-    for (const [key, value] of sortedEntries) {
-      dataString += key + value
-    }
+    const dataString = await this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
@@ -381,9 +373,25 @@ export class TwilioAdapter implements TelephonyAdapter {
     return result === 0
   }
 
-  /** Twilio signs the full URL, query included, and the POST params. */
+  /**
+   * The canonical string Twilio signs: the full URL, query included, then the
+   * POST params sorted by name and decoded. Shared by `validateWebhook` and
+   * `webhookReplayKey`, so a request re-encoded or with its params reordered —
+   * which still validates — is recognised as the same request.
+   */
+  protected async signingInput(request: Request): Promise<string> {
+    const url = buildWebhookUrl(request, this.webhookBaseUrl)
+    const params = new URLSearchParams(await request.clone().text())
+    let dataString = url.toString()
+    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
+    for (const [key, value] of sortedEntries) {
+      dataString += key + value
+    }
+    return dataString
+  }
+
   async webhookReplayKey(request: Request): Promise<string> {
-    return `${buildWebhookUrl(request, this.webhookBaseUrl).toString()}\n${await request.clone().text()}`
+    return this.signingInput(request)
   }
 
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {
