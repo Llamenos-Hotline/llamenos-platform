@@ -49,3 +49,26 @@ Feature: Caller audio does not stay at the telephony provider
     And the hub uses the mock telephony provider
     When volunteer 0 reads the hub's recording posture
     Then the response status should be 403
+
+  @backend @simulated-telephony @calls
+  Scenario: The recording posture names what the provider keeps that the hotline cannot remove
+    Given the hub uses the mock telephony provider
+    When the admin reads the hub's recording posture
+    Then the response status should be 200
+    And the posture should name at least one thing the provider retains, with the reason
+
+  @backend @simulated-telephony @calls @audit
+  Scenario: Enforcing the posture reports every setting it touched and re-reads the provider
+    Given the hub uses the mock telephony provider
+    When the admin enforces the hub's recording posture
+    Then the response status should be 200
+    And every enforcement action should carry its evidence or its reason
+    And the re-read posture should report provider-side recording as "off" with the evidence it read
+    And the hub audit log should contain a "providerRecordingPostureEnforced" entry
+
+  @backend @simulated-telephony @calls @permissions
+  Scenario: Only a telephony manager can enforce the recording posture
+    Given 1 volunteers are on shift
+    And the hub uses the mock telephony provider
+    When volunteer 0 enforces the hub's recording posture
+    Then the response status should be 403

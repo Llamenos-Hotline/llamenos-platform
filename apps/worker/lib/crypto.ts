@@ -8,7 +8,7 @@ import {
   randomBytes,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, HMAC_BAN_PREFIX, LABEL_BAN_KEY_DERIVE, LABEL_CALLER_NUMBER_SEAL } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, HMAC_BAN_PREFIX, LABEL_BAN_KEY_DERIVE, LABEL_CALLER_NUMBER_SEAL, LABEL_CALL_RECORDING_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
 // getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
@@ -342,6 +342,23 @@ export function sealCallerNumber(phone: string, callId: string, serverKek: strin
 /** Open a number sealed by sealCallerNumber. Throws on a wrong key, wrong call, or tampered value. */
 export function openCallerNumber(sealed: string, callId: string, serverKek: string): string {
   return new TextDecoder().decode(serverDecrypt(hexToBytes(sealed), LABEL_CALLER_NUMBER_SEAL, hexToBytes(serverKek), callId))
+}
+
+// --- Stored Call Recording ---
+
+/**
+ * Seal a call recording for the server's own object storage (#2309). The
+ * provider's copy is deleted once this copy exists, so this is the only copy:
+ * SERVER_KEK under its own label, bound to the hub and call, so a blob copied
+ * onto another call's key fails to open rather than playing the wrong audio.
+ */
+export function sealCallRecording(audio: Uint8Array, hubId: string, callId: string, serverKek: string): Uint8Array {
+  return serverEncrypt(audio, LABEL_CALL_RECORDING_SEAL, hexToBytes(serverKek), `${hubId}:${callId}`)
+}
+
+/** Open a recording sealed by sealCallRecording. Throws on a wrong key, wrong hub or call, or tampered blob. */
+export function openCallRecording(sealed: Uint8Array, hubId: string, callId: string, serverKek: string): Uint8Array {
+  return serverDecrypt(sealed, LABEL_CALL_RECORDING_SEAL, hexToBytes(serverKek), `${hubId}:${callId}`)
 }
 
 // --- Storage Credential Encryption ---

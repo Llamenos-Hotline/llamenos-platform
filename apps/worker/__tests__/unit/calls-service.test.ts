@@ -552,6 +552,20 @@ describe('CallsService', () => {
       const result = await svc.getHubIdForCall('CA-nonexistent')
       expect(result).toBeNull()
     })
+
+    it('falls back to the archived call record — a recording callback lands after the call ended (#2309)', async () => {
+      const limit = vi.fn()
+        .mockResolvedValueOnce([]) // active_calls: already archived
+        .mockResolvedValueOnce([{ hubId: 'hub-archived' }]) // call_records
+      const db = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit }) }),
+        }),
+      }
+      const svc = new CallsService(db as never)
+      expect(await svc.getHubIdForCall('CA-ended')).toBe('hub-archived')
+      expect(limit).toHaveBeenCalledTimes(2)
+    })
   })
 
   describe('listCallHistory', () => {

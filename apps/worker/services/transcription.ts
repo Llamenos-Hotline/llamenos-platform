@@ -1,75 +1,63 @@
 import type { Env } from '../types'
 import type { Services } from '../services'
-import { getTelephonyFromService } from '../lib/service-factories'
 import { encryptMessageForStorage } from '../lib/crypto'
-import { createLogger } from '../lib/logger'
+import { ServiceError } from './settings'
 
-const logger = createLogger('services.transcription')
+/**
+ * Transcribe a call recording into an E2EE note for the answering volunteer and
+ * the admins, when transcription is on globally and for that volunteer.
+ *
+ * `audio` is the recording the server already holds (#2309): the provider is
+ * never asked for it again. Throws on a transcription or storage failure so
+ * the caller can report it; returns quietly when transcription is off.
+ */
+export async function maybeTranscribe(params: {
+  hubId: string
+  callId: string
+  audio: ArrayBuffer
+  /** The answering volunteer's Ed25519 auth pubkey (`calls.answeredBy`). */
+  userPubkey: string
+  env: Env
+  services: Services
+}): Promise<void> {
+  const { hubId, callId, audio, userPubkey, env, services } = params
 
-export async function maybeTranscribe(
-  parentCallSid: string,
-  recordingSid: string,
-  userPubkey: string,
-  env: Env,
-  services: Services,
-) {
-  // Check if transcription is globally enabled
   const { globalEnabled } = await services.settings.getTranscriptionSettings()
   if (!globalEnabled) return
 
-  // Check if user has transcription enabled
-  try {
-    const volunteer = await services.identity.getUser(userPubkey)
-    if (!volunteer.transcriptionEnabled) return
-  } catch {
-    return
-  }
+  // A volunteer removed since answering has no transcription preference left
+  // to honour; any other lookup failure is an error, not a "no".
+  const volunteer = await services.identity.getUser(userPubkey).catch((err: unknown) => {
+    if (err instanceof ServiceError && err.status === 404) return null
+    throw err
+  })
+  if (!volunteer?.transcriptionEnabled) return
 
-  // Get recording audio directly by recording SID
-  const adapter = await getTelephonyFromService(env, services.settings)
-  if (!adapter) return
-  const audio = await adapter.getRecordingAudio(recordingSid)
-  if (!audio) return
+  // Transcribe using platform transcription service (CF Workers AI or self-hosted Whisper)
+  const result = await env.AI.run('@cf/openai/whisper', {
+    audio: [...new Uint8Array(audio)],
+  })
+  if (!result.text) return
 
-  try {
-    // Transcribe using platform transcription service (CF Workers AI or self-hosted Whisper)
-    const result = await env.AI.run('@cf/openai/whisper', {
-      audio: [...new Uint8Array(audio)],
-    })
+  // Envelope encryption: single ciphertext, wrapped key for user + admin.
+  // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
+  // key, not an HPKE recipient. #1021: `userPubkey` is the answering
+  // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
+  // is resolved to their devices' X25519 encryption keys rather than
+  // sealed to directly.
+  const readerPubkeys = await services.identity.buildReaderPubkeys(
+    env.ADMIN_DECRYPTION_PUBKEY,
+    [userPubkey],
+  )
 
-    if (result.text) {
-      // Envelope encryption: single ciphertext, wrapped key for user + admin.
-      // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
-      // key, not an HPKE recipient. #1021: `userPubkey` is the answering
-      // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
-      // is resolved to their devices' X25519 encryption keys rather than
-      // sealed to directly.
-      const readerPubkeys = await services.identity.buildReaderPubkeys(
-        env.ADMIN_DECRYPTION_PUBKEY,
-        [userPubkey],
-      )
+  const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
+  await services.records.createNote({
+    callId,
+    authorPubkey: 'system:transcription',
+    encryptedContent,
+    authorEnvelope: {},
+    adminEnvelopes: readerEnvelopes,
+  })
 
-      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
-      await services.records.createNote({
-        callId: parentCallSid,
-        authorPubkey: 'system:transcription',
-        encryptedContent,
-        authorEnvelope: {},
-        adminEnvelopes: readerEnvelopes,
-      })
-
-      // Mark call record as having a transcription and persist the recording SID
-      try {
-        await services.calls.updateMetadata('', parentCallSid, {
-          hasTranscription: true,
-          recordingSid,
-          hasRecording: true,
-        })
-      } catch {
-        // Call may already be ended — metadata update is best-effort
-      }
-    }
-  } catch (err) {
-    logger.error('maybeTranscribe failed', err)
-  }
+  await services.calls.updateMetadata(hubId, callId, { hasTranscription: true })
 }

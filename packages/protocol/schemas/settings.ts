@@ -351,6 +351,23 @@ export const providerSettingReadingSchema = z.discriminatedUnion('state', [
 export type ProviderSettingReading = z.infer<typeof providerSettingReadingSchema>
 
 /**
+ * What the provider keeps about a call or message, per provider (#2309): what
+ * this server deletes there, and — named, never assumed away — what it cannot.
+ * Taken from the provider's own documentation, not read from the account; the
+ * `source` says so. A provider whose retention this server has not established
+ * says that in `retained`, rather than listing nothing.
+ */
+export const providerRetentionStatementSchema = z.object({
+  /** What this server deletes at the provider, and how. */
+  removed: z.array(z.object({ what: z.string().min(1), how: z.string().min(1) })),
+  /** What the provider retains that this server cannot remove, and why. */
+  retained: z.array(z.object({ what: z.string().min(1), reason: z.string().min(1) })).min(1),
+  /** Where these statements come from. */
+  source: z.string().min(1),
+})
+export type ProviderRetentionStatement = z.infer<typeof providerRetentionStatementSchema>
+
+/**
  * What the telephony provider does with caller audio on its own: recording or
  * transcription this server did NOT request. Recordings this server did request
  * (voicemail, opted-in call recording) are listed separately as `heldAtProvider`.
@@ -361,10 +378,18 @@ export const providerRecordingPostureSchema = z.object({
 })
 export type ProviderRecordingPosture = z.infer<typeof providerRecordingPostureSchema>
 
+/**
+ * Kinds of provider-held artifact the ledger tracks until the provider confirms
+ * deletion: a voicemail, an opted-in call recording, or the provider's own log
+ * record of a call leg (Twilio/SignalWire call records name the caller's and
+ * each rung volunteer's phone number).
+ */
+export const heldProviderArtifactKindSchema = z.enum(['voicemail', 'call', 'call-log'])
+
 /** A recording this server knows the provider holds, until the provider confirms it deleted it. */
 export const heldProviderRecordingSchema = z.object({
   callId: z.string(),
-  kind: z.enum(['voicemail', 'call']),
+  kind: heldProviderArtifactKindSchema,
   /**
    * False when the provider reported the recording without a handle: the audio
    * is held there and this server cannot delete it — it must be removed at the
@@ -382,5 +407,35 @@ export const recordingPostureResponseSchema = providerRecordingPostureSchema.ext
   /** The provider type the posture was read from, or 'mock' for the test provider. */
   provider: z.string(),
   heldAtProvider: z.array(heldProviderRecordingSchema),
+  /** What the provider keeps about calls beyond recordings, and what of it this server removes (#2309). */
+  retention: providerRetentionStatementSchema,
 })
 export type RecordingPostureResponse = z.infer<typeof recordingPostureResponseSchema>
+
+// --- Provider-side recording posture: enforcement (#2309) ---
+
+/**
+ * One provider-side setting this server tried to turn off. `disabled` means the
+ * provider accepted the change; `already-off` means it was read as off. Both
+ * carry evidence. A setting the provider's API cannot change is `not-settable`
+ * with the reason; a write the provider refused is `failed` — neither is ever
+ * reported as off.
+ */
+export const providerSettingEnforcementSchema = z.discriminatedUnion('outcome', [
+  z.object({ setting: z.enum(['recording', 'transcription']), target: z.string().min(1), outcome: z.literal('disabled'), evidence: z.string().min(1) }),
+  z.object({ setting: z.enum(['recording', 'transcription']), target: z.string().min(1), outcome: z.literal('already-off'), evidence: z.string().min(1) }),
+  z.object({ setting: z.enum(['recording', 'transcription']), target: z.string().min(1), outcome: z.literal('not-settable'), reason: z.string().min(1) }),
+  z.object({ setting: z.enum(['recording', 'transcription']), target: z.string().min(1), outcome: z.literal('failed'), reason: z.string().min(1) }),
+])
+export type ProviderSettingEnforcement = z.infer<typeof providerSettingEnforcementSchema>
+
+/**
+ * `POST .../recording-posture/enforce`: every change attempted, then the
+ * posture as re-read afterwards — the re-read, not the write, is the evidence
+ * that a setting is now off.
+ */
+export const recordingPostureEnforcementResponseSchema = z.object({
+  actions: z.array(providerSettingEnforcementSchema).min(1),
+  posture: recordingPostureResponseSchema,
+})
+export type RecordingPostureEnforcementResponse = z.infer<typeof recordingPostureEnforcementResponseSchema>

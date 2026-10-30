@@ -806,6 +806,8 @@ callerLast4, startedAt, endedAt, duration, status, hasTranscription,
 hasVoicemail, hasRecording, recordingSid
 ```
 
+`hasRecording` is true only once the server holds its OWN sealed copy of the call's recording (see §4.8 "Call recording storage"); `recordingSid` is never used to reach the provider for playback.
+
 #### Algorithm
 
 Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients. A call record has no hub, so the server seals it to the admin escrow key `ADMIN_DECRYPTION_PUBKEY` alone; super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
@@ -1893,6 +1895,8 @@ GET /api/calls/:callId/recording
 Permission: calls:read-recording or answering volunteer
 Response: audio/wav binary
 Headers: Content-Type: audio/wav, Cache-Control: private, no-store
+Error: 404 "No recording available for this call" (hasRecording is false),
+       404 "Recording not available" (marked, but the server holds no copy)
 
 GET /api/calls/debug
 Permission: calls:debug
@@ -1900,6 +1904,19 @@ Response: internal call state
 ```
 
 Hub-scoped: `/api/hubs/:hubId/calls/*`
+
+#### Call recording storage (#2309)
+
+An opted-in call recording (`recordCalls`) never stays at the telephony provider:
+
+1. `POST /api/telephony/call-recording` tracks the provider's copy in `provider_recordings` (kind `call`) before anything else.
+2. The server fetches the audio once and stores it in its own object storage at `call-recordings/{hubId}/{callId}`, sealed with AES-256-GCM under a key HKDF-derived from `SERVER_KEK` (info = `LABEL_CALL_RECORDING_SEAL`, AAD = `label:hubId:callId`). The call is then marked `hasRecording`. A copy is never overwritten.
+3. The provider's copy is deleted through `TelephonyAdapter.deleteRecording`, with the same fail-loud contract as voicemail.
+4. Playback reads only the sealed copy, under the request's hub. The provider is never asked for a call recording again.
+
+If the copy cannot be made — the provider returns no audio, or storage or `SERVER_KEK` is unavailable — the provider's copy is NOT deleted, because it is then the only copy. The failure is recorded on the ledger row (`delete_attempts`, `last_error`), audited as `providerRecordingDeleteFailed`, shown in `heldAtProvider`, and retried by the `provider-recording-sweep` worker (copy first, then delete). The retention purge and the hub shred delete the sealed copy along with the provider's copy; a copy that cannot be deleted is audited as `callRecordingCopyDeleteFailed`.
+
+The copy is server-readable (Tier 1, at rest), not E2EE: the server already sees the audio when it fetches it, and clients play `audio/wav` from this endpoint unchanged. Sealing it to the admins' and answering volunteer's HPKE keys would need client-side decryption on every platform.
 
 ### 4.9 Conversations
 
@@ -2066,6 +2083,80 @@ Permission: settings:manage-telephony
 Body: { "type": "twilio"|"signalwire"|..., ...provider_credentials }
 Response: { "ok": true } or { "ok": false, "error": "..." }
 ```
+
+#### Recording Posture (#1505, #2297, #2309)
+
+```
+GET /api/hubs/:hubId/settings/telephony-provider/recording-posture
+Permission: settings:manage-telephony
+Response: RecordingPostureResponse
+Error: 404 "No telephony provider is configured"
+
+POST /api/hubs/:hubId/settings/telephony-provider/recording-posture/enforce
+Permission: settings:manage-telephony, plus system:manage-instance when the hub
+            has no provider of its own (it runs on the shared platform account)
+Response: { actions: ProviderSettingEnforcement[], posture: RecordingPostureResponse }
+Error: 403 { required: "system:manage-instance" }, 404 "No telephony provider is configured"
+Audit: providerRecordingPostureEnforced (every action, with its outcome)
+```
+
+```typescript
+type ProviderSettingReading =
+  | { state: 'off'; evidence: string }      // read from the provider
+  | { state: 'on'; evidence: string }
+  | { state: 'unknown'; reason: string }    // could not be read — never reported as off
+
+interface RecordingPostureResponse {
+  provider: string
+  recording: ProviderSettingReading         // recording this server did NOT request
+  transcription: ProviderSettingReading     // transcription this server did NOT request
+  heldAtProvider: Array<{                   // tracked until the provider confirms deletion
+    callId: string
+    kind: 'voicemail' | 'call' | 'call-log'
+    createdAt: string
+    deleteAttempts: number
+    lastAttemptAt: string | null
+    lastError: string | null
+  }>
+  retention: {                              // from provider documentation, not read from the account
+    removed: Array<{ what: string; how: string }>
+    retained: Array<{ what: string; reason: string }>   // never empty
+    source: string
+  }
+}
+
+type ProviderSettingEnforcement =
+  | { setting: 'recording' | 'transcription'; target: string; outcome: 'disabled'; evidence: string }
+  | { setting: 'recording' | 'transcription'; target: string; outcome: 'already-off'; evidence: string }
+  | { setting: 'recording' | 'transcription'; target: string; outcome: 'not-settable'; reason: string }
+  | { setting: 'recording' | 'transcription'; target: string; outcome: 'failed'; reason: string }
+```
+
+Enforce writes first, then re-reads the posture. The re-read, not the write, is what shows a setting as off. What each provider's API lets enforce change:
+
+| Provider | Recording | Transcription |
+|----------|-----------|---------------|
+| Twilio | Elastic SIP trunk: `POST trunking.twilio.com/v1/Trunks/{Sid}/Recording` `Mode=do-not-record`. A number routed to this server needs no change. A number routed elsewhere is `not-settable`: Twilio has no number-level switch, and the server does not rewrite routing. | Every Conversational Intelligence service with `auto_transcribe`: `POST intelligence.twilio.com/v2/Services/{Sid}` `AutoTranscribe=false` (Twilio documents up to five minutes to propagate) |
+| SignalWire | `already-off`: a SignalWire SIP trunk has no recording feature. Number routing is handled as for Twilio. | `not-settable`: no account-level switch is published |
+| Telnyx | `PATCH /v2/phone_numbers/{id}/voice` `call_recording.inbound_call_recording_enabled=false` | `not-settable`: no account- or number-level switch is documented |
+| Vonage, Plivo, Bandwidth | `not-settable`: no account-level switch; recording happens only when this server's NCCO/XML/BXML asks | `not-settable` |
+| Asterisk, FreeSWITCH | `not-settable`: dialplan configuration on the PBX host | `not-settable`: modules on the PBX host |
+
+#### Provider-held media and logs (#2297, #2309)
+
+What each provider keeps about a call, and what of it this server removes. This is also returned live as `retention` in the posture reading. A provider's own records that this server cannot remove are listed here by name; they are never assumed to be zero.
+
+| Provider | Deleted by this server | Retained at the provider |
+|----------|------------------------|--------------------------|
+| Twilio | Voicemail and call recordings (`DELETE /Recordings/{Sid}`). Call records of the caller's call and of every volunteer ring leg (`DELETE /Calls/{Sid}`), once the call has ended; Twilio refuses while it is in progress. | SMS/WhatsApp message records and bodies (not deleted by this server; Twilio says bodies persist up to 30 days in backups after a `DELETE`). Recordings and transcriptions this server did not request (reported, not deleted). Usage and billing records. Debugger and error logs of webhook requests. |
+| SignalWire | Voicemail and call recordings; call records of the caller's call and every ring leg (compatibility API `DELETE /Calls/{Sid}`). | SMS message records and bodies (not deleted by this server). Recordings and transcriptions this server did not request. Usage, billing and log records outside the compatibility API. |
+| Telnyx | Voicemail and call recordings (`DELETE /v2/recordings/{id}`). | Call detail records of every leg: no deletion API was found. Messaging detail records with text: redaction exists only for allowlisted organisations, is applied at read time, and is not configured by this server. Recording transcriptions this server did not request. Usage and billing records. |
+| Vonage | Voicemail and call recordings (Media API `DELETE /v3/media/{id}`). | Voice CDRs, with both numbers, for 13 months: the Redact API strips numbers, but only after Vonage provisions access and the CDR reaches long-term storage, and this server does not call it. Server logs (about 15 days; Messages API about 10), which the Redact API cannot reach. Conversation API call legs. SMS/Messages records. |
+| Plivo | Voicemail and call recordings (`DELETE /Recording/{id}/`). | Call detail records: no deletion API was found. SMS content: redacted only when sent with `log=false` or received under `log_incoming_messages=false`, neither of which this server sets. Transcriptions this server did not request: no API lists them. |
+| Bandwidth | Voicemail and call recordings (`DELETE /calls/{callId}/recordings/{id}`). | Call detail records and call events: no deletion API was found. MMS media for up to 48 hours (Bandwidth states it keeps no message text). |
+| Asterisk, FreeSWITCH | Voicemail and call recordings on the PBX host (sip-bridge `DELETE /recordings/:name`). | CDRs and logs on the operator's own PBX host, under its CDR configuration (PBX retention policy: #1320). CDRs at the upstream SIP trunk carrier. |
+
+Call-log deletion uses the same `provider_recordings` ledger as recordings, with kind `call-log`. The caller's call is tracked from `POST /api/telephony/incoming`, banned calls included. Each volunteer ring leg is tracked as it is dialled. The sweep deletes them once the call is no longer in `active_calls`. A refusal stays in `heldAtProvider` with the provider's error and is audited as `providerCallLogDeleteFailed`. Only adapters whose provider documents a deletion (`TelephonyAdapter.deleteCallLog`) track call logs at all.
 
 #### Messaging
 
@@ -2539,7 +2630,7 @@ and it stores `encryptedNsec` as an opaque column.
 
 ### 4.20 Telephony Webhooks
 
-These endpoints are called by telephony providers (Twilio, SignalWire, etc.), not by clients. Each request is validated by the provider's webhook signature, not Llamenos auth. Hub routing is via `?hub=<hubId>` query parameter.
+These endpoints are called by telephony providers (Twilio, SignalWire, etc.), not by clients. Each request is validated by the provider's webhook signature, not Llamenos auth. Hub routing is via `?hub=<hubId>` query parameter — except `/call-recording`, whose callback carries none: its hub is resolved from the call (`active_calls`, then `call_records`), and its signature is validated with THAT hub's adapter, the one its recording is then fetched and deleted through (#2309).
 
 ```
 POST /api/telephony/incoming

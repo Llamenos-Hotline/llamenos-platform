@@ -334,6 +334,13 @@ pub const LABEL_MESSAGING_CONTACT_HUB_KEY: &str = "llamenos:messaging-contact-hu
 /// Its own label, so the derived key is not the one that opens contact identifiers.
 pub const LABEL_CALLER_NUMBER_SEAL: &str = "llamenos:caller-number-seal:v1";
 
+/// Stored call recording — AES-256-GCM under a key HKDF-derived from SERVER_KEK
+/// (HKDF info = this label, AAD = `label:hubId:callId`). The server's own copy of
+/// an opted-in call recording, fetched from the telephony provider before the
+/// provider's copy is deleted (#2309). Its own label, so the derived key opens
+/// nothing else the server seals.
+pub const LABEL_CALL_RECORDING_SEAL: &str = "llamenos:call-recording-seal:v1";
+
 /// Erasure override co-approver signature — Ed25519 sig over (targetUserId || timestamp || justification)
 pub const LABEL_ERASURE_OVERRIDE_SIG: &str = "llamenos:erasure-override-sig:v1";
 
@@ -618,6 +625,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     // 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
     HMAC_MESSAGING_CONTACT_PREFIX,   // 105
     LABEL_MESSAGING_CONTACT_HUB_KEY, // 106
+    // 107: Server seal of a stored call recording (#2309)
+    LABEL_CALL_RECORDING_SEAL, // 107
 ];
 
 /// Look up a label string by its numeric ID.
@@ -819,12 +828,13 @@ mod tests {
             LABEL_MESSAGING_CONTACT_HUB_KEY,
             "llamenos:messaging-contact-hub-key:v1"
         );
+        assert_eq!(LABEL_CALL_RECORDING_SEAL, "llamenos:call-recording-seal:v1");
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 66 of the 107 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 67 of the 108 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -895,6 +905,7 @@ mod tests {
         assert_eq!(id_to_label(104), Some(LABEL_CALLER_NUMBER_SEAL));
         assert_eq!(id_to_label(105), Some(HMAC_MESSAGING_CONTACT_PREFIX));
         assert_eq!(id_to_label(106), Some(LABEL_MESSAGING_CONTACT_HUB_KEY));
+        assert_eq!(id_to_label(107), Some(LABEL_CALL_RECORDING_SEAL));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

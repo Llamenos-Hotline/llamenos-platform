@@ -20,6 +20,8 @@ import {
   callerRateLimitDigest,
   sealCallerNumber,
   openCallerNumber,
+  sealCallRecording,
+  openCallRecording,
   hashIP,
   encryptMessageForStorage,
   encryptCallRecordForStorage,
@@ -604,5 +606,32 @@ describe('sealCallerNumber / openCallerNumber', () => {
   it('is not openable as a contact identifier: it has its own derived key', () => {
     const sealed = sealCallerNumber('+15551234567', 'call-1', KEK)
     expect(() => decryptContactIdentifier(`enc:${sealed}`, KEK)).toThrow()
+  })
+})
+
+describe('sealCallRecording / openCallRecording (#2309)', () => {
+  const KEK = 'a'.repeat(64) // gitleaks:allow
+  const AUDIO = utf8ToBytes('RIFF....WAVEfmt caller audio')
+
+  it('round-trips for the hub and call it was sealed for', () => {
+    const sealed = sealCallRecording(AUDIO, 'hub-1', 'call-1', KEK)
+    expect([...openCallRecording(sealed, 'hub-1', 'call-1', KEK)]).toEqual([...AUDIO])
+  })
+
+  it('stores no plaintext audio', () => {
+    const sealed = bytesToHex(sealCallRecording(AUDIO, 'hub-1', 'call-1', KEK))
+    expect(sealed).not.toContain(bytesToHex(utf8ToBytes('caller audio')))
+  })
+
+  it('refuses a blob copied onto another call or hub, or opened with another key', () => {
+    const sealed = sealCallRecording(AUDIO, 'hub-1', 'call-1', KEK)
+    expect(() => openCallRecording(sealed, 'hub-1', 'call-2', KEK)).toThrow()
+    expect(() => openCallRecording(sealed, 'hub-2', 'call-1', KEK)).toThrow()
+    expect(() => openCallRecording(sealed, 'hub-1', 'call-1', 'c'.repeat(64))).toThrow()
+  })
+
+  it('is not openable as a caller number: it has its own derived key', () => {
+    const sealed = sealCallRecording(utf8ToBytes('+15551234567'), 'hub-1', 'call-1', KEK)
+    expect(() => openCallerNumber(bytesToHex(sealed), 'hub-1:call-1', KEK)).toThrow()
   })
 })

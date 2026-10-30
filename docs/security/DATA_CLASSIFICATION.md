@@ -404,9 +404,15 @@ Hash-chained for tamper detection.
 
 | Data | Classification | Retention | Notes |
 |------|---------------|-----------|-------|
-| Call audio | Transient | Provider-controlled | Not recorded by default |
-| Call detail records | Plaintext | Provider-controlled | Timestamps, numbers, durations |
+| Call audio | Transient | Not recorded unless asked | The server asks a provider to record only voicemail and, for a hub with `recordCalls`, the bridged call. Unrequested recording or transcription is read by the recording-posture probe, and turned off by its enforce endpoint where the provider's API allows. |
+| Voicemail recordings | Plaintext at the provider | Until fetched | Deleted at the provider once fetched. A refusal is tracked in `provider_recordings`, shown in `heldAtProvider`, audited and retried. |
+| Call recordings (opt-in) | Plaintext at the provider, then Tier 1 on our storage | Provider: until our copy exists | Copied into our object storage, sealed under `SERVER_KEK` (`LABEL_CALL_RECORDING_SEAL`, bound to hub and call), then deleted at the provider. Playback reads only our copy. The copy is deleted by the retention purge and the hub shred. |
+| Call detail records (caller's call and every volunteer ring leg — both phone numbers) | Plaintext | **Twilio, SignalWire:** deleted once the call ends. **Every other provider:** provider-controlled, and named as retained in the posture reading. | `DELETE /Calls/{Sid}`. A refusal stays tracked as a `call-log` row and is audited. |
+| SMS / messaging records and bodies | Plaintext | Provider-controlled | Not deleted by this server on any provider. Named as retained in the posture reading. |
+| Usage, billing and debugger logs | Plaintext | Provider-controlled | Not removable through any API this server uses. |
 | Webhook payloads | Transient | Request duration | Validated via HMAC signature |
+
+The per-provider list of what is deleted and what is retained, with the API used and the documentation it rests on, is in `docs/protocol/PROTOCOL.md` §4.12 "Provider-held media and logs". It is also returned live as `retention` by `GET /api/hubs/:hubId/settings/telephony-provider/recording-posture`. Nothing there is assumed to be zero without a source.
 
 #### Signal Notifier Sidecar (port 3100)
 

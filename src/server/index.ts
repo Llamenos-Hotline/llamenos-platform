@@ -75,7 +75,12 @@ const notifierApiKey = readSecret('notifier-api-key', 'NOTIFIER_API_KEY')
 // Unset means no tokens can be issued (UserNotificationsService refuses), never
 // tokens signed with another secret or with an empty key.
 const notifierTokenSecret = readSecret('notifier-token-secret', 'NOTIFIER_TOKEN_SECRET')
+// One object-store binding for both the services and the request env: the hub
+// shred deletes file envelope mirrors through it, and call recordings are kept
+// in it (#2309) — so the services must hold the same store the routes write to.
+const blobStorage = createBlobStorage()
 const services: Services = createServices(db, {
+  blobStorage,
   hmacSecret,
   serverKek,
   firehoseSealKey,
@@ -156,7 +161,7 @@ const env: Record<string, unknown> = {
   TWILIO_AUTH_TOKEN: readSecret('twilio-auth-token', 'TWILIO_AUTH_TOKEN'),
   TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER || '',
   AI: createTranscriptionService(),
-  BLOB_STORAGE: createBlobStorage(),
+  BLOB_STORAGE: blobStorage,
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
   SERVER_SECRET: serverSecret || undefined,
   GLITCHTIP_DSN: process.env.GLITCHTIP_DSN || undefined,

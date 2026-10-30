@@ -996,6 +996,45 @@ describe('Telephony routes', () => {
       expect(services.providerRecordings.track).not.toHaveBeenCalled()
     })
 
+    it('checks the signature with the adapter of the hub the call belongs to (#2309)', async () => {
+      // The global provider would refuse the signature; the call's own hub
+      // accepts it. Validating with the global adapter refused every hub with
+      // its own provider account, and its recordings stayed at the provider.
+      const globalAdapter = { ...adapter, validateWebhook: vi.fn().mockResolvedValue(false) }
+      vi.mocked(getTelephonyFromService).mockResolvedValue(globalAdapter as never)
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'failed' })
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/call-recording?parentCallSid=CA-parent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=failed',
+      })
+      expect(res.status).toBe(200)
+      expect(services.calls.getHubIdForCall).toHaveBeenCalledWith('CA-parent')
+      expect(vi.mocked(getHubTelephonyFromService).mock.calls.some(call => call[2] === 'hub-1')).toBe(true)
+      expect(globalAdapter.validateWebhook).not.toHaveBeenCalled()
+    })
+
+    it('ignores a ?hub= on /call-recording: another hub\'s credentials never vouch for this call (#2309)', async () => {
+      // The handler acts with the adapter of the hub that owns parentCallSid.
+      // Validating with a caller-chosen hub's adapter would let one hub's
+      // provider account sign a callback that copies, deletes and ends another
+      // hub's call.
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'failed' })
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/call-recording?hub=hub-other&parentCallSid=CA-parent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=failed',
+      })
+      expect(res.status).toBe(200)
+      expect(services.calls.getHubIdForCall).toHaveBeenCalledWith('CA-parent')
+      expect(vi.mocked(getHubTelephonyFromService).mock.calls.some(call => call[2] === 'hub-other')).toBe(false)
+      expect(vi.mocked(getHubTelephonyFromService).mock.calls.some(call => call[2] === 'hub-1')).toBe(true)
+    })
+
     it('does not end call on failed recording', async () => {
       adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({
         status: 'failed',

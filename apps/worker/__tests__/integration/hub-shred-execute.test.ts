@@ -262,6 +262,23 @@ describe('HubShredService.execute', () => {
       expect(hub!.status).toBe('shredded')
     })
 
+    // #2309: the server's own copy is sealed under SERVER_KEK, which no shred
+    // destroys — so it has to be deleted, not merely un-keyed.
+    it('deletes the server\'s own sealed copy of a call recording', async () => {
+      const hubId = await createHub()
+      await fresh.db.insert(schema.callRecords).values({
+        callId: 'call-copy', hubId, startedAt: new Date(), status: 'completed', encryptedContent: 'x',
+      })
+      const source = { getRecordingAudio: async () => new Uint8Array([1, 2, 3]).buffer }
+      await fresh.callRecordings.copyFromProvider(source, { hubId, callId: 'call-copy', recordingSid: 'RE-gone' })
+      expect(await fresh.callRecordings.read(hubId, 'call-copy')).not.toBeNull()
+
+      await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
+
+      expect(await fresh.callRecordings.read(hubId, 'call-copy'), 'a shredded hub must not keep playable audio').toBeNull()
+      expect(await fresh.callRecordings.hasCopy(hubId, 'call-copy')).toBe(false)
+    })
+
     it('refuses to shred while the provider will not delete, and keeps the handle', async () => {
       const hubId = await createHub()
       await fresh.recordings.track({ hubId, callId: 'call-c', recordingSid: 'RE-stuck', kind: 'call', adapter: account })

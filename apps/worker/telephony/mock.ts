@@ -52,7 +52,11 @@ import type {
   RecordingPostureContext,
 } from './adapter'
 import { ProviderRecordingDeleteError } from './adapter'
-import type { ProviderRecordingPosture } from '@protocol/schemas/settings'
+import type {
+  ProviderRecordingPosture,
+  ProviderRetentionStatement,
+  ProviderSettingEnforcement,
+} from '@protocol/schemas/settings'
 
 /** Value stored in `provider_configs.provider_type` when a hub uses the mock. */
 export const MOCK_PROVIDER_TYPE = 'mock'
@@ -219,6 +223,25 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
     return {
       recording: { state: 'off', evidence: 'the mock provider has no media path: it cannot record a call' },
       transcription: { state: 'off', evidence: 'the mock provider has no media path: it cannot transcribe a call' },
+    }
+  }
+
+  async enforceRecordingPosture(): Promise<ProviderSettingEnforcement[]> {
+    return [
+      { setting: 'recording', target: 'mock provider', outcome: 'already-off', evidence: 'the mock provider has no media path: it cannot record a call' },
+      { setting: 'transcription', target: 'mock provider', outcome: 'already-off', evidence: 'the mock provider has no media path: it cannot transcribe a call' },
+    ]
+  }
+
+  providerRetention(): ProviderRetentionStatement {
+    return {
+      removed: [
+        { what: 'Simulated voicemail and call recordings', how: 'deleteRecording, which refuses mock-undeletable-* handles so the failure path can be driven' },
+      ],
+      retained: [
+        { what: 'Simulated call state in this server process', reason: 'the mock provider is a test double with no external account; it keeps nothing outside memory' },
+      ],
+      source: 'the mock provider implementation',
     }
   }
 

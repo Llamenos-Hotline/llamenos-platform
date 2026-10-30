@@ -12,7 +12,7 @@ import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@s
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
 import { startParallelRinging, cancelLosingLegs } from '../services/ringing'
-import { maybeTranscribe } from '../services/transcription'
+import { processCallRecording } from '../services/call-recordings'
 import { processVoicemailRecording } from '../services/voicemail'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
@@ -80,8 +80,18 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   const services = c.get('services')
 
   // For /incoming, we don't know the hub yet — use global adapter for validation
-  // For all other routes, hub is in query params
-  const hubId = url.searchParams.get('hub') || undefined
+  // For all other routes, hub is in query params — except /call-recording,
+  // whose callback carries none (CRIT-W1: its handler resolves the hub from the
+  // call record). Its signature is checked with THAT hub's adapter, so the
+  // credentials that vouch for the callback are the ones its recording is then
+  // fetched and deleted through — and a hub with its own provider account is
+  // not refused, which would leave its recordings at the provider, untracked
+  // (#2309). A `?hub=` on /call-recording is ignored, never preferred: the
+  // handler acts with the call's hub's adapter, so validating with any other
+  // hub's credentials would let one hub's account vouch for another hub's call.
+  const hubId = url.pathname.endsWith('/call-recording')
+    ? (await services.calls.getHubIdForCall(url.searchParams.get('parentCallSid') || '')) || undefined
+    : url.searchParams.get('hub') || undefined
   const adapter = await getHubAdapter(env, services, hubId)
 
   // If no telephony provider is configured, reject with 403 — same as
@@ -152,6 +162,13 @@ telephony.post('/incoming',
 
   // Use hub-scoped adapter for all subsequent operations
   const adapter = hubId ? ((await getHubTelephonyFromService(c.env, services.settings, hubId)) ?? globalAdapter) : globalAdapter
+
+  // #2309: the provider now keeps a log record of this call, naming the
+  // caller's number. Where its API can delete one, it is tracked from the first
+  // webhook — banned calls included — and deleted once the call has ended.
+  if (adapter.deleteCallLog) {
+    await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid: callSid, kind: 'call-log', adapter })
+  }
 
   const banned = await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)
   if (banned) {
@@ -583,10 +600,10 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
   const { status: recordingStatus, recordingSid, callSid: webhookCallSid } = await adapter.parseRecordingWebhook(c.req.raw)
 
   if (recordingStatus === 'completed') {
-    // #2297: the provider now holds this call's audio. It is kept there for
-    // playback (the hub opted in to call recording), so it is tracked until
-    // the call record's retention purge or a hub shred deletes it — tracked
-    // first, before anything below can throw. Without a handle it is tracked
+    // #2297/#2309: the provider now holds this call's audio. It is tracked
+    // until the provider confirms deleting it — once our own sealed copy is
+    // made (below), or by the call record's retention purge or a hub shred —
+    // tracked first, before anything below can throw. Without a handle it is tracked
     // as unaddressable residue: the audio exists either way, and an untracked
     // recording is indistinguishable from one that was never made.
     const callId = parentCallSid || webhookCallSid || ''
@@ -619,9 +636,23 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
     }
 
     if (recordingSid) {
-      backgroundTask(c,
-        maybeTranscribe(parentCallSid, recordingSid, pubkey, c.env, services)
-      )
+      // #2309: tracked above, before anything could throw. Now copied into our
+      // own sealed storage (the playback source), deleted at the provider, and
+      // transcribed from our copy. A copy or deletion failure is kept on the
+      // ledger and retried by the sweep.
+      backgroundTask(c, processCallRecording({
+        env: c.env,
+        services,
+        adapter,
+        hubId: hubId ?? '',
+        callSid: parentCallSid,
+        recordingSid,
+        answeredBy: pubkey,
+      }).then((outcome) => {
+        if (outcome.providerCopy === 'kept') {
+          logger.error('Call recording left at the provider: will be retried', { parentCallSid, error: outcome.error })
+        }
+      }))
     }
   }
 

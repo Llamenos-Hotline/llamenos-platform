@@ -522,6 +522,21 @@ export async function startParallelRinging(
           )
         )
         recordRingLegs(callSid, legSids)
+        // #2309: every ring leg is a provider call whose log record names the
+        // volunteer's phone number; where it can be deleted, track it for
+        // deletion once the call has ended.
+        if (adapter.deleteCallLog) {
+          try {
+            for (const legSid of legSids) {
+              await services.providerRecordings.track({ hubId, callId: callSid, recordingSid: legSid, kind: 'call-log', adapter })
+            }
+          } catch (err) {
+            // Kept out of the ring outcome: the legs ARE ringing. What is lost is
+            // their later deletion, so say exactly that — loudly.
+            logger.error('Ring legs could not be tracked for provider call-log deletion — their log records stay at the provider', err, { callSid, hubId })
+            incCounter('llamenos_provider_call_logs_untracked_total', {})
+          }
+        }
 
         // An INVITE the PBX refused (endpoint gone between the reachability read
         // and the dial, a TLS failure to the contact, a PBX that will not

@@ -1,12 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockGetTelephonyFromService } = vi.hoisted(() => ({
-  mockGetTelephonyFromService: vi.fn(),
-}))
-vi.mock('@worker/lib/service-factories', () => ({
-  getTelephonyFromService: mockGetTelephonyFromService,
-}))
-
 vi.mock('@worker/lib/crypto', () => ({
   encryptMessageForStorage: vi.fn().mockReturnValue({
     encryptedContent: 'enc',
@@ -16,6 +9,7 @@ vi.mock('@worker/lib/crypto', () => ({
 
 import { encryptMessageForStorage } from '@worker/lib/crypto'
 import { maybeTranscribe } from '@worker/services/transcription'
+import { ServiceError } from '@worker/services/settings'
 
 describe('transcription', () => {
   function setup() {
@@ -50,25 +44,25 @@ describe('transcription', () => {
       },
     } as any
 
-    mockGetTelephonyFromService.mockReset()
     // The module-level crypto mock persists across tests; clear it so each test's
     // reader-list assertions read its OWN seal call, not a previous test's.
     vi.mocked(encryptMessageForStorage).mockClear()
 
-    return { env, services }
+    const run = (userPubkey = 'b'.repeat(64)) =>
+      maybeTranscribe({ hubId: 'hub-1', callId: 'call-1', audio: new ArrayBuffer(100), userPubkey, env, services })
+    return { env, services, run }
   }
 
   describe('maybeTranscribe', () => {
-    it('transcribes and creates note when enabled', async () => {
-      const { env, services } = setup()
+    it('transcribes the audio it is given and creates a note when enabled', async () => {
+      const { env, services, run } = setup()
       env.AI.run.mockResolvedValue({ text: 'Hello world' })
-      mockGetTelephonyFromService.mockResolvedValue({
-        getRecordingAudio: vi.fn().mockResolvedValue(new ArrayBuffer(100)),
-      })
 
       const userPubkey = 'b'.repeat(64)
-      await maybeTranscribe('call-1', 'rec-1', userPubkey, env, services)
+      await run(userPubkey)
       expect(services.records.createNote).toHaveBeenCalled()
+      // #2309: the flag lands on the call's own hub, not the hub-less '' row.
+      expect(services.calls.updateMetadata).toHaveBeenCalledWith('hub-1', 'call-1', { hasTranscription: true })
 
       // #1021/#1283: the readers are the admin's X25519 key and the volunteer's
       // resolved device key — never the Ed25519 auth pubkey, never ADMIN_PUBKEY.
@@ -79,37 +73,43 @@ describe('transcription', () => {
     })
 
     it('returns early when transcription disabled globally', async () => {
-      const { env, services } = setup()
+      const { env, services, run } = setup()
       services.settings.getTranscriptionSettings.mockResolvedValue({ globalEnabled: false })
 
-      await maybeTranscribe('call-1', 'rec-1', 'b'.repeat(64), env, services)
+      await run()
       expect(env.AI.run).not.toHaveBeenCalled()
     })
 
     it('returns early when user disabled transcription', async () => {
-      const { env, services } = setup()
+      const { env, services, run } = setup()
       services.identity.getUser.mockResolvedValue({ transcriptionEnabled: false })
 
-      await maybeTranscribe('call-1', 'rec-1', 'b'.repeat(64), env, services)
+      await run()
       expect(env.AI.run).not.toHaveBeenCalled()
     })
 
-    it('returns early when no adapter', async () => {
-      const { env, services } = setup()
-      mockGetTelephonyFromService.mockResolvedValue(null)
+    it('returns early when the volunteer no longer exists', async () => {
+      const { env, services, run } = setup()
+      services.identity.getUser.mockRejectedValue(new ServiceError(404, 'Not found'))
 
-      await maybeTranscribe('call-1', 'rec-1', 'b'.repeat(64), env, services)
+      await run()
       expect(env.AI.run).not.toHaveBeenCalled()
     })
 
-    it('returns early when no audio', async () => {
-      const { env, services } = setup()
-      mockGetTelephonyFromService.mockResolvedValue({
-        getRecordingAudio: vi.fn().mockResolvedValue(null),
-      })
+    it('surfaces a volunteer lookup failure instead of reading it as "transcription off"', async () => {
+      const { env, services, run } = setup()
+      services.identity.getUser.mockRejectedValue(new Error('connection reset'))
 
-      await maybeTranscribe('call-1', 'rec-1', 'b'.repeat(64), env, services)
+      await expect(run()).rejects.toThrow('connection reset')
       expect(env.AI.run).not.toHaveBeenCalled()
+    })
+
+    it('surfaces a transcription failure to the caller', async () => {
+      const { env, services, run } = setup()
+      env.AI.run.mockRejectedValue(new Error('whisper down'))
+
+      await expect(run()).rejects.toThrow('whisper down')
+      expect(services.records.createNote).not.toHaveBeenCalled()
     })
   })
 })

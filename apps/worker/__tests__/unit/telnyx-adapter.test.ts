@@ -433,6 +433,51 @@ describe('TelnyxAdapter', () => {
     })
   })
 
+  describe('enforceRecordingPosture (#2309)', () => {
+    function route(map: Record<string, Response>) {
+      fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+        const key = `${init?.method ?? 'GET'} ${String(url)}`
+        for (const [prefix, res] of Object.entries(map)) {
+          if (key.startsWith(prefix)) return res.clone()
+        }
+        return new Response('unexpected', { status: 599 })
+      })
+    }
+    const number = { 'GET https://api.telnyx.com/v2/phone_numbers?': Response.json({ data: [{ id: 'pn-1' }] }) }
+
+    it('PATCHes inbound recording off on a number that records', async () => {
+      route({
+        ...number,
+        'GET https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: true } } }),
+        'PATCH https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: {} }),
+      })
+      const actions = await adapter.enforceRecordingPosture()
+      expect(actions.map(a => [a.setting, a.outcome])).toEqual([['recording', 'disabled'], ['transcription', 'not-settable']])
+      const patch = fetchSpy.mock.calls.find((c: unknown[]) => (c[1] as RequestInit | undefined)?.method === 'PATCH')!
+      expect(JSON.parse(String((patch[1] as RequestInit).body))).toEqual({ call_recording: { inbound_call_recording_enabled: false } })
+    })
+
+    it('writes nothing when the number already does not record', async () => {
+      route({
+        ...number,
+        'GET https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: false } } }),
+      })
+      const [recording] = await adapter.enforceRecordingPosture()
+      expect(recording.outcome).toBe('already-off')
+      expect(fetchSpy.mock.calls.some((c: unknown[]) => (c[1] as RequestInit | undefined)?.method === 'PATCH')).toBe(false)
+    })
+
+    it('reports a refused PATCH as failed, never as disabled', async () => {
+      route({
+        ...number,
+        'GET https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: true } } }),
+        'PATCH https://api.telnyx.com/v2/phone_numbers/pn-1/voice': new Response('', { status: 422 }),
+      })
+      const [recording] = await adapter.enforceRecordingPosture()
+      expect(recording).toMatchObject({ outcome: 'failed', reason: expect.stringMatching(/Telnyx answered 422/) })
+    })
+  })
+
   describe('probeRecordingPosture', () => {
     const context = (tracked: string[]) => ({ trackedRecordings: async (h: string[]) => new Set(h.filter(x => tracked.includes(x))) })
     const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()

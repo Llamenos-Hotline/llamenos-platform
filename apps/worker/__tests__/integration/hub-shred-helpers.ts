@@ -32,6 +32,8 @@ import { AuditService } from '../../services/audit'
 import { ErasureService } from '../../services/erasure'
 import { HubShredService } from '../../services/hub-shred'
 import { ProviderRecordingsService, type ProviderMediaEraser } from '../../services/provider-recordings'
+import { CallRecordingsService } from '../../services/call-recordings'
+import type { BlobStorage } from '../../types'
 import type { TelephonyAdapter } from '../../telephony/adapter'
 import { notes } from '../../db/schema'
 
@@ -141,6 +143,8 @@ export interface FreshHubDb {
   shred: HubShredService
   /** The provider-recording ledger (#2297), on this database. */
   recordings: ProviderRecordingsService
+  /** The server's sealed call-recording copies (#2309), kept in an in-memory object store. */
+  callRecordings: CallRecordingsService
   /** What `HubShredService.execute` deletes provider-held audio through; resolves the adapter set by useTelephonyAdapter. */
   providerMedia: ProviderMediaEraser
   /** Attach a blob store after construction, before use. */
@@ -160,6 +164,25 @@ export function freshHubDb(name: string): FreshHubDb {
   let sql: ReturnType<typeof postgres> | undefined
   let blobStorage: { delete(key: string): Promise<void> } | undefined
   let telephonyAdapter: Pick<TelephonyAdapter, 'deleteRecording' | 'providerAccountId'> | null = null
+  // The server's sealed call-recording copies (#2309) live in an in-memory
+  // store; a deletion is also forwarded to whatever store a test attached, so
+  // a test observing deletions sees these keys too.
+  const recordingBlobs = new Map<string, Uint8Array>()
+  const recordingStore: Pick<BlobStorage, 'put' | 'get' | 'delete'> = {
+    async put(key, body) {
+      if (!(body instanceof Uint8Array)) throw new Error('test recording store accepts Uint8Array bodies only')
+      recordingBlobs.set(key, body)
+    },
+    async get(key) {
+      const bytes = recordingBlobs.get(key)
+      if (!bytes) return null
+      return { body: new Blob([new Uint8Array(bytes)]).stream(), size: bytes.byteLength, arrayBuffer: async () => new Uint8Array(bytes).buffer }
+    },
+    async delete(key) {
+      await blobStorage?.delete(key)
+      recordingBlobs.delete(key)
+    },
+  }
 
   const dbRef: FreshHubDb = {
     db: undefined as unknown as Database,
@@ -170,6 +193,7 @@ export function freshHubDb(name: string): FreshHubDb {
     erasure: undefined as unknown as ErasureService,
     shred: undefined as unknown as HubShredService,
     recordings: undefined as unknown as ProviderRecordingsService,
+    callRecordings: undefined as unknown as CallRecordingsService,
     providerMedia: undefined as unknown as ProviderMediaEraser,
     useBlobStorage(blob) {
       blobStorage = blob
@@ -220,7 +244,8 @@ export function freshHubDb(name: string): FreshHubDb {
       dbRef.identity = identity
       dbRef.audit = audit
       dbRef.erasure = erasure
-      dbRef.recordings = new ProviderRecordingsService(db, audit)
+      dbRef.callRecordings = new CallRecordingsService(db, recordingStore, 'ab'.repeat(32))
+      dbRef.recordings = new ProviderRecordingsService(db, audit, dbRef.callRecordings)
       dbRef.providerMedia = dbRef.recordings.eraser(async () => telephonyAdapter as TelephonyAdapter | null)
     },
     async teardown() {

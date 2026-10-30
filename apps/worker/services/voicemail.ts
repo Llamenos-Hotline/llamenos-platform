@@ -47,7 +47,7 @@ export async function processVoicemailRecording(params: {
   await services.providerRecordings.track({ hubId, callId: callSid, recordingSid, kind: 'voicemail', adapter })
 
   try {
-    await transcribeVoicemail({ env, services, adapter, callSid, recordingSid })
+    await transcribeVoicemail({ env, services, adapter, hubId, callSid, recordingSid })
   } catch (err) {
     logger.error('Voicemail transcription failed — the provider copy is deleted regardless', { callSid, err })
   }
@@ -76,10 +76,11 @@ async function transcribeVoicemail(params: {
   env: Env
   services: Services
   adapter: TelephonyAdapter
+  hubId: string
   callSid: string
   recordingSid: string
 }): Promise<void> {
-  const { env, services, adapter, callSid, recordingSid } = params
+  const { env, services, adapter, hubId, callSid, recordingSid } = params
   const { globalEnabled } = await services.settings.getTranscriptionSettings()
   if (!globalEnabled) return
 
@@ -109,9 +110,5 @@ async function transcribeVoicemail(params: {
     adminEnvelopes: readerEnvelopes,
   })
 
-  try {
-    await services.calls.updateMetadata('', callSid, { hasTranscription: true })
-  } catch {
-    // Call may already be ended — metadata update is best-effort
-  }
+  await services.calls.updateMetadata(hubId, callSid, { hasTranscription: true })
 }
