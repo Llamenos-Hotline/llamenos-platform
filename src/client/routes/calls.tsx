@@ -263,11 +263,6 @@ function CallHistoryPage() {
                         </span>
                       </div>
                     )}
-                    {call.callerLast4 && (
-                      <code className="text-[10px] text-muted-foreground font-mono">
-                        ***{call.callerLast4}
-                      </code>
-                    )}
                   </div>
                   {call.duration !== undefined && (
                     <Badge variant="outline" className="gap-1">

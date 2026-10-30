@@ -13,7 +13,7 @@
  *  2. The full caller number appears in NO plaintext column. The live call
  *     holds it only sealed under SERVER_KEK (`caller_number_sealed`); it is
  *     opened once, into the admin envelope, and the active row (with the
- *     sealed copy) is gone. callerLast4 stays plaintext per §2.5's list.
+ *     sealed copy) is gone. No fragment of the number (no last four digits) is stored beside it (#2262).
  *  3. The stale-call reaper (`getActiveCalls`) seals metadata the same way.
  *  4. With no admin recipient resolvable, the record is stored WITHOUT
  *     envelopes and the error is loud (loud-but-stored, matching the
@@ -89,17 +89,25 @@ async function readRecord(callId: string) {
 }
 
 function expectNoRawCallerDigits(row: Record<string, unknown>) {
-  // §2.5: callerLast4 stays plaintext by design; the FULL number must not
-  // appear in any plaintext column.
+  // No part of the number appears in any plaintext column: not the full number,
+  // and not its last four digits (#2262).
   const plaintextColumns = { ...row }
   delete plaintextColumns.encryptedContent
   delete plaintextColumns.adminEnvelopes
   expect(JSON.stringify(plaintextColumns)).not.toContain(RAW_CALLER)
   expect(JSON.stringify(plaintextColumns)).not.toContain('1234567')
-  expect(row.callerLast4).toBe('4567')
+  expect(Object.keys(row).filter((k) => /last4/i.test(k))).toEqual([])
 }
 
 describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
+  it('no table holds any part of a caller\'s number: no last-four column anywhere (#2262)', async () => {
+    const columns = await fresh.raw<{ table_name: string; column_name: string }[]>`
+      SELECT table_name, column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name IN ('active_calls', 'call_records')`
+    expect(columns.map((c) => c.column_name)).toContain('call_id') // the query found the tables
+    expect(columns.filter((c) => /last4|last_4|last_four/i.test(c.column_name))).toEqual([])
+  })
+
   it('endCall seals { answeredBy, callerNumber } for admin recipients', async () => {
     const admin = await seedAdmin()
     const calls = wiredCalls(async () => [admin.pubkey])
@@ -108,7 +116,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await calls.addCall('hub-1', {
       callId: 'call-seal-1',
       callerNumberSealed: sealedFor('call-seal-1'),
-      callerLast4: '4567',
     })
     await calls.answerCall('hub-1', 'call-seal-1', volunteer)
     await calls.endCall('hub-1', 'call-seal-1')
@@ -149,7 +156,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await calls.addCall('hub-1', {
       callId: 'call-seal-2',
       callerNumberSealed: sealedFor('call-seal-2'),
-      callerLast4: '4567',
     })
     await calls.endCall('hub-1', 'call-seal-2')
 
@@ -173,7 +179,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
       callId: 'call-stale-1',
       hubId: 'hub-1',
       callerNumberSealed: sealedFor('call-stale-1'),
-      callerLast4: '4567',
       status: 'ringing',
       startedAt: new Date(Date.now() - 10 * 60 * 1000),
     })
@@ -202,7 +207,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await calls.addCall('hub-1', {
       callId: 'call-seal-3',
       callerNumberSealed: sealedFor('call-seal-3'),
-      callerLast4: '4567',
     })
     const row = await calls.endCall('hub-1', 'call-seal-3')
     expect(row.encryptedContent).toBe('')
@@ -232,7 +236,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await services.calls.addCall('hub-1', {
       callId: 'call-seal-4',
       callerNumberSealed: sealedFor('call-seal-4'),
-      callerLast4: '4567',
     })
     await services.calls.endCall('hub-1', 'call-seal-4')
 

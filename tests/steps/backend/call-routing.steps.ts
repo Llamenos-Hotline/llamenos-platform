@@ -278,10 +278,11 @@ Then('the most recent call shows caller {string}', async ({request, world}, _exp
   )
   expect(status).toBe(200)
   expect(data.calls.length).toBeGreaterThan(0)
-  // The server sends only the last four digits; the full number is encrypted (#1129).
+  // The server sends no part of the caller's number: not the digits, not the last four (#1129, #2262).
   const call = data.calls[0]
-  expect(call.callerLast4).toBeTruthy()
+  expect(call.id).toBeTruthy()
   expect(call.callerNumber).toBeUndefined()
+  expect(call).not.toHaveProperty('callerLast4')
 })
 
 When('the call history is filtered by status {string}', async ({ request, world }, filterStatus: string) => {

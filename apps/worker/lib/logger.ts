@@ -147,7 +147,7 @@ export function getCorrelation(): CorrelationContext {
 // Field names the telephony/messaging code actually uses for caller/callee
 // identifiers, in addition to the generic "phone"/"email" style names.
 // `caller`/`called` are unanchored so they also catch compound names like
-// `callerNumber`, `callerLast4`, `calledNumber`. `from`/`to`/`number`/`address`
+// `callerNumber`, `calledNumber`. `from`/`to`/`number`/`address`
 // are anchored to whole-key matches (like the pre-existing `^pin$`) so we don't
 // blanket-redact unrelated fields such as `fromDate`/`toDate`/`pageNumber`
 // (the latter is already covered by the `phone` alternative for phone-ish uses).

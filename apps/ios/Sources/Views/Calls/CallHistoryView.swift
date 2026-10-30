@@ -99,7 +99,7 @@ final class CallHistoryViewModel {
                 }
 
                 // Attempt E2EE decryption of call metadata (admin envelope)
-                var callerNumber = dto.callerLast4
+                var callerNumber: String?
                 var answeredBy = dto.answeredBy
 
                 if let encryptedContent = dto.encryptedContent,
@@ -300,10 +300,12 @@ struct CallHistoryView: View {
 
     // MARK: - Helpers
 
-    /// Mask the caller number for privacy (show last 4 digits only).
+    /// The title of a row: the caller's number, masked, when the admin envelope opened.
+    /// The server sends no part of the number, so every other row is titled by what it
+    /// is: a call (its status, duration and time sit beneath and beside it).
     private func maskedCallerNumber(_ number: String?) -> String {
         guard let number, !number.isEmpty else {
-            return NSLocalizedString("calls_unknown_caller", comment: "Unknown Caller")
+            return NSLocalizedString("badge_call", comment: "Call")
         }
         let digits = number.filter(\.isNumber)
         if digits.count > 4 {

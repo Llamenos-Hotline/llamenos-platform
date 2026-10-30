@@ -24,7 +24,7 @@ import { createLogger } from '../lib/logger'
 const logger = createLogger('call-simulation')
 
 export type SimulateIncomingCallResult =
-  | { ok: true; callId: string; callerLast4: string; volunteersNotified: number }
+  | { ok: true; callId: string; volunteersNotified: number }
   | { ok: false; status: 403 | 409 | 422 | 500; code: 'banned' | 'mock-not-enabled' | 'no-volunteers' | 'ringing-failed' }
 
 /** A fictional NANP-style 555 number — never routable, never a real subscriber. */
@@ -69,7 +69,7 @@ export async function simulateIncomingCall(params: {
       ? { ok: false, status: 422, code: 'no-volunteers' }
       : { ok: false, status: 500, code: 'ringing-failed' }
   }
-  return { ok: true, callId, callerLast4: callerNumber.slice(-4), volunteersNotified: result.volunteersNotified }
+  return { ok: true, callId, volunteersNotified: result.volunteersNotified }
 }
 
 export type SimulateCallerHangupResult =

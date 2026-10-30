@@ -149,7 +149,6 @@ class ScreenshotTests {
             status = ActiveCallResponseStatus.Completed,
             answeredBy = samplePubkey,
             duration = 185.0,
-            callerLast4 = "7890",
         ),
         CallHistoryResponseCall(
             id = "call-002",
@@ -157,7 +156,6 @@ class ScreenshotTests {
             status = ActiveCallResponseStatus.Completed,
             answeredBy = samplePubkey2,
             duration = 423.0,
-            callerLast4 = "3456",
         ),
         CallHistoryResponseCall(
             id = "call-003",
@@ -165,7 +163,6 @@ class ScreenshotTests {
             status = ActiveCallResponseStatus.Unanswered,
             answeredBy = null,
             duration = null,
-            callerLast4 = "1122",
         ),
         CallHistoryResponseCall(
             id = "call-004",
@@ -173,7 +170,6 @@ class ScreenshotTests {
             status = ActiveCallResponseStatus.Completed,
             answeredBy = samplePubkey,
             duration = 612.0,
-            callerLast4 = "9988",
         ),
     )
 
@@ -502,7 +498,6 @@ class ScreenshotTests {
                 connectionState = WebSocketService.ConnectionState.CONNECTED,
                 currentCall = ActiveCall(
                     id = "call-active-001",
-                    callerNumber = "+1 (555) 123-****",
                     answeredBy = samplePubkey,
                     startedAt = sampleTimestamp,
                     status = "in-progress",

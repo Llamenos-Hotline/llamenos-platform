@@ -889,7 +889,6 @@ dev.post('/test-simulate/incoming-call', async (c) => {
   await services.calls.addCall(hubId, {
     callId,
     callerNumberSealed: sealCallerNumber(body.callerNumber, callId, c.env.SERVER_KEK),
-    callerLast4: body.callerNumber?.slice(-4),
   })
 
   // Publish call ring event (mirrors real telephony flow)
@@ -928,9 +927,7 @@ dev.post('/test-simulate/answer-call', async (c) => {
   // The simulated pickup stands in for a volunteer's phone leg being bridged
   // (/api/telephony/user-answer), which is where the real flow writes this entry.
   // The REST answer route no longer does for a leg it cannot bridge.
-  await audit(services.audit, 'callAnswered', body.pubkey, {
-    callerLast4: answered.callerLast4 || '',
-  }, undefined, answered.hubId || null)
+  await audit(services.audit, 'callAnswered', body.pubkey, {}, undefined, answered.hubId || null)
 
   // Publish call update event (mirrors real telephony flow)
   // Await to ensure event is in relay before returning — prevents race conditions in E2E tests

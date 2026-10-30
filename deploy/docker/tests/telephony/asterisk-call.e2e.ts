@@ -61,7 +61,6 @@ const UNANSWERED_PREFIX = '+1555021'
 
 interface CallRecord {
   id: string
-  callerLast4?: string
   answeredBy?: string | null
   status?: string
 }
@@ -138,16 +137,17 @@ async function channelsFor(caller: string): Promise<AriChannel[]> {
   return (await ari<AriChannel[]>('/channels')).filter((ch) => ch.caller.number === caller)
 }
 
-async function activeCall(request: APIRequestContext, hubId: string, callerLast4: string): Promise<CallRecord | undefined> {
+/** Each test provisions its own hub, so the call in it is the one the test placed. */
+async function activeCall(request: APIRequestContext, hubId: string): Promise<CallRecord | undefined> {
   const { status, data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/active`)
   expect(status).toBe(200)
-  return data.calls.find((c) => c.callerLast4 === callerLast4)
+  return data.calls?.[0]
 }
 
-async function historyCall(request: APIRequestContext, hubId: string, callerLast4: string): Promise<CallRecord | undefined> {
+async function historyCall(request: APIRequestContext, hubId: string): Promise<CallRecord | undefined> {
   const { status, data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/history`)
   expect(status).toBe(200)
-  return data.calls.find((c) => c.callerLast4 === callerLast4)
+  return data.calls?.[0]
 }
 
 async function auditActions(request: APIRequestContext, hubId: string): Promise<string[]> {
@@ -216,12 +216,11 @@ async function provisionHotline(
 
 /** An answered call runs its course: the volunteer answers, talks, hangs up, and both legs are released */
 async function expectAnsweredAndCompleted(request: APIRequestContext, hubId: string, caller: string, volunteerPubkey: string) {
-  const callerLast4 = caller.slice(-4)
   await expect
-    .poll(() => activeCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call answered by the volunteer' })
+    .poll(() => activeCall(request, hubId), { timeout: 30_000, message: 'call answered by the volunteer' })
     .toMatchObject({ answeredBy: volunteerPubkey, status: 'in-progress' })
   await expect
-    .poll(() => historyCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call completed in history' })
+    .poll(() => historyCall(request, hubId), { timeout: 30_000, message: 'call completed in history' })
     .toMatchObject({ answeredBy: volunteerPubkey, status: 'completed' })
   await expect.poll(async () => (await channelsFor(caller)).length, { timeout: 15_000 }).toBe(0)
 }
@@ -229,7 +228,6 @@ async function expectAnsweredAndCompleted(request: APIRequestContext, hubId: str
 test('an inbound SIP call rings the volunteer, bridges them to the caller, and is recorded', async ({ request }) => {
   const { hotline, hubId, volunteer } = await provisionHotline(request, uniqueNumber('+1555020'))
   const caller = uniqueNumber('+1555777')
-  const callerLast4 = caller.slice(-4)
 
   carrierCli('dialplan set global VOLUNTEER_TALK_SECONDS 12')
   placeCall(caller, hotline, 60)
@@ -237,7 +235,7 @@ test('an inbound SIP call rings the volunteer, bridges them to the caller, and i
   // The worker learnt about the call, rang the volunteer's phone, and accepted
   // the volunteer's pickup: the call is in progress and answered by them.
   await expect
-    .poll(() => activeCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call answered by the volunteer' })
+    .poll(() => activeCall(request, hubId), { timeout: 30_000, message: 'call answered by the volunteer' })
     .toMatchObject({ answeredBy: volunteer.pubkey, status: 'in-progress' })
 
   // On the PBX: the caller and the volunteer's leg share one mixing bridge.
@@ -251,7 +249,7 @@ test('an inbound SIP call rings the volunteer, bridges them to the caller, and i
 
   // The volunteer hangs up: their leg's `completed` status ends the call...
   await expect
-    .poll(() => historyCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call completed in history' })
+    .poll(() => historyCall(request, hubId), { timeout: 30_000, message: 'call completed in history' })
     .toMatchObject({ answeredBy: volunteer.pubkey, status: 'completed' })
   // ...and the caller is released with them, not left alone in the bridge.
   await expect.poll(async () => (await channelsFor(caller)).length, { timeout: 15_000 }).toBe(0)
@@ -275,13 +273,12 @@ test('an inbound SIP call rings the volunteer, bridges them to the caller, and i
 test('a caller who hangs up while the volunteer phone rings ends as unanswered, and the ringing stops', async ({ request }) => {
   const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX))
   const caller = uniqueNumber('+1555778')
-  const callerLast4 = caller.slice(-4)
 
   // The multi-language menu waits 8 s for a digit; hang up once the phone is ringing.
   placeCall(caller, hotline, 14)
 
   await expect
-    .poll(() => activeCall(request, hubId, callerLast4), { timeout: 20_000, message: 'call ringing' })
+    .poll(() => activeCall(request, hubId), { timeout: 20_000, message: 'call ringing' })
     .toMatchObject({ status: 'ringing' })
   await expect
     .poll(async () => (await channelsFor(caller)).length, { timeout: 10_000, message: 'volunteer leg dialled' })
@@ -289,7 +286,7 @@ test('a caller who hangs up while the volunteer phone rings ends as unanswered, 
 
   // The caller's hangup reaches the worker (queue-exit: hangup) and ends the call.
   await expect
-    .poll(() => historyCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call unanswered in history' })
+    .poll(() => historyCall(request, hubId), { timeout: 30_000, message: 'call unanswered in history' })
     .toMatchObject({ status: 'unanswered' })
   expect(await auditActions(request, hubId)).toContain('callMissed')
 
