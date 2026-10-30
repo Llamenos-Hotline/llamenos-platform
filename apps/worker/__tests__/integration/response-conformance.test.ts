@@ -54,7 +54,6 @@ vi.mock('../../lib/auth', async (importOriginal) => {
 })
 
 import { describe, it, expect, vi } from 'vitest'
-import { z } from 'zod'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import { assertConformsToSchema } from '../helpers/response-conformance'
@@ -76,9 +75,9 @@ import { healthResponseSchema, livenessResponseSchema, readinessResponseSchema }
 import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { configResponseSchema } from '@protocol/schemas/config'
 import { activeCallsResponseSchema, todayCountResponseSchema, callPresenceResponseSchema } from '@protocol/schemas/calls'
-import type { activeCalls } from '../../db/schema'
+import type { activeCalls, noteReplies } from '../../db/schema'
 import { hubListResponseSchema, hubDetailResponseSchema } from '@protocol/schemas/hubs'
-import { noteListResponseSchema, noteResponseSchema } from '@protocol/schemas/notes'
+import { noteListResponseSchema, noteStoredResponseSchema, noteReplyStoredResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
 import { inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
 import { userListResponseSchema, userResponseSchema } from '@protocol/schemas/users'
@@ -517,30 +516,11 @@ describe('Notes Routes — response conformance', () => {
     expect(typeof result.parsed.limit).toBe('number')
   })
 
-  // The note object inside POST /notes' 201 body. The envelope is `{ note }`,
-  // which is the shape the server has sent since 3f02c3291 (2026-05-04) and the
-  // only shape any client has ever read: src/client/lib/api/notes.ts types
-  // createNote/updateNote as `{ note: EncryptedNote }`.
-  //
-  // This case originally asserted the BARE note ("flat, no wrapper"), because
-  // the commit that introduced it (971c2e13e, #122) also changed the handler to
-  // `c.json(note, 201)` to match the bare `noteResponseSchema` its
-  // `describeRoute` declares. Two days later 3f02c3291 put the wrapper back —
-  // the desktop client was reading `res.note.id` and got `undefined` — and left
-  // the declaration alone. Nothing noticed for five months because this file has
-  // never run anywhere (#1167): no workflow invoked it, and it could not even
-  // load by hand.
-  //
-  // The wrapper is the settled contract, not the regression: PR #1386 adds
-  // `noteDetailResponseSchema` for exactly this `{ note }` body and lists
-  // "routes/notes.ts: POST/PATCH describeRoute should point at
-  // noteDetailResponseSchema" as outstanding work. So the ROUTE'S DECLARATION is
-  // the remaining defect, tracked there — not the handler, and not this test's
-  // validation of the note itself. When that schema lands, replace this inline
-  // envelope with it.
-  const notePostResponseSchema = z.object({ note: noteResponseSchema })
-
-  it('POST /notes — note body conforms to noteResponseSchema inside the { note } envelope', async () => {
+  // POST /notes answers `{ note }` — the shape src/client/lib/api/notes.ts and
+  // Android's NoteStoredResponse decode — and the route declares exactly that
+  // protocol schema, so this asserts against the declaration rather than an
+  // inline copy of it.
+  it('POST /notes — conforms to noteStoredResponseSchema', async () => {
     const mockRecords = {
       createNote: vi.fn().mockResolvedValue(mockNote),
     }
@@ -565,7 +545,7 @@ describe('Notes Routes — response conformance', () => {
       },
     })
 
-    const result = await assertConformsToSchema(app, 'POST', '/notes', notePostResponseSchema, {
+    const result = await assertConformsToSchema(app, 'POST', '/notes', noteStoredResponseSchema, {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',
@@ -576,6 +556,49 @@ describe('Notes Routes — response conformance', () => {
     })
     expect(result.parsed.note.encryptedContent).toBe('encrypted-data-base64')
     expect(result.parsed.note.authorPubkey).toBe(MOCK_PUBKEY)
+  })
+
+  // POST /notes/:id/replies answers `{ reply }` and DECLARED the bare
+  // `noteResponseSchema` — so the OpenAPI document and the Swift/Kotlin types
+  // generated from it described a body the server has never sent (#1641). Not
+  // only the wrapper was wrong: a reply is a `note_replies` row, with no
+  // `updatedAt` and `readerEnvelopes` instead of `adminEnvelopes`, so even
+  // `{ reply: noteResponseSchema }` fails against the real body. The fixture is
+  // therefore the ROW the service returns, not something shaped like the
+  // schema (#1362), so a route that leaked or dropped a column would show here.
+  it('POST /notes/:id/replies — conforms to noteReplyStoredResponseSchema', async () => {
+    const adminKey = 'a'.repeat(64)
+    const replyRow: typeof noteReplies.$inferSelect = {
+      id: 'b2c3d4e5-f6a7-4890-8bcd-ef1234567890',
+      noteId: mockNote.id,
+      authorPubkey: MOCK_PUBKEY,
+      encryptedContent: 'encrypted-reply-base64',
+      readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
+      createdAt: new Date(),
+    }
+    const mockRecords = {
+      getNote: vi.fn().mockResolvedValue({ ...mockNote, hubId: DEFAULT_HUB_ID }),
+      createReply: vi.fn().mockResolvedValue(replyRow),
+    }
+    const { app, env } = buildApp('/notes', notesRoutes, {
+      services: {
+        records: mockRecords,
+        identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([adminKey]) },
+      },
+    })
+
+    const result = await assertConformsToSchema(app, 'POST', `/notes/${mockNote.id}/replies`, noteReplyStoredResponseSchema, {
+      body: {
+        encryptedContent: 'encrypted-reply',
+        readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
+      },
+      expectedStatus: 201,
+      env,
+    })
+    expect(result.parsed.reply.id).toBe(replyRow.id)
+    expect(result.parsed.reply.noteId).toBe(mockNote.id)
+    expect(result.parsed.reply.readerEnvelopes).toHaveLength(1)
+    expect(mockRecords.createReply).toHaveBeenCalledWith(mockNote.id, expect.objectContaining({ authorPubkey: MOCK_PUBKEY }))
   })
 })
 

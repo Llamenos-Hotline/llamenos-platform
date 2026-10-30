@@ -171,6 +171,9 @@ const REFERENCED_BY_NAME = new Set([
   'AssigneeEnvelopeGap',
   'AssigneeRecipient',
   'AssigneeEnvelopeEntry',
+  // #1641 — `{ reply }` would otherwise mint a second, identical `Reply` type,
+  // and a bare `Reply` is one Swift-module name away from a collision.
+  'NoteReplyResponse',
 ])
 
 /**
