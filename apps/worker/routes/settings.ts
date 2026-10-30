@@ -75,6 +75,10 @@ import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } fr
  *   `/api/settings` ({@link hubSettingsRoutes} does not carry it), so under a
  *   hub these paths do not exist and no permission a hub can grant reaches
  *   them. A handler here never consults a hub.
+ * - `deploymentReads`: deployment-wide values every hub's MEMBERS must read to
+ *   do their work (the custom-field vocabulary a note is written in). Mounted
+ *   on both, because a hub-only member holds no global role and the unscoped
+ *   mount would refuse them. Reads only — a write here is the defect again.
  *
  * A new setting goes on `deployment` unless it has a per-hub value. The set of
  * routes reachable under a hub is pinned by
@@ -83,6 +87,7 @@ import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } fr
  */
 const scoped = new Hono<AppEnv>()
 const deployment = new Hono<AppEnv>()
+const deploymentReads = new Hono<AppEnv>()
 
 /**
  * Which hub a `scoped` settings request targets. The hub the request was routed
@@ -165,7 +170,7 @@ deployment.patch('/transcription',
 )
 
 // --- Custom fields: readable by settings:read (filtered by manage-fields), writable by admin ---
-deployment.get('/custom-fields',
+deploymentReads.get('/custom-fields',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get custom field definitions',
@@ -1477,13 +1482,16 @@ deployment.get('/geocoding/test',
 /** `/api/settings` — the platform defaults of the per-hub settings, and every deployment-wide setting. */
 const settingsRoutes = new Hono<AppEnv>()
 settingsRoutes.route('/', scoped)
+settingsRoutes.route('/', deploymentReads)
 settingsRoutes.route('/', deployment)
 export default settingsRoutes
 
 /**
- * `/api/hubs/:hubId/settings` — only the settings a hub has its own value of.
- * Deployment-wide settings are deliberately absent: a hub admin reaching
- * `/hubs/A/settings/messaging` gets a 404, not the shared sender credentials.
+ * `/api/hubs/:hubId/settings` — the settings a hub has its own value of, and
+ * the deployment vocabulary its members read. Every deployment-wide write is
+ * deliberately absent: a hub admin reaching `/hubs/A/settings/messaging` gets
+ * a 404, not the shared sender credentials.
  */
 export const hubSettingsRoutes = new Hono<AppEnv>()
 hubSettingsRoutes.route('/', scoped)
+hubSettingsRoutes.route('/', deploymentReads)

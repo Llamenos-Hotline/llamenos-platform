@@ -69,6 +69,9 @@ const HUB_REACHABLE = [
   'GET /cms/templates',
   'GET /cms/templates/:id',
   'GET /cms/templates/updates',
+  // A deployment-wide READ every member needs to write a note; a hub-only
+  // member has no global role to read it unscoped (iOS NotesViewModel).
+  'GET /custom-fields',
   'GET /ivr-audio',
   'GET /ivr-audio/:promptType/:language',
   'GET /ivr-languages',
@@ -98,7 +101,7 @@ const HUB_REACHABLE = [
 /** Settings the whole deployment has exactly one of. Unscoped only. */
 const DEPLOYMENT_ONLY = [
   'GET /transcription', 'PATCH /transcription',
-  'GET /custom-fields', 'PUT /custom-fields',
+  'PUT /custom-fields',
   'GET /webauthn', 'PATCH /webauthn',
   'GET /messaging', 'PATCH /messaging',
   'POST /messaging/test', 'POST /messaging/telegram/register-webhook',
