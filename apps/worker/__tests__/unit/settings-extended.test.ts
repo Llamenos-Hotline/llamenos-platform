@@ -1503,11 +1503,17 @@ describe('SettingsService.archiveHub', () => {
 // ---------------------------------------------------------------------------
 
 describe('SettingsService.deleteHub', () => {
+  const noProviderMedia = {
+    deleteForCalls: async () => ({ deleted: 0, failed: [] }),
+    deleteForHub: async () => ({ deleted: 0, failed: [] }),
+    retryPending: async () => ({ deleted: 0, failed: [] }),
+  }
+
   it('throws 404 when hub not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.deleteHub('nonexistent', { eraseForHub: vi.fn() })).rejects.toMatchObject({ status: 404 })
+    await expect(service.deleteHub('nonexistent', { eraseForHub: vi.fn() }, noProviderMedia)).rejects.toMatchObject({ status: 404 })
   })
 
   it('executes transaction to delete hub and cascade data', async () => {
@@ -1529,7 +1535,7 @@ describe('SettingsService.deleteHub', () => {
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
     const eraseForHub = vi.fn().mockResolvedValue(undefined)
-    const result = await service.deleteHub('hub-1', { eraseForHub })
+    const result = await service.deleteHub('hub-1', { eraseForHub }, noProviderMedia)
     expect(result).toEqual({ ok: true })
     expect(eraseForHub).toHaveBeenCalledWith('hub-1')
     expect(eraseForHub.mock.invocationCallOrder[0], 'sealed recordings go before the rows that name them')
@@ -1542,7 +1548,7 @@ describe('SettingsService.deleteHub', () => {
     ;(db as any).transaction = vi.fn()
     const refusal = new SealedRecordingDeleteError('hub-1', [{ callId: 'c1', error: 'store down' }])
 
-    await expect(service.deleteHub('hub-1', { eraseForHub: vi.fn().mockRejectedValue(refusal) }))
+    await expect(service.deleteHub('hub-1', { eraseForHub: vi.fn().mockRejectedValue(refusal) }, noProviderMedia))
       .rejects.toMatchObject({ status: 502 })
     expect((db as any).transaction, 'the rows that name the blobs must survive the refusal').not.toHaveBeenCalled()
   })
