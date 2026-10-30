@@ -28,6 +28,7 @@
  * All provider calls go through the `TelephonyAdapter` (never a provider API
  * directly), resolved per hub by the caller.
  */
+import { scrubProviderSids } from '../lib/provider-ref'
 import { and, eq, inArray, isNotNull, isNull, lt, sql, type SQL } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, providerRecordings } from '../db/schema'
@@ -353,7 +354,8 @@ export class ProviderRecordingsService {
       .set({
         deleteAttempts: sql`${providerRecordings.deleteAttempts} + 1`,
         lastAttemptAt: new Date(),
-        lastError: error.slice(0, 500),
+        // The provider's own error text can name the call or recording it refused (#2333).
+        lastError: scrubProviderSids(error).slice(0, 500),
       })
       .where(eq(providerRecordings.id, row.id))
     const isLog = row.kind === 'call-log'

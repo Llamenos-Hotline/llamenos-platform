@@ -22,6 +22,7 @@
     "typecheck": "bunx tsc --noEmit",
     "check:ipc-allowlist": "bash scripts/check-ipc-allowlist.sh",
     "bootstrap-admin": "bun run scripts/bootstrap-admin.ts",
+    "provider-ref": "bun run scripts/provider-ref.ts",
     "test": "PLAYWRIGHT_TEST=true bunx playwright test",
     "test:build": "PLAYWRIGHT_TEST=true bun run build",
     "test:live": "bunx playwright test --config playwright.live.config.ts",

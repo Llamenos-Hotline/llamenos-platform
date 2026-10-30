@@ -29,6 +29,7 @@ import {
 } from '../lib/crypto'
 import { getClientIp, CLIENT_FINGERPRINT_PREFIX } from '../lib/client-ip'
 import { createLogger } from '../lib/logger'
+import { withProviderRefs } from '../lib/provider-ref'
 import { ServiceError } from './settings'
 import type { ErasureService } from './erasure'
 
@@ -361,7 +362,7 @@ export class AuditService {
   async log(
     action: string,
     actorPubkey: string,
-    details: Record<string, unknown> = {},
+    rawDetails: Record<string, unknown> = {},
     hubId?: string | null,
     /** Explicit timestamp — only for seeding the historical sample dataset. Entries must be appended in chronological order. */
     at?: Date,
@@ -370,6 +371,13 @@ export class AuditService {
     if (actorPubkey !== 'system' && !/^[0-9a-f]{64}$/.test(actorPubkey)) {
       throw new ServiceError(400, 'Invalid actorPubkey format')
     }
+
+    // A provider's identifier for a call, recording or message joins to the provider's
+    // CDR, which holds the caller's number (#2333). Entries by 'system' are stored as
+    // plaintext and the rest are read back by every admin, so no entry carries one: the
+    // identifier is replaced by its keyed ref (lib/provider-ref.ts) before the hash chain
+    // commits to the details.
+    const details = withProviderRefs(rawDetails)
 
     const id = crypto.randomUUID()
 

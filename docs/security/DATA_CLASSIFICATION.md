@@ -65,8 +65,8 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 
 | Field | Classification | Retention | Notes |
 |-------|---------------|-----------|-------|
-| `callId` | Plaintext | Indefinite | Unique call identifier |
-| `callSid` | Plaintext | Indefinite | Telephony provider call ID |
+| `callId` | Plaintext | Indefinite | Unique call identifier. Equal to the telephony provider's call ID, so it is a join key into the provider's CDR: stored here as the working key, but never written to a log or audit row — those carry a keyed provider ref (PROTOCOL §4.8, "Provider identifiers in logs and audit rows") |
+| `callSid` | Plaintext | Indefinite | Telephony provider call ID (same value as `callId`; same rule) |
 | `startedAt` | Plaintext | Indefinite | Call start timestamp |
 | `duration` | Plaintext | Indefinite | Call duration in seconds |
 | `answeredBy` | Plaintext | Indefinite | User pubkey who answered |
