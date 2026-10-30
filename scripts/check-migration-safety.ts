@@ -171,6 +171,13 @@ function readSnapshot(metaDir: string, file: string | undefined): DrizzleSnapsho
 
 export interface LiveColumn {
   notNull: boolean
+  /**
+   * `notNull` is a fact, not a presumption: read off the catalog, or declared
+   * by the replaced release's snapshot. `--ci` presumes NOT NULL for a column
+   * no snapshot declares, which is the safe guess for the rules that fail on
+   * it and the unsafe one for anything that would pass on it.
+   */
+  provenNotNull: boolean
 }
 
 /**
@@ -193,7 +200,7 @@ export class CatalogSchema implements LiveSchema {
     columns: { schema: string; table: string; column: string; not_null: boolean }[],
   ) {
     for (const r of relations) this.relations.add(`${r.schema}.${r.name}`)
-    for (const c of columns) this.columns.set(`${c.schema}.${c.table}.${c.column}`, { notNull: c.not_null })
+    for (const c of columns) this.columns.set(`${c.schema}.${c.table}.${c.column}`, { notNull: c.not_null, provenNotNull: c.not_null })
   }
 
   static async read(sql: SQL): Promise<CatalogSchema> {
@@ -288,7 +295,71 @@ export class PresumedSchema implements LiveSchema {
 
   column(schema: string, table: string, column: string): LiveColumn | undefined {
     if (!this.relation(schema, table) || this.createdColumns.has(`${schema}.${table}.${column}`)) return undefined
-    return { notNull: this.previous.column(schema, table, column)?.notNull ?? true }
+    const declared = this.previous.column(schema, table, column)
+    return { notNull: declared?.notNull ?? true, provenNotNull: declared?.notNull ?? false }
+  }
+}
+
+/**
+ * The live schema as the pending migrations leave it for N-1, as far as
+ * "is this column proven NOT NULL" goes. The gate judges every statement
+ * against the schema before the migration, so a `DROP NOT NULL` elsewhere in
+ * the pending set would otherwise go unseen: from then on N-1 can write the
+ * NULL that a `WHERE col IS NULL` unique index is exempt for never seeing.
+ *
+ * A `DROP NOT NULL` anywhere in the pending set disqualifies the column,
+ * whatever the statement order or file: a migration's statements are no place
+ * to infer temporal safety. It removes only `provenNotNull`; `notNull` stays
+ * the pre-migration fact the other rules read. A DO block that mentions
+ * `DROP NOT NULL` cannot be attributed to a column and disqualifies them all.
+ */
+export class RelaxedSchema implements LiveSchema {
+  private readonly relaxed = new Set<string>()
+  private relaxesAny = false
+
+  constructor(
+    private readonly inner: LiveSchema,
+    statements: string[],
+  ) {
+    for (const sql of statements) {
+      let tree: unknown
+      try {
+        tree = parseSync(sql)
+      } catch {
+        continue // judged, and failed, as a parse error by the lint
+      }
+      this.collect(tree)
+    }
+  }
+
+  private collect(value: unknown): void {
+    if (Array.isArray(value)) return value.forEach((v) => this.collect(v))
+    if (value === null || typeof value !== 'object') return
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'AlterTableStmt') {
+        const s = child as AlterTableStmt
+        const t = rel(s.relation)
+        for (const c of s.cmds ?? []) {
+          if (!('AlterTableCmd' in c) || c.AlterTableCmd.subtype !== 'AT_DropNotNull') continue
+          if (t && c.AlterTableCmd.name) this.relaxed.add(`${t.schema}.${t.name}.${c.AlterTableCmd.name}`)
+          else this.relaxesAny = true // a form this gate cannot attribute
+        }
+      } else if (key === 'DoStmt') {
+        const body = (child as DoStmt).args?.flatMap((a) => ('DefElem' in a ? [str(a.DefElem.arg) ?? ''] : [])) ?? []
+        if (body.some((b) => /drop\s+not\s+null/i.test(b))) this.relaxesAny = true
+      }
+      this.collect(child)
+    }
+  }
+
+  relation(schema: string, name: string): boolean {
+    return this.inner.relation(schema, name)
+  }
+
+  column(schema: string, table: string, column: string): LiveColumn | undefined {
+    const live = this.inner.column(schema, table, column)
+    if (!live || !(this.relaxesAny || this.relaxed.has(`${schema}.${table}.${column}`))) return live
+    return { ...live, provenNotNull: false }
   }
 }
 
@@ -600,6 +671,35 @@ function existingConstraintColumn(
   }
 }
 
+/**
+ * Does a partial index's predicate provably match no row the table holds now?
+ * Only the one shape that can be proved from the schema alone: `col IS NULL`
+ * on a column that is NOT NULL before this migration runs. No existing row has
+ * NULL there, and N-1 cannot write one (it could not before), so the index has
+ * nothing to reject. A top-level AND is empty when any one conjunct is (drizzle
+ * writes `closed_at IS NULL AND hub_id IS NULL`); OR, NOT and every other
+ * predicate may match rows, and are judged as if there were none.
+ */
+function matchesNoExistingRow(
+  where: Node | undefined,
+  table: { schema: string; name: string },
+  live: LiveSchema,
+): boolean {
+  if (!where) return false
+  if ('BoolExpr' in where) {
+    return where.BoolExpr.boolop === 'AND_EXPR' && (where.BoolExpr.args ?? []).some((a) => matchesNoExistingRow(a, table, live))
+  }
+  if (!('NullTest' in where) || where.NullTest.nulltesttype !== 'IS_NULL') return false
+  const arg = where.NullTest.arg
+  if (!arg || !('ColumnRef' in arg)) return false
+  const fields = arg.ColumnRef.fields ?? []
+  const column = str(fields.at(-1))
+  if (column === undefined) return false
+  // `t.col` or `schema.t.col` must name this table; a bare `col` cannot name another.
+  if (fields.length > 1 && str(fields.at(-2)) !== table.name) return false
+  return live.column(table.schema, table.name, column)?.provenNotNull === true
+}
+
 function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[]): void {
   switch (key) {
     case 'AlterTableStmt':
@@ -661,7 +761,7 @@ function lintNode(key: string, value: unknown, ctx: LintContext, out: Finding[])
         'IndexElem' in p ? (p.IndexElem.name ? [p.IndexElem.name] : columnRefs(p.IndexElem.expr)) : [],
       )
       const hit = cols.find((c) => ctx.live.column(t.schema, t.name, c) !== undefined)
-      if (hit) {
+      if (hit && !matchesNoExistingRow(s.whereClause, t, ctx.live)) {
         out.push({ rule: 'unique-index-existing', object: { kind: 'column', schema: t.schema, table: t.name, column: hit } })
       }
       return
@@ -949,7 +1049,8 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
   const previousSnapshot = previousSnapshotFile(metaDir, input.settled)
   const previous = new SchemaView(readSnapshot(metaDir, previousSnapshot))
   const next = readSnapshot(metaDir, snapshotFileAtOrBefore(metaDir))
-  const ctx = lintContext(input.live, next)
+  const pendingStatements = input.pending.flatMap((f) => splitMigrationStatements(readFileSync(join(migrationsDir, f), 'utf-8')))
+  const ctx = lintContext(new RelaxedSchema(input.live, pendingStatements), next)
 
   // ── 2. Destructive-DDL lint, with verified annotations ─────────────────────
   let allowed = 0
