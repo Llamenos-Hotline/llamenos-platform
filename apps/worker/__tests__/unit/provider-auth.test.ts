@@ -53,16 +53,35 @@ describe('ProviderAuthMonitor.admit', () => {
     expect(m.admit('10.0.0.2', 'own_account_signature_invalid')).toBe(true)
   })
 
-  it('caps IP-refused classification instance-wide, however many prefixes the flood rotates through', () => {
+  it('bounds IP-refused classification instance-wide, however many prefixes the flood rotates through', () => {
     const c = clock()
-    const m = new ProviderAuthMonitor({ now: c.now })
+    let seed = 42
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
+    const m = new ProviderAuthMonitor({ now: c.now, random })
+    const offered = 20 * IP_REFUSED_CLASSIFICATIONS_PER_WINDOW
     let admitted = 0
-    for (let i = 0; i < IP_REFUSED_CLASSIFICATIONS_PER_WINDOW + 500; i++) {
-      if (m.admit(`10.${(i >> 8) & 0xff}.${i & 0xff}.1`, 'ip')) admitted++
+    for (let i = 0; i < offered; i++) {
+      if (m.admit(`10.${(i >> 8) & 0xff}.${i & 0xff}.1`, 'ip') || m.admit(`2001:db8:${i.toString(16)}::1`, 'ip')) admitted++
     }
-    expect(admitted).toBe(IP_REFUSED_CLASSIFICATIONS_PER_WINDOW)
+    // budget × (1 + ln(offered/budget)) expected; generous slack for the PRNG.
+    const bound = IP_REFUSED_CLASSIFICATIONS_PER_WINDOW * (1 + Math.log((2 * offered) / IP_REFUSED_CLASSIFICATIONS_PER_WINDOW))
+    expect(admitted).toBeGreaterThan(IP_REFUSED_CLASSIFICATIONS_PER_WINDOW)
+    expect(admitted).toBeLessThan(bound * 1.2)
+  })
+
+  it('past the budget a request is sampled, never refused outright — a flood cannot claim the whole budget first', () => {
+    const c = clock()
+    let roll = 0.999
+    const m = new ProviderAuthMonitor({ now: c.now, random: () => roll })
+    for (let i = 0; i < IP_REFUSED_CLASSIFICATIONS_PER_WINDOW; i++) {
+      expect(m.admit(`10.${(i >> 8) & 0xff}.${i & 0xff}.1`, 'ip')).toBe(true)
+    }
+    expect(m.admit('172.16.0.1', 'ip'), 'over budget and the roll misses').toBe(false)
+    roll = 0
+    expect(m.admit('172.16.0.1', 'ip'), 'the same source, sampled in').toBe(true)
     c.advance(REJECTION_DAMPING_MS)
-    expect(m.admit('172.16.0.1', 'ip')).toBe(true)
+    roll = 0.999
+    expect(m.admit('172.16.1.1', 'ip'), 'a new window has a fresh budget').toBe(true)
   })
 
   it('a full damping table evicts rather than refusing every new source', () => {

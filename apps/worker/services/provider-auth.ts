@@ -81,12 +81,17 @@ export const SIGNAL_MIN_INTERVAL_MS = 1_000
 const DAMPING_TABLE_LIMIT = 4096
 
 /**
- * Instance-wide ceiling on IP-refused requests whose signature is evaluated,
+ * Instance-wide budget of IP-refused requests whose signature is evaluated,
  * per {@link REJECTION_DAMPING_MS}. The per-prefix damping bounds one source;
  * this bounds a flood spread across many prefixes, so rotating sources (or
- * filling the damping table) can never lift the bound on pre-auth hashing.
- * Ten a second of ≤ 64 KiB HMACs is negligible work, and a stale allowlist
- * needs exactly one admitted request to be diagnosed.
+ * filling the damping table) cannot lift the bound on pre-auth hashing. Ten a
+ * second of ≤ 64 KiB HMACs is negligible work.
+ *
+ * Past the budget, a request is still classified with probability
+ * budget / offered — never refused outright — so a flood cannot claim the
+ * whole budget first and silence the one correctly signed request that
+ * diagnoses a stale allowlist; it can only dilute it. The expected work stays
+ * bounded: budget × (1 + ln(offered / budget)) per window.
  */
 export const IP_REFUSED_CLASSIFICATIONS_PER_WINDOW = 600
 
@@ -118,6 +123,8 @@ export function sourcePrefix(ip: string): string {
 export interface ProviderAuthMonitorOpts {
   /** Injected clock, for tests. */
   now?: () => number
+  /** Injected randomness in [0, 1), for tests of the over-budget sampling. */
+  random?: () => number
 }
 
 /**
@@ -130,11 +137,14 @@ export class ProviderAuthMonitor {
   private readonly signals = new Map<string, { at: number; held: number }>()
   private readonly lastAccepted = new Map<string, number>()
   private ipWindowStart = 0
-  private ipWindowCount = 0
+  private ipOffered = 0
+  private ipAdmitted = 0
   private readonly now: () => number
+  private readonly random: () => number
 
   constructor(opts: ProviderAuthMonitorOpts = {}) {
     this.now = opts.now ?? (() => Date.now())
+    this.random = opts.random ?? Math.random
   }
 
   /**
@@ -146,20 +156,14 @@ export class ProviderAuthMonitor {
    * let a flood across many prefixes silence a real diagnosis, and the body
    * cap already bounds what an admitted rejection costs. For `ip` (refused
    * before any hashing) the instance-wide
-   * {@link IP_REFUSED_CLASSIFICATIONS_PER_WINDOW} applies on top.
+   * {@link IP_REFUSED_CLASSIFICATIONS_PER_WINDOW} budget applies on top.
    */
   admit(sourceIp: string, cls: DampingClass): boolean {
     const now = this.now()
-    if (cls === 'ip') {
-      if (now - this.ipWindowStart >= REJECTION_DAMPING_MS) {
-        this.ipWindowStart = now
-        this.ipWindowCount = 0
-      }
-      if (this.ipWindowCount >= IP_REFUSED_CLASSIFICATIONS_PER_WINDOW) return false
-    }
     const key = createHash('sha256').update(this.salt).update(`${cls}|${sourcePrefix(sourceIp)}`).digest('base64')
     const last = this.damping.get(key)
     if (last !== undefined && now - last < REJECTION_DAMPING_MS) return false
+    if (cls === 'ip' && !this.ipBudgetAdmits(now)) return false
     this.damping.delete(key)
     if (this.damping.size >= DAMPING_TABLE_LIMIT) this.sweep(now)
     if (this.damping.size >= DAMPING_TABLE_LIMIT) {
@@ -167,8 +171,23 @@ export class ProviderAuthMonitor {
       if (oldest !== undefined) this.damping.delete(oldest)
     }
     this.damping.set(key, now)
-    if (cls === 'ip') this.ipWindowCount++
     return true
+  }
+
+  /** First-come up to the budget, then sampled at budget / offered (see IP_REFUSED_CLASSIFICATIONS_PER_WINDOW). */
+  private ipBudgetAdmits(now: number): boolean {
+    if (now - this.ipWindowStart >= REJECTION_DAMPING_MS) {
+      this.ipWindowStart = now
+      this.ipOffered = 0
+      this.ipAdmitted = 0
+    }
+    this.ipOffered++
+    const budget = IP_REFUSED_CLASSIFICATIONS_PER_WINDOW
+    if (this.ipAdmitted < budget || this.random() < budget / this.ipOffered) {
+      this.ipAdmitted++
+      return true
+    }
+    return false
   }
 
   /**
@@ -213,7 +232,8 @@ export class ProviderAuthMonitor {
     this.signals.clear()
     this.lastAccepted.clear()
     this.ipWindowStart = 0
-    this.ipWindowCount = 0
+    this.ipOffered = 0
+    this.ipAdmitted = 0
   }
 
   private sweep(now: number): void {
