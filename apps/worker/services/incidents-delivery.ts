@@ -47,6 +47,11 @@ export interface IncidentHolder {
 
 /**
  * Members of `hubId` whose roles IN THAT HUB grant `category`'s permission.
+ *
+ * Only people with a role assignment in the hub are interrupted. A platform
+ * super-admin who is not a member can still READ the hub's incidents (their
+ * global `*` reaches the GET, as it reaches every hub route), but is not paged
+ * for every hub on the instance — reach is resolved from hub roles (spec §5.4).
  * Inactive accounts are skipped.
  */
 export async function resolveIncidentHolders(
@@ -59,6 +64,7 @@ export async function resolveIncidentHolders(
   const [{ users }, { roles }] = await Promise.all([identity.getUsers(hubId), settings.getRoles()])
   return users
     .filter((u) => u.active)
+    .filter((u) => (u.hubRoles ?? []).some((assignment) => assignment.hubId === hubId))
     .filter((u) => permissionGranted(resolveHubPermissions(u.roles, u.hubRoles ?? [], roles, hubId), permission))
     .map((u) => ({ pubkey: u.pubkey, uiLanguage: u.uiLanguage || 'en' }))
 }
