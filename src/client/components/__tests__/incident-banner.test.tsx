@@ -30,6 +30,7 @@ vi.mock('@/lib/config', () => ({
     isMultiHub: true,
   }),
 }))
+vi.mock('@/lib/auth', () => ({ useAuth: () => ({ publicKey: 'a'.repeat(64) }) }))
 vi.mock('@/lib/api/client', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/api/client')>()
   return {

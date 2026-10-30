@@ -56,10 +56,18 @@ class IncidentRepository @Inject constructor(
     private var listening = false
 
     /**
+     * Bumped by [beginSession]. A fetch that started in an earlier session is discarded
+     * when it lands, so a doorbell in flight at logout cannot repopulate the next banner.
+     */
+    @Volatile
+    private var session = 0
+
+    /**
      * Start a session's view: forget the previous session's incidents, load every member
      * hub's list, and (once per process) listen for the doorbell and for relay reconnects.
      */
     fun beginSession() {
+        session++
         _state.value = State()
         startListening()
         scope.launch { refreshAll() }
@@ -86,6 +94,7 @@ class IncidentRepository @Inject constructor(
 
     /** Re-read the member-hub list and every member hub's open incidents. */
     suspend fun refreshAll() {
+        val started = session
         val hubs = try {
             apiService.getHubs().hubs
         } catch (e: ApiException) {
@@ -98,6 +107,7 @@ class IncidentRepository @Inject constructor(
         val fetched = coroutineScope {
             hubs.map { hub -> async { hub.id to fetch(hub.id) } }.awaitAll()
         }
+        if (started != session) return
         _state.update { current ->
             State(
                 // A hub whose read failed keeps what it last showed: an incident must not
@@ -112,7 +122,9 @@ class IncidentRepository @Inject constructor(
 
     /** Re-read one hub's open incidents — the response to that hub's doorbell. */
     suspend fun refresh(hubId: String) {
+        val started = session
         val list = fetch(hubId) ?: return
+        if (started != session) return
         _state.update { it.copy(byHub = it.byHub + (hubId to list)) }
     }
 

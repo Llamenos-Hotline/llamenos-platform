@@ -193,4 +193,25 @@ class IncidentRepositoryTest {
         coVerify(exactly = 2) { apiService.getOpenIncidents("hub-A") }
         coVerify(exactly = 2) { apiService.getOpenIncidents("hub-B") }
     }
+
+    @Test
+    fun `a doorbell fetch still in flight when a new session begins does not repopulate it`() = runTest(dispatcher) {
+        repository.beginSession()
+        var sessionEnded = false
+        coEvery { apiService.getOpenIncidents("hub-A") } answers {
+            if (sessionEnded) {
+                // The new session's own read: this user may see nothing in hub A.
+                HubIncidentListResponse(incidents = emptyList())
+            } else {
+                // The next session begins while this first fetch is still on the wire.
+                sessionEnded = true
+                repository.beginSession()
+                HubIncidentListResponse(incidents = listOf(incident("inc-A", "hub-A")))
+            }
+        }
+
+        repository.refresh("hub-A")
+
+        assertTrue(repository.state.value.byHub["hub-A"].orEmpty().none { it.id == "inc-A" })
+    }
 }

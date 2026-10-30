@@ -38,6 +38,9 @@ final class IncidentService {
     private(set) var hubNames: [String: String] = [:]
     /// The incident view is showing — set by a banner tap or an incident-push tap.
     var isIncidentViewPresented = false
+    /// Bumped by `reset()`. A fetch that started in an earlier session is discarded when it
+    /// lands, so a doorbell in flight at logout cannot repopulate the next user's banner.
+    @ObservationIgnored private var session = 0
 
     init(apiService: any HubAPIServiceProtocol) {
         self.apiService = apiService
@@ -66,7 +69,7 @@ final class IncidentService {
     /// Re-read every member hub's open incidents. A hub whose read fails keeps what it
     /// last showed: an incident must not vanish because one request did.
     func refreshAll(hubs: [SharedHub]) async {
-        hubNames = Dictionary(hubs.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let started = session
         var next: [String: [Incident]] = [:]
         for hub in hubs {
             if let list = await fetch(hub.id) {
@@ -75,7 +78,8 @@ final class IncidentService {
                 next[hub.id] = previous
             }
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, started == session else { return }
+        hubNames = Dictionary(hubs.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         incidentsByHub = next
     }
 
@@ -88,12 +92,14 @@ final class IncidentService {
 
     /// Re-read one hub's open incidents — the response to that hub's doorbell.
     func refresh(hubId: String) async {
-        guard let list = await fetch(hubId), !Task.isCancelled else { return }
+        let started = session
+        guard let list = await fetch(hubId), !Task.isCancelled, started == session else { return }
         incidentsByHub[hubId] = list
     }
 
     /// Forget everything. Called on logout so the next session starts clean.
     func reset() {
+        session += 1
         incidentsByHub = [:]
         hubNames = [:]
         isIncidentViewPresented = false
