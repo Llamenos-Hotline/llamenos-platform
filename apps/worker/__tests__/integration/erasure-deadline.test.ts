@@ -228,7 +228,9 @@ describe('erasure-deadline check (#2323)', () => {
 
     const row = await openIncident(hubId)
     expect(row).not.toBeNull()
-    expect(row!.counts).toEqual({ worker_failing: 1 })
+    // One signal per failing check in the category (overdue, and the #2347 failed check).
+    const checksInCategory = services.incidents.getChecks().filter((c) => c.category === 'erasure-deadline').length
+    expect(row!.counts).toEqual({ worker_failing: checksInCategory })
     expect(row!.counts).not.toHaveProperty('overdue')
 
     // A recovered check resets the streak; the next tick observes normally.

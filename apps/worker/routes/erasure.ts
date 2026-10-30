@@ -19,7 +19,7 @@ import { platformSettingsSchema } from '@protocol/schemas/platform-settings'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
-import { permissionGranted } from '@shared/permissions'
+import { permissionGranted, resolvePermissions } from '@shared/permissions'
 import { PLATFORM_INCIDENT_PERMISSION } from '../services/incidents-categories'
 import { getConnectionManager } from '../lib/ws-manager'
 import { revokeVolunteerSipIdentity } from '../telephony/registrar'
@@ -61,28 +61,38 @@ function serializeRequest(r: ErasureRequestRow) {
 /**
  * May the caller retry or abandon this request (#2347)? Decided from the
  * request's own attribution, by permission string only:
- *  - a request that concerns a hub is for that hub's `erasure:admin` holders,
- *    acting inside that hub (`permissions` is hub-resolved on the hub-scoped
- *    mount, so this cannot be satisfied from a foreign hub);
- *  - a request whose subject belongs to NO hub is for holders of the platform
- *    permission — the same ones the platform incident reaches.
- * Returns the audit chain the action belongs to (the acting hub, or null for
+ *  - retry, and abandoning a hub shred, belong to `erasure:admin` holders of a
+ *    hub the request concerns, acting inside that hub (`permissions` is
+ *    hub-resolved on the hub-scoped mount, so a foreign hub cannot satisfy it);
+ *  - a request whose subject belongs to NO hub belongs to the platform
+ *    permission instead;
+ *  - abandoning a PERSON's erasure is the platform permission's alone. It is
+ *    the subject's own request and their data lives in every hub they belong
+ *    to, so no single hub's admin may give up on it on the others' behalf.
+ * The platform permission is read from the caller's GLOBAL roles, never from
+ * the hub-resolved set: a custom role inside a hub must not be able to confer
+ * platform authority.
+ * Returns the audit chains the action is written to (the acting hub, null for
  * the platform chain), or the status to refuse with.
  */
 async function authorizeRequestAction(
-  c: { get: <K extends 'services' | 'permissions' | 'hubId'>(key: K) => AppEnv['Variables'][K] },
+  c: { get: <K extends 'services' | 'permissions' | 'hubId' | 'user' | 'allRoles'>(key: K) => AppEnv['Variables'][K] },
   request: ErasureRequestRow,
-): Promise<{ ok: true; auditHubId: string | null } | { ok: false; status: 403 }> {
-  const permissions = c.get('permissions')
+  action: 'retry' | 'abandon',
+): Promise<{ ok: true; auditHubIds: (string | null)[] } | { ok: false; status: 403 }> {
   const concerned = await c.get('services').erasure.hubsConcerning(request)
-  if (concerned.length === 0) {
-    return permissionGranted(permissions, PLATFORM_INCIDENT_PERMISSION)
-      ? { ok: true, auditHubId: null }
-      : { ok: false, status: 403 }
+  const holdsPlatform = permissionGranted(
+    resolvePermissions(c.get('user').roles, c.get('allRoles')),
+    PLATFORM_INCIDENT_PERMISSION,
+  )
+  const personAbandon = action === 'abandon' && request.scope === 'user'
+  if (concerned.length === 0 || personAbandon) {
+    // Recorded on the platform chain and, for a person's erasure, on every hub it concerned.
+    return holdsPlatform ? { ok: true, auditHubIds: [null, ...concerned] } : { ok: false, status: 403 }
   }
   const hubId = c.get('hubId')
-  if (hubId && concerned.includes(hubId) && permissionGranted(permissions, 'erasure:admin')) {
-    return { ok: true, auditHubId: hubId }
+  if (hubId && concerned.includes(hubId) && permissionGranted(c.get('permissions'), 'erasure:admin')) {
+    return { ok: true, auditHubIds: [hubId] }
   }
   return { ok: false, status: 403 }
 }
@@ -343,10 +353,10 @@ erasure.post(
     const services = c.get('services')
     const request = await services.erasure.getRequest(c.req.param('id'))
     if (!request) return c.json({ error: 'Erasure request not found' }, 404)
-    const decision = await authorizeRequestAction(c, request)
+    const decision = await authorizeRequestAction(c, request, 'retry')
     if (!decision.ok) return c.json({ error: 'Forbidden' }, decision.status)
     try {
-      const updated = await services.erasure.retryFailed(request.id, c.get('pubkey'), services.audit, decision.auditHubId)
+      const updated = await services.erasure.retryFailed(request.id, c.get('pubkey'), services.audit, decision.auditHubIds)
       return c.json({ request: serializeRequest(updated) })
     } catch (err) {
       if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 404 | 409)
@@ -362,7 +372,8 @@ erasure.post(
     summary: 'Abandon a failed erasure request',
     description:
       'Gives up on a failed request, recording who, when and why on the request and in the audit log. The request ' +
-      'becomes abandoned — distinct from completed: nothing was erased. Same authorisation as retry.',
+      'becomes abandoned — distinct from completed: nothing was erased. A hub shred is abandoned by an erasure:admin ' +
+      'holder of that hub; a person\'s erasure (which spans every hub they belong to) only by the platform permission.',
     responses: {
       200: {
         description: 'The request, abandoned',
@@ -376,7 +387,7 @@ erasure.post(
     const services = c.get('services')
     const request = await services.erasure.getRequest(c.req.param('id'))
     if (!request) return c.json({ error: 'Erasure request not found' }, 404)
-    const decision = await authorizeRequestAction(c, request)
+    const decision = await authorizeRequestAction(c, request, 'abandon')
     if (!decision.ok) return c.json({ error: 'Forbidden' }, decision.status)
     const { justification } = c.req.valid('json')
     try {
@@ -385,7 +396,7 @@ erasure.post(
         c.get('pubkey'),
         justification,
         services.audit,
-        decision.auditHubId,
+        decision.auditHubIds,
       )
       return c.json({ request: serializeRequest(updated) })
     } catch (err) {

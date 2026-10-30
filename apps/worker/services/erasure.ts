@@ -966,14 +966,14 @@ export class ErasureService {
    * request is `failed`, and refused while another request for the same
    * subject is already in flight — retrying must not produce two.
    *
-   * `hubId` is the audit chain the entry lands on (the acting hub, or null for
+   * `auditHubIds` are the audit chains the entry lands on (a hub, or null for
    * the platform chain); the entry carries the request's own id, no subject.
    */
   async retryFailed(
     requestId: string,
     actorPubkey: string,
     auditService: Pick<AuditService, 'log'>,
-    hubId: string | null,
+    auditHubIds: readonly (string | null)[],
   ): Promise<typeof erasureRequests.$inferSelect> {
     const row = await this.db.transaction(async (tx) => {
       const [request] = await tx.select().from(erasureRequests).where(eq(erasureRequests.id, requestId)).for('update').limit(1)
@@ -1000,7 +1000,9 @@ export class ErasureService {
         .returning()
       return updated!
     })
-    await auditService.log('erasureRetried', actorPubkey, { requestId: row.id, scope: row.scope }, hubId)
+    for (const hubId of auditHubIds) {
+      await auditService.log('erasureRetried', actorPubkey, { requestId: row.id, scope: row.scope }, hubId)
+    }
     return row
   }
 
@@ -1017,7 +1019,7 @@ export class ErasureService {
     actorPubkey: string,
     justification: string,
     auditService: Pick<AuditService, 'log'>,
-    hubId: string | null,
+    auditHubIds: readonly (string | null)[],
   ): Promise<typeof erasureRequests.$inferSelect> {
     const row = await this.db.transaction(async (tx) => {
       const [request] = await tx.select().from(erasureRequests).where(eq(erasureRequests.id, requestId)).for('update').limit(1)
@@ -1043,12 +1045,14 @@ export class ErasureService {
       }
       return updated!
     })
-    await auditService.log(
-      'erasureAbandoned',
-      actorPubkey,
-      { requestId: row.id, scope: row.scope, justification },
-      hubId,
-    )
+    for (const hubId of auditHubIds) {
+      await auditService.log(
+        'erasureAbandoned',
+        actorPubkey,
+        { requestId: row.id, scope: row.scope, justification },
+        hubId,
+      )
+    }
     return row
   }
 
