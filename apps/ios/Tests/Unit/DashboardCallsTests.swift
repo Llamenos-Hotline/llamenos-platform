@@ -245,8 +245,17 @@ final class DashboardCallsTests: XCTestCase {
         DashboardCallsStubURLProtocol.hang(myStatusKey)
         ws.emitDecryptedEventForTesting(hubId: hubA, json: callCompleted("mine-1"))
 
-        try await waitUntil(timeout: 3) { DashboardCallsStubURLProtocol.requests().contains(self.activeKey) }
-        XCTAssertTrue(DashboardCallsStubURLProtocol.requests().contains(myStatusKey))
+        // `reconcileCalls` starts the two fetches as sibling `async let` tasks, so which one
+        // reaches the URL loader first is not defined. Wait for both to be on the wire: the
+        // status request is the one that never answers, so `calls/active` having been issued
+        // too is exactly "the call list did not wait for shift status".
+        try await waitUntil(timeout: 3) {
+            let sent = DashboardCallsStubURLProtocol.requests()
+            return sent.contains(self.activeKey) && sent.contains(self.myStatusKey)
+        }
+        let sent = DashboardCallsStubURLProtocol.requests()
+        XCTAssertTrue(sent.contains(activeKey), "calls/active is issued while shifts/my-status hangs")
+        XCTAssertTrue(sent.contains(myStatusKey), "shifts/my-status is issued, and hangs")
     }
 
     /// A `calls/active` answer read before the end still lists the call. It must not put
