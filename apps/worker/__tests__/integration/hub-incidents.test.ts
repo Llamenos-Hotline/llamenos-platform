@@ -181,6 +181,21 @@ describe('signal()', () => {
     expect(notifier.sent.filter((s) => s.state === 'opened' && s.channel === 'relay')).toHaveLength(1)
   })
 
+  // `hub_incidents_open_unique` does not constrain hub_id NULL (nulls are distinct), and the
+  // platform-scope unique index ships a release after the column went nullable — until then
+  // apply()'s advisory lock + check-then-insert is the only thing holding this invariant.
+  it('concurrent PLATFORM-scope signals still yield exactly one open incident per category', async () => {
+    await Promise.all(Array.from({ length: 20 }, () => service.signalPlatform('provider-media', 'delete_failed')))
+    await Promise.all(Array.from({ length: 5 }, () => service.signalPlatform('erasure-deadline', 'failed')))
+    const open = await fresh.db
+      .select()
+      .from(schema.hubIncidents)
+      .where(and(isNull(schema.hubIncidents.hubId), isNull(schema.hubIncidents.closedAt)))
+    expect(open.map((r) => r.category).sort()).toEqual(['erasure-deadline', 'provider-media'])
+    expect(open.find((r) => r.category === 'provider-media')!.counts).toEqual({ delete_failed: 20 })
+    expect(open.find((r) => r.category === 'erasure-deadline')!.counts).toEqual({ failed: 5 })
+  })
+
   it('refuses a kind the category does not declare, and a non-positive count', async () => {
     const hubId = await createHub()
     await expect(service.signal(hubId, 'spam', 'delete_failed')).rejects.toThrow(/not declared/)

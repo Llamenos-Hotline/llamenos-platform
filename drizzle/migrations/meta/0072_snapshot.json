@@ -4205,22 +4205,6 @@
           "method": "btree",
           "with": {}
         },
-        "hub_incidents_open_platform_unique": {
-          "name": "hub_incidents_open_platform_unique",
-          "columns": [
-            {
-              "expression": "category",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"hub_incidents\".\"closed_at\" IS NULL AND \"hub_incidents\".\"hub_id\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "hub_incidents_hub_opened_idx": {
           "name": "hub_incidents_hub_opened_idx",
           "columns": [
