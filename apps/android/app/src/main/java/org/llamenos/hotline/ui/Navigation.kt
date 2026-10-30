@@ -46,6 +46,8 @@ import org.llamenos.hotline.ui.contacts.ContactsScreen
 import org.llamenos.hotline.ui.contacts.ContactsViewModel
 import org.llamenos.hotline.ui.contacts.ContactTimelineScreen
 import org.llamenos.hotline.ui.contacts.ContactTimelineViewModel
+import org.llamenos.hotline.ui.incidents.IncidentsScreen
+import org.llamenos.hotline.ui.incidents.IncidentsViewModel
 import org.llamenos.hotline.ui.reports.ReportCreateScreen
 import org.llamenos.hotline.ui.reports.ReportDetailScreen
 import org.llamenos.hotline.ui.reports.ReportTypePickerScreen
@@ -242,6 +244,10 @@ sealed interface LlamenosRoute {
     }
 
     /** Help & Reference. */
+    data object Incidents : LlamenosRoute {
+        override val route = "incidents"
+    }
+
     data object Help : LlamenosRoute {
         override val route = "help"
     }
@@ -714,6 +720,10 @@ private fun NavigationTree(
                         { /* Already on main — user can tap Settings tab */ }
                     is DeepLinkDestination.Admin ->
                         navController.navigate(LlamenosRoute.Admin.route)
+                    // The incident push names a hub, but opening the view never switches
+                    // to it: the view lists every member hub (multi-hub axiom).
+                    is DeepLinkDestination.Incidents ->
+                        navController.navigate(LlamenosRoute.Incidents.route)
                 }
             }
             MainScreen(
@@ -782,6 +792,9 @@ private fun NavigationTree(
                 },
                 onNavigateToTriage = {
                     navController.navigate(LlamenosRoute.Triage.route)
+                },
+                onNavigateToIncidents = {
+                    navController.navigate(LlamenosRoute.Incidents.route)
                 },
             )
         }
@@ -1047,6 +1060,14 @@ private fun NavigationTree(
 
         composable(LlamenosRoute.Blasts.route) {
             BlastsScreen(
+                onNavigateBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(LlamenosRoute.Incidents.route) {
+            val incidentsViewModel: IncidentsViewModel = hiltViewModel()
+            IncidentsScreen(
+                viewModel = incidentsViewModel,
                 onNavigateBack = { navController.popBackStack() },
             )
         }

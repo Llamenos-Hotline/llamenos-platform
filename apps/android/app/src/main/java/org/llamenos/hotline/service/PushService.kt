@@ -2,7 +2,10 @@ package org.llamenos.hotline.service
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.AndroidEntryPoint
@@ -10,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import org.llamenos.hotline.MainActivity
 import org.llamenos.hotline.R
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.WakeKeyService
@@ -179,8 +183,11 @@ class PushService : MessagingReceiver() {
                         hubId = wakePayload.hubId ?: "",
                         callId = wakePayload.callId,
                     )
-                    // Use wake payload for notification content when app is locked
-                    if (!cryptoService.isUnlocked) {
+                    if (PushNotificationRouter.isIncidentWake(wakePayload.type)) {
+                        // Content-free: the same generic text locked or unlocked.
+                        showIncidentNotification(context)
+                    } else if (!cryptoService.isUnlocked) {
+                        // Use wake payload for notification content when app is locked
                         showNotificationFromWakePayload(context, wakePayload.type, wakePayload.message)
                     }
                 }
@@ -272,6 +279,42 @@ class PushService : MessagingReceiver() {
                 notificationManager.notify(NOTIFICATION_ID_ANNOUNCEMENT, notification)
             }
         }
+    }
+
+    /**
+     * The incident push (B-INCIDENTS): `incident.push` and nothing else — no category,
+     * count or hub name. Tapping it opens the incident view (`llamenos://incidents`), which
+     * fetches the permission-filtered list for every member hub. The active hub is not
+     * touched here or on the tap (multi-hub axiom).
+     */
+    private fun showIncidentNotification(context: Context) {
+        ensureNotificationChannel(
+            context,
+            CHANNEL_INCIDENTS,
+            context.getString(R.string.incident_title),
+            NotificationManager.IMPORTANCE_HIGH,
+        )
+        val open = Intent(context, MainActivity::class.java)
+            .setAction(Intent.ACTION_VIEW)
+            .setData(Uri.parse(INCIDENTS_DEEP_LINK))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val tap = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_ID_INCIDENT,
+            open,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_INCIDENTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.app_name))
+            .setContentText(context.getString(R.string.incident_push))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(tap)
+            .setAutoCancel(true)
+            .build()
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID_INCIDENT, notification)
     }
 
     private fun handleIncomingCall(context: Context, data: Map<String, String>) {
@@ -390,9 +433,13 @@ class PushService : MessagingReceiver() {
         private const val CHANNEL_CALLS = "llamenos_calls"
         private const val CHANNEL_SHIFTS = "llamenos_shifts"
         private const val CHANNEL_GENERAL = "llamenos_general"
+        private const val CHANNEL_INCIDENTS = "llamenos_incidents"
 
         private const val NOTIFICATION_ID_CALL = 1001
         private const val NOTIFICATION_ID_SHIFT = 1002
         private const val NOTIFICATION_ID_ANNOUNCEMENT = 1003
+        private const val NOTIFICATION_ID_INCIDENT = 1004
+
+        private const val INCIDENTS_DEEP_LINK = "llamenos://incidents"
     }
 }

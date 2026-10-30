@@ -216,6 +216,9 @@ class DashboardViewModel @Inject constructor(
             is LlamenosEvent.ConversationNew -> {
                 // New conversation — handled by ConversationsViewModel
             }
+            is LlamenosEvent.HubIncidentChanged -> {
+                // Incident doorbell — handled by IncidentRepository
+            }
             is LlamenosEvent.Unknown -> {
                 // Forward compatibility — ignore unknown events
             }

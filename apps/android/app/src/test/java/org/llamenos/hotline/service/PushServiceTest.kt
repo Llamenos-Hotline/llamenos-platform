@@ -70,4 +70,22 @@ class PushServiceTest {
         // activeHubState.setActiveHub must never be called from wake payload routing.
         coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
     }
+
+    @Test
+    fun `incident wake payload switches no hub and stores nothing`() = runTest(testDispatcher) {
+        // The content-free incident push names its hub for routing only; tapping it opens
+        // the incident view, which lists every member hub. Nothing switches the active hub.
+        val router = PushNotificationRouter(linphoneService)
+        router.routeWakePayload(type = "incident", hubId = "hub-B", callId = null)
+
+        coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
+        coVerify(exactly = 0) { activeHubState.clearActiveHub() }
+    }
+
+    @Test
+    fun `only the incident wake type is recognised as the incident push`() {
+        assert(PushNotificationRouter.isIncidentWake("incident"))
+        assert(!PushNotificationRouter.isIncidentWake("incoming_call"))
+        assert(!PushNotificationRouter.isIncidentWake("announcement"))
+    }
 }
