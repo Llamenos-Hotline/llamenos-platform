@@ -34,6 +34,7 @@ import { activeCalls, providerRecordings } from '../db/schema'
 import type { TelephonyAdapter } from '../telephony/adapter'
 import type { HeldProviderRecording } from '@protocol/schemas/settings'
 import type { AuditService } from './audit'
+import type { IncidentService } from './incidents'
 import { createLogger } from '../lib/logger'
 import { createHash } from 'node:crypto'
 import type { CallRecordingsService } from './call-recordings'
@@ -130,6 +131,7 @@ export class ProviderRecordingsService {
     protected db: Database,
     private readonly audit: AuditService,
     private readonly callRecordings: CallRecordingsService,
+    private readonly incidents: Pick<IncidentService, 'signal'>,
   ) {}
 
   /**
@@ -363,12 +365,33 @@ export class ProviderRecordingsService {
       kind: row.kind,
       error,
     })
+    await this.raiseIncident(row.hubId)
     await this.audit.log(
       isLog ? 'providerCallLogDeleteFailed' : 'providerRecordingDeleteFailed',
       'system',
       { callId: row.callId, kind: row.kind, attempt: row.deleteAttempts + 1, error: error.slice(0, 500) },
       row.hubId || null,
     )
+  }
+
+  /**
+   * Tell the people responsible for the hub that caller audio is still held at
+   * the provider. In addition to the ledger, log and audit — never instead of
+   * them — so a failure to raise it is logged and never thrown: `deleteHeld`
+   * promises not to throw for a provider refusal. The incident carries the
+   * hub, the category and the kind only: no call id, recording handle or number.
+   */
+  private async raiseIncident(hubId: string): Promise<void> {
+    if (!hubId) {
+      // A recording tracked with no hub has no hub whose members could be told.
+      logger.error('Provider media deletion failed for a recording with no hub — no hub incident can be raised')
+      return
+    }
+    try {
+      await this.incidents.signal(hubId, 'provider-media', 'delete_failed')
+    } catch (err) {
+      logger.error('Could not raise the provider-media incident', { hubId, error: err })
+    }
   }
 
   private predicate(filter: HeldRecordingFilter): SQL {
