@@ -40,6 +40,7 @@ import ivrMediaRoutes from '../../routes/ivr-media'
 import { buildAudioUrlMap } from '../../lib/helpers'
 import type { AppEnv } from '../../types'
 import { DEFAULT_ROLES, resolvePermissions, type Role } from '@shared/permissions'
+import { CallRecordingsService } from '../../services/call-recordings'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -267,7 +268,7 @@ describe('ivr_audio is per hub (#2239)', () => {
     await db.insert(hubs).values({ id: HUB_C, name: HUB_C, slug: HUB_C, createdBy: ADMIN_A.pubkey })
     await setScope(undefined, DEFAULT_WAV)
     await setScope(HUB_C, A_WAV)
-    await svc.settings.deleteHub(HUB_C)
+    await svc.settings.deleteHub(HUB_C, new CallRecordingsService(db, undefined, undefined))
     expect(await db.select().from(ivrAudio).where(eq(ivrAudio.hubId, HUB_C))).toHaveLength(0)
     expect(await svc.settings.getIvrAudio(undefined, 'greeting', 'en')).not.toBeNull()
   })
