@@ -100,9 +100,14 @@ describe('BandwidthAdapter', () => {
       expect(result.contentType).toBe('application/xml')
       expect(result.body).toContain('<Gather')
       expect(result.body).toContain('maxDigits="4"')
-      expect(result.body).toContain('gatherUrl="/api/telephony/captcha?callSid=call-1&amp;lang=en"')
+      expect(result.body).toContain('gatherUrl="/api/telephony/captcha?callSid=call-1&amp;lang=en&amp;round=0"')
       expect(result.body).toContain('7, 3, 9, 1.')
       expect(result.body).toContain('Please enter the following digits:')
+      expect(result.body).toContain('To hear the numbers again, press star.')
+      // #2179: with gatherUrl set, verbs after <Gather> never run and the gather
+      // event is posted on timeout too — the old trailing <Hangup/> was dead.
+      expect(result.body).not.toContain('<Hangup/>')
+      expect(result.body).not.toContain('terminatingDigits')
     })
 
     it('returns Redirect to wait-music for normal calls', async () => {
@@ -137,30 +142,34 @@ describe('BandwidthAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('returns success BXML when digits match', async () => {
-      const result = await adapter.handleCaptchaResponse({
-        callSid: 'call-1',
-        digits: '7391',
-        expectedDigits: '7391',
-        callerLanguage: 'en',
-      })
+    it('returns success BXML on pass', async () => {
+      const result = await adapter.handleCaptchaResponse({ outcome: 'pass', callSid: 'call-1', callerLanguage: 'en' })
       expect(result.contentType).toBe('application/xml')
       expect(result.body).toContain('Thank you. Please hold while we connect you.')
       expect(result.body).toContain('<Redirect')
       expect(result.body).toContain('/api/telephony/wait-music?lang=en&amp;callSid=call-1')
     })
 
-    it('returns failure BXML when digits do not match', async () => {
+    it('on retry gathers again with the same digits and nothing after the Gather', async () => {
       const result = await adapter.handleCaptchaResponse({
-        callSid: 'call-1',
-        digits: '1234',
-        expectedDigits: '7391',
-        callerLanguage: 'en',
+        outcome: 'retry', digitsToSpeak: '7391', round: 1, callSid: 'call-1', callerLanguage: 'en',
       })
-      expect(result.contentType).toBe('application/xml')
-      expect(result.body).toContain('We are unable to connect your call. Goodbye.')
-      expect(result.body).toContain('<Hangup/>')
-      expect(result.body).not.toContain('<Redirect')
+      expect(result.body).toContain('gatherUrl="/api/telephony/captcha?callSid=call-1&amp;lang=en&amp;round=1"')
+      expect(result.body).toContain('That was incorrect. Please try again.')
+      expect(result.body).toContain('7, 3, 9, 1.')
+      expect(result.body).toContain('To hear the numbers again, press star.')
+      // With gatherUrl set Bandwidth ignores verbs after <Gather> and posts the
+      // gather event on timeout too — so nothing may follow it.
+      expect(result.body.split('</Gather>')[1].replace(/<\/Response>|\s/g, '')).toBe('')
+      expect(result.body).not.toContain('<Hangup/>')
+    })
+
+    it('on repeat re-speaks the digits without the retry prompt', async () => {
+      const result = await adapter.handleCaptchaResponse({
+        outcome: 'repeat', digitsToSpeak: '7391', round: 1, callSid: 'call-1', callerLanguage: 'en',
+      })
+      expect(result.body).toContain('7, 3, 9, 1.')
+      expect(result.body).not.toContain('That was incorrect.')
     })
   })
 

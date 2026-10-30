@@ -7,6 +7,7 @@ import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
 import {
   spamSettingsSchema,
+  spamSettingsPatchSchema,
   callSettingsSchema,
   messagingConfigSchema,
   telephonyProviderSchema,
@@ -236,7 +237,7 @@ settings.patch('/spam',
     },
   }),
   requirePermission('settings:manage-spam'),
-  validator('json', spamSettingsSchema),
+  validator('json', spamSettingsPatchSchema),
   async (c) => {
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')

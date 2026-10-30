@@ -156,7 +156,6 @@ export class BandwidthAdapter implements TelephonyAdapter {
 
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
-    const { locale, gender } = getBandwidthVoice(lang)
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingBxml = speakOrPlay('greeting', lang, params.audioUrls, greetingText)
@@ -175,18 +174,10 @@ export class BandwidthAdapter implements TelephonyAdapter {
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
       const captchaBxml = speakOrPlay('captchaPrompt', lang, params.audioUrls)
-      return this.bxml(`
-        <Gather maxDigits="4" gatherUrl="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" firstDigitTimeout="10" repeatCount="1">
-          ${greetingBxml}
-          ${noticeBxml}
-          ${captchaBxml}
-          <SpeakSentence locale="${locale}" gender="${gender}">${escapeXml(digits.split('').join(', '))}.</SpeakSentence>
-        </Gather>
-        <SpeakSentence locale="${locale}" gender="${gender}">${escapeXml(getPrompt('captchaTimeout', lang))}</SpeakSentence>
-        <Hangup/>
-      `)
+      return this.bxml(
+        this.captchaChallenge(params.callSid, lang, params.hubId, params.captchaDigits, greetingBxml + noticeBxml + captchaBxml, 0),
+      )
     }
 
     const holdBxml = speakOrPlay('pleaseHold', lang, params.audioUrls)
@@ -203,17 +194,41 @@ export class BandwidthAdapter implements TelephonyAdapter {
     const { locale, gender } = getBandwidthVoice(lang)
     const hp = hubXmlParam(params.hubId)
 
-    if (params.digits === params.expectedDigits) {
+    if (params.outcome === 'pass') {
       return this.bxml(`
-        <SpeakSentence locale="${locale}" gender="${gender}">${getPrompt('captchaSuccess', lang)}</SpeakSentence>
+        <SpeakSentence locale="${locale}" gender="${gender}">${escapeXml(getPrompt('captchaSuccess', lang))}</SpeakSentence>
         <Redirect redirectUrl="/api/telephony/wait-music?lang=${lang}&amp;callSid=${params.callSid}${hp}"/>
       `)
     }
 
-    return this.bxml(`
-      <SpeakSentence locale="${locale}" gender="${gender}">${getPrompt('captchaFail', lang)}</SpeakSentence>
-      <Hangup/>
-    `)
+    const lead = params.outcome === 'retry'
+      ? speakOrPlay('captchaRetry', lang)
+      : speakOrPlay('captchaPrompt', lang, params.audioUrls)
+    return this.bxml(
+      this.captchaChallenge(params.callSid, lang, params.hubId, params.digitsToSpeak, lead, params.round),
+    )
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then a Gather.
+   *
+   * - `terminatingDigits` defaults to none, so a `*` is collected and arrives
+   *   in the gather event's `digits` (the server reads it as "say them
+   *   again"); a lone `*` is submitted once `interDigitTimeout` elapses.
+   * - With `gatherUrl` set Bandwidth ignores every verb after `<Gather>` and
+   *   sends the gather event when it completes — including when
+   *   `firstDigitTimeout` elapses with no digits — so a timeout reaches the
+   *   server as a submission with no digits. Nothing follows the Gather.
+   */
+  private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: string, round: number): string {
+    const { locale, gender } = getBandwidthVoice(lang)
+    return `
+        <Gather maxDigits="4" gatherUrl="/api/telephony/captcha?callSid=${callSid}&amp;lang=${lang}&amp;round=${round}${hubXmlParam(hubId)}" firstDigitTimeout="10" repeatCount="1">
+          ${lead}
+          <SpeakSentence locale="${locale}" gender="${gender}">${escapeXml(digits.split('').join(', '))}.</SpeakSentence>
+          ${speakOrPlay('captchaRepeatHint', lang)}
+        </Gather>
+      `
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {

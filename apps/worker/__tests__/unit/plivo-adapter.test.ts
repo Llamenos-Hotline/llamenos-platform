@@ -100,7 +100,15 @@ describe('PlivoAdapter', () => {
       expect(res.body).toContain('<GetDigits')
       expect(res.body).toContain('numDigits="4"')
       expect(res.body).toContain('1, 2, 3, 4.')
-      expect(res.body).toContain('/api/telephony/captcha')
+      expect(res.body).toContain('To hear the numbers again, press star.')
+      const action = '/api/telephony/captcha?callSid=CA123&amp;lang=en&amp;round=0'
+      // #2179: with no digits Plivo moves to the next element — a Redirect back
+      // to the server, never a hangup — and validDigits keeps its default (with '*').
+      const afterGather = res.body.split('</GetDigits>')[1]
+      expect(afterGather).toContain(`<Redirect method="POST">${action}</Redirect>`)
+      expect(afterGather).not.toContain('<Hangup/>')
+      expect(res.body).not.toContain('validDigits')
+      expect(res.body).not.toContain('finishOnKey')
     })
 
     it('returns Conference enqueue response for normal call', async () => {
@@ -137,26 +145,32 @@ describe('PlivoAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('returns Conference on correct digits', async () => {
-      const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '5678',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-      })
+    it('returns Conference on pass', async () => {
+      const res = await adapter.handleCaptchaResponse({ outcome: 'pass', callSid: 'CA123', callerLanguage: 'en' })
       expect(res.body).toContain('<Conference')
       expect(res.body).not.toContain('<Hangup/>')
     })
 
-    it('returns hangup on incorrect digits', async () => {
+    it('on retry challenges again with the same digits, then redirects to the server on no input', async () => {
       const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '0000',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
+        outcome: 'retry', digitsToSpeak: '5678', round: 1, callSid: 'CA123', callerLanguage: 'en',
       })
-      expect(res.body).toContain('<Hangup/>')
-      expect(res.body).not.toContain('<Conference')
+      const action = '/api/telephony/captcha?callSid=CA123&amp;lang=en&amp;round=1'
+      expect(res.body).toContain(`<GetDigits numDigits="4" action="${action}"`)
+      expect(res.body).toContain('That was incorrect. Please try again.')
+      expect(res.body).toContain('5, 6, 7, 8.')
+      expect(res.body).toContain('To hear the numbers again, press star.')
+      // Plivo continues past GetDigits when nothing is pressed: the timeout must reach the server.
+      expect(res.body.trim().split('</GetDigits>')[1]).toContain(`<Redirect method="POST">${action}</Redirect>`)
+      expect(res.body).not.toContain('<Hangup/>')
+    })
+
+    it('on repeat re-speaks the digits without the retry prompt', async () => {
+      const res = await adapter.handleCaptchaResponse({
+        outcome: 'repeat', digitsToSpeak: '5678', round: 1, callSid: 'CA123', callerLanguage: 'en',
+      })
+      expect(res.body).toContain('5, 6, 7, 8.')
+      expect(res.body).not.toContain('That was incorrect.')
     })
   })
 

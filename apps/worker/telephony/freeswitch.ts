@@ -149,17 +149,9 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
     }
 
     if (voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
-      const speakXml =
-        greetingXml +
-        noticeXml +
-        this.fsPrompt('captchaPrompt', lang, audioUrls, speechUrl) +
-        this.captchaDigitUrls(digits, lang, speechUrl).map((url) => this.fsPlay(url)).join('')
-      const callbackUrl = this.buildCallbackUrl('/api/telephony/captcha', hubId)
-      const bindXml = `\n    <bind strip="#">~\\d{4} ${escapeXml(callbackUrl)}</bind>`
-      const timeoutXml = '\n    <pause milliseconds="10000"/>'
+      const leadXml = greetingXml + noticeXml + this.fsPrompt('captchaPrompt', lang, audioUrls, speechUrl)
       return this.xmlResponse(
-        this.doc(speakXml + bindXml + timeoutXml, {
+        this.doc(this.captchaChallenge(callSid, lang, hubId, params.captchaDigits, speechUrl, leadXml, 0), {
           call_phase: 'captcha',
         }),
       )
@@ -176,9 +168,9 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    const { digits, expectedDigits, callerLanguage: lang, callSid, speechUrl } = params
+    const { callerLanguage: lang, callSid, audioUrls, speechUrl, hubId } = params
 
-    if (digits === expectedDigits) {
+    if (params.outcome === 'pass') {
       const speakXml = this.fsSpeech((speechLang) => getPrompt('captchaSuccess', speechLang), lang, speechUrl)
       const parkXml = `\n    <execute application="park"/>`
       return this.xmlResponse(
@@ -189,9 +181,50 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       )
     }
 
-    const failXml = this.fsSpeech((speechLang) => getPrompt('captchaFail', speechLang), lang, speechUrl)
-    const hangupXml = '\n    <hangup/>'
-    return this.xmlResponse(this.doc(failXml + hangupXml))
+    const leadXml = params.outcome === 'retry'
+      ? this.fsSpeech((speechLang) => getPrompt('captchaRetry', speechLang), lang, speechUrl)
+      : this.fsPrompt('captchaPrompt', lang, audioUrls, speechUrl)
+    return this.xmlResponse(
+      this.doc(this.captchaChallenge(callSid, lang, hubId, params.digitsToSpeak, speechUrl, leadXml, params.round), {
+        call_phase: 'captcha',
+      }),
+    )
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then a digit
+   * binding for the answer.
+   *
+   * - The binding matches either four digits or a lone `*` (the caller asking
+   *   to hear them again), and submits the match to the CAPTCHA route.
+   * - The callback URL carries the call and its language, as every cloud
+   *   adapter's does: the route reads both from the query string.
+   * - If nothing matches before the pause ends, the document points
+   *   `httapi_url` at the same route, so mod_httapi's next fetch reaches the
+   *   server as a submission with no digits — a timeout the server counts —
+   *   instead of the call simply ending.
+   */
+  private captchaChallenge(
+    callSid: string,
+    lang: string,
+    hubId: string | undefined,
+    digits: string,
+    speechUrl: SpeechUrlBuilder | undefined,
+    leadXml: string,
+    round: number,
+  ): string {
+    const callbackUrl = this.buildCallbackUrl(
+      `/api/telephony/captcha?callSid=${encodeURIComponent(callSid)}&lang=${encodeURIComponent(lang)}&round=${round}`,
+      hubId,
+    )
+    return (
+      leadXml +
+      this.captchaDigitUrls(digits, lang, speechUrl).map((url) => this.fsPlay(url)).join('') +
+      this.fsSpeech((speechLang) => getPrompt('captchaRepeatHint', speechLang), lang, speechUrl) +
+      `\n    <bind strip="#">~^(\\*|\\d{4})$ ${escapeXml(callbackUrl)}</bind>` +
+      '\n    <pause milliseconds="10000"/>' +
+      `\n    <execute application="set" data="httapi_url=${escapeXml(callbackUrl)}"/>`
+    )
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {

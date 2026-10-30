@@ -103,7 +103,16 @@ describe('TwilioAdapter', () => {
       expect(res.body).toContain('<Gather')
       expect(res.body).toContain('numDigits="4"')
       expect(res.body).toContain('1, 2, 3, 4.')
-      expect(res.body).toContain('/api/telephony/captcha')
+      expect(res.body).toContain('To hear the numbers again, press star.')
+      const action = '/api/telephony/captcha?callSid=CA123&amp;lang=en&amp;round=0'
+      expect(res.body).toContain(`action="${action}"`)
+      // #2179: Twilio requests `action` only when it received input; with none
+      // the Gather falls through. The timeout must reach the server, not hang up.
+      const afterGather = res.body.split('</Gather>')[1]
+      expect(afterGather).toContain(`<Redirect method="POST">${action}</Redirect>`)
+      expect(afterGather).not.toContain('<Hangup/>')
+      // finishOnKey stays the default '#', so a '*' arrives in Digits.
+      expect(res.body).not.toContain('finishOnKey')
     })
 
     it('returns enqueue response for normal call', async () => {
@@ -137,27 +146,42 @@ describe('TwilioAdapter', () => {
     })
   })
 
+  // #2179: the adapter renders an outcome the server already classified; it
+  // never sees the expected answer.
   describe('handleCaptchaResponse', () => {
-    it('returns enqueue on correct digits', async () => {
-      const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '5678',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-      })
+    it('queues the caller on pass', async () => {
+      const res = await adapter.handleCaptchaResponse({ outcome: 'pass', callSid: 'CA123', callerLanguage: 'en' })
       expect(res.body).toContain('<Enqueue')
       expect(res.body).not.toContain('<Hangup/>')
     })
 
-    it('returns hangup on incorrect digits', async () => {
+    it('on retry says captchaRetry, then challenges again with the same digits and the star hint', async () => {
       const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '0000',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
+        outcome: 'retry', digitsToSpeak: '5678', round: 1, callSid: 'CA123', callerLanguage: 'en', hubId: 'hub-1',
       })
-      expect(res.body).toContain('<Hangup/>')
+      const gather = res.body.slice(res.body.indexOf('<Gather'), res.body.indexOf('</Gather>'))
+      expect(gather).toContain('That was incorrect. Please try again.')
+      expect(gather).toContain('5, 6, 7, 8.')
+      expect(gather).toContain('To hear the numbers again, press star.')
+      expect(gather).toContain('action="/api/telephony/captcha?callSid=CA123&amp;lang=en&amp;round=1&amp;hub=hub-1"')
       expect(res.body).not.toContain('<Enqueue')
+    })
+
+    it('on repeat re-speaks the same digits without the retry prompt', async () => {
+      const res = await adapter.handleCaptchaResponse({
+        outcome: 'repeat', digitsToSpeak: '5678', round: 2, callSid: 'CA123', callerLanguage: 'en',
+      })
+      expect(res.body).toContain('5, 6, 7, 8.')
+      expect(res.body).not.toContain('That was incorrect.')
+      expect(res.body).toContain('round=2')
+    })
+
+    it('a repeat plays the hub\'s uploaded captchaPrompt recording when there is one', async () => {
+      const res = await adapter.handleCaptchaResponse({
+        outcome: 'repeat', digitsToSpeak: '5678', round: 1, callSid: 'CA123', callerLanguage: 'en',
+        audioUrls: { 'captchaPrompt:en': 'https://example.com/prompt.mp3' },
+      })
+      expect(res.body).toContain('<Play>https://example.com/prompt.mp3</Play>')
     })
   })
 

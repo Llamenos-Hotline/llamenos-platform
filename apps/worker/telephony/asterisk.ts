@@ -37,6 +37,12 @@ interface AriGatherCommand extends AriCommandBase {
   numDigits: number
   timeout: number
   callbackEvent: 'language_selected' | 'captcha_response'
+  /**
+   * A key that ends the gather at once and is posted with the digits. A bridge
+   * that predates the field ignores it, and the key is still collected — the
+   * caller just waits for `timeout` (safe version skew).
+   */
+  finishOnKey?: '*'
   metadata?: Record<string, string>
 }
 
@@ -194,20 +200,11 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     }
 
     if (voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
-      return this.ariJson([
+      return this.ariJson(this.captchaChallenge(callSid, lang, hubId, params.captchaDigits, speechUrl, [
         greeting,
         ...notice,
         this.ariPrompt('captchaPrompt', lang, audioUrls, speechUrl),
-        ...this.captchaDigitUrls(digits, lang, speechUrl).map((url) => this.play(url)),
-        {
-          action: 'gather',
-          numDigits: 4,
-          timeout: 10,
-          callbackEvent: 'captcha_response',
-          metadata: callContext(callSid, lang, hubId),
-        },
-      ])
+      ], 0))
     }
 
     return this.ariJson([
@@ -219,19 +216,50 @@ export class AsteriskAdapter extends SipBridgeAdapter {
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    const { digits, expectedDigits, callerLanguage: lang, callSid, speechUrl, hubId } = params
+    const { callerLanguage: lang, callSid, audioUrls, speechUrl, hubId } = params
 
-    if (digits === expectedDigits) {
+    if (params.outcome === 'pass') {
       return this.ariJson([
         this.ariSpeech((speechLang) => getPrompt('captchaSuccess', speechLang), lang, speechUrl),
         this.ariQueue(callSid, lang, hubId),
       ])
     }
 
-    return this.ariJson([
-      this.ariSpeech((speechLang) => getPrompt('captchaFail', speechLang), lang, speechUrl),
-      { action: 'hangup' },
-    ])
+    const lead = params.outcome === 'retry'
+      ? this.ariSpeech((speechLang) => getPrompt('captchaRetry', speechLang), lang, speechUrl)
+      : this.ariPrompt('captchaPrompt', lang, audioUrls, speechUrl)
+    return this.ariJson(this.captchaChallenge(callSid, lang, hubId, params.digitsToSpeak, speechUrl, [lead], params.round))
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then a gather.
+   * ARI delivers `*` as a DTMF digit like any other; `finishOnKey` lets the
+   * bridge post it at once rather than after `timeout`. The bridge posts the
+   * gather — with no digits — when `timeout` elapses, so a timeout reaches the
+   * server as a submission with no digits.
+   */
+  private captchaChallenge(
+    callSid: string,
+    lang: string,
+    hubId: string | undefined,
+    digits: string,
+    speechUrl: SpeechUrlBuilder | undefined,
+    lead: AriCommand[],
+    round: number,
+  ): AriCommand[] {
+    return [
+      ...lead,
+      ...this.captchaDigitUrls(digits, lang, speechUrl).map((url) => this.play(url)),
+      this.ariSpeech((speechLang) => getPrompt('captchaRepeatHint', speechLang), lang, speechUrl),
+      {
+        action: 'gather',
+        numDigits: 4,
+        timeout: 10,
+        finishOnKey: '*',
+        callbackEvent: 'captcha_response',
+        metadata: { ...callContext(callSid, lang, hubId), round: String(round) },
+      },
+    ]
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {

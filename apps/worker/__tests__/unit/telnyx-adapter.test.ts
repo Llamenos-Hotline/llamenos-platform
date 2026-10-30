@@ -157,13 +157,9 @@ describe('TelnyxAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('queues caller on correct digits', async () => {
+    it('queues caller on pass', async () => {
       const result = await adapter.handleCaptchaResponse({
-        callSid: 'call-006',
-        digits: '1234',
-        expectedDigits: '1234',
-        callerLanguage: 'en',
-        hubId: 'hub-1',
+        outcome: 'pass', callSid: 'call-006', callerLanguage: 'en', hubId: 'hub-1',
       })
 
       expect(result.body).toBe('{}')
@@ -171,17 +167,13 @@ describe('TelnyxAdapter', () => {
       assertCommandFetchAnyBody('call-006', 'playback_start')
     })
 
-    it('hangs up on incorrect digits', async () => {
+    it('gathers again on retry', async () => {
       const result = await adapter.handleCaptchaResponse({
-        callSid: 'call-007',
-        digits: '0000',
-        expectedDigits: '1234',
-        callerLanguage: 'en',
+        outcome: 'retry', digitsToSpeak: '1234', round: 1, callSid: 'call-007', callerLanguage: 'en',
       })
 
       expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-007', 'speak')
-      assertCommandFetch('call-007', 'hangup', {})
+      assertCommandFetchAnyBody('call-007', 'gather_using_speak')
     })
   })
 

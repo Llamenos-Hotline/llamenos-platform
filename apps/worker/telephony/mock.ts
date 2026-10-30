@@ -158,7 +158,11 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    return mockResponse('captcha', { callSid: params.callSid, matched: params.digits === params.expectedDigits })
+    return mockResponse('captcha', {
+      callSid: params.callSid,
+      outcome: params.outcome,
+      ...(params.outcome === 'pass' ? {} : { digitsToSpeak: params.digitsToSpeak }),
+    })
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {

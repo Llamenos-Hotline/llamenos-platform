@@ -1417,54 +1417,9 @@ describe('SettingsService.storeCaptcha', () => {
   })
 })
 
-describe('SettingsService.verifyCaptcha', () => {
-  it('returns match: false when no captcha stored', async () => {
-    const { db, service } = setup()
-    db.$setSelectResult([])
-
-    const result = await service.verifyCaptcha({ callSid: 'CA123', digits: '1234' })
-    expect(result.match).toBe(false)
-    expect(result.expected).toBe('')
-  })
-
-  it('returns match: false for expired captcha', async () => {
-    const { db, service } = setup()
-    const oldDate = new Date(Date.now() - 10 * 60 * 1000) // 10 minutes ago
-    db.$setSelectResult([{ callSid: 'CA123', expected: '1234', createdAt: oldDate }])
-
-    const result = await service.verifyCaptcha({ callSid: 'CA123', digits: '1234' })
-    expect(result.match).toBe(false)
-    expect(result.expected).toBe('1234')
-  })
-
-  it('returns match: true for correct digits within TTL', async () => {
-    const { db, service } = setup()
-    const now = new Date()
-    db.$setSelectResult([{ callSid: 'CA123', expected: '5678', createdAt: now }])
-
-    const result = await service.verifyCaptcha({ callSid: 'CA123', digits: '5678' })
-    expect(result.match).toBe(true)
-    expect(result.expected).toBe('5678')
-  })
-
-  it('returns match: false for wrong digits', async () => {
-    const { db, service } = setup()
-    const now = new Date()
-    db.$setSelectResult([{ callSid: 'CA123', expected: '5678', createdAt: now }])
-
-    const result = await service.verifyCaptcha({ callSid: 'CA123', digits: '0000' })
-    expect(result.match).toBe(false)
-  })
-
-  it('deletes captcha on verification (one-time use)', async () => {
-    const { db, service } = setup()
-    const now = new Date()
-    db.$setSelectResult([{ callSid: 'CA123', expected: '9999', createdAt: now }])
-
-    await service.verifyCaptcha({ callSid: 'CA123', digits: '9999' })
-    expect(db.delete).toHaveBeenCalled()
-  })
-})
+// submitCaptcha keeps the challenge across attempts and locks its row: it is
+// covered against real PostgreSQL in integration/captcha-challenge.test.ts, and
+// its classifier in unit/captcha-outcome.test.ts.
 
 // ---------------------------------------------------------------------------
 // TTL Overrides

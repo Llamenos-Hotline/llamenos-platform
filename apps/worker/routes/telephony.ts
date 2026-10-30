@@ -2,12 +2,12 @@ import { Hono, type Context, type Next } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
-import type { SpeechUrlBuilder, TelephonyAdapter } from '../telephony/adapter'
+import type { SpeechUrlBuilder, TelephonyAdapter, TelephonyResponse } from '../telephony/adapter'
 import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
-import { banHashes, callerRateLimitDigest, getClientIp } from '../lib/crypto'
+import { banHashes, callerRateLimitDigest, getClientIp, sealCallerNumber } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
@@ -23,6 +23,8 @@ import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
+import type { IncidentKind } from '../services/incidents-categories'
+import type { OverLimitAction } from '@protocol/schemas/settings'
 
 const logger = createLogger('telephony')
 
@@ -38,6 +40,104 @@ function audioUrlsFor(c: Context<AppEnv>, hubId: string | undefined) {
 async function speechUrlFor(c: Context<AppEnv>, adapter: TelephonyAdapter): Promise<SpeechUrlBuilder | undefined> {
   if (!(adapter instanceof SipBridgeAdapter)) return undefined
   return c.get('services').ivrSpeech.urlBuilder(new URL(c.req.url).origin)
+}
+
+/**
+ * Where a caller who failed or timed out of the voice CAPTCHA goes: voicemail,
+ * never a silent drop (#2302, operator ruling). It goes through the same
+ * switch as an over-limit caller, so changing it is this one line.
+ */
+const CAPTCHA_FAILED_ACTION: OverLimitAction = 'voicemail'
+
+/** The `spam` incident kind each over-limit action is counted under. */
+const OVER_LIMIT_INCIDENT_KIND = {
+  reject: 'reject',
+  message: 'over_limit_message',
+  voicemail: 'over_limit_voicemail',
+} as const satisfies Record<OverLimitAction, IncidentKind<'spam'>>
+
+/**
+ * Tell the hub's `settings:manage-spam` holders that an automatic defence
+ * acted (rule V: a refusal nobody can see is a silent drop). Counts only — the
+ * signal carries a hub and a kind, never the caller's number or the call SID.
+ *
+ * A failure here must not cost the caller their response, so it is logged
+ * loudly rather than thrown; a call with no hub has nobody to tell.
+ */
+async function signalSpam(services: Services, hubId: string | undefined, kind: IncidentKind<'spam'>): Promise<void> {
+  if (!hubId) {
+    logger.warn('Spam defence acted on a call that resolved to no hub — no incident to raise', { kind })
+    return
+  }
+  try {
+    await services.incidents.signal(hubId, 'spam', kind)
+  } catch (err) {
+    logger.error('Spam incident signal failed — this defence is not visible to the hub', { hubId, kind, err })
+  }
+}
+
+interface RefusedCall {
+  callSid: string
+  callerNumber: string
+  callerLanguage: string
+  hubId: string | undefined
+}
+
+/**
+ * The one code path for a caller the spam defences will not put through to a
+ * volunteer: over the per-number limit (the hub's `overLimitAction`), or out
+ * of CAPTCHA attempts (`CAPTCHA_FAILED_ACTION`).
+ *
+ * - `reject`: refuse the call unanswered.
+ * - `message`: the greeting and the `rateLimited` prompt — the hub's upload
+ *   when there is one, else spoken — then hang up. Nothing is recorded.
+ * - `voicemail`: offer voicemail. The call is registered first, exactly as
+ *   ringing registers a call that may time out into voicemail, because the
+ *   voicemail callback attaches the message to that record.
+ */
+async function refuseLiveCall(
+  c: Context<AppEnv>,
+  adapter: TelephonyAdapter,
+  action: OverLimitAction,
+  call: RefusedCall,
+): Promise<TelephonyResponse> {
+  const services = c.get('services')
+  switch (action) {
+    case 'reject':
+      return adapter.rejectCall()
+    case 'message':
+      return adapter.handleIncomingCall({
+        callSid: call.callSid,
+        callerNumber: call.callerNumber,
+        voiceCaptchaEnabled: false,
+        rateLimited: true,
+        callerLanguage: call.callerLanguage,
+        hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
+        // Hung up before anyone could answer, so never recorded.
+        callRecordingEnabled: false,
+        audioUrls: await audioUrlsFor(c, call.hubId),
+        speechUrl: await speechUrlFor(c, adapter),
+        hubId: call.hubId,
+      })
+    case 'voicemail': {
+      await services.calls.addCall(call.hubId ?? '', {
+        callId: call.callSid,
+        callerNumberSealed: sealCallerNumber(call.callerNumber, call.callSid, c.env.SERVER_KEK),
+        callerLast4: call.callerNumber.slice(-4),
+        status: 'ringing',
+      })
+      const callSettings = await services.settings.getCallSettings(call.hubId)
+      return adapter.handleVoicemail({
+        callSid: call.callSid,
+        callerLanguage: call.callerLanguage,
+        callbackUrl: new URL(c.req.url).origin,
+        audioUrls: await audioUrlsFor(c, call.hubId),
+        speechUrl: await speechUrlFor(c, adapter),
+        maxRecordingSeconds: callSettings.voicemailMaxSeconds,
+        hubId: call.hubId,
+      })
+    }
+  }
 }
 
 const telephony = new Hono<AppEnv>()
@@ -120,8 +220,12 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
 
   // W05-H02: Replay protection — hash body to detect duplicate deliveries.
   // Returns idempotent 200 for replays (provider retries stop on 2xx).
+  // Keyed on the signed URL as well as the body: Twilio and Plivo send
+  // byte-identical bodies for two genuinely separate events on one call (two
+  // CAPTCHA timeouts, the same wrong answer twice), which differ only in the
+  // callback URL's `round`. A true replay repeats both.
   const bodyText = await c.req.raw.clone().text()
-  const isFirst = await checkWebhookReplay(getDb(), 'telephony', bodyText, 300)
+  const isFirst = await checkWebhookReplay(getDb(), 'telephony', `${url.pathname}${url.search}\n${bodyText}`, 300)
   if (!isFirst) {
     logger.info('Telephony webhook replay detected, returning idempotent 200')
     return c.text('OK', 200)
@@ -172,6 +276,7 @@ telephony.post('/incoming',
 
   const banned = await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)
   if (banned) {
+    await signalSpam(services, hubId, 'ban_match')
     return telephonyResponse(adapter.rejectCall())
   }
 
@@ -212,6 +317,7 @@ telephony.post('/language-selected',
   // while the caller is still in the language menu. Re-check before greeting or
   // queueing so a newly banned caller never reaches a volunteer.
   if (await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)) {
+    await signalSpam(services, hubId, 'ban_match')
     return telephonyResponse(adapter.rejectCall())
   }
 
@@ -242,9 +348,19 @@ telephony.post('/language-selected',
     rateLimited = rlResult.limited
   }
 
+  // Over the per-number limit: the hub's over-limit action, and an incident
+  // so the people responsible see it happening. The per-minute verdict comes
+  // from the rotating in-memory digest key above; nothing per-number is kept.
+  if (rateLimited) {
+    const action = spamSettings.overLimitAction
+    incCounter('llamenos_call_over_limit_total', { action })
+    await signalSpam(services, hubId, OVER_LIMIT_INCIDENT_KIND[action])
+    return telephonyResponse(await refuseLiveCall(c, adapter, action, { callSid, callerNumber, callerLanguage, hubId }))
+  }
+
   // Generate CAPTCHA digits server-side with CSPRNG and store them
   let captchaDigits: string | undefined
-  if (spamSettings.voiceCaptchaEnabled && !rateLimited) {
+  if (spamSettings.voiceCaptchaEnabled) {
     const buf = new Uint8Array(2)
     crypto.getRandomValues(buf)
     captchaDigits = String(1000 + (((buf[0] << 8) | buf[1]) % 9000))
@@ -263,7 +379,7 @@ telephony.post('/language-selected',
     callSid,
     callerNumber,
     voiceCaptchaEnabled: spamSettings.voiceCaptchaEnabled,
-    rateLimited,
+    rateLimited: false,
     callerLanguage,
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     callRecordingEnabled: recordCalls === true,
@@ -273,7 +389,7 @@ telephony.post('/language-selected',
     hubId,
   })
 
-  if (!rateLimited && !spamSettings.voiceCaptchaEnabled) {
+  if (!spamSettings.voiceCaptchaEnabled) {
     const origin = new URL(c.req.url).origin
     logger.info('Starting parallel ringing', { callSid, origin, hubId: hubId || 'global' })
     backgroundTask(c,startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId ?? ''))
@@ -288,7 +404,7 @@ telephony.post('/captcha',
   describeRoute({
     tags: ['Telephony Webhooks'],
     summary: 'CAPTCHA digit response — provider webhook (step 3)',
-    description: 'Receives DTMF digit from voice CAPTCHA gather. Validates against server-stored expected digits, returns TwiML.',
+    description: 'Receives the digits (none on a timeout) from the voice CAPTCHA gather. Classifies them against the server-stored challenge as pass, retry, repeat (star), fail or timeout; a pass is queued for a volunteer, retry and repeat challenge again, fail and timeout go to voicemail.',
     responses: {
       200: { description: 'TwiML response (application/xml)' },
       403: { description: 'Webhook signature invalid' },
@@ -305,27 +421,44 @@ telephony.post('/captcha',
 
   // A ban added while the caller was in the menu / CAPTCHA must still take effect.
   if (await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)) {
+    await signalSpam(services, hubId, 'ban_match')
     return telephonyResponse(adapter.rejectCall())
   }
 
-  // Look up expected digits from server-side storage (not URL params)
-  const { match, expected } = await services.settings.verifyCaptcha({ callSid, digits })
+  // Classified server-side against the stored challenge (constant-time); the
+  // adapter only renders the outcome. No digits = the gather timed out.
+  const result = await services.settings.submitCaptcha({ callSid, digits })
+  incCounter('llamenos_voice_captcha_total', { outcome: result.outcome })
+  const speechUrl = await speechUrlFor(c, adapter)
 
-  const response = await adapter.handleCaptchaResponse({
-    callSid,
-    digits,
-    expectedDigits: expected,
-    callerLanguage: callerLang,
-    hubId,
-    speechUrl: await speechUrlFor(c, adapter),
-  })
-
-  if (match) {
-    const origin = new URL(c.req.url).origin
-    backgroundTask(c,startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId ?? ''))
+  switch (result.outcome) {
+    case 'pass': {
+      // Ringing starts on a pass and on nothing else.
+      const origin = new URL(c.req.url).origin
+      backgroundTask(c, startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId ?? ''))
+      return telephonyResponse(await adapter.handleCaptchaResponse({
+        outcome: 'pass', callSid, callerLanguage: callerLang, hubId, speechUrl,
+      }))
+    }
+    case 'retry':
+    case 'repeat':
+      return telephonyResponse(await adapter.handleCaptchaResponse({
+        outcome: result.outcome,
+        digitsToSpeak: result.digitsToSpeak,
+        round: result.round,
+        callSid,
+        callerLanguage: callerLang,
+        hubId,
+        audioUrls: await audioUrlsFor(c, hubId),
+        speechUrl,
+      }))
+    case 'fail':
+    case 'timeout':
+      await signalSpam(services, hubId, result.outcome)
+      return telephonyResponse(await refuseLiveCall(c, adapter, CAPTCHA_FAILED_ACTION, {
+        callSid, callerNumber, callerLanguage: callerLang, hubId,
+      }))
   }
-
-  return telephonyResponse(response)
 })
 
 // --- Step 4: User answered -> bridge via queue ---

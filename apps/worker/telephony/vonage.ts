@@ -174,23 +174,11 @@ export class VonageAdapter implements TelephonyAdapter {
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
       const captchaAction = sayOrStream('captchaPrompt', lang, params.audioUrls, undefined, true)
-      const digitsTalk = talk(digits.split('').join(', ') + '.', lang, true)
-
-      return this.ncco([
-        greetingAction,
-        ...noticeActions,
-        captchaAction,
-        digitsTalk,
-        {
-          action: 'input',
-          type: ['dtmf'],
-          dtmf: { maxDigits: 4, timeOut: 10 },
-          eventUrl: [`/api/telephony/captcha?callSid=${params.callSid}&lang=${lang}${hp}`],
-          eventMethod: 'POST',
-        },
-      ])
+      return this.ncco(this.captchaChallenge(
+        params.callSid, lang, params.hubId, params.captchaDigits,
+        [greetingAction, ...noticeActions, captchaAction], 0,
+      ))
     }
 
     const holdAction = sayOrStream('pleaseHold', lang, params.audioUrls)
@@ -212,7 +200,7 @@ export class VonageAdapter implements TelephonyAdapter {
     const lang = params.callerLanguage
     const hp = hubQP(params.hubId)
 
-    if (params.digits === params.expectedDigits) {
+    if (params.outcome === 'pass') {
       return this.ncco([
         talk(getPrompt('captchaSuccess', lang), lang),
         {
@@ -225,7 +213,34 @@ export class VonageAdapter implements TelephonyAdapter {
       ])
     }
 
-    return this.ncco([talk(getPrompt('captchaFail', lang), lang)])
+    const lead = params.outcome === 'retry'
+      ? sayOrStream('captchaRetry', lang, undefined, undefined, true)
+      : sayOrStream('captchaPrompt', lang, params.audioUrls, undefined, true)
+    return this.ncco(this.captchaChallenge(params.callSid, lang, params.hubId, params.digitsToSpeak, [lead], params.round))
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then an `input`.
+   *
+   * `submitOnHash` stays false, so a `*` is an ordinary key press delivered in
+   * `dtmf.digits` (the server reads it as "say them again"), submitted after
+   * `timeOut` seconds without a further press. The input event is sent to
+   * `eventUrl` after that pause whether or not anything was pressed, so a
+   * timeout reaches the server as a submission with no digits.
+   */
+  private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: Record<string, unknown>[], round: number): Record<string, unknown>[] {
+    return [
+      ...lead,
+      talk(digits.split('').join(', ') + '.', lang, true),
+      sayOrStream('captchaRepeatHint', lang, undefined, undefined, true),
+      {
+        action: 'input',
+        type: ['dtmf'],
+        dtmf: { maxDigits: 4, timeOut: 10 },
+        eventUrl: [`/api/telephony/captcha?callSid=${callSid}&lang=${lang}&round=${round}${hubQP(hubId)}`],
+        eventMethod: 'POST',
+      },
+    ]
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {

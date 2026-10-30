@@ -362,6 +362,10 @@ export const apiRateLimits = pgTable('api_rate_limits', {
 export const captchas = pgTable('captchas', {
   callSid: text('call_sid').primaryKey(),
   expected: text('expected').notNull(),
+  /** Wrong or empty submissions so far; the challenge ends at `CAPTCHA_MAX_ATTEMPTS`. */
+  attempts: integer('attempts').notNull().default(0),
+  /** "Press star to hear the numbers again" uses so far; free up to `CAPTCHA_MAX_REPEATS`. */
+  repeats: integer('repeats').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

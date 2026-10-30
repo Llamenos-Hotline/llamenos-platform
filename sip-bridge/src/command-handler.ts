@@ -374,7 +374,7 @@ export class CommandHandler {
     if (call.dtmfBuffer === '') await this.stopPrompts(call)
 
     call.dtmfBuffer += event.digit
-    if (call.dtmfBuffer.length >= gather.numDigits) {
+    if (call.dtmfBuffer.length >= gather.numDigits || event.digit === gather.finishOnKey) {
       await this.completeGather(call)
     }
   }
@@ -665,6 +665,7 @@ export class CommandHandler {
     call.activeGather = {
       numDigits: cmd.numDigits,
       timeout: cmd.timeout,
+      finishOnKey: cmd.finishOnKey,
       callbackEvent: cmd.callbackEvent,
       metadata: cmd.metadata,
     }

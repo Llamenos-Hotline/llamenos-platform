@@ -55,6 +55,11 @@ import {
   users,
 } from '../db/schema'
 import type { SpamSettings, CallSettings } from '../types'
+import {
+  classifyCaptchaSubmission,
+  type ContinuingCaptchaOutcome,
+  type TerminalCaptchaOutcome,
+} from './captcha-outcome'
 import { isHubMember } from '../lib/hub-membership'
 import type {
   CustomFieldDefinition,
@@ -162,6 +167,8 @@ const DEFAULT_SPAM_SETTINGS: SpamSettings = {
   rateLimitEnabled: true,
   maxCallsPerMinute: 3,
   blockDurationMinutes: 30,
+  // Operator ruling Q4 (c): a short unrecorded message, then the call ends.
+  overLimitAction: 'message',
 }
 
 const DEFAULT_CALL_SETTINGS: CallSettings = {
@@ -1975,41 +1982,58 @@ export class SettingsService {
         target: captchas.callSid,
         set: {
           expected: data.expected,
+          attempts: 0,
+          repeats: 0,
           createdAt: new Date(),
         },
       })
     return { ok: true }
   }
 
-  async verifyCaptcha(data: {
+  /**
+   * Classify one CAPTCHA submission and advance the challenge (#2179).
+   *
+   * The challenge row survives a `retry` or `repeat` (the caller hears the same
+   * digits again) and is deleted only on a terminal outcome — before this, it
+   * was deleted on the first submission, so a second attempt could never pass.
+   * The row is locked for the read-modify-write, so two webhooks for one call
+   * cannot both spend the same attempt.
+   */
+  async submitCaptcha(data: {
     callSid: string
     digits: string
-  }): Promise<{ match: boolean; expected: string }> {
-    const [stored] = await this.db
-      .select()
-      .from(captchas)
-      .where(eq(captchas.callSid, data.callSid))
+  }): Promise<
+    | { outcome: TerminalCaptchaOutcome }
+    | { outcome: ContinuingCaptchaOutcome; digitsToSpeak: string; round: number }
+  > {
+    return this.db.transaction(async (tx) => {
+      const [stored] = await tx
+        .select()
+        .from(captchas)
+        .where(eq(captchas.callSid, data.callSid))
+        .for('update')
 
-    // Always delete after first attempt (one-time use)
-    await this.db.delete(captchas).where(eq(captchas.callSid, data.callSid))
+      if (!stored || Date.now() - stored.createdAt.getTime() > CAPTCHA_TTL_MS) {
+        if (stored) await tx.delete(captchas).where(eq(captchas.callSid, data.callSid))
+        return { outcome: 'fail' as const }
+      }
 
-    if (!stored) {
-      return { match: false, expected: '' }
-    }
+      const result = classifyCaptchaSubmission(stored, data.digits)
+      if (result.outcome === 'retry' || result.outcome === 'repeat') {
+        await tx
+          .update(captchas)
+          .set({ attempts: result.next.attempts, repeats: result.next.repeats })
+          .where(eq(captchas.callSid, data.callSid))
+        return {
+          outcome: result.outcome,
+          digitsToSpeak: stored.expected,
+          round: result.next.attempts + result.next.repeats,
+        }
+      }
 
-    // Expire after 5 minutes
-    if (Date.now() - stored.createdAt.getTime() > CAPTCHA_TTL_MS) {
-      return { match: false, expected: stored.expected }
-    }
-
-    // Constant-time comparison
-    const expected = stored.expected
-    const digits = data.digits
-    let match = expected.length === digits.length ? 1 : 0
-    for (let i = 0; i < expected.length; i++) {
-      match &= expected.charCodeAt(i) === digits.charCodeAt(i) ? 1 : 0
-    }
-    return { match: match === 1, expected }
+      await tx.delete(captchas).where(eq(captchas.callSid, data.callSid))
+      return { outcome: result.outcome }
+    })
   }
 
   // =========================================================================
