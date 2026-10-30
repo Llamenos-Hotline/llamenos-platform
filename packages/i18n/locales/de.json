@@ -4758,7 +4758,9 @@
       "banExpiry": "Bald ablaufende Sperren",
       "channelDisabled": "Abgewiesene Kontakte auf einem abgeschalteten Kanal",
       "erasureDeadline": "Überfällige Löschanfragen",
+      "providerAuth": "Abgewiesene Anfragen des Telefonanbieters",
       "providerMedia": "Beim Telefonanbieter verbliebene Aufnahmen",
+      "routing": "Anrufe, die niemanden erreichen",
       "spam": "Spam und unerwünschte Anrufe"
     },
     "closed": "Beendet",

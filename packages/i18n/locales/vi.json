@@ -4758,7 +4758,9 @@
       "banExpiry": "Lệnh chặn sắp hết hạn",
       "channelDisabled": "Liên hệ bị từ chối trên kênh đã tắt",
       "erasureDeadline": "Yêu cầu xóa đã quá hạn",
+      "providerAuth": "Yêu cầu từ nhà cung cấp điện thoại bị từ chối",
       "providerMedia": "Bản ghi âm còn lưu tại nhà cung cấp điện thoại",
+      "routing": "Cuộc gọi không đến được ai",
       "spam": "Spam và cuộc gọi không mong muốn"
     },
     "closed": "Đã kết thúc",

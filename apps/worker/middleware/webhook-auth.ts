@@ -13,13 +13,17 @@ interface WebhookAuthOptions {
   allowedContentTypes?: string[]
   replayWindowSeconds?: number
   skipReplay?: boolean
-  /** Called when the IP allowlist refuses a request, before the 403 is returned. */
-  onIpRejected?: (req: Request) => void | Promise<void>
+  /**
+   * Leave the IP allowlist to the route. The telephony webhooks do, because a
+   * refused source's signature is still evaluated there to CLASSIFY the
+   * refusal (#2330) — the request is refused either way.
+   */
+  skipIpAllowlist?: boolean
 }
 
 export function webhookAuth(options: WebhookAuthOptions) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    const { provider, allowedContentTypes, replayWindowSeconds = 300, skipReplay = false, onIpRejected } = options
+    const { provider, allowedContentTypes, replayWindowSeconds = 300, skipReplay = false, skipIpAllowlist = false } = options
 
     // 1. Content-Type enforcement
     if (allowedContentTypes) {
@@ -32,7 +36,7 @@ export function webhookAuth(options: WebhookAuthOptions) {
     // 2. IP allowlist (configured via env var)
     const cidrKey = `${provider.toUpperCase()}_WEBHOOK_IPS`
     const cidrs = (c.env as unknown as Record<string, string | undefined>)[cidrKey]
-    if (cidrs) {
+    if (cidrs && !skipIpAllowlist) {
       const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
       const clientIp = getClientIp(c.req.raw)
       if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {

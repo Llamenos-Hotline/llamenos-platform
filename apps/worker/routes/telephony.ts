@@ -27,6 +27,7 @@ import { webhookAuth } from '../middleware/webhook-auth'
 import type { IncidentKind } from '../services/incidents-categories'
 import type { OverLimitAction } from '@protocol/schemas/settings'
 import { recordTelephonyWebhookRejection } from '../telephony/webhook-rejection'
+import { bodyWithinLimit, providerAuthMonitor } from '../services/provider-auth'
 import { refuseIfChannelDisabled } from '../messaging/channel-guard'
 
 const logger = createLogger('telephony')
@@ -155,7 +156,9 @@ const telephony = new Hono<AppEnv>()
 
 // Apply webhook auth middleware to all telephony webhook routes:
 // - Content-Type enforcement (form-encoded or JSON depending on provider)
-// - IP allowlisting (via TELEPHONY_WEBHOOK_IPS env var)
+// The IP allowlist (TELEPHONY_WEBHOOK_IPS) is NOT applied here: validateWebhook
+// applies it, because a refused source's signature is still evaluated to
+// classify the refusal (#2330) — every route below goes through it.
 // Replay protection is deliberately skipped here: it runs exactly once, in
 // validateWebhook, AFTER the provider signature check. Running it in both
 // places inserted the same nonce twice, so every webhook looked like a replay
@@ -165,7 +168,7 @@ telephony.use('*', webhookAuth({
   provider: 'telephony',
   allowedContentTypes: ['application/x-www-form-urlencoded', 'application/json'],
   skipReplay: true,
-  onIpRejected: (req) => recordTelephonyWebhookRejection(req, { reason: 'ip_not_allowed', providerAddressVerified: false }),
+  skipIpAllowlist: true,
 }))
 
 /**
@@ -178,12 +181,96 @@ async function getHubAdapter(env: Env, services: Services, hubId: string | undef
   return getTelephonyFromService(env, services.settings)
 }
 
+/** Every refusal reads the same — never reveal which check refused, or whether telephony is set up. */
+function forbidden(c: Context<AppEnv>) {
+  return c.json({ error: 'Forbidden' }, 403)
+}
+
+/** How a refused webhook is classified; each is a `provider-auth` incident kind. */
+type ProviderAuthRejection =
+  | 'ip_rejected'
+  | 'signature_invalid'
+  | 'own_account_signature_invalid'
+  | 'provider_allowlist_stale'
+
+/** Rejections an outsider can produce at will: `record`, escalated only by the traffic discriminator. */
+const UNATTRIBUTED_REJECTIONS: ReadonlySet<ProviderAuthRejection> = new Set(['ip_rejected', 'signature_invalid'])
+
+/**
+ * The hub a refused webhook is about, determined before authentication: the
+ * one its URL names (`?hub=`, or the call `/call-recording` refers to), or —
+ * for `/incoming`, whose URL names none — the hub owning the number it was
+ * placed to. Only a body already known to be within the limit is parsed.
+ * Undefined when nothing resolves to an existing hub: that refusal is then the
+ * instance-level counter's to report, and no hub is invented for it.
+ */
+async function rejectionHub(
+  c: Context<AppEnv>,
+  adapter: TelephonyAdapter,
+  hubId: string | undefined,
+  bodyBounded: boolean,
+): Promise<string | undefined> {
+  const services = c.get('services')
+  try {
+    if (hubId) {
+      const { hub } = await services.settings.getHub(hubId)
+      return hub.id
+    }
+    if (!bodyBounded || !new URL(c.req.url).pathname.endsWith('/incoming')) return undefined
+    const { calledNumber } = await adapter.parseIncomingWebhook(c.req.raw)
+    if (!calledNumber) return undefined
+    const { hub } = await services.settings.getHubByPhone(calledNumber)
+    return hub.id
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Make a refused webhook visible to the hub's `provider-auth` holders (#2330,
+ * rule V). The incident carries the kind and a count — never the source
+ * address, the number or the provider's call id. An unattributed refusal
+ * while the hub's accepted traffic has stopped also signals `traffic_stopped`.
+ * Never throws: the request is refused whether or not this is recorded.
+ */
+async function signalProviderAuthRejection(
+  c: Context<AppEnv>,
+  adapter: TelephonyAdapter,
+  hubId: string | undefined,
+  kind: ProviderAuthRejection,
+  bodyBounded: boolean,
+): Promise<void> {
+  try {
+    const target = await rejectionHub(c, adapter, hubId, bodyBounded)
+    if (!target) return
+    const incidents = c.get('services').incidents
+    if (providerAuthMonitor.admitSignal(target, kind)) {
+      await incidents.signal(target, 'provider-auth', kind)
+    }
+    if (
+      UNATTRIBUTED_REJECTIONS.has(kind)
+      && providerAuthMonitor.trafficStopped(target)
+      && providerAuthMonitor.admitSignal(target, 'traffic_stopped')
+    ) {
+      await incidents.signal(target, 'provider-auth', 'traffic_stopped')
+    }
+  } catch (err) {
+    logger.error('Could not record a provider-auth incident', { kind, error: err })
+  }
+}
+
 /**
  * Webhook validation middleware — applied per-route to actual webhook endpoints.
  * NOT a wildcard `use('*')` because authenticated webrtcRoutes are mounted at the
  * same `/telephony` prefix and must not be intercepted by webhook signature checks.
  *
  * W05: Enforces signature validation, IP allowlist (opt-in), and replay protection.
+ *
+ * #2330: every refusal is classified and, when its hub resolves, made visible
+ * as a `provider-auth` incident (services/provider-auth.ts explains the
+ * attribution rules). The pre-auth work is bounded: a body over
+ * WEBHOOK_BODY_LIMIT_BYTES is refused unread and unhashed, and a source the
+ * allowlist refuses is hashed at most once a minute per /24 or /48.
  */
 async function validateWebhook(c: Context<AppEnv>, next: Next) {
   const url = new URL(c.req.url)
@@ -208,31 +295,52 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
 
   // If no telephony provider is configured, reject with 403 — same as
   // signature validation failure. Never reveal whether telephony is set up.
-  if (!adapter) {
-    await recordTelephonyWebhookRejection(c.req.raw, { reason: 'no_provider', providerAddressVerified: false })
-    return c.json({ error: 'Forbidden' }, 403)
+  if (!adapter) return forbidden(c)
+
+  // W05-H03: IP allowlist (opt-in via TELEPHONY_WEBHOOK_IPS env var).
+  // `null` = no allowlist configured: there is no provider-IP evidence, so no
+  // refusal can be attributed to our provider by IP (#2330 amendment 2).
+  const cidrs = (env as unknown as Record<string, string | undefined>).TELEPHONY_WEBHOOK_IPS
+  const cidrList = cidrs ? cidrs.split(',').map(s => s.trim()).filter(Boolean) : []
+  const sourceIp = getClientIp(c.req.raw)
+  const ipAllowed = cidrList.length > 0 ? !!sourceIp && isIpInCidrs(sourceIp, cidrList) : null
+
+  if (ipAllowed === false) {
+    // Refused whatever happens next. The signature is evaluated only to name
+    // the cause — a VALID one means the allowlist is stale — and never changes
+    // the answer. A source already refused this minute is refused unread.
+    logger.warn('Telephony webhook IP not in allowlist')
+    if (!providerAuthMonitor.admit(sourceIp, 'ip')) return forbidden(c)
+    const bounded = await bodyWithinLimit(c.req.raw)
+    const signedByUs = bounded && await adapter.validateWebhook(c.req.raw)
+    await signalProviderAuthRejection(c, adapter, hubId, signedByUs ? 'provider_allowlist_stale' : 'ip_rejected', bounded)
+    return forbidden(c)
   }
 
-  // W05-H03: IP allowlist (opt-in via TELEPHONY_WEBHOOK_IPS env var)
-  const cidrs = (env as unknown as Record<string, string | undefined>).TELEPHONY_WEBHOOK_IPS
-  const providerAddressVerified = Boolean(cidrs)
-  if (cidrs) {
-    const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
-    const clientIp = getClientIp(c.req.raw)
-    if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
-      logger.warn('Telephony webhook IP not in allowlist', { clientIp })
-      await recordTelephonyWebhookRejection(c.req.raw, { reason: 'ip_not_allowed', providerAddressVerified: false })
-      return c.json({ error: 'Forbidden' }, 403)
+  // From here the source is allowed (or no allowlist is configured) and the
+  // signature IS the authentication — damping can gate only the counting.
+  if (!(await bodyWithinLimit(c.req.raw))) {
+    logger.warn(`Webhook body over the limit for ${url.pathname}`)
+    if (providerAuthMonitor.admit(sourceIp, 'signature_invalid')) {
+      await signalProviderAuthRejection(c, adapter, hubId, 'signature_invalid', false)
     }
+    return forbidden(c)
   }
 
   // H05: Always validate webhook signatures — no localhost bypass
   const isValid = await adapter.validateWebhook(c.req.raw)
   if (!isValid) {
     logger.error(`Webhook signature FAILED for ${url.pathname}`)
-    await recordTelephonyWebhookRejection(c.req.raw, { reason: 'signature_invalid', adapter, providerAddressVerified })
-    return c.json({ error: 'Forbidden' }, 403)
+    // Notify-level only as a conjunction: provider egress IP (allowlisted)
+    // AND our account id (provider-populated) AND the bad signature.
+    const ownAccount = ipAllowed === true && (await adapter.webhookNamesOwnAccount?.(c.req.raw)) === true
+    const kind = ownAccount ? 'own_account_signature_invalid' : 'signature_invalid'
+    if (providerAuthMonitor.admit(sourceIp, kind)) {
+      await signalProviderAuthRejection(c, adapter, hubId, kind, true)
+    }
+    return forbidden(c)
   }
+  if (hubId) providerAuthMonitor.recordAccepted(hubId)
 
   // W05-H02: Replay protection — hash body to detect duplicate deliveries.
   // Returns idempotent 200 for replays (provider retries stop on 2xx).
@@ -276,6 +384,9 @@ telephony.post('/incoming',
       const { hub } = await services.settings.getHubByPhone(calledNumber)
       hubId = hub.id
       logger.info('Resolved hub for incoming call', { hubId })
+      // `/incoming` names no hub in its URL, so its accepted traffic is
+      // attributed here (the provider-auth traffic discriminator, #2330).
+      providerAuthMonitor.recordAccepted(hubId)
     } catch {
       // No hub found for this number
     }

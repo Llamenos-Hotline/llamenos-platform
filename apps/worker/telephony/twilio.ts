@@ -459,6 +459,15 @@ export class TwilioAdapter implements TelephonyAdapter {
     return `${this.providerLabel.toLowerCase()}:${this.getApiBaseUrl()}`
   }
 
+  /** Twilio (and SignalWire, with the project id) fills `AccountSid` in every voice webhook. */
+  async webhookNamesOwnAccount(request: Request): Promise<boolean> {
+    try {
+      return new URLSearchParams(await request.clone().text()).get('AccountSid') === this.accountSid
+    } catch {
+      return false
+    }
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     const res = await this.twilioApi(`/Recordings/${encodeURIComponent(recordingSid)}.json`, { method: 'DELETE' })
     await assertRecordingDeleted(res, this.providerLabel)

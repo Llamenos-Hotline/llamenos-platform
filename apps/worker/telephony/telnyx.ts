@@ -594,6 +594,16 @@ export class TelnyxAdapter implements TelephonyAdapter {
     return `telnyx:${this.connectionId}`
   }
 
+  /** Telnyx fills `data.payload.connection_id` in every Call Control event. */
+  async webhookNamesOwnAccount(request: Request): Promise<boolean> {
+    try {
+      const body = await request.clone().json() as { data?: { payload?: { connection_id?: unknown } } }
+      return body.data?.payload?.connection_id === this.connectionId
+    } catch {
+      return false
+    }
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     let recordings: TelnyxRecording[]
     try {

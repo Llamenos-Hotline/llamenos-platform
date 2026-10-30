@@ -32,6 +32,7 @@ import { A2pRegistrationService } from './provider-setup/a2p-registration'
 import { ProviderTemplateService } from './provider-setup/templates'
 import { HubOnboardService } from './provider-setup/hub-onboard'
 import { ErasureService, erasureDeadlineCheck } from './erasure'
+import { routingIncidentChecks } from './routing-readiness'
 import { RetentionService } from './retention'
 import { HubShredService } from './hub-shred'
 import { ProviderRecordingsService } from './provider-recordings'
@@ -223,6 +224,8 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   // exists; RUN only by the `incident-checks` scheduler worker — never by the
   // worker whose backlog a check measures.
   services.incidents.registerCheck(erasureDeadlineCheck(erasure))
+  // #2330: a hotline that rings nobody, or that nobody answers, says so.
+  for (const check of routingIncidentChecks(services)) services.incidents.registerCheck(check)
 
   // Only create firehose agent if seal key is configured
   if (opts?.firehoseSealKey) {

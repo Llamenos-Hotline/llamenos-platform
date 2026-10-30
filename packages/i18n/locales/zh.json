@@ -4758,7 +4758,9 @@
       "banExpiry": "即将到期的封禁",
       "channelDisabled": "在已关闭渠道上被拒绝的联系",
       "erasureDeadline": "逾期的删除请求",
+      "providerAuth": "被拒绝的电话服务商请求",
       "providerMedia": "电话服务商处遗留的录音",
+      "routing": "无人能接到的来电",
       "spam": "垃圾及骚扰电话"
     },
     "closed": "已结束",

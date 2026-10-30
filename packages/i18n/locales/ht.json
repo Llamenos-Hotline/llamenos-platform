@@ -4758,7 +4758,9 @@
       "banExpiry": "Entèdiksyon ki pral ekspire",
       "channelDisabled": "Kontak yo refize sou yon kanal ki etenn",
       "erasureDeadline": "Demann efasman ki an reta",
+      "providerAuth": "Demann founisè telefòn nan k ap rejte",
       "providerMedia": "Anrejistreman ki rete kay founisè telefòn nan",
+      "routing": "Apèl ki pa rive jwenn pèsonn",
       "spam": "Spam ak apèl moun pa vle"
     },
     "closed": "Fini",

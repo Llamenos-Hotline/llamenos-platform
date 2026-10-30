@@ -11,9 +11,9 @@
  * never a caller-supplied string. `worker_failing` is the L2 kind every
  * category accepts (see `runWorkerTick` in incidents.ts).
  *
- * Adding a category (the held `routing` and `provider-auth`, #2330) is: one
- * value in `incidentCategorySchema`, one row here. No migration — the column is
- * text.
+ * Adding a category is: one value in `incidentCategorySchema`, one row here,
+ * one locale key for its name. No migration — the column is text. `routing`
+ * and `provider-auth` (#2330) were added that way.
  */
 import type { IncidentCategory, IncidentSeverity } from '@protocol/schemas/incidents'
 import type { Permission } from '@shared/permissions'
@@ -92,6 +92,55 @@ export const INCIDENT_CATEGORIES = {
     updateWindowMs: 6 * 60 * MINUTE_MS,
     kinds: {
       expiring: 'record',
+      [WORKER_FAILING_KIND]: 'notify',
+    },
+  },
+  // The hotline's core function (#2330): a caller dialling in and nobody
+  // picking up. Both kinds are L1 checks (services/routing-readiness.ts) run
+  // by `incident-checks`, so they are LEVELS re-observed every tick — a hub
+  // with no shift and an empty fallback group is a standing incident until an
+  // admin rosters somebody, not a one-off. Reaches `shifts:manage-fallback`:
+  // the people who can make somebody ring when the schedule does not.
+  routing: {
+    permission: 'shifts:manage-fallback',
+    quietPeriodMs: 20 * MINUTE_MS,
+    updateWindowMs: 60 * MINUTE_MS,
+    kinds: {
+      // A call arriving now, during a period the hub expects coverage, would ring nobody.
+      nobody_would_ring: 'notify',
+      // Calls came in (≥ ROUTING_NO_ANSWER_MIN_INBOUND) and none was answered.
+      no_answers: 'notify',
+      [WORKER_FAILING_KIND]: 'notify',
+    },
+  },
+  // Provider webhooks refused before authentication (routes/telephony.ts). A
+  // rotated signing secret or a moved provider egress range makes EVERY call
+  // 403 — a total outage — but anyone on the internet can also produce a
+  // rejection, so the raw count never interrupts anybody. Only evidence an
+  // outsider cannot forge does (spec §5.7 amendments 1-3); the rest is
+  // visible in the panel and wakes nobody. Reaches the people who can fix the
+  // provider configuration.
+  'provider-auth': {
+    permission: 'telephony:manage-providers',
+    quietPeriodMs: 30 * MINUTE_MS,
+    updateWindowMs: 15 * MINUTE_MS,
+    kinds: {
+      // Unattributed: a bad signature from an allowed source (or with the IP
+      // allowlist off), or one that does not carry our provider account id.
+      signature_invalid: 'record',
+      // A source outside the provider IP allowlist whose signature did not verify.
+      ip_rejected: 'record',
+      // Our provider (allowlisted egress) about our account (provider-populated
+      // id) mis-authenticating: the signing secret no longer matches.
+      own_account_signature_invalid: 'notify',
+      // A correctly SIGNED request from outside the allowlist. Only our signing
+      // secret produces that signature, so the allowlist is out of date. The
+      // request is still refused; this only names the cause.
+      provider_allowlist_stale: 'notify',
+      // Unattributed rejections while this hub's accepted webhooks have
+      // stopped after flowing in the previous window — either the signing
+      // secret or the provider IP allowlist; the evidence cannot say which.
+      traffic_stopped: 'notify',
       [WORKER_FAILING_KIND]: 'notify',
     },
   },
