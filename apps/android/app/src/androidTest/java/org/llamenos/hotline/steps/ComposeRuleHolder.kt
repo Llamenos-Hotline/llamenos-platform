@@ -1,8 +1,8 @@
 package org.llamenos.hotline.steps
 
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import io.cucumber.junit.WithJunitRule
 import org.junit.Rule
+import org.llamenos.hotline.helpers.createAppComposeRule
 
 /**
  * Holds the Compose test rule and activity scenario for Cucumber step definitions.
@@ -16,8 +16,9 @@ import org.junit.Rule
 @WithJunitRule(useAsTestClassInDescription = true)
 class ComposeRuleHolder {
 
+    /** See [createAppComposeRule] for why this rule must dispatch on the UI thread (#2406). */
     @get:Rule(order = 0)
-    val composeRule = createEmptyComposeRule()
+    val composeRule = createAppComposeRule()
 
     val activityScenarioHolder = ActivityScenarioHolder()
 
