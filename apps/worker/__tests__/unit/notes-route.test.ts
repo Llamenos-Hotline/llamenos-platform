@@ -49,7 +49,6 @@ function makeApp(opts: {
   // so a test of another hub's id simply makes them answer null / 404.
   const mockCalls = {
     getActiveCallById: vi.fn().mockResolvedValue({ callId: 'call-test-1', hubId }),
-    getActiveCallByCallId: vi.fn().mockResolvedValue({ callId: 'call-test-1', hubId }),
     getCallRecord: vi.fn().mockResolvedValue(null),
   }
   const mockConversations = {
@@ -354,20 +353,19 @@ describe('POST /notes', () => {
     expect(mockRecords.createNote).not.toHaveBeenCalled()
   })
 
-  it('unscoped: refuses (404) a call of a hub the caller holds no role in', async () => {
+  it('outside a hub (no path hub): 404, and no call is looked up or note stored (#2395)', async () => {
     const { app, mockRecords, mockCalls } = makeApp({ hubId: '' })
-    mockCalls.getActiveCallByCallId.mockResolvedValueOnce({ callId: 'call-test-1', hubId: 'hub-9' })
     const res = await post(app, noteBody)
     expect(res.status).toBe(404)
+    expect(mockCalls.getActiveCallById).not.toHaveBeenCalled()
     expect(mockRecords.createNote).not.toHaveBeenCalled()
   })
 
-  it('unscoped: accepts a call of a hub the caller belongs to, and a call with no hub', async () => {
-    const { app, mockCalls } = makeApp({ hubId: '' })
-    mockCalls.getActiveCallByCallId.mockResolvedValueOnce({ callId: 'call-test-1', hubId: 'hub-1' })
-    expect((await post(app, noteBody)).status).toBe(201)
-    mockCalls.getActiveCallByCallId.mockResolvedValueOnce({ callId: 'call-test-1', hubId: '' })
-    expect((await post(app, noteBody)).status).toBe(201)
+  it('outside a hub, listing is a 404 even with notes:read-all, and no notes are read (#2395)', async () => {
+    const { app, mockRecords } = makeApp({ hubId: '', permissions: ['notes:read-own', 'notes:read-all'] })
+    const res = await app.request('/')
+    expect(res.status).toBe(404)
+    expect(mockRecords.listNotes).not.toHaveBeenCalled()
   })
 
   it('does NOT create interaction when caseId is absent', async () => {

@@ -133,6 +133,41 @@ export function hubsWithPermission(c: Context<AppEnv>, permission: string): stri
 }
 
 /**
+ * Make a router hub-only: every request that did not arrive under
+ * `/hubs/:hubId` is a 404, before any handler runs (#2395).
+ *
+ * A router whose rows belong to a hub has no meaning outside one. Mounted
+ * unscoped as well, its handlers see no hub id and the caller's GLOBAL
+ * permissions, and a service that adds its hub filter only `if (hubId)` then
+ * answers for every hub at once — a non-super-admin global role, which grants
+ * nothing inside any hub, would grant its permissions across all of them. That
+ * one shape produced #2239, #1137, #2367, #2376, #2381, #2363 and #2395.
+ *
+ * Registered first on the router, so the property belongs to the router and a
+ * stray `authenticated.route(...)` fails closed instead of widening scope.
+ * The hub is the PATH hub, set only by `hubContext` after it has proven
+ * membership — never one read from a body or query string. `app-mounts.test.ts`
+ * enforces the other half: no handler is served both inside and outside a hub
+ * unless its mount is in the reviewed ledger there.
+ *
+ *     router.use('*', hubOnly)
+ */
+export const hubOnly = createMiddleware<AppEnv>(async (c, next) => {
+  if (!c.get('hubId')) return c.json({ error: 'Not Found' }, 404)
+  return next()
+})
+
+/**
+ * The path hub of a request on a {@link hubOnly} router. Past that guard it is
+ * always set; this narrows the type so handlers never carry a hubless branch.
+ */
+export function pathHubId(c: Context<AppEnv>): string {
+  const hubId = c.get('hubId')
+  if (!hubId) throw new ServiceError(404, 'Not Found')
+  return hubId
+}
+
+/**
  * Refuse a row that belongs to another hub, as a 404.
  *
  * A row of another hub and a row that does not exist must be indistinguishable

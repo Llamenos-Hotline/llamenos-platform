@@ -379,7 +379,9 @@ export interface Conversation {
     linkedCallId?: string         // if conversation started from a call
     reportId?: string             // if conversation is a report thread
     type?: 'report'               // report conversations
-    reportTitle?: string          // encrypted
+    // PLAINTEXT: stored as the client sent it (routes/reports.ts), so the
+    // server can read both — the old "encrypted" note here was wrong (#2395).
+    reportTitle?: string
     reportCategory?: string
     customFieldValues?: string    // encrypted JSON of custom field values
   }

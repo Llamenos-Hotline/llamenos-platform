@@ -530,7 +530,7 @@ final class AdminViewModel {
         do {
             let response: AuditListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/audit?page=1&limit=\(auditPageSize)"
+                path: apiService.activeHubPath("/api/audit") + "?page=1&limit=\(auditPageSize)"
             )
             auditEntries = response.entries
             auditTotal = Int(response.total)
@@ -552,7 +552,7 @@ final class AdminViewModel {
         do {
             let response: AuditListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/audit?page=\(nextPage)&limit=\(auditPageSize)"
+                path: apiService.activeHubPath("/api/audit") + "?page=\(nextPage)&limit=\(auditPageSize)"
             )
             auditEntries.append(contentsOf: response.entries)
             auditPage = nextPage

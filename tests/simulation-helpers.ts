@@ -340,7 +340,7 @@ export function uniqueCallerNumber(): string {
 }
 
 /**
- * A real ringing call in `hubId` (or the unscoped hub), for a note to hang off.
+ * A real ringing call in `hubId`, for a note to hang off.
  *
  * `POST /notes` refuses a `callId` that is not a call of the hub it is written
  * to (#2112), so a fixture can no longer invent one — it files the note under a
@@ -348,11 +348,13 @@ export function uniqueCallerNumber(): string {
  */
 export async function simulateCallForNote(
   request: APIRequestContext,
-  hubId?: string,
+  // Notes exist only inside a hub, and a note may only hang off a call of ITS
+  // hub (#2112, #2395), so the call is placed in the hub the note will be filed in.
+  hubId: string,
 ): Promise<string> {
   const { callId } = await simulateIncomingCall(request, {
     callerNumber: uniqueCallerNumber(),
-    ...(hubId ? { hubId } : {}),
+    hubId,
   })
   return callId
 }

@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui.providersetup
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -103,10 +104,14 @@ fun WebhookConfirmationScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            WebhookUrlCard(
-                label = stringResource(R.string.sms_webhook),
-                url = "${webhookBaseUrl}/api/messaging/sms/webhook",
-            )
+            // Inbound messages name their hub in the URL; one that names none is
+            // refused (#2395), so with no hub there is no SMS URL to show.
+            viewModel.activeHubId?.let { hubId ->
+                WebhookUrlCard(
+                    label = stringResource(R.string.sms_webhook),
+                    url = "${webhookBaseUrl}/api/messaging/sms/webhook?hub=${Uri.encode(hubId)}",
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 

@@ -229,11 +229,9 @@ test.describe('Records Architecture', () => {
     // the UI is browsing — otherwise the report appears in the wrong hub and the page
     // shows empty state despite the API call succeeding.
     const { createReportViaApi } = await import('./api-helpers')
-    const activeHubId = await page.evaluate(() => {
-      const getHub = (window as unknown as Record<string, unknown>).__TEST_GET_ACTIVE_HUB as (() => string) | undefined
-      return getHub ? getHub() : undefined
-    }).catch(() => undefined)
-    await createReportViaApi(page.request, { title: `Isolation Report ${Date.now()}`, hubId: activeHubId })
+    const activeHubId = await page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null)
+    expect(activeHubId, 'the page has no active hub to file a report in').toBeTruthy()
+    await createReportViaApi(page.request, { title: `Isolation Report ${Date.now()}`, hubId: activeHubId! })
 
     await Navigation.goToReports(page)
 

@@ -85,12 +85,12 @@ Given('a CMS report type with allowCaseConversion disabled exists', async ({ req
 
 // ── Report Creation Steps ────────────────────────────────────────
 
-Given('a report of the conversion-enabled type exists', async ({ request, world }) => {
+Given('a report of the conversion-enabled type exists', async ({ request, world, workerHub }) => {
   // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
   const sealed = await encryptForTest('triage-report-content', [ADMIN_SEED])
   const { data } = await apiPost<{ id?: string; report?: { id: string } }>(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     {
       title: uniqueName('Triage Report'),
       category: 'general',
@@ -105,12 +105,12 @@ Given('a report of the conversion-enabled type exists', async ({ request, world 
   getTriageState(world).reportIds.push(id)
 })
 
-Given('a report of the conversion-disabled type exists', async ({ request, world }) => {
+Given('a report of the conversion-disabled type exists', async ({ request, world, workerHub }) => {
   // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
   const sealed = await encryptForTest('disabled-report-content', [ADMIN_SEED])
   await apiPost(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     {
       title: uniqueName('Disabled Report'),
       category: 'general',
@@ -121,12 +121,12 @@ Given('a report of the conversion-disabled type exists', async ({ request, world
   )
 })
 
-Given('a report of the conversion-enabled type exists with conversionStatus {string}', async ({ request, world }, conversionStatus: string) => {
+Given('a report of the conversion-enabled type exists with conversionStatus {string}', async ({ request, world, workerHub }, conversionStatus: string) => {
   // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
   const sealed = await encryptForTest('triage-status-report', [ADMIN_SEED])
   const { data } = await apiPost<{ id?: string; report?: { id: string } }>(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     {
       title: uniqueName('Triage Status Report'),
       category: 'general',
@@ -206,18 +206,18 @@ Then('the triage queue should be empty', async ({ world }) => {
 
 // ── Conversion Status Update Steps ───────────────────────────────
 
-When('the admin updates the report conversionStatus to {string}', async ({ request, world }, conversionStatus: string) => {
+When('the admin updates the report conversionStatus to {string}', async ({ request, world, workerHub }, conversionStatus: string) => {
   expect(getTriageState(world).reportId).toBeDefined()
-  await apiPatch(request, `/reports/${getTriageState(world).reportId}`, {
+  await apiPatch(request, `/hubs/${workerHub}/reports/${getTriageState(world).reportId}`, {
     conversionStatus,
   })
 })
 
-Then('the report metadata should include conversionStatus {string}', async ({ request, world }, expectedStatus: string) => {
+Then('the report metadata should include conversionStatus {string}', async ({ request, world, workerHub }, expectedStatus: string) => {
   expect(getTriageState(world).reportId).toBeDefined()
   const { data, status } = await apiGet<Record<string, unknown>>(
     request,
-    `/reports/${getTriageState(world).reportId}`,
+    `/hubs/${workerHub}/reports/${getTriageState(world).reportId}`,
   )
   expect(status).toBe(200)
   expect(data).toBeTruthy()
@@ -228,11 +228,11 @@ Then('the report metadata should include conversionStatus {string}', async ({ re
   expect(conversionStatus).toBe(expectedStatus)
 })
 
-When('the admin fetches the report', async ({ request, world }) => {
+When('the admin fetches the report', async ({ request, world, workerHub }) => {
   expect(getTriageState(world).reportId).toBeDefined()
   const { data } = await apiGet<Record<string, unknown>>(
     request,
-    `/reports/${getTriageState(world).reportId}`,
+    `/hubs/${workerHub}/reports/${getTriageState(world).reportId}`,
   )
   setLastResponse(world, { status: 200, data })
 })
@@ -277,11 +277,11 @@ When('the admin creates a case record from the report', async ({ request, world 
   }
 })
 
-Then('the report should have {int} linked case record', async ({ request, world }, count: number) => {
+Then('the report should have {int} linked case record', async ({ request, world, workerHub }, count: number) => {
   expect(getTriageState(world).reportId).toBeDefined()
   const { data } = await apiGet<Record<string, unknown>>(
     request,
-    `/reports/${getTriageState(world).reportId}`,
+    `/hubs/${workerHub}/reports/${getTriageState(world).reportId}`,
   )
   const linked = (data as Record<string, unknown>)?.linkedRecords as unknown[]
     ?? (data as Record<string, unknown>)?.linkedCaseRecords as unknown[]
@@ -301,10 +301,10 @@ Given('a volunteer exists with cases:create permission only', async ({ request, 
   getTriageState(world).volunteerNsec = vol.seedHex
 })
 
-When('the volunteer lists reports with conversionEnabled true', async ({ request, world }) => {
+When('the volunteer lists reports with conversionEnabled true', async ({ request, world, workerHub }) => {
   const res = await apiGet<{ conversations?: unknown[]; reports?: unknown[] }>(
     request,
-    '/reports?conversionEnabled=true',
+    `/hubs/${workerHub}/reports?conversionEnabled=true`,
     getTriageState(world).volunteerNsec!,
   )
   setLastResponse(world, res)
@@ -386,10 +386,10 @@ Then('the response should include {string} matching the original report', async 
   expect(value).toBe(getTriageState(world).reportId)
 })
 
-Then('the report conversionStatus should be {string}', async ({ request, world }, expectedStatus: string) => {
+Then('the report conversionStatus should be {string}', async ({ request, world, workerHub }, expectedStatus: string) => {
   const state = getTriageState(world)
   expect(state.reportId).toBeDefined()
-  const { data } = await apiGet<Record<string, unknown>>(request, `/reports/${state.reportId}`)
+  const { data } = await apiGet<Record<string, unknown>>(request, `/hubs/${workerHub}/reports/${state.reportId}`)
   const meta = parseMetadata(data as Record<string, unknown>)
   expect(meta.conversionStatus).toBe(expectedStatus)
 })

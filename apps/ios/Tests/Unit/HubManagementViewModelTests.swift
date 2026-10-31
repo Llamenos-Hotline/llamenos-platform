@@ -55,6 +55,12 @@ final class MockHubAPIService: HubAPIServiceProtocol {
         return APIService.hubPath(hubId, path)
     }
 
+    /// Mirrors APIService: a hub-owned path never falls back to the bare path.
+    func activeHubPath(_ path: String) throws -> String {
+        guard let hubId = activeHubId else { throw APIError.noActiveHub }
+        return APIService.hubPath(hubId, path)
+    }
+
     func request<T: Decodable>(method: String, path: String, body: (any Encodable)?) async throws -> T {
         pathLock.withLock { _requestedPaths.append(path) }
         if let stub = requestStub, let result = try stub(method, path) as? T {

@@ -16,7 +16,7 @@ import shiftsRoutes from './routes/shifts'
 import bansRoutes from './routes/bans'
 import notesRoutes from './routes/notes'
 import callsRoutes from './routes/calls'
-import auditRoutes from './routes/audit'
+import auditRoutes, { platformAuditRoutes } from './routes/audit'
 import settingsRoutes, { hubSettingsRoutes } from './routes/settings'
 import telephonyRoutes from './routes/telephony'
 import ivrMediaRoutes from './routes/ivr-media'
@@ -240,6 +240,14 @@ api.use('/ivr-speech/*', rateLimit('webhook'))
 api.route('/', ivrMediaRoutes)
 
 // Authenticated routes
+//
+// A router whose rows belong to a hub is mounted ONLY under /hubs/:hubId, and
+// guards itself with `hubOnly` (lib/hub-scope.ts) so a stray unscoped mount
+// fails closed. Mounting one router both here and on `hubScoped` makes "no hub
+// id" mean "every hub" to its services, and lets a global role grant across
+// every hub what it grants inside none (#2395). `__tests__/unit/app-mounts.test.ts`
+// fails on any handler served both inside and outside a hub that is not in its
+// reviewed ledger.
 const authenticated = new Hono<AppEnv>()
 authenticated.use('*', auth)
 // Default rate limiting: GET/HEAD/OPTIONS → read tier, mutations → write tier (H03)
@@ -254,16 +262,13 @@ authenticated.route('/volunteers', usersRoutes)
 authenticated.route('/identity', identityRoutes)
 authenticated.route('/shifts', shiftsRoutes)
 authenticated.route('/bans', bansRoutes)
-authenticated.route('/notes', notesRoutes)
 authenticated.route('/calls', callsRoutes)
-authenticated.route('/audit', auditRoutes)
 authenticated.route('/settings/cms', entitySchemaRoutes)
 authenticated.route('/settings', settingsRoutes)
 authenticated.route('/telephony', webrtcRoutes)
 authenticated.route('/conversations', conversationsRoutes)
 authenticated.route('/uploads', uploadsRoutes)
 authenticated.route('/files', filesRoutes)
-authenticated.route('/reports', reportsRoutes)
 authenticated.route('/setup', setupRoutes)
 authenticated.route('/hubs', hubRoutes)
 authenticated.route('/blasts', blastsRoutes)
@@ -271,9 +276,10 @@ authenticated.route('/devices', devicesRoutes)
 authenticated.route('/sessions', sessionRoutes)
 authenticated.route('/security-events', securityEventsRoutes)
 authenticated.route('/admin/security-events', adminSecurityEventsRoutes)
+// The platform audit chain. A hub's chain is only under /hubs/:hubId/audit (#2395).
+authenticated.route('/admin/audit', platformAuditRoutes)
 authenticated.route('/account', accountRoutes)
 authenticated.route('/admin/devices', adminDevicesRoutes)
-authenticated.route('/contacts', contactsRoutes)
 authenticated.route('/directory', contactsV2Routes)
 authenticated.route('/records', recordsRoutes)
 authenticated.route('/events', eventsRoutes)

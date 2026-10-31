@@ -55,7 +55,7 @@ function baseConfig(overrides: Partial<MessagingConfig>): MessagingConfig {
 function makeServices(config: MessagingConfig) {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getMessagingConfig: vi.fn().mockResolvedValue(config) },
+    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(config) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
@@ -85,7 +85,7 @@ async function createApp(services: Services) {
 }
 
 function post(app: Hono<AppEnv>, channel: 'rcs' | 'telegram', body: unknown, headers: Record<string, string> = {}) {
-  return app.request(`/api/messaging/${channel}/webhook`, {
+  return app.request(`/api/messaging/${channel}/webhook?hub=hub-test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),

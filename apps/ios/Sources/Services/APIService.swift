@@ -15,6 +15,8 @@ enum APIError: LocalizedError {
     case networkError(Error)
     case decodingError(Error)
     case authTokenCreationFailed(Error)
+    /// A hub-owned resource was asked for with no hub active (`activeHubPath(_:)`).
+    case noActiveHub
 
     /// What a volunteer is shown. Everything here is a localized sentence — never an
     /// HTTP status line, a response body or a decoder path (#2207).
@@ -22,6 +24,8 @@ enum APIError: LocalizedError {
         switch self {
         case .noBaseURL:
             return NSLocalizedString("error_no_hub_url", comment: "No hub URL configured")
+        case .noActiveHub:
+            return NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
         case .insecureConnection(let reason):
             return reason
         case .requestFailed(let code, _):
@@ -70,6 +74,7 @@ extension APIError: CustomDebugStringConvertible {
         case .networkError(let error): return "Network error: \(error.localizedDescription)"
         case .decodingError(let error): return "Decoding error: \(Self.describe(decoding: error))"
         case .authTokenCreationFailed(let error): return "Auth token creation failed: \(error.localizedDescription)"
+        case .noActiveHub: return "No active hub for a hub-owned resource"
         }
     }
 }
@@ -467,6 +472,16 @@ final class APIService: @unchecked Sendable {
     /// `hubPath(_:_:)` with that hub's ID (multi-hub routing axiom).
     func hp(_ path: String) -> String {
         guard let hubId = hubContext.activeHubId else { return path }
+        return Self.hubPath(hubId, path)
+    }
+
+    /// Scope an `/api/...` path to the active hub, for a resource that belongs to a hub
+    /// and has NO unscoped route: notes, reports, contacts and the audit log (#2395).
+    ///
+    /// Unlike `hp(_:)` it never falls back to the bare path — the server refuses that
+    /// path, and a request with no hub in it would be a request for every hub's rows.
+    func activeHubPath(_ path: String) throws -> String {
+        guard let hubId = hubContext.activeHubId else { throw APIError.noActiveHub }
         return Self.hubPath(hubId, path)
     }
 
