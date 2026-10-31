@@ -35,6 +35,7 @@ import type {
 } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { holdMusicUrl } from './hold-music'
 
 /**
  * Bandwidth `<SpeakSentence locale gender>` voices — the explicit, ordered list
@@ -265,9 +266,10 @@ export class BandwidthAdapter implements TelephonyAdapter {
     }
 
     const waitBxml = speakOrPlay('waitMessage', lang, audioUrls)
+    const holdMusic = holdMusicUrl(audioUrls)
     return this.bxml(`
       ${waitBxml}
-      <PlayAudio>https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3</PlayAudio>
+      ${holdMusic ? `<PlayAudio>${escapeXml(holdMusic)}</PlayAudio>` : ''}
       <Redirect redirectUrl="/api/telephony/wait-music?lang=${lang}"/>
     `)
   }

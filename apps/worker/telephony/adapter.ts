@@ -329,6 +329,10 @@ export type CaptchaResponseParams = {
   callerLanguage: string
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  /**
+   * Prompts for a retry or repeat, and the hold track a caller who passes is
+   * queued with (Telnyx plays it from here, #2298)
+   */
   audioUrls?: AudioUrlMap
   speechUrl?: SpeechUrlBuilder
 } & (

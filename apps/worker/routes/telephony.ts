@@ -7,6 +7,7 @@ import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
+import { holdMusicEntry } from '../telephony/hold-music'
 import { banHashes, callerRateLimitDigest, getClientIp, sealCallerNumber } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
@@ -29,9 +30,17 @@ import { recordTelephonyWebhookRejection } from '../telephony/webhook-rejection'
 
 const logger = createLogger('telephony')
 
-/** Operator-uploaded prompts, as signed URLs the provider fetches from the origin it reached us on */
-function audioUrlsFor(c: Context<AppEnv>, hubId: string | undefined) {
-  return buildAudioUrlMap(c.get('services').settings, new URL(c.req.url).origin, c.env.HMAC_SECRET, hubId)
+/**
+ * What a provider fetches during this call, from the origin it reached us on:
+ * operator-uploaded prompts as signed URLs, plus the worker's own hold track
+ * (#2298) — so no adapter ever has to name a media host.
+ */
+async function audioUrlsFor(c: Context<AppEnv>, hubId: string | undefined) {
+  const origin = new URL(c.req.url).origin
+  return {
+    ...(await buildAudioUrlMap(c.get('services').settings, origin, c.env.HMAC_SECRET, hubId)),
+    ...holdMusicEntry(origin),
+  }
 }
 
 /**
@@ -444,7 +453,7 @@ telephony.post('/captcha',
       const origin = new URL(c.req.url).origin
       backgroundTask(c, startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId ?? ''))
       return telephonyResponse(await adapter.handleCaptchaResponse({
-        outcome: 'pass', callSid, callerLanguage: callerLang, hubId, speechUrl,
+        outcome: 'pass', callSid, callerLanguage: callerLang, hubId, audioUrls: await audioUrlsFor(c, hubId), speechUrl,
       }))
     }
     case 'retry':

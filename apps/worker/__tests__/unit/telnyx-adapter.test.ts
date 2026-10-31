@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TelnyxAdapter } from '@worker/telephony/telnyx'
+import { holdMusicEntry } from '@worker/telephony/hold-music'
+
+const HOLD_ORIGIN = 'https://hotline.example.org'
+const HOLD = holdMusicEntry(HOLD_ORIGIN)
+const HOLD_URL = `${HOLD_ORIGIN}/api/ivr-audio/hold-music.wav`
 
 describe('TelnyxAdapter', () => {
   let adapter: TelnyxAdapter
@@ -115,11 +120,12 @@ describe('TelnyxAdapter', () => {
         callerLanguage: 'en',
         hotlineName: 'Test Hotline',
         hubId: 'hub-1',
+        audioUrls: HOLD,
       })
 
       expect(result.body).toBe('{}')
       assertCommandFetchAnyBody('call-003', 'speak')
-      assertCommandFetchAnyBody('call-003', 'playback_start')
+      assertCommandFetch('call-003', 'playback_start', { audio_url: HOLD_URL, loop: 'infinity' })
     })
 
     it('hangs up for rate-limited calls', async () => {
@@ -159,12 +165,12 @@ describe('TelnyxAdapter', () => {
   describe('handleCaptchaResponse', () => {
     it('queues caller on pass', async () => {
       const result = await adapter.handleCaptchaResponse({
-        outcome: 'pass', callSid: 'call-006', callerLanguage: 'en', hubId: 'hub-1',
+        outcome: 'pass', callSid: 'call-006', callerLanguage: 'en', hubId: 'hub-1', audioUrls: HOLD,
       })
 
       expect(result.body).toBe('{}')
       assertCommandFetchAnyBody('call-006', 'speak')
-      assertCommandFetchAnyBody('call-006', 'playback_start')
+      assertCommandFetch('call-006', 'playback_start', { audio_url: HOLD_URL, loop: 'infinity' })
     })
 
     it('gathers again on retry', async () => {
