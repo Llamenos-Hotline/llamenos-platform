@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { listAuditLog, listPlatformAuditLog, listUsers, type AuditLogEntry, type User } from '@/lib/api'
+import { listAuditLog, listPlatformAuditLog, listUsers, NoActiveHubError, type AuditLogEntry, type User } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { ScrollText, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -76,7 +76,8 @@ export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
       search: searchText || undefined,
     })
       .then(r => { setEntries(r.entries); setTotal(r.total) })
-      .catch(() => toast(t('common.error'), 'error'))
+      // No hub to browse is an empty chain, not a failure to load one (#2405).
+      .catch(err => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
       .finally(() => setLoading(false))
   }, [scope, page, eventType, dateFrom, dateTo, searchText, t, toast])
 

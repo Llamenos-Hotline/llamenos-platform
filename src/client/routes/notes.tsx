@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
+import { listNotes, NoActiveHubError, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
@@ -160,8 +160,9 @@ function NotesPage() {
       )
       setNotes(decryptedNotes)
       setTotal(res.total)
-    } catch {
-      toast(t('common.error'), 'error')
+    } catch (err) {
+      // No hub to browse is an empty list, not a failure to load one (#2405).
+      if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error')
     } finally {
       setLoading(false)
     }
