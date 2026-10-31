@@ -536,7 +536,10 @@ final class AdminViewModel {
             auditTotal = Int(response.total)
             hasMoreAudit = auditEntries.count < Int(response.total)
         } catch {
-            errorMessage = error.localizedDescription
+            // No hub to browse is an empty chain, not a failure
+            if !APIError.isNoHub(error) {
+                errorMessage = error.localizedDescription
+            }
         }
 
         isLoadingAudit = false

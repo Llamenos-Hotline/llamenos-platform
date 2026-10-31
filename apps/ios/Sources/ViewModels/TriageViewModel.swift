@@ -95,7 +95,8 @@ final class TriageViewModel {
             reports = response.conversations
             total = Int(response.total)
         } catch {
-            if reports.isEmpty {
+            // No hub to browse is an empty queue, not a failure
+            if reports.isEmpty && !APIError.isNoHub(error) {
                 errorMessage = error.localizedDescription
             }
         }
