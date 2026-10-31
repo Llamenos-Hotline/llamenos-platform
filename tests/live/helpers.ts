@@ -215,14 +215,17 @@ export async function callCount(request: APIRequestContext): Promise<number> {
   return (await res.json()).count as number
 }
 
-/** Total conversations the hub can see — same delta technique as callCount. */
+/**
+ * Total conversations the hub can see — same delta technique as callCount.
+ * Conversations are served only under `/api/hubs/:hubId` (#2381).
+ */
 export async function conversationCount(request: APIRequestContext): Promise<number> {
-  const res = await request.get('/api/conversations')
-  if (!res.ok()) {
-    throw new Error(`GET /api/conversations failed: ${res.status()} ${await res.text()}`)
-  }
-  const body = await res.json()
-  return Array.isArray(body) ? body.length : (body.conversations?.length ?? 0)
+  const hubId = await resolveHubId(request)
+  const { status, data } = await apiGet<{ conversations?: unknown[] }>(
+    request, `/hubs/${hubId}/conversations`, requireAdminSeed(),
+  )
+  if (status !== 200) throw new Error(`GET /api/hubs/${hubId}/conversations failed: ${status}`)
+  return data.conversations?.length ?? 0
 }
 
 /**

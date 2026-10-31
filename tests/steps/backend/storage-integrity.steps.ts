@@ -191,7 +191,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
     // data so this is an actual JSONB round-trip, not a null column.
     const patchRes = await apiPatch<Record<string, unknown>>(
       request,
-      `/conversations/${result.conversationId}`,
+      `/hubs/${workerHub}/conversations/${result.conversationId}`,
       { metadata: { source: 'storage-test', tags: ['integrity'] } },
     )
     expect(patchRes.status).toBe(200)
@@ -199,7 +199,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
     // Fetch it to get the full record
     const { status, data } = await apiGet<Record<string, unknown>>(
       request,
-      `/conversations/${result.conversationId}`,
+      `/hubs/${workerHub}/conversations/${result.conversationId}`,
     )
     expect(status).toBe(200)
     state.apiResponses.set(entityType, data)
@@ -273,7 +273,7 @@ Given('the admin keypair is known for envelope verification', async ({ world }) 
 
 // ── When: Fetch ─────────────────────────────────────────────────────
 
-When('the {string} is fetched via the API', async ({ request, world }, entityType: string) => {
+When('the {string} is fetched via the API', async ({ request, world, workerHub }, entityType: string) => {
   const state = getStorageIntegrityState(world)
   const id = state.entityIds.get(entityType)
   expect(id).toBeDefined()
@@ -299,7 +299,7 @@ When('the {string} is fetched via the API', async ({ request, world }, entityTyp
   }
 
   if (entityType === 'conversation metadata') {
-    const { status, data } = await apiGet<Record<string, unknown>>(request, `/conversations/${id}`)
+    const { status, data } = await apiGet<Record<string, unknown>>(request, `/hubs/${workerHub}/conversations/${id}`)
     expect(status).toBe(200)
     state.apiResponses.set(entityType, data)
     return

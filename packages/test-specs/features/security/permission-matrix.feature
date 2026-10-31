@@ -736,7 +736,7 @@ Feature: Permission Matrix
       | GET    | /api/metrics                       |
       | GET    | /api/hubs                          |
       | GET    | /api/reports                       |
-      | GET    | /api/conversations                 |
+      | GET    | /api/hubs/x/conversations          |
       | GET    | /api/system/health                 |
       | POST   | /api/users                    |
       | POST   | /api/bans                          |

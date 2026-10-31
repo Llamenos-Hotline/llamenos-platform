@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv, EncryptedMessage } from '../types'
 import type { MessagingChannelType } from '@shared/types'
@@ -23,10 +23,29 @@ import { adminHpkeRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
+import { ServiceError } from '../services/settings'
 
 const logger = createLogger('routes.conversations')
 
 const conversations = new Hono<AppEnv>()
+
+// Conversations exist only inside a hub, and so does this router (#2381). It is
+// mounted solely under /hubs/:hubId, where hubContext has proven membership and
+// replaced `permissions` with the caller's set IN THAT HUB. Outside a hub the
+// handlers would see no hub filter and the caller's global permissions — every
+// hub's waiting queue, served to anyone with a session. Refused here rather than
+// trusted to the mount table, so a stray unscoped mount fails closed.
+conversations.use('*', async (c, next) => {
+  if (!c.get('hubId')) return c.json({ error: 'Conversations are hub-scoped: use /hubs/:hubId/conversations' }, 404)
+  return next()
+})
+
+/** The request's hub. Always set past the guard above; the check narrows the type. */
+function requireHubId(c: Context<AppEnv>): string {
+  const hubId = c.get('hubId')
+  if (!hubId) throw new ServiceError(404, 'Conversations are hub-scoped: use /hubs/:hubId/conversations')
+  return hubId
+}
 
 // Inside /hubs/:hubId every /:id route may only touch a conversation of that
 // hub (#2011). Registered before the handlers so no route can opt out; a
@@ -57,9 +76,10 @@ function dispatchPushToUser(
 }
 
 /**
- * GET /conversations — list conversations
- * Users with conversations:read-all see everything.
- * Others see only their assigned + waiting conversations (filtered by claimable channels).
+ * GET /conversations — list this hub's conversations
+ * Users with conversations:read-all in the hub see all of them.
+ * Others see only their assigned + the waiting conversations on channels they may
+ * claim in this hub — none at all when they may claim no channel.
  */
 conversations.get('/',
   describeRoute({
@@ -85,7 +105,7 @@ conversations.get('/',
     const user = c.get('user')
     const canReadAll = checkPermission(permissions, 'conversations:read-all')
     const query = c.req.valid('query')
-    const hubId = c.get('hubId')
+    const hubId = requireHubId(c)
 
     const offset = (query.page - 1) * query.limit
 
@@ -110,17 +130,15 @@ conversations.get('/',
         offset,
       })
 
-      // Filter waiting conversations by channels the volunteer can claim
+      // The waiting queue is what the caller may claim, so it is bounded by the
+      // channels their hub permissions let them claim. No claimable channel means
+      // no waiting conversation — an empty set never means "unfiltered".
       const claimableChannels = getClaimableChannels(permissions)
       const userChannels = user.supportedMessagingChannels
 
-      let filteredWaiting = waiting.conversations
-      // Filter by permission-based claimable channels
-      if (claimableChannels.length > 0) {
-        filteredWaiting = filteredWaiting.filter(conv =>
-          claimableChannels.includes(conv.channelType)
-        )
-      }
+      let filteredWaiting = waiting.conversations.filter(conv =>
+        claimableChannels.includes(conv.channelType)
+      )
       // Also filter by user's configured supported channels (if set)
       if (userChannels && userChannels.length > 0) {
         filteredWaiting = filteredWaiting.filter(conv =>
@@ -170,8 +188,7 @@ conversations.get('/stats',
   requirePermission('conversations:read-assigned'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId')
-    const stats = await services.conversations.getStats(hubId)
+    const stats = await services.conversations.getStats(requireHubId(c))
     return c.json(stats)
   },
 )
@@ -200,8 +217,7 @@ conversations.get('/load',
     }
 
     const services = c.get('services')
-    const hubId = c.get('hubId')
-    const loads = await services.conversations.getAllVolunteerLoads(hubId)
+    const loads = await services.conversations.getAllVolunteerLoads(requireHubId(c))
     return c.json({ loads })
   },
 )
@@ -233,7 +249,7 @@ conversations.get('/:id',
     const permissions = c.get('permissions')
     const canReadAll = checkPermission(permissions, 'conversations:read-all')
 
-    const conv = await services.conversations.getById(id)
+    const conv = await services.conversations.getByIdForHub(id, requireHubId(c))
 
     // Non-admins can only view their assigned or waiting conversations
     if (!canReadAll && conv.assignedTo !== pubkey && conv.status !== 'waiting') {
@@ -274,7 +290,7 @@ conversations.get('/:id/messages',
     const query = c.req.valid('query')
 
     // Verify access
-    const conv = await services.conversations.getById(id)
+    const conv = await services.conversations.getByIdForHub(id, requireHubId(c))
     if (!canReadAll && conv.assignedTo !== pubkey && conv.status !== 'waiting') {
       return c.json({ error: 'Forbidden' }, 403)
     }
@@ -319,7 +335,7 @@ conversations.post('/:id/messages',
     const canSendAny = checkPermission(permissions, 'conversations:send-any')
 
     // Verify access
-    const conv = await services.conversations.getById(id)
+    const conv = await services.conversations.getByIdForHub(id, requireHubId(c))
     if (!canSendAny && conv.assignedTo !== pubkey) {
       return c.json({ error: 'Forbidden' }, 403)
     }
@@ -560,7 +576,7 @@ conversations.patch('/:id',
     const body = c.req.valid('json')
 
     // Only users with update permission or assigned volunteer can update
-    const conv = await services.conversations.getById(id)
+    const conv = await services.conversations.getByIdForHub(id, requireHubId(c))
     if (!canUpdate && conv.assignedTo !== pubkey) {
       return c.json({ error: 'Forbidden' }, 403)
     }
@@ -595,15 +611,6 @@ conversations.patch('/:id',
 // The server never sees a content key or plaintext on this path.
 
 /**
- * Under a hub-scoped mount the caller's permissions are this hub's, so a
- * conversation from any other hub is out of reach — answered as 404, so the
- * route is not an existence oracle for foreign conversation ids.
- */
-function inCallerHub(conversationHubId: string | null, callerHubId: string | undefined): boolean {
-  return callerHubId === undefined || conversationHubId === callerHubId
-}
-
-/**
  * GET /conversations/:id/assignee-envelopes — messages the current assignee
  * cannot yet open, and the device keys to wrap them for. Paged: the re-wrapping
  * client posts the envelopes and asks again until `messages` is empty.
@@ -625,8 +632,8 @@ conversations.get('/:id/assignee-envelopes',
   async (c) => {
     const services = c.get('services')
     const id = c.req.param('id')
-    const conv = await services.conversations.getById(id)
-    if (!inCallerHub(conv.hubId, c.get('hubId'))) return c.json({ error: 'Conversation not found' }, 404)
+    // A conversation of another hub is a 404, the same as a missing one.
+    await services.conversations.getByIdForHub(id, requireHubId(c))
 
     const gaps = await services.conversations.listAssigneeEnvelopeGaps(id)
     return c.json(gaps)
@@ -660,8 +667,7 @@ conversations.post('/:id/assignee-envelopes',
     const services = c.get('services')
     const id = c.req.param('id')
     const body = c.req.valid('json')
-    const conv = await services.conversations.getById(id)
-    if (!inCallerHub(conv.hubId, c.get('hubId'))) return c.json({ error: 'Conversation not found' }, 404)
+    const conv = await services.conversations.getByIdForHub(id, requireHubId(c))
 
     const { added, assignedTo } = await services.conversations.addAssigneeEnvelopes(id, body.envelopes)
 
@@ -714,13 +720,10 @@ conversations.post('/:id/claim',
     const pubkey = c.get('pubkey')
     const permissions = c.get('permissions')
     const user = c.get('user')
-    const hubId = c.get('hubId')
-    if (!hubId) {
-      return c.json({ error: 'missing hub context' }, 400)
-    }
+    const hubId = requireHubId(c)
 
     // Fetch conversation to check channel type
-    const conv = await services.conversations.getById(id)
+    const conv = await services.conversations.getByIdForHub(id, hubId)
 
     // Check channel-specific claim permission
     if (!canClaimChannel(permissions, conv.channelType)) {

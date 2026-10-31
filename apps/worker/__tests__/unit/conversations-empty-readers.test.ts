@@ -26,7 +26,7 @@ function createSmsServices() {
   const getHpkeRecipients = vi.fn().mockResolvedValue([])
   const services = {
     conversations: {
-      getById: vi.fn().mockResolvedValue({
+      getByIdForHub: vi.fn().mockResolvedValue({
         id: 'conv-sms',
         channelType: 'sms',
         assignedTo: VALID_PUBKEY,
@@ -48,6 +48,8 @@ describe('POST /conversations/:id/messages — empty-reader crisis contract', ()
       prefix: '/conversations',
       routes: conversationsRoutes,
       authenticated: true,
+      // Conversations are served only inside a hub (#2381).
+      hubId: 'hub-1',
       services,
     })
 
