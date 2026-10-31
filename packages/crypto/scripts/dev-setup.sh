@@ -117,7 +117,7 @@ if [[ $ERRORS -eq 0 ]]; then
   echo -e "${GREEN}Setup complete!${NC} Key commands:"
   echo "  cargo test                          # Run all tests"
   echo "  cargo build --release               # Release build"
-  echo "  ./scripts/generate-bindings.sh      # Generate Swift/Kotlin bindings"
+  echo "  ./scripts/generate-bindings.sh      # Generate Swift bindings (Kotlin: ./scripts/kotlin-bindings.sh sync)"
   echo "  ./scripts/build-mobile.sh           # Build for mobile targets"
 else
   echo -e "${RED}$ERRORS issue(s) found.${NC} Fix the above errors and re-run this script."

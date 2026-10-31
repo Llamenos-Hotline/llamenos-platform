@@ -103,15 +103,12 @@ fn rust_and_typescript_derive_identical_aad_for_every_label() {
 /// The tracked Kotlin binding must expose the AAD derivation and must carry
 /// the `aadHex` parameter on both symmetric entry points.
 ///
-/// `packages/crypto/bindings/kotlin/...` and the copy Gradle compiles under
-/// `apps/android/...` are both checked: a regenerated binding that was not
-/// copied across is the same stale-artifact failure, one directory later.
+/// Freshness against the whole crate is `scripts/kotlin-bindings.sh check`
+/// (run by CI's crypto-tests job, after this suite); this pins the AAD-specific
+/// signatures that a hand-edit could keep while leaving the file regenerable.
 #[test]
 fn the_generated_kotlin_binding_is_not_stale() {
-    for binding in [
-        "packages/crypto/bindings/kotlin/org/llamenos/core/llamenos_core.kt",
-        "apps/android/app/src/main/java/org/llamenos/core/llamenos_core.kt",
-    ] {
+    for binding in ["apps/android/app/src/main/java/org/llamenos/core/llamenos_core.kt"] {
         let kt = read(binding);
         for symbol in [
             "fun `mobileContentAadHex`",

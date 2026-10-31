@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Generate Swift and Kotlin bindings from the llamenos-core Rust crate.
+# Generate the Swift bindings from the llamenos-core Rust crate.
+# (The Android Kotlin binding has its own generator: scripts/kotlin-bindings.sh.)
 #
 # Usage: ./scripts/generate-bindings.sh
 #
@@ -39,17 +40,10 @@ mkdir -p bindings/swift
 cargo run --features uniffi-bindgen --bin uniffi-bindgen -- \
   generate --library "$LIBRARY" --language swift --out-dir bindings/swift/
 
-echo "Generating Kotlin bindings..."
-mkdir -p bindings/kotlin
-cargo run --features uniffi-bindgen --bin uniffi-bindgen -- \
-  generate --library "$LIBRARY" --language kotlin --out-dir bindings/kotlin/
-
 echo ""
 echo "Bindings generated:"
 echo "  Swift:  bindings/swift/"
 ls -1 bindings/swift/
-echo "  Kotlin: bindings/kotlin/"
-find bindings/kotlin/ -name "*.kt" -type f
 
 echo ""
-echo "Done. Copy these into your iOS/Android projects."
+echo "Done. Copy these into your iOS project."
