@@ -31,6 +31,7 @@ import type {
 } from '@protocol/schemas/settings'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { holdMusicUrl } from './hold-music'
 
 /**
  * Vonage NCCO talk `language` codes — the explicit, ordered list of locales
@@ -257,13 +258,8 @@ export class VonageAdapter implements TelephonyAdapter {
     }
 
     const waitAction = sayOrStream('waitMessage', lang, audioUrls)
-    return this.ncco([
-      waitAction,
-      {
-        action: 'stream',
-        streamUrl: ['https://com.twilio.music.soft-rock.s3.amazonaws.com/_ghost_-_promo_2_sample_pack.mp3'],
-      },
-    ])
+    const holdMusic = holdMusicUrl(audioUrls)
+    return this.ncco(holdMusic ? [waitAction, stream(holdMusic)] : [waitAction])
   }
 
   async handleVoicemail(params: VoicemailParams): Promise<TelephonyResponse> {
