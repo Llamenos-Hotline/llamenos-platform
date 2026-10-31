@@ -35,6 +35,13 @@ class ProviderSetupViewModel @Inject constructor(
     private val _selectedProvider = MutableStateFlow<String?>(null)
     val selectedProvider: StateFlow<String?> = _selectedProvider.asStateFlow()
 
+    /**
+     * The hub whose provider is being configured. A messaging webhook URL must
+     * name it (`?hub=`): the server refuses an inbound message that names no hub,
+     * because the deployment-wide sender cannot say which hub it is for (#2395).
+     */
+    val activeHubId: String? get() = repository.activeHubIdOrNull()
+
     private val _isTesting = MutableStateFlow(false)
     val isTesting: StateFlow<Boolean> = _isTesting.asStateFlow()
 

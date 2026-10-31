@@ -491,7 +491,7 @@ class AdminViewModel @Inject constructor(
             try {
                 val response = apiService.request<AuditLogResponse>(
                     "GET",
-                    apiService.hp("/api/audit") + "?page=$page&limit=50",
+                    apiService.activeHubPath("/api/audit") + "?page=$page&limit=50",
                 )
 
                 _uiState.update {

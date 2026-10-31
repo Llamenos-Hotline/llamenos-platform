@@ -198,7 +198,7 @@ final class ReportsViewModel {
 
             let _: SharedConversation = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/reports"),
+                path: apiService.activeHubPath("/api/reports"),
                 body: request
             )
 
@@ -261,7 +261,7 @@ final class ReportsViewModel {
             // `rawBody:` detour this used to need is gone.
             let _: SharedConversation = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/reports"),
+                path: apiService.activeHubPath("/api/reports"),
                 body: body
             )
 
@@ -292,7 +292,7 @@ final class ReportsViewModel {
             let request = ReportAssignRequest(assignedTo: signingPubkey)
             let _: SharedConversation = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/reports/\(id)/assign"),
+                path: apiService.activeHubPath("/api/reports/\(id)/assign"),
                 body: request
             )
 
@@ -316,7 +316,7 @@ final class ReportsViewModel {
             let request = ReportUpdateRequest(status: "closed")
             let _: SharedConversation = try await apiService.request(
                 method: "PATCH",
-                path: apiService.hp("/api/reports/\(id)"),
+                path: apiService.activeHubPath("/api/reports/\(id)"),
                 body: request
             )
 
@@ -337,7 +337,7 @@ final class ReportsViewModel {
         do {
             let response: ReportListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/reports") + "?limit=50"
+                path: apiService.activeHubPath("/api/reports") + "?limit=50"
             )
             reports = response.conversations
             totalCount = Int(response.total)
@@ -354,7 +354,7 @@ final class ReportsViewModel {
         do {
             let response: ReportCategoriesResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/reports/categories")
+                path: apiService.activeHubPath("/api/reports/categories")
             )
             categories = response.categories
         } catch {
@@ -367,7 +367,7 @@ final class ReportsViewModel {
         do {
             let response: CMSReportTypeListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/reports/types")
+                path: apiService.activeHubPath("/api/reports/types")
             )
             reportTypes = response.reportTypes
         } catch {

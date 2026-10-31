@@ -263,6 +263,25 @@ export function hp(path: string): string {
   return activeHubId ? `/hubs/${activeHubId}${path}` : path
 }
 
+/** A hub-owned resource was asked for with no hub to ask it in (#2395). */
+export class NoActiveHubError extends Error {
+  constructor(public path: string) {
+    super(`No hub selected for ${path}`)
+    this.name = 'NoActiveHubError'
+  }
+}
+
+/**
+ * Prefix a hub-owned path with the active hub. Notes, reports, contacts and the
+ * audit log have no unscoped route (#2395): unlike `hp()`, this never falls back
+ * to the bare path — the server refuses it, and a request with no hub in it
+ * would be a request for every hub's rows. Throws `NoActiveHubError` instead.
+ */
+export function activeHubPath(path: string): string {
+  if (!activeHubId) throw new NoActiveHubError(path)
+  return hubPath(activeHubId, path)
+}
+
 /**
  * Prefix a path with an explicit hub scope, independent of the active hub.
  * Use this for anything that belongs to a specific hub regardless of what the

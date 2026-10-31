@@ -80,7 +80,7 @@ class ContactsViewModel @Inject constructor(
             }
             try {
                 val query = buildString {
-                    append(apiService.hp("/api/contacts"))
+                    append(apiService.activeHubPath("/api/contacts"))
                     append("?page=$page&limit=50")
                 }
                 val response = apiService.request<ContactsListResponse>(
