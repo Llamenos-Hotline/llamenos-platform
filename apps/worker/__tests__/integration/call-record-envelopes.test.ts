@@ -28,6 +28,8 @@ import '../../db/pg-array-patch'
 import '../mocks/llamenos-crypto-ffi'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { hexToBytes } from '@shared/encoding'
@@ -100,12 +102,37 @@ function expectNoRawCallerDigits(row: Record<string, unknown>) {
 }
 
 describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
-  it('no table holds any part of a caller\'s number: no last-four column anywhere (#2262)', async () => {
-    const columns = await fresh.raw<{ table_name: string; column_name: string }[]>`
-      SELECT table_name, column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name IN ('active_calls', 'call_records')`
-    expect(columns.map((c) => c.column_name)).toContain('call_id') // the query found the tables
-    expect(columns.filter((c) => /last4|last_4|last_four/i.test(c.column_name))).toEqual([])
+  it('migration 0074 erases every stored last-four digit, and the schema no longer declares the column (#2262)', async () => {
+    // What the previous release left behind: digits beside a live call and a finished one.
+    await fresh.raw.unsafe(`INSERT INTO active_calls (call_id, hub_id, caller_last4) VALUES ('legacy-active', 'hub-1', '4567')`)
+    await fresh.raw.unsafe(
+      `INSERT INTO call_records (call_id, hub_id, caller_last4, started_at, status, encrypted_content)
+       VALUES ('legacy-record', 'hub-1', '4567', now(), 'completed', '')`,
+    )
+
+    const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
+    const file = readdirSync(dir).find((f) => f.startsWith('0074_') && f.endsWith('.sql'))
+    expect(file, 'migration 0074 is missing').toBeTruthy()
+    const statements = readFileSync(join(dir, file!), 'utf8')
+      .split('--> statement-breakpoint')
+      .map((st) => st.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
+      .filter(Boolean)
+    expect(statements.length).toBeGreaterThan(0)
+    for (const statement of statements) await fresh.raw.unsafe(statement)
+
+    const left = await fresh.raw.unsafe(
+      `SELECT (SELECT count(*)::int FROM active_calls WHERE caller_last4 IS NOT NULL)
+            + (SELECT count(*)::int FROM call_records WHERE caller_last4 IS NOT NULL) AS n`,
+    )
+    expect(left[0]!.n).toBe(0)
+
+    // The code never names the column again: not on the tables, not on any row it reads.
+    for (const table of [schema.activeCalls, schema.callRecords]) {
+      expect(Object.keys(table).filter((k) => /last4/i.test(k))).toEqual([])
+    }
+
+    await fresh.raw.unsafe(`DELETE FROM active_calls WHERE call_id = 'legacy-active'`)
+    await fresh.raw.unsafe(`DELETE FROM call_records WHERE call_id = 'legacy-record'`)
   })
 
   it('endCall seals { answeredBy, callerNumber } for admin recipients', async () => {
