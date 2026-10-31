@@ -439,6 +439,16 @@ try {
     ),
   )
 
+  // A timestamped migration written on one branch can land after one from
+  // another branch that sorts later, and this database may already have that
+  // one (#2391). Applying it now is correct — migration:order proved in CI
+  // that both orders build the same schema — but it is never silent.
+  const lastApplied = [...ledger.values()]
+    .filter((r) => r.applied_at != null)
+    .map((r) => r.filename)
+    .sort()
+    .at(-1)
+
   let applied = 0
   let reconciled = 0
   let alreadyDone = 0
@@ -469,6 +479,12 @@ try {
     // reconciliation; anything with no row at all is a genuinely new migration
     // and is applied strictly, even on a database that was caught up earlier.
     const catchUp = row !== undefined
+    if (!catchUp && lastApplied !== undefined && file < lastApplied) {
+      console.log(
+        `[migrate] ${file}: applying after ${lastApplied}, which sorts later. They were written on ` +
+          'different branches; migration:order proved both orders build the same schema.',
+      )
+    }
 
     const statements = splitMigrationStatements(content)
 

@@ -110,7 +110,7 @@ describe('classifyImpact', () => {
     ['scripts/check-migration-drift.sh'],
     ['scripts/typecheck-tests-gate.ts'],
     ['scripts/eslint-rules/no-inline-api-shape.js'],
-    ['scripts/regenerate-snapshot.ts'],
+    ['scripts/db-generate.ts'],
     ['scripts/image-smoke.sh'],
     ['scripts/verify-runtime.ts'],
     ['scripts/run-migrations.ts'],

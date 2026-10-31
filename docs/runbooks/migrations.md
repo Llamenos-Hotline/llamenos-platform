@@ -40,7 +40,7 @@ anything N-1 uses is split across two releases.
 |-------|---------|------------|
 | **Expand** | N | Add the new shape next to the old one: a new column, table or enum value that is nullable or has a default. The code writes both shapes and reads the new one, falling back to the old. |
 | **Backfill** | N | An `UPDATE … WHERE` (or a batched job) copies old into new. The dual write covers rows the old code writes during the rollout. |
-| **Forget** | N+1 | The code stops using the old shape, and the drizzle schema stops declaring it. `drizzle-kit generate` writes a `DROP`. Delete that statement and keep the regenerated snapshot. The database keeps the old shape, so N, still running beside the new pod, finds it. |
+| **Forget** | N+1 | The code stops using the old shape, and the drizzle schema stops declaring it. `bun run db:generate` writes a `DROP`. Delete that statement and keep the generated snapshot. The database keeps the old shape, so N, still running beside the new pod, finds it. |
 | **Contract** | N+2 | The migration drops the old shape, annotated `-- migration-safety: allow …`. N+1 no longer declares it, so the gate verifies the annotation and accepts the drop. |
 
 Expand and forget can share a release when nothing in the previous release
@@ -107,7 +107,11 @@ Both modes, in three parts.
 1. **Order.** Every pending file sorts after every settled one (applied, at
    deploy time; on the base branch, in CI). The runner applies by filename, so
    an upgraded database would run an out-of-order file last but a fresh one in
-   the middle.
+   the middle. The exception is a timestamped migration **concurrent** with
+   every settled file it sorts before: written on another branch, so neither
+   descends from the other in the snapshot graph. `migration:order` proves in
+   Postgres that each such upgrade order builds the schema a fresh install
+   does (see "Naming and order" below).
 2. **Destructive-DDL lint.** Each pending file is split with the runner's own
    splitter (`scripts/lib/migration-statements.ts`, on
    `--> statement-breakpoint`). Each statement is then parsed with the real
@@ -142,11 +146,12 @@ Both modes, in three parts.
    dropping it. A forgotten column must not be NOT NULL without a default, or
    this release's INSERTs, which omit it, fail.
 
-**The release being replaced** is the newest drizzle snapshot
-(`drizzle/migrations/meta/NNNN_snapshot.json`) at or before the last settled
-file. Snapshots are immutable, so both modes read it from the tree: CI takes
-the last file on the base branch, the deploy takes the last file the
-database's ledger applied.
+**The release being replaced** is the schema the settled files build: the
+merge of the snapshot heads among them (`drizzle/migrations/meta/`; one head is
+simply the newest snapshot). Snapshots are immutable, so both modes read it from
+the tree: CI takes the files on the base branch, the deploy takes the files the
+database's ledger applied. **The newest snapshot** is the same merge over every
+snapshot in the tree.
 
 CI additionally rejects any edit to, or deletion of, a migration or snapshot
 that exists on the base branch: the runner refuses a file whose checksum
@@ -165,6 +170,41 @@ new container starts, instead of after.
   not-yet-deployed change created is judged as if that table were live. Annotate
   it, or (when the table has never been deployed) fold the change into a new
   migration that creates it right.
+
+## Naming and order
+
+Migrations are written by `bun run db:generate --name <what>` (`--custom` for a
+hand-written one) as `drizzle/migrations/YYYYMMDDHHMMSS_<what>.sql` plus
+`meta/YYYYMMDDHHMMSS_snapshot.json`. `bunx drizzle-kit generate` is not used:
+drizzle-kit 0.31 numbers files from `_journal.json` (now deleted; nothing read
+it at run time) and aborts as soon as two snapshots share a parent, so every
+migration PR had to be regenerated after the one before it landed (#2391).
+`0000`–`0070` keep their numbered names, and sort before every timestamped one.
+
+Each snapshot is the full schema its branch declared, and its `prevIds` name
+every head the tree had when it was generated (`scripts/lib/migration-graph.ts`).
+Two PRs that each add a migration are two heads; nothing is renumbered when the
+first lands. The schema the tree's migrations build is the 3-way merge of the
+heads over their nearest common ancestor, which `migration:check` compares with
+the declared schema. Two heads that changed one object differently do not merge,
+and the check fails: regenerate the later one on top.
+
+A migration written first can land second, and so sort before a file a deployed
+database has already applied. That database applies the two in the opposite
+order to a fresh install. `migration:order` (`scripts/check-migration-order.ts`,
+in the `migration-drift` job) takes every main tip a deployment can sit on — the
+base, and each merge-group entry ahead — builds a real database from it and
+upgrades it, builds a fresh install twice (the second run must be a no-op), and
+compares catalog fingerprints: tables, columns, constraints, indexes, triggers,
+functions, enums, sequences, views, policies. It trusts no `prevIds`: the orders
+come from git. The runner logs every such out-of-order application.
+
+`migration:claims` (`scripts/check-migration-claims.ts`, CI and pre-push) fails a
+PR whose migration cannot land as named — for the numbered PRs from before the
+cutover, a number already taken or claimed by an older open PR, or a stale
+`prevId` — and prints the regeneration command. The procedure, and why a
+hand-edited `prevId` is never the fix, is in
+`.claude/agents/fragments/_worker-rules.md` ("Migrations").
 
 ## Contracting: annotations
 

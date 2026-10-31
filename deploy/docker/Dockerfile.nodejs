@@ -64,6 +64,7 @@ COPY scripts/run-migrations.ts scripts/run-migrations.ts
 COPY scripts/lib/migration-statements.ts scripts/lib/migration-statements.ts
 # Pre-deploy migration safety gate (--target); see the same line in Dockerfile.
 COPY scripts/check-migration-safety.ts scripts/check-migration-safety.ts
+COPY scripts/lib/migration-graph.ts scripts/lib/migration-graph.ts
 COPY deploy/docker/docker-entrypoint-nodejs.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY deploy/docker/download-page/ public/

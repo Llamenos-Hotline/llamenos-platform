@@ -3142,7 +3142,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 5
+      pull-requests: read # migration:claims' open-PR sweep
+    timeout-minutes: 10
+    env:
+      MIGRATION_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
 
     steps:
       - name: Checkout
@@ -3166,14 +3169,36 @@ jobs:
       # their SQL, with no database. The same gate runs again before a deploy
       # against the real database (--target); docs/runbooks/migrations.md.
       - name: Check migration safety (diff-only)
-        env:
-          MIGRATION_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
           git fetch --no-tags --depth=1 origin "$MIGRATION_BASE"
           bun run migration:safety --ci --base "$MIGRATION_BASE"
 
-      - name: Test the migration safety gate
-        run: bun test scripts/check-migration-safety.test.ts
+      # A numbered migration that cannot land as named (a number the base or
+      # an older open PR already has, a stale prevId), and a timestamped one
+      # without its snapshot, fail HERE with the command that fixes them,
+      # instead of in the merge group (#2391). The open-PR sweep is one
+      # `gh pr list`, made only when the PR adds a migration, and only on
+      # pull_request: in a merge group the queue has already ordered them.
+      - name: Check migration claims
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SWEEP: ${{ github.event_name == 'pull_request' && format('--against-open-prs --pr {0}', github.event.pull_request.number) || '' }}
+        run: bun run migration:claims --base "$MIGRATION_BASE" $SWEEP
+
+      # Every main tip a deployment can sit on (the base, and in a merge group
+      # each entry ahead of this one) upgrades to this tree's migrations in
+      # an order a fresh install may not use. Prove in Postgres that each
+      # builds the same schema; it starts a container only when an order
+      # actually differs.
+      - name: Prove migration orders agree
+        run: |
+          git fetch --no-tags --deepen=10 origin "$GITHUB_SHA"
+          bun run migration:order --ci --base "$MIGRATION_BASE"
+
+      - name: Test the migration gates
+        run: >-
+          bun test scripts/check-migration-safety.test.ts scripts/check-migration-claims.test.ts
+          scripts/check-migration-order.test.ts scripts/db-generate.test.ts scripts/lib/migration-graph.test.ts
 
   docs-guard:
     needs: changes
