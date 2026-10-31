@@ -491,6 +491,13 @@
       "when": 1793334527834,
       "tag": "0069_hub_incidents",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1793387718013,
+      "tag": "0072_erasure_failed_platform_incidents",
+      "breakpoints": true
     }
   ]
 }

@@ -4788,6 +4788,28 @@ Delivery:
 - **Signal** — `notify` incidents only, to permission holders whose alert channel is Signal: the localized `incident.signalAlert` (category + state).
 - **Rate** — one announcement on open, at most one `updated` per category window, one on close. `record` incidents are visible (relay, banner, GET) but never push or alert. A `record` incident escalating to `notify` interrupts once, as "opened".
 
+`erasure-deadline` counts two kinds: `overdue` (an unfinished request past its deadline) and `failed` (a request the erasure worker gave up on; it ends when the request is retried or abandoned). A request is attributed to every hub its subject belongs to.
+
+**Platform incidents.** Something that concerns the instance rather than any hub — an erasure whose subject belongs to no hub — opens an incident with no hub:
+
+```
+GET /api/incidents/platform?open=true
+Permission: system:manage-instance   // from the caller's GLOBAL roles; hub roles never grant it
+Response: { "incidents": PlatformIncident[] }   // HubIncident without "hubId"
+```
+
+A platform incident has no relay event and no push wake (both are routed by hub). Holders of the platform permission are paged on the Signal alert and read the detail from the GET above.
+
+**Retrying and abandoning a failed erasure request:**
+
+```
+POST /api/erasure/requests/:id/retry          (also under /api/hubs/:hubId/…)
+POST /api/erasure/requests/:id/abandon        Body: { "justification": string }
+Response: { "request": ErasureRequest }   // status "pending" after retry, "abandoned" after abandon
+```
+
+Allowed for `erasure:admin` holders of a hub the request concerns, acting in that hub; for a request whose subject belongs to no hub, only the platform permission. Abandoning a *person's* erasure is the platform permission's alone (their data lives in every hub they belong to). An `abandoned` request is not `completed`: `executedAt` stays null, and who/when/why is recorded on the request and in the audit log (`erasureAbandoned`, `erasureRetried`).
+
 ---
 
 ## 5. Push Notification Protocol

@@ -14,8 +14,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WORKER_TICK_INTERVAL_MS } from '@worker/metrics/worker-liveness'
-import { erasureDeadlineCheck } from '@worker/services/erasure'
-import { INCIDENT_CATEGORIES } from '@worker/services/incidents-categories'
+import { erasureDeadlineCheck, erasureFailedCheck } from '@worker/services/erasure'
+import { INCIDENT_CATEGORIES, severityOf } from '@worker/services/incidents-categories'
 import type { IncidentService } from '@worker/services/incidents'
 import { startErasureExpiryWorker, stopErasureExpiryWorker } from '@worker/lib/erasure-expiry-worker'
 
@@ -40,7 +40,10 @@ function productionFilesContaining(needle: string, dirs: string[]): string[] {
 
 describe('erasure-deadline check', () => {
   it('reports the erasure-deadline category, which reaches erasure:admin', () => {
-    const check = erasureDeadlineCheck({ countOverdueForHub: async () => ({ count: 0, oldestAgeSeconds: null }) })
+    const check = erasureDeadlineCheck({
+      countOverdueForHub: async () => ({ count: 0, oldestAgeSeconds: null }),
+      countOverdueWithoutHub: async () => ({ count: 0, oldestAgeSeconds: null }),
+    })
     expect(check.category).toBe('erasure-deadline')
     expect(check.kind).toBe('overdue')
     expect(INCIDENT_CATEGORIES[check.category].permission).toBe('erasure:admin')
@@ -51,8 +54,32 @@ describe('erasure-deadline check', () => {
       countOverdueForHub: async () => {
         throw new Error('db down')
       },
+      countOverdueWithoutHub: async () => {
+        throw new Error('db down')
+      },
     })
     await expect(check.check('hub-1', new Date())).rejects.toThrow('db down')
+  })
+
+  it('the failed check shares the category, declares its own kind, and covers hub-less subjects too', async () => {
+    const calls: string[] = []
+    const check = erasureFailedCheck({
+      countFailedForHub: async (hubId) => {
+        calls.push(`hub:${hubId}`)
+        return { count: 1, oldestAgeSeconds: 5 }
+      },
+      countFailedWithoutHub: async () => {
+        calls.push('platform')
+        return { count: 2, oldestAgeSeconds: 9 }
+      },
+    })
+    expect(check.category).toBe('erasure-deadline')
+    expect(check.kind).toBe('failed')
+    expect(check.name).not.toBe(erasureDeadlineCheck({ countOverdueForHub: async () => ({ count: 0, oldestAgeSeconds: null }), countOverdueWithoutHub: async () => ({ count: 0, oldestAgeSeconds: null }) }).name)
+    expect(severityOf(check.category, check.kind)).toBe('notify')
+    await check.check('hub-1', new Date())
+    expect(await check.platform!(new Date())).toEqual({ count: 2, oldestAgeSeconds: 9 })
+    expect(calls).toEqual(['hub:hub-1', 'platform'])
   })
 
   it('is registered only by the service registry, and its query is read only by the check', () => {
