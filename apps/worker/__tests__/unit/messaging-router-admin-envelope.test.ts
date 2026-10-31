@@ -97,7 +97,7 @@ function setup() {
 
   const services = {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getMessagingConfig: vi.fn().mockResolvedValue(null) },
+    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(null) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
@@ -139,7 +139,7 @@ describe('inbound messaging webhook — admin envelope is decryptable (#1283)', 
     const { services, addMessage } = setup()
     const app = await createApp(services, admin)
 
-    const res = await app.request('/api/messaging/sms/webhook', {
+    const res = await app.request('/api/messaging/sms/webhook?hub=hub-test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: incoming.externalId }),
@@ -161,7 +161,7 @@ describe('inbound messaging webhook — admin envelope is decryptable (#1283)', 
     const { services, addMessage } = setup()
     const app = await createApp(services, admin)
 
-    await app.request('/api/messaging/sms/webhook', {
+    await app.request('/api/messaging/sms/webhook?hub=hub-test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: incoming.externalId }),
@@ -182,7 +182,7 @@ describe('inbound messaging webhook — admin envelope is decryptable (#1283)', 
     const { services, addMessage } = setup()
     const app = await createApp(services, makeAdmin(), /* withDecryptionKey */ false)
 
-    const res = await app.request('/api/messaging/sms/webhook', {
+    const res = await app.request('/api/messaging/sms/webhook?hub=hub-test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: incoming.externalId }),

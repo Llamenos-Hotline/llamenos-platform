@@ -84,7 +84,7 @@ final class TriageViewModel {
 
     private func fetchReports() async {
         do {
-            var path = apiService.hp("/api/reports") + "?conversionEnabled=true&limit=50"
+            var path = try apiService.activeHubPath("/api/reports") + "?conversionEnabled=true&limit=50"
             if selectedFilter != .all {
                 path += "&conversionStatus=\(selectedFilter.rawValue)"
             }

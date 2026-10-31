@@ -215,7 +215,7 @@ final class NotesViewModel {
         do {
             let response: NotesListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/notes?page=\(page)&limit=\(pageSize)")
+                path: apiService.activeHubPath("/api/notes?page=\(page)&limit=\(pageSize)")
             )
 
             if replacing {

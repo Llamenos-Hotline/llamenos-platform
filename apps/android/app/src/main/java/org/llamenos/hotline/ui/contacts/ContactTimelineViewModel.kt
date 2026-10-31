@@ -44,7 +44,7 @@ class ContactTimelineViewModel @Inject constructor(
             try {
                 val response = apiService.request<ContactTimelineDetailResponse>(
                     "GET",
-                    apiService.hp("/api/contacts/$contactHash"),
+                    apiService.activeHubPath("/api/contacts/$contactHash"),
                 )
                 val events = response.toTimelineEvents()
                 _uiState.update {

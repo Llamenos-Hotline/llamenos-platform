@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { listAuditLog, listUsers, type AuditLogEntry, type User } from '@/lib/api'
+import { listAuditLog, listPlatformAuditLog, listUsers, type AuditLogEntry, type User } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { ScrollText, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export const Route = createFileRoute('/audit')({
-  component: AuditPage,
+  component: () => <AuditPage />,
 })
 
 const EVENT_CATEGORIES = [
@@ -40,7 +40,11 @@ function getEventCategoryColor(action: string): string {
   return 'bg-secondary text-secondary-foreground'
 }
 
-export function AuditPage() {
+/**
+ * `hub` is the active hub's chain. `platform` is the deployment-level chain, which
+ * has its own route and permission (`system:view-audit`) — no hub's entries (#2395).
+ */
+export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
   const { t } = useTranslation()
   const { isAdmin } = useAuth()
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
@@ -62,7 +66,8 @@ export function AuditPage() {
 
   const fetchEntries = useCallback(() => {
     setLoading(true)
-    listAuditLog({
+    const list = scope === 'platform' ? listPlatformAuditLog : listAuditLog
+    list({
       page,
       limit,
       eventType: eventType !== 'all' ? eventType : undefined,
@@ -73,7 +78,7 @@ export function AuditPage() {
       .then(r => { setEntries(r.entries); setTotal(r.total) })
       .catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
-  }, [page, eventType, dateFrom, dateTo, searchText, t, toast])
+  }, [scope, page, eventType, dateFrom, dateTo, searchText, t, toast])
 
   useEffect(() => {
     fetchEntries()
@@ -102,7 +107,7 @@ export function AuditPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-2">
         <ScrollText className="h-6 w-6 text-primary" />
-        <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t('auditLog.title')}</h1>
+        <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t(scope === 'platform' ? 'adminNav.items.platformAudit' : 'auditLog.title')}</h1>
       </div>
 
       {/* Filter bar */}
