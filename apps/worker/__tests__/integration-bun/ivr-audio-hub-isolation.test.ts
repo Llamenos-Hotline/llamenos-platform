@@ -267,7 +267,12 @@ describe('ivr_audio is per hub (#2239)', () => {
     await db.insert(hubs).values({ id: HUB_C, name: HUB_C, slug: HUB_C, createdBy: ADMIN_A.pubkey })
     await setScope(undefined, DEFAULT_WAV)
     await setScope(HUB_C, A_WAV)
-    await svc.settings.deleteHub(HUB_C)
+    // This hub holds no provider recordings, so the eraser has nothing to ask a provider about.
+    await svc.settings.deleteHub(HUB_C, {
+      deleteForCalls: async () => ({ deleted: 0, failed: [] }),
+      deleteForHub: async () => ({ deleted: 0, failed: [] }),
+      retryPending: async () => ({ deleted: 0, failed: [] }),
+    })
     expect(await db.select().from(ivrAudio).where(eq(ivrAudio.hubId, HUB_C))).toHaveLength(0)
     expect(await svc.settings.getIvrAudio(undefined, 'greeting', 'en')).not.toBeNull()
   })

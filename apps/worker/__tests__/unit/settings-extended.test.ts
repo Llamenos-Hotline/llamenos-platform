@@ -1547,11 +1547,17 @@ describe('SettingsService.archiveHub', () => {
 // ---------------------------------------------------------------------------
 
 describe('SettingsService.deleteHub', () => {
+  const noProviderMedia = {
+    deleteForCalls: async () => ({ deleted: 0, failed: [] }),
+    deleteForHub: async () => ({ deleted: 0, failed: [] }),
+    retryPending: async () => ({ deleted: 0, failed: [] }),
+  }
+
   it('throws 404 when hub not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.deleteHub('nonexistent')).rejects.toMatchObject({ status: 404 })
+    await expect(service.deleteHub('nonexistent', noProviderMedia)).rejects.toMatchObject({ status: 404 })
   })
 
   it('executes transaction to delete hub and cascade data', async () => {
@@ -1572,7 +1578,7 @@ describe('SettingsService.deleteHub', () => {
     }
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
-    const result = await service.deleteHub('hub-1')
+    const result = await service.deleteHub('hub-1', noProviderMedia)
     expect(result).toEqual({ ok: true })
     expect((db as any).transaction).toHaveBeenCalled()
   })

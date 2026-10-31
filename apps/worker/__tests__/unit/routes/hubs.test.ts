@@ -18,6 +18,12 @@ const VOLUNTEER_PERMISSIONS = DEFAULT_ROLES.find(r => r.id === 'role-volunteer')
  * `userHubRoles` says otherwise) and NO global role — a non-super-admin global
  * role carries no hub authority (#1037).
  */
+const noProviderMedia = {
+  deleteForCalls: async () => ({ deleted: 0, failed: [] }),
+  deleteForHub: async () => ({ deleted: 0, failed: [] }),
+  retryPending: async () => ({ deleted: 0, failed: [] }),
+}
+
 function createTestApp(opts: {
   permissions?: string[]
   hubId?: string
@@ -25,6 +31,7 @@ function createTestApp(opts: {
   userHubRoles?: { hubId: string; roleIds: string[] }[]
   globalRoles?: string[]
   serviceMock?: Record<string, unknown>
+  env?: Record<string, unknown>
   auditLogSpy?: ReturnType<typeof vi.fn>
 } = {}) {
   const {
@@ -50,6 +57,8 @@ function createTestApp(opts: {
     },
     identity: serviceMock.identity || {},
     audit: mockAuditService,
+    // Hub deletion asks the provider to delete caller audio first (#2364).
+    providerRecordings: serviceMock.providerRecordings ?? { eraser: vi.fn().mockReturnValue(noProviderMedia) },
   }
 
   const app = new Hono<AppEnv>()
@@ -82,6 +91,7 @@ function createTestApp(opts: {
     // Minimal env
     c.env = {
       HMAC_SECRET: 'test-hmac-secret',
+      ...opts.env,
     } as unknown as AppEnv['Bindings']
     await next()
   })
@@ -660,7 +670,7 @@ describe('hubs routes', () => {
 
       const res = await app.request('/hubs/hub-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
-      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1')
+      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1', noProviderMedia, { beforeDrop: expect.any(Function) })
     })
 
     // Deleting a hub strips its role from every member, so it is a
@@ -713,7 +723,46 @@ describe('hubs routes', () => {
         },
       })
       expect((await app.request('/hubs/hub-1', { method: 'DELETE' })).status).toBe(200)
-      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1')
+      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1', noProviderMedia, { beforeDrop: expect.any(Function) })
+    })
+
+    // #2364: storage teardown is irreversible, so it is handed to deleteHub as
+    // `beforeDrop` — which runs only after the provider confirmed — rather
+    // than run up front, where a refused deletion would already have lost it.
+    it('defers storage teardown to deleteHub instead of running it first', async () => {
+      const destroyHub = vi.fn().mockResolvedValue(undefined)
+      const deleteHub = vi.fn().mockResolvedValue(undefined)
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        env: { STORAGE_MANAGER: { destroyHub } },
+        serviceMock: {
+          settings: {
+            deleteHub,
+            getHubStorageCredentials: vi.fn().mockResolvedValue({ userName: 'hub-user' }),
+          },
+          identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
+        },
+      })
+      expect((await app.request('/hubs/hub-1', { method: 'DELETE' })).status).toBe(200)
+      expect(destroyHub).not.toHaveBeenCalled()
+      const { beforeDrop } = deleteHub.mock.calls[0]![2] as { beforeDrop: () => Promise<void> }
+      await beforeDrop()
+      expect(destroyHub).toHaveBeenCalledWith('hub-1', 'hub-user')
+    })
+
+    it('answers 502 when the provider refuses to delete the hub\'s recordings', async () => {
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: {
+          settings: {
+            deleteHub: vi.fn().mockRejectedValue(new ServiceError(502, 'Hub deletion refused: caller audio is still held')),
+          },
+          identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
+        },
+      })
+      const res = await app.request('/hubs/hub-1', { method: 'DELETE' })
+      expect(res.status).toBe(502)
+      expect(await res.json()).toEqual({ error: 'Hub deletion refused: caller audio is still held' })
     })
 
     it('returns 403 without system:manage-hubs permission', async () => {
