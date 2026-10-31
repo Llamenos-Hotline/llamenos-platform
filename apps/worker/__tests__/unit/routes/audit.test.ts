@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
-import auditRoutes from '@worker/routes/audit'
+import auditRoutes, { platformAuditRoutes } from '@worker/routes/audit'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -9,13 +9,14 @@ import auditRoutes from '@worker/routes/audit'
 
 function createTestApp(opts: {
   permissions?: string[]
-  hubId?: string
+  /** The path hub hubContext would set; `null` = a request outside any hub. */
+  hubId?: string | null
   pubkey?: string
   serviceMock?: Record<string, unknown>
 } = {}) {
   const {
     permissions = ['*'],
-    hubId,
+    hubId = 'hub-1',
     pubkey = 'a'.repeat(64),
     serviceMock = {},
   } = opts
@@ -45,13 +46,14 @@ function createTestApp(opts: {
       onBreak: false,
       callPreference: 'phone',
     })
-    if (hubId !== undefined) {
+    if (hubId !== null) {
       c.set('hubId', hubId)
     }
     await next()
   })
 
   app.route('/audit', auditRoutes)
+  app.route('/admin/audit', platformAuditRoutes)
 
   return { app }
 }
@@ -129,21 +131,33 @@ describe('audit routes', () => {
       expect(listSpy).toHaveBeenCalledWith('hub-42', expect.anything())
     })
 
-    it('passes empty string when no hubId in context', async () => {
-      const listSpy = vi.fn().mockResolvedValue({
-        entries: [],
-        total: 0,
-        page: 1,
-        limit: 50,
-      })
+    it('refuses (404) outside a hub, even to a super-admin, without reading any log (#2395)', async () => {
+      const listSpy = vi.fn()
+      const verifySpy = vi.fn()
       const { app } = createTestApp({
-        permissions: ['audit:read'],
-        serviceMock: { audit: { list: listSpy } },
+        permissions: ['*'],
+        hubId: null,
+        serviceMock: { audit: { list: listSpy, verifyChain: verifySpy } },
       })
 
-      const res = await app.request('/audit')
+      expect((await app.request('/audit')).status).toBe(404)
+      expect((await app.request('/audit/verify')).status).toBe(404)
+      expect(listSpy).not.toHaveBeenCalled()
+      expect(verifySpy).not.toHaveBeenCalled()
+    })
+
+    it('verifies the path hub\'s chain', async () => {
+      const verifySpy = vi.fn().mockResolvedValue({ valid: true, totalEntries: 0, checkedEntries: 0 })
+      const { app } = createTestApp({
+        permissions: ['audit:read'],
+        hubId: 'hub-42',
+        serviceMock: { audit: { verifyChain: verifySpy } },
+      })
+
+      const res = await app.request('/audit/verify?hubId=hub-other')
       expect(res.status).toBe(200)
-      expect(listSpy).toHaveBeenCalledWith('', expect.anything())
+      // The query's hubId is never the scope: the path hub is.
+      expect(verifySpy).toHaveBeenCalledWith('hub-42', { limit: 500, offset: 0 })
     })
 
     it('forwards actorPubkey filter query param', async () => {
@@ -265,5 +279,52 @@ describe('audit routes', () => {
       const res = await app.request('/audit/some-entry-id', { method: 'DELETE' })
       expect(res.status).toBe(404)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The platform chain — its own route and permission (#2395)
+// ---------------------------------------------------------------------------
+
+describe('platform audit routes (/admin/audit)', () => {
+  it('lists the platform chain (null), never a hub\'s and never every hub\'s', async () => {
+    const listSpy = vi.fn().mockResolvedValue({ entries: [], total: 0 })
+    const { app } = createTestApp({
+      permissions: ['system:view-audit'],
+      hubId: null,
+      serviceMock: { audit: { list: listSpy } },
+    })
+
+    const res = await app.request('/admin/audit?eventType=userCreated')
+    expect(res.status).toBe(200)
+    expect(listSpy).toHaveBeenCalledWith(null, expect.objectContaining({ eventType: 'userCreated' }))
+  })
+
+  it('verifies the platform chain', async () => {
+    const verifySpy = vi.fn().mockResolvedValue({ valid: true, totalEntries: 0, checkedEntries: 0 })
+    const { app } = createTestApp({
+      permissions: ['system:view-audit'],
+      hubId: null,
+      serviceMock: { audit: { verifyChain: verifySpy } },
+    })
+
+    const res = await app.request('/admin/audit/verify')
+    expect(res.status).toBe(200)
+    expect(verifySpy).toHaveBeenCalledWith(undefined, { limit: 500, offset: 0 })
+  })
+
+  it('requires system:view-audit — audit:read is a hub permission and is not enough', async () => {
+    const listSpy = vi.fn()
+    const verifySpy = vi.fn()
+    const { app } = createTestApp({
+      permissions: ['audit:read'],
+      hubId: null,
+      serviceMock: { audit: { list: listSpy, verifyChain: verifySpy } },
+    })
+
+    expect((await app.request('/admin/audit')).status).toBe(403)
+    expect((await app.request('/admin/audit/verify')).status).toBe(403)
+    expect(listSpy).not.toHaveBeenCalled()
+    expect(verifySpy).not.toHaveBeenCalled()
   })
 })

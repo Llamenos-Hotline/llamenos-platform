@@ -504,7 +504,7 @@ final class DashboardViewModel {
         do {
             let response: NotesListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/notes") + "?page=1&limit=3"
+                path: apiService.activeHubPath("/api/notes") + "?page=1&limit=3"
             )
 
             recentNoteCount = response.total

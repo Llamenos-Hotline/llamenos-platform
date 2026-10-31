@@ -75,9 +75,10 @@ Before({ tags: '@backend' }, async ({ world }) => {
 })
 // ── E2EE Roundtrip Steps ─────────────────────────────────────────
 
-Given('a volunteer with a known keypair', async ({request, world}) => {
+Given('a volunteer with a known keypair', async ({request, world, workerHub }) => {
   // Register a volunteer and use its keypair
   const vol = await createVolunteerViaApi(request, {
+    hubId: workerHub,
     name: `E2EE Vol ${Date.now()}`,
   })
   getSecTestState(world).volunteerKeypair = { seedHex: vol.seedHex, pubkey: vol.pubkey }
@@ -110,7 +111,7 @@ Given('the admin has registered a device encryption key', async ({ request }) =>
   await registerDeviceKeyViaApi(request, ADMIN_SEED)
 })
 
-Given('a hub with {int} admins with known keypairs', async ({request, world}, count: number) => {
+Given('a hub with {int} admins with known keypairs', async ({request, world, workerHub }, count: number) => {
   const state = getSecTestState(world)
   state.adminKeypairs = []
   // Register each admin as a real user. Keypairs conjured locally and never
@@ -125,12 +126,13 @@ Given('a hub with {int} admins with known keypairs', async ({request, world}, co
     const admin = await createUserViaApi(request, {
       name: `E2EE Admin ${Date.now()}-${i}`,
       roleIds: ['role-hub-admin'],
+      hubId: workerHub,
     })
     state.adminKeypairs.push({ seedHex: admin.seedHex, pubkey: admin.pubkey })
   }
 })
 
-When('the volunteer encrypts a note {string}', async ({request, world}, noteText: string) => {
+When('the volunteer encrypts a note {string}', async ({request, world, workerHub }, noteText: string) => {
   const state = getSecTestState(world)
   expect(state.volunteerKeypair).toBeDefined()
 
@@ -158,10 +160,10 @@ When('the volunteer encrypts a note {string}', async ({request, world}, noteText
 
   const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: ciphertextHex,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       authorEnvelope,
       adminEnvelopes,
     },
@@ -177,14 +179,14 @@ When('the encrypted envelope is stored on the server', async ({ world }) => {
   expect(getSecTestState(world).noteId).toBeDefined()
 })
 
-When('the volunteer retrieves and decrypts the note', async ({request, world}) => {
+When('the volunteer retrieves and decrypts the note', async ({request, world, workerHub }) => {
   const state = getSecTestState(world)
   expect(state.noteId).toBeDefined()
   expect(state.volunteerKeypair).toBeDefined()
 
   const { status, data } = await apiGet<{ notes: Array<{ id: string; encryptedContent?: string }> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     state.volunteerKeypair!.seedHex,
   )
   expect(status).toBe(200)
@@ -203,13 +205,13 @@ Then('the decrypted text should be {string}', async ({ world }, expectedText: st
   expect(getSecTestState(world).decryptedText).toBe(expectedText)
 })
 
-When('the admin retrieves and decrypts the note with their key', async ({request, world}) => {
+When('the admin retrieves and decrypts the note with their key', async ({request, world, workerHub }) => {
   const state = getSecTestState(world)
   expect(state.noteId).toBeDefined()
 
   const { status, data } = await apiGet<{ notes: Array<{ id: string; encryptedContent?: string }> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
   )
   expect(status).toBe(200)
   const note = data.notes.find(n => n.id === state.noteId)
@@ -223,14 +225,14 @@ When('the admin retrieves and decrypts the note with their key', async ({request
   state.decryptedText = decryptContent(note!.encryptedContent!, recoveredKey, LABEL_NOTE_KEY)
 })
 
-When('the third party attempts to decrypt the note', async ({request, world}) => {
+When('the third party attempts to decrypt the note', async ({request, world, workerHub }) => {
   expect(getSecTestState(world).noteId).toBeDefined()
   expect(getSecTestState(world).thirdPartyKeypair).toBeDefined()
   // Third party (unregistered) should not be able to access notes at all
   const status = await testEndpointAccess(
     request,
     'GET',
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     getSecTestState(world).thirdPartyKeypair!.seedHex,
   )
   getSecTestState(world).sessionResult = { status, data: null }
@@ -388,13 +390,13 @@ Then('no reader envelope is addressed to an auth key', async ({ request, world }
   expect(sealedTo, "sealed to the admin's auth key").not.toContain(seedHexToPubkey(ADMIN_SEED))
 })
 
-When('a volunteer encrypts a note {string}', async ({request, world}, noteText: string) => {
+When('a volunteer encrypts a note {string}', async ({request, world, workerHub }, noteText: string) => {
   const state = getSecTestState(world)
   expect(state.adminKeypairs.length).toBeGreaterThan(0)
 
   // A registered volunteer authors the note, so the server authorises the write
   // against a real identity rather than the suite's admin credentials.
-  const vol = await createUserViaApi(request, { name: `Multi-admin Vol ${Date.now()}` })
+  const vol = await createUserViaApi(request, { name: `Multi-admin Vol ${Date.now()}`, hubId: workerHub })
   state.volunteerKeypair = { seedHex: vol.seedHex, pubkey: vol.pubkey }
 
   const contentKey = generateContentKey()
@@ -402,7 +404,7 @@ When('a volunteer encrypts a note {string}', async ({request, world}, noteText: 
   state.contentKey = contentKey
   state.ciphertextHex = ciphertextHex
   state.notePlaintext = noteText
-  state.noteCallId = await simulateCallForNote(request)
+  state.noteCallId = await simulateCallForNote(request, workerHub)
   state.envelopes = new Map()
 
   const volRecipient = hpkeRecipientForSeed(vol.seedHex)
@@ -420,7 +422,7 @@ When('a volunteer encrypts a note {string}', async ({request, world}, noteText: 
 
   const { status, data } = await apiPost<{ note?: { id?: string } }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: ciphertextHex,
       callId: state.noteCallId,
@@ -434,7 +436,7 @@ When('a volunteer encrypts a note {string}', async ({request, world}, noteText: 
   expect(state.noteId, 'server returned no note id').toBeTruthy()
 })
 
-Then('all {int} admins can decrypt the note independently', async ({ request, world }, count: number) => {
+Then('all {int} admins can decrypt the note independently', async ({ request, world, workerHub }, count: number) => {
   const state = getSecTestState(world)
   expect(state.noteId).toBeTruthy()
   expect(state.adminKeypairs.length).toBe(count)
@@ -453,7 +455,7 @@ Then('all {int} admins can decrypt the note independently', async ({ request, wo
     // copy the step kept in memory would exercise nothing but hpke-js.
     const { status, data } = await apiGet<{ notes: StoredNote[] }>(
       request,
-      `/notes?callId=${encodeURIComponent(state.noteCallId!)}`,
+      `/hubs/${workerHub}/notes?callId=${encodeURIComponent(state.noteCallId!)}`,
       kp.seedHex,
     )
     expect(status, `admin ${kp.pubkey} could not list notes`).toBe(200)
@@ -700,11 +702,11 @@ Given('routes for GET, POST, and DELETE on {string}', async ({}, _path: string) 
   // Routes are registered in the DO — this is a precondition
 })
 
-Then('each method dispatches to its own handler', async ({request}) => {
+Then('each method dispatches to its own handler', async ({request, workerHub }) => {
   // Verify all three methods respond with authenticated requests
-  const getRes = await apiGet(request, '/notes')
-  await apiPost(request, '/notes', { content: 'test', callId: `dispatch-${Date.now()}` })
-  await apiDelete(request, '/notes/nonexistent')
+  const getRes = await apiGet(request, `/hubs/${workerHub}/notes`)
+  await apiPost(request, `/hubs/${workerHub}/notes`, { content: 'test', callId: `dispatch-${Date.now()}` })
+  await apiDelete(request, `/hubs/${workerHub}/notes/nonexistent`)
 
   // Each should respond (not 404 for the route itself — may be 404 for the resource)
   expect(getRes.status).not.toBe(405)

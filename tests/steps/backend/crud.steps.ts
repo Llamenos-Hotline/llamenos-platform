@@ -28,7 +28,7 @@ import {
   getSpamSettingsViaApi,
   getCustomFieldsViaApi,
   updateCustomFieldsViaApi,
-  listAuditLogViaApi,
+  listPlatformAuditLogViaApi,
   listNotesViaApi,
   listReportsViaApi,
   uniquePhone,
@@ -256,22 +256,22 @@ Then('the bulk import should report {int} created', async ({ world }, count: num
 
 // ─── Notes ──────────────────────────────────────────────────────────
 
-When('an admin creates a note with encrypted content', async ({ request, world }) => {
-  const { data, status } = await apiPost<{ id: string; note?: { id: string } }>(request, '/notes', await validNoteBody(request))
+When('an admin creates a note with encrypted content', async ({ request, world, workerHub }) => {
+  const { data, status } = await apiPost<{ id: string; note?: { id: string } }>(request, `/hubs/${workerHub}/notes`, await validNoteBody(request, ADMIN_SEED, { hubId: workerHub }))
   expect(status).toBeLessThan(300)
   getCrudState(world).noteId = (data as Record<string, unknown>)?.id as string
     ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
 })
 
-Then('the note should appear in the notes list', async ({request}) => {
-  const { notes } = await listNotesViaApi(request)
+Then('the note should appear in the notes list', async ({request, workerHub }) => {
+  const { notes } = await listNotesViaApi(request, { hubId: workerHub })
   expect(notes.length).toBeGreaterThan(0)
 })
 
-When('the admin updates the note content', async ({ request, world }) => {
+When('the admin updates the note content', async ({ request, world, workerHub }) => {
   if (getCrudState(world).noteId) {
     // New content is sealed under a new key, so the edit re-wraps it for the admin (#2113).
-    const { status } = await apiPatch(request, `/notes/${getCrudState(world).noteId}`, await sealedNoteFields(ADMIN_SEED, 'crud-test-updated'))
+    const { status } = await apiPatch(request, `/hubs/${workerHub}/notes/${getCrudState(world).noteId}`, await sealedNoteFields(ADMIN_SEED, 'crud-test-updated'))
     setLastResponse(world, { status, data: null })
   }
 })
@@ -283,43 +283,43 @@ Then('the note should have updated content', async ({ world }) => {
   expect(getSharedState(world).lastResponse!.status).toBeLessThan(300)
 })
 
-Given('a note exists', async ({ request, world }) => {
-  const { data } = await apiPost<{ id: string; note?: { id: string } }>(request, '/notes', await validNoteBody(request))
+Given('a note exists', async ({ request, world, workerHub }) => {
+  const { data } = await apiPost<{ id: string; note?: { id: string } }>(request, `/hubs/${workerHub}/notes`, await validNoteBody(request, ADMIN_SEED, { hubId: workerHub }))
   getCrudState(world).noteId = (data as Record<string, unknown>)?.id as string
     ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
 })
 
-When('an admin creates a reply on the note', async ({ request, world }) => {
+When('an admin creates a reply on the note', async ({ request, world, workerHub }) => {
   if (getCrudState(world).noteId) {
     const { encryptedContent, envelopes } = await encryptForTest('crud-reply-content', [ADMIN_SEED])
-    await apiPost(request, `/notes/${getCrudState(world).noteId}/replies`, {
+    await apiPost(request, `/hubs/${workerHub}/notes/${getCrudState(world).noteId}/replies`, {
       encryptedContent,
       readerEnvelopes: envelopes,
     })
   }
 })
 
-Then('the note should have {int} reply', async ({ request, world }, count: number) => {
+Then('the note should have {int} reply', async ({ request, world, workerHub }, count: number) => {
   if (getCrudState(world).noteId) {
-    const { data, status } = await apiGet<{ replies: unknown[] }>(request, `/notes/${getCrudState(world).noteId}/replies`)
+    const { data, status } = await apiGet<{ replies: unknown[] }>(request, `/hubs/${workerHub}/notes/${getCrudState(world).noteId}/replies`)
     if (status === 200 && data) {
       expect((data as { replies?: unknown[] }).replies?.length ?? 0).toBe(count)
     }
   }
 })
 
-Given('{int} notes exist for different calls', async ({ request, world }, count: number) => {
+Given('{int} notes exist for different calls', async ({ request, world, workerHub }, count: number) => {
   getCrudState(world).noteCallIds = []
   for (let i = 0; i < count; i++) {
-    const body = await validNoteBody(request, ADMIN_SEED, { plaintext: `crud-filter-note-${i}` })
+    const body = await validNoteBody(request, ADMIN_SEED, { plaintext: `crud-filter-note-${i}`, hubId: workerHub })
     getCrudState(world).noteCallIds.push(body.callId as string)
-    const { status } = await apiPost(request, '/notes', body)
+    const { status } = await apiPost(request, `/hubs/${workerHub}/notes`, body)
     expect(status, `note ${i} for its own call`).toBe(201)
   }
 })
 
-When('the admin lists notes for the first call', async ({ request, world }) => {
-  const { notes, total } = await listNotesViaApi(request, { callId: getCrudState(world).noteCallIds[0] })
+When('the admin lists notes for the first call', async ({ request, world, workerHub }) => {
+  const { notes, total } = await listNotesViaApi(request, { callId: getCrudState(world).noteCallIds[0], hubId: workerHub })
   setLastResponse(world, { status: 200, data: { notes, total } })
 })
 
@@ -451,26 +451,29 @@ Then('the custom fields list should be empty', async ({request}) => {
 
 // ─── Reports ────────────────────────────────────────────────────────
 
-Given('a reporter user exists', async ({ request, world }) => {
+Given('a reporter user exists', async ({ request, world, workerHub }) => {
+  // Members of the scenario's hub: reports exist only inside a hub (#2395).
   const vol = await createVolunteerViaApi(request, {
     name: uniqueName('CRUD Reporter'),
     roleIds: ['role-reporter'],
+    hubId: workerHub,
   })
   getCrudState(world).reporterDeviceKey = vol.deviceKey
   // Also create a reviewer for assignment
   const reviewer = await createVolunteerViaApi(request, {
+    hubId: workerHub,
     name: uniqueName('CRUD Reviewer'),
     roleIds: ['role-reviewer'],
   })
   getCrudState(world).reviewerPubkey = reviewer.pubkey
 })
 
-When('the reporter creates a report titled {string}', async ({ request, world }, title: string) => {
+When('the reporter creates a report titled {string}', async ({ request, world, workerHub }, title: string) => {
   // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
   const sealed = await encryptForTest('crud-report-content', [ADMIN_SEED])
   const { data, status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     {
       title,
       category: 'general',
@@ -485,30 +488,30 @@ When('the reporter creates a report titled {string}', async ({ request, world },
   expect(getCrudState(world).reportId).toBeTruthy()
 })
 
-Then('the report should appear in the reports list', async ({request}) => {
-  const { conversations } = await listReportsViaApi(request)
+Then('the report should appear in the reports list', async ({request, workerHub }) => {
+  const { conversations } = await listReportsViaApi(request, { hubId: workerHub })
   expect(conversations.length).toBeGreaterThan(0)
 })
 
-When('an admin assigns the report to a reviewer', async ({ request, world }) => {
+When('an admin assigns the report to a reviewer', async ({ request, world, workerHub }) => {
   if (getCrudState(world).reportId && getCrudState(world).reviewerPubkey) {
-    await apiPost(request, `/reports/${getCrudState(world).reportId}/assign`, {
+    await apiPost(request, `/hubs/${workerHub}/reports/${getCrudState(world).reportId}/assign`, {
       assignedTo: getCrudState(world).reviewerPubkey,
     })
   }
 })
 
-When('the admin updates the report status to {string}', async ({ request, world }, status: string) => {
+When('the admin updates the report status to {string}', async ({ request, world, workerHub }, status: string) => {
   if (getCrudState(world).reportId) {
-    await apiPatch(request, `/reports/${getCrudState(world).reportId}`, { status })
+    await apiPatch(request, `/hubs/${workerHub}/reports/${getCrudState(world).reportId}`, { status })
   }
 })
 
-Then('the report status should be {string}', async ({ request, world }, expectedStatus: string) => {
+Then('the report status should be {string}', async ({ request, world, workerHub }, expectedStatus: string) => {
   if (getCrudState(world).reportId) {
     const { data } = await apiGet<{ status: string; conversation?: { status: string } }>(
       request,
-      `/reports/${getCrudState(world).reportId}`,
+      `/hubs/${workerHub}/reports/${getCrudState(world).reportId}`,
     )
     const actual = (data as Record<string, unknown>)?.status as string
       ?? ((data as Record<string, unknown>)?.conversation as Record<string, unknown>)?.status as string
@@ -552,8 +555,10 @@ Then('the fallback group should be empty', async ({ request, world }) => {
 
 // ─── Audit Trail ────────────────────────────────────────────────────
 
+// The volunteer is created and deactivated through the unscoped /users routes, so
+// these are deployment actions: they are on the platform chain (#2395).
 Then('the audit log should contain a {string} entry', async ({ request }, eventType: string) => {
-  const { entries } = await listAuditLogViaApi(request, { eventType })
+  const { entries } = await listPlatformAuditLogViaApi(request, { eventType })
   expect(entries.length).toBeGreaterThan(0)
   expect(entries.some(e => e.action === eventType)).toBeTruthy()
 })

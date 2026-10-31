@@ -5,8 +5,13 @@ import { requirePermission } from '../middleware/permission-guard'
 import { paginationSchema } from '@protocol/schemas/common'
 import { contactTimelineListResponseSchema, contactTimelineDetailResponseSchema } from '@protocol/schemas/contacts'
 import { authErrors } from '../openapi/helpers'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 
 const contacts = new Hono<AppEnv>()
+// A contact timeline is a hub's notes and conversations, so this router is
+// hub-only (#2395): outside /hubs/:hubId it listed every hub's contacts for a
+// global `contacts:view` holder.
+contacts.use('*', hubOnly)
 contacts.use('*', requirePermission('contacts:view'))
 
 // GET /contacts — list contacts with note counts
@@ -29,7 +34,7 @@ contacts.get('/',
   validator('query', paginationSchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId')
+    const hubId = pathHubId(c)
     const query = c.req.valid('query')
     const offset = ((query.page ?? 1) - 1) * (query.limit ?? 20)
 
@@ -112,7 +117,7 @@ contacts.get('/:hash',
     const hash = c.req.param('hash')
     // The hash is a blind index: the same caller hashes identically in every hub.
     // Inside /hubs/:hubId the timeline is that hub's alone.
-    const hubId = c.get('hubId')
+    const hubId = pathHubId(c)
 
     // Parallel fetch from RecordsService (notes) and ConversationsService (conversations)
     const [notesResult, conversations] = await Promise.all([

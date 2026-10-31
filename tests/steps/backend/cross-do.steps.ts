@@ -341,26 +341,29 @@ Then('each conversation should have its own channel type', async ({ request, wor
 
 // ─── Report Workflow ────────────────────────────────────────────────
 
-Given('a reporter and reviewer exist', async ({ request, world }) => {
+Given('a reporter and reviewer exist', async ({ request, world, workerHub }) => {
+  // Members of the scenario's hub: reports exist only inside a hub (#2395).
   const reporter = await createVolunteerViaApi(request, {
     name: uniqueName('XDO Reporter'),
     roleIds: ['role-reporter'],
+    hubId: workerHub,
   })
   getCrossDoState(world).reporterDeviceKey = reporter.deviceKey
 
   const reviewer = await createVolunteerViaApi(request, {
+    hubId: workerHub,
     name: uniqueName('XDO Reviewer'),
     roleIds: ['role-reviewer'],
   })
   getCrossDoState(world).reviewerPubkey = reviewer.pubkey
 })
 
-When('the reporter creates a report', async ({ request, world }) => {
+When('the reporter creates a report', async ({ request, world, workerHub }) => {
   // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
   const sealed = await encryptForTest('xdo-report-content', [ADMIN_SEED])
   const { data, status: _status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     {
       title: uniqueName('XDO Report'),
       category: 'general',
@@ -373,17 +376,17 @@ When('the reporter creates a report', async ({ request, world }) => {
     ?? ((data as Record<string, unknown>)?.conversation as Record<string, unknown>)?.id as string
 })
 
-When('the admin assigns the report to the reviewer', async ({ request, world }) => {
+When('the admin assigns the report to the reviewer', async ({ request, world, workerHub }) => {
   if (getCrossDoState(world).reportId && getCrossDoState(world).reviewerPubkey) {
-    await apiPost(request, `/reports/${getCrossDoState(world).reportId}/assign`, { assignedTo: getCrossDoState(world).reviewerPubkey })
+    await apiPost(request, `/hubs/${workerHub}/reports/${getCrossDoState(world).reportId}/assign`, { assignedTo: getCrossDoState(world).reviewerPubkey })
   }
 })
 
-Then('the report should show the reviewer as assignee', async ({ request, world }) => {
+Then('the report should show the reviewer as assignee', async ({ request, world, workerHub }) => {
   if (getCrossDoState(world).reportId) {
     const { data } = await apiGet<{ assignedTo?: string; conversation?: { assignedTo: string } }>(
       request,
-      `/reports/${getCrossDoState(world).reportId}`,
+      `/hubs/${workerHub}/reports/${getCrossDoState(world).reportId}`,
     )
     const assignee = (data as Record<string, unknown>)?.assignedTo as string
       ?? ((data as Record<string, unknown>)?.conversation as Record<string, unknown>)?.assignedTo as string
@@ -391,9 +394,9 @@ Then('the report should show the reviewer as assignee', async ({ request, world 
   }
 })
 
-Then('the audit log should contain report assignment entries', async ({request, world: _world}) => {
+Then('the audit log should contain report assignment entries', async ({request, world: _world, workerHub }) => {
   // Report-related audit entries are logged without hub scope — query globally
-  const { entries } = await listAuditLogViaApi(request)
+  const { entries } = await listAuditLogViaApi(request, { hubId: workerHub })
   // Look for report-related audit entries
   expect(entries.length).toBeGreaterThan(0)
 })
@@ -439,12 +442,12 @@ Then('only the second volunteer should be rung', async ({ world }) => {
 
 // ─── Conversation Notes ─────────────────────────────────────────────
 
-When('the volunteer writes a note for the conversation', async ({ request, world }) => {
+When('the volunteer writes a note for the conversation', async ({ request, world, workerHub }) => {
   const volDeviceKey = getScenarioState(world).volunteers[0]?.deviceKey ?? getCrossDoState(world).volunteerDeviceKey
   if (volDeviceKey && getCrossDoState(world).conversationId) {
     const { data, status } = await apiPost<{ id?: string; note?: { id: string } }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         ...(await sealedNoteFields(volDeviceKey, 'xdo-conv-note')),
         conversationId: getCrossDoState(world).conversationId,
@@ -462,9 +465,9 @@ Then('the note should be linked to the conversation', async ({ world }) => {
   expect(getCrossDoState(world).noteId).toBeDefined()
 })
 
-Then('listing notes by conversation returns the correct note', async ({ request, world }) => {
+Then('listing notes by conversation returns the correct note', async ({ request, world, workerHub }) => {
   if (getCrossDoState(world).conversationId) {
-    const { notes } = await listNotesViaApi(request, { callId: undefined })
+    const { notes } = await listNotesViaApi(request, { hubId: workerHub })
     // At least one note exists
     expect(notes.length).toBeGreaterThan(0)
   }

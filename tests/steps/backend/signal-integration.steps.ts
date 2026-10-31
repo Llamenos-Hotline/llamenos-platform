@@ -438,8 +438,9 @@ Then(
 
 Then(
   'an audit log entry should be created for the registration',
+  // Deployment-wide messaging setup is audited on the platform chain (#2395).
   async ({ request }) => {
-    const { status, data } = await apiGet<{ entries: unknown[] }>(request, `/audit?limit=5`)
+    const { status, data } = await apiGet<{ entries: unknown[] }>(request, '/admin/audit?limit=5')
     expect(status).toBe(200)
     expect((data as { entries: unknown[] }).entries.length).toBeGreaterThan(0)
   },

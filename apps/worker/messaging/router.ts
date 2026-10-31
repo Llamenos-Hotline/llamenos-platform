@@ -19,10 +19,11 @@ import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
+import { ServiceError } from '../services/settings'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { getClientIp } from '../lib/client-ip'
 import { webhookAuth } from '../middleware/webhook-auth'
-import { hasHubPermission, permissionGranted, resolvePermissions } from '@shared/permissions'
+import { hasHubPermission } from '@shared/permissions'
 
 const logger = createLogger('messaging')
 
@@ -89,7 +90,7 @@ messaging.post('/:channel/webhook',
     return c.json({ error: 'Unknown channel' }, 404)
   }
 
-  // Hub-scoped routing: read hubId from query param, fall back to global
+  // The hub is named by the webhook URL (`?hub=`); see the check after the signature.
   const url = new URL(c.req.url)
   const hubId = url.searchParams.get('hub') || undefined
   const services = c.get('services')
@@ -118,6 +119,29 @@ messaging.post('/:channel/webhook',
   if (!isValid) {
     logger.error(`Webhook signature FAILED for ${channel}`)
     return new Response('Forbidden', { status: 403 })
+  }
+
+  // An inbound message belongs to a hub, and only the URL can say which (#2395).
+  // The messaging senders are deployment-wide (`messagingConfig`), so unlike a
+  // voice call, whose dialled number names its hub, the receiving address does
+  // not identify one. A message that named no hub used to be stored as a hubless
+  // conversation: never pushed, sealed for admins only, and since #2381 readable
+  // through no route at all. It is refused instead — loudly, here and in the
+  // provider's delivery log — and the URLs we hand out always carry `?hub=`.
+  // Checked after the signature, so an unauthenticated caller cannot use it to
+  // probe which hub ids exist.
+  if (!hubId) {
+    logger.error(`Messaging webhook for ${channel} names no hub — refused; configure the provider with the hub's webhook URL (?hub=)`)
+    return c.json({ error: 'Webhook URL names no hub (?hub=)' }, 400)
+  }
+  try {
+    await services.settings.getHub(hubId)
+  } catch (err) {
+    if (err instanceof ServiceError && err.status === 404) {
+      logger.error(`Messaging webhook for ${channel} names an unknown hub — refused`, { hubId })
+      return c.json({ error: 'Unknown hub' }, 404)
+    }
+    throw err
   }
 
   // W05-H02: Replay protection — return idempotent 200 for duplicate deliveries
@@ -414,7 +438,7 @@ async function tryAutoAssign(
   env: Env,
   conversationId: string,
   channelType: MessagingChannelType,
-  hubId: string | undefined,
+  hubId: string,
 ): Promise<void> {
   try {
     // 1. Check if auto-assign is enabled
@@ -423,8 +447,8 @@ async function tryAutoAssign(
 
     const maxConcurrent = messagingConfig.maxConcurrentPerUser || 3
 
-    // 2. Get current on-shift volunteers (scoped to hub, or global if no hub)
-    const onShiftPubkeys = await services.shifts.getCurrentVolunteers(hubId ?? '')
+    // 2. Get the conversation's hub's on-shift volunteers
+    const onShiftPubkeys = await services.shifts.getCurrentVolunteers(hubId)
     if (onShiftPubkeys.length === 0) return
 
     // 3. Get user details to filter by channel capability
@@ -432,9 +456,8 @@ async function tryAutoAssign(
     const { roles: roleDefs } = await services.settings.getRoles()
     // The assignee must be able to claim conversations in the conversation's
     // hub — a volunteer removed from the hub may linger in its shift roster (#1037).
-    const canClaimHere = (v: (typeof allUsers)[number]) => hubId
-      ? hasHubPermission(v.roles, v.hubRoles ?? [], roleDefs, hubId, 'conversations:claim')
-      : permissionGranted(resolvePermissions(v.roles, roleDefs), 'conversations:claim')
+    const canClaimHere = (v: (typeof allUsers)[number]) =>
+      hasHubPermission(v.roles, v.hubRoles ?? [], roleDefs, hubId, 'conversations:claim')
     const onShiftVolunteers = allUsers.filter(v =>
       onShiftPubkeys.includes(v.pubkey) &&
       v.active &&
@@ -454,7 +477,12 @@ async function tryAutoAssign(
 
     if (eligibleVolunteers.length === 0) return
 
-    // 4. Get volunteer load counts via service
+    // 4. Load is counted per PERSON, across every hub they belong to — on purpose.
+    // `maxConcurrentPerUser` lives on the deployment-wide messaging config and caps
+    // how many conversations one volunteer is holding at once, which is a limit on
+    // that person's attention, not on one hub's queue: a volunteer at the cap in
+    // hub A has no spare capacity for hub B. Only the count leaves the service, so
+    // no other hub's conversation is disclosed here (#2395).
     const loads = await services.conversations.getAllVolunteerLoads()
 
     // 5. Find least-loaded volunteer under max capacity

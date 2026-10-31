@@ -464,10 +464,15 @@ export class AuditService {
   }
 
   /**
-   * List audit entries with pagination and optional filters.
+   * List one chain's audit entries with pagination and optional filters: a
+   * hub's, or the platform chain for `null`.
+   *
+   * There is deliberately no "every chain" form. Treating a missing hub id as
+   * "all hubs" is how the unscoped `/api/audit` mount served every hub's log to
+   * a global `audit:read` holder (#2395). An empty string matches no chain.
    */
   async list(
-    hubId: string | undefined,
+    chain: string | null,
     filters: AuditListFilters = {},
   ): Promise<{ entries: AuditEntry[]; total: number }> {
     const {
@@ -485,10 +490,7 @@ export class AuditService {
 
     const conditions = []
 
-    // Hub scope
-    if (hubId) {
-      conditions.push(eq(auditLog.hubId, hubId))
-    }
+    conditions.push(chain === null ? sql`${auditLog.hubId} IS NULL` : eq(auditLog.hubId, chain))
 
     // Direct action match
     if (action) {

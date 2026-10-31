@@ -46,15 +46,15 @@ Before({ tags: '@backend' }, async ({ world }) => {
 })
 // ── Note Creation ────────────────────────────────────────────────
 
-Given('a new note is created', async ({request, world}) => {
+Given('a new note is created', async ({request, world, workerHub }) => {
   // Create a note via the API with real AES-256-GCM encryption
   const { encryptedContent, envelopes } = await encryptForTest('test note encrypted', [ADMIN_SEED])
   const { status, data } = await apiPost<{ note?: Record<string, unknown> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       adminEnvelopes: envelopes,
     },
   )
@@ -62,15 +62,15 @@ Given('a new note is created', async ({request, world}) => {
   getNoteTestState(world).envelope = data.note
 })
 
-Given('a note created by a volunteer', async ({request, world}) => {
+Given('a note created by a volunteer', async ({request, world, workerHub }) => {
   // Notes must be created by a registered volunteer — real crypto
   const { encryptedContent, envelopes } = await encryptForTest('volunteer note', [ADMIN_SEED])
   const { status, data } = await apiPost<{ note?: Record<string, unknown> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       adminEnvelopes: envelopes,
     },
   )
@@ -90,14 +90,14 @@ Given('a hub with {int} admins', async ({request: _request, world}, count: numbe
   }
 })
 
-Given('an encrypted note envelope', async ({request, world}) => {
+Given('an encrypted note envelope', async ({request, world, workerHub }) => {
   const { encryptedContent, envelopes } = await encryptForTest('envelope test note', [ADMIN_SEED])
   const { status, data } = await apiPost<{ note?: Record<string, unknown> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       adminEnvelopes: envelopes,
     },
   )
@@ -106,7 +106,7 @@ Given('an encrypted note envelope', async ({request, world}) => {
   }
 })
 
-Given('two notes created by the same volunteer', async ({request, world}) => {
+Given('two notes created by the same volunteer', async ({request, world, workerHub }) => {
   getNoteTestState(world).envelopes = []
   for (let i = 0; i < 2; i++) {
     // Each note gets a unique content key (forward secrecy)
@@ -116,10 +116,10 @@ Given('two notes created by the same volunteer', async ({request, world}) => {
     )
     const { status, data } = await apiPost<{ note?: Record<string, unknown> }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         encryptedContent,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, workerHub),
         adminEnvelopes: envelopes,
       },
     )
@@ -129,7 +129,7 @@ Given('two notes created by the same volunteer', async ({request, world}) => {
   }
 })
 
-When('a note is created', async ({request, world}) => {
+When('a note is created', async ({request, world, workerHub }) => {
   // Build real HPKE admin envelopes from the keypairs created in the "hub with N admins" step
   const contentKey = generateContentKey()
   const encryptedContent = encryptContent('multi admin note', contentKey, LABEL_NOTE_KEY)
@@ -144,10 +144,10 @@ When('a note is created', async ({request, world}) => {
 
   const { status, data } = await apiPost<{ note?: Record<string, unknown> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       adminEnvelopes,
     },
   )
