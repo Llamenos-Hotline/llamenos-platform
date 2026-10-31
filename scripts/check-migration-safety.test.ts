@@ -753,10 +753,9 @@ describe('--ci end to end, with no database', () => {
     }
   })
 
-  test('the journal may change: drizzle-kit appends to it with every migration', () => {
+  test('meta files other than snapshots are not migrations: the retired journal is migration:claims\' business', () => {
     withRepo((root, base) => {
-      const p = join(migrationsOf(root), 'meta', '_journal.json')
-      writeFileSync(p, `${readFileSync(p, 'utf-8')}\n`)
+      writeFileSync(join(migrationsOf(root), 'meta', '_journal.json'), '{"entries":[]}\n')
       addMigration(root, '9999_ok.sql', 'CREATE TABLE ok (x text);')
       expect(runCi(root, base).code).toBe(0)
     })
