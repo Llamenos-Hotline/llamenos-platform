@@ -34,7 +34,7 @@
  * database people use). Without it, a throwaway Postgres container is started
  * (the image deploy/docker/docker-compose.dev.yml pins) and removed afterwards.
  *
- * Usage: bun run migration:order [--base <rev>] [--root <repo>]
+ * Usage: bun run migration:order [--ci] [--base <rev>] [--root <repo>]
  * Exit:  0 every order agrees, 1 two orders differ (or a run failed), 2 could not run.
  */
 import { SQL } from 'bun'
@@ -304,8 +304,16 @@ async function main() {
 
   // The tips a deployment can be sitting on: the base, then each first-parent
   // commit up to (not including) HEAD — in a merge group, the entries ahead of
-  // this one.
-  const between = git(root, 'rev-list', '--first-parent', '--reverse', `${base}..HEAD`).split('\n').filter(Boolean)
+  // this one. A branch not yet rebased has no such commits to offer, and in a
+  // shallow clone the walk would silently stop short, so --ci (where the base
+  // is always an ancestor) treats an unreachable base as an error.
+  const ancestor = Bun.spawnSync(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], { cwd: root }).exitCode === 0
+  if (!ancestor && process.argv.includes('--ci')) {
+    throw new Error(`${base} is not an ancestor of HEAD in this clone; fetch more history (git fetch --deepen=…)`)
+  }
+  const between = ancestor
+    ? git(root, 'rev-list', '--first-parent', '--reverse', `${base}..HEAD`).split('\n').filter(Boolean)
+    : []
   const tips = [git(root, 'rev-parse', base).trim(), ...between.slice(0, -1)].map((rev) => ({
     rev: rev.slice(0, 12),
     files: migrationsAt(root, rev),

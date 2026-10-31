@@ -80,6 +80,38 @@ Each learned from a live fleet failure. Full list + failures:
   HPKE/Ed25519/X25519/sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings,
   by path or by your PR description. Say so in the description if the paths do not show it.
 
+## Migrations (#2391 — read before adding one)
+
+- **Generate, never number by hand.** Change `apps/worker/db/schema/`, then
+  `bun run db:generate --name <what>` (`--custom` for hand-written SQL). It writes
+  `drizzle/migrations/YYYYMMDDHHMMSS_<what>.sql` and `meta/<same>_snapshot.json`, whose
+  `prevIds` name the heads it was generated on. `bunx drizzle-kit generate` is retired: it
+  needs the deleted `_journal.json` and aborts once two snapshots share a parent.
+- **Another migration landing first changes nothing for you.** Do not rename, renumber or
+  regenerate because main moved. Yours becomes a second head: `migration:check` merges the
+  heads, `migration:safety` lets a concurrent file sort before one main already has, and
+  `migration:order` proves in Postgres that both apply orders build one schema. Regenerate
+  only when a gate reports a CONFLICT (both changed the same object differently).
+- **Before pushing:** `bun run migration:check`, `bun run migration:safety --ci`,
+  `bun run migration:claims --against-open-prs` (pre-push runs the first and last). Every
+  failure prints its exact fix.
+- **The `prevId` trap (numbered PRs from before the cutover: #2346, #2307, #2361, #2382).**
+  A snapshot is a full copy of the schema, not a diff. Renumbering a numbered file, or
+  hand-editing its `prevId` to main's newest snapshot, leaves a snapshot that still lacks
+  every column main — or an earlier pending PR — added since. It passes locally and fails
+  `migration-drift` in the merge group, taking the whole batch down. The fix is always to
+  regenerate:
+  `git show HEAD:<file>.sql > /tmp/<file>.sql` (keep hand edits) →
+  `git fetch -q origin && git rebase origin/main` → `git rm -q` the `.sql` and its snapshot →
+  `bun run db:generate --name <what>` → re-apply the hand edits → rerun the three checks.
+- **Never generate on another PR's unmerged schema.** A "forward" snapshot that already holds
+  an open PR's columns is rejected by the pre-push `migration:check`, and rightly: this
+  branch's schema does not declare those columns, so the snapshot describes a schema the
+  branch cannot build, and it is wrong on main if that PR changes or never lands. Push the
+  snapshot generated on main with only this branch's change, say so in the PR body
+  ("migration generated without #N"), and after #N lands rerun the checks — a timestamped
+  migration normally needs nothing; regenerate only if one reports a conflict.
+
 ---
 
 # Supervisor Operating Manual
