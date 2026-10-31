@@ -59,6 +59,19 @@ function waitingIn(world: Record<string, unknown>, label: string): Seeded {
   return conv
 }
 
+function lastResponse(world: Record<string, unknown>): { status: number; data: unknown } {
+  const last = s(world).last
+  if (!last) throw new Error('no response recorded')
+  return last
+}
+
+/** The conversation ids of the last list response; fails when it carried no list. */
+function listedIds(world: Record<string, unknown>): string[] {
+  const data = lastResponse(world).data as { conversations?: Array<{ id: string }> } | null
+  if (!data?.conversations) throw new Error(`not a conversation list: ${JSON.stringify(data)}`)
+  return data.conversations.map(c => c.id)
+}
+
 function record(world: Record<string, unknown>, res: { status: number; data: unknown }): void {
   s(world).last = res
   setLastResponse(world, res)
@@ -149,44 +162,40 @@ When('the admin reads the conversation counts of hub {string}', async ({ request
 // ── Then ────────────────────────────────────────────────────────────
 
 Then('the response carries no conversation of hub {string} or hub {string}', async ({ world }, a: string, b: string) => {
-  const last = s(world).last
-  expect(last, 'no response recorded').toBeDefined()
-  const body = JSON.stringify(last!.data ?? null)
+  const last = lastResponse(world)
+  const body = JSON.stringify(last.data ?? null)
   for (const label of [a, b]) {
     const conv = waitingIn(world, label)
     expect(body, `hub ${label}'s conversation id in ${body}`).not.toContain(conv.id)
     expect(body, `hub ${label}'s contact hash in ${body}`).not.toContain(conv.contactIdentifierHash)
   }
-  const data = (last!.data ?? {}) as { conversations?: unknown[]; id?: unknown }
+  const data = (last.data ?? {}) as { conversations?: unknown[]; id?: unknown }
   expect(data.conversations ?? [], 'a conversation list').toEqual([])
   expect(data.id, 'a single conversation').toBeUndefined()
 })
 
 Then('the response carries no conversation counts', async ({ world }) => {
-  const data = (s(world).last?.data ?? {}) as Record<string, unknown>
+  const data = (lastResponse(world).data ?? {}) as Record<string, unknown>
   for (const key of ['waiting', 'active', 'closed', 'today', 'total']) {
     expect(data[key], `"${key}" in ${JSON.stringify(data)}`).toBeUndefined()
   }
 })
 
 Then('the listed conversations are exactly none', async ({ world }) => {
-  const data = s(world).last?.data as { conversations?: Array<{ id: string }>; waitingCount?: number }
-  expect(data?.conversations, 'a conversation list').toBeDefined()
-  expect(data.conversations!.map(c => c.id)).toEqual([])
-  expect(data.waitingCount).toBe(0)
+  expect(listedIds(world)).toEqual([])
+  expect((lastResponse(world).data as { waitingCount?: number }).waitingCount).toBe(0)
 })
 
 Then(
   'the listed conversations are exactly hub {string}\'s waiting {string} conversation',
   async ({ world }, label: string, channel: string) => {
-    const data = s(world).last?.data as { conversations?: Array<{ id: string; channelType: string; status: string }> }
-    expect(data?.conversations, 'a conversation list').toBeDefined()
-    expect(data.conversations!.map(c => c.id)).toEqual([waitingIn(world, label).id])
-    expect(data.conversations![0]).toMatchObject({ channelType: channel, status: 'waiting' })
+    expect(listedIds(world)).toEqual([waitingIn(world, label).id])
+    const [row] = (lastResponse(world).data as { conversations: Array<{ channelType: string; status: string }> }).conversations
+    expect(row).toMatchObject({ channelType: channel, status: 'waiting' })
   },
 )
 
 Then('the counts are {int} waiting of {int} in total', async ({ world }, waiting: number, total: number) => {
-  const data = s(world).last?.data as { waiting: number; total: number }
+  const data = lastResponse(world).data as { waiting: number; total: number }
   expect(data).toMatchObject({ waiting, total })
 })
