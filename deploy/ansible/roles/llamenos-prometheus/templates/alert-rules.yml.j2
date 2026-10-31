@@ -100,6 +100,114 @@ groups:
             can be checked. Treat every background job as unverified until this
             clears.
 
+      # ── Routing backstops (#2330): the instance-wide view of "calls are not working" ──
+      #
+      # Hub-level alerting lives inside the app, so it dies with the app's
+      # routing. These rules judge the whole instance from outside, from four
+      # counters with NO hub label (apps/worker/routes/metrics.ts):
+      #
+      #   llamenos_telephony_webhook_rejected_total{reason, attribution}
+      #   llamenos_calls_inbound_total       calls that entered the ringing queue
+      #   llamenos_calls_answered_total      calls a volunteer answered
+      #
+      # There is deliberately NO rule on the raw rejection count. A refusal
+      # happens before authentication, so anyone on the internet can cause one:
+      # a threshold on it is a way to wake the operator at will, and a way to
+      # bury a real outage under noise. Rejections only page when they carry
+      # evidence the sender is OUR provider acting for OUR account, or when they
+      # arrive while genuine inbound traffic has stopped.
+      #
+      # Two rules share the WebhookAuthOutage name, told apart by `reason`.
+      # Reaches the operator through the existing Alertmanager receiver; it does
+      # not notify hub members.
+      - alert: WebhookAuthOutage
+        # Our provider, from its own address, naming our account, failed the
+        # signature: a rotated or wrong signing secret. Forging this needs the
+        # provider's egress, so it pages on the first one. A partial rotation
+        # (one number or subaccount) leaves other traffic flowing, so this does
+        # NOT wait for inbound to stop.
+        expr: >-
+          sum by (job, instance) (
+            increase(llamenos_telephony_webhook_rejected_total{job="llamenos-app",attribution="own_account"}[{{ prometheus_routing_own_account_window }}])
+          ) > 0
+        labels:
+          severity: critical
+          reason: own_account
+        annotations:
+          summary: "Our telephony provider's webhooks are failing signature checks"
+          description: >-
+            Webhooks from the telephony provider's own addresses, naming this
+            deployment's account, are being refused for a bad signature. Calls
+            are most likely not reaching the app. The usual cause is a rotated
+            or mistyped provider auth token / signing secret. See the "Provider
+            webhook rejections" runbook (docs/runbooks).
+
+      - alert: WebhookAuthOutage
+        # Refusals we cannot attribute (an out-of-date provider address list, or
+        # a provider that puts no account id in its webhooks) are only an
+        # outage if the real traffic stopped: inbound was flowing in the
+        # previous window and is flat in this one. An attacker's noise cannot
+        # satisfy the inbound part, and cannot suppress it either.
+        expr: >-
+          (
+            sum by (job, instance) (
+              increase(llamenos_telephony_webhook_rejected_total{job="llamenos-app",attribution="unattributed"}[{{ prometheus_routing_traffic_window }}])
+            ) > 0
+          )
+          and on (job, instance)
+          (
+            sum by (job, instance) (
+              increase(llamenos_calls_inbound_total{job="llamenos-app"}[{{ prometheus_routing_traffic_window }}])
+            ) == 0
+          )
+          and on (job, instance)
+          (
+            sum by (job, instance) (
+              increase(llamenos_calls_inbound_total{job="llamenos-app"}[{{ prometheus_routing_traffic_window }}] offset {{ prometheus_routing_traffic_window }})
+            ) > 0
+          )
+        labels:
+          severity: critical
+          reason: inbound_flat
+        annotations:
+          summary: "Inbound calls stopped while provider webhooks are being refused"
+          description: >-
+            Calls were reaching the queue in the previous window and none have
+            in this one, while provider webhooks are being refused. Two causes
+            look the same from here: a rotated or wrong signing secret, and an
+            out-of-date provider IP allowlist (TELEPHONY_WEBHOOK_IPS). See the
+            "Provider webhook rejections" runbook (docs/runbooks).
+
+      - alert: InboundButNoAnswers
+        # The cross-hub backstop for when the app still serves metrics but hub
+        # alerting is itself broken: calls came in and not one was picked up.
+        # round() because a counter's increase() is extrapolated (1 event reads
+        # as 0.9 or 1.2).
+        expr: >-
+          (
+            sum by (job, instance) (
+              round(increase(llamenos_calls_inbound_total{job="llamenos-app"}[{{ prometheus_routing_traffic_window }}]))
+            ) >= {{ prometheus_routing_no_answer_min_inbound }}
+          )
+          and on (job, instance)
+          (
+            sum by (job, instance) (
+              increase(llamenos_calls_answered_total{job="llamenos-app"}[{{ prometheus_routing_traffic_window }}])
+            ) == 0
+          )
+        # A call that has just entered the queue has not had time to be picked
+        # up; it must survive past ringing and the voicemail fallback unanswered.
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Calls are coming in and nobody is answering them"
+          description: >-
+            Calls entered the queue in the last window and none was answered, on
+            any hub. Check the shift schedules and fallback groups, the
+            telephony provider, and that volunteers' apps are receiving calls.
+            Hub members are NOT notified of this by the app.
+
       - alert: HighMemoryUsage
         expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 85
         for: 5m
@@ -156,9 +264,7 @@ groups:
       #   - Certificate expiry: Caddy exposes no cert-expiry metric without a
       #     blackbox_exporter instance (not currently deployed); adding one is
       #     a new component, not a rule tweak.
-      #   - "No calls routed in N minutes": no counter for a successfully
-      #     answered/routed call exists yet (only llamenos_calls_unroutable_total,
-      #     which counts routing FAILURES).
+      #   - (Answered-call counting now exists: see InboundButNoAnswers above.)
       # All three operational signals above (backup staleness, TLS expiry, and
       # container/DB health) ARE covered today, independent of these Prometheus
       # metrics, by the cron-based `alerting` role (templates/alerting/check-alerts.sh.j2)

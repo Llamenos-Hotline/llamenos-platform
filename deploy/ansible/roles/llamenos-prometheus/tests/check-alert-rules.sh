@@ -4,6 +4,9 @@
 #   1. Render templates/alert-rules.yml.j2 with Jinja2 (StrictUndefined, so a
 #      template that starts depending on a variable fails here loudly rather
 #      than rendering a hole), exactly as the role's `template` task would.
+#      The ONLY variables supplied are defaults/main.yml's: a fresh checkout
+#      deploys exactly what is tested here, so a variable a rule needs that has
+#      no default fails this script instead of silently rendering nothing.
 #   2. `promtool check rules` on the rendered file.
 #   3. `promtool test rules` with tests/alert-rules.test.yml.
 #
@@ -22,18 +25,21 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-python3 - "$role_dir/templates/alert-rules.yml.j2" "$work/llamenos.yml" <<'PY'
+python3 - "$role_dir/templates/alert-rules.yml.j2" "$work/llamenos.yml" "$role_dir/defaults/main.yml" <<'PY'
 import sys
 import jinja2
+import yaml
 
-src, dst = sys.argv[1], sys.argv[2]
+src, dst, defaults = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(defaults) as f:
+    role_defaults = yaml.safe_load(f)
 env = jinja2.Environment(
     trim_blocks=True,  # Ansible's template module default
     keep_trailing_newline=True,
     undefined=jinja2.StrictUndefined,
 )
 with open(src) as f:
-    rendered = env.from_string(f.read()).render()
+    rendered = env.from_string(f.read()).render(**role_defaults)
 with open(dst, "w") as f:
     f.write(rendered)
 PY

@@ -15,6 +15,7 @@ import { activeCalls, callRecords, callTokens } from '../db/schema'
 import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
+import { recordCallAnswered, recordCallInbound } from '../routes/metrics'
 
 const logger = createLogger('services.calls')
 
@@ -276,6 +277,8 @@ export class CallsService {
       })
       .returning()
 
+    // Instance-wide, no hub label: the cross-hub backstop for #2330.
+    recordCallInbound()
     return row
   }
 
@@ -304,7 +307,10 @@ export class CallsService {
       )
       .returning()
 
-    if (row) return row
+    if (row) {
+      recordCallAnswered()
+      return row
+    }
 
     const existing = await this.getActiveCallById(hubId, callId)
     if (!existing) throw new ServiceError(404, 'Call not found')
@@ -734,6 +740,7 @@ export class CallsService {
       .returning()
     if (claimed.length === 0) return null
 
+    recordCallAnswered()
     return { callSid: tokenRow.callSid, volunteerPubkey: tokenRow.volunteerPubkey, hubId: tokenRow.hubId }
   }
 

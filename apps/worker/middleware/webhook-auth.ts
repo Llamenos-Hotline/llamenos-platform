@@ -13,11 +13,13 @@ interface WebhookAuthOptions {
   allowedContentTypes?: string[]
   replayWindowSeconds?: number
   skipReplay?: boolean
+  /** Called when the IP allowlist refuses a request, before the 403 is returned. */
+  onIpRejected?: (req: Request) => void | Promise<void>
 }
 
 export function webhookAuth(options: WebhookAuthOptions) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    const { provider, allowedContentTypes, replayWindowSeconds = 300, skipReplay = false } = options
+    const { provider, allowedContentTypes, replayWindowSeconds = 300, skipReplay = false, onIpRejected } = options
 
     // 1. Content-Type enforcement
     if (allowedContentTypes) {
@@ -35,6 +37,7 @@ export function webhookAuth(options: WebhookAuthOptions) {
       const clientIp = getClientIp(c.req.raw)
       if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
         logger.warn('Webhook IP not in allowlist', { provider })
+        await onIpRejected?.(c.req.raw)
         return c.text('Forbidden', 403)
       }
     }
