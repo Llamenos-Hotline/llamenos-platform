@@ -28,6 +28,7 @@ const ENV_CONSUMERS = [
   'apps/worker/lib/push-dispatch.ts',
   'apps/worker/lib/ntfy-origin.ts',
   'apps/worker/routes/config.ts',
+  'apps/worker/routes/invite-page.ts',
 ]
 
 /** The `const env: Record<string, unknown> = { ... }` literal, as source. */

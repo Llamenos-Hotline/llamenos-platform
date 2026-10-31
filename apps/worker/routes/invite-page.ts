@@ -37,6 +37,7 @@ import { getLocaleString, LANGUAGE_CODES, DEFAULT_LANGUAGE } from '@llamenos/i18
 import type { AppEnv } from '../types'
 import { checkRateLimit } from '../lib/helpers'
 import { routeRateLimitClient } from '../lib/route-rate-limit'
+import { parseAppDownloadUrl } from '../lib/config'
 
 /** Invite codes are `crypto.randomUUID()` — the same shape `normalizeInviteCode` accepts client-side. */
 const INVITE_CODE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -164,11 +165,11 @@ invitePage.get('/', async (c) => {
   if (!valid) return respond('invalid', 404)
 
   const url = new URL(c.req.url)
-  const downloadUrl = c.env.APP_DOWNLOAD_URL?.trim()
   return respond('valid', 200, {
     code,
     pageUrl: `${url.origin}${url.pathname}?code=${encodeURIComponent(code)}`,
-    downloadUrl: downloadUrl && /^https:\/\//.test(downloadUrl) ? downloadUrl : undefined,
+    // Unset: no download link. Malformed never reaches here — startup refuses it.
+    downloadUrl: parseAppDownloadUrl(c.env.APP_DOWNLOAD_URL),
   })
 })
 

@@ -147,6 +147,28 @@ function assertDatabaseUrl(env: ConfigInput): void {
   }
 }
 
+/**
+ * APP_DOWNLOAD_URL: where the invite page (routes/invite-page.ts) sends a
+ * person who does not have the app yet. Optional — a deployment that
+ * distributes the client some other way leaves it unset and the page offers no
+ * download link. When it IS set it must be an absolute https URL: it becomes an
+ * `href` on an unauthenticated page, so a plain-http, relative or `javascript:`
+ * value is a configuration error, refused at startup rather than quietly
+ * dropped from the page.
+ */
+export function parseAppDownloadUrl(value: string | undefined): string | undefined {
+  const raw = value?.trim()
+  if (!raw) return undefined
+  const url = URL.canParse(raw) ? new URL(raw) : undefined
+  if (url?.protocol !== 'https:' || !url.hostname) {
+    throw new Error(
+      `[llamenos] APP_DOWNLOAD_URL must be an absolute https:// URL (a store listing or ` +
+      `download page). Unset it to offer no download link on the invite page.`
+    )
+  }
+  return raw
+}
+
 import { createLogger } from './logger'
 import { MIN_DEPLOYED_SECRET_LENGTH } from './dev-surfaces'
 
@@ -316,6 +338,9 @@ export function validateConfig(
   warnIfAbsent(env, 'APNS_KEY_P8', 'iOS push notifications disabled')
   warnIfAbsent(env, 'APNS_KEY_ID', 'iOS push notifications disabled')
   warnIfAbsent(env, 'APNS_TEAM_ID', 'iOS push notifications disabled')
+  // Absent is a supported deployment; malformed is not, so it throws.
+  parseAppDownloadUrl(env['APP_DOWNLOAD_URL'])
+  warnIfAbsent(env, 'APP_DOWNLOAD_URL', 'the invite page offers no app download link, only "Open in app"')
 
   // --- Webhook IP allowlist (#1622) ---
   // middleware/webhook-auth.ts, middleware/webhook-ip-allowlist.ts and

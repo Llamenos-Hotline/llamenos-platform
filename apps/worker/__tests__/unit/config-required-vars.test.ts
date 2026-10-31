@@ -86,6 +86,25 @@ describe('validateConfig: the required-variable list', () => {
     const bad = { ...completeEnv(), ADMIN_PUBKEY: 'not-a-pubkey' }
     expect(() => validateConfig(bad)).toThrow(/ADMIN_PUBKEY/)
   })
+
+  // The invite page's download link (#2394): a deployment that distributes the
+  // client another way runs without it, but a set value becomes an href on an
+  // unauthenticated page, so anything but an absolute https URL is refused.
+  it('leaves APP_DOWNLOAD_URL optional, and accepts an https one', () => {
+    expect(() => validateConfig(completeEnv())).not.toThrow()
+    expect(() => validateConfig({ ...completeEnv(), APP_DOWNLOAD_URL: '   ' })).not.toThrow()
+    expect(() => validateConfig({ ...completeEnv(), APP_DOWNLOAD_URL: 'https://downloads.example.test/app' })).not.toThrow()
+  })
+
+  it.each([
+    'http://downloads.example.test/app',
+    'javascript:alert(1)',
+    '/download',
+    'downloads.example.test/app',
+    'https://',
+  ])('refuses to start with APP_DOWNLOAD_URL=%s, and names it', (value) => {
+    expect(() => validateConfig({ ...completeEnv(), APP_DOWNLOAD_URL: value })).toThrow(/APP_DOWNLOAD_URL/)
+  })
 })
 
 describe('validateConfig: one role per secret (D6, #2171)', () => {

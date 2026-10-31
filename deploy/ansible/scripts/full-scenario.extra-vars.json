@@ -19,6 +19,8 @@
   "_comment_1624": "Added with #1624. Each of these switches on a var the worker READS and that no render previously reached: METRICS_SCRAPE_TOKEN (the Prometheus scrape bearer), SIGNAL_QUEUE_RETENTION_DAYS, and one <PROVIDER>_WEBHOOK_IPS line. SIP_BRIDGE_URL, SIP_REGISTRAR_SECRET and TURN_* are rendered by calling-scenario.extra-vars.json. Dummy non-secret placeholders, as above.",
   "metrics_scrape_token": "check-required-env-fixture-metrics-token",
   "signal_queue_retention_days": 14,
+  "_comment_2394": "Added with #2394: APP_DOWNLOAD_URL, the invite page's download link, consumed by apps/worker/routes/invite-page.ts. Dummy RFC 2606 host, as above.",
+  "app_download_url": "https://downloads.example.org/app",
   "webhook_ip_allowlists": {
     "twilio": ["203.0.113.0/24"]
   }

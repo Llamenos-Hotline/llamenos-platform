@@ -111,13 +111,23 @@ describe('GET /onboarding?code=', () => {
     expect(res.headers.get('content-security-policy')).toContain("default-src 'none'")
   })
 
-  it('offers a download link only when the operator configured an https one', async () => {
+  it('offers a download link only when the operator configured one', async () => {
     const withLink = await (await createApp({ downloadUrl: 'https://downloads.example.test/app' }).get(`https://h.test/onboarding?code=${CODE}`)).text()
     expect(withLink).toContain('href="https://downloads.example.test/app"')
-    const insecure = await (await createApp({ downloadUrl: 'http://downloads.example.test/app' }).get(`https://h.test/onboarding?code=${CODE}`)).text()
-    expect(insecure).not.toContain('downloads.example.test')
+    expect(withLink).toContain('Get the app')
+    // Unset is a supported deployment: the page still works, with "Open in app" alone.
     const none = await (await createApp().get(`https://h.test/onboarding?code=${CODE}`)).text()
+    expect(none).toContain('Open in app')
     expect(none).not.toContain('Get the app')
+  })
+
+  it('never renders a download URL that is not absolute https', async () => {
+    // Startup refuses these (lib/config.ts); the route must not emit one as an href even so.
+    for (const bad of ['http://downloads.example.test/app', 'javascript:alert(1)', '/download']) {
+      const res = await createApp({ downloadUrl: bad }).get(`https://h.test/onboarding?code=${CODE}`)
+      expect(res.status).toBe(500)
+      expect(await res.text()).not.toContain(bad)
+    }
   })
 
   it('renders in the requested language, right to left where the script requires it', async () => {

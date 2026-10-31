@@ -213,6 +213,16 @@ backup_rclone_remote: ""
 # cors_allowed_origins_extra: []        # appended to the two defaults
 # cors_allowed_origins: []              # replaces them entirely
 
+# ─── Invite page download link ───────────────────────────────────
+# Where the invite page (https://<api host>/onboarding?code=...) sends someone
+# who does not have the app yet — a store listing or download page. Optional:
+# leave empty if you distribute the client another way, and the page offers
+# "Open in app" alone. When set it must be an absolute https:// URL (the render
+# and the app both refuse anything else), and it must not name your
+# organisation — the invite page is unbranded so a link preview or a shoulder
+# surfer learns nothing from it.
+app_download_url: ""
+
 # ─── Signal queue retention ──────────────────────────────────────
 # Days the Signal delivery queue keeps rows before cleanup (1-3650). Unset
 # keeps the worker's 30-day default. The worker refuses to boot on a value

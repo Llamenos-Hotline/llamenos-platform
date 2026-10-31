@@ -32,6 +32,10 @@ app:
     # telephony/messaging webhooks are delivered to. The app refuses to boot
     # without it rather than trust the spoofable Host header.
     WEBHOOK_BASE_URL: ""
+    # Optional — the invite page's "Get the app" link: an absolute https:// URL
+    # to a store listing or download page (the app refuses to boot on anything
+    # else). Empty: the page offers "Open in app" alone.
+    APP_DOWNLOAD_URL: ""
 
 # PostgreSQL connection
 postgres:

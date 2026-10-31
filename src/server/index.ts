@@ -166,6 +166,9 @@ const env: Record<string, unknown> = {
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
   SERVER_SECRET: serverSecret || undefined,
   GLITCHTIP_DSN: process.env.GLITCHTIP_DSN || undefined,
+  // The invite page's download link — apps/worker/routes/invite-page.ts.
+  // validateConfig() has already refused a malformed value.
+  APP_DOWNLOAD_URL: process.env.APP_DOWNLOAD_URL || undefined,
   DEV_RESET_SECRET: process.env.DEV_RESET_SECRET || undefined,
   E2E_TEST_SECRET: process.env.E2E_TEST_SECRET || undefined,
   DEV_ROUTES_ENABLED: process.env.DEV_ROUTES_ENABLED || undefined,
