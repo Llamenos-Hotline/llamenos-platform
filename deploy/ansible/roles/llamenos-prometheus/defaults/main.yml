@@ -3,3 +3,19 @@ prometheus_image: prom/prometheus:v3.2.1
 prometheus_retention: 15d
 prometheus_retention_size: 5GB
 prometheus_scrape_interval: 15s
+
+# ── Routing backstop alerts (#2330) ──────────────────────────────────────────
+# Generic defaults: the alerts work as shipped, with only the Alertmanager
+# receiver (llamenos-alertmanager role) filled in. Tune these to your own call
+# volume; a hotline taking a call a day wants longer windows than one taking
+# a call a minute. Prometheus durations (e.g. 15m, 1h).
+#
+# WebhookAuthOutage, own-account clause: a refused webhook that carries our own
+# provider account, from the provider's address, with a bad signature.
+prometheus_routing_own_account_window: 15m
+# WebhookAuthOutage, flat-traffic clause AND InboundButNoAnswers. The flat-traffic
+# clause compares this window with the one before it.
+prometheus_routing_traffic_window: 30m
+# InboundButNoAnswers fires when at least this many calls entered the queue in
+# the window and none was answered.
+prometheus_routing_no_answer_min_inbound: 1

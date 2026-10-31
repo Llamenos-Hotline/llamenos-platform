@@ -21,6 +21,8 @@ vi.mock('@worker/db', () => ({
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
 import { recordRingLegs } from '@worker/services/ringing'
 import { checkWebhookReplay } from '@worker/services/webhook-replay'
+import metricsRoutes from '@worker/routes/metrics'
+import { resetWebhookRejectionDamping } from '@worker/telephony/webhook-rejection'
 
 // Mock webhook replay protection — unit tests have no database
 vi.mock('@worker/services/webhook-replay', () => ({
@@ -204,6 +206,66 @@ describe('Telephony routes', () => {
         body: 'CallSid=CA123',
       })
       expect(res.status).toBe(403)
+    })
+
+    describe('refusals are counted at instance level (#2330)', () => {
+      async function counts(): Promise<Record<string, number>> {
+        const res = await metricsRoutes.request(
+          '/prometheus',
+          { headers: { Authorization: 'Bearer t' } },
+          { METRICS_SCRAPE_TOKEN: 't' },
+        )
+        const out: Record<string, number> = {}
+        for (const line of (await res.text()).split('\n')) {
+          const m = /^llamenos_telephony_webhook_rejected_total\{reason="(\w+)",attribution="(\w+)"\} (\d+)$/.exec(line)
+          if (m) out[`${m[1]}/${m[2]}`] = Number(m[3])
+        }
+        return out
+      }
+      const post = (app: Awaited<ReturnType<typeof createTestApp>>, ip: string) =>
+        app.request('/api/telephony/incoming', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': ip },
+          body: 'CallSid=CA123',
+        })
+
+      beforeEach(() => {
+        resetWebhookRejectionDamping()
+        process.env.TRUST_PROXY_HEADERS = 'true'
+      })
+
+      it('counts a failed signature, and nothing for an accepted webhook', async () => {
+        const before = await counts()
+        const ok = await post(await createTestApp(adapter, services), '198.51.100.1')
+        expect(ok.status).toBe(200)
+        expect(await counts()).toEqual(before)
+
+        adapter.validateWebhook = vi.fn().mockResolvedValue(false)
+        const res = await post(await createTestApp(adapter, services), '198.51.100.2')
+        expect(res.status).toBe(403)
+        const after = await counts()
+        expect(after['signature_invalid/unattributed']).toBe(before['signature_invalid/unattributed'] + 1)
+        expect(after['signature_invalid/own_account']).toBe(before['signature_invalid/own_account'])
+      })
+
+      it('counts a request from outside the IP allowlist as ip_not_allowed, still 403', async () => {
+        const before = await counts()
+        const app = await createTestApp(adapter, services, { TELEPHONY_WEBHOOK_IPS: '203.0.113.0/24' })
+        const res = await post(app, '198.51.100.3')
+        expect(res.status).toBe(403)
+        expect((await counts())['ip_not_allowed/unattributed']).toBe(before['ip_not_allowed/unattributed'] + 1)
+        expect(adapter.validateWebhook).not.toHaveBeenCalled()
+      })
+
+      it('counts a request when no provider is configured as no_provider', async () => {
+        const before = await counts()
+        const app = await createTestApp(adapter, services)
+        vi.mocked(getTelephonyFromService).mockResolvedValue(null)
+        vi.mocked(getHubTelephonyFromService).mockResolvedValue(null)
+        const res = await post(app, '198.51.100.4')
+        expect(res.status).toBe(403)
+        expect((await counts())['no_provider/unattributed']).toBe(before['no_provider/unattributed'] + 1)
+      })
     })
 
     describe('replay protection (#1036)', () => {

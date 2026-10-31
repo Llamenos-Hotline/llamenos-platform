@@ -44,6 +44,10 @@ const startTime = Date.now()
 // Public API for middleware / services to record metrics
 // ---------------------------------------------------------------------------
 
+function metricName(key: string): string {
+  return key.split('{')[0]
+}
+
 function labelStr(labels?: Record<string, string>): string {
   if (!labels || Object.keys(labels).length === 0) return ''
   return `{${Object.entries(labels).map(([k, v]) => `${k}="${v}"`).join(',')}}`
@@ -112,6 +116,66 @@ export function setActiveConversations(count: number): void {
 /** Update SIP bridge status per hub (1=up, 0=down) */
 export function setSipBridgeStatus(hubId: string, up: boolean): void {
   setGauge('llamenos_sip_bridge_status', up ? 1 : 0, { hub_id: hubId })
+}
+
+// ---------------------------------------------------------------------------
+// Routing backstop counters (instance-level, #2330)
+//
+// Labels here are CLOSED unions: a hub id, user, caller or address can not be
+// passed, so nothing downstream can grow a per-hub series. These feed the
+// WebhookAuthOutage / InboundButNoAnswers alert rules, which judge the whole
+// instance from outside the app and so still work when hub-level alerting is
+// itself what broke.
+// ---------------------------------------------------------------------------
+
+/** Why a provider webhook was refused before reaching a handler. */
+export type WebhookRejectReason = 'no_provider' | 'ip_not_allowed' | 'signature_invalid'
+
+/**
+ * Whether the refused request carried our own provider account. `own_account`
+ * is reserved for the conjunction "provider egress address AND our account id
+ * AND a bad signature" (see telephony/webhook-rejection.ts); everything else,
+ * including every request an anonymous caller can forge, is `unattributed`.
+ */
+export type WebhookAttribution = 'own_account' | 'unattributed'
+
+const COUNTER_HELP = {
+  llamenos_telephony_webhook_rejected_total:
+    'Provider webhooks refused before reaching a handler, by reason and attribution (never by hub or address)',
+  llamenos_calls_inbound_total: 'Inbound calls that entered the ringing queue (instance-wide, no hub label)',
+  llamenos_calls_answered_total: 'Inbound calls a volunteer answered (instance-wide, no hub label)',
+} as const
+
+/**
+ * Every label set a routing-backstop counter can take. Each is published as 0
+ * from process start: Prometheus' increase() reports nothing for a series that
+ * first appears already at 1, so a counter born on its first event would make
+ * the very first rejection or call invisible to the rules.
+ */
+const ROUTING_COUNTER_SERIES: readonly string[] = [
+  ...(['no_provider', 'ip_not_allowed'] as const).map(
+    (reason) => `llamenos_telephony_webhook_rejected_total${labelStr({ reason, attribution: 'unattributed' })}`,
+  ),
+  `llamenos_telephony_webhook_rejected_total${labelStr({ reason: 'signature_invalid', attribution: 'own_account' })}`,
+  `llamenos_telephony_webhook_rejected_total${labelStr({ reason: 'signature_invalid', attribution: 'unattributed' })}`,
+  'llamenos_calls_inbound_total',
+  'llamenos_calls_answered_total',
+]
+for (const series of ROUTING_COUNTER_SERIES) counters.set(series, 0)
+
+/** Count one refused provider webhook. */
+export function recordWebhookRejected(reason: WebhookRejectReason, attribution: WebhookAttribution): void {
+  incCounter('llamenos_telephony_webhook_rejected_total', { reason, attribution })
+}
+
+/** Count one inbound call that entered the ringing queue. */
+export function recordCallInbound(): void {
+  incCounter('llamenos_calls_inbound_total')
+}
+
+/** Count one inbound call a volunteer answered. */
+export function recordCallAnswered(): void {
+  incCounter('llamenos_calls_answered_total')
 }
 
 /** Update backup age in seconds (from last successful backup timestamp) */
@@ -227,9 +291,20 @@ function formatPrometheusMetrics(): string {
     }
   }
 
+  // Routing backstop counters — HELP/TYPE once per family, every series (the
+  // zero-initialised ones included) below it.
+  for (const [name, help] of Object.entries(COUNTER_HELP)) {
+    lines.push(`# HELP ${name} ${help}`)
+    lines.push(`# TYPE ${name} counter`)
+    for (const [key, value] of counters) {
+      if (metricName(key) === name) lines.push(`${key} ${value}`)
+    }
+  }
+
   // Any additional custom counters
   for (const [key, value] of counters) {
     if (key.startsWith('llamenos_http_requests_total')) continue  // already emitted
+    if (metricName(key) in COUNTER_HELP) continue  // already emitted
     const name = key.split('{')[0]
     if (!lines.some(l => l.includes(`# TYPE ${name}`))) {
       lines.push(`# TYPE ${name} counter`)
