@@ -25,7 +25,7 @@ import type { RecipientEnvelope } from '@shared/types'
 import type { Database } from '../db'
 import { unsealAgentKey } from '../lib/agent-identity'
 import { encryptMessageForStorage } from '../lib/crypto'
-import { adminHpkeRecipient, type Ed25519AuthPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { transitionalInstanceRecipient, type Ed25519AuthPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { CircuitBreaker } from '../lib/circuit-breaker'
 import { createLogger } from '../lib/logger'
 import { clearWindowKeyCache } from '../messaging/firehose-observer'
@@ -411,7 +411,7 @@ export class FirehoseAgentService {
     // that. ADMIN_PUBKEY used to be added here too: an Ed25519 signing key,
     // accepted by DHKEM(X25519) as 32 arbitrary bytes, producing a second
     // envelope that no secret key could ever open (#1283).
-    const adminRecipient = adminHpkeRecipient(this.env)
+    const adminRecipient = transitionalInstanceRecipient(this.env)
 
     const recipientPubkeys = [
       ...new Set([conn.agentPubkey, ...(adminRecipient ? [adminRecipient] : [])]),
