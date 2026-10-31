@@ -161,6 +161,25 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
       }
     })
 
+    it('re-runs whole after a boot that died partway through, and still discards every digit', async () => {
+      // The runner records a file only once every statement has succeeded, so a crash
+      // after the CREATEs runs the whole file again on the next boot. Here it already ran.
+      for (const statement of migrationStatements()) {
+        await fresh.raw.unsafe(statement)
+      }
+      const triggers = await fresh.raw.unsafe(
+        `SELECT tgrelid::regclass::text AS tbl FROM pg_trigger
+         WHERE tgname LIKE '%_discard_caller_last4' ORDER BY 1`,
+      )
+      expect(triggers.map((t) => t.tbl)).toEqual(['active_calls', 'call_records'])
+      try {
+        await insertLegacy()
+        expect(await digitsStored()).toBe(0)
+      } finally {
+        await cleanup()
+      }
+    })
+
     it('is no longer declared by the code: no column on either table definition', () => {
       for (const table of [schema.activeCalls, schema.callRecords]) {
         expect(Object.keys(table).filter((k) => /last4/i.test(k))).toEqual([])
