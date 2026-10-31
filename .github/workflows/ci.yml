@@ -562,7 +562,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           components: clippy, rustfmt
@@ -886,7 +886,7 @@ jobs:
 
       # ── WASM build (required for crypto-interop-wasm.spec.ts) ──
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
 
@@ -1378,7 +1378,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
 
@@ -1532,7 +1532,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
 
@@ -1812,7 +1812,7 @@ jobs:
         run: PLAYWRIGHT_TEST=true bun run build
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
 
@@ -2314,7 +2314,7 @@ jobs:
 
       - name: Install Rust stable (for crypto build)
         if: steps.crypto-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: x86_64-linux-android
@@ -2684,7 +2684,7 @@ jobs:
 
       - name: Install Rust stable (for crypto xcframework)
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
@@ -2852,7 +2852,7 @@ jobs:
 
       - name: Install Rust stable (for crypto xcframework)
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
