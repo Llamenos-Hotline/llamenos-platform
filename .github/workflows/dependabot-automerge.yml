@@ -1,0 +1,79 @@
+# Enable auto-merge on Dependabot PRs. Nothing else.
+#
+# Operator ruling (2026-10-30): "dependabot PRs should not need any LLM review
+# and should be merged immediately when they are opened, as long as they pass."
+# This replaces the earlier policy in dependabot-auto-approve.yml of leaving the
+# Merge press to a human. The fast `fleet/review` pass on these PRs is correct
+# and intended; this workflow does not touch it.
+#
+# WHAT THIS DOES. `gh pr merge --auto --squash` and nothing more. Auto-merge is
+# a request, not a merge: the merge queue and the five required contexts
+# (`ci-status`, `gitleaks`, `CodeQL`, `fleet/verify`, `fleet/review`) still
+# decide, and a PR whose checks fail simply sits there. No `--admin`, no direct
+# merge, no check bypass. The approving review that
+# `require_extra_approval_for_unattributed_changes` demands still comes from
+# dependabot-auto-approve.yml.
+#
+# WHY IT KEYS ON THE AUTHOR AND NOTHING ELSE. `pulls/{n}.user.login` is set by
+# GitHub and cannot be forged. Title text, branch name (`dependabot/**`) and
+# labels are all author-controlled; keying on any of them would hand every PR a
+# merge bypass. The script never reads them.
+#
+# WHY `workflow_run`, NOT `pull_request_target`/`pull_request`. Two measured
+# constraints (GitHub docs, "Automating Dependabot with GitHub Actions"):
+#   1. A repo whose target branch has a merge queue cannot have PRs added to it
+#      by `GITHUB_TOKEN`; a PAT with merge permission is required. That is
+#      RELEASE_BOT_TOKEN, the `llamenos-auto` machine user.
+#   2. A workflow triggered by Dependabot sees Dependabot secrets, not Actions
+#      secrets, so RELEASE_BOT_TOKEN is not reachable from a Dependabot-actor
+#      `pull_request` run.
+# `workflow_run` runs the BASE branch's copy of this file with Actions secrets
+# — the path dependabot-auto-approve.yml already relies on — and means a bump
+# that edits `.github/workflows/` cannot rewrite its own auto-merge step.
+# Enabling happens when CI first completes on the PR (minutes after open), not
+# at the instant of open; auto-merge would not merge before then anyway.
+# Idempotent: it re-runs for every CI completion on a PR.
+
+name: Dependabot Auto-Merge
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  enable-auto-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # `workflow_run` fires for every push as well; the real author check is
+    # below, against the API.
+    if: github.event.workflow_run.event == 'pull_request'
+    # Everything below goes through the PAT; the job's own token is unused.
+    permissions: {}
+    steps:
+      - name: Enable auto-merge if the PR author is dependabot[bot]
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the PR by head SHA, as dependabot-auto-approve.yml does, so
+          # this stays correct when several PRs share a branch name.
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" \
+                 --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open PR for $HEAD_SHA — nothing to do."; exit 0
+          fi
+
+          # The only gate. Never the title, branch name or a label.
+          author=$(gh api "repos/$REPO/pulls/$pr" --jq '.user.login')
+          if [ "$author" != "dependabot[bot]" ]; then
+            echo "PR #$pr is authored by $author, not dependabot[bot] — out of scope."; exit 0
+          fi
+
+          gh pr merge "$pr" --repo "$REPO" --auto --squash
+          echo "Auto-merge enabled on PR #$pr; the merge queue and required checks still decide."

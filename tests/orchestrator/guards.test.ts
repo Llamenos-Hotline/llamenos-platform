@@ -4365,19 +4365,15 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       .toMatch(/"\$review" != "success"/)
   })
 
-  it('the Dependabot approver never merges — a human lands the supply-chain update', () => {
-    // fleet/review refused the auto-merging version twice. The second refusal
-    // was the substantive one: every Dependabot bump IS Tier 2 and does get a
-    // model review, but a model reading a lockfile diff sees version numbers
-    // and hashes, never the code the registry publishes. Diff-level review is
-    // structurally blind to supply-chain payloads, so the human Merge press is
-    // the real checkpoint. Re-adding auto-merge re-opens that.
+  it('the Dependabot approver only approves — enabling auto-merge lives in dependabot-automerge.yml', () => {
+    // Operator ruling 2026-10-30: Dependabot PRs auto-merge once they pass.
+    // The approval and the auto-merge request are separate workflows so the
+    // approver stays a pure approver and the author-gated merge request has
+    // one home, pinned by dependabot-automerge.test.ts.
     const yaml = autoApproveYaml()
     const runLines = yaml.split('\n').filter((l) => !l.trim().startsWith('#'))
-    expect(runLines.join('\n'), 'auto-merge must not come back — approve only')
+    expect(runLines.join('\n'), 'enabling auto-merge belongs in dependabot-automerge.yml')
       .not.toMatch(/gh pr merge/)
-    expect(runLines.join('\n'), '--auto would let a bump land with no human decision')
-      .not.toMatch(/--auto\b/)
   })
 
   it('the Dependabot approver uses the collaborator PAT — github-actions[bot] cannot satisfy the unattributed-changes rule', () => {
