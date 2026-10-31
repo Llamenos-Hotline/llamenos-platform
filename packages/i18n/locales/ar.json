@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "دعوة",
+    "validHeading": "تمت دعوتك",
+    "validBody": "ثبّت التطبيق إن لم يكن لديك، ثم افتح هذه الدعوة فيه.",
+    "openInApp": "افتح في التطبيق",
+    "downloadApp": "احصل على التطبيق",
+    "qrLabel": "امسح الرمز لفتح هذه الدعوة على هاتفك",
+    "invalidHeading": "لا يمكن استخدام هذا الرابط",
+    "invalidBody": "الرابط غير صالح أو انتهت صلاحيته. اطلب رابطًا جديدًا ممّن أرسله إليك.",
+    "rateLimitedHeading": "محاولات كثيرة جدًا",
+    "rateLimitedBody": "يرجى الانتظار دقيقة ثم المحاولة مرة أخرى."
+  },
   "ivr": {
     "selfAnnouncement": "للعربية، اضغط [N].",
     "title": "IVR Language Menu",

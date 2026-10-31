@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "आमंत्रण",
+    "validHeading": "आपको आमंत्रित किया गया है",
+    "validBody": "अगर ऐप आपके पास नहीं है तो पहले उसे इंस्टॉल करें, फिर इस आमंत्रण को उसमें खोलें।",
+    "openInApp": "ऐप में खोलें",
+    "downloadApp": "ऐप प्राप्त करें",
+    "qrLabel": "इस आमंत्रण को अपने फ़ोन पर खोलने के लिए स्कैन करें",
+    "invalidHeading": "इस लिंक का उपयोग नहीं किया जा सकता",
+    "invalidBody": "लिंक मान्य नहीं है या उसकी अवधि समाप्त हो चुकी है। भेजने वाले से नया लिंक माँगें।",
+    "rateLimitedHeading": "बहुत अधिक प्रयास",
+    "rateLimitedBody": "कृपया एक मिनट प्रतीक्षा करें और फिर से प्रयास करें।"
+  },
   "ivr": {
     "selfAnnouncement": "हिन्दी के लिए, [N] दबाएँ।",
     "title": "IVR Language Menu",

@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "邀请",
+    "validHeading": "你已受到邀请",
+    "validBody": "如果还没有安装应用，请先安装，然后在应用中打开此邀请。",
+    "openInApp": "在应用中打开",
+    "downloadApp": "获取应用",
+    "qrLabel": "扫描二维码，在手机上打开此邀请",
+    "invalidHeading": "此链接无法使用",
+    "invalidBody": "链接无效或已过期。请向发送者索取新的链接。",
+    "rateLimitedHeading": "尝试次数过多",
+    "rateLimitedBody": "请等待一分钟后再试。"
+  },
   "ivr": {
     "selfAnnouncement": "如需中文服务，请按[N]。",
     "title": "IVR Language Menu",

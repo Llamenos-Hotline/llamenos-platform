@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Lời mời",
+    "validHeading": "Bạn đã được mời",
+    "validBody": "Hãy cài đặt ứng dụng nếu bạn chưa có, sau đó mở lời mời này trong ứng dụng.",
+    "openInApp": "Mở trong ứng dụng",
+    "downloadApp": "Tải ứng dụng",
+    "qrLabel": "Quét để mở lời mời này trên điện thoại của bạn",
+    "invalidHeading": "Không thể sử dụng liên kết này",
+    "invalidBody": "Liên kết không hợp lệ hoặc đã hết hạn. Hãy nhờ người đã gửi cho bạn một liên kết mới.",
+    "rateLimitedHeading": "Quá nhiều lần thử",
+    "rateLimitedBody": "Vui lòng đợi một phút rồi thử lại."
+  },
   "ivr": {
     "selfAnnouncement": "Tiếng Việt, nhấn [N].",
     "title": "IVR Language Menu",

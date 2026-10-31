@@ -23,6 +23,10 @@ import { harnessClientHeaders } from '../../dev-surface-secret'
 interface InviteTestState {
   inviteCode?: string
   rateLimitResponses: number[]
+  /** Body of the last page fetched from /onboarding. */
+  pageHtml?: string
+  /** Where the page's Open in app link redirected to. */
+  deepLink?: string
   volunteerDeviceKey?: string
   /** Seed of the user who redeemed an invite earlier in the scenario. */
   redeemerSeedHex?: string
@@ -116,6 +120,56 @@ When('a random UUID is validated as an invite', async ({ request, world }) => {
   setLastResponse(world, { status: res.status(), data })
 })
 
+const INVITE_LINK = (code: string) => `${BASE_URL}/onboarding?code=${code}`
+
+async function fetchInvitePage(
+  request: Parameters<typeof apiGet>[0],
+  s: InviteTestState,
+  code: string,
+  headers: Record<string, string> = {},
+) {
+  const res = await request.get(INVITE_LINK(code), { headers: { ...headers, ...harnessClientHeaders(s.scenarioIp) } })
+  s.pageHtml = await res.text()
+  return res
+}
+
+When('the invite link is opened in a browser', async ({ request, world }) => {
+  const s = getS(world)
+  expect(s.inviteCode).toBeDefined()
+  const res = await fetchInvitePage(request, s, s.inviteCode!)
+  setLastResponse(world, { status: res.status(), data: null })
+})
+
+When('the Open in app link on the page is followed', async ({ request, world }) => {
+  const s = getS(world)
+  const href = /href="(\/onboarding\/open\?code=[^"]+)"/.exec(s.pageHtml ?? '')?.[1]
+  expect(href, 'the page has an Open in app link').toBeDefined()
+  // A browser hands a custom-scheme redirect to the OS rather than following it.
+  const res = await request.get(`${BASE_URL}${href}`, { maxRedirects: 0, headers: harnessClientHeaders(s.scenarioIp) })
+  expect(res.status()).toBe(302)
+  s.deepLink = res.headers()['location']
+})
+
+When('a new user redeems the invite from that deep link', async ({ request, world }) => {
+  const s = getS(world)
+  // What the app does with the link: read the code out of it, nothing else.
+  const code = new URL(s.deepLink!).searchParams.get('code')
+  expect(code).toBe(s.inviteCode)
+  setLastResponse(world, await redeemInviteViaApi(request, code!, generateTestKeypair().seedHex, s.scenarioIp))
+})
+
+When('a client opens {int} invite links in a browser', async ({ request, world }, count: number) => {
+  const s = getS(world)
+  const shared = getSharedState(world)
+  shared.floodResponses = []
+  for (let i = 0; i < count; i++) {
+    const res = await fetchInvitePage(request, s, crypto.randomUUID())
+    s.rateLimitResponses.push(res.status())
+    shared.floodResponses.push(res.status())
+  }
+  setLastResponse(world, { status: s.rateLimitResponses[s.rateLimitResponses.length - 1], data: null })
+})
+
 When('a new user redeems the invite', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
@@ -202,6 +256,47 @@ Then('the invite has an expiration date', async ({ world }) => {
   const data = resp!.data as { invite: { expiresAt: string } }
   expect(data.invite.expiresAt).toBeDefined()
   expect(new Date(data.invite.expiresAt).getTime()).toBeGreaterThan(Date.now())
+})
+
+/** Words that would name the service or its product; the per-scenario names are added where known. */
+const PRODUCT_NAMES = [/llamenos/i, /llámenos/i, /hotline/i, /crisis/i]
+
+Then('the page offers to open the app', async ({ world }) => {
+  const html = getS(world).pageHtml ?? ''
+  expect(html).toContain('/onboarding/open?code=')
+  expect(html).toContain('<svg')
+})
+
+Then('the page says the link cannot be used', async ({ world }) => {
+  const html = getS(world).pageHtml ?? ''
+  expect(html).toContain('This link cannot be used')
+  expect(html).not.toContain('/onboarding/open')
+})
+
+Then('the page names no organisation, hub, invitee or product', async ({ request, world, workerHub }) => {
+  const html = getS(world).pageHtml ?? ''
+  expect(html.length).toBeGreaterThan(0)
+  const hub = await apiGet<{ hub?: { name: string }; name?: string }>(request, `/hubs/${workerHub}`, ADMIN_SEED)
+  const hubName = hub.data.hub?.name ?? hub.data.name
+  expect(hubName, 'the test hub has a name to look for').toBeTruthy()
+  for (const needle of [hubName!, 'Browser Visitor', 'Used Visitor', 'Deep Link']) expect(html).not.toContain(needle)
+  for (const pattern of PRODUCT_NAMES) expect(html).not.toMatch(pattern)
+  // No link-preview metadata and no deep-link scheme in the document itself.
+  expect(html).not.toMatch(/<meta[^>]+(property|name)="(og:|twitter:|description)/i)
+  expect(html).not.toContain('hub-invite')
+})
+
+Then('a link that was never issued renders exactly the same page', async ({ request, world }) => {
+  const s = getS(world)
+  const issued = s.pageHtml
+  const res = await fetchInvitePage(request, s, crypto.randomUUID())
+  expect(res.status()).toBe(404)
+  expect(s.pageHtml).toBe(issued)
+})
+
+Then('the browser is sent to the app deep link for the invite', async ({ world }) => {
+  const s = getS(world)
+  expect(s.deepLink).toBe(`llamenos://hub-invite?code=${s.inviteCode}`)
 })
 
 Then('the invite is valid', async ({ world }) => {

@@ -722,6 +722,18 @@
     "phoneHelp": "The main hotline number for this hub. Used for call routing.",
     "slugHelp": "The slug is used in URLs and API references. It is generated from the name."
   },
+  "invitePage": {
+    "title": "Vexwendin",
+    "validHeading": "Hûn hatine vexwendin",
+    "validBody": "Heke sepan nîne, wê saz bikin û paşê vê vexwendinê tê de vekin.",
+    "openInApp": "Di sepanê de veke",
+    "downloadApp": "Sepanê bistîne",
+    "qrLabel": "Ji bo vekirina vê vexwendinê li ser têlefona xwe biskanîne",
+    "invalidHeading": "Ev girêdan nayê bikaranîn",
+    "invalidBody": "Girêdan derbasdar nîne an dema wê qediyaye. Ji kesê ku şandiye girêdanek nû bixwazin.",
+    "rateLimitedHeading": "Pir zêde hewldan",
+    "rateLimitedBody": "Ji kerema xwe hûrdemekê bisekinin û dîsa biceribînin."
+  },
   "ivr": {
     "selfAnnouncement": "Ji bo Kurdî, bişkoka [N] bixin.",
     "title": "IVR Language Menu",

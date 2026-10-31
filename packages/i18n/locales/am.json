@@ -722,6 +722,18 @@
     "phoneHelp": "The main hotline number for this hub. Used for call routing.",
     "slugHelp": "The slug is used in URLs and API references. It is generated from the name."
   },
+  "invitePage": {
+    "title": "ግብዣ",
+    "validHeading": "ተጋብዘዋል",
+    "validBody": "መተግበሪያው ገና ከሌለዎት ይጫኑት፣ ከዚያ ይህን ግብዣ በውስጡ ይክፈቱ።",
+    "openInApp": "በመተግበሪያ ውስጥ ክፈት",
+    "downloadApp": "መተግበሪያውን ያግኙ",
+    "qrLabel": "ይህን ግብዣ በስልክዎ ለመክፈት ይቃኙ",
+    "invalidHeading": "ይህ አገናኝ ጥቅም ላይ ሊውል አይችልም",
+    "invalidBody": "አገናኙ ልክ አይደለም ወይም ጊዜው አልፎበታል። የላከልዎትን ሰው አዲስ ይጠይቁ።",
+    "rateLimitedHeading": "ከመጠን በላይ ሙከራዎች",
+    "rateLimitedBody": "እባክዎ አንድ ደቂቃ ይጠብቁና እንደገና ይሞክሩ።"
+  },
   "ivr": {
     "selfAnnouncement": "አማርኛ ለ፣ [N] ይጫኑ።",
     "title": "IVR Language Menu",
