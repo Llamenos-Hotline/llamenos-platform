@@ -113,7 +113,7 @@ export async function seedSampleDataset(
 
   // ── Replace: dropping the hub cascades through every hub-scoped table ─────
   await services.settings.ensureInit({ ENVIRONMENT: env.ENVIRONMENT })
-  await services.settings.purgeHub(hubId)
+  await services.settings.purgeHub(hubId, services.callRecordings)
   // purgeHub also removes users that belonged only to that hub — put the sample accounts back
   await services.identity.ensureSampleAccounts(accounts)
 

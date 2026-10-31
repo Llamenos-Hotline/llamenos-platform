@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { SettingsService, invalidateRolesCache } from '@worker/services/settings'
+import { SealedRecordingDeleteError } from '@worker/services/call-recordings'
 import { createMockDb } from './mock-db'
 
 // ---------------------------------------------------------------------------
@@ -1551,7 +1552,7 @@ describe('SettingsService.deleteHub', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.deleteHub('nonexistent')).rejects.toMatchObject({ status: 404 })
+    await expect(service.deleteHub('nonexistent', { eraseForHub: vi.fn() })).rejects.toMatchObject({ status: 404 })
   })
 
   it('executes transaction to delete hub and cascade data', async () => {
@@ -1572,9 +1573,23 @@ describe('SettingsService.deleteHub', () => {
     }
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
-    const result = await service.deleteHub('hub-1')
+    const eraseForHub = vi.fn().mockResolvedValue(undefined)
+    const result = await service.deleteHub('hub-1', { eraseForHub })
     expect(result).toEqual({ ok: true })
-    expect((db as any).transaction).toHaveBeenCalled()
+    expect(eraseForHub).toHaveBeenCalledWith('hub-1')
+    expect(eraseForHub.mock.invocationCallOrder[0], 'sealed recordings go before the rows that name them')
+      .toBeLessThan((db as any).transaction.mock.invocationCallOrder[0])
+  })
+
+  it('drops nothing when a sealed recording cannot be deleted (#2338)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeHub()])
+    ;(db as any).transaction = vi.fn()
+    const refusal = new SealedRecordingDeleteError('hub-1', [{ callId: 'c1', error: 'store down' }])
+
+    await expect(service.deleteHub('hub-1', { eraseForHub: vi.fn().mockRejectedValue(refusal) }))
+      .rejects.toMatchObject({ status: 502 })
+    expect((db as any).transaction, 'the rows that name the blobs must survive the refusal').not.toHaveBeenCalled()
   })
 })
 

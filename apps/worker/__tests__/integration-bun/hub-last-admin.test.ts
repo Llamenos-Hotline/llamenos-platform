@@ -27,6 +27,7 @@ import { SettingsService, ServiceError } from '../../services/settings'
 import { ErasureService } from '../../services/erasure'
 import { AuditService } from '../../services/audit'
 import { RecordsService } from '../../services/records'
+import { CallRecordingsService } from '../../services/call-recordings'
 import {
   ROLE_CATALOG_LOCK_KEY,
   hubAdminLockKey,
@@ -570,7 +571,7 @@ describe('a role-definition guard decides from one view of the users', () => {
 
     const spy = { fired: () => false }
     await db.transaction(async tx => {
-      const hooked = afterFirstUsersRead(tx, async () => { await settings.purgeHub(hubId) })
+      const hooked = afterFirstUsersRead(tx, async () => { await settings.purgeHub(hubId, new CallRecordingsService(db, undefined, undefined)) })
       spy.fired = hooked.fired
       await assertRoleChangeKeepsAdmins(hooked.tx, bystanderRoleId, null)
     })

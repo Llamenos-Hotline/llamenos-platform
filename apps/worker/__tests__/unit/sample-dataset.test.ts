@@ -198,6 +198,7 @@ describe('seedSampleDataset', () => {
         addMessage: vi.fn(async () => ({})),
       },
       audit: { log: vi.fn(async (..._args: unknown[]) => ({})) },
+      callRecordings: { eraseForHub: vi.fn(async () => undefined) },
     }
     return { services: services as unknown as Services, stubs: services, calls }
   }
@@ -207,7 +208,9 @@ describe('seedSampleDataset', () => {
   it('replaces the previous sample hub before rebuilding it', async () => {
     const { services, stubs, calls } = stubServices()
     await seedSampleDataset(services, ENV, NOW)
-    expect(stubs.settings.purgeHub).toHaveBeenCalledWith(SAMPLE_HUB.id)
+    // The replace must hand purgeHub the recordings eraser: it is what keeps the
+    // previous sample hub's sealed audio from outliving the rows that name it (#2338).
+    expect(stubs.settings.purgeHub).toHaveBeenCalledWith(SAMPLE_HUB.id, services.callRecordings)
     expect(calls.indexOf('settings.purgeHub')).toBeLessThan(calls.indexOf('settings.createHub'))
     // accounts removed by the purge are restored before memberships are assigned
     expect(calls.indexOf('identity.ensureSampleAccounts')).toBeGreaterThan(calls.indexOf('settings.purgeHub'))

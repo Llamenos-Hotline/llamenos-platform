@@ -97,6 +97,7 @@ import { IVR_LANGUAGES, IVR_MENU_MAX_LANGUAGES, LANGUAGE_CODES } from '@shared/l
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
 import { speechLanguageFor } from './ivr-speech/voices'
+import type { SealedRecordingEraser } from './call-recordings'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
 import type { Role } from '@shared/permissions'
 import { DEFAULT_ROLES } from '@shared/permissions'
@@ -2241,7 +2242,7 @@ export class SettingsService {
     return { ok: true }
   }
 
-  async deleteHub(id: string): Promise<{ ok: true }> {
+  async deleteHub(id: string, recordings: SealedRecordingEraser): Promise<{ ok: true }> {
     const [existing] = await this.db
       .select()
       .from(hubsTable)
@@ -2250,14 +2251,20 @@ export class SettingsService {
       throw new ServiceError(404, 'Hub not found')
     }
 
-    return this.purgeHub(id)
+    return this.purgeHub(id, recordings)
   }
 
   /**
    * Delete a hub and every hub-scoped row, without requiring the hub row to
    * exist — so orphaned data (hub row already gone) can still be cleared.
+   *
+   * The hub's sealed call recordings are deleted from object storage BEFORE the
+   * transaction: the call rows it drops are what name those blobs, so after
+   * them the audio could never be found again (#2338). If a recording cannot be
+   * deleted this throws and nothing has been removed.
    */
-  async purgeHub(id: string): Promise<{ ok: true }> {
+  async purgeHub(id: string, recordings: SealedRecordingEraser): Promise<{ ok: true }> {
+    await recordings.eraseForHub(id)
     await this.db.transaction(async (tx) => {
       // 1. Delete users who belong exclusively to this hub (cascade deletes sessions, webauthn, etc.)
       // Exclude super-admins — they are system-level accounts that must survive hub deletion.

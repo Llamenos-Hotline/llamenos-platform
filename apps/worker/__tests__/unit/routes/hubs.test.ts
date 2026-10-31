@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import hubRoutes from '@worker/routes/hubs'
 import { ServiceError } from '@worker/services/settings'
+import { SealedRecordingDeleteError } from '@worker/services/call-recordings'
 import { DEFAULT_ROLES } from '@shared/permissions'
 
 const VOLUNTEER_PERMISSIONS = DEFAULT_ROLES.find(r => r.id === 'role-volunteer')!.permissions
@@ -50,6 +51,10 @@ function createTestApp(opts: {
     },
     identity: serviceMock.identity || {},
     audit: mockAuditService,
+    // Hub deletion erases our sealed call recordings first (#2338); a test of
+    // another route never reaches it.
+    callRecordings: serviceMock.callRecordings || { eraseForHub: vi.fn().mockResolvedValue(undefined) },
+    incidents: serviceMock.incidents || { signal: vi.fn().mockResolvedValue(undefined) },
   }
 
   const app = new Hono<AppEnv>()
@@ -647,6 +652,7 @@ describe('hubs routes', () => {
     it('deletes a hub', async () => {
       const deleteHubSpy = vi.fn().mockResolvedValue(undefined)
       const getHubStorageCredentialsSpy = vi.fn().mockResolvedValue(undefined)
+      const callRecordings = { eraseForHub: vi.fn().mockResolvedValue(undefined) }
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: {
@@ -655,12 +661,48 @@ describe('hubs routes', () => {
             getHubStorageCredentials: getHubStorageCredentialsSpy,
           },
           identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
+          callRecordings,
         },
       })
 
       const res = await app.request('/hubs/hub-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
-      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1')
+      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1', callRecordings)
+    })
+
+    // #2338: the sealed recordings are deleted before ANYTHING is destroyed, and
+    // a recording the object store refuses to delete refuses the deletion — with
+    // the hub intact, an audit entry, and an incident for the provider managers.
+    it('refuses the deletion, and reports it, when a stored call recording cannot be deleted', async () => {
+      const getHubStorageCredentialsSpy = vi.fn().mockResolvedValue(undefined)
+      const deleteHubSpy = vi.fn().mockResolvedValue(undefined)
+      const signal = vi.fn().mockResolvedValue(undefined)
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: {
+          settings: { deleteHub: deleteHubSpy, getHubStorageCredentials: getHubStorageCredentialsSpy },
+          identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
+          callRecordings: {
+            eraseForHub: vi.fn().mockRejectedValue(new SealedRecordingDeleteError('hub-1', [
+              { callId: 'call-1', error: 'the server\'s copy of the recording could not be deleted: store down' },
+            ])),
+          },
+          incidents: { signal },
+        },
+      })
+
+      const res = await app.request('/hubs/hub-1', { method: 'DELETE' })
+      expect(res.status).toBe(502)
+      expect(((await res.json()) as { error: string }).error).toMatch(/store down/)
+      expect(getHubStorageCredentialsSpy, 'nothing is destroyed once a recording survives').not.toHaveBeenCalled()
+      expect(deleteHubSpy).not.toHaveBeenCalled()
+      expect(auditLogSpy).toHaveBeenCalledWith(
+        'callRecordingCopyDeleteFailed',
+        expect.any(String),
+        expect.objectContaining({ callId: 'call-1' }),
+        'hub-1',
+      )
+      expect(signal).toHaveBeenCalledWith('hub-1', 'provider-media', 'delete_failed', 1)
     })
 
     // Deleting a hub strips its role from every member, so it is a
@@ -713,7 +755,7 @@ describe('hubs routes', () => {
         },
       })
       expect((await app.request('/hubs/hub-1', { method: 'DELETE' })).status).toBe(200)
-      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1')
+      expect(deleteHubSpy).toHaveBeenCalledWith('hub-1', expect.anything())
     })
 
     it('returns 403 without system:manage-hubs permission', async () => {
