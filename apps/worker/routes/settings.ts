@@ -783,6 +783,9 @@ deployment.post('/messaging/test',
 // Telegram only sends the X-Telegram-Bot-Api-Secret-Token header (which the
 // adapter requires on every inbound webhook) if the webhook was registered with
 // a secret_token, so registering it is part of setting the channel up (#2154).
+// The URL must name the hub the bot's messages belong to: the bot is
+// deployment-wide, and the inbound router refuses a message that names no hub
+// (#2395), so a hubless registration would silently drop every message.
 deployment.post('/messaging/telegram/register-webhook',
   describeRoute({
     tags: ['Settings'],
@@ -808,8 +811,11 @@ deployment.post('/messaging/telegram/register-webhook',
     },
   }),
   requirePermission('settings:manage-messaging'),
+  validator('query', z.object({ hubId: z.string().min(1) })),
   async (c) => {
     const services = c.get('services')
+    const { hubId } = c.req.valid('query')
+    await services.settings.getHub(hubId)
     let adapter: Awaited<ReturnType<typeof getMessagingAdapterFromService>>
     try {
       adapter = await getMessagingAdapterFromService(
@@ -824,7 +830,7 @@ deployment.post('/messaging/telegram/register-webhook',
     if (!(adapter instanceof TelegramAdapter)) {
       return c.json({ error: 'Telegram is not configured' }, 400)
     }
-    const url = buildProviderWebhookUrls(webhookOrigin(c.env), c.req.query('hubId') || undefined).messaging.telegram
+    const url = buildProviderWebhookUrls(webhookOrigin(c.env), hubId).messaging.telegram
     const result = await adapter.registerWebhook(url)
     if (!result.ok) {
       return c.json({ error: result.error ?? 'Telegram setWebhook failed' }, 502)

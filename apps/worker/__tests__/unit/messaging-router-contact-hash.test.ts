@@ -54,7 +54,7 @@ function adapterReturning(incoming: IncomingMessage): MessagingAdapter {
 function makeServices() {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getMessagingConfig: vi.fn().mockResolvedValue(null) },
+    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(null) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
@@ -113,17 +113,6 @@ describe('the messaging router hashes the sender once, per hub', () => {
     expect(hubArg).toBe(HUB)
     expect(hashArg).toBe(messagingContactHash(SENDER, HUB, KEY))
     expect(hashArg).not.toContain(SENDER.slice(-4))
-  })
-
-  it('uses the "global" scope for a webhook without ?hub=, and a different hash than any hub', async () => {
-    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({})))
-    const services = makeServices()
-
-    await post(await createApp(services), '/api/messaging/sms/webhook')
-
-    const [, hashArg] = vi.mocked(services.conversations.handleIncoming).mock.calls[0]
-    expect(hashArg).toBe(messagingContactHash(SENDER, undefined, KEY))
-    expect(hashArg).not.toBe(messagingContactHash(SENDER, HUB, KEY))
   })
 
   it('gives the same contact a different thread hash in another hub', async () => {

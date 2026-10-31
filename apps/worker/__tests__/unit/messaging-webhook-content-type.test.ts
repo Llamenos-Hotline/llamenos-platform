@@ -46,7 +46,7 @@ function makeFormAdapter(): MessagingAdapter {
 function makeServices() {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getMessagingConfig: vi.fn().mockResolvedValue(null) },
+    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(null) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
@@ -90,7 +90,7 @@ describe('inbound messaging webhook content type — #2068', () => {
     const services = makeServices()
     const app = await createApp(services)
 
-    const res = await app.request('/api/messaging/sms/webhook', {
+    const res = await app.request('/api/messaging/sms/webhook?hub=hub-test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ MessageSid: 'SM-2068', From: '+15551112068', Body: 'hello' }).toString(),
@@ -106,7 +106,7 @@ describe('inbound messaging webhook content type — #2068', () => {
     const services = makeServices()
     const app = await createApp(services)
 
-    const res = await app.request('/api/messaging/sms/webhook', {
+    const res = await app.request('/api/messaging/sms/webhook?hub=hub-test', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: 'hello',
