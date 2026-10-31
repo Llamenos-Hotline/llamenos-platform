@@ -113,6 +113,7 @@ COPY --chown=llamenos:llamenos scripts/lib/migration-statements.ts scripts/lib/m
 # running one (deploy/ansible/playbooks/update.yml, --target): it judges exactly
 # the migration files this image will apply. docs/runbooks/migrations.md.
 COPY --chown=llamenos:llamenos scripts/check-migration-safety.ts scripts/check-migration-safety.ts
+COPY --chown=llamenos:llamenos scripts/lib/migration-graph.ts scripts/lib/migration-graph.ts
 # Startup invariant check for Bun's native text layer (run by the entrypoint)
 COPY --chown=llamenos:llamenos scripts/verify-runtime.ts scripts/verify-runtime.ts
 
