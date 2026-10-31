@@ -74,6 +74,7 @@ extension APIError: CustomDebugStringConvertible {
         case .networkError(let error): return "Network error: \(error.localizedDescription)"
         case .decodingError(let error): return "Decoding error: \(Self.describe(decoding: error))"
         case .authTokenCreationFailed(let error): return "Auth token creation failed: \(error.localizedDescription)"
+        case .noActiveHub: return "No active hub for a hub-owned resource"
         }
     }
 }
