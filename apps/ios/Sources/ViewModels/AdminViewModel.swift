@@ -1205,7 +1205,7 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            var path = "/api/erasure/requests"
+            var path = apiService.hp("/api/erasure/requests")
             if let filter = erasureStatusFilter {
                 path += "?status=\(filter)"
             }
@@ -1233,7 +1233,7 @@ final class AdminViewModel {
             let body = ImmediateErasureRequest(justification: justification)
             try await apiService.request(
                 method: "POST",
-                path: "/api/erasure/\(userId)",
+                path: apiService.hp("/api/erasure/\(userId)"),
                 body: body
             )
 
@@ -1258,7 +1258,7 @@ final class AdminViewModel {
         do {
             try await apiService.request(
                 method: "POST",
-                path: "/api/erasure/\(userId)/wipe-device/\(devicePubkey)"
+                path: apiService.hp("/api/erasure/\(userId)/wipe-device/\(devicePubkey)")
             )
 
             let generator = UINotificationFeedbackGenerator()

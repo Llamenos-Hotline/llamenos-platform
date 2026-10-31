@@ -3,6 +3,7 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
 import { okResponseSchema } from '@protocol/schemas/common'
+import { permissionGranted, resolveHubPermissions, resolvePermissions } from '@shared/permissions'
 import {
   erasureRequestResponseSchema,
   erasureRequestListResponseSchema,
@@ -34,6 +35,52 @@ function serializeConfig(config: EffectiveErasureConfig) {
     updatedAt: config.updatedAt?.toISOString() ?? null,
     updatedBy: config.updatedBy,
   }
+}
+
+function serializeRequest(r: Awaited<ReturnType<AppEnv['Variables']['services']['erasure']['listRequests']>>['requests'][number]) {
+  return {
+    id: r.id,
+    userId: r.userId,
+    status: r.status,
+    requestedBy: r.requestedBy,
+    requestedAt: r.requestedAt?.toISOString() ?? '',
+    executeAt: r.executeAt?.toISOString() ?? '',
+    executedAt: r.executedAt?.toISOString() ?? null,
+    justification: r.justification,
+    emergencyOverride: r.emergencyOverride,
+    coApproverPubkey: r.coApproverPubkey,
+    cancelledAt: r.cancelledAt?.toISOString() ?? null,
+  }
+}
+
+/** The permission that reads what no hub admin can: requests that concern no hub. */
+const PLATFORM_ERASURE_PERMISSION = 'system:manage-instance'
+
+type SubjectContext = {
+  get: <K extends 'services' | 'hubId' | 'user' | 'allRoles'>(key: K) => AppEnv['Variables'][K]
+}
+
+/**
+ * May the caller act on this person's account (#2363)? An erasure or device
+ * wipe reaches every hub the person belongs to, so from inside a hub the caller
+ * must be in a hub the person belongs to AND hold `erasure:admin` in each of
+ * them: no hub's admin may erase, or wipe the devices of, someone on the
+ * strength of another organisation's membership. Decided from the permission as
+ * resolved per hub — never a role name or id. A person who belongs to no hub has
+ * no hub admin, so they are the platform permission's to act on, outside a hub.
+ */
+async function mayActOnSubject(c: SubjectContext, targetUserId: string): Promise<boolean> {
+  const hubId = c.get('hubId')
+  const user = c.get('user')
+  const allRoles = c.get('allRoles')
+  const subjectHubs = await c.get('services').erasure.hubsOfUser(targetUserId)
+  if (subjectHubs.length === 0) {
+    return !hubId && permissionGranted(resolvePermissions(user.roles, allRoles), PLATFORM_ERASURE_PERMISSION)
+  }
+  if (!hubId || !subjectHubs.includes(hubId)) return false
+  return subjectHubs.every((h) =>
+    permissionGranted(resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, h), 'erasure:admin'),
+  )
 }
 
 // --- Self-service routes ---
@@ -238,7 +285,11 @@ erasure.get(
   '/requests',
   describeRoute({
     tags: ['Erasure'],
-    summary: 'List all erasure requests',
+    summary: 'List the hub\'s erasure requests',
+    description:
+      'Erasure requests that concern the hub in the path: a shred of it, or a person\'s erasure whose subject ' +
+      'belongs to it. Another hub\'s requests are never listed. Requests concerning no hub are read at ' +
+      '/erasure/platform/requests.',
     responses: {
       200: {
         description: 'Erasure requests list',
@@ -254,32 +305,65 @@ erasure.get(
   requirePermission('erasure:admin'),
   async (c) => {
     const services = c.get('services')
+    const hubId = c.get('hubId')
+    if (!hubId) {
+      return c.json({ error: 'Hub context required' }, 400)
+    }
     const status = c.req.query('status')
     const limit = Math.min(Number(c.req.query('limit') ?? 50), 200)
     const offset = Number(c.req.query('offset') ?? 0)
 
-    const { requests, total } = await services.erasure.listRequests({
-      status,
-      limit,
-      offset,
-    })
+    const { requests, total } = await services.erasure.listRequests(
+      { kind: 'hub', hubId },
+      { status, limit, offset },
+    )
 
-    return c.json({
-      requests: requests.map((r) => ({
-        id: r.id,
-        userId: r.userId,
-        status: r.status,
-        requestedBy: r.requestedBy,
-        requestedAt: r.requestedAt?.toISOString() ?? '',
-        executeAt: r.executeAt?.toISOString() ?? '',
-        executedAt: r.executedAt?.toISOString() ?? null,
-        justification: r.justification,
-        emergencyOverride: r.emergencyOverride,
-        coApproverPubkey: r.coApproverPubkey,
-        cancelledAt: r.cancelledAt?.toISOString() ?? null,
-      })),
-      total,
-    })
+    return c.json({ requests: requests.map(serializeRequest), total })
+  },
+)
+
+// Platform scope is its own endpoint under a platform permission, not a flag on
+// the hub one (#2361's precedent for incidents): a hub-less subject has no hub
+// admin, so it is read here and nothing else is.
+erasure.get(
+  '/platform/requests',
+  describeRoute({
+    tags: ['Erasure'],
+    summary: 'List erasure requests that concern no hub (platform scope)',
+    description:
+      'Only requests whose subject belongs to no hub that exists, or a shred of a hub that is gone. Never a hub\'s ' +
+      'requests. Needs system:manage-instance as a global permission; unavailable under a hub path.',
+    responses: {
+      200: {
+        description: 'Erasure requests list',
+        content: {
+          'application/json': {
+            schema: resolver(erasureRequestListResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  async (c) => {
+    // The platform permission is read from the GLOBAL roles, never from the
+    // hub-resolved set: a custom role inside a hub must not confer it.
+    if (c.get('hubId')) {
+      return c.json({ error: 'Platform scope has no hub context' }, 400)
+    }
+    const held = resolvePermissions(c.get('user').roles, c.get('allRoles'))
+    if (!permissionGranted(held, PLATFORM_ERASURE_PERMISSION)) {
+      return c.json({ error: 'Forbidden', required: PLATFORM_ERASURE_PERMISSION }, 403)
+    }
+    const status = c.req.query('status')
+    const limit = Math.min(Number(c.req.query('limit') ?? 50), 200)
+    const offset = Number(c.req.query('offset') ?? 0)
+
+    const { requests, total } = await c.get('services').erasure.listRequests(
+      { kind: 'platform' },
+      { status, limit, offset },
+    )
+    return c.json({ requests: requests.map(serializeRequest), total })
   },
 )
 
@@ -389,6 +473,10 @@ erasure.post(
     const targetUserId = c.req.param('userId')
     const body = c.req.valid('json')
 
+    if (!(await mayActOnSubject(c, targetUserId))) {
+      return c.json({ error: 'Forbidden', required: 'erasure:admin' }, 403)
+    }
+
     const { reEncryptionJobIds } = await services.erasure.executeErasure(
       targetUserId,
       pubkey,
@@ -444,6 +532,10 @@ erasure.post(
     const targetUserId = c.req.param('userId')
     const targetDevicePubkey = c.req.param('devicePubkey')
 
+    if (!(await mayActOnSubject(c, targetUserId))) {
+      return c.json({ error: 'Forbidden', required: 'erasure:admin' }, 403)
+    }
+
     const wsManager = getConnectionManager()
     if (wsManager) {
       wsManager.sendSignedWipeToUser(targetUserId, {
@@ -483,10 +575,12 @@ erasure.get(
   requirePermission('erasure:admin'),
   async (c) => {
     const services = c.get('services')
+    const hubId = c.get('hubId')
+    if (!hubId) {
+      return c.json({ error: 'Hub context required' }, 400)
+    }
     const userId = c.req.query('userId')
-    const jobs = await services.erasure.listReEncryptionJobs(
-      userId ?? undefined,
-    )
+    const jobs = await services.erasure.listReEncryptionJobs(hubId, userId ?? undefined)
 
     return c.json({
       jobs: jobs.map((j) => ({

@@ -92,21 +92,29 @@ Given('an admin user', async ({ request, world }) => {
   setActingAdmin(world, s.admin)
 })
 
-Given('{int} pending erasure requests exist', async ({ request }, count: number) => {
+// The hub's queue lists the requests of the hub's own members (#2363), so each
+// requester is a member of the scenario hub and files the request in it.
+Given('{int} pending erasure requests exist', async ({ request, workerHub }, count: number) => {
   for (let i = 0; i < count; i++) {
     const user = await createUserViaApi(request)
-    await apiPost(request, '/erasure/me', { justification: `test-${i}` }, user.deviceKey)
+    await addHubMemberViaApi(request, workerHub, user.pubkey, ['role-volunteer'])
+    const res = await apiPost(request, `/hubs/${workerHub}/erasure/me`, { justification: `test-${i}` }, user.deviceKey)
+    expect(res.status).toBe(200)
   }
 })
 
-Given('a target volunteer user exists', async ({ request, world }) => {
+Given('a target volunteer user exists', async ({ request, world, workerHub }) => {
   const s = getS(world)
   s.targetUser = await createUserViaApi(request)
+  // Admin erasure acts on the members of the hub it is called in (#2363).
+  await addHubMemberViaApi(request, workerHub, s.targetUser.pubkey, ['role-volunteer'])
 })
 
-Given('a target volunteer user with a known device pubkey', async ({ request, world }) => {
+Given('a target volunteer user with a known device pubkey', async ({ request, world, workerHub }) => {
   const s = getS(world)
   s.targetUser = await createUserViaApi(request)
+  // Admin erasure acts on the members of the hub it is called in (#2363).
+  await addHubMemberViaApi(request, workerHub, s.targetUser.pubkey, ['role-volunteer'])
 })
 
 // ── When ───────────────────────────────────────────────────────────
@@ -150,20 +158,20 @@ When('the admin GETs {string}', async ({ request, world, workerHub }, path: stri
   setLastResponse(world, res)
 })
 
-When('the admin POSTs to {string} with a justification', async ({ request, world }, pathTemplate: string) => {
+When('the admin POSTs to {string} with a justification', async ({ request, world, workerHub }, pathTemplate: string) => {
   const s = getS(world)
   expect(s.admin).toBeDefined()
   expect(s.targetUser).toBeDefined()
-  const path = pathTemplate.replace(':userId', s.targetUser!.pubkey)
+  const path = hubPath(pathTemplate, workerHub).replace(':userId', s.targetUser!.pubkey)
   const res = await apiPost(request, path, { justification: 'Admin-ordered erasure' }, s.admin!.deviceKey)
   setLastResponse(world, res)
 })
 
-When('the admin POSTs to {string}', async ({ request, world }, pathTemplate: string) => {
+When('the admin POSTs to {string}', async ({ request, world, workerHub }, pathTemplate: string) => {
   const s = getS(world)
   expect(s.admin).toBeDefined()
   expect(s.targetUser).toBeDefined()
-  const path = pathTemplate
+  const path = hubPath(pathTemplate, workerHub)
     .replace(':userId', s.targetUser!.pubkey)
     .replace(':devicePubkey', 'a'.repeat(64))
   const res = await apiPost(request, path, {}, s.admin!.deviceKey)
