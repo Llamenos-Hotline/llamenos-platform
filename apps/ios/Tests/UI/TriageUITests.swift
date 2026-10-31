@@ -91,7 +91,12 @@ final class TriageUITests: BaseUITest {
             navigateToTriage()
         }
         when("I open the filter menu") {
-            let filter = app.buttons["triage-filter-button"]
+            // Tap the toolbar item, not the Button inside it, like every other toolbar tap in
+            // this suite. On a hosted runner (iOS 18.5 SDK build on the iOS 26.2 simulator) the
+            // inner Button reports hit point {-1, -1} and XCTest fails to "scroll it to
+            // visible" — 6 of 6 hosted runs, while the toolbar item taps fine (#2355). The
+            // menu opening is proved below by its statuses, not by this tap.
+            let filter = find("triage-filter-button")
             XCTAssertTrue(filter.waitForExistence(timeout: 5), "The queue should offer a status filter")
             filter.tap()
         }
