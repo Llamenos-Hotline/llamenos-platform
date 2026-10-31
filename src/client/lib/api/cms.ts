@@ -75,7 +75,7 @@ export async function getTemplateDetails(templateId: string) {
 }
 
 export async function createRolesFromTemplate(roles: Array<{ name: string; slug: string; description: string; permissions: string[] }>) {
-  return request<{ created: Array<{ id: string; name: string }>; count: number }>(hp('/settings/cms/roles/from-template'), {
+  return request<{ created: Array<{ id: string; name: string }>; count: number }>('/settings/cms/roles/from-template', {
     method: 'POST',
     body: JSON.stringify({ roles }),
   })

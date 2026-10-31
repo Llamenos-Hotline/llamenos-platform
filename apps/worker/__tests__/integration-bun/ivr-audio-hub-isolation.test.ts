@@ -35,7 +35,7 @@ import { hubs, ivrAudio } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { ServiceError, SettingsService } from '../../services/settings'
 import { hubContext } from '../../middleware/hub'
-import settingsRoutes from '../../routes/settings'
+import settingsRoutes, { hubSettingsRoutes } from '../../routes/settings'
 import ivrMediaRoutes from '../../routes/ivr-media'
 import { buildAudioUrlMap } from '../../lib/helpers'
 import type { AppEnv } from '../../types'
@@ -110,7 +110,7 @@ function appAs(actor: Actor) {
   app.route('/api/settings', settingsRoutes)
   const hubScoped = new Hono<AppEnv>()
   hubScoped.use('*', hubContext)
-  hubScoped.route('/settings', settingsRoutes)
+  hubScoped.route('/settings', hubSettingsRoutes)
   app.route('/api/hubs/:hubId', hubScoped)
   return app
 }

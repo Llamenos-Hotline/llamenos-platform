@@ -57,14 +57,44 @@ import { buildProviderWebhookUrls, webhookOrigin } from '../lib/provider-webhook
 import { TelegramAdapter } from '../messaging/telegram/adapter'
 import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } from '../lib/helpers'
 
-const settings = new Hono<AppEnv>()
+/**
+ * Settings live at two scopes, and which one a handler writes is decided by the
+ * ROUTER it is registered on — never by whether a hub id happens to be present
+ * when it runs (#2367). Handlers whose service call takes no hub id were
+ * reached through `/hubs/:hubId/settings` and wrote the deployment row: a hub
+ * admin rewrote every hub's messaging credentials, and the hub in the URL was
+ * decoration.
+ *
+ * - `scoped`: settings each hub has its own value of, layered over a platform
+ *   default. Mounted at `/api/settings` (the platform default) AND at
+ *   `/api/hubs/:hubId/settings` (that hub's value). A handler here must resolve
+ *   its hub with {@link targetHubId} / {@link ivrAudioHub} and pass it on.
+ * - `deployment`: settings the whole deployment has exactly ONE of — the
+ *   messaging sender every hub sends through, the login policy, the custom
+ *   field and report-type vocabularies, TTLs, geocoding, roles. Mounted ONLY at
+ *   `/api/settings` ({@link hubSettingsRoutes} does not carry it), so under a
+ *   hub these paths do not exist and no permission a hub can grant reaches
+ *   them. A handler here never consults a hub.
+ * - `deploymentReads`: deployment-wide values every hub's MEMBERS must read to
+ *   do their work (the custom-field vocabulary a note is written in). Mounted
+ *   on both, because a hub-only member holds no global role and the unscoped
+ *   mount would refuse them. Reads only — a write here is the defect again.
+ *
+ * A new setting goes on `deployment` unless it has a per-hub value. The set of
+ * routes reachable under a hub is pinned by
+ * `__tests__/unit/settings-scope-mounts.test.ts`, so putting one on `scoped`
+ * is a decision a reviewer sees, not a default.
+ */
+const scoped = new Hono<AppEnv>()
+const deployment = new Hono<AppEnv>()
+const deploymentReads = new Hono<AppEnv>()
 
 /**
- * Which hub a settings request targets. The hub the request was routed under
- * (`/hubs/:hubId/settings/...`, membership-checked by hubContext) always wins —
- * a `?hubId=` query must never redirect a hub-scoped request at another hub.
- * The query is only honoured on the platform-mounted route, where the caller
- * already needed the global permission. `undefined` = platform-wide values.
+ * Which hub a `scoped` settings request targets. The hub the request was routed
+ * under (`/hubs/:hubId/settings/...`, membership-checked by hubContext) always
+ * wins — a `?hubId=` query must never redirect a hub-scoped request at another
+ * hub. The query is only honoured on the platform-mounted route, where the
+ * caller already needed the global permission. `undefined` = platform-wide values.
  */
 function targetHubId(c: Context<AppEnv>): string | undefined {
   return (c.get('hubId') as string | undefined) || c.req.query('hubId') || undefined
@@ -87,7 +117,7 @@ const requireIvrAudioScope = createMiddleware<AppEnv>(async (c, next) => {
 })
 
 // --- Transcription settings: readable + writable by settings:manage-transcription ---
-settings.get('/transcription',
+deployment.get('/transcription',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get transcription settings',
@@ -111,7 +141,7 @@ settings.get('/transcription',
   },
 )
 
-settings.patch('/transcription',
+deployment.patch('/transcription',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update transcription settings',
@@ -134,13 +164,13 @@ settings.patch('/transcription',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateTranscriptionSettings(body)
-    await audit(services.audit, 'transcriptionToggled', pubkey, body as Record<string, unknown>, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'transcriptionToggled', pubkey, body as Record<string, unknown>, undefined, null)
     return c.json(result)
   },
 )
 
 // --- Custom fields: readable by settings:read (filtered by manage-fields), writable by admin ---
-settings.get('/custom-fields',
+deploymentReads.get('/custom-fields',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get custom field definitions',
@@ -166,7 +196,7 @@ settings.get('/custom-fields',
   },
 )
 
-settings.put('/custom-fields',
+deployment.put('/custom-fields',
   describeRoute({
     tags: ['Settings'],
     summary: 'Replace custom field definitions',
@@ -189,13 +219,13 @@ settings.put('/custom-fields',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateCustomFields(body as unknown as Parameters<typeof services.settings.updateCustomFields>[0])
-    await audit(services.audit, 'customFieldsUpdated', pubkey, {}, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'customFieldsUpdated', pubkey, {}, undefined, null)
     return c.json(result)
   },
 )
 
 // --- All remaining settings: require specific permissions ---
-settings.get('/spam',
+scoped.get('/spam',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get spam mitigation settings',
@@ -219,7 +249,7 @@ settings.get('/spam',
   },
 )
 
-settings.patch('/spam',
+scoped.patch('/spam',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update spam mitigation settings',
@@ -248,7 +278,7 @@ settings.patch('/spam',
   },
 )
 
-settings.get('/call',
+scoped.get('/call',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get call settings',
@@ -272,7 +302,7 @@ settings.get('/call',
   },
 )
 
-settings.patch('/call',
+scoped.patch('/call',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update call settings',
@@ -301,7 +331,7 @@ settings.patch('/call',
   },
 )
 
-settings.get('/ivr-languages',
+scoped.get('/ivr-languages',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get IVR language settings (optionally hub-scoped)',
@@ -326,7 +356,7 @@ settings.get('/ivr-languages',
   },
 )
 
-settings.patch('/ivr-languages',
+scoped.patch('/ivr-languages',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update IVR language settings (optionally hub-scoped)',
@@ -355,7 +385,7 @@ settings.patch('/ivr-languages',
   },
 )
 
-settings.get('/webauthn',
+deployment.get('/webauthn',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get WebAuthn settings',
@@ -379,7 +409,7 @@ settings.get('/webauthn',
   },
 )
 
-settings.patch('/webauthn',
+deployment.patch('/webauthn',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update WebAuthn settings',
@@ -423,13 +453,13 @@ settings.patch('/webauthn',
       }
     }
     const result = await services.identity.updateWebAuthnSettings(body)
-    await audit(services.audit, 'webauthnSettingsUpdated', pubkey, body as Record<string, unknown>, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'webauthnSettingsUpdated', pubkey, body as Record<string, unknown>, undefined, null)
     return c.json(result)
   },
 )
 
 // --- Telephony Provider settings ---
-settings.get('/telephony-provider',
+scoped.get('/telephony-provider',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get telephony provider settings',
@@ -454,7 +484,7 @@ settings.get('/telephony-provider',
   },
 )
 
-settings.patch('/telephony-provider',
+scoped.patch('/telephony-provider',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update telephony provider settings',
@@ -513,7 +543,7 @@ async function readRecordingPosture(
  * this server cannot remove. Each reading is evidence-backed; a setting the
  * probe could not read is `unknown` with the reason, never `off`.
  */
-settings.get('/telephony-provider/recording-posture',
+scoped.get('/telephony-provider/recording-posture',
   describeRoute({
     tags: ['Settings'],
     summary: 'Read provider-side recording and transcription, what is still held at the provider, and what it retains',
@@ -543,7 +573,7 @@ settings.get('/telephony-provider/recording-posture',
  * shared platform account (a hub with no provider of its own) also needs
  * `system:manage-instance`.
  */
-settings.post('/telephony-provider/recording-posture/enforce',
+scoped.post('/telephony-provider/recording-posture/enforce',
   describeRoute({
     tags: ['Settings'],
     summary: 'Turn off provider-side recording and transcription wherever the provider API allows, then re-read the posture',
@@ -586,7 +616,7 @@ settings.post('/telephony-provider/recording-posture/enforce',
   },
 )
 
-settings.post('/telephony-provider/test',
+scoped.post('/telephony-provider/test',
   describeRoute({
     tags: ['Settings'],
     summary: 'Test telephony provider credentials',
@@ -660,7 +690,7 @@ settings.post('/telephony-provider/test',
 )
 
 // --- Messaging config ---
-settings.get('/messaging',
+deployment.get('/messaging',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get messaging configuration',
@@ -684,7 +714,7 @@ settings.get('/messaging',
   },
 )
 
-settings.patch('/messaging',
+deployment.patch('/messaging',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update messaging configuration',
@@ -707,12 +737,12 @@ settings.patch('/messaging',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateMessagingConfig(body)
-    await audit(services.audit, 'messagingConfigUpdated', pubkey, body as Record<string, unknown>, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'messagingConfigUpdated', pubkey, body as Record<string, unknown>, undefined, null)
     return c.json(result)
   },
 )
 
-settings.post('/messaging/test',
+deployment.post('/messaging/test',
   describeRoute({
     tags: ['Settings'],
     summary: 'Test messaging channel connectivity',
@@ -753,7 +783,7 @@ settings.post('/messaging/test',
 // Telegram only sends the X-Telegram-Bot-Api-Secret-Token header (which the
 // adapter requires on every inbound webhook) if the webhook was registered with
 // a secret_token, so registering it is part of setting the channel up (#2154).
-settings.post('/messaging/telegram/register-webhook',
+deployment.post('/messaging/telegram/register-webhook',
   describeRoute({
     tags: ['Settings'],
     summary: 'Register the Telegram webhook with the configured secret_token',
@@ -794,7 +824,7 @@ settings.post('/messaging/telegram/register-webhook',
     if (!(adapter instanceof TelegramAdapter)) {
       return c.json({ error: 'Telegram is not configured' }, 400)
     }
-    const url = buildProviderWebhookUrls(webhookOrigin(c.env), targetHubId(c)).messaging.telegram
+    const url = buildProviderWebhookUrls(webhookOrigin(c.env), c.req.query('hubId') || undefined).messaging.telegram
     const result = await adapter.registerWebhook(url)
     if (!result.ok) {
       return c.json({ error: result.error ?? 'Telegram setWebhook failed' }, 502)
@@ -804,7 +834,7 @@ settings.post('/messaging/telegram/register-webhook',
 )
 
 // --- Setup state ---
-settings.get('/setup',
+deployment.get('/setup',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get setup wizard state',
@@ -828,7 +858,7 @@ settings.get('/setup',
   },
 )
 
-settings.patch('/setup',
+deployment.patch('/setup',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update setup wizard state',
@@ -851,12 +881,12 @@ settings.patch('/setup',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateSetupState(body as Record<string, unknown> as Parameters<typeof services.settings.updateSetupState>[0])
-    await audit(services.audit, 'setupStateUpdated', pubkey, body as Record<string, unknown>, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'setupStateUpdated', pubkey, body as Record<string, unknown>, undefined, null)
     return c.json(result)
   },
 )
 
-settings.get('/ivr-audio',
+scoped.get('/ivr-audio',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get IVR audio prompts',
@@ -881,7 +911,7 @@ settings.get('/ivr-audio',
   },
 )
 
-settings.get('/ivr-audio/:promptType/:language',
+scoped.get('/ivr-audio/:promptType/:language',
   describeRoute({
     tags: ['Settings'],
     summary: 'Download an IVR audio prompt (for the operator to listen back)',
@@ -906,7 +936,7 @@ settings.get('/ivr-audio/:promptType/:language',
   },
 )
 
-settings.put('/ivr-audio/:promptType/:language',
+scoped.put('/ivr-audio/:promptType/:language',
   describeRoute({
     tags: ['Settings'],
     summary: 'Upload IVR audio prompt',
@@ -944,7 +974,7 @@ settings.put('/ivr-audio/:promptType/:language',
   },
 )
 
-settings.delete('/ivr-audio/:promptType/:language',
+scoped.delete('/ivr-audio/:promptType/:language',
   describeRoute({
     tags: ['Settings'],
     summary: 'Delete IVR audio prompt',
@@ -974,7 +1004,7 @@ settings.delete('/ivr-audio/:promptType/:language',
 )
 
 // --- Report Types ---
-settings.get('/report-types',
+deployment.get('/report-types',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get report type definitions',
@@ -998,7 +1028,7 @@ settings.get('/report-types',
   },
 )
 
-settings.post('/report-types',
+deployment.post('/report-types',
   describeRoute({
     tags: ['Settings'],
     summary: 'Create a report type',
@@ -1021,12 +1051,12 @@ settings.post('/report-types',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.createReportType(body as Record<string, unknown> as Parameters<typeof services.settings.createReportType>[0])
-    await audit(services.audit, 'reportTypeCreated', pubkey, { name: body.name }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'reportTypeCreated', pubkey, { name: body.name }, undefined, null)
     return c.json(result, 201)
   },
 )
 
-settings.patch('/report-types/:id',
+deployment.patch('/report-types/:id',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update a report type',
@@ -1050,12 +1080,12 @@ settings.patch('/report-types/:id',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateReportType(id, body as Record<string, unknown> as Parameters<typeof services.settings.updateReportType>[1])
-    await audit(services.audit, 'reportTypeUpdated', pubkey, { reportTypeId: id }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'reportTypeUpdated', pubkey, { reportTypeId: id }, undefined, null)
     return c.json(result)
   },
 )
 
-settings.delete('/report-types/:id',
+deployment.delete('/report-types/:id',
   describeRoute({
     tags: ['Settings'],
     summary: 'Delete a report type',
@@ -1077,13 +1107,13 @@ settings.delete('/report-types/:id',
     const id = c.req.param('id')
     const services = c.get('services')
     const result = await services.settings.archiveReportType(id)
-    await audit(services.audit, 'reportTypeArchived', pubkey, { reportTypeId: id }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'reportTypeArchived', pubkey, { reportTypeId: id }, undefined, null)
     return c.json(result)
   },
 )
 
 // --- Roles (PBAC) ---
-settings.get('/roles',
+deployment.get('/roles',
   describeRoute({
     tags: ['Settings'],
     summary: 'List all roles',
@@ -1107,7 +1137,7 @@ settings.get('/roles',
   },
 )
 
-settings.post('/roles',
+deployment.post('/roles',
   describeRoute({
     tags: ['Settings'],
     summary: 'Create a custom role',
@@ -1131,12 +1161,12 @@ settings.post('/roles',
     const services = c.get('services')
     const result = await services.settings.createRole(body)
     invalidateRolesCache()
-    await audit(services.audit, 'roleCreated', pubkey, { name: body.name }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'roleCreated', pubkey, { name: body.name }, undefined, null)
     return c.json(result, 201)
   },
 )
 
-settings.patch('/roles/:id',
+deployment.patch('/roles/:id',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update a role',
@@ -1161,12 +1191,12 @@ settings.patch('/roles/:id',
     const services = c.get('services')
     const result = await services.settings.updateRole(id, body)
     invalidateRolesCache()
-    await audit(services.audit, 'roleUpdated', pubkey, { roleId: id }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'roleUpdated', pubkey, { roleId: id }, undefined, null)
     return c.json(result)
   },
 )
 
-settings.delete('/roles/:id',
+deployment.delete('/roles/:id',
   describeRoute({
     tags: ['Settings'],
     summary: 'Delete a role',
@@ -1189,12 +1219,12 @@ settings.delete('/roles/:id',
     const services = c.get('services')
     const result = await services.settings.deleteRole(id)
     invalidateRolesCache()
-    await audit(services.audit, 'roleDeleted', pubkey, { roleId: id }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'roleDeleted', pubkey, { roleId: id }, undefined, null)
     return c.json(result)
   },
 )
 
-settings.post('/roles/:id/envelopes',
+deployment.post('/roles/:id/envelopes',
   describeRoute({
     tags: ['Settings'],
     summary: 'Add or update HPKE envelopes for a platform role',
@@ -1219,12 +1249,12 @@ settings.post('/roles/:id/envelopes',
     const services = c.get('services')
     const result = await services.settings.addRoleEnvelopes(id, body.envelopes)
     invalidateRolesCache()
-    await audit(services.audit, 'roleEnvelopesUpdated', pubkey, { roleId: id, count: body.envelopes.length }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'roleEnvelopesUpdated', pubkey, { roleId: id, count: body.envelopes.length }, undefined, null)
     return c.json(result)
   },
 )
 
-settings.get('/users/:id/effective-permissions',
+deployment.get('/users/:id/effective-permissions',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get effective permissions for a user',
@@ -1254,7 +1284,7 @@ settings.get('/users/:id/effective-permissions',
 )
 
 // --- Permissions catalog ---
-settings.get('/permissions',
+deployment.get('/permissions',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get permissions catalog',
@@ -1282,7 +1312,7 @@ settings.get('/permissions',
 
 // --- Migration Status (Epic 286) ---
 // Returns migration status for all 7 DOs in a single response
-settings.get('/migrations',
+deployment.get('/migrations',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get migration status for all Durable Objects',
@@ -1306,7 +1336,7 @@ settings.get('/migrations',
 )
 
 // --- TTL Overrides (admin-configurable cleanup intervals) ---
-settings.get('/ttl',
+deployment.get('/ttl',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get TTL override settings',
@@ -1330,7 +1360,7 @@ settings.get('/ttl',
   },
 )
 
-settings.patch('/ttl',
+deployment.patch('/ttl',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update TTL override settings',
@@ -1353,13 +1383,13 @@ settings.patch('/ttl',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateTTLOverrides(body as Record<string, unknown>)
-    await audit(services.audit, 'ttlOverridesUpdated', pubkey, body as Record<string, unknown>, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'ttlOverridesUpdated', pubkey, body as Record<string, unknown>, undefined, null)
     return c.json(result)
   },
 )
 
 // --- Aggregated cleanup metrics from all DOs ---
-settings.get('/cleanup-metrics',
+deployment.get('/cleanup-metrics',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get aggregated cleanup metrics',
@@ -1388,7 +1418,7 @@ settings.get('/cleanup-metrics',
 )
 
 // --- Geocoding config: readable by settings:read (API key omitted), writable by settings:manage ---
-settings.get('/geocoding',
+deployment.get('/geocoding',
   describeRoute({
     tags: ['Settings'],
     summary: 'Get geocoding configuration (API key omitted)',
@@ -1404,7 +1434,7 @@ settings.get('/geocoding',
   },
 )
 
-settings.put('/geocoding',
+deployment.put('/geocoding',
   describeRoute({
     tags: ['Settings'],
     summary: 'Update geocoding configuration (admin only)',
@@ -1420,12 +1450,12 @@ settings.put('/geocoding',
     const pubkey = c.get('pubkey')
     const services = c.get('services')
     await services.settings.updateGeocodingConfig(body)
-    await audit(services.audit, 'settings.geocoding.updated', pubkey, { provider: body.provider, enabled: body.enabled }, undefined, targetHubId(c) ?? null)
+    await audit(services.audit, 'settings.geocoding.updated', pubkey, { provider: body.provider, enabled: body.enabled }, undefined, null)
     return c.json({ provider: body.provider, countries: body.countries, enabled: body.enabled })
   },
 )
 
-settings.get('/geocoding/test',
+deployment.get('/geocoding/test',
   describeRoute({
     tags: ['Settings'],
     summary: 'Test geocoding connectivity (admin only)',
@@ -1449,4 +1479,19 @@ settings.get('/geocoding/test',
   },
 )
 
-export default settings
+/** `/api/settings` — the platform defaults of the per-hub settings, and every deployment-wide setting. */
+const settingsRoutes = new Hono<AppEnv>()
+settingsRoutes.route('/', scoped)
+settingsRoutes.route('/', deploymentReads)
+settingsRoutes.route('/', deployment)
+export default settingsRoutes
+
+/**
+ * `/api/hubs/:hubId/settings` — the settings a hub has its own value of, and
+ * the deployment vocabulary its members read. Every deployment-wide write is
+ * deliberately absent: a hub admin reaching `/hubs/A/settings/messaging` gets
+ * a 404, not the shared sender credentials.
+ */
+export const hubSettingsRoutes = new Hono<AppEnv>()
+hubSettingsRoutes.route('/', scoped)
+hubSettingsRoutes.route('/', deploymentReads)

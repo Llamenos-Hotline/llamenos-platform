@@ -483,8 +483,9 @@ describe('entity-schema routes', () => {
       expect(res.status).toBe(201)
       const json = await res.json()
       expect(json.applied).toBe(true)
-      // Template application auto-enables case management
-      expect(setCaseMgmtSpy).toHaveBeenCalledWith({ enabled: true })
+      // Template application auto-enables case management — in the hub it was
+      // applied to, never the deployment default every hub inherits (#2367)
+      expect(setCaseMgmtSpy).toHaveBeenCalledWith({ enabled: true }, 'hub-1')
       expect(auditLogSpy).toHaveBeenCalledOnce()
     })
 

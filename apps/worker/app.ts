@@ -17,7 +17,7 @@ import bansRoutes from './routes/bans'
 import notesRoutes from './routes/notes'
 import callsRoutes from './routes/calls'
 import auditRoutes from './routes/audit'
-import settingsRoutes from './routes/settings'
+import settingsRoutes, { hubSettingsRoutes } from './routes/settings'
 import telephonyRoutes from './routes/telephony'
 import ivrMediaRoutes from './routes/ivr-media'
 import webrtcRoutes from './routes/webrtc'
@@ -44,7 +44,7 @@ import eventsRoutes, { eventsAdminRouter } from './routes/events'
 import healthRoutes from './routes/health'
 import metricsRoutes from './routes/metrics'
 import systemRoutes from './routes/system'
-import entitySchemaRoutes from './routes/entity-schema'
+import entitySchemaRoutes, { hubEntitySchemaRoutes } from './routes/entity-schema'
 import evidenceRoutes from './routes/evidence'
 import geocodingRoutes from './routes/geocoding'
 import analyticsRoutes from './routes/analytics'
@@ -316,8 +316,10 @@ hubScoped.route('/contacts', contactsRoutes)
 hubScoped.route('/directory', contactsV2Routes)
 hubScoped.route('/records', recordsRoutes)
 hubScoped.route('/events', eventsRoutes)
-hubScoped.route('/settings/cms', entitySchemaRoutes)
-hubScoped.route('/settings', settingsRoutes)
+// The hub-mounted settings routers carry only what a hub has its own value of;
+// deployment-wide settings exist solely on the unscoped mount above (#2367).
+hubScoped.route('/settings/cms', hubEntitySchemaRoutes)
+hubScoped.route('/settings', hubSettingsRoutes)
 hubScoped.route('/analytics', analyticsRoutes)
 hubScoped.route('/messaging/signal', signalRoutes)
 hubScoped.route('/provider-setup', providerSetupRoutes)
