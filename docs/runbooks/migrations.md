@@ -179,7 +179,7 @@ hand-written one) as `drizzle/migrations/YYYYMMDDHHMMSS_<what>.sql` plus
 drizzle-kit 0.31 numbers files from `_journal.json` (now deleted; nothing read
 it at run time) and aborts as soon as two snapshots share a parent, so every
 migration PR had to be regenerated after the one before it landed (#2391).
-`0000`–`0069` keep their numbered names, and sort before every timestamped one.
+`0000`–`0070` keep their numbered names, and sort before every timestamped one.
 
 Each snapshot is the full schema its branch declared, and its `prevIds` name
 every head the tree had when it was generated (`scripts/lib/migration-graph.ts`).

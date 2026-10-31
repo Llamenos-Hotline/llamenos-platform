@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -35,11 +35,24 @@ interface Repo {
   migrations: string
 }
 
-/** A repo whose only commit, `base`, is this tree's drizzle/ — origin/main as of this change. */
+/**
+ * The scenarios below are main as it stood at the cutover: 0069 newest, with
+ * #2346 (0070) and the other numbered PRs still open. Main keeps landing
+ * migrations, so the copy is cut back to this point rather than read live.
+ */
+const CUTOVER_BASE = '0069'
+
+/** A repo whose only commit, `base`, is this tree's drizzle/ up to CUTOVER_BASE. */
 function repo(): Repo {
   const root = mkdtempSync(join(tmpdir(), 'migration-claims-'))
   scratch.push(root)
   cpSync(join(ROOT, 'drizzle'), join(root, 'drizzle'), { recursive: true })
+  for (const dir of [join(root, 'drizzle', 'migrations'), join(root, 'drizzle', 'migrations', 'meta')]) {
+    for (const f of readdirSync(dir)) {
+      const prefix = /^(\d+)_/.exec(f)?.[1]
+      if (prefix !== undefined && BigInt(prefix) > BigInt(CUTOVER_BASE)) rmSync(join(dir, f))
+    }
+  }
   git(root, 'init', '-q', '-b', 'my-branch')
   git(root, 'config', 'user.email', 'test@example.invalid')
   git(root, 'config', 'user.name', 'test')

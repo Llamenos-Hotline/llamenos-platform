@@ -34,7 +34,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** `0042` — the numbered scheme used up to and including 0069. */
+/** `0042` — the numbered scheme used up to and including 0070. */
 export const LEGACY_PREFIX = /^\d{4}$/
 /** `20261030141523` — UTC YYYYMMDDHHMMSS, what db-generate writes. */
 export const TIMESTAMP_PREFIX = /^\d{14}$/

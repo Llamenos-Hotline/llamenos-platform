@@ -43,7 +43,7 @@ Each learned from a live fleet failure. Full list + failures:
 - **Before pushing:** `bun run migration:check`, `bun run migration:safety --ci`,
   `bun run migration:claims --against-open-prs` (pre-push runs the first and last). Every
   failure prints its exact fix.
-- **The `prevId` trap (numbered PRs from before the cutover: #2346, #2307, #2361, #2382).**
+- **The `prevId` trap (numbered PRs from before the cutover: #2307, #2361, #2382, #2399).**
   A snapshot is a full copy of the schema, not a diff. Renumbering a numbered file, or
   hand-editing its `prevId` to main's newest snapshot, leaves a snapshot that still lacks
   every column main — or an earlier pending PR — added since. It passes locally and fails
