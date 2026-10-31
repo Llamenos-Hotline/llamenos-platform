@@ -337,7 +337,7 @@ test('a volunteer who is scheduled but has not clocked in gets no INVITE — and
     const firstCaller = uniqueNumber('+1555780')
     placeCall(firstCaller, hotline, 30)
     await expect
-      .poll(() => activeCall(request, hubId, firstCaller.slice(-4)), { timeout: 30_000, message: 'the call reached the hub' })
+      .poll(() => activeCall(request, hubId), { timeout: 30_000, message: 'the call reached the hub' })
       .toMatchObject({ status: 'ringing' })
 
     expect(
@@ -346,7 +346,7 @@ test('a volunteer who is scheduled but has not clocked in gets no INVITE — and
     ).toBeNull()
     expect(await inAppChannels()).toEqual([])
     await expect
-      .poll(() => historyCall(request, hubId, firstCaller.slice(-4)), { timeout: 60_000, message: 'the call ends unanswered' })
+      .poll(() => historyCall(request, hubId), { timeout: 60_000, message: 'the call ends unanswered' })
       .toMatchObject({ status: 'unanswered' })
 
     // The volunteer's own consent arrives: now the same call rings them.
