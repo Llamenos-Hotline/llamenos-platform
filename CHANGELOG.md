@@ -404,6 +404,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.0 (2026-10-31)
+
+### Breaking Changes
+
+- GitHub never deploys to or knows the internals of our VPSes (#2318)
+
+### Features
+
+- out-of-process WorkerStalled alert for scheduler workers (#2328)
+- one safety gate — diff-only in CI, live database + backup gate before every local deploy (#2312) (#2313)
+- provider holds no caller media — our own call-recording copy, posture enforcement, call-log deletion, named residue (#2309) (#2314)
+- B-SPAM-STRINGS — keys for the CAPTCHA, under-attack and incident chain [I18N] (#2331) (#2332)
+- B-INCIDENTS core — live, aggregate-only hub incidents the responsible people can see [PROTO] (#2342)
+- detect overdue caller erasures independently of the erasure worker (#2323) (#2343)
+- a failed provider-recording deletion raises a provider-media incident (#2353)
+- B-CAPTCHA — two attempts with star-to-repeat, timeouts reach the server, over-limit action raises a spam incident [PROTO] (#2346)
+- instance-level routing backstop — webhook rejection attribution, inbound/answered counters, WebhookAuthOutage and InboundButNoAnswers (#2330) (#2371)
+
+### Fixes
+
+- bot-authored skip requires every commit to be a bot's (#2284) (#2287)
+- STOP from a non-subscriber is remembered — suppression enforced at import and every send (#2288)
+- UI tests never raise the notifications permission alert (#2292)
+- release-pr rail models knope's one-span rewrite, not a file-wide replace (#2301)
+- delete caller recordings at the provider; probe provider-side recording (#2297) (#2304)
+- pin Playwright jobs to ubuntu-24.04 — 1.59.1 has no ubuntu26.04 build (#2315) (#2320)
+- a volunteer can redeem an invite — entry point, llamenos:// deep link, hub-addressed link (#1128) (#1542)
+- bind the storage-integrity JSONB round-trip scenarios (#1198) (#1454)
+- decrypt relay events with the frame's epoch, register the device key at enrolment, resubscribe on new hubs (#2127)
+- handle-less provider recordings tracked as residue; purge audit carries what remained (#2321) (#2322)
+- key fleet/review's verdict cache on the PR description as well as the tree (#2336) (#2337)
+- show Call Ended from the relay event, not a later calls/active fetch (#2283) (#2289)
+- knope's release PR matches the review waiver again (EOF newline in tauri.conf.json) (#2344) (#2349)
+- release-pr rail fixture states its own trailing newline (unblocks #2290 backend-unit) (#2360)
+- unique-index-existing passes a partial index whose predicate provably matches no row (unblocks #2361) (#2368)
+- deployment-wide settings are unreachable under /hubs/:hubId (#2367) (#2370)
+- Android coverage gate reports executed scenarios, not tagged ones (#1212) (#2387)
+- reprice the shard packer from measured durations; flag stale prices (#2339) (#2355)
+- Compose test rule dispatches app coroutines on the UI thread (#2406) (#2407)
+- timestamped, order-independent migrations + a PR-time claims guard (#2391) (#2398)
+
 ## 0.20.1 (2026-10-27)
 
 ### Features
