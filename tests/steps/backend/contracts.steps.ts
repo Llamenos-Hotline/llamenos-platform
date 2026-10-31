@@ -64,7 +64,8 @@ When('an admin sends {string} to {string} with body:', async (
 // ── Generic admin GET/POST/PATCH (no body) ──────────────────────────
 
 When('an admin sends {string} to {string}', async ({ request, world, workerHub }, method: string, path: string) => {
-  const resolved = resolvePathParams(world, path, workerHub)
+  // `:hubId` stands for the scenario's own hub, the way a client addresses it.
+  const resolved = resolvePathParams(world, path, workerHub).replace(':hubId', workerHub)
   const apiPath = resolved.startsWith('/api') ? resolved.slice(4) : resolved
   switch (method) {
     case 'GET':
@@ -83,15 +84,15 @@ When('an admin sends {string} to {string}', async ({ request, world, workerHub }
 
 // ── Specific invalid body steps ─────────────────────────────────────
 
-When('an admin sends {string} to {string} with empty encrypted content', async ({ request, world }, _method: string, _path: string) => {
-  setLastResponse(world, await apiPost(request, '/notes', {
+When('an admin sends {string} to {string} with empty encrypted content', async ({ request, world, workerHub }, _method: string, _path: string) => {
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/notes`, {
     encryptedContent: '',
     callId: 'test-call-id',
   }, ADMIN_NSEC))
 })
 
-When('an admin sends {string} to {string} with missing title', async ({ request, world }, _method: string, _path: string) => {
-  setLastResponse(world, await apiPost(request, '/reports', {
+When('an admin sends {string} to {string} with missing title', async ({ request, world, workerHub }, _method: string, _path: string) => {
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/reports`, {
     encryptedContent: 'test-content',
     readerEnvelopes: [{ pubkey: 'a'.repeat(64), ct: 'key', enc: 'b'.repeat(64) }],
   }, ADMIN_NSEC))
@@ -157,10 +158,10 @@ Given('I am authenticated as admin', async () => {
 
 Then(
   'the audit log entry for {string} should not contain the raw phone {string}',
-  async ({ request }, eventType: string, rawPhone: string) => {
+  async ({ request, workerHub }, eventType: string, rawPhone: string) => {
     const res = await apiGet<{ entries: Array<{ eventType: string; payload: unknown }> }>(
       request,
-      '/audit',
+      `/hubs/${workerHub}/audit`,
       ADMIN_NSEC,
     )
     expect(res.status).toBe(200)

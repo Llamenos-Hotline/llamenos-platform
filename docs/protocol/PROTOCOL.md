@@ -1194,7 +1194,7 @@ A messaging conversation is identified by a per-hub keyed hash of the sender's i
 
 ```
 messagingContactHash(identifier, hub_id | null, messaging_hash_key_hex):
-  // scope = the hub id, or the literal "global" for a webhook with no ?hub=
+  // scope = the hub id, or the literal "global" when none is given (the inbound webhook always gives one, #2395)
   scope_key = HKDF-SHA256(ikm  = hex_to_bytes(messaging_hash_key_hex),
                           salt = "",
                           info = UTF-8(LABEL_MESSAGING_CONTACT_HUB_KEY + ":" + scope),
@@ -1898,11 +1898,11 @@ Hub-scoped: All shift endpoints are also available at `/api/hubs/:hubId/shifts/*
 All note endpoints require `notes:read-own` baseline. Clients must encrypt notes before sending (Section 2.3).
 
 ```
-GET /api/notes?callId=...&page=1&limit=50
+GET /api/hubs/:hubId/notes?callId=...&page=1&limit=50
 Permission: notes:read-own (own only) or notes:read-all (all notes)
 Response: { "notes": EncryptedNote[], "total": number }
 
-POST /api/notes
+POST /api/hubs/:hubId/notes
 Permission: notes:create
 Body: {
   "callId"?: string,            // an active call or a call record in the hub; no calls:read-history needed
@@ -1913,7 +1913,7 @@ Body: {
 }
 Response: 201 { "note": EncryptedNote }   // NoteStoredResponse — wrapped, never the bare note
 
-PATCH /api/notes/:id
+PATCH /api/hubs/:hubId/notes/:id
 Permission: notes:update-own
 Body: {
   "encryptedContent": hex,
@@ -1923,11 +1923,11 @@ Body: {
 Response: { "note": EncryptedNote }       // NoteStoredResponse
 ```
 
-Hub-scoped: `/api/hubs/:hubId/notes/*`
+Hub-only: notes exist only inside a hub. There is no unscoped `/api/notes`; the router answers `404` to any request outside `/hubs/:hubId` (#2395).
 
 **Server-side write guards (#2112, #2113).** The server never holds a note's content key, so a malformed write cannot be repaired afterwards; it is refused at the boundary instead:
 
-- `callId` / `conversationId` must name an existing call (live or finished) / conversation **of the hub in the path**. Under `/api/hubs/:hubId` a record of another hub and one that does not exist are both `404` with the same message; on the unscoped mount the record must sit in a hub the caller holds a role in (a record with no hub is global).
+- `callId` / `conversationId` must name an existing call (live or finished) / conversation **of the hub in the path**. A record of another hub and one that does not exist are both `404` with the same message.
 - `adminEnvelopes` must include at least one envelope addressed to a member of the note's hub's `admin` reader set (§2.4.2: the registered device keys of the members holding the admin minimum in that hub — the same set the hub last-admin invariant counts — and the hub's escrow key; super-admins are never readers), or, transitionally, to `ADMIN_DECRYPTION_PUBKEY`, which shipped clients still seal to and which is in no reader set. An empty or absent set, or one addressed only to other keys, is `422`. The same rule applies to `PATCH` whenever it replaces `encryptedContent` or `adminEnvelopes` (the author is checked first, so a non-author gets `403`), to note replies (`readerEnvelopes`), to client-sealed outbound messages (`readerEnvelopes`) and to reports (`readerEnvelopes`).
 - A hub with **no** resolvable admin recipient at all (an empty `admin` reader set — no admin of the hub with a registered device and no hub escrow key — and no `ADMIN_DECRYPTION_PUBKEY`) is **refused** with `503` and an operator-visible error log. The hub last-admin invariant guarantees the hub has an admin, so an empty recipient set is a misconfiguration, and storing under it would create a note nobody can ever open. Server-sealed records (inbound messages, call records) are unaffected: the server cannot refuse a caller who has already spoken, so those keep the loud-but-stored contract.
 
@@ -2074,11 +2074,11 @@ Hub-scoped: `/api/hubs/:hubId/conversations/*`
 Reports are a specialized type of conversation with `metadata.type = "report"`.
 
 ```
-GET /api/reports?status=&category=&page=1&limit=50
+GET /api/hubs/:hubId/reports?status=&category=&page=1&limit=50
 Permission: reports:read-all, reports:read-assigned, or reports:read-own
 Response: { "conversations": Conversation[], "total": number }
 
-POST /api/reports
+POST /api/hubs/:hubId/reports
 Permission: reports:create
 Body: {
   "title": string,
@@ -2088,15 +2088,15 @@ Body: {
 }
 Response: { "id": string, ... }
 
-GET /api/reports/:id
+GET /api/hubs/:hubId/reports/:id
 Permission: reports:read-all, reports:read-assigned (if assigned), or own report
 Response: Conversation (with metadata.type = "report")
 
-GET /api/reports/:id/messages?page=1&limit=100
+GET /api/hubs/:hubId/reports/:id/messages?page=1&limit=100
 Auth: Required (access-checked)
 Response: { "messages": EncryptedMessage[], "total": number }
 
-POST /api/reports/:id/messages
+POST /api/hubs/:hubId/reports/:id/messages
 Permission: reports:send-message, reports:send-message-own (own report), or assigned
 Body: {
   "encryptedContent": hex,
@@ -2105,26 +2105,26 @@ Body: {
 }
 Response: EncryptedMessage
 
-POST /api/reports/:id/assign
+POST /api/hubs/:hubId/reports/:id/assign
 Permission: reports:assign
 Body: { "assignedTo": "pubkey_hex" }
 Response: Conversation
 
-PATCH /api/reports/:id
+PATCH /api/hubs/:hubId/reports/:id
 Permission: reports:update
 Body: { "status"?: string }
 Response: Conversation
 
-GET /api/reports/categories
+GET /api/hubs/:hubId/reports/categories
 Auth: Required
 Response: { "categories": string[] }
 
-GET /api/reports/:id/files
+GET /api/hubs/:hubId/reports/:id/files
 Auth: Required (access-checked)
 Response: { "files": FileRecord[] }
 ```
 
-Hub-scoped: `/api/hubs/:hubId/reports/*`
+Hub-only: there is no unscoped `/api/reports` (#2395). `metadata.reportTitle` and `metadata.reportCategory` are stored as the client sends them, so the server can read them.
 
 ### 4.11 Bans
 
@@ -2680,16 +2680,25 @@ Response: { "ok": true } or { "ok": false, "error": "..." }
 
 ### 4.17 Audit Log
 
+There are two kinds of chain: one per hub, and the platform chain (`hub_id IS NULL`) for deployment-level actions. Each has its own route and permission. A missing hub id never means "every hub's log" (#2395).
+
 ```
-GET /api/audit?page=1&limit=50&actorPubkey=&eventType=&dateFrom=&dateTo=&search=
-Permission: audit:read
+GET /api/hubs/:hubId/audit?page=1&limit=50&actorPubkey=&eventType=&dateFrom=&dateTo=&search=
+Permission: audit:read (in the hub)
 Response: {
   "entries": AuditLogEntry[],
   "total": number
 }
-```
 
-Hub-scoped: `/api/hubs/:hubId/audit/*`
+GET /api/hubs/:hubId/audit/verify?limit=500&offset=0
+Permission: audit:read (in the hub)
+Response: ChainVerificationResult
+
+GET /api/admin/audit?page=1&limit=50&actorPubkey=&eventType=&dateFrom=&dateTo=&search=
+GET /api/admin/audit/verify?limit=500&offset=0
+Permission: system:view-audit
+The platform chain only. It holds no hub's entries.
+```
 
 ### 4.18 WebRTC
 
@@ -2779,6 +2788,8 @@ GET  /api/messaging/rcs/webhook         (Google RBM webhook verification)
 POST /api/messaging/:channel/webhook?hub=<hubId>
 // channel: sms | whatsapp | signal | rcs
 ```
+
+`?hub=` is required on the inbound messaging webhook. The messaging senders are deployment-wide, so the receiving address cannot name a hub the way a dialled voice number does. After the signature check, a message whose URL names no hub gets `400`, and one that names a hub that does not exist gets `404`. Neither is stored (#2395).
 
 ### 4.22 Development / Test (Development Environment Only)
 
@@ -2919,17 +2930,17 @@ Response: AdminDeviceOverview
 Legacy contact timeline aggregation. Hub-scoped.
 
 ```
-GET /api/contacts
+GET /api/hubs/:hubId/contacts
 Permission: contacts:view
 Query: ?page=&limit=
 Response: { "contacts": ContactTimeline[], "total": number }
 
-GET /api/contacts/:hash
+GET /api/hubs/:hubId/contacts/:hash
 Permission: contacts:view
 Response: { "notes": EncryptedNote[], "conversations": Conversation[] }
 ```
 
-Hub-scoped: `/api/hubs/:hubId/contacts/*`
+Hub-only: there is no unscoped `/api/contacts` (#2395).
 
 ### 4.30 Contact Directory (v2)
 
@@ -4224,11 +4235,8 @@ The following endpoints are implemented but documented here at a high level. For
 
 #### Contacts & Directory
 ```
-GET    /api/contacts
-GET    /api/contacts/:id
-POST   /api/contacts
-PATCH  /api/contacts/:id
-DELETE /api/contacts/:id
+GET    /api/hubs/:hubId/contacts
+GET    /api/hubs/:hubId/contacts/:hash
 GET    /api/directory
 ```
 

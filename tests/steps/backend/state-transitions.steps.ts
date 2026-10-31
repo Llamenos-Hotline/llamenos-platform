@@ -46,9 +46,11 @@ Before({ tags: '@lifecycle' }, async ({ world }) => {
 
 // ── Reporter setup for conversion testing ────────────────────────
 
-Given('a reporter exists for conversion testing', async ({ request, world }) => {
+Given('a reporter exists for conversion testing', async ({ request, world, workerHub }) => {
+  // A member of the scenario's hub: reports exist only inside a hub (#2395).
   const reporter = await createVolunteerViaApi(request, {
     name: uniqueName('Conversion Reporter'),
+    hubId: workerHub,
     roleIds: ['role-reporter'],
   })
   getTransitionState(world).reporterDeviceKey = reporter.deviceKey
@@ -56,13 +58,13 @@ Given('a reporter exists for conversion testing', async ({ request, world }) => 
 
 // ── Report creation for conversion ──────────────────────────────
 
-When('the reporter submits a report for conversion', async ({ request, world }) => {
+When('the reporter submits a report for conversion', async ({ request, world, workerHub }) => {
   expect(getTransitionState(world).reporterDeviceKey).toBeDefined()
   // Sealed to the admin as every real client does: the server refuses a report no admin can open (#2113).
   const sealed = await encryptForTest('conversion-report-content', [ADMIN_SEED])
   const { data, status } = await apiPost<{ id?: string; conversation?: { id: string } }>(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     {
       title: uniqueName('Conversion Report'),
       category: 'general',
@@ -134,12 +136,12 @@ When('the admin converts the submitted report to a case again', async ({ request
   getTransitionState(world).convertCount++
 })
 
-Then('the submitted report should still have exactly one linked case', async ({ request, world }) => {
+Then('the submitted report should still have exactly one linked case', async ({ request, world, workerHub }) => {
   expect(getTransitionState(world).reportId).toBeDefined()
 
   const { data } = await apiGet<Record<string, unknown>>(
     request,
-    `/reports/${getTransitionState(world).reportId}`,
+    `/hubs/${workerHub}/reports/${getTransitionState(world).reportId}`,
   )
   const linked = (data as Record<string, unknown>)?.linkedRecords as unknown[]
     ?? (data as Record<string, unknown>)?.linkedCaseRecords as unknown[]

@@ -93,6 +93,8 @@ async function webhook(
   sender: string = SENDER,
   overrides: Partial<IncomingMessage> = {},
 ): Promise<{ status: number }> {
+  // The hub the URL names exists: the webhook refuses one that names no hub (#2395).
+  await fresh.db.insert(schema.hubs).values({ id: hubId, name: hubId, slug: hubId, createdBy: 'a'.repeat(64) }).onConflictDoNothing()
   vi.mocked(getMessagingAdapterFromService).mockResolvedValue({
     validateWebhook: vi.fn().mockResolvedValue(true),
     parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body, sender, overrides)),

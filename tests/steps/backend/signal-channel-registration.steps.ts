@@ -210,8 +210,10 @@ When('the admin requests account info', async ({ request, world, workerHub }) =>
 
 // ── Then ─────────────────────────────────────────────────────────────
 
+// Signal registration and identity trust are deployment-wide messaging setup,
+// audited on the platform chain (#2395).
 Then('an audit log entry should be created', async ({ request }) => {
-  const { status, data } = await apiGet<{ entries: unknown[] }>(request, '/audit?limit=5', ADMIN_SEED)
+  const { status, data } = await apiGet<{ entries: unknown[] }>(request, '/admin/audit?limit=5', ADMIN_SEED)
   expect(status).toBe(200)
   expect(data.entries.length).toBeGreaterThan(0)
 })
