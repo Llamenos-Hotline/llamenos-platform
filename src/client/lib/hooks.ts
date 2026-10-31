@@ -101,14 +101,13 @@ export function useCallFeed() {
   useRelaySubscriptions(memberHubIds, CALL_KINDS, (_kind, content: LlamenosEvent, hubId) => {
     switch (content.type) {
       case 'call:ring': {
-        const call = content as LlamenosEvent & { callId: string; callerLast4?: string; startedAt?: string }
+        const call = content as LlamenosEvent & { callId: string; startedAt?: string }
         setCalls(prev => {
           if (prev.some(c => c.id === call.callId)) return prev
           return [...prev, {
             id: call.callId,
             hubId,
             callerNumber: '[redacted]',
-            callerLast4: call.callerLast4,
             answeredBy: null,
             startedAt: call.startedAt ?? new Date().toISOString(),
             status: 'ringing' as const,

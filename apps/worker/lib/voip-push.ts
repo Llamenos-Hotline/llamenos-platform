@@ -27,7 +27,6 @@ const logger = createLogger('voip-push')
 export async function dispatchVoipPushFromService(
   volunteerPubkeys: string[],
   callId: string,
-  callerDisplay: string,
   hubId: string,
   env: Env,
   identityService: IdentityService,
@@ -47,7 +46,7 @@ export async function dispatchVoipPushFromService(
 
   for (const device of deviceList) {
     if (device.platform === 'ios' && hasApns) {
-      promises.push(sendApnsVoipPush(device.voipToken, callId, callerDisplay, hubId, env))
+      promises.push(sendApnsVoipPush(device.voipToken, callId, hubId, env))
     } else if (device.platform === 'android' && hasNtfy) {
       promises.push(sendNtfyVoipPush(device.voipToken, callId, hubId, env))
     }
@@ -64,7 +63,6 @@ export async function dispatchVoipPushFromService(
 async function sendApnsVoipPush(
   deviceToken: string,
   callId: string,
-  callerDisplay: string,
   hubId: string,
   env: Env,
 ): Promise<void> {
@@ -87,7 +85,6 @@ async function sendApnsVoipPush(
       expiration: Math.floor(Date.now() / 1000) + 30, // 30 second TTL
       data: {
         'call-id': callId,
-        'caller': callerDisplay,
         'hub-id': hubId,
         'type': 'incoming_call',
       },
@@ -102,8 +99,8 @@ async function sendApnsVoipPush(
 /**
  * Send ntfy high-priority message for VoIP (Android via UnifiedPush).
  * The voipToken for Android is the UnifiedPush endpoint URL.
- * Payload is minimal: call-id, hub-id, type. No caller display name
- * (that's PII — the app fetches it from the server after waking).
+ * Payload is minimal: call-id, hub-id, type. No caller identity of
+ * any kind: the incoming card names the hub, never the caller.
  */
 async function sendNtfyVoipPush(
   pushEndpoint: string,

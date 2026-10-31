@@ -52,7 +52,6 @@ const DDL = `
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
     caller_number_sealed TEXT,
-    caller_last4 TEXT,
     answered_by TEXT,
     status TEXT NOT NULL DEFAULT 'ringing',
     has_transcription BOOLEAN DEFAULT FALSE,
@@ -68,7 +67,6 @@ const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.call_records (
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
-    caller_last4 TEXT,
     started_at TIMESTAMPTZ NOT NULL,
     ended_at TIMESTAMPTZ,
     duration INTEGER,
@@ -194,7 +192,6 @@ async function seedRingingCall(callSid: string, volunteers: string[]): Promise<s
     callId: callSid,
     hubId: HUB,
     callerNumberSealed: null,
-    callerLast4: '1111',
     status: 'ringing',
   })
   return Promise.all(
