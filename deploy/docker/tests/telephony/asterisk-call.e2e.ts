@@ -307,8 +307,8 @@ test('the carrier cannot reach the hotline until the operator provisions the SIP
   await expect
     .poll(carrierCallCounts, { timeout: 15_000, message: 'the carrier gave up on the call' })
     .toEqual({ processed: before + 1, active: 0 })
-  expect(await historyCall(request, hubId, refused.slice(-4))).toBeUndefined()
-  expect(await activeCall(request, hubId, refused.slice(-4))).toBeUndefined()
+  expect(await historyCall(request, hubId)).toBeUndefined()
+  expect(await activeCall(request, hubId)).toBeUndefined()
 
   // The operator provisions the trunk; the carrier's next call reaches the hotline.
   await createTrunk(request, { domain: CARRIER_HOST })
@@ -465,7 +465,7 @@ test('a turned-away caller hears the prompt the operator uploaded, fetched by th
   const caller = uniqueNumber('+1555782')
   placeCall(caller, hotline, 4)
   await expect
-    .poll(() => historyCall(request, hubId, caller.slice(-4)), { timeout: 30_000, message: 'the first call ended' })
+    .poll(() => historyCall(request, hubId), { timeout: 30_000, message: 'the first call ended' })
     .toMatchObject({ status: 'unanswered' })
   await expect.poll(carrierCallCounts, { timeout: 15_000 }).toMatchObject({ active: 0 })
 
@@ -511,10 +511,10 @@ test('a caller hears the uploaded greeting, then the hold message, before they a
     recordNextCallAs(name)
     placeCall(caller, hotline, 10)
     await expect
-      .poll(() => activeCall(request, hubId, caller.slice(-4)), { timeout: 20_000, message: 'the caller is queued and ringing' })
+      .poll(() => activeCall(request, hubId), { timeout: 20_000, message: 'the caller is queued and ringing' })
       .toMatchObject({ status: 'ringing' })
     await expect
-      .poll(() => historyCall(request, hubId, caller.slice(-4)), { timeout: 30_000, message: 'the caller hung up' })
+      .poll(() => historyCall(request, hubId), { timeout: 30_000, message: 'the caller hung up' })
       .toMatchObject({ status: 'unanswered' })
     await expect.poll(() => heard(name) !== null, { timeout: 5_000, message: `the carrier's recording of ${name}` }).toBe(true)
     const audio = heard(name)
@@ -559,7 +559,7 @@ async function callThroughMenu(request: APIRequestContext, hubId: string, caller
   recordNextCallAs(name)
   placeCall(caller, hotline, 30)
   await expect
-    .poll(() => historyCall(request, hubId, caller.slice(-4)), { timeout: 60_000, message: 'the caller hung up' })
+    .poll(() => historyCall(request, hubId), { timeout: 60_000, message: 'the caller hung up' })
     .toMatchObject({ status: 'unanswered' })
   await expect.poll(() => heard(name) !== null, { timeout: 5_000, message: `the carrier's recording of ${name}` }).toBe(true)
   const audio = heard(name)
