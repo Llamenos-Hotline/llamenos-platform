@@ -260,10 +260,10 @@ Then('the ban reason should be {string}', async ({ request, world }, expectedRea
   expect(matchingBan).toBeDefined()
 })
 
-Then('a note should exist linked to that call ID', async ({ request, world }) => {
+Then('a note should exist linked to that call ID', async ({ request, world, workerHub }) => {
   const state = getScenarioState(world)
   expect(state.callId).toBeTruthy()
-  const { notes } = await listNotesViaApi(request, { callId: state.callId })
+  const { notes } = await listNotesViaApi(request, { callId: state.callId, hubId: workerHub })
   expect(notes.length).toBeGreaterThan(0)
   expect(notes[0].callId).toBe(state.callId)
 })

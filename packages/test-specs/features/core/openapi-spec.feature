@@ -58,8 +58,8 @@ Feature: OpenAPI Specification & Documentation
       | post   | /shifts           |
       | get    | /bans             |
       | post   | /bans             |
-      | get    | /notes            |
-      | post   | /notes            |
+      | get    | /hubs/{hubId}/notes            |
+      | post   | /hubs/{hubId}/notes            |
       | get    | /calls/active     |
       | get    | /hubs/{hubId}/conversations |
       | get    | /blasts           |

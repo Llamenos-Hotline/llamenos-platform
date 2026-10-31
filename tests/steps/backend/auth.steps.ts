@@ -181,8 +181,13 @@ Then('the server should respond with {int}', async ({ world }, expectedStatus: n
 
 // ── Permission System Steps ──────────────────────────────────────
 
-Given('a user with the {string} role', async ({request, world}, roleName: string) => {
+Given('a user with the {string} role', async ({request, world, workerHub }, roleName: string) => {
+  // A member of the scenario's hub in that role: the checks below hit hub-owned
+  // routes (notes, reports), where a global role alone grants nothing (#2395).
+  // Super-admin is the one global role that reaches into every hub, and it is
+  // granted deployment-wide, not through a hub's member route.
   const vol = await createVolunteerViaApi(request, {
+    hubId: roleName === 'Super Admin' ? undefined : workerHub,
     name: `${roleName} Test ${Date.now()}`,
     roleIds: [roleName === 'Super Admin' ? 'role-super-admin' : `role-${roleName.toLowerCase().replace(/ /g, '-')}`],
   })
@@ -197,13 +202,13 @@ Then('they should pass permission checks for any action', async ({request, world
   expect(status).toBe(200)
 })
 
-Then('they should pass permission checks for {string}', async ({request, world}, permission: string) => {
+Then('they should pass permission checks for {string}', async ({request, world, workerHub }, permission: string) => {
   expect(getAuthTestState(world).volunteerSeedHex).toBeDefined()
   // Map permission to an endpoint to verify
   const endpointMap: Record<string, { method: 'GET' | 'POST'; path: string }> = {
-    'notes:create': { method: 'POST', path: '/notes' },
-    'notes:read': { method: 'GET', path: '/notes' },
-    'reports:create': { method: 'POST', path: '/reports' },
+    'notes:create': { method: 'POST', path: `/hubs/${workerHub}/notes` },
+    'notes:read': { method: 'GET', path: `/hubs/${workerHub}/notes` },
+    'reports:create': { method: 'POST', path: `/hubs/${workerHub}/reports` },
   }
   const endpoint = endpointMap[permission]
   if (endpoint) {
@@ -219,11 +224,11 @@ Then('they should pass permission checks for {string}', async ({request, world},
   }
 })
 
-Then('they should fail permission checks for {string}', async ({request, world}, permission: string) => {
+Then('they should fail permission checks for {string}', async ({request, world, workerHub }, permission: string) => {
   expect(getAuthTestState(world).volunteerSeedHex).toBeDefined()
   const endpointMap: Record<string, { method: 'GET' | 'POST'; path: string }> = {
     'admin:settings': { method: 'GET', path: '/settings/spam' },
-    'notes:read': { method: 'GET', path: '/notes' },
+    'notes:read': { method: 'GET', path: `/hubs/${workerHub}/notes` },
   }
   const endpoint = endpointMap[permission]
   if (endpoint) {

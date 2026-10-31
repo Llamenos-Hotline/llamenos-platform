@@ -970,7 +970,8 @@ export interface NoteRecord {
 
 export async function listNotesViaApi(
   request: APIRequestContext,
-  params?: { callId?: string; conversationId?: string; page?: number; limit?: number; hubId?: string },
+  // Notes have no unscoped route (#2395): the hub is required.
+  params: { callId?: string; conversationId?: string; page?: number; limit?: number; hubId: string },
 ): Promise<{ notes: NoteRecord[]; total: number }> {
   const qs = new URLSearchParams()
   if (params?.callId) qs.set('callId', params.callId)
@@ -978,8 +979,7 @@ export async function listNotesViaApi(
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   const qsStr = qs.toString()
-  const base = `/notes${qsStr ? `?${qsStr}` : ''}`
-  const path = params?.hubId ? hubPath(base.split('?')[0], params.hubId) + (qsStr ? `?${qsStr}` : '') : base
+  const path = hubPath('/notes', params.hubId) + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<{ notes: NoteRecord[]; total: number }>(request, path)
   if (status !== 200) throw new Error(`Failed to list notes: ${status}`)
   return data
@@ -999,7 +999,8 @@ export interface AuditEntry {
 
 export async function listAuditLogViaApi(
   request: APIRequestContext,
-  params?: { eventType?: string; search?: string; page?: number; limit?: number; hubId?: string },
+  // A hub's chain; the platform chain is /admin/audit (#2395).
+  params: { eventType?: string; search?: string; page?: number; limit?: number; hubId: string },
 ): Promise<{ entries: AuditEntry[]; total: number }> {
   const qs = new URLSearchParams()
   if (params?.eventType) qs.set('eventType', params.eventType)
@@ -1007,9 +1008,26 @@ export async function listAuditLogViaApi(
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   const qsStr = qs.toString()
-  const path = hubPath('/audit', params?.hubId) + (qsStr ? `?${qsStr}` : '')
+  const path = hubPath('/audit', params.hubId) + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<{ entries: AuditEntry[]; total: number }>(request, path)
   if (status !== 200) throw new Error(`Failed to list audit log: ${status}`)
+  return data
+}
+
+/**
+ * The platform chain: deployment-level actions (users created outside a hub,
+ * deployment messaging setup, …). Its own route and permission (#2395).
+ */
+export async function listPlatformAuditLogViaApi(
+  request: APIRequestContext,
+  params?: { eventType?: string; limit?: number },
+): Promise<{ entries: AuditEntry[]; total: number }> {
+  const qs = new URLSearchParams()
+  if (params?.eventType) qs.set('eventType', params.eventType)
+  if (params?.limit) qs.set('limit', String(params.limit))
+  const qsStr = qs.toString()
+  const { status, data } = await apiGet<{ entries: AuditEntry[]; total: number }>(request, `/admin/audit${qsStr ? `?${qsStr}` : ''}`)
+  if (status !== 200) throw new Error(`Failed to list platform audit log: ${status}`)
   return data
 }
 
@@ -1028,13 +1046,13 @@ export interface ChainVerificationResult {
 
 export async function verifyAuditChainViaApi(
   request: APIRequestContext,
-  params?: { hubId?: string; limit?: number; offset?: number },
+  params: { hubId: string; limit?: number; offset?: number },
 ): Promise<ChainVerificationResult> {
   const qs = new URLSearchParams()
-  if (params?.limit != null) qs.set('limit', String(params.limit))
-  if (params?.offset != null) qs.set('offset', String(params.offset))
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  if (params.offset != null) qs.set('offset', String(params.offset))
   const qsStr = qs.toString()
-  const path = hubPath('/audit/verify', params?.hubId) + (qsStr ? `?${qsStr}` : '')
+  const path = hubPath('/audit/verify', params.hubId) + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<ChainVerificationResult>(request, path)
   if (status !== 200) throw new Error(`Failed to verify audit chain: ${status}`)
   return data
@@ -1057,12 +1075,12 @@ export interface ReportRecord {
 
 export async function listReportsViaApi(
   request: APIRequestContext,
-  params?: { status?: string; hubId?: string },
+  params: { status?: string; hubId: string },
 ): Promise<{ conversations: ReportRecord[]; total: number }> {
   const qs = new URLSearchParams()
-  if (params?.status) qs.set('status', params.status)
+  if (params.status) qs.set('status', params.status)
   const qsStr = qs.toString()
-  const basePath = hubPath('/reports', params?.hubId)
+  const basePath = hubPath('/reports', params.hubId)
   const path = basePath + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<{ conversations: ReportRecord[]; total: number }>(request, path)
   if (status !== 200) throw new Error(`Failed to list reports: ${status}`)
@@ -1075,9 +1093,10 @@ export async function listReportsViaApi(
  */
 export async function createReportViaApi(
   request: APIRequestContext,
-  options?: { title?: string; category?: string; status?: string; reportTypeId?: string; seedHex?: string; hubId?: string },
+  // Reports have no unscoped route (#2395): the hub is required.
+  options: { title?: string; category?: string; status?: string; reportTypeId?: string; seedHex?: string; hubId: string },
 ): Promise<ReportRecord> {
-  const seedHex = options?.seedHex ?? ADMIN_SEED
+  const seedHex = options.seedHex ?? ADMIN_SEED
 
   const title = options?.title ?? `Test Report ${Date.now()}`
   // The reporter AND the admin, as the real ReportForm seals it: the server
@@ -1095,7 +1114,7 @@ export async function createReportViaApi(
   }
   if (options?.reportTypeId) body.reportTypeId = options.reportTypeId
 
-  const { status, data } = await apiPost<ReportRecord>(request, hubPath('/reports', options?.hubId), body, seedHex)
+  const { status, data } = await apiPost<ReportRecord>(request, hubPath('/reports', options.hubId), body, seedHex)
   if (status !== 201 && status !== 200) {
     throw new Error(`Failed to create report: ${status} ${JSON.stringify(data)}`)
   }
@@ -1105,10 +1124,10 @@ export async function createReportViaApi(
   if (options?.status && options.status !== 'waiting') {
     const assigneePubkey = seedHexToPubkey(seedHex)
     if (options.status === 'active') {
-      await assignReportViaApi(request, report.id, assigneePubkey, options?.hubId)
+      await assignReportViaApi(request, report.id, assigneePubkey, options.hubId)
     } else if (options.status === 'closed') {
-      await assignReportViaApi(request, report.id, assigneePubkey, options?.hubId)
-      await updateReportStatusViaApi(request, report.id, 'closed', options?.hubId)
+      await assignReportViaApi(request, report.id, assigneePubkey, options.hubId)
+      await updateReportStatusViaApi(request, report.id, 'closed', options.hubId)
     }
   }
   return report
@@ -1118,7 +1137,7 @@ export async function assignReportViaApi(
   request: APIRequestContext,
   reportId: string,
   pubkey: string,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
   const path = hubPath(`/reports/${reportId}/assign`, hubId)
   const { status } = await apiPost(request, path, { assignedTo: pubkey })
@@ -1129,7 +1148,7 @@ export async function updateReportStatusViaApi(
   request: APIRequestContext,
   reportId: string,
   newStatus: string,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
   const path = hubPath(`/reports/${reportId}`, hubId)
   const { status } = await apiPatch(request, path, { status: newStatus })
@@ -1661,18 +1680,18 @@ export async function sealedNoteFields(
 }
 
 /**
- * A complete `POST /notes` body the server accepts: {@link sealedNoteFields}
- * filed under a REAL call (#2112 refuses an id that is not one), in `hubId` when
- * the note is posted through `/hubs/:hubId/notes`.
+ * A complete `POST /hubs/:hubId/notes` body the server accepts:
+ * {@link sealedNoteFields} filed under a REAL call of `hubId` (#2112 refuses an
+ * id that is not a call of the note's hub; notes exist only in a hub, #2395).
  */
 export async function validNoteBody(
   request: APIRequestContext,
-  authorSeedHex: string = ADMIN_SEED,
-  options?: { plaintext?: string; hubId?: string },
+  authorSeedHex: string,
+  options: { plaintext?: string; hubId: string },
 ): Promise<Record<string, unknown>> {
   return {
-    callId: await simulateCallForNote(request, options?.hubId),
-    ...(await sealedNoteFields(authorSeedHex, options?.plaintext)),
+    callId: await simulateCallForNote(request, options.hubId),
+    ...(await sealedNoteFields(authorSeedHex, options.plaintext)),
   }
 }
 
@@ -2415,12 +2434,12 @@ export async function getAffinityGroupViaApi(
 
 export async function listTriageQueueViaApi(
   request: APIRequestContext,
-  params?: { conversionStatus?: string; hubId?: string },
+  params: { conversionStatus?: string; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<{ conversations: Record<string, unknown>[]; total: number }> {
   const qs = new URLSearchParams({ conversionEnabled: 'true' })
-  if (params?.conversionStatus) qs.set('conversionStatus', params.conversionStatus)
-  const path = `${hubPath('/reports', params?.hubId)}?${qs}`
+  if (params.conversionStatus) qs.set('conversionStatus', params.conversionStatus)
+  const path = `${hubPath('/reports', params.hubId)}?${qs}`
   const { status, data } = await apiGet<{ conversations: Record<string, unknown>[]; total: number }>(request, path, seedHex)
   if (status !== 200) throw new Error(`Failed to list triage queue: ${status}`)
   return data
@@ -2430,8 +2449,8 @@ export async function updateReportConversionStatusViaApi(
   request: APIRequestContext,
   reportId: string,
   conversionStatus: string,
-  seedHex = ADMIN_SEED,
-  hubId?: string,
+  seedHex: string,
+  hubId: string,
 ): Promise<Record<string, unknown>> {
   const { status, data } = await apiPatch<Record<string, unknown>>(
     request,
@@ -2447,8 +2466,8 @@ export async function createCaseFromReportViaApi(
   request: APIRequestContext,
   reportId: string,
   entityTypeId: string,
-  seedHex = ADMIN_SEED,
-  hubId?: string,
+  seedHex: string,
+  hubId: string,
 ): Promise<{ recordId: string; linkId: string }> {
   // Create the record first
   const record = await createRecordViaApi(request, entityTypeId, {

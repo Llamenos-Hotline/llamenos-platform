@@ -379,8 +379,8 @@ Then('the request should be permitted', async ({ world }) => {
   expect(state.lastResponse?.status).toBeLessThan(400)
 })
 
-Then('the audit log should show permission alias {string}', async ({ request }, alias: string) => {
-  const res = await apiGet<{ entries: Array<{ details?: string }> }>(request, '/audit')
+Then('the audit log should show permission alias {string}', async ({ request, workerHub }, alias: string) => {
+  const res = await apiGet<{ entries: Array<{ details?: string }> }>(request, `/hubs/${workerHub}/audit`)
   expect(res.status).toBe(200)
   const hasAlias = res.data.entries.some(e => e.details?.includes(alias))
   expect(hasAlias).toBe(true)
