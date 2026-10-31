@@ -102,37 +102,70 @@ function expectNoRawCallerDigits(row: Record<string, unknown>) {
 }
 
 describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
-  it('migration 0074 erases every stored last-four digit, and the schema no longer declares the column (#2262)', async () => {
-    // What the previous release left behind: digits beside a live call and a finished one.
-    await fresh.raw.unsafe(`INSERT INTO active_calls (call_id, hub_id, caller_last4) VALUES ('legacy-active', 'hub-1', '4567')`)
-    await fresh.raw.unsafe(
-      `INSERT INTO call_records (call_id, hub_id, caller_last4, started_at, status, encrypted_content)
-       VALUES ('legacy-record', 'hub-1', '4567', now(), 'completed', '')`,
-    )
-
-    const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
-    const file = readdirSync(dir).find((f) => f.startsWith('0074_') && f.endsWith('.sql'))
-    expect(file, 'migration 0074 is missing').toBeTruthy()
-    const statements = readFileSync(join(dir, file!), 'utf8')
-      .split('--> statement-breakpoint')
-      .map((st) => st.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
-      .filter(Boolean)
-    expect(statements.length).toBeGreaterThan(0)
-    for (const statement of statements) await fresh.raw.unsafe(statement)
-
-    const left = await fresh.raw.unsafe(
-      `SELECT (SELECT count(*)::int FROM active_calls WHERE caller_last4 IS NOT NULL)
-            + (SELECT count(*)::int FROM call_records WHERE caller_last4 IS NOT NULL) AS n`,
-    )
-    expect(left[0]!.n).toBe(0)
-
-    // The code never names the column again: not on the tables, not on any row it reads.
-    for (const table of [schema.activeCalls, schema.callRecords]) {
-      expect(Object.keys(table).filter((k) => /last4/i.test(k))).toEqual([])
+  describe('migration 0074 keeps no last-four digit (#2262)', () => {
+    const insertLegacy = async () => {
+      await fresh.raw.unsafe(`INSERT INTO active_calls (call_id, hub_id, caller_last4) VALUES ('legacy-active', 'hub-1', '4567')`)
+      await fresh.raw.unsafe(
+        `INSERT INTO call_records (call_id, hub_id, caller_last4, started_at, status, encrypted_content)
+         VALUES ('legacy-record', 'hub-1', '4567', now(), 'completed', '')`,
+      )
+    }
+    const digitsStored = async () => {
+      const rows = await fresh.raw.unsafe(
+        `SELECT (SELECT count(*)::int FROM active_calls WHERE caller_last4 IS NOT NULL)
+              + (SELECT count(*)::int FROM call_records WHERE caller_last4 IS NOT NULL) AS n`,
+      )
+      return rows[0]!.n as number
+    }
+    const cleanup = async () => {
+      await fresh.raw.unsafe(`DELETE FROM active_calls WHERE call_id = 'legacy-active'`)
+      await fresh.raw.unsafe(`DELETE FROM call_records WHERE call_id = 'legacy-record'`)
     }
 
-    await fresh.raw.unsafe(`DELETE FROM active_calls WHERE call_id = 'legacy-active'`)
-    await fresh.raw.unsafe(`DELETE FROM call_records WHERE call_id = 'legacy-record'`)
+    function migrationStatements(): string[] {
+      const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
+      const file = readdirSync(dir).find((f) => f.startsWith('0074_') && f.endsWith('.sql'))
+      expect(file, 'migration 0074 is missing').toBeTruthy()
+      return readFileSync(join(dir, file!), 'utf8')
+        .split('--> statement-breakpoint')
+        .map((st) => st.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
+        .filter(Boolean)
+    }
+
+    it('erases every digit the previous release stored', async () => {
+      // Rows as the previous release left them: the trigger is off to plant what it had written.
+      await fresh.raw.unsafe(`ALTER TABLE active_calls DISABLE TRIGGER USER`)
+      await fresh.raw.unsafe(`ALTER TABLE call_records DISABLE TRIGGER USER`)
+      try {
+        await insertLegacy()
+        expect(await digitsStored()).toBe(2)
+        for (const statement of migrationStatements().filter((st) => st.startsWith('UPDATE'))) {
+          await fresh.raw.unsafe(statement)
+        }
+        expect(await digitsStored()).toBe(0)
+      } finally {
+        await fresh.raw.unsafe(`ALTER TABLE active_calls ENABLE TRIGGER USER`)
+        await fresh.raw.unsafe(`ALTER TABLE call_records ENABLE TRIGGER USER`)
+        await cleanup()
+      }
+    })
+
+    it('discards digits a previous-release pod writes during a rollout, without failing its INSERT', async () => {
+      try {
+        await insertLegacy() // would throw if the column rejected the write
+        expect(await digitsStored()).toBe(0)
+        await fresh.raw.unsafe(`UPDATE active_calls SET caller_last4 = '9999' WHERE call_id = 'legacy-active'`)
+        expect(await digitsStored()).toBe(0)
+      } finally {
+        await cleanup()
+      }
+    })
+
+    it('is no longer declared by the code: no column on either table definition', () => {
+      for (const table of [schema.activeCalls, schema.callRecords]) {
+        expect(Object.keys(table).filter((k) => /last4/i.test(k))).toEqual([])
+      }
+    })
   })
 
   it('endCall seals { answeredBy, callerNumber } for admin recipients', async () => {

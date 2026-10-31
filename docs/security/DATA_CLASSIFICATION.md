@@ -71,7 +71,7 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 | `duration` | Plaintext | Indefinite | Call duration in seconds |
 | `answeredBy` | Plaintext | Indefinite | User pubkey who answered |
 | `callerHash` | Hashed (HMAC-SHA256) | Indefinite | Caller phone hash (irreversible) |
-| _(no fragment of the caller's number)_ | — | — | No last-four digits, no prefix, no hash is stored beside a call record (#2262, D2). Migration 0074 erased every stored value and the code no longer declares `caller_last4`; the empty columns are dropped by the contract migration one release later (expand/contract). |
+| _(no fragment of the caller's number)_ | — | — | No last-four digits, no prefix, no hash is stored beside a call record (#2262, D2). Migration 0074 erased every stored value and the code no longer declares `caller_last4`; the empty columns are dropped by the contract migration one release later (expand/contract), and until then a trigger discards anything a previous-release pod writes there. |
 | `hasTranscription` | Plaintext | Indefinite | Boolean flag |
 | `hasVoicemail` | Plaintext | Indefinite | Boolean flag |
 | `notes[].encryptedContent` | **E2EE** | Indefinite | AES-256-GCM ciphertext (via HPKE) |
