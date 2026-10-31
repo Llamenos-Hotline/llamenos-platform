@@ -19,6 +19,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
@@ -165,6 +166,17 @@ class NotesViewModel @Inject constructor(
                         currentPage = page,
                         totalNotes = response.total.toInt(),
                         hasMorePages = allNotes.size < response.total.toInt(),
+                    )
+                }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405).
+                _uiState.update {
+                    it.copy(
+                        notes = emptyList(),
+                        isLoading = false,
+                        isRefreshing = false,
+                        totalNotes = 0,
+                        hasMorePages = false,
                     )
                 }
             } catch (e: ApiException) {

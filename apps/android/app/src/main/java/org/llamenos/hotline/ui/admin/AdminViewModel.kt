@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.model.AddBanRequest
 import org.llamenos.protocol.SharedEntry
 import org.llamenos.hotline.model.AuditLogResponse
@@ -507,6 +508,11 @@ class AdminViewModel @Inject constructor(
                         auditTotal = response.total.toInt(),
                         hasMoreAuditPages = allEntries.size < response.total.toInt(),
                     )
+                }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405).
+                _uiState.update {
+                    it.copy(auditEntries = emptyList(), isLoadingAudit = false, auditTotal = 0, hasMoreAuditPages = false)
                 }
             } catch (e: Exception) {
                 _uiState.update {

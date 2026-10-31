@@ -15,6 +15,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
@@ -140,6 +141,11 @@ class ReportsViewModel @Inject constructor(
                         isLoading = false,
                         isRefreshing = false,
                     )
+                }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405).
+                _uiState.update {
+                    it.copy(reports = emptyList(), total = 0, isLoading = false, isRefreshing = false)
                 }
             } catch (e: Exception) {
                 _uiState.update {

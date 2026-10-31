@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ContactSummary
 import org.llamenos.hotline.model.ContactsListResponse
@@ -95,6 +96,11 @@ class ContactsViewModel @Inject constructor(
                         isLoading = false,
                         isRefreshing = false,
                     )
+                }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405).
+                _uiState.update {
+                    it.copy(contacts = emptyList(), total = 0, isLoading = false, isRefreshing = false)
                 }
             } catch (e: Exception) {
                 _uiState.update {

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.CmsReportTypesResponse
 import org.llamenos.hotline.model.ConvertFromReportResponse
@@ -106,6 +107,11 @@ class TriageViewModel @Inject constructor(
                     isLoading = false,
                     isRefreshing = false,
                 )
+            }
+        } catch (_: NoActiveHubException) {
+            // No hub to browse: nothing to load, which is not a failure (#2405).
+            _uiState.update {
+                it.copy(reports = emptyList(), total = 0, isLoading = false, isRefreshing = false)
             }
         } catch (e: Exception) {
             _uiState.update {
