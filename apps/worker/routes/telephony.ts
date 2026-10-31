@@ -124,7 +124,6 @@ async function refuseLiveCall(
       await services.calls.addCall(call.hubId ?? '', {
         callId: call.callSid,
         callerNumberSealed: sealCallerNumber(call.callerNumber, call.callSid, c.env.SERVER_KEK),
-        callerLast4: call.callerNumber.slice(-4),
         status: 'ringing',
       })
       const callSettings = await services.settings.getCallSettings(call.hubId)
