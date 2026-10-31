@@ -64,10 +64,10 @@ export const hubIncidents = pgTable(
     // advisory lock and checks-then-inserts in one transaction; every writer goes
     // through it. The backing partial unique index (on `category`, WHERE
     // closed_at IS NULL AND hub_id IS NULL) ships in the release AFTER the one
-    // that relaxes `hub_id` to nullable — migration 0072 expands, a later one
-    // contracts (docs/runbooks/migrations.md). That migration must first close all
-    // but the newest open platform incident per category, or CREATE UNIQUE INDEX
-    // fails on a duplicate.
+    // that relaxes `hub_id` to nullable — the erasure_failed_platform_incidents
+    // migration expands, a later one contracts (docs/runbooks/migrations.md). That
+    // migration must first close all but the newest open platform incident per
+    // category, or CREATE UNIQUE INDEX fails on a duplicate.
     index('hub_incidents_hub_opened_idx').on(table.hubId, table.openedAt),
   ],
 )
