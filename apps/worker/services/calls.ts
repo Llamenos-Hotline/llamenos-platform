@@ -16,6 +16,7 @@ import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
 import { recordCallAnswered, recordCallInbound } from '../routes/metrics'
+import type { SealedRecordingEraser } from './call-recordings'
 
 const logger = createLogger('services.calls')
 
@@ -766,8 +767,14 @@ export class CallsService {
     return archived[0]?.hubId ?? null
   }
 
-  /** Truncate all call data for a hub */
-  async reset(hubId: string): Promise<{ ok: true }> {
+  /**
+   * Truncate all call data for a hub. The sealed recordings go first: the rows
+   * deleted below are what name them, so dropping the rows first would leave
+   * the audio in object storage with nothing to find it by (#2338). Throws,
+   * with every row intact, if a recording cannot be deleted.
+   */
+  async reset(hubId: string, recordings: SealedRecordingEraser): Promise<{ ok: true }> {
+    await recordings.eraseForHub(hubId)
     await this.db.delete(activeCalls).where(eq(activeCalls.hubId, hubId))
     await this.db.delete(callRecords).where(eq(callRecords.hubId, hubId))
     // Also clean up any expired call tokens (best-effort)

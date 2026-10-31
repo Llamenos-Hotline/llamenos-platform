@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
+import type { Services } from '../services'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { resolveHubPermissions } from '@shared/permissions'
 import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema } from '@protocol/schemas/hubs'
@@ -11,6 +12,7 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import type { Hub } from '@shared/types'
 import { ServiceError } from '../services/settings'
+import { SealedRecordingDeleteError } from '../services/call-recordings'
 import { audit } from '../services/audit'
 import { encryptStorageCredential } from '../lib/crypto'
 import { hubContext } from '../middleware/hub'
@@ -21,6 +23,27 @@ import { createLogger } from '../lib/logger'
 import { getConnectionManager } from '../lib/ws-manager'
 
 const logger = createLogger('routes.hubs')
+
+/**
+ * The hub survives a refused deletion, so the people who run its telephony
+ * provider are told through an incident (a log line is not a person finding
+ * out), and the hub's own audit log says which calls' audio is still held.
+ * Best-effort: the 502 the caller gets is the primary report.
+ */
+async function reportUndeletedRecordings(
+  services: Services,
+  actorPubkey: string,
+  err: SealedRecordingDeleteError,
+): Promise<void> {
+  try {
+    for (const failure of err.failures) {
+      await audit(services.audit, 'callRecordingCopyDeleteFailed', actorPubkey, { callId: failure.callId, error: failure.error.slice(0, 500) }, undefined, err.hubId)
+    }
+    await services.incidents.signal(err.hubId, 'provider-media', 'delete_failed', err.failures.length)
+  } catch (reportErr) {
+    logger.error('Hub deletion refused over undeletable call recordings, and the report of it failed', { hubId: err.hubId, err: reportErr })
+  }
+}
 
 const routes = new Hono<AppEnv>()
 
@@ -341,6 +364,14 @@ routes.delete('/:hubId',
     const services = c.get('services')
 
     try {
+      // Our sealed call recordings first, before anything is destroyed: a
+      // recording the object store will not delete refuses the whole deletion
+      // with the hub still intact, instead of half-destroyed. `deleteHub` runs
+      // the same erase again as its own guarantee (it also catches a recording
+      // callback that landed since), so no other caller can drop the rows that
+      // name the blobs without it (#2338).
+      await services.callRecordings.eraseForHub(hubId)
+
       // Destroy hub-scoped storage buckets and IAM before deleting the hub
       const storageManager = (c.env as unknown as Record<string, unknown>).STORAGE_MANAGER as StorageManager | undefined
       if (storageManager) {
@@ -361,15 +392,18 @@ routes.delete('/:hubId',
         logger.error('Hub deletion: member roster unreadable — SIP endpoints may linger', { hubId, err })
       }
 
-      await services.settings.deleteHub(hubId)
+      await services.settings.deleteHub(hubId, services.callRecordings)
 
       for (const member of members) {
         await revokeSipIdentityIfRoleless(services, c.env.SERVER_KEK, member, c.get('allRoles'))
       }
       return c.json({ ok: true })
     } catch (err) {
+      if (err instanceof SealedRecordingDeleteError) {
+        await reportUndeletedRecordings(c.get('services'), c.get('pubkey'), err)
+      }
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 500)
+        return c.json({ error: err.message }, err.status as 404 | 500 | 502)
       }
       const message = err instanceof Error ? err.message : 'Failed to delete hub'
       return c.json({ error: message }, 500)

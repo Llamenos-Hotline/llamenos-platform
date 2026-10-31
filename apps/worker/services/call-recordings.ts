@@ -32,6 +32,7 @@ import type { TelephonyAdapter } from '../telephony/adapter'
 import { openCallRecording, sealCallRecording } from '../lib/crypto'
 import { maybeTranscribe } from './transcription'
 import { createLogger } from '../lib/logger'
+import { ServiceError } from './settings'
 
 const logger = createLogger('services.call-recordings')
 
@@ -41,7 +42,30 @@ export interface CallRecordingCopyFailure {
   error: string
 }
 
-export class CallRecordingsService {
+/**
+ * Our sealed copies of a hub's call recordings could not all be deleted. Thrown
+ * by `eraseForHub` BEFORE the caller drops any row: the rows (and the
+ * `hasRecording` flags) are what name the blobs, so a refusal leaves them
+ * addressable for the retry. Status 502 — it is the object store, not the
+ * request, that refused.
+ */
+export class SealedRecordingDeleteError extends ServiceError {
+  constructor(readonly hubId: string, readonly failures: CallRecordingCopyFailure[]) {
+    super(502, `${failures.length} stored call recording(s) could not be deleted, so nothing was removed — ${failures[0].error}`)
+  }
+}
+
+/**
+ * What every path that drops a hub's call rows must be handed. Required, never
+ * optional, at each such path: a deletion that could omit it would drop the
+ * rows that name the blobs and leave the audio unreachable for good (#2338).
+ */
+export interface SealedRecordingEraser {
+  /** Delete every sealed recording the hub holds; throws `SealedRecordingDeleteError` if any survives. */
+  eraseForHub(hubId: string): Promise<void>
+}
+
+export class CallRecordingsService implements SealedRecordingEraser {
   constructor(
     protected db: Database,
     private readonly blob: Pick<BlobStorage, 'put' | 'get' | 'delete'> | undefined,
@@ -139,6 +163,18 @@ export class CallRecordingsService {
     }
     if (deleted.length > 0) await this.setHasRecording(hubId, deleted, false)
     return failures
+  }
+
+  /**
+   * Delete every sealed recording this hub holds. The caller drops the hub's
+   * call rows only AFTER this returns — the candidates are read from those rows
+   * (and the provider ledger), so dropping them first would leave blobs nothing
+   * can find. Every blob is attempted; a refusal for any of them throws once
+   * all have been tried.
+   */
+  async eraseForHub(hubId: string): Promise<void> {
+    const failures = await this.deleteCopies(hubId, await this.copyCandidates(hubId, 'all'))
+    if (failures.length > 0) throw new SealedRecordingDeleteError(hubId, failures)
   }
 
   private async callsWithCopies(hubId: string, callIds?: string[]): Promise<string[]> {
