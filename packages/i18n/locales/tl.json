@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "Mga ban na malapit nang mag-expire",
+      "channelDisabled": "Mga contact na tinanggihan sa isang naka-off na channel",
       "erasureDeadline": "Mga lampas-taning na kahilingang magbura",
       "providerMedia": "Mga recording na naiwan sa phone provider",
       "spam": "Spam at hindi gustong tawag"

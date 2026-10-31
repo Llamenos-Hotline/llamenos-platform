@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "حظر على وشك الانتهاء",
+      "channelDisabled": "اتصالات رُفضت على قناة معطّلة",
       "erasureDeadline": "طلبات حذف متأخرة",
       "providerMedia": "تسجيلات متبقية لدى مزود الهاتف",
       "spam": "مكالمات مزعجة وغير مرغوب فيها"

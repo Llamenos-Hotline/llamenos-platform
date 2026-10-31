@@ -89,6 +89,7 @@ import type {
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
 import type { IvrLanguageSettings } from '@protocol/schemas/settings'
+import type { HubChannelType } from '@protocol/schemas/provider-setup'
 import type {
   ReportTypeDefinition,
   ReportFieldDefinition,
@@ -1132,6 +1133,21 @@ export class SettingsService {
   // =========================================================================
   // Enabled Channels
   // =========================================================================
+
+  /**
+   * Has this hub switched `channel` on? The switches are `hub_settings.channels`
+   * (written by `PUT /hubs/:hubId/onboard/channels`).
+   *
+   * A hub that has never recorded any — one not set up through hub onboarding —
+   * has no per-hub restriction, so the deployment-wide answer stands and this
+   * is true. Once recorded the object is the whole truth for the hub: a channel
+   * it does not name is off, exactly as `enableChannel` seeds every channel false.
+   */
+  async isHubChannelEnabled(hubId: string, channel: HubChannelType): Promise<boolean> {
+    const { channels } = await this.getHubSettings(hubId)
+    if (!channels || typeof channels !== 'object' || Object.keys(channels).length === 0) return true
+    return (channels as Partial<Record<HubChannelType, boolean>>)[channel] === true
+  }
 
   async getEnabledChannels(env: {
     TWILIO_ACCOUNT_SID?: string

@@ -4754,6 +4754,7 @@
   "incident": {
     "category": {
       "banExpiry": "ሊያበቁ የተቃረቡ እገዳዎች",
+      "channelDisabled": "በተዘጋ ቻናል የተመለሱ ግንኙነቶች",
       "erasureDeadline": "ጊዜያቸው ያለፈ የመሰረዝ ጥያቄዎች",
       "providerMedia": "በስልክ አቅራቢው ዘንድ የቀሩ ቅጂዎች",
       "spam": "አይፈለጌ እና ያልተፈለጉ ጥሪዎች"

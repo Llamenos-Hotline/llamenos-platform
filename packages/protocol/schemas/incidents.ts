@@ -22,6 +22,7 @@ export const incidentCategorySchema = z.enum([
   'provider-media',
   'erasure-deadline',
   'ban-expiry',
+  'channel-disabled',
 ])
 export type IncidentCategory = z.infer<typeof incidentCategorySchema>
 

@@ -22,6 +22,12 @@ const logger = createLogger('routing-readiness')
 
 export interface HubRoutingReadiness {
   hubId: string
+  /**
+   * Has the hub switched voice on? A hub without voice takes no calls, so
+   * coverage is not a question about it (#2384): a Signal-only hub with no
+   * shift is healthy, not "can ring nobody".
+   */
+  voiceEnabled: boolean
   /** Distinct volunteers named by at least one shift, on any day. */
   rosteredVolunteers: number
   /** Volunteers in the hub's fallback group (rung when nobody is on shift). */
@@ -41,9 +47,10 @@ export async function hubRoutingReadiness(
   services: Services,
   hubId: string,
 ): Promise<HubRoutingReadiness> {
-  const [{ shifts }, fallback] = await Promise.all([
+  const [{ shifts }, fallback, voiceEnabled] = await Promise.all([
     services.shifts.list(hubId),
     services.settings.getFallbackGroup(hubId),
+    services.settings.isHubChannelEnabled(hubId, 'voice'),
   ])
 
   const rostered = new Set<string>()
@@ -53,6 +60,7 @@ export async function hubRoutingReadiness(
 
   return {
     hubId,
+    voiceEnabled,
     rosteredVolunteers: rostered.size,
     fallbackVolunteers: fallback.userPubkeys.length,
     canEverRing: rostered.size > 0 || fallback.userPubkeys.length > 0,
@@ -71,7 +79,7 @@ export async function warnOnUnroutableHubs(services: Services): Promise<HubRouti
     const { hubs } = await services.settings.getHubs()
     const active = hubs.filter(h => h.status === 'active')
     const readiness = await Promise.all(active.map(h => hubRoutingReadiness(services, h.id)))
-    unroutable = readiness.filter(r => !r.canEverRing)
+    unroutable = readiness.filter(r => r.voiceEnabled && !r.canEverRing)
 
     for (const hub of unroutable) {
       logger.error(

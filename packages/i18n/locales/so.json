@@ -4754,6 +4754,7 @@
   "incident": {
     "category": {
       "banExpiry": "Mamnuucyo dhawaan dhacaya",
+      "channelDisabled": "Xiriirro la dididay kanaal la damiyay",
       "erasureDeadline": "Codsiyo tirtirid oo dib u dhacay",
       "providerMedia": "Duubisyo ku haray bixiyaha telefoonka",
       "spam": "Spam iyo wicitaano aan la rabin"

@@ -4754,6 +4754,7 @@
   "incident": {
     "category": {
       "banExpiry": "Qedexeyên ku nêzîkî dawiyê ne",
+      "channelDisabled": "Têkiliyên li kanalek girtî hatin red kirin",
       "erasureDeadline": "Daxwazên jêbirinê yên derengmayî",
       "providerMedia": "Tomarên ku li cem dabînkerê telefonê man",
       "spam": "Spam û bangên nexwestî"

@@ -117,6 +117,7 @@ function ringRoster() {
     },
     settings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+      isHubChannelEnabled: vi.fn().mockResolvedValue(true),
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
     },
   }

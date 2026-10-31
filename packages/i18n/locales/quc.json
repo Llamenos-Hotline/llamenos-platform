@@ -4754,6 +4754,7 @@
   "incident": {
     "category": {
       "banExpiry": "Bans about to expire",
+      "channelDisabled": "Contacts turned away on a switched-off channel",
       "erasureDeadline": "Overdue erasure requests",
       "providerMedia": "Recordings left at the phone provider",
       "spam": "Spam and unwanted calls"

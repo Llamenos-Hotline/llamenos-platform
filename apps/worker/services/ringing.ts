@@ -77,7 +77,8 @@ type RingableUser = Awaited<ReturnType<Services['identity']['getUsers']>>['users
  * and the read-only routing diagnostic (services/routing-readiness.ts), so
  * "who may answer", "who is shown as available" and "who would be rung" can
  * never drift from "who was rung". Returns null when there is no roster at all;
- * `available` is empty when a roster exists but nobody is available.
+ * `available` is empty when a roster exists but nobody is available. Also null
+ * for a hub with voice switched off: it takes no calls, whatever its roster says.
  *
  * `usedFallback` says which of the two rosters `available` came from — the hub's
  * fallback group, or the scheduled ∩ clocked-in intersection. It is reported by
@@ -91,6 +92,12 @@ export async function resolveRingableVolunteers(
   services: Services,
   hubId: string,
 ): Promise<{ available: RingableUser[]; usedFallback: boolean } | null> {
+  // A hub that has switched voice off takes no calls (refused at /incoming,
+  // #2384), so nobody is a ring target for it: its roster is not coverage. This
+  // is the one place that says so, so presence, the answer route and the
+  // routing diagnostic agree with the ringing path.
+  if (hubId !== '' && !(await services.settings.isHubChannelEnabled(hubId, 'voice'))) return null
+
   const scheduledPubkeys = await services.shifts.getCurrentVolunteers(hubId)
 
   // Ringing requires BOTH consents: the admin scheduled them AND they clocked
