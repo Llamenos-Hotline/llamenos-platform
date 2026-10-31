@@ -14,14 +14,18 @@ import { z } from 'zod'
  * permission (see `INCIDENT_CATEGORY_PERMISSION` in the worker), never by a role.
  *
  * Extensible by design: the column is plain text and clients must treat an
- * unknown value as "an incident they may not be able to label", so `routing`
- * and `provider-auth` (#2330) can be appended without a schema break.
+ * unknown value as "an incident they may not be able to label", so values are
+ * appended without a schema break — `routing` and `provider-auth` arrived that
+ * way (#2330): a hotline that rings nobody, and provider webhooks being
+ * refused, are both total outages nothing else reports.
  */
 export const incidentCategorySchema = z.enum([
   'spam',
   'provider-media',
   'erasure-deadline',
   'ban-expiry',
+  'routing',
+  'provider-auth',
 ])
 export type IncidentCategory = z.infer<typeof incidentCategorySchema>
 

@@ -95,6 +95,18 @@ describe('incident categories', () => {
     expect(INCIDENT_CATEGORIES['provider-media'].permission).toBe('telephony:manage-providers')
     expect(INCIDENT_CATEGORIES['erasure-deadline'].permission).toBe('erasure:admin')
     expect(INCIDENT_CATEGORIES['ban-expiry'].permission).toBe('system:view-bans')
+    // #2330: the people who can make somebody ring, and the people who manage the provider.
+    expect(INCIDENT_CATEGORIES.routing.permission).toBe('shifts:manage-fallback')
+    expect(INCIDENT_CATEGORIES['provider-auth'].permission).toBe('telephony:manage-providers')
+  })
+
+  it('a provider-auth refusal an outsider can produce wakes nobody; only unforgeable evidence does (#2330)', () => {
+    const kinds = INCIDENT_CATEGORIES['provider-auth'].kinds
+    expect(kinds.signature_invalid).toBe('record')
+    expect(kinds.ip_rejected).toBe('record')
+    expect(kinds.own_account_signature_invalid).toBe('notify')
+    expect(kinds.provider_allowlist_stale).toBe('notify')
+    expect(kinds.traffic_stopped).toBe('notify')
   })
 
   it.each(Object.entries(INCIDENT_CATEGORIES))('%s accepts worker_failing as notify, and outlives an incident-checks interval', (category, policy) => {

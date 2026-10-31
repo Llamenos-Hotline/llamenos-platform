@@ -4757,7 +4757,9 @@
     "category": {
       "banExpiry": "곧 만료되는 차단",
       "erasureDeadline": "기한이 지난 삭제 요청",
+      "providerAuth": "거부되고 있는 전화 서비스 제공업체 요청",
       "providerMedia": "전화 서비스 제공업체에 남은 녹음",
+      "routing": "아무에게도 연결되지 않는 전화",
       "spam": "스팸 및 원치 않는 전화"
     },
     "closed": "종료됨",

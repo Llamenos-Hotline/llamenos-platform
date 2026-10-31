@@ -129,6 +129,21 @@ export interface TelephonyAdapter {
   validateWebhook(request: Request): Promise<boolean>
 
   /**
+   * Does this UNAUTHENTICATED webhook carry, in the field the provider itself
+   * fills in, the identifier of OUR provider account (the same account
+   * `providerAccountId` names)? Used only to CLASSIFY a refused webhook
+   * (#2330): our provider, about our account, failing the signature means the
+   * signing secret no longer matches — together with the provider IP
+   * allowlist, never alone. The identifier is public by design, so this is
+   * never authentication and never widens acceptance.
+   *
+   * Optional: an adapter whose provider puts no account identifier in its
+   * webhooks leaves it out, and its rejections can only escalate through the
+   * traffic discriminator. Must not throw on a malformed body — return false.
+   */
+  webhookNamesOwnAccount?(request: Request): Promise<boolean>
+
+  /**
    * Get call recording/audio for transcription by call SID.
    */
   getCallRecording(callSid: string): Promise<ArrayBuffer | null>

@@ -4755,7 +4755,9 @@
     "category": {
       "banExpiry": "Süresi dolmak üzere olan engellemeler",
       "erasureDeadline": "Süresi geçmiş silme talepleri",
+      "providerAuth": "Reddedilen telefon sağlayıcısı istekleri",
       "providerMedia": "Telefon sağlayıcısında kalan kayıtlar",
+      "routing": "Kimseye ulaşmayan aramalar",
       "spam": "Spam ve istenmeyen aramalar"
     },
     "closed": "Sona erdi",

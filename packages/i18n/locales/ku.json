@@ -4755,7 +4755,9 @@
     "category": {
       "banExpiry": "Qedexeyên ku nêzîkî dawiyê ne",
       "erasureDeadline": "Daxwazên jêbirinê yên derengmayî",
+      "providerAuth": "Daxwazên dabînkerê telefonê yên ku tên redkirin",
       "providerMedia": "Tomarên ku li cem dabînkerê telefonê man",
+      "routing": "Bangên ku nagihîjin kesî",
       "spam": "Spam û bangên nexwestî"
     },
     "closed": "Bi dawî bû",

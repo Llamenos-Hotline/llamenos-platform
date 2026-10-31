@@ -4757,7 +4757,9 @@
     "category": {
       "banExpiry": "Mga ban na malapit nang mag-expire",
       "erasureDeadline": "Mga lampas-taning na kahilingang magbura",
+      "providerAuth": "Mga kahilingan ng phone provider na tinatanggihan",
       "providerMedia": "Mga recording na naiwan sa phone provider",
+      "routing": "Mga tawag na walang naaabot",
       "spam": "Spam at hindi gustong tawag"
     },
     "closed": "Natapos na",

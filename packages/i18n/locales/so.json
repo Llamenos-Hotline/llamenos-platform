@@ -4755,7 +4755,9 @@
     "category": {
       "banExpiry": "Mamnuucyo dhawaan dhacaya",
       "erasureDeadline": "Codsiyo tirtirid oo dib u dhacay",
+      "providerAuth": "Codsiyada bixiyaha telefoonka ee la diidayo",
       "providerMedia": "Duubisyo ku haray bixiyaha telefoonka",
+      "routing": "Wicitaano aan cidna gaarin",
       "spam": "Spam iyo wicitaano aan la rabin"
     },
     "closed": "Dhammaaday",
