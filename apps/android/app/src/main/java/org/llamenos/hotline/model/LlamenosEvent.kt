@@ -59,4 +59,14 @@ sealed class LlamenosEvent {
 
     /** An event type this client version does not recognize. */
     data class Unknown(val type: String) : LlamenosEvent()
+
+    /**
+     * A hub incident opened, updated or closed (`KIND_HUB_INCIDENT`, 1050).
+     *
+     * A DOORBELL, never content: the wire payload is exactly `{incidentId, state}`
+     * (the relay reaches every hub member) and carries no `type` field, so it is
+     * recognised by its envelope kind. Nothing may be rendered from it — the
+     * subscriber re-reads the permission-filtered `GET /hubs/:hubId/incidents`.
+     */
+    data class HubIncidentChanged(val incidentId: String, val state: String) : LlamenosEvent()
 }

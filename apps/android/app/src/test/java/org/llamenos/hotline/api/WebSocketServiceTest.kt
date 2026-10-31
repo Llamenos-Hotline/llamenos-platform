@@ -50,8 +50,8 @@ class WebSocketServiceTest {
         return service to activity
     }
 
-    private fun eventFrame(hubId: String, payload: String = "deadbeef", epoch: Long = 1) =
-        """{"type":"event","v":1,"hubId":"$hubId","kind":1000,"payload":"$payload","epoch":$epoch,"ts":1730000000000,"sig":"ab"}"""
+    private fun eventFrame(hubId: String, payload: String = "deadbeef", epoch: Long = 1, kind: Int = 1000) =
+        """{"type":"event","v":1,"hubId":"$hubId","kind":$kind,"payload":"$payload","epoch":$epoch,"ts":1730000000000,"sig":"ab"}"""
 
     /**
      * #2117: the relay seals every frame under an epoch-scoped AAD, so the epoch
@@ -195,6 +195,40 @@ class WebSocketServiceTest {
         service.handleServerMessage("""{"type":"subscribed","hubId":"h","kinds":[1000]}""")
         service.handleServerMessage("""{"type":"pong"}""")
         assertEquals(0, activity.state("h").activeCallCount)
+    }
+
+    // ---- Hub incident doorbell (KIND_HUB_INCIDENT) ----
+
+    @Test
+    fun `incident kinds are subscribed on every member hub`() {
+        assertTrue(WebSocketService.KIND_HUB_INCIDENT in WebSocketService.RELAY_EVENT_KINDS)
+    }
+
+    /**
+     * The doorbell's payload is exactly `{incidentId, state}` — no `type` field — so it is
+     * recognised by its envelope kind. Before B-INCIDENTS-CLIENTS it was dropped as untyped.
+     */
+    @Test
+    fun `a type-less incident doorbell is delivered by kind and attributed to its hub`() = runBlocking {
+        val (service, _) = makeService("""{"incidentId":"inc-1","state":"opened"}""")
+
+        val received = async(Dispatchers.Unconfined) { service.typedEvents.first() }
+        service.handleServerMessage(eventFrame("hub-b", kind = WebSocketService.KIND_HUB_INCIDENT))
+
+        val attributed = withTimeout(2_000) { received.await() }
+        assertEquals("hub-b", attributed.hubId)
+        assertEquals(LlamenosEvent.HubIncidentChanged("inc-1", "opened"), attributed.event)
+    }
+
+    @Test
+    fun `an incident doorbell carrying anything beyond incidentId and state is dropped`() = runBlocking {
+        val (service, _) = makeService("""{"incidentId":"inc-1","state":"opened","category":"spam"}""")
+
+        val received = async(Dispatchers.Unconfined) { service.typedEvents.first() }
+        service.handleServerMessage(eventFrame("hub-a", kind = WebSocketService.KIND_HUB_INCIDENT))
+
+        assertNull(withTimeoutOrNull(200) { received.await() })
+        received.cancel()
     }
 
     // ---- Hub membership gained while connected ----

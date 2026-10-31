@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { WS_PROTOCOL_VERSION } from '@protocol/schemas/ws-messages'
+import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 
 const wipeKey = vi.fn(async () => {})
 
@@ -262,5 +263,38 @@ describe('RelayConnection remote wipe', () => {
 
     expect(wipeKey).toHaveBeenCalledTimes(1)
     expect(wipedEvents).toHaveLength(1)
+  })
+})
+
+describe('RelayConnection hub incident doorbell (KIND_HUB_INCIDENT)', () => {
+  it('delivers the type-less {incidentId, state} payload to KIND_HUB_INCIDENT subscribers', async () => {
+    const { connection, socket } = await connectAuthenticated()
+    const delivered: Array<{ kind: number; content: unknown; hubId: string }> = []
+    connection.subscribe('hub-1', [KIND_HUB_INCIDENT], (kind, content, hubId) => delivered.push({ kind, content, hubId }))
+
+    socket.receive(signedHubEvent('hub-1', KIND_HUB_INCIDENT, { incidentId: 'inc-1', state: 'opened' }))
+    await vi.waitFor(() => expect(delivered).toHaveLength(1))
+
+    expect(delivered[0]).toEqual({
+      kind: KIND_HUB_INCIDENT,
+      content: { type: 'hub:incident', incidentId: 'inc-1', state: 'opened' },
+      hubId: 'hub-1',
+    })
+    connection.close()
+  })
+
+  it('drops an incident payload carrying anything beyond {incidentId, state}', async () => {
+    const { connection, socket } = await connectAuthenticated()
+    const delivered: unknown[] = []
+    connection.subscribe('hub-1', [KIND_HUB_INCIDENT], (_kind, content) => delivered.push(content))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    socket.receive(signedHubEvent('hub-1', KIND_HUB_INCIDENT, { incidentId: 'inc-1', state: 'opened', category: 'spam' }))
+    await settle()
+
+    expect(delivered).toEqual([])
+    expect(errors).toHaveBeenCalledWith('[relay] hub incident event does not match its schema; dropped')
+    errors.mockRestore()
+    connection.close()
   })
 })

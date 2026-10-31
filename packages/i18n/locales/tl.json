@@ -4761,9 +4761,12 @@
       "spam": "Spam at hindi gustong tawag"
     },
     "closed": "Natapos na",
+    "inHub": "Sa hub na {{hub}}",
     "ongoing": "{{count}} pangyayari mula {{time}}",
     "opened": "Nangyayari ngayon",
+    "otherHub": "Sa ibang hub",
     "push": "May aktibidad sa iyong hotline na kailangang tingnan.",
-    "signalAlert": "Alerto sa hotline — {{category}}: {{state}}. Buksan ang app para sa mga detalye."
+    "signalAlert": "Alerto sa hotline — {{category}}: {{state}}. Buksan ang app para sa mga detalye.",
+    "title": "Mga aktibong insidente"
   }
 }

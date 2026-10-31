@@ -48,6 +48,7 @@ struct MainTabView: View {
     @State private var conversationsViewModel: ConversationsViewModel?
 
     var body: some View {
+        @Bindable var incidentService = appState.incidentService
         TabView(selection: $selectedTab) {
             // Dashboard
             DashboardView()
@@ -95,7 +96,14 @@ struct MainTabView: View {
         }
         .tint(.brandPrimary)
         .safeAreaInset(edge: .top, spacing: 0) {
-            RejectedWritesBanner()
+            VStack(spacing: 0) {
+                // Open incidents in any member hub — above every tab, never dismissable (rule V).
+                IncidentBanner()
+                RejectedWritesBanner()
+            }
+        }
+        .sheet(isPresented: $incidentService.isIncidentViewPresented) {
+            IncidentsView()
         }
         .accessibilityIdentifier("main-tab-view")
         .task {

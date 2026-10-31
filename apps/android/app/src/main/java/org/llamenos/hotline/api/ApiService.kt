@@ -34,6 +34,7 @@ import org.llamenos.hotline.model.RecoveryVerifyResponse
 import org.llamenos.hotline.model.VoipTokenRequest
 import org.llamenos.hotline.service.OfflineQueue
 import org.llamenos.hotline.telephony.SipConnectionParams
+import org.llamenos.protocol.HubIncidentListResponse
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -423,6 +424,14 @@ class ApiService @Inject constructor(
      * every active hub). This is the member-hub list for multi-hub routing.
      */
     suspend fun getHubs(): HubsListResponse = request("GET", "/api/hubs")
+
+    /**
+     * The open incidents in [hubId] the caller is responsible for (B-INCIDENTS). The
+     * server filters by the caller's permissions in that hub; the client renders what
+     * comes back and never decides reach itself.
+     */
+    suspend fun getOpenIncidents(hubId: String): HubIncidentListResponse =
+        request("GET", hubPath(hubId, "/api/incidents?open=true"))
 
     /**
      * The account-wide relay event keys (current and previous UTC-day epoch) from
