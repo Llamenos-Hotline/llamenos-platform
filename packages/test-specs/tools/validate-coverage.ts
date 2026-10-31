@@ -7,7 +7,9 @@
  * a corresponding implementation on the target platform(s).
  *
  * Platforms:
- *   android — Cucumber step defs (Kotlin @Given/@When/@Then), real phrase matching
+ *   android — execution funnel: tagged → selected by CucumberHiltRunner's tag expression →
+ *             shipped by copyFeatureFiles → every step bound to exactly one Kotlin step def.
+ *             Only the last stage ("executed") is scored; see classifyAndroid.
  *   desktop — playwright-bdd step definitions, real Cucumber-expression matching
  *   backend — playwright-bdd step definitions, real Cucumber-expression matching
  *   ios     — exact Swift test-method name, in a target a merge-gating CI job runs (see checkIosCoverage)
@@ -92,7 +94,7 @@
  *       or a @wip/@fixme/@skip tag has no linked issue
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
 import { join, relative, basename, dirname } from "path";
 import { fileURLToPath } from "url";
 import { CucumberExpression, ParameterTypeRegistry } from "@cucumber/cucumber-expressions";
@@ -120,12 +122,6 @@ export interface Scenario {
   isOutline: boolean;
 }
 
-interface TestMethod {
-  name: string;
-  file: string;
-  className: string;
-}
-
 // ---- CLI argument parsing ----
 
 function parsePlatformArg(): Platform[] {
@@ -134,7 +130,7 @@ function parsePlatformArg(): Platform[] {
   if (platformIdx === -1 || !args[platformIdx + 1]) {
     // Default: validate all platforms that have test directories
     const platforms: Platform[] = [];
-    if (existsSync(join(ANDROID_TEST_DIR, "e2e")) || existsSync(join(ANDROID_TEST_DIR, "steps"))) {
+    if (existsSync(join(ANDROID_TEST_DIR, "steps"))) {
       platforms.push("android");
     }
     if (existsSync(DESKTOP_STEPS_DIR)) {
@@ -245,16 +241,16 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
 /**
  * Platform tag filters, replicating the scenario selection that actually
  * runs: `playwright.config.ts` (`defineBddProject({ tags: ... })`) for
- * desktop/backend, and the `@CucumberOptions(tags = ...)` expression on
- * `CucumberHiltRunner.kt` for android. A scenario tagged e.g. `@desktop @wip`
- * never runs on desktop in CI, so counting it in the denominator would
- * measure scenarios the build never executes.
+ * desktop/backend. A scenario tagged e.g. `@desktop @wip` never runs on
+ * desktop in CI, so counting it in the denominator would measure scenarios
+ * the build never executes.
  *
  * NOTE: these must be kept in sync with those runner configs by hand — there
- * is no shared source of truth between them today.
+ * is no shared source of truth between them today. Android is deliberately
+ * absent: its selection is read from `CucumberHiltRunner.kt` itself (see
+ * classifyAndroid), so there is nothing here to drift.
  */
 const PLATFORM_EXCLUDE_TAGS: Partial<Record<Platform, string[]>> = {
-  android: ["wip"],
   desktop: ["backend", "wip", "fixme", "requires-camera", "requires-live-calls"],
   backend: ["wip", "fixme"],
 };
@@ -287,24 +283,45 @@ function scenarioToSwiftMethod(title: string): string {
 
 // ---- Platform-specific test file parsing ----
 
-function parseKotlinTestFile(path: string): TestMethod[] {
-  const content = readFileSync(path, "utf-8");
-  const methods: TestMethod[] = [];
-  const classMatch = content.match(/class\s+(\w+)/);
-  const className = classMatch?.[1] ?? basename(path, ".kt");
-
-  // Match @Test fun methods (JUnit-style)
-  const methodRegex = /@Test\s*\n\s*fun\s+(\w+)\s*\(/g;
-  let match: RegExpExecArray | null;
-  while ((match = methodRegex.exec(content)) !== null) {
-    methods.push({
-      name: match[1],
-      file: relative(ANDROID_TEST_DIR, path),
-      className,
-    });
+/**
+ * Blank out line comments and block comments (nested ones included) while leaving string
+ * literals alone. A commented-out `@Then("…")` is not a step definition: counting it let a
+ * deleted implementation keep its scenarios "bound".
+ */
+export function stripKotlinComments(src: string): string {
+  let out = "";
+  for (let i = 0; i < src.length; ) {
+    if (src.startsWith('"""', i)) {
+      const end = src.indexOf('"""', i + 3);
+      const stop = end === -1 ? src.length : end + 3;
+      out += src.slice(i, stop);
+      i = stop;
+    } else if (src[i] === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"' && src[j] !== "\n") j += src[j] === "\\" ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+    } else if (src.startsWith("//", i)) {
+      while (i < src.length && src[i] !== "\n") i++;
+    } else if (src.startsWith("/*", i)) {
+      let depth = 1;
+      i += 2;
+      while (i < src.length && depth > 0) {
+        if (src.startsWith("/*", i)) {
+          depth++;
+          i += 2;
+        } else if (src.startsWith("*/", i)) {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+    } else {
+      out += src[i++];
+    }
   }
-
-  return methods;
+  return out;
 }
 
 /**
@@ -312,7 +329,7 @@ function parseKotlinTestFile(path: string): TestMethod[] {
  * Extracts strings from @Given, @When, @Then, @And, @But annotations.
  */
 function parseCucumberStepPhrases(path: string): string[] {
-  const content = readFileSync(path, "utf-8");
+  const content = stripKotlinComments(readFileSync(path, "utf-8"));
   const phrases: string[] = [];
 
   // Match @Given("..."), @When("..."), @Then("..."), @And("..."), @But("...")
@@ -580,149 +597,306 @@ function findMatchingStepDef(
 
 // ---- Coverage checking per platform ----
 
-function checkAndroidCoverage(scenarios: Scenario[]): { covered: number; missing: number } {
-  const stepsDir = join(ANDROID_TEST_DIR, "steps");
-  const e2eDir = join(ANDROID_TEST_DIR, "e2e");
-  const useCucumber = existsSync(stepsDir) && findFiles(stepsDir, "Steps.kt").length > 0;
+// ---- Android: tagged → selected → shipped → bound ----
+//
+// An `@android` tag is a claim, not evidence. A scenario only runs on a device
+// if ALL of these hold, and each is read from the file that actually decides it
+// rather than restated here:
+//
+//   tagged   the scenario carries `@android` (feature- or scenario-level)
+//   selected the runner's `@CucumberOptions(tags = …)` expression admits it
+//            (CucumberHiltRunner.kt)
+//   shipped  its feature file is copied into the androidTest APK
+//            (`copyFeatureFiles` in apps/android/app/build.gradle.kts)
+//   bound    every step matches exactly one step definition: none missing
+//            (UndefinedStepException) and none ambiguous
+//
+// "executed" = selected ∧ shipped ∧ bound. That is the only number that says
+// anything about hardware; the old gate printed tagged∧bound and called it
+// coverage (#1212), crediting ~360 scenarios whose files never leave the repo.
 
-  if (useCucumber) {
-    return checkAndroidCucumberCoverage(scenarios);
-  }
+export interface AndroidPaths {
+  runnerKt: string;
+  buildGradle: string;
+  stepsDir: string;
+  featuresDir: string;
+  baseline: string;
+}
 
-  // Legacy: @Test method matching
-  const testDirs = [e2eDir, stepsDir];
-  const allMethods: TestMethod[] = [];
+const DEFAULT_ANDROID_PATHS: AndroidPaths = {
+  runnerKt: join(ANDROID_TEST_DIR, "CucumberHiltRunner.kt"),
+  buildGradle: join(ROOT, "apps/android/app/build.gradle.kts"),
+  stepsDir: join(ANDROID_TEST_DIR, "steps"),
+  featuresDir: FEATURES_DIR,
+  baseline: join(__dirname, "android-dead-tags.baseline.json"),
+};
 
-  for (const dir of testDirs) {
-    const files = findFiles(dir, "Test.kt").concat(findFiles(dir, "Steps.kt"));
-    for (const file of files) {
-      allMethods.push(...parseKotlinTestFile(file));
-    }
-  }
-
-  console.log(
-    `  Found ${allMethods.length} Android @Test methods across ${new Set(allMethods.map(m => m.file)).size} test files\n`
-  );
-
-  let covered = 0;
-  let missing = 0;
-  let currentFeature = "";
-
-  for (const scenario of scenarios) {
-    if (scenario.featureFile !== currentFeature) {
-      currentFeature = scenario.featureFile;
-      console.log(`  Feature: ${scenario.featureName} (${scenario.featureFile})`);
-    }
-
-    const expectedMethod = scenarioToMethodName(scenario.title);
-    const method = allMethods.find((m) => m.name === expectedMethod);
-
-    if (method) {
-      console.log(
-        `    ✓ ${scenario.title}\n      ${method.className}.${method.name}`
-      );
-      covered++;
-    } else {
-      // Fuzzy match
-      const fuzzyMatch = allMethods.find((m) =>
-        m.name.toLowerCase().includes(expectedMethod.slice(0, 20).toLowerCase())
-      );
-      if (fuzzyMatch) {
-        console.log(
-          `    ~ ${scenario.title}\n      ${fuzzyMatch.className}.${fuzzyMatch.name} (fuzzy match)`
-        );
-        covered++;
-      } else {
-        console.log(
-          `    ✗ ${scenario.title}\n      MISSING (expected: ${expectedMethod})`
-        );
-        missing++;
-      }
-    }
-  }
-
-  return { covered, missing };
+/** The runner's own tag expression, e.g. `@android and not @wip`. */
+export function readAndroidRunnerTags(runnerKt: string): string {
+  const m = readFileSync(runnerKt, "utf-8").match(/\btags\s*=\s*"([^"]+)"/);
+  if (!m) throw new Error(`no @CucumberOptions(tags = "…") found in ${runnerKt}`);
+  return m[1];
 }
 
 /**
- * Cucumber-specific coverage check for Android.
- *
- * With Cucumber, coverage is verified by checking that every Gherkin step
- * phrase in @android-tagged feature files has a matching step definition
- * in the steps/ directory. Scenarios are covered when all their steps
- * have matching definitions.
- *
- * NOTE: this uses a hand-rolled regex approximation of Cucumber Expression
- * matching (`stepMatchesCucumberPhrase`), not the real `@cucumber/
- * cucumber-expressions` engine used for desktop/backend below — Android's
- * Cucumber runtime is JVM-based (io.cucumber:cucumber-java), not
- * playwright-bdd, so the JS library's exact behavior doesn't apply here.
- * It supports {string}/{int}/{word} and \(-style escapes, which covers
- * every parameter type actually used in `apps/android/.../steps/*.kt`.
+ * Feature directories (relative to packages/test-specs/features) that
+ * `copyFeatureFiles` ships into the test APK. Anything outside them is invisible
+ * to the on-device runner no matter what it is tagged.
  */
-function checkAndroidCucumberCoverage(scenarios: Scenario[]): { covered: number; missing: number } {
-  const stepsDir = join(ANDROID_TEST_DIR, "steps");
-  const stepFiles = findFiles(stepsDir, ".kt");
+export function readAndroidShippedDirs(buildGradle: string): string[] {
+  const block = readFileSync(buildGradle, "utf-8").match(/val copyFeatureFiles\b[^{]*\{([\s\S]*?)\n\}/);
+  if (!block) throw new Error(`no copyFeatureFiles task found in ${buildGradle}`);
+  const dirs = [...block[1].matchAll(/\bfrom\("[^"]*packages\/test-specs\/features\/?([^"]*)"\)/g)].map((m) =>
+    m[1].replace(/\/+$/, "")
+  );
+  if (dirs.length === 0) throw new Error(`copyFeatureFiles in ${buildGradle} copies no packages/test-specs/features dir`);
+  return dirs;
+}
 
-  // Collect all cucumber step phrases from step definition files
-  const allPhrases: string[] = [];
-  for (const file of stepFiles) {
-    allPhrases.push(...parseCucumberStepPhrases(file));
+/** Cucumber tag expressions: `@a and (@b or not @c)`. */
+export function matchesTagExpression(expr: string, tags: string[]): boolean {
+  const tokens = expr.match(/\(|\)|[^\s()]+/g) ?? [];
+  let pos = 0;
+  const parseOr = (): boolean => {
+    let v = parseAnd();
+    while (tokens[pos] === "or") {
+      pos++;
+      v = parseAnd() || v;
+    }
+    return v;
+  };
+  const parseAnd = (): boolean => {
+    let v = parseNot();
+    while (tokens[pos] === "and") {
+      pos++;
+      v = parseNot() && v;
+    }
+    return v;
+  };
+  const parseNot = (): boolean => {
+    if (tokens[pos] === "not") {
+      pos++;
+      return !parseNot();
+    }
+    return parseAtom();
+  };
+  const parseAtom = (): boolean => {
+    const t = tokens[pos++];
+    if (t === "(") {
+      const v = parseOr();
+      if (tokens[pos++] !== ")") throw new Error(`unbalanced parentheses in tag expression "${expr}"`);
+      return v;
+    }
+    if (!t?.startsWith("@")) throw new Error(`unexpected "${t ?? "end of input"}" in tag expression "${expr}"`);
+    return tags.includes(t.slice(1));
+  };
+  const result = parseOr();
+  if (pos !== tokens.length) throw new Error(`unexpected "${tokens[pos]}" in tag expression "${expr}"`);
+  return result;
+}
+
+export interface AndroidVerdict {
+  scenario: Scenario;
+  selected: boolean;
+  shipped: boolean;
+  /** Steps no step definition matches, or a note if the scenario has no steps at all. */
+  unbound: string[];
+  /** Steps that two or more step definitions match (Cucumber throws on those). */
+  ambiguous: string[];
+  executed: boolean;
+}
+
+export interface AndroidFunnel {
+  tagged: number;
+  selected: number;
+  shipped: number;
+  bound: number;
+  executed: number;
+  runnerTags: string;
+  shippedDirs: string[];
+}
+
+export function classifyAndroid(
+  scenarios: Scenario[],
+  paths: AndroidPaths = DEFAULT_ANDROID_PATHS
+): { verdicts: AndroidVerdict[]; funnel: AndroidFunnel } {
+  const runnerTags = readAndroidRunnerTags(paths.runnerKt);
+  const shippedDirs = readAndroidShippedDirs(paths.buildGradle);
+  const phrases = findFiles(paths.stepsDir, ".kt").flatMap(parseCucumberStepPhrases);
+
+  const verdicts: AndroidVerdict[] = scenarios
+    .filter((s) => s.allTags.includes("android"))
+    .map((scenario) => {
+      const selected = matchesTagExpression(runnerTags, scenario.allTags);
+      const shipped = shippedDirs.some((d) => scenario.featureFile === d || scenario.featureFile.startsWith(`${d}/`));
+      const steps = extractScenarioSteps(join(paths.featuresDir, scenario.featureFile), scenario.title);
+      const unbound: string[] = [];
+      const ambiguous: string[] = [];
+      if (steps.length === 0) unbound.push("(scenario has no steps — it would pass having asserted nothing)");
+      for (const step of steps) {
+        const hits = phrases.filter((p) => stepMatchesCucumberPhrase(step, p)).length;
+        if (hits === 0) unbound.push(step);
+        else if (hits > 1) ambiguous.push(step);
+      }
+      const executed = selected && shipped && unbound.length === 0 && ambiguous.length === 0;
+      return { scenario, selected, shipped, unbound, ambiguous, executed };
+    });
+
+  const selected = verdicts.filter((v) => v.selected);
+  const funnel: AndroidFunnel = {
+    tagged: verdicts.length,
+    selected: selected.length,
+    shipped: selected.filter((v) => v.shipped).length,
+    bound: selected.filter((v) => v.shipped && v.unbound.length === 0 && v.ambiguous.length === 0).length,
+    executed: selected.filter((v) => v.executed).length,
+    runnerTags,
+    shippedDirs,
+  };
+  return { verdicts, funnel };
+}
+
+/**
+ * Per-feature-file count of selected scenarios that never reach the device because their
+ * file is not shipped. (A shipped scenario that cannot bind is not baselined: it is a hard
+ * failure in evaluateAndroidGate, since it would crash the whole device run.)
+ */
+export function androidDeadByFeature(verdicts: AndroidVerdict[]): Record<string, number> {
+  const dead: Record<string, number> = {};
+  for (const v of verdicts) {
+    if (v.selected && !v.shipped) dead[v.scenario.featureFile] = (dead[v.scenario.featureFile] ?? 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(dead).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+export function writeAndroidBaseline(verdicts: AndroidVerdict[], path: string): void {
+  const body = {
+    description:
+      "Ratchet for #1212: per feature file, how many @android scenarios the runner selects but that do not " +
+      "execute on a device because the file is not shipped in the test APK. validate-coverage fails when " +
+      "a file's count rises or a new file appears. Lower it by shipping and binding the scenarios or by " +
+      "correcting the tag - never by deleting a tag to make the numbers agree. Regenerate with: " +
+      "bun run test-specs:validate --platform android --write-android-baseline",
+    deadScenariosByFeature: androidDeadByFeature(verdicts),
+  };
+  writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+}
+
+export interface AndroidGateResult {
+  /** Reasons the gate fails, each naming the scenario or feature file. */
+  failures: string[];
+  /** Baseline entries that are now too high (progress not yet locked in). */
+  stale: string[];
+}
+
+/**
+ * Hard failures, independent of any percentage:
+ *  - a scenario shipped in the APK with unbound/ambiguous steps would crash the
+ *    on-device run (UndefinedStepException), so it is named;
+ *  - a feature file whose count of non-executing @android scenarios exceeds its
+ *    baseline — a new dead tag is named rather than averaged into a percentage.
+ */
+export function evaluateAndroidGate(verdicts: AndroidVerdict[], baselinePath: string): AndroidGateResult {
+  const failures: string[] = [];
+  for (const v of verdicts) {
+    if (!v.selected || !v.shipped) continue;
+    const label = `${v.scenario.featureFile}: ${v.scenario.title}`;
+    for (const s of v.unbound) failures.push(`${label}\n        shipped to the device but no step definition for: ${s}`);
+    for (const s of v.ambiguous) failures.push(`${label}\n        shipped to the device but the step matches more than one definition: ${s}`);
   }
 
-  console.log(
-    `  Cucumber mode: Found ${allPhrases.length} step definitions across ${stepFiles.length} step files\n`
-  );
-
-  let covered = 0;
-  let missing = 0;
-  let currentFeature = "";
-
-  for (const scenario of scenarios) {
-    if (scenario.featureFile !== currentFeature) {
-      currentFeature = scenario.featureFile;
-      console.log(`  Feature: ${scenario.featureName} (${scenario.featureFile})`);
+  const baseline: Record<string, number> = existsSync(baselinePath)
+    ? (JSON.parse(readFileSync(baselinePath, "utf-8")).deadScenariosByFeature ?? {})
+    : {};
+  const dead = androidDeadByFeature(verdicts);
+  const stale: string[] = [];
+  for (const [file, count] of Object.entries(dead)) {
+    const allowed = baseline[file] ?? 0;
+    if (count > allowed) {
+      const titles = verdicts
+        .filter((v) => v.selected && !v.shipped && v.scenario.featureFile === file)
+        .map((v) => `          - ${v.scenario.title}`)
+        .join("\n");
+      failures.push(
+        `${file}: ${count} @android scenario(s) selected by the runner but not shipped in the test APK (baseline ${allowed}).\n` +
+          `        Ship the file and bind its steps, or correct the tag - do not just delete it.\n${titles}`
+      );
     }
+  }
+  for (const [file, allowed] of Object.entries(baseline)) {
+    const count = dead[file] ?? 0;
+    if (count < allowed) stale.push(`${file}: ${allowed} → ${count}`);
+  }
+  return { failures, stale };
+}
 
-    // Extract all Gherkin steps for this scenario from the feature file
-    const featurePath = join(FEATURES_DIR, scenario.featureFile);
-    const gherkinSteps = extractScenarioSteps(featurePath, scenario.title);
+function androidReason(v: AndroidVerdict): string {
+  const reasons: string[] = [];
+  if (!v.shipped) reasons.push("file not shipped in the test APK");
+  if (v.unbound.length > 0) reasons.push(`${v.unbound.length} step(s) unbound`);
+  if (v.ambiguous.length > 0) reasons.push(`${v.ambiguous.length} step(s) ambiguous`);
+  return reasons.join(" + ");
+}
 
-    if (gherkinSteps.length === 0) {
-      // No steps extracted — could be an outline with examples or empty scenario
-      console.log(`    ✓ ${scenario.title} (no steps to validate)`);
-      covered++;
+function checkAndroidCoverage(
+  scenarios: Scenario[],
+  paths: AndroidPaths = DEFAULT_ANDROID_PATHS
+): { covered: number; missing: number; total: number; failures: string[] } {
+  const { verdicts, funnel } = classifyAndroid(scenarios, paths);
+
+  console.log(`  Execution funnel - each stage keeps only what survives the one before:`);
+  console.log(`    tagged @android ............. ${funnel.tagged}`);
+  console.log(`    selected by the runner ...... ${funnel.selected}   (tags = "${funnel.runnerTags}")`);
+  console.log(`    shipped in the test APK ..... ${funnel.shipped}   (copyFeatureFiles: ${funnel.shippedDirs.join(", ")})`);
+  console.log(`    steps bound ................. ${funnel.bound}`);
+  console.log(`    EXECUTED on a device ........ ${funnel.executed}`);
+  console.log(`  "Executed" means selected, shipped and fully bound - not that its Then-steps can fail;`);
+  console.log(`  that is audit-silent-steps.ts's job.\n`);
+
+  // Say WHY the rest do not run: a wrong tag/shipping gap and a missing implementation
+  // need different fixes, and averaging them together hides which one you have.
+  const dead = verdicts.filter((v) => v.selected && !v.executed);
+  const notShipped = dead.filter((v) => !v.shipped);
+  const implemented = notShipped.filter((v) => v.unbound.length === 0 && v.ambiguous.length === 0).length;
+  console.log(`  Of the ${dead.length} selected scenario(s) that do not execute:`);
+  console.log(`    ${notShipped.length} are in feature files the test APK does not contain`);
+  console.log(`      ${implemented} of those have every step bound already (ship the file, or retag it if it is not an Android flow)`);
+  console.log(`      ${notShipped.length - implemented} also have unbound steps (implementation missing)`);
+  console.log(`    ${dead.length - notShipped.length} are shipped but have unbound/ambiguous steps (would crash the device run)\n`);
+
+  let currentFeature = "";
+  for (const v of verdicts.filter((x) => x.selected)) {
+    if (v.scenario.featureFile !== currentFeature) {
+      currentFeature = v.scenario.featureFile;
+      console.log(`  Feature: ${v.scenario.featureName} (${v.scenario.featureFile})`);
+    }
+    if (v.executed) {
+      console.log(`    ✓ ${v.scenario.title}`);
       continue;
     }
-
-    // Check each step has a matching definition
-    const unmatchedSteps: string[] = [];
-    for (const step of gherkinSteps) {
-      const hasMatch = allPhrases.some((phrase) =>
-        stepMatchesCucumberPhrase(step, phrase)
-      );
-      if (!hasMatch) {
-        unmatchedSteps.push(step);
-      }
-    }
-
-    if (unmatchedSteps.length === 0) {
-      console.log(
-        `    ✓ ${scenario.title} (${gherkinSteps.length} steps matched)`
-      );
-      covered++;
-    } else {
-      console.log(
-        `    ✗ ${scenario.title}\n      Missing step defs for:`
-      );
-      for (const step of unmatchedSteps) {
-        console.log(`        - ${step}`);
-      }
-      missing++;
-    }
+    console.log(`    ✗ ${v.scenario.title}\n      NOT EXECUTED - ${androidReason(v)}`);
+    for (const s of v.unbound) console.log(`        - unbound: ${s}`);
+    for (const s of v.ambiguous) console.log(`        - ambiguous: ${s}`);
   }
 
-  return { covered, missing };
+  const deselected = verdicts.filter((v) => !v.selected);
+  if (deselected.length > 0) {
+    console.log(`\n  ${deselected.length} @android scenario(s) deselected by the runner's tag expression (not in the total):`);
+    for (const v of deselected) console.log(`    - ${v.scenario.featureFile}: ${v.scenario.title}`);
+  }
+  console.log();
+
+  const gate = evaluateAndroidGate(verdicts, paths.baseline);
+  if (gate.stale.length > 0) {
+    console.log(`  Dead-tag baseline can be lowered (progress not locked in) - rerun with --write-android-baseline:`);
+    for (const s of gate.stale) console.log(`    ${s}`);
+    console.log();
+  }
+  return {
+    covered: funnel.executed,
+    missing: funnel.selected - funnel.executed,
+    total: funnel.selected,
+    failures: gate.failures,
+  };
 }
 
 /**
@@ -1342,6 +1516,14 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
  * removes them from the denominator here exactly as it does in the runner.
  * Anything below 100 means this tool and the runner disagree.
  *
+ * Android is 9 — 48/530 (9.06%), measured 2026-10-30 (#1212). The figure is the
+ * EXECUTED funnel (selected by the runner, shipped in the test APK, every step
+ * bound — see classifyAndroid), not the 76-78% the gate printed before, which
+ * credited every tagged scenario with a step binding whether or not its feature
+ * file ever left the repo. 482 scenarios sit in files `copyFeatureFiles` does not
+ * ship. Their per-file counts are pinned in android-dead-tags.baseline.json so a
+ * NEW dead tag fails and names itself instead of nudging a percentage.
+ *
  * iOS is 3.3 — exactly 19/569 (3.34%), measured 2026-09-27 (#1221), so losing
  * a single credited test fails the gate. The previous value, 5, only passed
  * because the matcher was wrong: its 20-character fuzzy fallback added 10
@@ -1362,7 +1544,7 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
 const COVERAGE_THRESHOLDS: Record<Platform, number> = {
   desktop: 100,
   backend: 100,
-  android: 76,
+  android: 9,
   ios: 3.3,
 };
 
@@ -1396,21 +1578,32 @@ function main() {
   // Every deliberate exclusion must name its issue
   const untrackedSkipCount = reportUntrackedSkipTags(featureFiles);
 
-  const results: { platform: string; total: number; covered: number; missing: number }[] = [];
+  const results: { platform: string; total: number; covered: number; missing: number; failures: string[] }[] = [];
+
+  if (process.argv.includes("--write-android-baseline")) {
+    writeAndroidBaseline(classifyAndroid(allScenarios).verdicts, DEFAULT_ANDROID_PATHS.baseline);
+    console.log(`Wrote ${relative(ROOT, DEFAULT_ANDROID_PATHS.baseline)}`);
+    return;
+  }
 
   for (const platform of platforms) {
-    const platformScenarios = scenariosForPlatform(allScenarios, platform);
+    // Android reads its own selection from the runner; the others use PLATFORM_EXCLUDE_TAGS.
+    const platformScenarios = platform === "android" ? allScenarios : scenariosForPlatform(allScenarios, platform);
+    const headline =
+      platform === "android"
+        ? `${platformScenarios.filter((s) => s.allTags.includes("android")).length} scenarios tagged @android`
+        : `${platformScenarios.length} scenarios tagged @${platform}`;
     console.log(`\n${"=".repeat(60)}`);
-    console.log(`Platform: ${platform.toUpperCase()} (${platformScenarios.length} scenarios tagged @${platform})`);
+    console.log(`Platform: ${platform.toUpperCase()} (${headline})`);
     console.log(`${"=".repeat(60)}\n`);
 
     if (platformScenarios.length === 0) {
       console.log(`  No scenarios tagged @${platform}\n`);
-      results.push({ platform, total: 0, covered: 0, missing: 0 });
+      results.push({ platform, total: 0, covered: 0, missing: 0, failures: [] });
       continue;
     }
 
-    let result: { covered: number; missing: number };
+    let result: { covered: number; missing: number; total?: number; failures?: string[] };
 
     switch (platform) {
       case "android":
@@ -1429,9 +1622,10 @@ function main() {
 
     results.push({
       platform,
-      total: platformScenarios.length,
+      total: result.total ?? platformScenarios.length,
       covered: result.covered,
       missing: result.missing,
+      failures: result.failures ?? [],
     });
   }
 
@@ -1451,11 +1645,15 @@ function main() {
     const pctStr = r.total > 0 ? pct.toFixed(1) : "N/A";
     const threshold = COVERAGE_THRESHOLDS[r.platform as Platform] ?? 100;
     const belowThreshold = r.total > 0 && pct < threshold;
-    const status = belowThreshold ? "✗" : "✓";
+    const status = belowThreshold || r.failures.length > 0 ? "✗" : "✓";
     const thresholdNote = threshold < 100 ? ` (threshold: ${threshold}%)` : "";
     console.log(`  ${status} ${r.platform}: ${r.covered}/${r.total} (${pctStr}%)${thresholdNote}`);
     if (belowThreshold) {
       console.log(`      Required: ${threshold}%, Actual: ${pctStr}%`);
+      failed = true;
+    }
+    for (const f of r.failures) {
+      console.log(`      ✗ ${f}`);
       failed = true;
     }
   }

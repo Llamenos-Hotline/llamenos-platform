@@ -1,0 +1,28 @@
+{
+  "description": "Ratchet for #1212: per feature file, how many @android scenarios the runner selects but that do not execute on a device because the file is not shipped in the test APK. validate-coverage fails when a file's count rises or a new file appears. Lower it by shipping and binding the scenarios or by correcting the tag - never by deleting a tag to make the numbers agree. Regenerate with: bun run test-specs:validate --platform android --write-android-baseline",
+  "deadScenariosByFeature": {
+    "admin/audit-log.feature": 17,
+    "admin/ban-management.feature": 15,
+    "admin/blast-campaign.feature": 4,
+    "admin/custom-fields.feature": 4,
+    "admin/settings.feature": 58,
+    "admin/shift-management.feature": 20,
+    "core/auth-login.feature": 56,
+    "core/call-actions.feature": 3,
+    "core/call-routing.feature": 48,
+    "core/contacts.feature": 12,
+    "core/dashboard.feature": 26,
+    "core/hub-context.feature": 2,
+    "core/hub-management.feature": 4,
+    "core/messaging-flow.feature": 35,
+    "core/note-encryption.feature": 34,
+    "core/reports.feature": 35,
+    "core/schema-browser.feature": 4,
+    "core/volunteer-lifecycle.feature": 42,
+    "platform/desktop/cases/cms-case-management.feature": 4,
+    "security/crypto-interop.feature": 15,
+    "security/e2ee-roundtrip.feature": 6,
+    "security/network-security.feature": 27,
+    "security/session-management.feature": 11
+  }
+}

@@ -365,3 +365,236 @@ Feature: Demo
     ).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Android: tagged → selected → shipped → bound (#1212)
+//
+// The previous gate credited a scenario for being @android-tagged and having a
+// step binding, so 362 scenarios in files `copyFeatureFiles` never ships counted
+// as covered. These tests build a miniature repo layout and assert the gate can
+// FAIL in each direction, naming the scenario or file responsible.
+// ---------------------------------------------------------------------------
+import { mkdirSync } from "fs";
+import {
+  classifyAndroid,
+  evaluateAndroidGate,
+  matchesTagExpression,
+  readAndroidRunnerTags,
+  readAndroidShippedDirs,
+  stripKotlinComments,
+  writeAndroidBaseline,
+  type AndroidPaths,
+  type Scenario,
+} from "./validate-coverage";
+
+const RUNNER = `@CucumberOptions(features = ["features"], glue = ["x"], tags = "@android and not @wip")\nclass R`;
+const GRADLE = (from: string) => `
+val copyFeatureFiles by tasks.registering(Copy::class) {
+    from("\${rootProject.projectDir}/../../packages/test-specs/features/${from}")
+    into("src/androidTest/assets/features/${from}")
+}
+
+tasks.named("preBuild") { dependsOn(copyFeatureFiles) }
+`;
+const STEPS = `
+class S {
+    @Given("the app is open") fun open() {}
+    @Then("the home screen shows") fun home() {}
+    @Then("the home screen is shown") fun home2() {}
+}
+`;
+
+function feature(tags: string, scenarios: Record<string, string[]>): string {
+  const body = Object.entries(scenarios)
+    .map(([title, steps]) => `  Scenario: ${title}\n${steps.map((s) => `    ${s}`).join("\n")}`)
+    .join("\n\n");
+  return `${tags}\nFeature: F\n\n${body}\n`;
+}
+
+function withAndroidRepo(
+  files: { shipped?: Record<string, string>; unshipped?: Record<string, string>; steps?: string; shippedDir?: string },
+  fn: (paths: AndroidPaths, scenarios: Scenario[]) => void
+) {
+  const root = mkdtempSync(join(tmpdir(), "android-funnel-"));
+  try {
+    const shippedDir = files.shippedDir ?? "platform/mobile";
+    const featuresDir = join(root, "features");
+    const stepsDir = join(root, "steps");
+    mkdirSync(stepsDir, { recursive: true });
+    writeFileSync(join(stepsDir, "S.kt"), files.steps ?? STEPS);
+    writeFileSync(join(root, "Runner.kt"), RUNNER);
+    writeFileSync(join(root, "build.gradle.kts"), GRADLE(shippedDir));
+    const scenarios: Scenario[] = [];
+    for (const [dir, group] of [[shippedDir, files.shipped], ["core", files.unshipped]] as const) {
+      for (const [name, content] of Object.entries(group ?? {})) {
+        const path = join(featuresDir, dir, name);
+        mkdirSync(join(featuresDir, dir), { recursive: true });
+        writeFileSync(path, content);
+        scenarios.push(...parseFeatureFile(path, featuresDir));
+      }
+    }
+    fn(
+      {
+        runnerKt: join(root, "Runner.kt"),
+        buildGradle: join(root, "build.gradle.kts"),
+        stepsDir,
+        featuresDir,
+        baseline: join(root, "baseline.json"),
+      },
+      scenarios
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("Android execution funnel", () => {
+  test("reads the runner's tag expression and the shipped dirs from the real files, not constants", () => {
+    withAndroidRepo({}, (paths) => {
+      expect(readAndroidRunnerTags(paths.runnerKt)).toBe("@android and not @wip");
+      expect(readAndroidShippedDirs(paths.buildGradle)).toEqual(["platform/mobile"]);
+    });
+    withAndroidRepo({ shippedDir: "platform/mobile/hubs" }, (paths) => {
+      expect(readAndroidShippedDirs(paths.buildGradle)).toEqual(["platform/mobile/hubs"]);
+    });
+  });
+
+  test("tag expressions: and / or / not / parentheses", () => {
+    expect(matchesTagExpression("@android and not @wip", ["android"])).toBe(true);
+    expect(matchesTagExpression("@android and not @wip", ["android", "wip"])).toBe(false);
+    expect(matchesTagExpression("@a and (@b or @c)", ["a", "c"])).toBe(true);
+    expect(matchesTagExpression("@a and (@b or @c)", ["a"])).toBe(false);
+    expect(matchesTagExpression("not @a or @b", ["b"])).toBe(true);
+    expect(() => matchesTagExpression("@a and", ["a"])).toThrow();
+  });
+
+  test("a bound scenario in a shipped file executes", () => {
+    withAndroidRepo(
+      { shipped: { "ok.feature": feature("@android", { Opens: ["Given the app is open", "Then the home screen shows"] }) } },
+      (paths, scenarios) => {
+        const { funnel } = classifyAndroid(scenarios, paths);
+        expect(funnel).toMatchObject({ tagged: 1, selected: 1, shipped: 1, bound: 1, executed: 1 });
+      }
+    );
+  });
+
+  test("a bound scenario in a file the APK does not contain is tagged but NOT executed", () => {
+    withAndroidRepo(
+      { unshipped: { "dead.feature": feature("@android", { Dead: ["Given the app is open"] }) } },
+      (paths, scenarios) => {
+        const { funnel, verdicts } = classifyAndroid(scenarios, paths);
+        expect(funnel).toMatchObject({ tagged: 1, selected: 1, shipped: 0, executed: 0 });
+        expect(verdicts[0].unbound).toEqual([]); // implementation exists; the file just never ships
+      }
+    );
+  });
+
+  test("@wip is deselected by the runner expression and stays out of the total", () => {
+    withAndroidRepo(
+      { shipped: { "w.feature": feature("@android @wip", { Parked: ["Given a step nobody wrote"] }) } },
+      (paths, scenarios) => {
+        const { funnel } = classifyAndroid(scenarios, paths);
+        expect(funnel).toMatchObject({ tagged: 1, selected: 0, executed: 0 });
+        expect(evaluateAndroidGate(classifyAndroid(scenarios, paths).verdicts, paths.baseline).failures).toEqual([]);
+      }
+    );
+  });
+
+  test("BREAK: a shipped @android scenario with no step binding fails the gate and names the scenario and step", () => {
+    withAndroidRepo(
+      {
+        shipped: {
+          "ok.feature": feature("@android", { Opens: ["Given the app is open"] }),
+          "bad.feature": feature("@android", { "Unbound flow": ["Given the app is open", "Then a step nobody implemented"] }),
+        },
+      },
+      (paths, scenarios) => {
+        const { verdicts, funnel } = classifyAndroid(scenarios, paths);
+        expect(funnel).toMatchObject({ selected: 2, shipped: 2, executed: 1 });
+        const { failures } = evaluateAndroidGate(verdicts, paths.baseline);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toContain("platform/mobile/bad.feature: Unbound flow");
+        expect(failures[0]).toContain("a step nobody implemented");
+      }
+    );
+  });
+
+  test("BREAK: a NEW dead @android tag in an unshipped file fails against the baseline and names the file", () => {
+    withAndroidRepo(
+      { unshipped: { "old.feature": feature("@android", { Old: ["Given the app is open"] }) } },
+      (paths, scenarios) => {
+        writeAndroidBaseline(classifyAndroid(scenarios, paths).verdicts, paths.baseline);
+        expect(evaluateAndroidGate(classifyAndroid(scenarios, paths).verdicts, paths.baseline).failures).toEqual([]);
+      }
+    );
+    withAndroidRepo(
+      {
+        unshipped: {
+          "old.feature": feature("@android", { Old: ["Given the app is open"] }),
+          "new.feature": feature("@android", { "Brand new dead tag": ["Given the app is open"] }),
+        },
+      },
+      (paths, scenarios) => {
+        // baseline only knows old.feature
+        const only = scenarios.filter((s) => s.featureFile.endsWith("old.feature"));
+        writeAndroidBaseline(classifyAndroid(only, paths).verdicts, paths.baseline);
+        const { failures } = evaluateAndroidGate(classifyAndroid(scenarios, paths).verdicts, paths.baseline);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toContain("core/new.feature");
+        expect(failures[0]).toContain("Brand new dead tag");
+      }
+    );
+  });
+
+  test("BREAK: removing a real step definition drops the executed count", () => {
+    const f = { shipped: { "ok.feature": feature("@android", { Opens: ["Given the app is open", "Then the home screen shows"] }) } };
+    let before = 0;
+    withAndroidRepo(f, (paths, scenarios) => {
+      before = classifyAndroid(scenarios, paths).funnel.executed;
+    });
+    withAndroidRepo({ ...f, steps: `class S { @Given("the app is open") fun open() {} }` }, (paths, scenarios) => {
+      expect(classifyAndroid(scenarios, paths).funnel.executed).toBe(before - 1);
+    });
+  });
+
+  test("a step matched by two definitions is ambiguous and does not execute", () => {
+    withAndroidRepo(
+      { shipped: { "amb.feature": feature("@android", { Ambiguous: ["Given the app is open"] }) },
+        steps: `class S { @Given("the app is open") fun a() {}\n @When("the app is open") fun b() {} }` },
+      (paths, scenarios) => {
+        const { verdicts } = classifyAndroid(scenarios, paths);
+        expect(verdicts[0].ambiguous).toEqual(["the app is open"]);
+        expect(verdicts[0].executed).toBe(false);
+      }
+    );
+  });
+
+  test("a scenario with no steps is not credited", () => {
+    withAndroidRepo({ shipped: { "empty.feature": feature("@android", { Hollow: [] }) } }, (paths, scenarios) => {
+      expect(classifyAndroid(scenarios, paths).funnel.executed).toBe(0);
+    });
+  });
+});
+
+describe("stripKotlinComments", () => {
+  test("a commented-out step definition is not a step definition", () => {
+    const src = `class S {\n  // @Given("line comment")\n  /* @When("block") /* nested */ still comment */\n  @Then("real") fun r() {}\n  val u = "http://not-a-comment"\n}`;
+    const out = stripKotlinComments(src);
+    expect(out).toContain('@Then("real")');
+    expect(out).toContain('"http://not-a-comment"');
+    expect(out).not.toContain("line comment");
+    expect(out).not.toContain("block");
+  });
+
+  test("BREAK: commenting out a real step definition unbinds its scenario", () => {
+    withAndroidRepo(
+      {
+        shipped: { "ok.feature": feature("@android", { Opens: ["Given the app is open"] }) },
+        steps: `class S {\n // @Given("the app is open")\n fun open() {}\n}`,
+      },
+      (paths, scenarios) => {
+        expect(classifyAndroid(scenarios, paths).funnel.executed).toBe(0);
+      }
+    );
+  });
+});
