@@ -17,7 +17,8 @@
  *    incidents route; a member of the same hub without it sees nothing;
  *  - a hub that never recorded switches is unrestricted (the deployment-wide
  *    answer stands), and a recorded set is the whole truth for the hub;
- *  - voice off → the hub resolves no ring target, however well it is rostered.
+ *  - voice off → the hub resolves no ring target, however well it is rostered,
+ *    and no registered incident check reads the switch as an outage.
  *
  * Requires postgres at DATABASE_URL; creates and drops its own database.
  */
@@ -253,5 +254,33 @@ describe('a hub that has switched voice off is not a ring target', () => {
     // The fallback group names a pubkey that is no user, so nobody is available
     // — but the resolver now reaches the roster instead of returning null.
     expect(await resolveRingableVolunteers(services, hubId)).toEqual({ available: [], usedFallback: true })
+  })
+
+  it('raises no incident from any registered check: the switch doing what it was set to do is not an outage', async () => {
+    // An active hub WITH a number and nobody rostered — every coverage check's
+    // worst case — but voice is off, so it takes no calls and expects no
+    // coverage. Asked of every registered L1 check, not of one category, so a
+    // coverage check added later that forgets the voice switch fails here.
+    const id = `hub-cd-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
+    await services.settings.createHub({
+      id,
+      name: `Hub ${id}`,
+      slug: id,
+      status: 'active',
+      phoneNumber: `+1555${String(Date.now()).slice(-7)}`,
+      createdBy: 'integration-test',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as never, await insertHubFounder(fresh.db))
+    await services.settings.updateHubSettings(id, { channels: { voice: false, signal: true } })
+    expect(services.incidents.getChecks().length).toBeGreaterThan(0)
+
+    await services.incidents.runChecks()
+
+    const open = await fresh.db
+      .select({ category: schema.hubIncidents.category, counts: schema.hubIncidents.counts })
+      .from(schema.hubIncidents)
+      .where(and(eq(schema.hubIncidents.hubId, id), isNull(schema.hubIncidents.closedAt)))
+    expect(open).toEqual([])
   })
 })
