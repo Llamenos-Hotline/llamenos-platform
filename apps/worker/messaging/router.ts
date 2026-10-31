@@ -173,7 +173,18 @@ messaging.post('/:channel/webhook',
   // turned the channel off must not process any of it. Delivery receipts for
   // messages we already sent were reconciled above and are not contact. The
   // refusal is signalled to the hub (record-severity incident), never silent.
+  //
+  // One exception: a STOP is still recorded as an opt-out. STOP is always
+  // honoured (TCPA compliance), and outbound blasts do not consult the switch,
+  // so a STOP dropped while the channel is paused would let the hub message
+  // somebody who asked it to stop. Nothing else about the message is kept.
   if (await refuseIfChannelDisabled(services, hubId, channel)) {
+    try {
+      const refused = await adapter.parseIncomingMessage(c.req.raw)
+      if (isOptOut(refused.body)) await recordOptOut(services, refused, hubId, c.env.MESSAGING_HASH_KEY)
+    } catch (err) {
+      logger.error(`Could not check a refused ${channel} message for an opt-out`, err)
+    }
     return c.json({ error: `${channel} is not enabled for this hub` }, 403)
   }
 
@@ -282,15 +293,9 @@ messaging.post('/:channel/webhook',
   if (incoming.body) {
     const normalizedBody = incoming.body.trim().toUpperCase()
     const effectiveHubId = hubId ?? ''
-    // STOP is always recognized (TCPA compliance)
-    if (normalizedBody === 'STOP') {
-      await services.blasts.handleSubscriberKeyword(effectiveHubId, {
-        identifier: incoming.senderIdentifier,
-        ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: true }),
-        externalId: incoming.externalId,
-        keyword: 'STOP',
-        channel: incoming.channelType,
-      })
+    // STOP is always recognized (TCPA compliance) — on a switched-off channel too, above
+    if (isOptOut(incoming.body)) {
+      await recordOptOut(services, incoming, hubId, c.env.MESSAGING_HASH_KEY)
       // Still forward to conversation for logging
     } else {
       // START / UNSTOP: the one message that lifts an opt-out, for exactly the
@@ -384,6 +389,27 @@ messaging.post('/:channel/webhook',
 })
 
 /** Every identifier this message itself carries for its sender. */
+/** Is this message an opt-out (STOP)? */
+function isOptOut(body: string | undefined): boolean {
+  return body?.trim().toUpperCase() === 'STOP'
+}
+
+/** File the sender's STOP: unsubscribe them from blasts and suppress every identifier recorded for them. */
+async function recordOptOut(
+  services: Services,
+  incoming: IncomingMessage,
+  hubId: string | undefined,
+  messagingHashKey: string,
+): Promise<void> {
+  await services.blasts.handleSubscriberKeyword(hubId ?? '', {
+    identifier: incoming.senderIdentifier,
+    ...await subscriberHashesFor(services, incoming, hubId, messagingHashKey, { includeRecorded: true }),
+    externalId: incoming.externalId,
+    keyword: 'STOP',
+    channel: incoming.channelType,
+  })
+}
+
 function carriedIdentifiers(incoming: IncomingMessage): string[] {
   return [incoming.senderIdentifier, ...(incoming.aliases ?? [])]
 }

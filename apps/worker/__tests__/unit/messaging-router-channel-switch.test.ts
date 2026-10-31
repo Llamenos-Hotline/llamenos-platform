@@ -33,10 +33,10 @@ const incoming: IncomingMessage = {
   timestamp: '2026-10-30T00:00:00.000Z',
 }
 
-function makeAdapter(): MessagingAdapter {
+function makeAdapter(message: IncomingMessage = incoming): MessagingAdapter {
   return {
     validateWebhook: vi.fn().mockResolvedValue(true),
-    parseIncomingMessage: vi.fn().mockResolvedValue(incoming),
+    parseIncomingMessage: vi.fn().mockResolvedValue(message),
   } as unknown as MessagingAdapter
 }
 
@@ -112,6 +112,44 @@ describe('inbound messaging webhook honours the hub channel switch — #2384', (
     expect(services.incidents.signal).toHaveBeenCalledWith(HUB, 'channel-disabled', 'sms')
     expect(JSON.stringify(vi.mocked(services.incidents.signal).mock.calls)).not.toContain('5551110000')
     expect(JSON.stringify(vi.mocked(services.incidents.signal).mock.calls)).not.toContain('SM-2384')
+    expect(services.blasts.handleSubscriberKeyword).not.toHaveBeenCalled()
+  })
+
+  it('a STOP on a switched-off channel is still recorded as an opt-out, and nothing else about it is kept', async () => {
+    // Outbound blasts do not consult the switch: a STOP dropped while SMS is
+    // paused would let the hub message this person again once it is back on.
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(makeAdapter({ ...incoming, body: ' stop ' }))
+    const services = makeServices(false)
+    const app = await createApp(services)
+
+    const res = await post(app)
+
+    expect(res.status).toBe(403)
+    expect(services.blasts.handleSubscriberKeyword).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(services.blasts.handleSubscriberKeyword).mock.calls[0][0]).toBe(HUB)
+    expect(vi.mocked(services.blasts.handleSubscriberKeyword).mock.calls[0][1]).toMatchObject({
+      identifier: SENDER,
+      keyword: 'STOP',
+      channel: 'sms',
+    })
+    expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
+    expect(publishEvent).not.toHaveBeenCalled()
+    expect(services.incidents.signal).toHaveBeenCalledWith(HUB, 'channel-disabled', 'sms')
+  })
+
+  it('an opt-IN on a switched-off channel is refused like any other contact: the opt-out stands', async () => {
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(makeAdapter({ ...incoming, body: 'START' }))
+    const services = makeServices(false)
+    const clear = vi.fn().mockResolvedValue(undefined)
+    ;(services as unknown as { messagingSuppression: { clear: typeof clear } }).messagingSuppression = { clear }
+    const app = await createApp(services)
+
+    const res = await post(app)
+
+    expect(res.status).toBe(403)
+    expect(clear).not.toHaveBeenCalled()
+    expect(services.blasts.handleSubscriberKeyword).not.toHaveBeenCalled()
+    expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
   })
 
   it('the same hub with SMS on processes the message and raises nothing', async () => {
