@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
 import { fakeSpeech, spoken } from '../helpers/fake-speech'
+import { getPrompt } from '@shared/voice-prompts'
 
 /** What each <playback> in a document speaks, in order (uploads are null) */
 const playbacks = (xml: string) =>
@@ -123,36 +124,33 @@ describe('FreeSwitchAdapter', () => {
       expect(response.contentType).toBe('text/xml')
       expect(response.body).toContain('<bind')
       // One clip per digit (ten clips a language, not one per call), each hiding its digit.
-      expect(playbacks(response.body).slice(-4)).toEqual(['5', '6', '7', '8'].map((digit) => ({ locale: 'en', digit })))
+      expect(playbacks(response.body).slice(-5, -1)).toEqual(['5', '6', '7', '8'].map((digit) => ({ locale: 'en', digit })))
+      expect(playbacks(response.body).at(-1)).toEqual({ locale: 'en', text: getPrompt('captchaRepeatHint', 'en') })
+      // #2179: the callback carries the call and its language, as the route reads them from the query.
+      expect(response.body).toContain('http://callback.local/api/telephony/captcha?callSid=call-1&amp;lang=en&amp;round=0')
     })
   })
 
   describe('handleCaptchaResponse', () => {
-    it('continues call flow on correct digits', async () => {
+    it('continues call flow on pass', async () => {
       const response = await adapter.handleCaptchaResponse({
-        digits: '5678',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-        callSid: 'call-1',
-        speechUrl: fakeSpeech,
+        outcome: 'pass', callerLanguage: 'en', callSid: 'call-1', speechUrl: fakeSpeech,
       })
 
       expect(response.contentType).toBe('text/xml')
-      // Should not contain hangup
-      expect(response.body).not.toContain('"hangup"')
+      expect(response.body).not.toContain('hangup')
+      expect(response.body).toContain('application="park"')
     })
 
-    it('hangs up on incorrect digits', async () => {
+    it('on retry binds four digits or a lone star, and calls back on timeout instead of ending', async () => {
       const response = await adapter.handleCaptchaResponse({
-        digits: '0000',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-        callSid: 'call-1',
-        speechUrl: fakeSpeech,
+        outcome: 'retry', digitsToSpeak: '5678', round: 1, callerLanguage: 'en', callSid: 'call-1', speechUrl: fakeSpeech,
       })
 
-      expect(response.contentType).toBe('text/xml')
-      expect(response.body).toContain('hangup')
+      const callback = 'http://callback.local/api/telephony/captcha?callSid=call-1&amp;lang=en&amp;round=1'
+      expect(response.body).toContain(`<bind strip="#">~^(\\*|\\d{4})$ ${callback}</bind>`)
+      expect(response.body).toContain(`<execute application="set" data="httapi_url=${callback}"/>`)
+      expect(response.body).not.toContain('hangup')
     })
   })
 

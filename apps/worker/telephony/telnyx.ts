@@ -323,9 +323,8 @@ export class TelnyxAdapter implements TelephonyAdapter {
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
       const captchaText = getPrompt('captchaPrompt', lang)
-      const digitsSpoken = digits.split('').join(', ')
+      const digitsSpoken = params.captchaDigits.split('').join(', ')
       const captchaState = encodeClientState({
         hubId: params.hubId,
         lang,
@@ -340,7 +339,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
       })
 
       await this.client.command(params.callSid, 'gather_using_speak', {
-        payload: `${captchaText} ${digitsSpoken}.`,
+        payload: `${captchaText} ${digitsSpoken}. ${getPrompt('captchaRepeatHint', lang)}`,
         voice,
         language,
         minimum_digits: 1,
@@ -380,7 +379,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
     const lang = params.callerLanguage
     const { voice, language } = getTelnyxVoice(lang)
 
-    if (params.digits === params.expectedDigits) {
+    // Telnyx posts every Call Control event to /incoming and never reaches
+    // /captcha (#2305, fixed by the TeXML move): this is the contract only.
+    if (params.outcome === 'pass') {
       const successText = getPrompt('captchaSuccess', lang)
       const queueState = encodeClientState({
         hubId: params.hubId,
@@ -405,13 +406,16 @@ export class TelnyxAdapter implements TelephonyAdapter {
       return this.emptyResponse()
     }
 
-    const failText = getPrompt('captchaFail', lang)
-    await this.client.command(params.callSid, 'speak', {
-      payload: failText,
+    const lead = getPrompt(params.outcome === 'retry' ? 'captchaRetry' : 'captchaPrompt', lang)
+    await this.client.command(params.callSid, 'gather_using_speak', {
+      payload: `${lead} ${params.digitsToSpeak.split('').join(', ')}. ${getPrompt('captchaRepeatHint', lang)}`,
       voice,
       language,
+      minimum_digits: 1,
+      maximum_digits: 4,
+      timeout_millis: 10000,
+      client_state: encodeClientState({ hubId: params.hubId, lang, callSid: params.callSid, phase: 'captcha' }),
     })
-    await this.client.command(params.callSid, 'hangup', {})
 
     return this.emptyResponse()
   }
@@ -763,6 +767,11 @@ export class TelnyxAdapter implements TelephonyAdapter {
     } catch {
       return false
     }
+  }
+
+  /** Telnyx signs the timestamp header and the raw body. */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return `${request.headers.get('telnyx-timestamp') ?? ''}\n${await request.clone().text()}`
   }
 
   // --- Webhook Parsing ---

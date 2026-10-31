@@ -211,7 +211,8 @@ describe('SettingsService.getSpamSettings', () => {
     db.$setSelectResult([makeSettingsRow({ spamSettings })])
 
     const result = await service.getSpamSettings()
-    expect(result).toEqual(spamSettings)
+    // A row stored before overLimitAction existed reads as the operator's default (#2179).
+    expect(result).toEqual({ ...spamSettings, overLimitAction: 'message' })
   })
 
   it('returns defaults when spamSettings is null in DB', async () => {
@@ -226,6 +227,7 @@ describe('SettingsService.getSpamSettings', () => {
       rateLimitEnabled: true,
       maxCallsPerMinute: 3,
       blockDurationMinutes: 30,
+      overLimitAction: 'message',
     })
   })
 })

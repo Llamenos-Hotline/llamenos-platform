@@ -23,6 +23,7 @@ const VOICE_PROMPT_KEYS = [
   'captchaSuccess',
   'captchaFail',
   'captchaRetry',
+  'captchaRepeatHint',
   'waitMessage',
   'unavailableMessage',
   'voicemailPrompt',

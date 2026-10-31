@@ -677,12 +677,13 @@ describe('AsteriskAdapter', () => {
         captchaDigits: '1234',
       })
       const body = JSON.parse(res.body)
-      // Greeting, the CAPTCHA prompt, each digit, then collect them.
-      expect(body.commands).toHaveLength(7)
+      // Greeting, the CAPTCHA prompt, each digit, the star hint, then collect them.
+      expect(body.commands).toHaveLength(8)
       expect(body.commands.slice(2, 6).map((c: { url: string }) => spoken(c.url))).toEqual(
         ['1', '2', '3', '4'].map((digit) => ({ locale: 'en', digit })),
       )
-      const gather = body.commands[6]
+      expect(spoken(body.commands[6].url)).toEqual({ locale: 'en', text: getPrompt('captchaRepeatHint', 'en') })
+      const gather = body.commands[7]
       expect(gather.action).toBe('gather')
       expect(gather.numDigits).toBe(4)
       expect(gather.timeout).toBe(10)
@@ -765,13 +766,9 @@ describe('AsteriskAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('returns queue on correct digits', async () => {
+    it('returns queue on pass', async () => {
       const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '5678',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-        speechUrl: fakeSpeech,
+        outcome: 'pass', callSid: 'CA123', callerLanguage: 'en', speechUrl: fakeSpeech,
       })
       const body = JSON.parse(res.body)
       const queue = body.commands.find((c: { action: string }) => c.action === 'queue')
@@ -779,18 +776,14 @@ describe('AsteriskAdapter', () => {
       expect(body.commands.some((c: { action: string }) => c.action === 'hangup')).toBe(false)
     })
 
-    it('returns hangup on incorrect digits', async () => {
+    it('on retry challenges again: retry prompt first, a gather last, no hangup and no queue', async () => {
       const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '0000',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-        speechUrl: fakeSpeech,
+        outcome: 'retry', digitsToSpeak: '5678', round: 1, callSid: 'CA123', callerLanguage: 'en', speechUrl: fakeSpeech,
       })
       const body = JSON.parse(res.body)
-      expect(spoken(body.commands[0].url)).toEqual({ locale: 'en', text: getPrompt('captchaFail', 'en') })
-      expect(getPrompt('captchaFail', 'en')).not.toBe('')
-      expect(body.commands.some((c: { action: string }) => c.action === 'hangup')).toBe(true)
+      expect(spoken(body.commands[0].url)).toEqual({ locale: 'en', text: getPrompt('captchaRetry', 'en') })
+      expect(body.commands.at(-1)).toMatchObject({ action: 'gather', numDigits: 4, callbackEvent: 'captcha_response' })
+      expect(body.commands.some((c: { action: string }) => c.action === 'hangup')).toBe(false)
       expect(body.commands.some((c: { action: string }) => c.action === 'queue')).toBe(false)
     })
   })
@@ -1051,29 +1044,22 @@ describe('FreeSwitchAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('returns park on correct digits', async () => {
+    it('returns park on pass', async () => {
       const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '5678',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-        speechUrl: fakeSpeech,
+        outcome: 'pass', callSid: 'CA123', callerLanguage: 'en', speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('<execute application="park"/>')
       expect(res.body).not.toContain('<hangup/>')
     })
 
-    it('returns hangup on incorrect digits', async () => {
+    it('on retry binds the answer again and never hangs up or parks', async () => {
       const res = await adapter.handleCaptchaResponse({
-        callSid: 'CA123',
-        digits: '0000',
-        expectedDigits: '5678',
-        callerLanguage: 'en',
-        speechUrl: fakeSpeech,
+        outcome: 'retry', digitsToSpeak: '5678', round: 1, callSid: 'CA123', callerLanguage: 'en', speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('text/xml')
-      expect(res.body).toContain('<hangup/>')
+      expect(res.body).toContain('<bind strip="#">')
+      expect(res.body).not.toContain('<hangup/>')
       expect(res.body).not.toContain('<execute application="park"/>')
     })
   })

@@ -183,13 +183,17 @@ describe('VonageAdapter', () => {
       })
 
       const ncco = parseNcco(response)
-      expect(ncco).toHaveLength(4)
+      expect(ncco).toHaveLength(5)
       expect(ncco[0].action).toBe('talk')
       expect(ncco[1].action).toBe('talk')
       expect(ncco[2].action).toBe('talk')
       expect(ncco[2].text).toBe('7, 3, 9, 1.')
-      expect(ncco[3].action).toBe('input')
-      expect(ncco[3].dtmf.maxDigits).toBe(4)
+      expect(ncco[3].text).toBe(getPrompt('captchaRepeatHint', 'en'))
+      expect(ncco[4].action).toBe('input')
+      expect(ncco[4].dtmf.maxDigits).toBe(4)
+      // submitOnHash stays off, so * is an ordinary key delivered in dtmf.digits.
+      expect(ncco[4].dtmf.submitOnHash).toBeUndefined()
+      expect(ncco[4].eventUrl).toEqual(['/api/telephony/captcha?callSid=call-123&lang=en&round=0'])
     })
 
     it('returns hold/conversation NCCO for normal call flow', async () => {
@@ -232,13 +236,8 @@ describe('VonageAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('returns success NCCO with conversation on correct digits', async () => {
-      const response = await adapter.handleCaptchaResponse({
-        callSid: 'call-123',
-        digits: '7391',
-        expectedDigits: '7391',
-        callerLanguage: 'en',
-      })
+    it('returns success NCCO with conversation on pass', async () => {
+      const response = await adapter.handleCaptchaResponse({ outcome: 'pass', callSid: 'call-123', callerLanguage: 'en' })
 
       const ncco = parseNcco(response)
       expect(ncco).toHaveLength(2)
@@ -247,18 +246,27 @@ describe('VonageAdapter', () => {
       expect(ncco[1].name).toBe('call-123')
     })
 
-    it('returns failure NCCO on incorrect digits', async () => {
+    it('on retry says captchaRetry, re-speaks the digits and the star hint, then inputs again', async () => {
       const response = await adapter.handleCaptchaResponse({
-        callSid: 'call-123',
-        digits: '1234',
-        expectedDigits: '7391',
-        callerLanguage: 'en',
+        outcome: 'retry', digitsToSpeak: '7391', round: 1, callSid: 'call-123', callerLanguage: 'en',
       })
 
       const ncco = parseNcco(response)
-      expect(ncco).toHaveLength(1)
-      expect(ncco[0].action).toBe('talk')
-      expect(ncco[0].text).toBe(getPrompt('captchaFail', 'en'))
+      expect(ncco.map((a: { action: string }) => a.action)).toEqual(['talk', 'talk', 'talk', 'input'])
+      expect(ncco[0].text).toBe(getPrompt('captchaRetry', 'en'))
+      expect(ncco[1].text).toBe('7, 3, 9, 1.')
+      expect(ncco[2].text).toBe(getPrompt('captchaRepeatHint', 'en'))
+      expect(ncco[3].eventUrl).toEqual(['/api/telephony/captcha?callSid=call-123&lang=en&round=1'])
+    })
+
+    it('on repeat leads with the challenge prompt, not the retry prompt', async () => {
+      const response = await adapter.handleCaptchaResponse({
+        outcome: 'repeat', digitsToSpeak: '7391', round: 1, callSid: 'call-123', callerLanguage: 'en',
+      })
+
+      const ncco = parseNcco(response)
+      expect(ncco[0].text).toBe(getPrompt('captchaPrompt', 'en'))
+      expect(ncco[1].text).toBe('7, 3, 9, 1.')
     })
   })
 

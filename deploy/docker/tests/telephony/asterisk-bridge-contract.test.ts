@@ -19,6 +19,7 @@ import { Hono } from 'hono'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { AllDialsFailedError, type TelephonyResponse } from '@worker/telephony/adapter'
 import { fakeSpeech, spoken } from '@worker/__tests__/helpers/fake-speech'
+import { classifyCaptchaSubmission, type CaptchaChallengeState } from '@worker/services/captcha-outcome'
 import { CommandHandler, ringResponse } from '../../../../sip-bridge/src/command-handler'
 import type { BridgeClient, BridgeEvent } from '../../../../sip-bridge/src/bridge-client'
 import type { WebhookSender } from '../../../../sip-bridge/src/webhook-sender'
@@ -96,6 +97,8 @@ function fakeWorker(script: WorkerScript) {
   const note = (key: string, value: unknown) => {
     parsed[key] = [...(parsed[key] ?? []), value]
   }
+  /** The server's CAPTCHA challenge, advanced by the route's own classifier (#2179). */
+  let challenge: CaptchaChallengeState = { expected: script.captchaDigits ?? '', attempts: 0, repeats: 0 }
 
   const routes: Record<string, (req: Request, q: Record<string, string>) => Promise<TelephonyResponse>> = {
     [WORKER_PATHS.incoming]: async (req) => {
@@ -123,7 +126,17 @@ function fakeWorker(script: WorkerScript) {
     [CALLBACK_PATHS.captcha_response]: async (req, q) => {
       const { digits } = await adapter.parseCaptchaWebhook(req)
       note('captcha', digits)
-      return adapter.handleCaptchaResponse({ callSid: q.callSid, digits, expectedDigits: script.captchaDigits ?? '', callerLanguage: q.lang, hubId: q.hub, speechUrl: fakeSpeech })
+      const result = classifyCaptchaSubmission(challenge, digits)
+      const call = { callSid: q.callSid, callerLanguage: q.lang, hubId: q.hub, speechUrl: fakeSpeech }
+      if (result.outcome === 'pass') return adapter.handleCaptchaResponse({ ...call, outcome: 'pass' })
+      if (result.outcome === 'retry' || result.outcome === 'repeat') {
+        challenge = { ...challenge, ...result.next }
+        return adapter.handleCaptchaResponse({
+          ...call, outcome: result.outcome, digitsToSpeak: challenge.expected, round: result.next.attempts + result.next.repeats,
+        })
+      }
+      // fail / timeout: the route's CAPTCHA_FAILED_ACTION is voicemail.
+      return adapter.handleVoicemail({ callSid: q.callSid, callerLanguage: q.lang, callbackUrl: 'http://app:3000', hubId: q.hub, speechUrl: fakeSpeech })
     },
     [CALLBACK_PATHS.wait_music]: async (req, q) => {
       const { queueTime } = await adapter.parseQueueWaitWebhook(req)
@@ -244,7 +257,7 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
 
     // Voice captcha: four digits, posted with the call's context.
     for (const d of '4837') await handler.handleEvent(dtmf(d))
-    expect(worker.to(CALLBACK_PATHS.captcha_response)[0].query).toEqual({ callSid: CALLER, lang: 'es', hub: HUB })
+    expect(worker.to(CALLBACK_PATHS.captcha_response)[0].query).toEqual({ callSid: CALLER, lang: 'es', round: '0', hub: HUB })
     expect(worker.parsed.captcha).toEqual(['4837'])
 
     // Passed: the caller is queued on hold, and wait-music is polled with their language.
@@ -283,6 +296,33 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
   // #1505 — the same path, end to end, for a hub that has NOT opted in. The
   // bridge is the component that would write the file, so this asserts against
   // the real CommandHandler rather than the adapter's markup alone.
+  it('voice captcha: star replays the digits at once, a timeout reaches the worker, and the second attempt passes (#2179)', async () => {
+    const worker = fakeWorker({ enabledLanguages: ['en', 'es'], captchaDigits: '4837' })
+    handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+    await handler.handleEvent(incoming)
+    await handler.handleEvent(dtmf('2'))
+
+    // Star ends the gather at once (finishOnKey) and asks to hear the digits again.
+    await handler.handleEvent(dtmf('*'))
+    expect(worker.parsed.captcha).toEqual(['*'])
+
+    // No input on the replayed challenge: once its prompts have played, the
+    // bridge posts no digits on the next round.
+    const played = pbx.of('playMedia').length
+    for (let n = 1; n <= played; n++) {
+      await handler.handleEvent({ type: 'playback_finished', channelId: CALLER, playbackId: `pb-${n}`, failed: false, media: '', timestamp: ts })
+    }
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(worker.parsed.captcha).toEqual(['*', ''])
+    expect(worker.to(CALLBACK_PATHS.captcha_response).map((r) => r.query.round)).toEqual(['0', '1'])
+    expect(pbx.of('startMoh')).toEqual([])
+
+    // The right digits on the second attempt: queued.
+    for (const d of '4837') await handler.handleEvent(dtmf(d))
+    expect(worker.parsed.captcha).toEqual(['*', '', '4837'])
+    expect(pbx.of('startMoh')).toEqual([[CALLER]])
+  })
+
   it('a hub that does not record calls: the caller is bridged, but no recording is ever started', async () => {
     const worker = fakeWorker({ enabledLanguages: ['en'], recordCalls: false })
     handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)

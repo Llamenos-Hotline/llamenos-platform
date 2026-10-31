@@ -241,6 +241,11 @@ export interface GatherCommand {
   numDigits: number
   /** Seconds to wait for input after the preceding prompts finish */
   timeout: number
+  /**
+   * A key that completes the gather as soon as it is pressed, and is posted
+   * with the digits (the voice CAPTCHA's "press star to hear them again").
+   */
+  finishOnKey?: string
   callbackEvent: 'language_selected' | 'captcha_response'
   metadata?: Record<string, string>
 }
@@ -308,6 +313,7 @@ export interface ActiveCall {
   activeGather?: {
     numDigits: number
     timeout: number
+    finishOnKey?: string
     callbackEvent: GatherCommand['callbackEvent']
     metadata?: Record<string, string>
     timeoutTimer?: ReturnType<typeof setTimeout>

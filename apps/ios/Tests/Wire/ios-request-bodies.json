@@ -167,12 +167,13 @@
       "method": "PATCH",
       "path": "/api/settings/spam",
       "module": "@protocol/schemas/settings",
-      "schema": "spamSettingsSchema",
-      "swiftType": "SpamSettings",
+      "schema": "spamSettingsPatchSchema",
+      "swiftType": "SpamSettingsPatch",
       "callSite": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
       "optionalKeys": [
         "blockDurationMinutes",
         "maxCallsPerMinute",
+        "overLimitAction",
         "rateLimitEnabled",
         "voiceCaptchaEnabled"
       ]
@@ -459,12 +460,14 @@
       "legacySnakeCase": {
         "block_duration_minutes": 45,
         "max_calls_per_minute": 7,
+        "over_limit_action": "voicemail",
         "rate_limit_enabled": true,
         "voice_captcha_enabled": true
       },
       "wire": {
         "blockDurationMinutes": 45,
         "maxCallsPerMinute": 7,
+        "overLimitAction": "voicemail",
         "rateLimitEnabled": true,
         "voiceCaptchaEnabled": true
       }

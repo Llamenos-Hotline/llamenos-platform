@@ -100,6 +100,9 @@ async function captchaClips(pbx: (typeof PBXS)[number], speechUrl: SpeechUrlBuil
   return pbx.playUrls(res).filter((url) => url.startsWith(`${ORIGIN}/api/ivr-speech/`))
 }
 
+/** The four digit clips: they sit just before the closing star hint (#2179). */
+const digitClips = (clips: string[]) => clips.slice(-5, -1)
+
 describe.each(PBXS)('$name CAPTCHA speech (#1352)', (pbx) => {
   it('the PBX fetching the challenge leaves no digit of it in the request log', async () => {
     const speech = new IvrSpeechService(SECRET, engine())
@@ -130,13 +133,13 @@ describe.each(PBXS)('$name CAPTCHA speech (#1352)', (pbx) => {
     const mine = await captchaClips(pbx, await new IvrSpeechService(SECRET, engine()).urlBuilder(ORIGIN), '1111')
     const theirs = await captchaClips(pbx, await new IvrSpeechService('a1'.repeat(32), engine()).urlBuilder(ORIGIN), '1111')
     const path = (url: string) => new URL(url).pathname
-    expect(path(mine.at(-1)!)).not.toBe(path(theirs.at(-1)!))
+    expect(path(digitClips(mine).at(-1)!)).not.toBe(path(digitClips(theirs).at(-1)!))
   })
 
   it('every call shares the same ten digit clips, so the PBX media cache stays bounded', async () => {
     const build = await new IvrSpeechService(SECRET, engine()).urlBuilder(ORIGIN)
-    const first = (await captchaClips(pbx, build, '3579')).slice(-4)
-    const second = (await captchaClips(pbx, build, '9753')).slice(-4)
+    const first = digitClips(await captchaClips(pbx, build, '3579'))
+    const second = digitClips(await captchaClips(pbx, build, '9753'))
     expect(second).toEqual([...first].reverse())
     expect(new Set(first).size).toBe(4)
   })

@@ -158,7 +158,11 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    return mockResponse('captcha', { callSid: params.callSid, matched: params.digits === params.expectedDigits })
+    return mockResponse('captcha', {
+      callSid: params.callSid,
+      outcome: params.outcome,
+      ...(params.outcome === 'pass' ? {} : { digitsToSpeak: params.digitsToSpeak }),
+    })
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
@@ -198,6 +202,10 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
   /** The mock accepts no inbound webhooks — calls are injected by the authenticated simulated-telephony routes only. */
   async validateWebhook(_request: Request): Promise<boolean> {
     return false
+  }
+
+  async webhookReplayKey(request: Request): Promise<string> {
+    return request.clone().text()
   }
 
   async getCallRecording(_callSid: string): Promise<ArrayBuffer | null> {

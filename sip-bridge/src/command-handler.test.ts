@@ -326,6 +326,40 @@ describe('CommandHandler', () => {
       ])
     })
 
+    it('a finishOnKey press ends the gather at once and is posted with the digits (#2179)', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'gather', numDigits: 4, timeout: 10, finishOnKey: '*', callbackEvent: 'captcha_response', metadata: CONTEXT },
+      ])
+      await handler.handleEvent(incoming())
+
+      await handler.handleEvent(dtmf('4'))
+      expect(worker.to('/api/telephony/captcha')).toEqual([])
+      await handler.handleEvent(dtmf('*'))
+
+      expect(worker.to('/api/telephony/captcha')).toMatchObject([{ payload: { digits: '4*' }, query: CONTEXT }])
+    })
+
+    it('without finishOnKey a star is just collected — the gather waits for four keys or the timeout', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'gather', numDigits: 4, timeout: 10, callbackEvent: 'captcha_response', metadata: CONTEXT },
+      ])
+      await handler.handleEvent(incoming())
+
+      await handler.handleEvent(dtmf('*'))
+      expect(worker.to('/api/telephony/captcha')).toEqual([])
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(worker.to('/api/telephony/captcha')).toMatchObject([{ payload: { digits: '*' } }])
+    })
+
+    it('posts no digits when the gather times out with no input', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'gather', numDigits: 4, timeout: 10, finishOnKey: '*', callbackEvent: 'captcha_response', metadata: CONTEXT },
+      ])
+      await handler.handleEvent(incoming())
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(worker.to('/api/telephony/captcha')).toMatchObject([{ payload: { digits: '' }, query: CONTEXT }])
+    })
+
     it('a new gather replaces a pending one: the old timeout never fires', async () => {
       worker.reply('/api/telephony/incoming', [
         { action: 'gather', numDigits: 1, timeout: 5, callbackEvent: 'language_selected', metadata: { hub: 'hub-1' } },

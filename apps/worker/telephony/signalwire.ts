@@ -1,5 +1,4 @@
 import { TwilioAdapter } from './twilio'
-import { buildWebhookUrl } from '../lib/webhook-url'
 import type {
   ProviderRetentionStatement,
   ProviderSettingEnforcement,
@@ -96,15 +95,7 @@ export class SignalWireAdapter extends TwilioAdapter {
     const signature = request.headers.get('X-SignalWire-Signature') || request.headers.get('X-Twilio-Signature')
     if (!signature) return false
 
-    const url = buildWebhookUrl(request, this.webhookBaseUrl)
-    const body = await request.clone().text()
-    const params = new URLSearchParams(body)
-
-    let dataString = url.toString()
-    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
-    for (const [key, value] of sortedEntries) {
-      dataString += key + value
-    }
+    const dataString = await this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(

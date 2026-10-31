@@ -2181,9 +2181,16 @@ Response: SpamSettings
 
 PATCH /api/settings/spam
 Permission: settings:manage-spam
-Body: partial SpamSettings
-Response: { "ok": true }
+Body: partial SpamSettings (a field left out is left unchanged — no defaults are applied)
+Response: SpamSettings
 ```
+
+`SpamSettings.overLimitAction` (`"reject" | "message" | "voicemail"`, default
+`"message"`) is what a caller over `maxCallsPerMinute` gets: refused unanswered,
+the `rateLimited` prompt played unrecorded before the call ends, or voicemail.
+A caller who fails or times out of the voice CAPTCHA (two attempts; `*` replays
+the digits) is offered voicemail. Every one of these raises a `spam` hub incident
+(counts only) for the hub's `settings:manage-spam` holders.
 
 #### Call Settings
 

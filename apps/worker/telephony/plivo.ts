@@ -181,18 +181,10 @@ export class PlivoAdapter implements TelephonyAdapter {
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
       const captchaXml = sayOrPlay('captchaPrompt', lang, params.audioUrls)
-      return this.plivoXml(`
-        <GetDigits numDigits="4" action="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" timeout="10" redirect="true">
-          ${greetingXml}
-          ${noticeXml}
-          ${captchaXml}
-          ${speak(digits.split('').join(', ') + '.', lang)}
-        </GetDigits>
-        ${speak(getPrompt('captchaTimeout', lang), lang)}
-        <Hangup/>
-      `)
+      return this.plivoXml(
+        this.captchaChallenge(params.callSid, lang, params.hubId, params.captchaDigits, greetingXml + noticeXml + captchaXml, 0),
+      )
     }
 
     const holdXml = sayOrPlay('pleaseHold', lang, params.audioUrls)
@@ -208,17 +200,41 @@ export class PlivoAdapter implements TelephonyAdapter {
     const lang = params.callerLanguage
     const hp = hubXmlParam(params.hubId)
 
-    if (params.digits === params.expectedDigits) {
+    if (params.outcome === 'pass') {
       return this.plivoXml(`
         ${speak(getPrompt('captchaSuccess', lang), lang)}
         <Conference waitSound="/api/telephony/wait-music?lang=${lang}${hp}" action="/api/telephony/queue-exit?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" startConferenceOnEnter="false" endConferenceOnExit="false" stayAlone="true">${params.callSid}</Conference>
       `)
     }
 
-    return this.plivoXml(`
-      ${speak(getPrompt('captchaFail', lang), lang)}
-      <Hangup/>
-    `)
+    const lead = params.outcome === 'retry'
+      ? sayOrPlay('captchaRetry', lang)
+      : sayOrPlay('captchaPrompt', lang, params.audioUrls)
+    return this.plivoXml(
+      this.captchaChallenge(params.callSid, lang, params.hubId, params.digitsToSpeak, lead, params.round),
+    )
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then GetDigits.
+   *
+   * - `validDigits` defaults to `1234567890*#` and `finishOnKey` to `#`, so a
+   *   `*` is collected and arrives in `Digits` (the server reads it as "say
+   *   them again"); a lone `*` is submitted once `digitTimeout` elapses.
+   * - With no digits Plivo continues to the next element rather than calling
+   *   `action`, so a `<Redirect>` to the same route follows: the server learns
+   *   of the timeout as a submission with no digits.
+   */
+  private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: string, round: number): string {
+    const action = `/api/telephony/captcha?callSid=${callSid}&amp;lang=${lang}&amp;round=${round}${hubXmlParam(hubId)}`
+    return `
+        <GetDigits numDigits="4" action="${action}" method="POST" timeout="10" redirect="true">
+          ${lead}
+          ${speak(digits.split('').join(', ') + '.', lang)}
+          ${sayOrPlay('captchaRepeatHint', lang)}
+        </GetDigits>
+        <Redirect method="POST">${action}</Redirect>
+      `
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
@@ -324,20 +340,9 @@ export class PlivoAdapter implements TelephonyAdapter {
     // 2. HMAC-SHA256 with auth token
     // 3. Compare with X-Plivo-Signature-V3 header
     const signature = request.headers.get('X-Plivo-Signature-V3')
-    const nonce = request.headers.get('X-Plivo-Signature-V3-Nonce')
-    if (!signature || !nonce) return false
+    if (!signature || !request.headers.get('X-Plivo-Signature-V3-Nonce')) return false
 
-    const url = buildWebhookUrl(request, this.webhookBaseUrl)
-    const body = await request.clone().text()
-    const params = new URLSearchParams(body)
-
-    // Build validation string: URL + sorted params + nonce
-    let dataString = url.origin + url.pathname
-    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
-    for (const [key, value] of sortedEntries) {
-      dataString += key + value
-    }
-    dataString += '.' + nonce
+    const dataString = await this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
@@ -359,6 +364,27 @@ export class PlivoAdapter implements TelephonyAdapter {
       result |= aBuf[i] ^ bBuf[i]
     }
     return result === 0
+  }
+
+  /**
+   * The canonical string Plivo V3 signs: the URL WITHOUT its query, the POST
+   * params sorted by name and decoded, then the per-request nonce. Shared by
+   * `validateWebhook` and `webhookReplayKey`: the nonce tells two identical
+   * bodies apart, and the unsigned query can never vary the key.
+   */
+  private async signingInput(request: Request): Promise<string> {
+    const url = buildWebhookUrl(request, this.webhookBaseUrl)
+    const params = new URLSearchParams(await request.clone().text())
+    let dataString = url.origin + url.pathname
+    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
+    for (const [key, value] of sortedEntries) {
+      dataString += key + value
+    }
+    return dataString + '.' + (request.headers.get('X-Plivo-Signature-V3-Nonce') ?? '')
+  }
+
+  async webhookReplayKey(request: Request): Promise<string> {
+    return this.signingInput(request)
   }
 
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {

@@ -5,6 +5,7 @@
 // are defined here as server-internal storage types.
 
 import type { MessagingChannelType, RecipientEnvelope } from '@shared/types'
+import type { OverLimitAction } from '@protocol/schemas/settings'
 
 // ---------------------------------------------------------------------------
 // Re-exports of entity types whose schema matches storage shape exactly
@@ -261,6 +262,8 @@ export interface SpamSettings {
   rateLimitEnabled: boolean
   maxCallsPerMinute: number
   blockDurationMinutes: number
+  /** What a caller over `maxCallsPerMinute` gets — see `overLimitActionSchema`. */
+  overLimitAction: OverLimitAction
 }
 
 /**

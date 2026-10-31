@@ -54,6 +54,8 @@ export const INCIDENT_CATEGORIES = {
       ban_match: 'record',
       fail: 'notify',
       over_limit_message: 'notify',
+      // The over-limit caller was sent to voicemail rather than a volunteer.
+      over_limit_voicemail: 'notify',
       reject: 'notify',
       mode_switch: 'notify',
       [WORKER_FAILING_KIND]: 'notify',

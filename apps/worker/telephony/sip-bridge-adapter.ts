@@ -295,6 +295,11 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     return result === 0
   }
 
+  /** The bridge signs `${timestamp}.${url}.${body}` — exactly that is the key. */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return `${request.headers.get('X-Bridge-Timestamp') || ''}.${request.url}.${await request.clone().text()}`
+  }
+
   // --- Webhook parsing (shared — JSON payloads from bridge) ---
 
   async parseIncomingWebhook(request: Request): Promise<WebhookCallInfo> {

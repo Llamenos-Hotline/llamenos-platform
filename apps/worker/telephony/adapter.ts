@@ -63,7 +63,7 @@ export interface TelephonyAdapter {
   handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse>
 
   /**
-   * Generate response for CAPTCHA digit gather (after caller enters digits).
+   * Generate response for a classified CAPTCHA submission — see `CaptchaResponseParams`.
    */
   handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse>
 
@@ -127,6 +127,17 @@ export interface TelephonyAdapter {
    * Validate that a webhook request is authentic (from the telephony provider).
    */
   validateWebhook(request: Request): Promise<boolean>
+
+  /**
+   * The request material this provider's signature authenticates, as the key
+   * replay protection records. A replay repeats it exactly; two genuinely
+   * separate events differ in it — even when their bodies are byte-identical,
+   * as Twilio's and Plivo's are for two CAPTCHA timeouts on one call.
+   *
+   * Never include anything the signature does not cover: an attacker could
+   * vary it to make a captured request look new.
+   */
+  webhookReplayKey(request: Request): Promise<string>
 
   /**
    * Get call recording/audio for transcription by call SID.
@@ -259,6 +270,11 @@ export interface IncomingCallParams {
   callSid: string
   callerNumber: string
   voiceCaptchaEnabled: boolean
+  /**
+   * Render the over-limit `message` outcome: the greeting, then the
+   * `rateLimited` prompt (the hub's upload if any, else spoken), nothing
+   * recorded, then hang up. Set only by the route's over-limit switch.
+   */
   rateLimited: boolean
   callerLanguage: string
   hotlineName: string
@@ -280,15 +296,43 @@ export interface IncomingCallParams {
   speechUrl?: SpeechUrlBuilder
 }
 
-export interface CaptchaResponseParams {
+/**
+ * How to answer one CAPTCHA submission. The server has already classified it
+ * (`submitCaptcha`, a constant-time compare): an adapter renders the outcome
+ * and never sees or compares the expected answer itself.
+ *
+ * - `pass`: thank the caller and queue them for a volunteer.
+ * - `retry`: say `captchaRetry`, then challenge again with the same digits.
+ * - `repeat`: the caller pressed star — challenge again with the same digits.
+ *
+ * A challenge always offers the star hint (`captchaRepeatHint`), and its
+ * no-input timeout always reaches `/api/telephony/captcha` with no digits, so
+ * the server can count it and give the caller their second attempt.
+ * Terminal failures (`fail`, `timeout`) never reach an adapter here: the route
+ * hands them to the same over-limit switch every refused caller goes through.
+ */
+export type CaptchaResponseParams = {
   callSid: string
-  digits: string
-  expectedDigits: string
   callerLanguage: string
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  audioUrls?: AudioUrlMap
   speechUrl?: SpeechUrlBuilder
-}
+} & (
+  | { outcome: 'pass' }
+  | {
+      outcome: 'retry' | 'repeat'
+      digitsToSpeak: string
+      /**
+       * Which challenge this is (the first is 0), carried as `&round=` on the
+       * gather's callback URL. Twilio and Plivo post byte-identical bodies for
+       * two identical submissions — two timeouts, the same wrong answer — and
+       * replay protection keys on the URL and the body, so without it the
+       * second would be dropped as a replay of the first.
+       */
+      round: number
+    }
+)
 
 export interface CallAnsweredParams {
   /** The incoming call SID, used as the queue name to bridge caller → volunteer */

@@ -45,6 +45,8 @@ function makeMockAdapter(overrides?: Partial<TelephonyAdapter>): TelephonyAdapte
     ringVolunteers: vi.fn().mockResolvedValue([]),
     cancelRinging: vi.fn().mockResolvedValue(undefined),
     validateWebhook: vi.fn().mockResolvedValue(true),
+    // Twilio's rule: the signed URL, query included, and the body.
+    webhookReplayKey: vi.fn(async (req: Request) => `${req.url}\n${await req.clone().text()}`),
     getCallRecording: vi.fn().mockResolvedValue(null),
     getRecordingAudio: vi.fn().mockResolvedValue(null),
     parseIncomingWebhook: vi.fn().mockResolvedValue({ callSid: 'CA-incoming', callerNumber: '+15551111111', calledNumber: '+15551234567' }),
@@ -66,10 +68,10 @@ function makeServices(): Services {
       getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
       getHubByPhone: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] }),
-      getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false, rateLimitEnabled: false, maxCallsPerMinute: 5, blockDurationMinutes: 30 }),
+      getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false, rateLimitEnabled: false, maxCallsPerMinute: 5, blockDurationMinutes: 30, overLimitAction: 'message' }),
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
       storeCaptcha: vi.fn().mockResolvedValue(undefined),
-      verifyCaptcha: vi.fn().mockResolvedValue({ match: true, expected: '1234' }),
+      submitCaptcha: vi.fn().mockResolvedValue({ outcome: 'pass' }),
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 }),
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
       resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
@@ -77,6 +79,9 @@ function makeServices(): Services {
     },
     records: {
       checkBan: vi.fn().mockResolvedValue(false),
+    },
+    incidents: {
+      signal: vi.fn().mockResolvedValue(undefined),
     },
     calls: {
       resolveCallToken: vi.fn().mockResolvedValue(null),
@@ -202,7 +207,7 @@ describe('Telephony routes', () => {
     })
 
     describe('replay protection (#1036)', () => {
-      // The real nonce table is unique on sha256(provider + body). Model it with a
+      // The real nonce table is unique on sha256(provider + the adapter's replay key). Model it with a
       // Set so a second insert of the same key reports "not first" exactly like
       // Postgres does — the always-true default mock hid the double-insert bug.
       function useStatefulReplayStore() {
@@ -423,24 +428,71 @@ describe('Telephony routes', () => {
       )
     })
 
-    it('returns rate-limited response when rate limited', async () => {
-      services.settings.checkRateLimit = vi.fn().mockResolvedValue({ limited: true })
-      services.settings.getSpamSettings = vi.fn().mockResolvedValue({
-        voiceCaptchaEnabled: false,
-        rateLimitEnabled: true,
-        maxCallsPerMinute: 5,
-        blockDurationMinutes: 30,
+    // #2179 / operator ruling Q4: one setting, one code path, three outcomes —
+    // and every one of them raises a spam incident (rule V).
+    describe('over the per-number limit', () => {
+      const overLimit = async (overLimitAction: 'reject' | 'message' | 'voicemail', voiceCaptchaEnabled = false) => {
+        services.settings.checkRateLimit = vi.fn().mockResolvedValue({ limited: true })
+        services.settings.getSpamSettings = vi.fn().mockResolvedValue({
+          voiceCaptchaEnabled,
+          rateLimitEnabled: true,
+          maxCallsPerMinute: 5,
+          blockDurationMinutes: 30,
+          overLimitAction,
+        })
+        const app = await createTestApp(adapter, services)
+        return app.request('/api/telephony/language-selected?hub=hub-1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'CallSid=CA-lang&From=%2B15551111111&Digits=2',
+        })
+      }
+
+      it('message: plays the rateLimited prompt with nothing recorded, and signals over_limit_message', async () => {
+        const res = await overLimit('message')
+        expect(res.status).toBe(200)
+        expect(adapter.handleIncomingCall).toHaveBeenCalledTimes(1)
+        expect(adapter.handleIncomingCall).toHaveBeenCalledWith(
+          expect.objectContaining({ rateLimited: true, callRecordingEnabled: false, voiceCaptchaEnabled: false }),
+        )
+        expect(adapter.handleVoicemail).not.toHaveBeenCalled()
+        expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'spam', 'over_limit_message')
       })
-      const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/language-selected?hub=hub-1', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'CallSid=CA-lang&From=%2B15551111111&Digits=2',
+
+      it('reject: refuses the call unanswered and signals reject', async () => {
+        const res = await overLimit('reject')
+        expect(await res.text()).toContain('<Reject')
+        expect(adapter.handleIncomingCall).not.toHaveBeenCalled()
+        expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'spam', 'reject')
       })
-      expect(res.status).toBe(200)
-      expect(adapter.handleIncomingCall).toHaveBeenCalledWith(
-        expect.objectContaining({ rateLimited: true }),
-      )
+
+      it('voicemail: registers the call so the message has a record, offers voicemail, signals over_limit_voicemail', async () => {
+        const res = await overLimit('voicemail')
+        expect(res.status).toBe(200)
+        expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', expect.objectContaining({ callId: 'CA-lang', status: 'ringing' }))
+        expect(adapter.handleVoicemail).toHaveBeenCalledWith(expect.objectContaining({ callSid: 'CA-lang', hubId: 'hub-1', maxRecordingSeconds: 120 }))
+        expect(adapter.handleIncomingCall).not.toHaveBeenCalled()
+        expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'spam', 'over_limit_voicemail')
+      })
+
+      it('never issues a CAPTCHA to an over-limit caller, even with the hub\'s CAPTCHA on', async () => {
+        await overLimit('message', true)
+        expect(services.settings.storeCaptcha).not.toHaveBeenCalled()
+      })
+
+      it('the incident signal carries no caller number and no call SID', async () => {
+        await overLimit('message')
+        const args = JSON.stringify((services.incidents.signal as ReturnType<typeof vi.fn>).mock.calls)
+        expect(args).not.toContain('5551111111')
+        expect(args).not.toContain('CA-lang')
+      })
+
+      it('a failing incident signal still answers the caller', async () => {
+        services.incidents.signal = vi.fn().mockRejectedValue(new Error('db down'))
+        const res = await overLimit('message')
+        expect(res.status).toBe(200)
+        expect(adapter.handleIncomingCall).toHaveBeenCalledWith(expect.objectContaining({ rateLimited: true }))
+      })
     })
 
     it('reads spam settings and scopes the rate-limit window to the called hub (#1051)', async () => {
@@ -494,6 +546,7 @@ describe('Telephony routes', () => {
         rateLimitEnabled: true,
         maxCallsPerMinute: 5,
         blockDurationMinutes: 30,
+        overLimitAction: 'message',
       })
       const app = await createTestApp(adapter, services)
       const res = await app.request('/api/telephony/language-selected?hub=hub-1', {
@@ -508,68 +561,91 @@ describe('Telephony routes', () => {
   })
 
   describe('POST /captcha', () => {
-    it('rejects a caller banned while solving the CAPTCHA, without enqueueing', async () => {
-      services.records.checkBan = vi.fn().mockResolvedValue(true)
-      services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
+    const submit = async (body = 'Digits=1234&From=%2B15551111111', query = 'hub=hub-1&callSid=CA-captcha&lang=en') => {
       const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/captcha?hub=hub-1&callSid=CA-captcha&lang=en', {
+      return app.request(`/api/telephony/captcha?${query}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'Digits=1234&From=%2B15551111111',
+        body,
       })
+    }
+
+    it('rejects a caller banned while solving the CAPTCHA, without enqueueing, and signals ban_match', async () => {
+      services.records.checkBan = vi.fn().mockResolvedValue(true)
+      const res = await submit()
       expect(res.status).toBe(200)
       expect(await res.text()).toContain('<Reject')
       expect(adapter.handleCaptchaResponse).not.toHaveBeenCalled()
+      expect(services.settings.submitCaptcha).not.toHaveBeenCalled()
+      expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'spam', 'ban_match')
     })
 
-    it('returns enqueue on correct CAPTCHA digits', async () => {
-      services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
-      const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/captcha?hub=hub-1&callSid=CA-captcha&lang=en', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'Digits=1234&From=%2B15551111111',
-      })
+    it('a pass enqueues the caller; the adapter is never handed the expected answer', async () => {
+      const res = await submit()
       expect(res.status).toBe(200)
-      expect(res.headers.get('Content-Type')).toContain('xml')
       expect(await res.text()).toContain('<Enqueue')
+      expect(services.settings.submitCaptcha).toHaveBeenCalledWith({ callSid: 'CA-captcha', digits: '1234' })
+      const params = (adapter.handleCaptchaResponse as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      expect(params).toMatchObject({ outcome: 'pass', callSid: 'CA-captcha', callerLanguage: 'en', hubId: 'hub-1' })
+      expect(params).not.toHaveProperty('expectedDigits')
+      expect(services.incidents.signal).not.toHaveBeenCalled()
+    })
+
+    it.each(['retry', 'repeat'] as const)('%s re-challenges with the same digits and does not ring or signal', async (outcome) => {
+      services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome, digitsToSpeak: '4821', round: 1 })
+      const res = await submit()
+      expect(res.status).toBe(200)
       expect(adapter.handleCaptchaResponse).toHaveBeenCalledWith(
-        expect.objectContaining({
-          callSid: 'CA-captcha',
-          digits: '1234',
-          expectedDigits: '1234',
-          callerLanguage: 'en',
-          hubId: 'hub-1',
-        }),
+        expect.objectContaining({ outcome, digitsToSpeak: '4821', round: 1, callSid: 'CA-captcha', hubId: 'hub-1' }),
       )
+      expect(services.calls.addCall).not.toHaveBeenCalled()
+      expect(adapter.handleVoicemail).not.toHaveBeenCalled()
+      expect(services.incidents.signal).not.toHaveBeenCalled()
     })
 
-    it('returns hangup on incorrect CAPTCHA digits', async () => {
-      services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: false, expected: '5678' })
-      adapter.parseCaptchaWebhook = vi.fn().mockResolvedValue({ digits: '0000', callerNumber: '+15551111111' })
-      adapter.handleCaptchaResponse = vi.fn().mockResolvedValue({
-        contentType: 'text/xml',
-        body: '<Response><Hangup/></Response>',
-      })
-      const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/captcha?hub=hub-1&callSid=CA-captcha&lang=en', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'Digits=0000&From=%2B15551111111',
-      })
+    it.each(['fail', 'timeout'] as const)('%s goes to voicemail — never a silent drop — and signals the incident', async (outcome) => {
+      services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome })
+      const res = await submit('Digits=0000&From=%2B15551111111')
       expect(res.status).toBe(200)
-      expect(await res.text()).toContain('<Hangup')
+      expect(adapter.handleCaptchaResponse).not.toHaveBeenCalled()
+      expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', expect.objectContaining({ callId: 'CA-captcha' }))
+      expect(adapter.handleVoicemail).toHaveBeenCalledWith(expect.objectContaining({ callSid: 'CA-captcha', callerLanguage: 'en' }))
+      expect(adapter.hangupResponse).not.toHaveBeenCalled()
+      expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'spam', outcome)
     })
 
-    it('starts parallel ringing on correct CAPTCHA', async () => {
-      services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
-      const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/captcha?hub=hub-1&callSid=CA-captcha&lang=en', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'Digits=1234&From=%2B15551111111',
+    it('a timeout arrives with no digits and is submitted as such', async () => {
+      adapter.parseCaptchaWebhook = vi.fn().mockResolvedValue({ digits: '', callerNumber: '+15551111111' })
+      services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+      await submit('CallSid=CA-captcha&From=%2B15551111111')
+      expect(services.settings.submitCaptcha).toHaveBeenCalledWith({ callSid: 'CA-captcha', digits: '' })
+    })
+
+    // Twilio and Plivo post byte-identical bodies for two timeouts on one call;
+    // only the signed callback URL's `round` differs. Modelled on the real
+    // nonce table: unique on what the route hands checkWebhookReplay.
+    it('two identical bodies on different challenge rounds are both processed; a true replay is not', async () => {
+      const seen = new Set<string>()
+      vi.mocked(checkWebhookReplay).mockImplementation(async (_db, provider, input) => {
+        const key = `${provider}:${input}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
       })
-      expect(res.status).toBe(200)
+      try {
+        services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+        const body = 'CallSid=CA-captcha&From=%2B15551111111'
+        await submit(body, 'hub=hub-1&callSid=CA-captcha&lang=en&round=0')
+        await submit(body, 'hub=hub-1&callSid=CA-captcha&lang=en&round=1')
+        expect(services.settings.submitCaptcha).toHaveBeenCalledTimes(2)
+
+        const replay = await submit(body, 'hub=hub-1&callSid=CA-captcha&lang=en&round=1')
+        expect(await replay.text()).toBe('OK')
+        expect(services.settings.submitCaptcha).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.mocked(checkWebhookReplay).mockReset()
+        vi.mocked(checkWebhookReplay).mockResolvedValue(true)
+      }
     })
   })
 

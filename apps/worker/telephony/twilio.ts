@@ -143,7 +143,6 @@ export class TwilioAdapter implements TelephonyAdapter {
 
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
-    const tLang = getTwilioVoice(lang)
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingTwiml = sayOrPlay('greeting', lang, params.audioUrls, greetingText)
@@ -166,18 +165,10 @@ export class TwilioAdapter implements TelephonyAdapter {
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
       const captchaTwiml = sayOrPlay('captchaPrompt', lang, params.audioUrls)
       return this.twiml(`
         <Response>
-          <Gather numDigits="4" action="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" timeout="10">
-            ${greetingTwiml}
-            ${noticeTwiml}
-            ${captchaTwiml}
-            <Say language="${tLang}">${escapeXml(digits.split('').join(', '))}.</Say>
-          </Gather>
-          <Say language="${tLang}">${escapeXml(getPrompt('captchaTimeout', lang))}</Say>
-          <Hangup/>
+          ${this.captchaChallenge(params.callSid, lang, params.hubId, params.captchaDigits, greetingTwiml + noticeTwiml + captchaTwiml, 0)}
         </Response>
       `)
     }
@@ -198,20 +189,47 @@ export class TwilioAdapter implements TelephonyAdapter {
     const tLang = getTwilioVoice(lang)
     const hp = hubXmlParam(params.hubId)
 
-    if (params.digits === params.expectedDigits) {
+    if (params.outcome === 'pass') {
       return this.twiml(`
         <Response>
-          <Say language="${tLang}">${getPrompt('captchaSuccess', lang)}</Say>
+          <Say language="${tLang}">${escapeXml(getPrompt('captchaSuccess', lang))}</Say>
           <Enqueue waitUrl="/api/telephony/wait-music?lang=${lang}${hp}" action="/api/telephony/queue-exit?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST">${params.callSid}</Enqueue>
         </Response>
       `)
     }
+
+    const lead = params.outcome === 'retry'
+      ? sayOrPlay('captchaRetry', lang)
+      : sayOrPlay('captchaPrompt', lang, params.audioUrls)
     return this.twiml(`
       <Response>
-        <Say language="${tLang}">${getPrompt('captchaFail', lang)}</Say>
-        <Hangup/>
+        ${this.captchaChallenge(params.callSid, lang, params.hubId, params.digitsToSpeak, lead, params.round)}
       </Response>
     `)
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then a gather for
+   * the answer.
+   *
+   * - `finishOnKey` stays Twilio's default `#`, so `*` is collected as a digit
+   *   and arrives in `Digits` (the server reads it as "say them again"); with
+   *   `numDigits="4"` a lone `*` is submitted once `timeout` elapses.
+   * - With no input at all `<Gather>` falls through to the next verb (Twilio
+   *   requests `action` only when it received input), so a `<Redirect>` to the
+   *   same route follows it: the server learns of the timeout as a submission
+   *   with no digits, counts it, and gives the second attempt.
+   */
+  private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: string, round: number): string {
+    const tLang = getTwilioVoice(lang)
+    const action = `/api/telephony/captcha?callSid=${callSid}&amp;lang=${lang}&amp;round=${round}${hubXmlParam(hubId)}`
+    return `
+          <Gather numDigits="4" action="${action}" method="POST" timeout="10">
+            ${lead}
+            <Say language="${tLang}">${escapeXml(digits.split('').join(', '))}.</Say>
+            ${sayOrPlay('captchaRepeatHint', lang)}
+          </Gather>
+          <Redirect method="POST">${action}</Redirect>`
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
@@ -331,15 +349,7 @@ export class TwilioAdapter implements TelephonyAdapter {
     const signature = request.headers.get('X-Twilio-Signature')
     if (!signature) return false
 
-    const url = buildWebhookUrl(request, this.webhookBaseUrl)
-    const body = await request.clone().text()
-    const params = new URLSearchParams(body)
-
-    let dataString = url.toString()
-    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
-    for (const [key, value] of sortedEntries) {
-      dataString += key + value
-    }
+    const dataString = await this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
@@ -361,6 +371,27 @@ export class TwilioAdapter implements TelephonyAdapter {
       result |= aBuf[i] ^ bBuf[i]
     }
     return result === 0
+  }
+
+  /**
+   * The canonical string Twilio signs: the full URL, query included, then the
+   * POST params sorted by name and decoded. Shared by `validateWebhook` and
+   * `webhookReplayKey`, so a request re-encoded or with its params reordered —
+   * which still validates — is recognised as the same request.
+   */
+  protected async signingInput(request: Request): Promise<string> {
+    const url = buildWebhookUrl(request, this.webhookBaseUrl)
+    const params = new URLSearchParams(await request.clone().text())
+    let dataString = url.toString()
+    const sortedEntries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
+    for (const [key, value] of sortedEntries) {
+      dataString += key + value
+    }
+    return dataString
+  }
+
+  async webhookReplayKey(request: Request): Promise<string> {
+    return this.signingInput(request)
   }
 
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {

@@ -127,14 +127,42 @@ export const ttlOverridesBodySchema = z.record(z.string(), z.number().int().min(
 
 export const setupCompleteBodySchema = z.object({})
 
-export const spamSettingsSchema = z.object({
+/**
+ * What a caller over the hub's per-number call limit gets — one setting, one
+ * code path on the server (the operator's Q4 ruling, #2179):
+ * - `reject`: the call is refused unanswered;
+ * - `message`: the `rateLimited` prompt is played, nothing is recorded, then the call ends;
+ * - `voicemail`: the caller is offered voicemail instead of a volunteer.
+ * Every one of them is signalled as a `spam` incident, so the hub's
+ * `settings:manage-spam` holders can see it happening.
+ */
+export const overLimitActionSchema = z.enum(['reject', 'message', 'voicemail'])
+export type OverLimitAction = z.infer<typeof overLimitActionSchema>
+
+const spamSettingsFields = {
   voiceCaptchaEnabled: z.boolean().optional(),
   rateLimitEnabled: z.boolean().optional(),
   maxCallsPerMinute: z.number().int().min(1).max(100).optional(),
   blockDurationMinutes: z.number().int().min(1).max(1440).optional(),
+}
+
+export const spamSettingsSchema = z.object({
+  ...spamSettingsFields,
+  overLimitAction: overLimitActionSchema.optional().default('message'),
 })
 
 export type SpamSettings = z.infer<typeof spamSettingsSchema>
+
+/**
+ * PATCH /settings/spam body. The same fields WITHOUT their defaults: a PATCH
+ * derived from `spamSettingsSchema` would materialise `overLimitAction:
+ * 'message'` for every body that omits it, silently resetting a hub's chosen
+ * action whenever any other spam toggle is flipped (#1643).
+ */
+export const spamSettingsPatchSchema = z.object({
+  ...spamSettingsFields,
+  overLimitAction: overLimitActionSchema.optional(),
+})
 
 export const callSettingsSchema = z.object({
   queueTimeoutSeconds: z.number().int().min(30).max(300).optional(),

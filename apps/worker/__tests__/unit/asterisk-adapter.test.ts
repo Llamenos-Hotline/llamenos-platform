@@ -126,7 +126,11 @@ describe('AsteriskAdapter', () => {
       expect(gather.numDigits).toBe(4)
       expect(gather.callbackEvent).toBe('captcha_response')
       // One clip per digit (ten clips a language, not one per call), each hiding its digit.
-      expect(spokenBy(body.commands).slice(-4)).toEqual(['1', '2', '3', '4'].map((digit) => ({ locale: 'es', digit })))
+      expect(spokenBy(body.commands).slice(-5, -1)).toEqual(['1', '2', '3', '4'].map((digit) => ({ locale: 'es', digit })))
+      // #2179: the star hint follows the digits, and star ends the gather at once.
+      expect(spokenBy(body.commands).at(-1)).toEqual({ locale: 'es', text: getPrompt('captchaRepeatHint', 'es') })
+      expect(gather.finishOnKey).toBe('*')
+      expect(gather.metadata).toMatchObject({ callSid: 'call-1', lang: 'es', round: '0' })
     })
 
     it('queues caller when no captcha and not rate limited', async () => {
@@ -149,13 +153,9 @@ describe('AsteriskAdapter', () => {
   })
 
   describe('handleCaptchaResponse', () => {
-    it('queues caller when digits match', async () => {
+    it('queues caller on pass', async () => {
       const response = await adapter.handleCaptchaResponse({
-        digits: '1234',
-        expectedDigits: '1234',
-        callerLanguage: 'en',
-        callSid: 'call-1',
-        speechUrl: fakeSpeech,
+        outcome: 'pass', callerLanguage: 'en', callSid: 'call-1', speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -163,18 +163,25 @@ describe('AsteriskAdapter', () => {
       expect(queue).toBeDefined()
     })
 
-    it('hangs up when digits do not match', async () => {
+    it('on retry plays captchaRetry, the same digits and the star hint, then gathers with star as a terminator', async () => {
       const response = await adapter.handleCaptchaResponse({
-        digits: '9999',
-        expectedDigits: '1234',
-        callerLanguage: 'en',
-        callSid: 'call-1',
-        speechUrl: fakeSpeech,
+        outcome: 'retry', digitsToSpeak: '1234', round: 1, callerLanguage: 'en', callSid: 'call-1', speechUrl: fakeSpeech,
       })
 
-      const body = JSON.parse(response.body)
-      const hangup = body.commands.find((c: { action: string }) => c.action === 'hangup')
-      expect(hangup).toBeDefined()
+      const commands: Command[] = JSON.parse(response.body).commands
+      expect(spokenBy(commands)).toEqual([
+        { locale: 'en', text: getPrompt('captchaRetry', 'en') },
+        { locale: 'en', digit: '1' },
+        { locale: 'en', digit: '2' },
+        { locale: 'en', digit: '3' },
+        { locale: 'en', digit: '4' },
+        { locale: 'en', text: getPrompt('captchaRepeatHint', 'en') },
+      ])
+      const gather = commands.at(-1) as Command & { finishOnKey?: string; metadata?: Record<string, string> }
+      expect(gather.action).toBe('gather')
+      expect(gather.finishOnKey).toBe('*')
+      expect(gather.metadata).toMatchObject({ callSid: 'call-1', lang: 'en', round: '1' })
+      expect(commands.some((c) => c.action === 'hangup')).toBe(false)
     })
   })
 

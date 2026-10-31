@@ -174,23 +174,11 @@ export class VonageAdapter implements TelephonyAdapter {
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const digits = params.captchaDigits
       const captchaAction = sayOrStream('captchaPrompt', lang, params.audioUrls, undefined, true)
-      const digitsTalk = talk(digits.split('').join(', ') + '.', lang, true)
-
-      return this.ncco([
-        greetingAction,
-        ...noticeActions,
-        captchaAction,
-        digitsTalk,
-        {
-          action: 'input',
-          type: ['dtmf'],
-          dtmf: { maxDigits: 4, timeOut: 10 },
-          eventUrl: [`/api/telephony/captcha?callSid=${params.callSid}&lang=${lang}${hp}`],
-          eventMethod: 'POST',
-        },
-      ])
+      return this.ncco(this.captchaChallenge(
+        params.callSid, lang, params.hubId, params.captchaDigits,
+        [greetingAction, ...noticeActions, captchaAction], 0,
+      ))
     }
 
     const holdAction = sayOrStream('pleaseHold', lang, params.audioUrls)
@@ -212,7 +200,7 @@ export class VonageAdapter implements TelephonyAdapter {
     const lang = params.callerLanguage
     const hp = hubQP(params.hubId)
 
-    if (params.digits === params.expectedDigits) {
+    if (params.outcome === 'pass') {
       return this.ncco([
         talk(getPrompt('captchaSuccess', lang), lang),
         {
@@ -225,7 +213,34 @@ export class VonageAdapter implements TelephonyAdapter {
       ])
     }
 
-    return this.ncco([talk(getPrompt('captchaFail', lang), lang)])
+    const lead = params.outcome === 'retry'
+      ? sayOrStream('captchaRetry', lang, undefined, undefined, true)
+      : sayOrStream('captchaPrompt', lang, params.audioUrls, undefined, true)
+    return this.ncco(this.captchaChallenge(params.callSid, lang, params.hubId, params.digitsToSpeak, [lead], params.round))
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then an `input`.
+   *
+   * `submitOnHash` stays false, so a `*` is an ordinary key press delivered in
+   * `dtmf.digits` (the server reads it as "say them again"), submitted after
+   * `timeOut` seconds without a further press. The input event is sent to
+   * `eventUrl` after that pause whether or not anything was pressed, so a
+   * timeout reaches the server as a submission with no digits.
+   */
+  private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: Record<string, unknown>[], round: number): Record<string, unknown>[] {
+    return [
+      ...lead,
+      talk(digits.split('').join(', ') + '.', lang, true),
+      sayOrStream('captchaRepeatHint', lang, undefined, undefined, true),
+      {
+        action: 'input',
+        type: ['dtmf'],
+        dtmf: { maxDigits: 4, timeOut: 10 },
+        eventUrl: [`/api/telephony/captcha?callSid=${callSid}&lang=${lang}&round=${round}${hubQP(hubId)}`],
+        eventMethod: 'POST',
+      },
+    ]
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
@@ -365,15 +380,7 @@ export class VonageAdapter implements TelephonyAdapter {
     const sig = url.searchParams.get('sig')
     if (!sig) return false
 
-    // Reconstruct signing input: sort all query params (excluding sig), concatenate
-    const params = Array.from(url.searchParams.entries())
-      .filter(([key]) => key !== 'sig')
-      .sort(([a], [b]) => a.localeCompare(b))
-
-    let sigInput = ''
-    for (const [key, value] of params) {
-      sigInput += `&${key}=${value}`
-    }
+    const sigInput = this.signingInput(request)
 
     const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
@@ -397,6 +404,32 @@ export class VonageAdapter implements TelephonyAdapter {
       result |= aBuf[i] ^ bBuf[i]
     }
     return result === 0
+  }
+
+  /**
+   * The canonical string Vonage signs: every query parameter but `sig`, sorted
+   * by name and decoded (a timestamp among them). Shared by `validateWebhook`
+   * and `webhookReplayKey`.
+   */
+  private signingInput(request: Request): string {
+    const params = Array.from(new URL(request.url).searchParams.entries())
+      .filter(([key]) => key !== 'sig')
+      .sort(([a], [b]) => a.localeCompare(b))
+    let sigInput = ''
+    for (const [key, value] of params) {
+      sigInput += `&${key}=${value}`
+    }
+    return sigInput
+  }
+
+  /**
+   * The canonical signed query, plus the body. The body is unsigned — anyone
+   * holding a valid query could already send any body, so including it opens
+   * nothing — and it keeps two different events that share a signed query
+   * (same callback, same second) from colliding.
+   */
+  async webhookReplayKey(request: Request): Promise<string> {
+    return `${this.signingInput(request)}\n${await request.clone().text()}`
   }
 
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {
