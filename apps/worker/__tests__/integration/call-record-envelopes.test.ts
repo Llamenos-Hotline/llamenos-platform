@@ -102,7 +102,7 @@ function expectNoRawCallerDigits(row: Record<string, unknown>) {
 }
 
 describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
-  describe('migration 0074 keeps no last-four digit (#2262)', () => {
+  describe('the scrub_caller_last4 migration keeps no last-four digit (#2262)', () => {
     const insertLegacy = async () => {
       await fresh.raw.unsafe(`INSERT INTO active_calls (call_id, hub_id, caller_last4) VALUES ('legacy-active', 'hub-1', '4567')`)
       await fresh.raw.unsafe(
@@ -124,8 +124,9 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
 
     function migrationStatements(): string[] {
       const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
-      const file = readdirSync(dir).find((f) => f.startsWith('0074_') && f.endsWith('.sql'))
-      expect(file, 'migration 0074 is missing').toBeTruthy()
+      // By name: a timestamped migration's prefix is when it was generated (#2391).
+      const file = readdirSync(dir).find((f) => /^\d+_scrub_caller_last4\.sql$/.test(f))
+      expect(file, 'the scrub_caller_last4 migration is missing').toBeTruthy()
       return readFileSync(join(dir, file!), 'utf8')
         .split('--> statement-breakpoint')
         .map((st) => st.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
