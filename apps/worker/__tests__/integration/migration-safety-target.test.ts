@@ -18,6 +18,7 @@
  * Every test gets its own database: a copy of one template migrated once by
  * the real runner. Each is dropped on teardown.
  */
+import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -244,6 +245,9 @@ describe('migration safety gate --target', () => {
     const meta = path.join(migrations, 'meta')
     const latest = readdirSync(meta).filter((f) => f.endsWith('_snapshot.json')).sort().at(-1) as string
     const snapshot = JSON.parse(readFileSync(path.join(meta, latest), 'utf-8'))
+    // Its own id, as drizzle-kit gives every snapshot: a copy repeating the
+    // parent's id is a structural error the gate reports (#2391).
+    snapshot.id = randomUUID()
     delete snapshot.tables['public.users'].columns.team_id
     // Release N forgets users.team_id; release N+1 contracts it. CI judged
     // N+1 against a base that already held N, so its annotation passed there.

@@ -107,6 +107,17 @@ pre-push:
       run: bun run codegen:check
     check-migration-drift:
       run: bun scripts/check-migration-drift.ts
+    # #2391: a migration that cannot land as named fails before it is pushed,
+    # with the fix. The open-PR sweep needs gh; CI's migration-drift job runs
+    # it regardless, so without gh this still checks everything else.
+    check-migration-claims:
+      run: |
+        if gh auth status >/dev/null 2>&1; then
+          bun scripts/check-migration-claims.ts --against-open-prs
+        else
+          echo "migration-claims: gh is not authenticated; skipping only the open-PR sweep (CI runs it)"
+          bun scripts/check-migration-claims.ts
+        fi
     rust-format-check:
       glob: "packages/crypto/**/*.rs"
       run: bun run crypto:fmt

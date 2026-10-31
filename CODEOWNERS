@@ -166,9 +166,9 @@ scripts/typecheck-tests-gate.ts     @rhonda-rodododo
 # Custom lint rules loaded by eslint.config.js (no-inline-api-shape, the
 # api-schema-binding rail): a rule that reports nothing is a lint gate off.
 scripts/eslint-rules/               @rhonda-rodododo
-# Rewrites the drizzle snapshot that check-migration-drift compares against —
-# the migration gate's baseline writer.
-scripts/regenerate-snapshot.ts      @rhonda-rodododo
+# Writes every migration and the drizzle snapshot that check-migration-drift
+# compares against — the migration gate's baseline writer.
+scripts/db-generate.ts              @rhonda-rodododo
 # The built-image gate (image-smoke.yml, and release.yml before publish):
 # image-smoke.sh runs the REAL entrypoint under production hardening against
 # PostgreSQL 17. verify-runtime.ts is the startup invariant that entrypoint
