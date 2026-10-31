@@ -10,7 +10,6 @@
  */
 import { getClientIp } from '../lib/client-ip'
 import { recordWebhookRejected, type WebhookAttribution, type WebhookRejectReason } from '../routes/metrics'
-import type { TelephonyAdapter } from './adapter'
 
 /** One counted refusal per source prefix, reason and attribution per minute (a /24 for IPv4, a /48 for IPv6). */
 const SOURCE_WINDOW_MS = 60_000
@@ -60,16 +59,18 @@ export function resetWebhookRejectionDamping(): void {
 export interface WebhookRejection {
   reason: WebhookRejectReason
   /**
-   * The adapter whose signature check refused the request. Absent when no
-   * provider was configured.
-   */
-  adapter?: Pick<TelephonyAdapter, 'webhookNamesOwnAccount'>
-  /**
    * Whether a provider-address allowlist is configured AND this request passed
    * it. Without that there is no evidence the request came from our provider,
    * so it cannot be attributed to it.
    */
   providerAddressVerified: boolean
+  /**
+   * Whether the request names our provider account in the provider-populated
+   * part of it (`TelephonyAdapter.webhookNamesOwnAccount`). The route reads it
+   * once, from a body it has already bounded, and the hub's `provider-auth`
+   * incident is classified from the same answer. Absent = not read.
+   */
+  namesOwnAccount?: boolean
 }
 
 /**
@@ -81,12 +82,11 @@ export interface WebhookRejection {
  * egress is shared by every customer, so any one or two of those proves
  * nothing; every other combination is `unattributed`.
  */
-export async function recordTelephonyWebhookRejection(req: Request, rejection: WebhookRejection): Promise<void> {
-  let attribution: WebhookAttribution = 'unattributed'
-  if (rejection.reason === 'signature_invalid' && rejection.providerAddressVerified && rejection.adapter?.webhookNamesOwnAccount) {
-    // Classification is observability: it must never turn a 403 into a 500.
-    attribution = (await rejection.adapter.webhookNamesOwnAccount(req).catch(() => false)) ? 'own_account' : 'unattributed'
-  }
+export function recordTelephonyWebhookRejection(req: Request, rejection: WebhookRejection): void {
+  const attribution: WebhookAttribution =
+    rejection.reason === 'signature_invalid' && rejection.providerAddressVerified && rejection.namesOwnAccount === true
+      ? 'own_account'
+      : 'unattributed'
 
   // Damp AFTER classifying and per (prefix, reason, attribution). A provider's
   // egress is shared by all its customers, so an attacker inside our provider's

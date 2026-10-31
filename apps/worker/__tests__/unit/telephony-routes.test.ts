@@ -252,10 +252,47 @@ describe('Telephony routes', () => {
       it('counts a request from outside the IP allowlist as ip_not_allowed, still 403', async () => {
         const before = await counts()
         const app = await createTestApp(adapter, services, { TELEPHONY_WEBHOOK_IPS: '203.0.113.0/24' })
+        // The signature verifies — and the request is still refused. It is evaluated
+        // only to name the cause (a stale allowlist), never to accept.
         const res = await post(app, '198.51.100.3')
         expect(res.status).toBe(403)
         expect((await counts())['ip_not_allowed/unattributed']).toBe(before['ip_not_allowed/unattributed'] + 1)
-        expect(adapter.validateWebhook).not.toHaveBeenCalled()
+      })
+
+      it('counts our account from the allowlisted provider address with a bad signature as own_account', async () => {
+        const before = await counts()
+        adapter.validateWebhook = vi.fn().mockResolvedValue(false)
+        adapter.webhookNamesOwnAccount = vi.fn().mockResolvedValue(true)
+        const app = await createTestApp(adapter, services, { TELEPHONY_WEBHOOK_IPS: '198.51.100.0/24' })
+        const res = await post(app, '198.51.100.5')
+        expect(res.status).toBe(403)
+        expect((await counts())['signature_invalid/own_account']).toBe(before['signature_invalid/own_account'] + 1)
+      })
+
+      it('does not read an oversized body to classify it: unattributed, still 403', async () => {
+        const before = await counts()
+        adapter.webhookNamesOwnAccount = vi.fn().mockResolvedValue(true)
+        const app = await createTestApp(adapter, services, { TELEPHONY_WEBHOOK_IPS: '198.51.100.0/24' })
+        const res = await app.request('/api/telephony/incoming', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': '198.51.100.6' },
+          body: `AccountSid=ACown&pad=${'x'.repeat(128 * 1024)}`,
+        })
+        expect(res.status).toBe(403)
+        expect(adapter.webhookNamesOwnAccount).not.toHaveBeenCalled()
+        const after = await counts()
+        expect(after['signature_invalid/unattributed']).toBe(before['signature_invalid/unattributed'] + 1)
+        expect(after['signature_invalid/own_account']).toBe(before['signature_invalid/own_account'])
+      })
+
+      it('a classifier that throws still refuses with 403 and counts the rejection as unattributed', async () => {
+        const before = await counts()
+        adapter.validateWebhook = vi.fn().mockResolvedValue(false)
+        adapter.webhookNamesOwnAccount = vi.fn().mockRejectedValue(new Error('boom'))
+        const app = await createTestApp(adapter, services, { TELEPHONY_WEBHOOK_IPS: '198.51.100.0/24' })
+        const res = await post(app, '198.51.100.7')
+        expect(res.status).toBe(403)
+        expect((await counts())['signature_invalid/unattributed']).toBe(before['signature_invalid/unattributed'] + 1)
       })
 
       it('counts a request when no provider is configured as no_provider', async () => {

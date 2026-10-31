@@ -99,9 +99,6 @@ function hubXmlParam(hubId?: string): string {
 
 const logger = createLogger('telephony.twilio')
 
-/** Largest webhook body read to classify a refused request; real ones are well under 4 KiB. */
-const MAX_ATTRIBUTION_BODY_BYTES = 16 * 1024
-
 /**
  * TwilioAdapter — Twilio implementation of TelephonyAdapter.
  */
@@ -399,19 +396,6 @@ export class TwilioAdapter implements TelephonyAdapter {
     return this.signingInput(request)
   }
 
-  /**
-   * Twilio-compatible providers (SignalWire included) put the account in the
-   * form-encoded `AccountSid`. The body is read only when its declared length is
-   * small: this runs on requests that failed authentication.
-   */
-  async webhookNamesOwnAccount(request: Request): Promise<boolean> {
-    const length = Number(request.headers.get('content-length'))
-    if (!Number.isInteger(length) || length <= 0 || length > MAX_ATTRIBUTION_BODY_BYTES) return false
-    if (!request.headers.get('content-type')?.startsWith('application/x-www-form-urlencoded')) return false
-    const body = await request.clone().text()
-    return new URLSearchParams(body).get('AccountSid') === this.accountSid
-  }
-
   async getCallRecording(callSid: string): Promise<ArrayBuffer | null> {
     const res = await this.twilioApi(`/Calls/${callSid}/Recordings.json`, {
       method: 'GET',
@@ -460,11 +444,13 @@ export class TwilioAdapter implements TelephonyAdapter {
   }
 
   /**
-   * Twilio (and SignalWire, with the project id) fills `AccountSid` in every
-   * voice webhook. Exactly one must be present: a body repeating the field is
-   * not one the provider wrote, and `get` would read only the first.
+   * Twilio (and SignalWire, with the project id) fills the form-encoded
+   * `AccountSid` in every voice webhook. Exactly one must be present: a body
+   * repeating the field is not one the provider wrote, and `get` would read
+   * only the first.
    */
   async webhookNamesOwnAccount(request: Request): Promise<boolean> {
+    if (!request.headers.get('content-type')?.startsWith('application/x-www-form-urlencoded')) return false
     try {
       const sids = new URLSearchParams(await request.clone().text()).getAll('AccountSid')
       return sids.length === 1 && sids[0] === this.accountSid

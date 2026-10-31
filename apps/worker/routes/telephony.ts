@@ -291,7 +291,10 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
 
   // If no telephony provider is configured, reject with 403 — same as
   // signature validation failure. Never reveal whether telephony is set up.
-  if (!adapter) return forbidden(c)
+  if (!adapter) {
+    recordTelephonyWebhookRejection(c.req.raw, { reason: 'no_provider', providerAddressVerified: false })
+    return forbidden(c)
+  }
 
   // W05-H03: IP allowlist (opt-in via TELEPHONY_WEBHOOK_IPS env var).
   // `null` = no allowlist configured: there is no provider-IP evidence, so no
@@ -306,6 +309,8 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
     // the cause — a VALID one means the allowlist is stale — and never changes
     // the answer. A source already refused this minute is refused unread.
     logger.warn('Telephony webhook IP not in allowlist')
+    // The instance counter damps itself per source prefix and reads no body.
+    recordTelephonyWebhookRejection(c.req.raw, { reason: 'ip_not_allowed', providerAddressVerified: false })
     if (!providerAuthMonitor.admit(sourceIp, 'ip')) return forbidden(c)
     const bounded = await bodyWithinLimit(c.req.raw)
     const signedByUs = bounded && await adapter.validateWebhook(c.req.raw)
@@ -317,6 +322,8 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   // signature IS the authentication — damping can gate only the counting.
   if (!(await bodyWithinLimit(c.req.raw))) {
     logger.warn(`Webhook body over the limit for ${url.pathname}`)
+    // Refused unread, so its account id is unknown: unattributed.
+    recordTelephonyWebhookRejection(c.req.raw, { reason: 'signature_invalid', providerAddressVerified: ipAllowed === true })
     if (providerAuthMonitor.admit(sourceIp, 'signature_invalid')) {
       await signalProviderAuthRejection(c, adapter, hubId, 'signature_invalid', false)
     }
@@ -328,8 +335,13 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   if (!isValid) {
     logger.error(`Webhook signature FAILED for ${url.pathname}`)
     // Notify-level only as a conjunction: provider egress IP (allowlisted)
-    // AND our account id (provider-populated) AND the bad signature.
-    const ownAccount = ipAllowed === true && (await adapter.webhookNamesOwnAccount?.(c.req.raw)) === true
+    // AND our account id (provider-populated) AND the bad signature. Read once,
+    // for the hub's incident and the instance counter alike; classifying is
+    // observability and must never turn this 403 into a 500.
+    const providerAddressVerified = ipAllowed === true
+    const ownAccount = providerAddressVerified &&
+      (await adapter.webhookNamesOwnAccount?.(c.req.raw).catch(() => false)) === true
+    recordTelephonyWebhookRejection(c.req.raw, { reason: 'signature_invalid', providerAddressVerified, namesOwnAccount: ownAccount })
     const kind = ownAccount ? 'own_account_signature_invalid' : 'signature_invalid'
     if (providerAuthMonitor.admit(sourceIp, kind)) {
       await signalProviderAuthRejection(c, adapter, hubId, kind, true)

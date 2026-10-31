@@ -33,6 +33,7 @@ function makeAdapter(opts: { signatureValid?: boolean; ownAccount?: boolean } = 
   return {
     validateWebhook: vi.fn().mockResolvedValue(opts.signatureValid ?? false),
     webhookNamesOwnAccount: vi.fn().mockResolvedValue(opts.ownAccount ?? false),
+    webhookReplayKey: vi.fn(async (req: Request) => `${req.url}\n${await req.clone().text()}`),
     parseIncomingWebhook: vi.fn().mockResolvedValue({ callSid: 'CA-1', callerNumber: '+15551111111', calledNumber: HUB_NUMBER }),
     parseLanguageWebhook: vi.fn().mockResolvedValue({ callSid: 'CA-1', callerNumber: '+15551111111', digits: '1' }),
     handleLanguageMenu: vi.fn().mockResolvedValue({ contentType: 'text/xml', body: '<Response/>' }),

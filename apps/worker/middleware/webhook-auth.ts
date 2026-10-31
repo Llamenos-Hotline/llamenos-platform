@@ -41,7 +41,6 @@ export function webhookAuth(options: WebhookAuthOptions) {
       const clientIp = getClientIp(c.req.raw)
       if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
         logger.warn('Webhook IP not in allowlist', { provider })
-        await onIpRejected?.(c.req.raw)
         return c.text('Forbidden', 403)
       }
     }
