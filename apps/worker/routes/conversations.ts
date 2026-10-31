@@ -632,7 +632,8 @@ conversations.get('/:id/assignee-envelopes',
   async (c) => {
     const services = c.get('services')
     const id = c.req.param('id')
-    const conv = await services.conversations.getByIdForHub(id, requireHubId(c))
+    // A conversation of another hub is a 404, the same as a missing one.
+    await services.conversations.getByIdForHub(id, requireHubId(c))
 
     const gaps = await services.conversations.listAssigneeEnvelopeGaps(id)
     return c.json(gaps)

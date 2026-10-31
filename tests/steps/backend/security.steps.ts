@@ -318,10 +318,11 @@ When('a message {string} is encrypted for volunteer and admin', async ({ request
 
   const { simulateIncomingMessage, uniqueCallerNumber } = await import('../../simulation-helpers')
   const sender = uniqueCallerNumber()
-  const hubId = getScenarioState(world).hubId
+  const volunteer = state.volunteerKeypair
+  if (!volunteer) throw new Error('the scenario needs a registered volunteer first')
   // Conversations are read only through their hub (#2381), so the volunteer
   // who will read this one must be a member of it.
-  await addHubMemberViaApi(request, hubId, state.volunteerKeypair!.pubkey, ['role-volunteer'])
+  await addHubMemberViaApi(request, getScenarioState(world).hubId, volunteer.pubkey, ['role-volunteer'])
 
   // The server seals an inbound message for the admin and for whoever the
   // conversation is assigned to, so the conversation has to be assigned to the
