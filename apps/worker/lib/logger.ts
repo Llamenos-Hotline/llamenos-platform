@@ -16,6 +16,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { PROVIDER_ID_KEY_RE, providerRef, providerRefKey, scrubProviderSids } from './provider-ref'
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal'
 
@@ -181,11 +182,12 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
 const MAX_REDACT_DEPTH = 3
 
 function redactString(s: string): string {
-  return s
+  const redacted = s
     .replace(NSEC_RE, '[REDACTED:nsec]')
     .replace(HEX_KEY_RE, '[REDACTED:hex64]')
     .replace(PHONE_RE, '[REDACTED:PHONE]')
     .replace(EMAIL_RE, '[REDACTED:EMAIL]')
+  return scrubProviderSids(redacted)
 }
 
 function isSensitiveKey(key: string): boolean {
@@ -213,7 +215,12 @@ function redactInner(value: unknown, depth: number, seen: WeakSet<object>): unkn
 
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
-    if (isSensitiveKey(k)) {
+    // A provider identifier joins to the provider's CDR, which holds the caller's number (#2333).
+    // It is logged as a keyed ref under `<key>Ref` so an operator can still follow one call —
+    // checked before the sensitive-key rule, whose `sid` pattern would otherwise blank it.
+    if (PROVIDER_ID_KEY_RE.test(k) && typeof v === 'string') {
+      out[providerRefKey(k)] = providerRef(v)
+    } else if (isSensitiveKey(k)) {
       out[k] = '[REDACTED]'
     } else {
       try {
@@ -361,7 +368,7 @@ function buildEntry(
     timestamp: new Date().toISOString(),
     level,
     namespace,
-    message,
+    message: scrubProviderSids(message),
     ...correlation,
     ...redactedExtra,
   }
