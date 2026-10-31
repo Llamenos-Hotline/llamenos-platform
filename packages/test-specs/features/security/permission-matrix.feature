@@ -222,7 +222,7 @@ Feature: Permission Matrix
   # ─── Notes Domain ─────────────────────────────────────────────────
 
   Scenario Outline: <role> <expected> access to list own notes
-    When the "<role>" user sends "GET" to "/api/notes"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/notes"
     Then the response status should be <status>
 
     Examples:
@@ -234,7 +234,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to create note
-    When the "<role>" user sends "POST" to "/api/notes" with valid note body
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/notes" with valid note body
     Then the response status should be <status>
 
     Examples:
@@ -311,7 +311,7 @@ Feature: Permission Matrix
   # ─── Audit Domain ─────────────────────────────────────────────────
 
   Scenario Outline: <role> <expected> access to audit log
-    When the "<role>" user sends "GET" to "/api/audit"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/audit"
     Then the response status should be <status>
 
     Examples:
@@ -663,7 +663,7 @@ Feature: Permission Matrix
   # ─── Contacts Domain ──────────────────────────────────────────────
 
   Scenario Outline: <role> <expected> access to contacts
-    When the "<role>" user sends "GET" to "/api/contacts"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/contacts"
     Then the response status should be <status>
 
     Examples:
@@ -705,7 +705,7 @@ Feature: Permission Matrix
   # ─── Reports Domain ───────────────────────────────────────────────
 
   Scenario Outline: <role> <expected> access to create report
-    When the "<role>" user sends "POST" to "/api/reports" with valid report body
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/reports" with valid report body
     Then the response status should be <status>
 
     Examples:
@@ -727,15 +727,15 @@ Feature: Permission Matrix
       | GET    | /api/users                    |
       | GET    | /api/shifts                        |
       | GET    | /api/bans                          |
-      | GET    | /api/notes                         |
+      | GET    | /api/hubs/:hubId/notes                         |
       | GET    | /api/calls/active                  |
-      | GET    | /api/audit                         |
+      | GET    | /api/hubs/:hubId/audit                         |
       | GET    | /api/settings/spam                 |
       | GET    | /api/invites                       |
-      | GET    | /api/contacts                      |
+      | GET    | /api/hubs/:hubId/contacts                      |
       | GET    | /api/metrics                       |
       | GET    | /api/hubs                          |
-      | GET    | /api/reports                       |
+      | GET    | /api/hubs/:hubId/reports                       |
       | GET    | /api/conversations                 |
       | GET    | /api/system/health                 |
       | POST   | /api/users                    |

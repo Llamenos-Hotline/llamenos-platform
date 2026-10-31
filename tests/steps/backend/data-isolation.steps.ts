@@ -105,18 +105,14 @@ async function ensureEntityType(
 
 Given(
   'a {string} user {string} with resources',
-  async ({ request, world }, role: string, name: string) => {
-    // Create volunteer with given role
+  async ({ request, world, workerHub }, role: string, name: string) => {
+    // A member of the scenario's hub in the given role: notes, reports and
+    // records exist only inside a hub, so a global role would grant nothing (#2395).
     const vol = await createVolunteerViaApi(request, {
       name: `${name} ${Date.now()}`,
+      hubId: workerHub,
+      roleIds: [role === 'reporter' ? 'role-reporter' : 'role-volunteer'],
     })
-
-    // Assign the right role — use role IDs (not slugs)
-    if (role === 'reporter') {
-      await apiPatch(request, `/users/${vol.pubkey}`, { roles: ['role-reporter'] })
-    } else if (role === 'volunteer') {
-      // Default role is volunteer — no change needed
-    }
 
     const user: UserWithResources = {
       name,
@@ -136,10 +132,10 @@ Given(
       )
       const noteRes = await apiPost<{ note?: { id?: string }; id?: string }>(
         request,
-        '/notes',
+        `/hubs/${workerHub}/notes`,
         {
           encryptedContent: noteContent,
-          callId: await simulateCallForNote(request),
+          callId: await simulateCallForNote(request, workerHub),
           adminEnvelopes: noteEnvelopes,
         },
         vol.deviceKey,
@@ -165,6 +161,7 @@ Given(
       // Create a report authenticated as this reporter so the server records their
       // pubkey as the author — required for reporter-isolation filter in GET /reports
       const report = await createReportViaApi(request, {
+        hubId: workerHub,
         title: `${name}'s report ${Date.now()}`,
         seedHex: vol.deviceKey,
       })
@@ -175,7 +172,7 @@ Given(
   },
 )
 
-When('{string} lists their {word}', async ({ request, world }, name: string, resource: string) => {
+When('{string} lists their {word}', async ({ request, world, workerHub }, name: string, resource: string) => {
   const user = getIsolationState(world).users.get(name)
   expect(user).toBeTruthy()
 
@@ -184,7 +181,7 @@ When('{string} lists their {word}', async ({ request, world }, name: string, res
   if (resource === 'note' || resource === 'notes') {
     const { status, data } = await apiGet<{ notes: Array<{ id: string }> }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       user!.deviceKey,
     )
     results.notes = status === 200 ? data.notes.map(n => n.id) : []
@@ -193,7 +190,7 @@ When('{string} lists their {word}', async ({ request, world }, name: string, res
   if (resource === 'report' || resource === 'reports') {
     const { status, data } = await apiGet<{ conversations: Array<{ id: string }> }>(
       request,
-      '/reports',
+      `/hubs/${workerHub}/reports`,
       user!.deviceKey,
     )
     results.reports = status === 200 ? data.conversations.map(r => r.id) : []
@@ -263,13 +260,20 @@ Then(
 
 // ── Hub-Scoped Isolation ──────────────────────────────────────────
 
+// Each named hub is a real hub, and its volunteer a member of it alone. These
+// steps used to ignore the hub names and file every note in one unscoped pool,
+// so the scenario could not tell hubs apart (#2395).
 Given(
   'hub {string} with a volunteer {string}',
-  async ({ request, world }, _hubName: string, volName: string) => {
+  async ({ request, world }, hubName: string, volName: string) => {
+    const hubId = await createHubViaApi(request, uniqueName(`bdd-iso-${hubName}`))
     const vol = await createVolunteerViaApi(request, {
       name: `${volName} ${Date.now()}`,
+      roleIds: [],
     })
-    getIsolationState(world).users.set(volName, {
+    await addHubMemberViaApi(request, hubId, vol.pubkey, ['role-volunteer'])
+    const isoState = getIsolationState(world)
+    isoState.users.set(volName, {
       name: volName,
       deviceKey: vol.deviceKey,
       pubkey: vol.pubkey,
@@ -277,44 +281,56 @@ Given(
       reportIds: [],
       recordIds: [],
     })
+    isoState.dedicatedHubs.set(hubName, { hubId, memberName: volName })
   },
 )
 
 When(
   '{string} creates a note in hub {string}',
-  async ({ request, world }, volName: string, _hubName: string) => {
+  async ({ request, world }, volName: string, hubName: string) => {
     const user = getIsolationState(world).users.get(volName)
+    const hub = getIsolationState(world).dedicatedHubs.get(hubName)
     expect(user).toBeTruthy()
+    expect(hub, `hub "${hubName}" not set up`).toBeTruthy()
     const { encryptedContent: hubNoteContent, envelopes: hubNoteEnvelopes } = await encryptForTest(
       `${volName}'s hub note`,
       [user!.deviceKey, ADMIN_SEED],
     )
     const res = await apiPost<{ note?: { id?: string }; id?: string }>(
       request,
-      '/notes',
+      `/hubs/${hub!.hubId}/notes`,
       {
         encryptedContent: hubNoteContent,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, hub!.hubId),
         adminEnvelopes: hubNoteEnvelopes,
       },
       user!.deviceKey,
     )
-    if (res.status === 200 || res.status === 201) {
-      const noteId = res.data.note?.id ?? res.data.id
-      if (noteId) user!.noteIds.push(noteId)
-    }
+    expect(res.status, `${volName} files a note in hub ${hubName}`).toBe(201)
+    const noteId = res.data.note?.id ?? res.data.id
+    if (noteId) user!.noteIds.push(noteId)
   },
 )
 
 Then(
   '{string} should not see notes from hub {string}',
-  async ({ request, world }, viewerName: string, _hubName: string) => {
+  async ({ request, world }, viewerName: string, otherHubName: string) => {
     const viewer = getIsolationState(world).users.get(viewerName)
     expect(viewer).toBeTruthy()
+    const isoState = getIsolationState(world)
+    const ownHub = [...isoState.dedicatedHubs.values()].find(h => h.memberName === viewerName)
+    const otherHub = isoState.dedicatedHubs.get(otherHubName)
+    expect(ownHub, `${viewerName} has no hub`).toBeTruthy()
+    expect(otherHub, `hub "${otherHubName}" not set up`).toBeTruthy()
 
+    // The other hub's list is refused outright: not a member.
+    const refused = await apiGet(request, `/hubs/${otherHub!.hubId}/notes`, viewer!.deviceKey)
+    expect(refused.status).toBe(403)
+
+    // And the viewer's own hub's list carries none of the other hub's notes.
     const { status, data } = await apiGet<{ notes: Array<{ id: string }> }>(
       request,
-      '/notes',
+      `/hubs/${ownHub!.hubId}/notes`,
       viewer!.deviceKey,
     )
     expect(status).toBe(200)
@@ -326,6 +342,7 @@ Then(
         otherNoteIds.push(...user.noteIds)
       }
     }
+    expect(otherNoteIds.length, 'the other hub has a note to leak').toBeGreaterThan(0)
 
     const visibleIds = data.notes.map(n => n.id)
     for (const otherId of otherNoteIds) {
@@ -358,7 +375,7 @@ When(
 
 When(
   'the volunteer makes a request requiring {string} permissions',
-  async ({ request, world }, oldRole: string) => {
+  async ({ request, world, workerHub }, oldRole: string) => {
     expect(getIsolationState(world).volunteer).toBeTruthy()
     // hub-admin can list volunteers; volunteer cannot
     // Use an endpoint that the old role had access to
@@ -366,7 +383,7 @@ When(
     if (oldRole === 'hub-admin') {
       endpoint = '/users'
     } else if (oldRole === 'reviewer') {
-      endpoint = '/notes' // reviewers can list notes
+      endpoint = `/hubs/${workerHub}/notes` // reviewers can list notes
     }
     getIsolationState(world).roleChangeResponse = await testEndpointAccess(
       request,
@@ -392,7 +409,7 @@ Then(
 
 // ── Deactivation Enforcement ──────────────────────────────────────
 
-Given('an active volunteer with notes and shift access', async ({ request, world }) => {
+Given('an active volunteer with notes and shift access', async ({ request, world, workerHub }) => {
   const vol = await createVolunteerViaApi(request, {
     name: `Deactivation Vol ${Date.now()}`,
   })
@@ -403,10 +420,10 @@ Given('an active volunteer with notes and shift access', async ({ request, world
   )
   await apiPost(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: deactContent,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       adminEnvelopes: deactEnvelopes,
     },
     vol.deviceKey,
@@ -423,12 +440,12 @@ When('an admin deactivates the volunteer', async ({ request, world }) => {
 
 Then(
   'the volunteer should receive {int} when listing notes',
-  async ({ request, world }, expectedStatus: number) => {
+  async ({ request, world, workerHub }, expectedStatus: number) => {
     expect(getIsolationState(world).deactivatedVol).toBeTruthy()
     const status = await testEndpointAccess(
       request,
       'GET',
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       getIsolationState(world).deactivatedVol!.deviceKey,
     )
     expect(status).toBe(expectedStatus)
@@ -467,7 +484,7 @@ Then(
 
 When(
   '{string} tries to update {string}\'s note',
-  async ({ request, world }, actorName: string, targetName: string) => {
+  async ({ request, world, workerHub }, actorName: string, targetName: string) => {
     const actor = getIsolationState(world).users.get(actorName)
     const target = getIsolationState(world).users.get(targetName)
     expect(actor, `actor "${actorName}" not found`).toBeTruthy()
@@ -479,7 +496,7 @@ When(
     const status = await testEndpointAccess(
       request,
       'PATCH',
-      `/notes/${noteId}`,
+      `/hubs/${workerHub}/notes/${noteId}`,
       actor!.deviceKey,
       { encryptedContent },
     )
@@ -493,10 +510,10 @@ Then('the note update should be rejected with {int}', async ({ world }, expected
 
 // ── Admin Reads All Notes; Volunteers Read Only Their Own ─────────
 
-When('the admin lists all notes', async ({ request, world }) => {
+When('the admin lists all notes', async ({ request, world, workerHub }) => {
   const { status, data } = await apiGet<{ notes: Array<{ id: string }> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     ADMIN_SEED,
   )
   expect(status).toBe(200)

@@ -94,12 +94,12 @@ function getKeypair(world: Record<string, unknown>, name: string) {
 
 // ── Given ───────────────────────────────────────────────────────────
 
-Given('a volunteer {string} with a real keypair', async ({ request, world }, name: string) => {
+Given('a volunteer {string} with a real keypair', async ({ request, world, workerHub }, name: string) => {
   const kp = generateTestKeypair()
   const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
   // Register volunteer with Ed25519 pubkey (for auth), X25519 is derived internally for HPKE
-  const { status } = await apiPost(request, '/users', {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/users`, {
     name: `E2EE ${name} ${Date.now()}`,
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
@@ -153,7 +153,7 @@ When('the content key is HPKE-wrapped for the admin', async ({ world }) => {
 
 When(
   'the encrypted note is submitted via the API with real ciphertext and envelopes',
-  async ({ request, world }) => {
+  async ({ request, world, workerHub }) => {
     expect(getE2EEIntegrityState(world).ciphertextHex).toBeDefined()
     expect(getE2EEIntegrityState(world).adminPubkey).toBeDefined()
 
@@ -171,10 +171,10 @@ When(
 
     const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, workerHub),
         authorEnvelope: volEnvelope ?? {},
         adminEnvelopes,
       },
@@ -206,7 +206,7 @@ When(
   },
 )
 
-When('the encrypted note is submitted via the API by {string}', async ({ request, world }, volName: string) => {
+When('the encrypted note is submitted via the API by {string}', async ({ request, world, workerHub }, volName: string) => {
   const volKp = getKeypair(world, volName)
   expect(getE2EEIntegrityState(world).ciphertextHex).toBeDefined()
 
@@ -221,10 +221,10 @@ When('the encrypted note is submitted via the API by {string}', async ({ request
 
   const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       authorEnvelope: volEnvelope ?? {},
       adminEnvelopes,
     },
@@ -235,14 +235,14 @@ When('the encrypted note is submitted via the API by {string}', async ({ request
   getE2EEIntegrityState(world).apiNote = data.note
 })
 
-When('volunteer {string} fetches the note', async ({ request, world }, volName: string) => {
+When('volunteer {string} fetches the note', async ({ request, world, workerHub }, volName: string) => {
   const volKp = getKeypair(world, volName)
   expect(getE2EEIntegrityState(world).noteId).toBeDefined()
 
   // VolB can fetch notes if they have notes:read-own permission (registered volunteer)
   const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     volKp.seedHex,
   )
   expect(status).toBe(200)
@@ -289,7 +289,7 @@ When(
 
 When(
   'the encrypted note is submitted via the API with both admin envelopes',
-  async ({ request, world }) => {
+  async ({ request, world, workerHub }) => {
     const volKp = [...getE2EEIntegrityState(world).keypairs.entries()].find(([name]) =>
       name.toLowerCase().includes('vol'),
     )
@@ -307,10 +307,10 @@ When(
 
     const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, workerHub),
         authorEnvelope: volEnvelope ?? {},
         adminEnvelopes,
       },
@@ -341,7 +341,7 @@ When('the volunteer encrypts note content {string} with real crypto', async ({ w
   getE2EEIntegrityState(world).envelopes.set(getE2EEIntegrityState(world).adminX25519Pubkey!, adminEnv)
 })
 
-When('the encrypted note is submitted via the API with real envelopes', async ({ request, world }) => {
+When('the encrypted note is submitted via the API with real envelopes', async ({ request, world, workerHub }) => {
   const [, volKp] = [...getE2EEIntegrityState(world).keypairs.entries()][0]
   expect(volKp).toBeDefined()
 
@@ -356,10 +356,10 @@ When('the encrypted note is submitted via the API with real envelopes', async ({
 
   const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: getE2EEIntegrityState(world).ciphertextHex,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       authorEnvelope: volEnvelope ?? {},
       adminEnvelopes,
     },
@@ -548,11 +548,11 @@ Then('the DB author_envelope JSONB should be a proper object not a string', asyn
 // ── Cross-user encryption boundary steps ─────────────────────────────
 // Matches: packages/test-specs/features/security/cross-user-encryption.feature
 
-Given('a reviewer {string} with a real keypair', async ({ request, world }, name: string) => {
+Given('a reviewer {string} with a real keypair', async ({ request, world, workerHub }, name: string) => {
   const kp = generateTestKeypair()
   const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
-  const { status } = await apiPost(request, '/users', {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/users`, {
     name: `XU Reviewer ${name} ${Date.now()}`,
     phone: uniquePhone(),
     roleIds: ['role-reviewer'],
@@ -561,11 +561,11 @@ Given('a reviewer {string} with a real keypair', async ({ request, world }, name
   expect([200, 201]).toContain(status)
 })
 
-Given('a hub admin {string} with a real keypair', async ({ request, world }, name: string) => {
+Given('a hub admin {string} with a real keypair', async ({ request, world, workerHub }, name: string) => {
   const kp = generateTestKeypair()
   const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
-  const { status } = await apiPost(request, '/users', {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/users`, {
     name: `XU HubAdmin ${name} ${Date.now()}`,
     phone: uniquePhone(),
     roleIds: ['role-hub-admin'],
@@ -576,7 +576,7 @@ Given('a hub admin {string} with a real keypair', async ({ request, world }, nam
 
 When(
   '{string} creates an encrypted note {string} with their own envelope and admin envelope',
-  async ({ request, world }, authorName: string, plaintext: string) => {
+  async ({ request, world, workerHub }, authorName: string, plaintext: string) => {
     const state = getE2EEIntegrityState(world)
     const authorKp = getKeypair(world, authorName)
     expect(state.adminX25519Pubkey).toBeDefined()
@@ -603,10 +603,10 @@ When(
 
     const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         encryptedContent: state.ciphertextHex,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, workerHub),
         authorEnvelope: authorEnv,
         adminEnvelopes: [{ pubkey: state.adminX25519Pubkey, ...adminEnv }],
       },
@@ -620,7 +620,7 @@ When(
 
 When(
   'the admin creates an encrypted note {string} with only the admin envelope',
-  async ({ request, world }, plaintext: string) => {
+  async ({ request, world, workerHub }, plaintext: string) => {
     const state = getE2EEIntegrityState(world)
     expect(state.adminX25519Pubkey).toBeDefined()
     expect(state.adminSeedHex).toBeDefined()
@@ -639,10 +639,10 @@ When(
 
     const { status, data } = await apiPost<{ note?: Record<string, unknown> & { id?: string } }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         encryptedContent: state.ciphertextHex,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, workerHub),
         authorEnvelope: adminEnv,
         adminEnvelopes: [{ pubkey: state.adminX25519Pubkey, ...adminEnv }],
       },
@@ -658,14 +658,14 @@ Then('the note is stored on the server', async ({ world }) => {
   expect(getE2EEIntegrityState(world).noteId).toBeTruthy()
 })
 
-When('{string} retrieves the note as the author', async ({ request, world }, authorName: string) => {
+When('{string} retrieves the note as the author', async ({ request, world, workerHub }, authorName: string) => {
   const state = getE2EEIntegrityState(world)
   const authorKp = getKeypair(world, authorName)
   expect(state.noteId).toBeDefined()
 
   const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     authorKp.seedHex,
   )
   expect(status).toBe(200)
@@ -695,14 +695,14 @@ When('{string} decrypts their note using their own envelope', async ({ world }, 
   )
 })
 
-When('the admin retrieves the note via notes:read-all', async ({ request, world }) => {
+When('the admin retrieves the note via notes:read-all', async ({ request, world, workerHub }) => {
   const state = getE2EEIntegrityState(world)
   expect(state.noteId).toBeDefined()
   expect(state.adminSeedHex).toBeDefined()
 
   const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     state.adminSeedHex!,
   )
   expect(status).toBe(200)
@@ -739,7 +739,7 @@ Then('the decrypted note content should be {string}', async ({ world }, expected
 
 When(
   '{string} fetches the author\'s note via direct API access as an authorized reader',
-  async ({ request, world }, readerName: string) => {
+  async ({ request, world, workerHub }, readerName: string) => {
     const state = getE2EEIntegrityState(world)
     const readerKp = getKeypair(world, readerName)
 
@@ -747,7 +747,7 @@ When(
     // since they have notes:read-own only (not notes:read-all)
     const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       readerKp.seedHex,
     )
     expect(status).toBe(200)
@@ -761,7 +761,7 @@ When(
   },
 )
 
-When('{string} fetches notes via notes:read-all', async ({ request, world }, readerName: string) => {
+When('{string} fetches notes via notes:read-all', async ({ request, world, workerHub }, readerName: string) => {
   const state = getE2EEIntegrityState(world)
   const readerKp = getKeypair(world, readerName)
   expect(state.noteId).toBeDefined()
@@ -769,7 +769,7 @@ When('{string} fetches notes via notes:read-all', async ({ request, world }, rea
   // Hub admin has notes:read-all → can see all notes
   const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     readerKp.seedHex,
   )
   expect(status).toBe(200)
@@ -778,13 +778,13 @@ When('{string} fetches notes via notes:read-all', async ({ request, world }, rea
   state.apiNote = note
 })
 
-When('{string} retrieves notes visible to them', async ({ request, world }, volName: string) => {
+When('{string} retrieves notes visible to them', async ({ request, world, workerHub }, volName: string) => {
   const state = getE2EEIntegrityState(world)
   const volKp = getKeypair(world, volName)
 
   const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     volKp.seedHex,
   )
   expect(status).toBe(200)

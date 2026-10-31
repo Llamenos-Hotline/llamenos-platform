@@ -98,7 +98,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
     // Create a real volunteer first with a known keypair
     const volKp = generateTestKeypair()
     state.volunteerKp = volKp
-    const regResult = await apiPost(request, '/users', {
+    const regResult = await apiPost(request, `/hubs/${workerHub}/users`, {
       name: `StorageVol ${Date.now()}`,
       phone: uniquePhone(),
       roleIds: ['role-volunteer'],
@@ -121,10 +121,10 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
 
     const { status, data } = await apiPost<Record<string, unknown>>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       {
         encryptedContent: ciphertextHex,
-        callId: await simulateCallForNote(request),
+        callId: await simulateCallForNote(request, workerHub),
         authorEnvelope: volEnv,
         adminEnvelopes: [{ pubkey: admin.pubkeyHex, ...adminEnv }],
       },
@@ -253,10 +253,10 @@ Given('the {string} settings are updated via the API with structured data', asyn
   getStorageIntegrityState(world).settingsPath = path
 })
 
-Given('a registered volunteer {string} with a known keypair', async ({ request, world }, name: string) => {
+Given('a registered volunteer {string} with a known keypair', async ({ request, world, workerHub }, name: string) => {
   const kp = generateTestKeypair()
   getStorageIntegrityState(world).volunteerKp = kp
-  const { status } = await apiPost(request, '/users', {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/users`, {
     name: `StorageEnv ${name} ${Date.now()}`,
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
@@ -273,7 +273,7 @@ Given('the admin keypair is known for envelope verification', async ({ world }) 
 
 // ── When: Fetch ─────────────────────────────────────────────────────
 
-When('the {string} is fetched via the API', async ({ request, world }, entityType: string) => {
+When('the {string} is fetched via the API', async ({ request, world, workerHub }, entityType: string) => {
   const state = getStorageIntegrityState(world)
   const id = state.entityIds.get(entityType)
   expect(id).toBeDefined()
@@ -282,7 +282,7 @@ When('the {string} is fetched via the API', async ({ request, world }, entityTyp
     const volKp = state.volunteerKp
     const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
       request,
-      '/notes',
+      `/hubs/${workerHub}/notes`,
       volKp?.seedHex,
     )
     expect(status).toBe(200)
@@ -343,7 +343,7 @@ When('the system_settings row is fetched directly from the database', async ({ w
   getStorageIntegrityState(world).dbRows.set('settings', rows ?? {})
 })
 
-When('the volunteer creates a note with real HPKE envelopes', async ({ request, world }) => {
+When('the volunteer creates a note with real HPKE envelopes', async ({ request, world, workerHub }) => {
   expect(getStorageIntegrityState(world).volunteerKp).toBeDefined()
   expect(getStorageIntegrityState(world).adminPubkey).toBeDefined()
 
@@ -360,10 +360,10 @@ When('the volunteer creates a note with real HPKE envelopes', async ({ request, 
 
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: ciphertextHex,
-      callId: await simulateCallForNote(request),
+      callId: await simulateCallForNote(request, workerHub),
       authorEnvelope: authorEnv,
       adminEnvelopes: getStorageIntegrityState(world).submittedEnvelopes,
     },
@@ -375,13 +375,13 @@ When('the volunteer creates a note with real HPKE envelopes', async ({ request, 
   getStorageIntegrityState(world).apiResponses.set('envelope-note', noteData)
 })
 
-When('the note is fetched via the API', async ({ request, world }) => {
+When('the note is fetched via the API', async ({ request, world, workerHub }) => {
   const id = getStorageIntegrityState(world).entityIds.get('envelope-note')
   expect(id).toBeDefined()
 
   const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     getStorageIntegrityState(world).volunteerKp?.seedHex,
   )
   expect(status).toBe(200)
