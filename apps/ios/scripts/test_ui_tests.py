@@ -198,6 +198,54 @@ class Report(unittest.TestCase):
         self.assertIn("other than an assertion", out)
 
 
+class TimingDrift(unittest.TestCase):
+    """A price the packer balances by, gone stale, is a late shard (#2339)."""
+
+    PRICES = {"mac": {"A": 20.0, "B": 20.0}, "hosted": {"A": 30.0, "B": 30.0}}
+
+    @staticmethod
+    def cases(cls: str, secs: float, n: int = 3, status: str = "passed") -> list[dict]:
+        return [{"class": cls, "test": f"test{i}", "status": status, "seconds": secs} for i in range(n)]
+
+    def test_a_class_costing_far_more_than_its_price_is_reported_with_both_figures(self):
+        # CaseManagementUITests: priced 28.7s on hosted, cost 48.0s.
+        drifted = ui.timing_drift(self.cases("A", 50.0), "hosted", self.PRICES)
+        self.assertEqual(drifted, [("A", 50.0, 30.0)])
+
+    def test_a_class_costing_far_less_than_its_price_is_reported_too(self):
+        self.assertEqual([d[0] for d in ui.timing_drift(self.cases("A", 12.0), "hosted", self.PRICES)], ["A"])
+
+    def test_ordinary_hosted_noise_is_not_drift(self):
+        self.assertEqual(ui.timing_drift(self.cases("A", 38.0), "hosted", self.PRICES), [])
+
+    def test_the_price_compared_against_is_the_one_for_the_host_the_shard_ran_on(self):
+        # 28s is 40% over the Mac's 20s but on the hosted price of 30s.
+        self.assertEqual(ui.timing_drift(self.cases("A", 28.0), "hosted", self.PRICES), [])
+        self.assertEqual([d[0] for d in ui.timing_drift(self.cases("A", 28.0), "mac", self.PRICES)], ["A"])
+
+    def test_a_failed_test_does_not_count_towards_what_a_class_costs(self):
+        self.assertEqual(ui.timing_drift(self.cases("A", 300.0, status="failed"), "hosted", self.PRICES), [])
+
+    def test_the_worst_drift_comes_first(self):
+        cases = self.cases("A", 45.0) + self.cases("B", 90.0)
+        self.assertEqual([d[0] for d in ui.timing_drift(cases, "hosted", self.PRICES)], ["B", "A"])
+
+    def test_the_report_names_the_stale_class_and_the_command_that_fixes_it(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "xcodebuild-test.log"
+            log.write_text("Test Case '-[LlamenosUITests.AUITests testOk]' passed (50.0 seconds).\n", encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(ui, "load_timings", return_value=self.PRICES), contextlib.redirect_stdout(out):
+                rc = ui.report(log, None, "hosted")
+        self.assertEqual(rc, 0)
+        self.assertIn("::warning::", out.getvalue())
+        self.assertIn("AUITests", out.getvalue())
+        self.assertIn("timings --host hosted", out.getvalue())
+
+
 class RealTimings(unittest.TestCase):
     def test_the_checked_in_timings_have_both_hosts_and_a_sane_factor(self):
         prices = ui.load_timings()
