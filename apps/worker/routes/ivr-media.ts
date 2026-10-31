@@ -10,7 +10,7 @@ import { Hono, type Context } from 'hono'
 import type { AppEnv } from '../types'
 import { IVR_HUB_ID_PATTERN, IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '../lib/helpers'
 import { verifyIvrMediaPath } from '../lib/ivr-media-url'
-import { HOLD_MUSIC_ROUTE, holdMusicWav } from '../telephony/hold-music'
+import { holdMusicWav } from '../telephony/hold-music'
 
 const ivrMedia = new Hono<AppEnv>()
 
@@ -48,7 +48,7 @@ const uploadedPrompt = (hubSegment: boolean) => async (c: Context<AppEnv>) => {
  * URL names nothing. The bytes change only with the source, so a day's caching
  * is safe.
  */
-ivrMedia.get(HOLD_MUSIC_ROUTE, (c) => {
+ivrMedia.get('/ivr-audio/hold-music.wav', (c) => {
   const wav = holdMusicWav()
   return c.body(wav, 200, {
     'Content-Type': 'audio/wav',

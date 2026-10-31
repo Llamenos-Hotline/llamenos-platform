@@ -24,7 +24,12 @@ import type { AudioUrlMap } from './adapter'
 /** Reserved key in the AudioUrlMap: a prompt key is `promptType:language`, so this can never be one */
 export const HOLD_MUSIC_AUDIO_KEY = 'holdMusic'
 
-/** The path the IVR media router registers, relative to the `/api` mount */
+/**
+ * The path the IVR media router registers, relative to the `/api` mount. The
+ * router spells it as a literal, because the API route-table guard
+ * (scripts/api-schema-binding) reads only literal paths; hold-music.test.ts
+ * fetches HOLD_MUSIC_PATH through that router, so the two cannot drift.
+ */
 export const HOLD_MUSIC_ROUTE = '/ivr-audio/hold-music.wav'
 
 /** Where a provider fetches the track from */
