@@ -184,7 +184,6 @@ export interface WakePayload {
   type: PushNotificationType
   conversationId?: string
   channelType?: string
-  callId?: string
   shiftId?: string
   startsAt?: string
 }

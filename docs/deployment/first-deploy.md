@@ -205,7 +205,7 @@ application secrets.
 keeps recent messages in RAM for redelivery (default 12 h). The notification
 payloads are two-tier HPKE ciphertext, but the Android **incoming-call wake**
 (`sendNtfyVoipPush` in `apps/worker/lib/voip-push.ts`) is currently plain JSON:
-`type`, `call-id` and `hub-id`. So the relay's memory — not its disk — holds
+`type`, `call-id` (an opaque per-call reference — never the telephony provider's call id, #2374) and `hub-id`. So the relay's memory — not its disk — holds
 which hub rang which device topic. Disk encryption would not protect a running
 host against that anyway; encrypting that payload is an app-side follow-up.
 
