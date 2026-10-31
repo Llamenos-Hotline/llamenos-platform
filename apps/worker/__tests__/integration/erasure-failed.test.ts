@@ -355,6 +355,28 @@ describe('the failed state reaches erasure:admin (#2347 part 1)', () => {
     expect(again.status).toBe(409)
   })
 
+  it('abandoning a failed shred leaves the hub frozen while another shred for it is still in flight', async () => {
+    const hubId = await createHub()
+    const failed = await dueHubShred(hubId)
+    await tickWithFailingShred()
+    expect((await statusOf(failed)).status).toBe('failed')
+
+    // The failed request is not `pending`, so a second shred can be scheduled — through the real path.
+    const second = await services.erasure.createHubShredRequest(hubId, 'integration-test')
+    expect(second.status).toBe('pending')
+
+    const res = await postAs(erasureDesk(hubId), `/api/hubs/${hubId}/erasure/requests/${failed}/abandon`, {
+      justification: 'Superseded by a new shred request',
+    })
+    expect(res.status).toBe(200)
+    expect((await statusOf(failed)).status).toBe('abandoned')
+
+    // Thawing here would lift the freeze the second shred depends on.
+    const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
+    expect(hub!.status).toBe('shred_pending')
+    expect((await statusOf(second.id)).status).toBe('pending')
+  })
+
   it('a member of the hub without erasure:admin, and an admin of another hub, can neither retry nor abandon', async () => {
     const hubId = await createHub()
     const otherHub = await createHub()

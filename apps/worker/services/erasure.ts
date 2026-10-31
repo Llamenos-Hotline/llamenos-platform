@@ -1077,7 +1077,8 @@ export class ErasureService {
    * `completed`: `executed_at` stays NULL because nothing was erased, so the
    * two can never be confused. A hub shred that abandons also thaws the hub
    * (restoring its pre-shred status) — otherwise it would sit `shred_pending`
-   * forever behind a request that will never run.
+   * forever behind a request that will never run — unless another shred for
+   * the hub is still pending or executing, which keeps the hub frozen.
    */
   async abandonFailed(
     requestId: string,
@@ -1103,10 +1104,27 @@ export class ErasureService {
         .where(and(eq(erasureRequests.id, request.id), eq(erasureRequests.status, 'failed')))
         .returning()
       if (request.scope === 'hub' && request.hubId) {
-        await tx
-          .update(hubs)
-          .set({ status: request.previousStatus ?? 'active', updatedAt: new Date() })
-          .where(and(eq(hubs.id, request.hubId), eq(hubs.status, 'shred_pending')))
+        // Not while another shred for this hub is in flight: a failed request is
+        // not `pending`, so a second one can be scheduled behind it, and that
+        // one depends on the freeze this would lift.
+        const [inFlight] = await tx
+          .select({ id: erasureRequests.id })
+          .from(erasureRequests)
+          .where(
+            and(
+              eq(erasureRequests.scope, 'hub'),
+              eq(erasureRequests.hubId, request.hubId),
+              ne(erasureRequests.id, request.id),
+              sql`${erasureRequests.status} IN ('pending', 'executing')`,
+            ),
+          )
+          .limit(1)
+        if (!inFlight) {
+          await tx
+            .update(hubs)
+            .set({ status: request.previousStatus ?? 'active', updatedAt: new Date() })
+            .where(and(eq(hubs.id, request.hubId), eq(hubs.status, 'shred_pending')))
+        }
       }
       return updated!
     })
