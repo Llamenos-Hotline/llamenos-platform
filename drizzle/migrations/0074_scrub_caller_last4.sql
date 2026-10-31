@@ -20,15 +20,21 @@
 --
 -- Order matters: the trigger exists BEFORE the scrub, so a row written between the two
 -- is nulled by the trigger and every row committed before it is nulled by the UPDATE.
-CREATE FUNCTION "discard_caller_last4"() RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- Every statement is re-runnable. The runner applies a file statement by statement and
+-- records it only once all of them succeed, so a boot that dies partway through runs
+-- this whole file again on the next boot; a bare CREATE FUNCTION / CREATE TRIGGER would
+-- fail that retry on "already exists" and no pod could start again. OR REPLACE swaps
+-- each object in place, so neither table is ever without its trigger during a retry.
+CREATE OR REPLACE FUNCTION "discard_caller_last4"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   NEW."caller_last4" := NULL;
   RETURN NEW;
 END
 $$;--> statement-breakpoint
-CREATE TRIGGER "active_calls_discard_caller_last4" BEFORE INSERT OR UPDATE ON "active_calls"
+CREATE OR REPLACE TRIGGER "active_calls_discard_caller_last4" BEFORE INSERT OR UPDATE ON "active_calls"
   FOR EACH ROW EXECUTE FUNCTION "discard_caller_last4"();--> statement-breakpoint
-CREATE TRIGGER "call_records_discard_caller_last4" BEFORE INSERT OR UPDATE ON "call_records"
+CREATE OR REPLACE TRIGGER "call_records_discard_caller_last4" BEFORE INSERT OR UPDATE ON "call_records"
   FOR EACH ROW EXECUTE FUNCTION "discard_caller_last4"();--> statement-breakpoint
 UPDATE "active_calls" SET "caller_last4" = NULL WHERE "caller_last4" IS NOT NULL;--> statement-breakpoint
 UPDATE "call_records" SET "caller_last4" = NULL WHERE "caller_last4" IS NOT NULL;
