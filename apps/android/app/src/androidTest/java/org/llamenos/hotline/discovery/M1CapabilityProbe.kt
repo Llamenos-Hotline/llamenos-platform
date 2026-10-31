@@ -8,7 +8,6 @@ import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
@@ -36,6 +35,7 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.di.ActiveHubEntryPoint
 import org.llamenos.hotline.di.CryptoEntryPoint
 import org.llamenos.hotline.helpers.TestPermissions
+import org.llamenos.hotline.helpers.createAppComposeRule
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -73,7 +73,7 @@ import java.net.URL
 class M1CapabilityProbe {
 
     @get:Rule
-    val compose = createEmptyComposeRule()
+    val compose = createAppComposeRule()
 
     private var scenario: ActivityScenario<MainActivity>? = null
     private val args = InstrumentationRegistry.getArguments()
