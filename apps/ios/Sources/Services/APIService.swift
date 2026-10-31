@@ -60,6 +60,17 @@ enum APIError: LocalizedError {
     static func isPermanentRefusal(status: Int) -> Bool {
         (400..<500).contains(status) && ![401, 408, 409, 429].contains(status)
     }
+
+    /// Whether `error` means there is no hub to browse: none is configured, or none is
+    /// active. A hub's list is then empty — there is nothing to load, which is not a
+    /// failure to load it (#2405). Actions still report `errorDescription`: a write with
+    /// nowhere to go did fail.
+    static func isNoHub(_ error: Error) -> Bool {
+        switch error as? APIError {
+        case .noBaseURL, .noActiveHub: return true
+        default: return false
+        }
+    }
 }
 
 extension APIError: CustomDebugStringConvertible {

@@ -231,8 +231,8 @@ final class NotesViewModel {
             // Decrypt all notes
             notes = encryptedNotes.compactMap(decryptNote)
         } catch {
-            if case APIError.noBaseURL = error {
-                // Hub not configured — show empty state, no error
+            if APIError.isNoHub(error) {
+                // No hub to browse — show the empty state, no error
             } else {
                 errorMessage = error.localizedDescription
             }

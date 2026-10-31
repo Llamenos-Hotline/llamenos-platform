@@ -57,7 +57,8 @@ final class ContactsViewModel {
             total = Int(response.total)
             currentPage = 1
         } catch {
-            if contacts.isEmpty {
+            // No hub to browse is an empty list, not a failure
+            if contacts.isEmpty && !APIError.isNoHub(error) {
                 errorMessage = error.localizedDescription
             }
         }
@@ -112,7 +113,8 @@ final class ContactsViewModel {
             total = matched.count
             currentPage = 1
         } catch {
-            if contacts.isEmpty {
+            // No hub to browse is an empty list, not a failure
+            if contacts.isEmpty && !APIError.isNoHub(error) {
                 errorMessage = error.localizedDescription
             }
         }
