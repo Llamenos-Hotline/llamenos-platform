@@ -233,7 +233,10 @@ Then('the audit log should record the simulated call', async ({ request, world }
   const { entries } = await listAuditLogViaApi(request, { hubId: state.hubId, limit: 100 })
   const entry = entries.find(e => e.action === 'callSimulated')
   expect(entry, 'expected a callSimulated audit entry').toBeDefined()
-  expect(entry!.details.callId).toBe(state.callId)
+  // A call's id is the provider's id for it, so the audit row names the call by its keyed ref (#2333),
+  // never by the id; the test cannot compute the ref (HMAC_SECRET lives only in the server).
+  expect(entry!.details.callIdRef).toMatch(/^pr_[0-9a-f]{16}$/)
+  expect(JSON.stringify(entry), 'the audit entry must not carry the call id itself').not.toContain(state.callId as string)
 })
 
 Then('the hub call history should contain {int} unanswered call', async ({ request, world }, count: number) => {

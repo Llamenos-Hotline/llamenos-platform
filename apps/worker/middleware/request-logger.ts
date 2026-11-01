@@ -1,4 +1,5 @@
 import { createMiddleware } from 'hono/factory'
+import { matchedRoutes } from 'hono/route'
 import type { AppEnv } from '../types'
 import { withCorrelation } from '../lib/logger'
 import { createLogger } from '../lib/logger'
@@ -12,7 +13,10 @@ export const requestLogger = createMiddleware<AppEnv>(async (c, next) => {
   c.set('requestId', id)
 
   const method = c.req.method
-  const path = c.req.path
+  // The matched route pattern, never the URL: `/api/calls/:callId/answer` carries the provider's
+  // identifier for the call, which joins to the provider's CDR and its caller's number (#2333).
+  // An unmatched request logs its wildcard (`/api/*`), so a scanner's URL is not echoed either.
+  const path = matchedRoutes(c).at(-1)?.path ?? '[unrouted]'
 
   logger.info('Request started', { method, path, correlationId: id, requestId: id })
 

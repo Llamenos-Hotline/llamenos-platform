@@ -522,7 +522,7 @@ export async function startParallelRinging(
               maxDelayMs: 3000,
               isRetryable: isRetryableError,
               onRetry: (attempt, error) => {
-                logger.warn(`ringVolunteers retry ${attempt} for callSid=${callSid}`, { error })
+                logger.warn('ringVolunteers retry', { attempt, callSid, error })
                 incCounter('llamenos_retry_attempts_total', { service: 'telephony', operation: 'ringVolunteers' })
               },
             },

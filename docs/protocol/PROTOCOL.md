@@ -1919,6 +1919,20 @@ If the copy cannot be made — the provider returns no audio, or storage or `SER
 
 The copy is server-readable (Tier 1, at rest), not E2EE: the server already sees the audio when it fetches it, and clients play `audio/wav` from this endpoint unchanged. Sealing it to the admins' and answering volunteer's HPKE keys would need client-side decryption on every platform.
 
+#### Provider identifiers in logs and audit rows (#2333)
+
+A provider's identifier for a call, recording or message (`CallSid`, `RecordingSid`, `MessageSid`, the Vonage/Plivo/Telnyx/Bandwidth UUIDs) is the key to the provider's own CDR, which holds the caller's number. Logs, audit rows and ledger error text therefore never carry one; they carry a **provider ref**:
+
+```
+key = HKDF-SHA256(ikm = HMAC_SECRET, salt = "", info = UTF-8(LABEL_PROVIDER_REF_KEY), L = 32)
+ref = "pr_" + hex(HMAC-SHA256(key, UTF-8(providerId)))[0..16]
+```
+
+- The structured logger writes any `callId`, `callSid`, `parentCallSid`, `legSid`, `recordingSid`, `messageSid`, `callUuid`, `callControlId`, `providerCallId` or `providerMessageId` field as `<field>Ref`, and replaces any Twilio/SignalWire SID (`[A-Z]{2}` + 32 hex) in a message or value with its ref. `AuditService.log` does the same to `details` before the hash chain commits to them.
+- A request is logged by its matched route (`/api/calls/:callId/answer`), never its URL.
+- Debugging one call: take the id from the provider's console or CDR, run `bun run provider-ref <id>` where the app runs (`docker compose exec app bun scripts/provider-ref.ts <id>`), and grep the logs for the ref. Someone with only the logs, or only the provider's records, cannot make that link without `HMAC_SECRET`. Rotating `HMAC_SECRET` changes every ref.
+- Kept raw, because the server needs them to act: `active_calls.call_id`, `call_records.call_id`, `call_tokens.call_sid`, `provider_recordings.call_id` / `recording_sid` (the handle is handed back to the provider to delete the recording), the call id in API paths and bodies, relay events and VoIP push payloads, and the object-storage key of a sealed recording. A call's id **is** the provider's id for it; separating the two (an internal call id, with the provider id a stored attribute) is a larger change and is not part of this one.
+
 ### 4.9 Conversations
 
 Conversations are served **only** under `/api/hubs/:hubId/conversations` (#2381). There is no unscoped `/api/conversations`: a conversation belongs to one hub, and every read and write below is bounded by the caller's permissions in that hub. The waiting queue in the list is limited to the channels the caller may claim there (`conversations:claim-<channel>` / `claim-any`); a caller who may claim no channel sees no waiting conversation.

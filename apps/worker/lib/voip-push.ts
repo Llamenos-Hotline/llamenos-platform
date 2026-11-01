@@ -41,7 +41,7 @@ export async function dispatchVoipPushFromService(
   const { devices: deviceList } = await identityService.getVoipTokens(volunteerPubkeys)
   if (deviceList.length === 0) return
 
-  logger.debug(`Dispatching to ${deviceList.length} devices for call ${callId}`)
+  logger.debug('Dispatching VoIP push', { devices: deviceList.length, callId })
 
   const promises: Promise<void>[] = []
 

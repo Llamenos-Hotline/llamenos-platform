@@ -341,6 +341,12 @@ pub const LABEL_CALLER_NUMBER_SEAL: &str = "llamenos:caller-number-seal:v1";
 /// nothing else the server seals.
 pub const LABEL_CALL_RECORDING_SEAL: &str = "llamenos:call-recording-seal:v1";
 
+/// Provider-identifier reference — HMAC key HKDF-derived from HMAC_SECRET (HKDF
+/// info = this label). The worker logs and audits `HMAC(key, providerId)` instead of
+/// a provider's call/recording/message identifier, which joins to the provider's CDR
+/// (#2333). Its own label, so the key hashes nothing else the server hashes.
+pub const LABEL_PROVIDER_REF_KEY: &str = "llamenos:provider-ref-key:v1";
+
 /// Erasure override co-approver signature — Ed25519 sig over (targetUserId || timestamp || justification)
 pub const LABEL_ERASURE_OVERRIDE_SIG: &str = "llamenos:erasure-override-sig:v1";
 
@@ -627,6 +633,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_MESSAGING_CONTACT_HUB_KEY, // 106
     // 107: Server seal of a stored call recording (#2309)
     LABEL_CALL_RECORDING_SEAL, // 107
+    // 108: Keyed reference to a provider identifier for logs and audit rows (#2333)
+    LABEL_PROVIDER_REF_KEY, // 108
 ];
 
 /// Look up a label string by its numeric ID.
@@ -829,12 +837,13 @@ mod tests {
             "llamenos:messaging-contact-hub-key:v1"
         );
         assert_eq!(LABEL_CALL_RECORDING_SEAL, "llamenos:call-recording-seal:v1");
+        assert_eq!(LABEL_PROVIDER_REF_KEY, "llamenos:provider-ref-key:v1");
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 67 of the 108 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 68 of the 109 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -906,6 +915,7 @@ mod tests {
         assert_eq!(id_to_label(105), Some(HMAC_MESSAGING_CONTACT_PREFIX));
         assert_eq!(id_to_label(106), Some(LABEL_MESSAGING_CONTACT_HUB_KEY));
         assert_eq!(id_to_label(107), Some(LABEL_CALL_RECORDING_SEAL));
+        assert_eq!(id_to_label(108), Some(LABEL_PROVIDER_REF_KEY));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).
