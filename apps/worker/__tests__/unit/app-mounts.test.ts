@@ -44,6 +44,7 @@ import notesRoutes from '@worker/routes/notes'
 import reportsRoutes from '@worker/routes/reports'
 import contactsRoutes from '@worker/routes/contacts'
 import auditRoutes from '@worker/routes/audit'
+import conversationsRoutes from '@worker/routes/conversations'
 
 interface RouteEntry { method: string; path: string; handler: unknown }
 
@@ -100,8 +101,6 @@ const LEDGER: Record<string, string> = {
     'Handlers fall back to `hubId ?? \'\'`, which names no hub (#2381 audit).',
   '/bans':
     'Unscoped = the platform ban list (`hub_id IS NULL`), a deployment-wide list by design.',
-  '/conversations':
-    'WIDENS: any authenticated user lists every hub\'s waiting queue. Removed by #2397 (#2381); drop this entry with that mount.',
   '/blasts':
     'WIDENS (#2404): listSubscribers / listBlasts / getSubscriberStats drop the hub filter with no hub.',
   '/directory':
@@ -166,9 +165,9 @@ describe('dual mounts (#2395)', () => {
     expect(Object.keys(LEDGER).filter(k => !dual.has(k)), 'Remove these entries: the mount is gone.').toEqual([])
   })
 
-  it('the #2395 routers are reachable only under a hub', () => {
+  it('the hub-owned routers (#2395, #2381) are reachable only under a hub', () => {
     const paths = routes.filter(r => r.method !== 'ALL').map(r => r.path)
-    for (const prefix of ['/notes', '/reports', '/contacts', '/audit']) {
+    for (const prefix of ['/notes', '/reports', '/contacts', '/audit', '/conversations']) {
       expect(paths.filter(p => p === `/api${prefix}` || p.startsWith(`/api${prefix}/`)), `unscoped ${prefix}`).toEqual([])
       expect(paths.some(p => p.startsWith(`${HUB_PREFIX}${prefix}`)), `hub ${prefix}`).toBe(true)
     }
@@ -192,8 +191,9 @@ describe('hubOnly fails closed when a hub-owned router is mounted unscoped (#239
   stray.route('/reports', reportsRoutes)
   stray.route('/contacts', contactsRoutes)
   stray.route('/audit', auditRoutes)
+  stray.route('/conversations', conversationsRoutes)
 
-  for (const path of ['/notes', '/notes/n1', '/reports', '/reports/r1/messages', '/contacts', '/contacts/abc', '/audit', '/audit/verify']) {
+  for (const path of ['/notes', '/notes/n1', '/reports', '/reports/r1/messages', '/contacts', '/contacts/abc', '/audit', '/audit/verify', '/conversations', '/conversations/c1']) {
     it(`GET ${path} with every permission and no hub is a 404`, async () => {
       const res = await stray.request(path)
       expect(res.status).toBe(404)

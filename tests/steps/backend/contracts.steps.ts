@@ -65,7 +65,7 @@ When('an admin sends {string} to {string} with body:', async (
 
 When('an admin sends {string} to {string}', async ({ request, world, workerHub }, method: string, path: string) => {
   // `:hubId` stands for the scenario's own hub, the way a client addresses it.
-  const resolved = resolvePathParams(world, path, workerHub).replace(':hubId', workerHub)
+  const resolved = resolvePathParams(world, path, workerHub).replaceAll(':hubId', workerHub)
   const apiPath = resolved.startsWith('/api') ? resolved.slice(4) : resolved
   switch (method) {
     case 'GET':
