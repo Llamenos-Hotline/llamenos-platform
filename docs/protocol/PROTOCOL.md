@@ -1921,8 +1921,10 @@ The copy is server-readable (Tier 1, at rest), not E2EE: the server already sees
 
 ### 4.9 Conversations
 
+Conversations are served **only** under `/api/hubs/:hubId/conversations` (#2381). There is no unscoped `/api/conversations`: a conversation belongs to one hub, and every read and write below is bounded by the caller's permissions in that hub. The waiting queue in the list is limited to the channels the caller may claim there (`conversations:claim-<channel>` / `claim-any`); a caller who may claim no channel sees no waiting conversation.
+
 ```
-GET /api/conversations?status=&channel=&page=1&limit=50
+GET /api/hubs/:hubId/conversations?status=&channel=&page=1&limit=50
 Permission: conversations:read-all (all) or conversations:read-assigned (own + waiting)
 Response: {
   "conversations": Conversation[],
@@ -1932,23 +1934,23 @@ Response: {
   "claimableChannels"?: string[]
 }
 
-GET /api/conversations/stats
+GET /api/hubs/:hubId/conversations/stats
 Auth: Required
 Response: { "total": number, "active": number, "waiting": number, "closed": number }
 
-GET /api/conversations/load
+GET /api/hubs/:hubId/conversations/load
 Permission: conversations:read-all
 Response: { "loads": { [pubkey: string]: number } }
 
-GET /api/conversations/:id
+GET /api/hubs/:hubId/conversations/:id
 Auth: Required (access-checked per conversation)
 Response: Conversation
 
-GET /api/conversations/:id/messages?page=1&limit=50
+GET /api/hubs/:hubId/conversations/:id/messages?page=1&limit=50
 Auth: Required (access-checked per conversation)
 Response: { "messages": EncryptedMessage[], "total": number }
 
-POST /api/conversations/:id/messages
+POST /api/hubs/:hubId/conversations/:id/messages
 Permission: conversations:send or conversations:send-any
 Body: {
   "encryptedContent": hex,
@@ -1957,21 +1959,21 @@ Body: {
 }
 Response: EncryptedMessage
 
-PATCH /api/conversations/:id
+PATCH /api/hubs/:hubId/conversations/:id
 Permission: conversations:update or assigned volunteer
 Body: { "status"?: string, "assignedTo"?: string }
 Response: Conversation
 
-POST /api/conversations/:id/claim
+POST /api/hubs/:hubId/conversations/:id/claim
 Permission: conversations:claim + channel-specific (e.g., conversations:claim-sms)
 Response: Conversation
 Error: 403 "No permission to claim this channel type"
 
-GET /api/conversations/:id/assignee-envelopes
+GET /api/hubs/:hubId/conversations/:id/assignee-envelopes
 Permission: conversations:read-all
 Response: AssigneeEnvelopeGapsResponse   // ≤ 200 messages, oldest first — see §2.4.1
 
-POST /api/conversations/:id/assignee-envelopes
+POST /api/hubs/:hubId/conversations/:id/assignee-envelopes
 Permission: conversations:read-all + conversations:update
 Body: { "envelopes": [{ "messageId": string, "envelope": RecipientEnvelope }] }  // 1..1000
 Response: { "added": number }

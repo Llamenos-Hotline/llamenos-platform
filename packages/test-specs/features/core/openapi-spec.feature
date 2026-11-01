@@ -61,6 +61,6 @@ Feature: OpenAPI Specification & Documentation
       | get    | /notes            |
       | post   | /notes            |
       | get    | /calls/active     |
-      | get    | /conversations    |
+      | get    | /hubs/{hubId}/conversations |
       | get    | /blasts           |
       | post   | /blasts           |

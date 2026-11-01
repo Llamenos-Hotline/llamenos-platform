@@ -1,4 +1,4 @@
-import { request, hp, hubPath } from './client'
+import { request, hubPath } from './client'
 import type {
   AddAssigneeEnvelopesBody,
   AddAssigneeEnvelopesResponse,
@@ -43,10 +43,6 @@ export async function listConversations(hubId: string, params?: {
   return { ...res, conversations: res.conversations.map((c): HubConversation => ({ ...c, hubId })) }
 }
 
-export async function getConversation(id: string) {
-  return request<Conversation>(hp(`/conversations/${id}`))
-}
-
 export async function getConversationMessages(hubId: string, id: string, params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
@@ -76,10 +72,6 @@ export async function updateConversation(hubId: string, id: string, data: { stat
     body: JSON.stringify(data),
   })
   return { ...conversation, hubId }
-}
-
-export async function getConversationStats() {
-  return request<{ waiting: number; active: number; closed: number; today: number; total: number }>(hp('/conversations/stats'))
 }
 
 export async function getUserLoads(hubId: string) {

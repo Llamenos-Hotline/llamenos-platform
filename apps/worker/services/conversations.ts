@@ -1125,9 +1125,10 @@ export class ConversationsService {
 
   // --- Stats ---
 
-  async getStats(hubId?: string): Promise<ConversationStats> {
+  /** One hub's conversation counts. There is no deployment-wide variant (#2381). */
+  async getStats(hubId: string): Promise<ConversationStats> {
     const baseCondition = sql`(${conversations.metadata} IS NULL OR ${conversations.metadata}->>'type' IS NULL OR ${conversations.metadata}->>'type' != 'report')`
-    const hubCondition = hubId ? and(baseCondition, eq(conversations.hubId, hubId)) : baseCondition
+    const hubCondition = and(baseCondition, eq(conversations.hubId, hubId))
 
     const todayStart = new Date()
     todayStart.setUTCHours(0, 0, 0, 0)

@@ -211,6 +211,7 @@ When('a WhatsApp message arrives from {string} with body {string}', async ({ req
     senderNumber: phone,
     body,
     channel: 'whatsapp',
+    hubId: getScenarioState(world).hubId,
   })
   getCrossDoState(world).conversationIds.push(result.conversationId)
 })
@@ -226,11 +227,7 @@ When('the volunteer claims the conversation', async ({ request, world }) => {
   const volPubkey = getScenarioState(world).volunteers[0]?.pubkey ?? getCrossDoState(world).volunteerPubkey
   if (volPubkey && getCrossDoState(world).conversationId) {
     const volDeviceKey = getScenarioState(world).volunteers[0]?.deviceKey ?? getCrossDoState(world).volunteerDeviceKey
-    // Conversation claim requires hub context — use hub-scoped path
-    const hubId = getScenarioState(world).hubId
-    const claimPath = hubId
-      ? `/hubs/${hubId}/conversations/${getCrossDoState(world).conversationId}/claim`
-      : `/conversations/${getCrossDoState(world).conversationId}/claim`
+    const claimPath = `/hubs/${getScenarioState(world).hubId}/conversations/${getCrossDoState(world).conversationId}/claim`
     const { status } = await apiPost(request, claimPath, {
       pubkey: volPubkey,
     }, volDeviceKey!)
@@ -242,7 +239,7 @@ Then('the conversation status should be {string}', async ({ request, world }, ex
   if (getCrossDoState(world).conversationId) {
     const { data } = await apiGet<{ status?: string; conversation?: { status: string } }>(
       request,
-      `/conversations/${getCrossDoState(world).conversationId}`,
+      `/hubs/${getScenarioState(world).hubId}/conversations/${getCrossDoState(world).conversationId}`,
     )
     const actual = (data as Record<string, unknown>)?.status as string
       ?? ((data as Record<string, unknown>)?.conversation as Record<string, unknown>)?.status as string
@@ -252,7 +249,7 @@ Then('the conversation status should be {string}', async ({ request, world }, ex
 
 When('the admin closes the conversation', async ({ request, world }) => {
   if (getCrossDoState(world).conversationId) {
-    await apiPatch(request, `/conversations/${getCrossDoState(world).conversationId}`, { status: 'closed' })
+    await apiPatch(request, `/hubs/${getScenarioState(world).hubId}/conversations/${getCrossDoState(world).conversationId}`, { status: 'closed' })
   }
 })
 
@@ -269,7 +266,7 @@ Then('the conversation should be reopened', async ({ request, world }) => {
   if (getCrossDoState(world).conversationId) {
     const { data } = await apiGet<{ status?: string; conversation?: { status: string } }>(
       request,
-      `/conversations/${getCrossDoState(world).conversationId}`,
+      `/hubs/${getScenarioState(world).hubId}/conversations/${getCrossDoState(world).conversationId}`,
     )
     const actual = (data as Record<string, unknown>)?.status as string
       ?? ((data as Record<string, unknown>)?.conversation as Record<string, unknown>)?.status as string
@@ -331,7 +328,7 @@ Then('{int} separate conversations should exist', async ({ world }, count: numbe
 Then('each conversation should have its own channel type', async ({ request, world }) => {
   const channels = new Set<string>()
   for (const id of getCrossDoState(world).conversationIds) {
-    const { data } = await apiGet<{ channelType?: string; conversation?: { channelType: string } }>(request, `/conversations/${id}`)
+    const { data } = await apiGet<{ channelType?: string; conversation?: { channelType: string } }>(request, `/hubs/${getScenarioState(world).hubId}/conversations/${id}`)
     const channel = (data as Record<string, unknown>)?.channelType as string
       ?? ((data as Record<string, unknown>)?.conversation as Record<string, unknown>)?.channelType as string
     if (channel) channels.add(channel)

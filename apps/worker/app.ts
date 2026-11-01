@@ -260,7 +260,8 @@ authenticated.route('/audit', auditRoutes)
 authenticated.route('/settings/cms', entitySchemaRoutes)
 authenticated.route('/settings', settingsRoutes)
 authenticated.route('/telephony', webrtcRoutes)
-authenticated.route('/conversations', conversationsRoutes)
+// No unscoped /conversations: a conversation belongs to a hub, and the router
+// refuses requests outside /hubs/:hubId (#2381).
 authenticated.route('/uploads', uploadsRoutes)
 authenticated.route('/files', filesRoutes)
 authenticated.route('/reports', reportsRoutes)

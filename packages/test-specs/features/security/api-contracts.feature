@@ -166,7 +166,7 @@ Feature: API Contract Validation
     Then the response status should be 400
 
   Scenario: Conversation status rejects invalid enum
-    When an admin sends "GET" to "/api/conversations?status=invalid"
+    When an admin sends "GET" to "/api/hubs/{hubId}/conversations?status=invalid"
     Then the response status should be 400
 
   # ─── Date Format Validation ────────────────────────────────────────

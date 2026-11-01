@@ -74,6 +74,7 @@ Given(
       senderNumber,
       body: 'Initial Signal message',
       channel: 'signal',
+      hubId: getScenarioState(world).hubId,
     })
     setState(world, STATE_KEY, {
       senderNumber,
@@ -91,6 +92,7 @@ Given('an active Signal conversation', async ({ request, world }) => {
     senderNumber,
     body: 'Initial Signal message',
     channel: 'signal',
+    hubId: getScenarioState(world).hubId,
   })
   setState(world, STATE_KEY, {
     senderNumber,
@@ -110,9 +112,10 @@ Given(
       senderNumber,
       body: 'Need help',
       channel: 'signal',
+      hubId: getScenarioState(world).hubId,
     })
     // Send an outbound reply (creates a message with externalId = timestamp)
-    const { status } = await apiPost(request, `/conversations/${inbound.conversationId}/messages`, {
+    const { status } = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/conversations/${inbound.conversationId}/messages`, {
       body: 'We can help you',
       externalId: timestamp,
     })
@@ -134,6 +137,7 @@ Given(
       senderNumber,
       body: 'First message',
       channel: 'signal',
+      hubId: getScenarioState(world).hubId,
     })
     setState(world, STATE_KEY, {
       senderNumber,
@@ -154,6 +158,7 @@ When(
       senderNumber,
       body,
       channel: 'signal',
+      hubId: getScenarioState(world).hubId,
     })
     const signalState = getSignalState(world)
     signalState.conversationId = result.conversationId
@@ -169,7 +174,7 @@ When(
   async ({ request, world }, replyBody: string) => {
     const state = getScenarioState(world)
     expect(state.conversationId).toBeDefined()
-    const { status } = await apiPost(request, `/conversations/${state.conversationId}/messages`, {
+    const { status } = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/conversations/${state.conversationId}/messages`, {
       body: replyBody,
     })
     expect(status).toBe(201)
@@ -193,7 +198,7 @@ When(
       // Find the outbound message by its externalId = timestamp
       const { data: messages } = await apiGet<{ messages: Array<{ id: string; externalId?: string }> }>(
         request,
-        `/conversations/${signalState.conversationId}/messages`,
+        `/hubs/${getScenarioState(world).hubId}/conversations/${signalState.conversationId}/messages`,
       )
       const msg = messages.messages.find(m => m.externalId === timestamp)
       if (msg) {
@@ -261,6 +266,7 @@ When(
       senderNumber: signalState.senderNumber,
       body: 'Follow-up message',
       channel: 'signal',
+      hubId: getScenarioState(world).hubId,
     })
     signalState.conversationId = result.conversationId
     state.messageId = result.messageId
@@ -271,7 +277,7 @@ When('an unknown envelope type arrives via the Signal webhook', async ({ request
   const signalState = getSignalState(world)
   const state = getScenarioState(world)
   // Count conversations before posting the unknown webhook
-  const { data: before } = await apiGet<{ total: number }>(request, `/conversations?limit=1`)
+  const { data: before } = await apiGet<{ total: number }>(request, `/hubs/${getScenarioState(world).hubId}/conversations?limit=1`)
   signalState.conversationCountBefore = (before as { total?: number }).total ?? 0
 
   // Post a Signal webhook payload with no dataMessage, receiptMessage, or typingMessage
@@ -331,7 +337,7 @@ Then(
     expect(state.conversationId).toBeDefined()
     const { status, data } = await apiGet<{ channelType: string }>(
       request,
-      `/conversations/${state.conversationId}`,
+      `/hubs/${getScenarioState(world).hubId}/conversations/${state.conversationId}`,
     )
     expect(status).toBe(200)
     expect(data.channelType).toBe(expectedChannelType)
@@ -343,7 +349,7 @@ Then('the conversation should contain the original message body', async ({ reque
   expect(state.conversationId).toBeDefined()
   const { status, data } = await apiGet<{ messages: Array<{ body?: string }> }>(
     request,
-    `/conversations/${state.conversationId}/messages`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${state.conversationId}/messages`,
   )
   expect(status).toBe(200)
   expect(data.messages.length).toBeGreaterThan(0)
@@ -354,7 +360,7 @@ Then('the outbound message should be dispatched to the Signal bridge', async ({ 
   expect(state.conversationId).toBeDefined()
   const { status, data } = await apiGet<{ messages: Array<{ direction: string }> }>(
     request,
-    `/conversations/${state.conversationId}/messages`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${state.conversationId}/messages`,
   )
   expect(status).toBe(200)
   const outbound = data.messages.find(m => m.direction === 'outbound')
@@ -366,7 +372,7 @@ Then('the message status should be {string}', async ({ request, world }, expecte
   expect(state.conversationId).toBeDefined()
   const { data } = await apiGet<{ messages: Array<{ status: string; direction: string }> }>(
     request,
-    `/conversations/${state.conversationId}/messages`,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${state.conversationId}/messages`,
   )
   const outbound = data.messages.filter(m => m.direction === 'outbound')
   expect(outbound.length).toBeGreaterThan(0)
@@ -380,7 +386,7 @@ Then(
     expect(signalState.conversationId).toBeDefined()
     const { data } = await apiGet<{ messages: Array<{ status: string; direction: string; externalId?: string }> }>(
       request,
-      `/conversations/${signalState.conversationId}/messages`,
+      `/hubs/${getScenarioState(world).hubId}/conversations/${signalState.conversationId}/messages`,
     )
     const outbound = data.messages.filter(m => m.direction === 'outbound')
     expect(outbound.length).toBeGreaterThan(0)
@@ -467,7 +473,7 @@ Then('the webhook should return 200 OK', async ({ world }) => {
 Then('no conversation should be created', async ({ request, world }) => {
   const signalState = getSignalState(world)
   const state = getScenarioState(world)
-  const { data: after } = await apiGet<{ total: number }>(request, `/conversations?limit=1`)
+  const { data: after } = await apiGet<{ total: number }>(request, `/hubs/${getScenarioState(world).hubId}/conversations?limit=1`)
   const afterTotal = (after as { total?: number }).total ?? 0
   // No new conversation should appear beyond what was there before
   expect(afterTotal).toBeLessThanOrEqual((signalState.conversationCountBefore ?? 0) + 0)

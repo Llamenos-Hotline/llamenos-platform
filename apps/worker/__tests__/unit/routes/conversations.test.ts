@@ -163,7 +163,7 @@ describe('conversations route', () => {
       expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
     })
 
-    it('returns assigned + waiting conversations for volunteer without read-all', async () => {
+    it('returns assigned + waiting conversations for a volunteer who may claim their channels', async () => {
       const assignedSpy = vi.fn().mockResolvedValue({
         conversations: [{ id: 'conv-1', channelType: 'sms', status: 'active' }],
         total: 1,
@@ -176,7 +176,7 @@ describe('conversations route', () => {
         total: 2,
       })
       const app = createTestApp({
-        permissions: ['conversations:read-assigned'],
+        permissions: ['conversations:read-assigned', 'conversations:claim-sms', 'conversations:claim-whatsapp'],
         services: {
           conversations: {
             list: vi.fn().mockImplementation((args) => {
@@ -193,6 +193,39 @@ describe('conversations route', () => {
       expect(body.conversations).toHaveLength(3)
       expect(body.assignedCount).toBe(1)
       expect(body.waitingCount).toBe(2)
+      // Both queries are this hub's.
+      expect(assignedSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
+      expect(waitingSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
+    })
+
+    it('shows no waiting conversation to a caller who may claim no channel (#2381)', async () => {
+      // An empty claimable set used to skip the channel filter entirely, so a
+      // caller with no claim permission saw the whole waiting queue.
+      const waitingSpy = vi.fn().mockResolvedValue({
+        conversations: [
+          { id: 'conv-2', channelType: 'sms', status: 'waiting' },
+          { id: 'conv-3', channelType: 'whatsapp', status: 'waiting' },
+        ],
+        total: 2,
+      })
+      const app = createTestApp({
+        permissions: ['conversations:read-assigned'],
+        services: {
+          conversations: {
+            list: vi.fn().mockImplementation((args) => {
+              if (args.assignedTo) return { conversations: [{ id: 'conv-1', channelType: 'sms', status: 'active' }], total: 1 }
+              return waitingSpy(args)
+            }),
+          },
+        },
+      })
+
+      const res = await app.request('/')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.conversations.map((c: { id: string }) => c.id)).toEqual(['conv-1'])
+      expect(body.waitingCount).toBe(0)
+      expect(body.claimableChannels).toEqual([])
     })
 
     it('filters waiting conversations by claimable channels', async () => {
@@ -710,22 +743,26 @@ describe('conversations route', () => {
       expect(claimSpy).toHaveBeenCalledWith('conv-1', 'test-pubkey-' + '0'.repeat(50))
     })
 
-    it('returns 400 when hubId is missing', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
-        id: 'conv-1',
-        channelType: 'sms',
-        status: 'waiting',
-      })
+    it('refuses every route outside a hub, before any service is read (#2381)', async () => {
+      const list = vi.fn()
+      const getStats = vi.fn()
+      const getByIdForHub = vi.fn()
+      const getById = vi.fn()
       const app = createTestApp({
-        permissions: ['conversations:claim-sms'],
+        permissions: ['*'],
         hubId: '',
-        services: { conversations: { getById: getSpy } },
+        services: { conversations: { list, getStats, getById, getByIdForHub } },
       })
 
-      const res = await app.request('/conv-1/claim', { method: 'POST' })
-      expect(res.status).toBe(400)
-      const body = await res.json()
-      expect(body.error).toContain('missing hub context')
+      for (const [method, path] of [
+        ['GET', '/'], ['GET', '/stats'], ['GET', '/load'], ['GET', '/conv-1'],
+        ['GET', '/conv-1/messages'], ['PATCH', '/conv-1'], ['POST', '/conv-1/claim'],
+      ] as const) {
+        const res = await app.request(path, { method })
+        expect(res.status, `${method} ${path}`).toBe(404)
+        expect((await res.json()).error).toContain('hub-scoped')
+      }
+      for (const spy of [list, getStats, getById, getByIdForHub]) expect(spy).not.toHaveBeenCalled()
     })
 
     it('returns 403 when volunteer lacks channel claim permission', async () => {

@@ -273,15 +273,21 @@ class BaseUITest: XCTestCase {
 
     /// Simulate an incoming message via the test simulation API.
     /// Returns (conversationId, messageId) on success.
+    ///
+    /// The message must carry the class hub: conversations exist only inside a hub and the
+    /// app lists them per member hub (`/api/hubs/:id/conversations`), so a conversation the
+    /// server files under no hub is never returned to any client (#2381).
     @discardableResult
     func simulateIncomingMessage(
         senderNumber: String = "+15559876543",
         body: String = "Test message",
-        channel: String = "sms"
+        channel: String = "sms",
+        hubId: String? = nil
     ) -> (conversationId: String, messageId: String) {
+        // Default to the class hub; a test that needs a hub of its own passes it.
         return simulationRequest(
             endpoint: "incoming-message",
-            body: ["senderNumber": senderNumber, "body": body, "channel": channel],
+            body: ["senderNumber": senderNumber, "body": body, "channel": channel, "hubId": hubId ?? testHubId],
             extractKeys: ("conversationId", "messageId")
         )
     }

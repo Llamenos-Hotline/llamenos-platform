@@ -14,7 +14,7 @@ import {
   VALID_ENVELOPE,
 } from '../helpers/openapi-validation'
 
-/** Creates a mock services object whose conversations.getById returns a web-channel conversation */
+/** Creates a mock services object whose conversations.getByIdForHub returns a web-channel conversation */
 function createWebChannelServices(): AppEnv['Variables']['services'] {
   const webConv = {
     id: 'conv-1',
@@ -27,7 +27,7 @@ function createWebChannelServices(): AppEnv['Variables']['services'] {
       if (typeof prop === 'symbol') return undefined
       if (prop === 'conversations') {
         return {
-          getById: vi.fn().mockResolvedValue(webConv),
+          getByIdForHub: vi.fn().mockResolvedValue(webConv),
           addMessage: vi.fn().mockResolvedValue({ id: 'msg-new' }),
         }
       }
@@ -46,6 +46,8 @@ function createApp() {
     prefix: '/conversations',
     routes: conversationsRoutes,
     authenticated: true,
+    // Conversations are served only inside a hub (#2381).
+    hubId: 'hub-1',
     services: createWebChannelServices(),
   })
 }
