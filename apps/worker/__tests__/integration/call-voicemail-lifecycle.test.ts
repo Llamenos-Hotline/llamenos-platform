@@ -29,6 +29,7 @@ const TEST_SCHEMA = `test_callvm_${Date.now()}_${Math.random().toString(36).slic
 const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.active_calls (
     call_id TEXT PRIMARY KEY,
+    push_ref TEXT UNIQUE,
     hub_id TEXT,
     caller_number_sealed TEXT,
     caller_last4 TEXT,

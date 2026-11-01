@@ -47,12 +47,13 @@ const RECORDING_SID = 'RE-provider-handle-1'
 
 const ACTIVE_CALL_KEYS = [
   'answeredBy', 'callerLast4', 'hasRecording', 'hasTranscription', 'hasVoicemail',
-  'hubId', 'id', 'startedAt', 'status',
+  'hubId', 'id', 'pushRef', 'startedAt', 'status',
 ]
 
 function activeRow(overrides: Partial<ActiveCallRow> = {}): ActiveCallRow {
   return {
     callId: 'CA-active-1',
+    pushRef: 'push-ref-1',
     hubId: 'hub-1',
     callerNumberSealed: CALLER_HASH,
     callerLast4: '4567',

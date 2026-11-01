@@ -4893,6 +4893,8 @@ For incoming call notifications on iOS, a VoIP push is sent via APNs with a 30-s
 4. If the user answers, prompt for PIN to unlock the identity key.
 5. Use the identity key to authenticate and answer the call via REST API.
 
+**The push names the call by an opaque reference, never by the call's id (#2374).** The VoIP push body is `{ "type": "incoming_call", "call-id": <ref>, "hub-id": <hub> }` on both APNs and ntfy, and nothing else — no caller digits. A call's id is the telephony provider's identifier for it (the webhook's `CallSid`, or the UUID the other providers issue): a key into the provider's CDR, which holds the caller's number, and a push leaves our systems for Apple and the ntfy relay. `<ref>` is 128 random bits minted per call (`active_calls.push_ref`), unrelated to the call's id. The wire key stays `call-id` because the clients and liblinphone read that key; its value is a reference, not an id usable in the API. A client resolves it to the call by matching `pushRef` on `GET /api/calls/active` (hub-scoped by the push's `hub-id`), and the `call:ring` relay event carries the same `pushRef` next to its `callId`. The reference is deleted with the call's live row when the call ends.
+
 ### 5.5 Hub Routing for Push Notifications
 
 The `hubId` field in a decrypted wake payload identifies which hub the notification belongs to. Clients must dispatch the notification to the correct hub handler regardless of which hub is currently active in the UI.

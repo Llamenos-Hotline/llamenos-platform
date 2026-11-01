@@ -9,6 +9,7 @@
  * optional `ShiftsService` that production never passed, so presence reported
  * nobody on every deployment. See services/presence.ts.
  */
+import { randomBytes } from 'node:crypto'
 import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
@@ -28,6 +29,14 @@ const IN_PROGRESS_TTL_MS = 2 * 60 * 60 * 1000
 
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
+
+/**
+ * What a VoIP push says in place of the call's id (#2374): 128 random bits, unrelated to the
+ * provider's identifier, so Apple and ntfy learn nothing a telephony provider's records could join.
+ */
+function newPushRef(): string {
+  return randomBytes(16).toString('hex')
+}
 
 export interface CallsServiceDeps {
   /**
@@ -310,11 +319,13 @@ export class CallsService {
       callerLast4?: string
       status?: string
     },
-  ): Promise<ActiveCallRow> {
+  ): Promise<ActiveCallRow & { pushRef: string }> {
+    const pushRef = newPushRef()
     const [row] = await this.db
       .insert(activeCalls)
       .values({
         callId: data.callId,
+        pushRef,
         hubId,
         callerNumberSealed: data.callerNumberSealed,
         callerLast4: data.callerLast4 ?? null,
@@ -324,7 +335,7 @@ export class CallsService {
 
     // Instance-wide, no hub label: the cross-hub backstop for #2330.
     recordCallInbound()
-    return row
+    return { ...row, pushRef }
   }
 
   /**
