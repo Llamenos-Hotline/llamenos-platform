@@ -96,5 +96,6 @@ fun categoryLabel(category: String): Int = when (category) {
     "provider-media" -> R.string.incident_category_provider_media
     "erasure-deadline" -> R.string.incident_category_erasure_deadline
     "ban-expiry" -> R.string.incident_category_ban_expiry
+    "channel-disabled" -> R.string.incident_category_channel_disabled
     else -> R.string.incident_title
 }
