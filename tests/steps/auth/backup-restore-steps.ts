@@ -153,14 +153,26 @@ When('I choose my encrypted backup file using only the keyboard', async ({ page,
   // chooser. The native dialog itself is not asserted: headless Chromium drops
   // it intermittently when workers run in parallel, even though the click on
   // the input is dispatched every time.
-  const inputClicked = page.evaluate(() => new Promise<boolean>(resolve => {
+  //
+  // The listener is installed and AWAITED before the key goes down. Starting
+  // the evaluate and pressing Enter without awaiting it lets the keypress
+  // overtake the registration, the click lands before anyone is listening, and
+  // the step fails on a correct app (~10% of runs on a fast local machine, both
+  // attempts on the slower ubuntu-26.04 runner, #2379).
+  await page.evaluate(() => {
+    const probe = window as unknown as { __fileInputClicked?: boolean }
+    probe.__fileInputClicked = false
     document.addEventListener('click', e => {
-      if ((e.target as HTMLElement).tagName === 'INPUT') resolve(true)
+      if ((e.target as HTMLElement).tagName === 'INPUT') probe.__fileInputClicked = true
     }, true)
-    setTimeout(() => resolve(false), 5000)
-  }))
+  })
   await page.keyboard.press('Enter')
-  expect(await inputClicked, 'Enter on the button must activate the file input').toBe(true)
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as unknown as { __fileInputClicked?: boolean }).__fileInputClicked),
+      { message: 'Enter on the button must activate the file input' },
+    )
+    .toBe(true)
   await page.getByTestId(TestIds.BACKUP_FILE_INPUT).setInputFiles(backupWorld.filePath)
 })
 
