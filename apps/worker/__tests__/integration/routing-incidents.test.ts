@@ -212,6 +212,17 @@ describe('routing/nobody_would_ring (#2330)', () => {
     expect(await openIncident(hub.id, 'routing')).toBeNull()
   })
 
+  it('a hub that has switched voice off receives no calls, so expects no coverage — until it is switched back on', async () => {
+    const hub = await createHub()
+    await services.settings.updateHubSettings(hub.id, { channels: { voice: false, signal: true } })
+    await services.incidents.runChecks()
+    expect(await openIncident(hub.id, 'routing')).toBeNull()
+
+    await services.settings.updateHubSettings(hub.id, { channels: { voice: true, signal: true } })
+    await services.incidents.runChecks()
+    expect((await openIncident(hub.id, 'routing'))!.counts).toEqual({ nobody_would_ring: 1 })
+  })
+
   it('a fallback group naming an available volunteer would ring — no incident', async () => {
     const hub = await createHub()
     await services.settings.setFallbackGroup({ userPubkeys: [await volunteerOf(hub.id)] }, hub.id)

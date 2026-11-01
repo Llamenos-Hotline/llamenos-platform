@@ -191,10 +191,16 @@ export const ROUTING_NO_ANSWER_MIN_INBOUND = 3
  * Can this hub receive a call at all? Only an active hub with a number is
  * routed to (`SettingsService.getHubByPhone`); a hub without one — mid-setup,
  * or messaging-only — expects no calls, so neither check has anything to say.
+ *
+ * Nor does a hub that has switched voice off (#2393): the webhook refuses its
+ * calls, so an empty roster there is the switch doing what it was set to do,
+ * not a hotline that cannot answer. Without this, every voice-off hub holds a
+ * standing `notify` incident that pages the fallback desk for nothing.
  */
 async function hubTakesCalls(services: Pick<Services, 'settings'>, hubId: string): Promise<boolean> {
   const { hub } = await services.settings.getHub(hubId)
-  return hub.status === 'active' && !!hub.phoneNumber
+  if (hub.status !== 'active' || !hub.phoneNumber) return false
+  return services.settings.isHubChannelEnabled(hubId, 'voice')
 }
 
 /**
