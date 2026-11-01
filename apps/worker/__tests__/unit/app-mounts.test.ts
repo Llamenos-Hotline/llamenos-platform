@@ -43,7 +43,7 @@ import app from '@worker/app'
 import notesRoutes from '@worker/routes/notes'
 import reportsRoutes from '@worker/routes/reports'
 import contactsRoutes from '@worker/routes/contacts'
-import auditRoutes from '@worker/routes/audit'
+import auditRoutes, { platformAuditRoutes } from '@worker/routes/audit'
 import conversationsRoutes from '@worker/routes/conversations'
 
 interface RouteEntry { method: string; path: string; handler: unknown }
@@ -77,6 +77,20 @@ function dualMounts(routes: readonly RouteEntry[]): Map<string, string[]> {
     }
   }
   return new Map([...out].map(([k, v]) => [k, [...v].sort()]))
+}
+
+/**
+ * The mount key (first path segment) of every endpoint the hub-scoped chain
+ * serves. Router-wide `ALL` entries are skipped, as in {@link dualMounts}, which
+ * also drops the chain-wide `hubContext` registration at `/api/hubs/:hubId/*`.
+ */
+function hubMounts(routes: readonly RouteEntry[]): string[] {
+  const keys = new Set<string>()
+  for (const r of routes) {
+    if (r.method === 'ALL' || !r.path.startsWith(`${HUB_PREFIX}/`)) continue
+    keys.add(`/${r.path.slice(HUB_PREFIX.length + 1).split('/')[0]}`)
+  }
+  return [...keys].sort()
 }
 
 /**
@@ -165,16 +179,28 @@ describe('dual mounts (#2395)', () => {
     expect(Object.keys(LEDGER).filter(k => !dual.has(k)), 'Remove these entries: the mount is gone.').toEqual([])
   })
 
-  it('the hub-owned routers (#2395, #2381) are reachable only under a hub', () => {
-    const paths = routes.filter(r => r.method !== 'ALL').map(r => r.path)
-    for (const prefix of ['/notes', '/reports', '/contacts', '/audit', '/conversations']) {
-      expect(paths.filter(p => p === `/api${prefix}` || p.startsWith(`/api${prefix}/`)), `unscoped ${prefix}`).toEqual([])
-      expect(paths.some(p => p.startsWith(`${HUB_PREFIX}${prefix}`)), `hub ${prefix}`).toBe(true)
+  it('every router mounted under a hub and not in the ledger has no unscoped route at all (#2395, #2381)', () => {
+    // Derived, not listed: a hub-owned mount is any mount the hub-scoped chain
+    // serves that the ledger does not excuse. The dual-mount check above only
+    // catches the SAME handler on both sides; this also catches a second router,
+    // with different code, mounted at the same unscoped path.
+    const unscopedRoutes = routes.filter(r => r.method !== 'ALL' && !inHub(r.path))
+    const hubOwned = hubMounts(routes).filter(k => !(k in LEDGER))
+    expect(hubOwned.length, 'the hub-scoped chain must expose some hub-owned mount').toBeGreaterThan(0)
+    for (const key of hubOwned) {
+      expect(
+        unscopedRoutes.filter(r => r.path === `/api${key}` || r.path.startsWith(`/api${key}/`)).map(r => `${r.method} ${r.path}`),
+        `unscoped ${key}`,
+      ).toEqual([])
     }
-    // The platform chain has its own route, and no hub's.
-    expect(paths).toContain('/api/admin/audit')
-    expect(paths).toContain('/api/admin/audit/verify')
-    expect(paths).not.toContain(`${HUB_PREFIX}/admin/audit`)
+  })
+
+  it('the platform audit chain has its own routes, and none of them is served inside a hub (#2395)', () => {
+    const platform = new Set<unknown>(platformAuditRoutes.routes.filter(r => r.method !== 'ALL').map(r => r.handler))
+    expect(platform.size, 'platformAuditRoutes has endpoints').toBeGreaterThan(0)
+    const served = routes.filter(r => platform.has(r.handler))
+    expect(served.length, 'the platform audit routes are mounted').toBeGreaterThan(0)
+    expect(served.filter(r => inHub(r.path)).map(r => r.path)).toEqual([])
   })
 })
 
@@ -187,21 +213,34 @@ describe('hubOnly fails closed when a hub-owned router is mounted unscoped (#239
     c.set('pubkey', 'a'.repeat(64))
     await next()
   })
-  stray.route('/notes', notesRoutes)
-  stray.route('/reports', reportsRoutes)
-  stray.route('/contacts', contactsRoutes)
-  stray.route('/audit', auditRoutes)
-  stray.route('/conversations', conversationsRoutes)
+  const mounted = {
+    '/notes': notesRoutes,
+    '/reports': reportsRoutes,
+    '/contacts': contactsRoutes,
+    '/audit': auditRoutes,
+    '/conversations': conversationsRoutes,
+  }
+  for (const [mount, router] of Object.entries(mounted)) stray.route(mount, router)
 
-  for (const path of ['/notes', '/notes/n1', '/reports', '/reports/r1/messages', '/contacts', '/contacts/abc', '/audit', '/audit/verify', '/conversations', '/conversations/c1']) {
-    it(`GET ${path} with every permission and no hub is a 404`, async () => {
-      const res = await stray.request(path)
+  // Every endpoint each router declares, with its path params filled in; read
+  // from the routers themselves, so a route added to one is covered unasked.
+  const requests = Object.entries(mounted).flatMap(([mount, router]) =>
+    router.routes
+      .filter(r => r.method !== 'ALL')
+      .map(r => ({
+        method: r.method,
+        path: (r.path === '/' ? mount : `${mount}${r.path}`).replace(/:[^/]+/g, 'x').replace(/\*/g, 'x'),
+      })),
+  )
+
+  it('covers every endpoint of every hub-owned router', () => {
+    expect(requests.length).toBeGreaterThan(Object.keys(mounted).length)
+  })
+
+  for (const { method, path } of requests) {
+    it(`${method} ${path} with every permission and no hub is a 404`, async () => {
+      const res = await stray.request(path, { method, headers: { 'content-type': 'application/json' }, body: method === 'GET' || method === 'DELETE' ? undefined : '{}' })
       expect(res.status).toBe(404)
     })
   }
-
-  it('a write is refused the same way', async () => {
-    const res = await stray.request('/notes', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
-    expect(res.status).toBe(404)
-  })
 })
