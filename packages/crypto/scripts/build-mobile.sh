@@ -125,31 +125,11 @@ build_android() {
   echo "Release .so files:"
   find "$android_release_dist" -name "*.so" -type f | sort
 
-  # Generate Kotlin bindings
+  # Kotlin bindings: kotlin-bindings.sh is the single generator of the tracked
+  # file Gradle compiles; writing it here keeps it in step with the .so above.
   echo ""
   echo "Generating Kotlin bindings..."
-  echo "Building uniffi-bindgen binary (release-bindgen profile)..."
-  cargo build --profile release-bindgen --features uniffi-bindgen
-
-  local bindgen_lib="target/release-bindgen/${LIB_NAME}"
-  if [[ "$(uname)" == "Darwin" ]]; then
-    bindgen_lib="${bindgen_lib}.dylib"
-  else
-    bindgen_lib="${bindgen_lib}.so"
-  fi
-
-  if [[ ! -f "$bindgen_lib" ]]; then
-    echo "ERROR: Bindgen library not found at $bindgen_lib"
-    exit 1
-  fi
-
-  local kotlin_dist="$DIST_DIR/android/kotlin"
-  mkdir -p "$kotlin_dist"
-  cargo run --features uniffi-bindgen --bin uniffi-bindgen -- \
-    generate --library "$bindgen_lib" --language kotlin --out-dir "$kotlin_dist"
-
-  echo "Kotlin bindings:"
-  find "$kotlin_dist" -name "*.kt" -type f
+  "$SCRIPT_DIR/kotlin-bindings.sh" sync
 }
 
 # ─── iOS build ─────────────────────────────────────────────────
@@ -298,11 +278,8 @@ if [[ "$PLATFORM" == "android" || "$PLATFORM" == "all" ]]; then
       echo "  $size  $(echo "$f" | sed "s|$DIST_DIR/||")"
     done
   fi
-  if [[ -d "$DIST_DIR/android/kotlin" ]]; then
-    find "$DIST_DIR/android/kotlin" -name "*.kt" -type f | while read -r f; do
-      echo "  $(echo "$f" | sed "s|$DIST_DIR/||")"
-    done
-  fi
+  echo ""
+  echo "Android Kotlin binding (tracked): apps/android/app/src/main/java/org/llamenos/core/llamenos_core.kt"
 fi
 
 if [[ "$PLATFORM" == "ios" || "$PLATFORM" == "all" ]]; then

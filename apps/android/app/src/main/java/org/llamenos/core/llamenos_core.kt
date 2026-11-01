@@ -709,6 +709,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_message(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event(
@@ -720,6 +722,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_ed25519_verify(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_encrypt_draft(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_encrypt_hub_field(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_encrypt_message(
     ): Short
@@ -882,6 +886,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event(`ciphertextHe
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(`encryptedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(`packedHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_message(`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_server_event(`encryptedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -893,6 +899,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_ecdh_complete(`theirPubkeyHex`:
 external fun uniffi_llamenos_core_fn_func_mobile_ed25519_verify(`messageHex`: RustBuffer.ByValue,`signatureHex`: RustBuffer.ByValue,`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_encrypt_draft(`plaintext`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_encrypt_hub_field(`plaintext`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_encrypt_message(`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1198,6 +1206,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial() != 46122.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field() != 13981.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1214,6 +1225,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_encrypt_draft() != 30232.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_encrypt_hub_field() != 34062.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_encrypt_message() != 47681.toShort()) {
@@ -3491,6 +3505,21 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Open a field sealed by `mobile_encrypt_hub_field` (or the desktop
+         * `encrypt_hub_field`) under the stored hub key.
+         */
+    @Throws(CryptoException::class) fun `mobileDecryptHubField`(`packedHex`: kotlin.String, `hubId`: kotlin.String, `label`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(
+    
+        FfiConverterString.lower(`packedHex`),FfiConverterString.lower(`hubId`),FfiConverterString.lower(`label`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Decrypt a conversation message (`LABEL_MESSAGE`) as this device, whether a
          * client or the server sealed it. Takes all of the message's reader envelopes.
          */
@@ -3581,6 +3610,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_encrypt_draft(
     
         FfiConverterString.lower(`plaintext`),FfiConverterString.lower(`hubId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal a small hub-scoped field (tag label, tag category, team name) under the
+         * stored hub key. `label` is bound as AAD and must be a registered
+         * domain-separation label. The hub key never leaves Rust.
+         */
+    @Throws(CryptoException::class) fun `mobileEncryptHubField`(`plaintext`: kotlin.String, `hubId`: kotlin.String, `label`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_encrypt_hub_field(
+    
+        FfiConverterString.lower(`plaintext`),FfiConverterString.lower(`hubId`),FfiConverterString.lower(`label`),_status)
 }
     )
     }
