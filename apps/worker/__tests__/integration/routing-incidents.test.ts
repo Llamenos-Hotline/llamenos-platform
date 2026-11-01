@@ -49,7 +49,7 @@ let services: Services
 interface Sent {
   channel: 'relay' | 'interrupt'
   incidentId: string
-  hubId: string
+  hubId: string | null
   state: IncidentState
 }
 const sent: Sent[] = []
