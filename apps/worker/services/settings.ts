@@ -115,6 +115,7 @@ import {
   resolveTTL,
 } from '../lib/ttl'
 import { createLogger } from '../lib/logger'
+import type { ProviderMediaEraser } from './provider-recordings'
 import { webhookSecretProblem } from '../messaging/webhook-secret'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
@@ -2282,7 +2283,27 @@ export class SettingsService {
     return { ok: true }
   }
 
-  async deleteHub(id: string, recordings: SealedRecordingEraser): Promise<{ ok: true }> {
+  /**
+   * Permanently delete a hub. Caller audio the telephony provider still holds
+   * for it is deleted AT the provider first (#2364): the hub row's cascade drops
+   * `provider_configs`, the only way to reach that provider again, so audio left
+   * there when the credentials go is unrecoverable. A recording the provider
+   * will not delete — or one with no handle to delete it by (#2322) — refuses the
+   * deletion with a 502 before anything is dropped; `deleteHeld` has already
+   * kept the ledger row and raised the `provider-media` incident. A sealed copy
+   * the object store will not delete refuses it first, as `SealedRecordingDeleteError`.
+   * `providerMedia` is required so a caller cannot omit the step (the #1127 / #1566 failure class).
+   *
+   * `beforeDrop` runs once the provider has confirmed and before any hub row is
+   * dropped, for teardown that is also irreversible (object-storage buckets): it
+   * must not run for a deletion that is about to be refused.
+   */
+  async deleteHub(
+    id: string,
+    recordings: SealedRecordingEraser,
+    providerMedia: ProviderMediaEraser,
+    options: { beforeDrop?: () => Promise<void> } = {},
+  ): Promise<{ ok: true }> {
     const [existing] = await this.db
       .select()
       .from(hubsTable)
@@ -2291,6 +2312,22 @@ export class SettingsService {
       throw new ServiceError(404, 'Hub not found')
     }
 
+    // The server's own sealed copies first, so a blob the object store will not
+    // delete surfaces as the typed `SealedRecordingDeleteError` (what callers
+    // report on) rather than as an anonymous entry in the provider step's
+    // `failed` list below — `providerMedia` erases those copies too, but folds
+    // a refusal into a 502.
+    await recordings.eraseForHub(id)
+
+    const media = await providerMedia.deleteForHub(id)
+    if (media.failed.length > 0) {
+      throw new ServiceError(
+        502,
+        `Hub deletion refused: caller audio is still held for ${media.failed.length} recording(s) that could not be deleted — ${media.failed[0].error}`,
+      )
+    }
+
+    await options.beforeDrop?.()
     return this.purgeHub(id, recordings)
   }
 

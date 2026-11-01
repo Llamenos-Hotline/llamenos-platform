@@ -5,6 +5,7 @@ import {
   isMockTelephonyAllowed,
   mockTelephonyRefusalReason,
   assertMockTelephonyAllowed,
+  recoverMockRecording,
 } from '@worker/telephony/mock'
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
 import type { Env } from '@worker/types'
@@ -102,6 +103,14 @@ describe('MockTelephonyAdapter', () => {
     await adapter.deleteRecording('mock-rec-1')
     expect(adapter.actions).toContainEqual({ type: 'delete-recording', recordingSid: 'mock-rec-1' })
     await expect(adapter.deleteRecording('mock-undeletable-1')).rejects.toThrow(/refuses to delete/)
+  })
+
+  it('stops refusing an undeletable handle only once the provider has recovered, and only once', async () => {
+    await expect(adapter.deleteRecording('mock-undeletable-2')).rejects.toThrow(/refuses to delete/)
+    recoverMockRecording('mock-undeletable-2')
+    await expect(adapter.deleteRecording('mock-undeletable-2')).resolves.toBeUndefined()
+    expect(adapter.actions).toContainEqual({ type: 'delete-recording', recordingSid: 'mock-undeletable-2' })
+    await expect(adapter.deleteRecording('mock-undeletable-3')).rejects.toThrow(/refuses to delete/)
   })
 
   it('reports its recording posture with evidence, never a bare off', async () => {

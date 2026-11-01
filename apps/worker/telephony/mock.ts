@@ -68,6 +68,20 @@ export const MOCK_PROVIDER_TYPE = 'mock'
  */
 export const MOCK_UNDELETABLE_RECORDING_PREFIX = 'mock-undeletable-'
 
+/**
+ * Undeletable handles whose provider has since "recovered". A refusal that never
+ * lifts leaves a hub that cannot be deleted — correctly, since #2364 refuses to
+ * destroy the credentials while the provider still holds caller audio — so a
+ * test that drives a refusal needs the provider to come back before it tears the
+ * hub down. Process-wide because the adapter is rebuilt on every resolve.
+ */
+const recoveredRecordings = new Set<string>()
+
+/** The simulated provider stops refusing this handle; its next deletion succeeds. */
+export function recoverMockRecording(recordingSid: string): void {
+  recoveredRecordings.add(recordingSid)
+}
+
 /** Prefix of every call SID minted by the mock — lets routes refuse to touch real calls. */
 export const MOCK_CALL_SID_PREFIX = 'mock-call-'
 
@@ -221,7 +235,7 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
   }
 
   async deleteRecording(recordingSid: string): Promise<void> {
-    if (recordingSid.startsWith(MOCK_UNDELETABLE_RECORDING_PREFIX)) {
+    if (recordingSid.startsWith(MOCK_UNDELETABLE_RECORDING_PREFIX) && !recoveredRecordings.delete(recordingSid)) {
       throw new ProviderRecordingDeleteError('mock', 503, 'the mock provider refuses to delete this recording')
     }
     this.record({ type: 'delete-recording', recordingSid })
