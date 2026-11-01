@@ -27,15 +27,15 @@ import {
   type IncidentState,
 } from '@protocol/schemas/incidents'
 import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
-import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
+import { permissionGranted, resolveHubPermissions, resolvePermissions } from '@shared/permissions'
 import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService, type PushDispatcher } from '../lib/push-dispatch'
 import type { IdentityService } from './identity'
 import type { SettingsService } from './settings'
 import type { ShiftsService } from './shifts'
 import type { UserNotificationsService } from './user-notifications'
-import type { IncidentNotifier } from './incidents'
-import { INCIDENT_CATEGORIES } from './incidents-categories'
+import { isHubScoped, type HubScopedIncidentRow, type IncidentNotifier } from './incidents'
+import { INCIDENT_CATEGORIES, PLATFORM_INCIDENT_PERMISSION } from './incidents-categories'
 import { createLogger } from '../lib/logger'
 
 const log = createLogger('services.incidents-delivery')
@@ -69,6 +69,22 @@ export async function resolveIncidentHolders(
     .map((u) => ({ pubkey: u.pubkey, uiLanguage: u.uiLanguage || 'en' }))
 }
 
+/**
+ * Holders of the PLATFORM permission, resolved from their GLOBAL roles only —
+ * a hub role never grants it, so a hub's admins are not paged for an incident
+ * that belongs to no hub. Inactive accounts are skipped.
+ */
+export async function resolvePlatformIncidentHolders(
+  identity: Pick<IdentityService, 'getUsers'>,
+  settings: Pick<SettingsService, 'getRoles'>,
+): Promise<IncidentHolder[]> {
+  const [{ users }, { roles }] = await Promise.all([identity.getUsers(), settings.getRoles()])
+  return users
+    .filter((u) => u.active)
+    .filter((u) => permissionGranted(resolvePermissions(u.roles, roles), PLATFORM_INCIDENT_PERMISSION))
+    .map((u) => ({ pubkey: u.pubkey, uiLanguage: u.uiLanguage || 'en' }))
+}
+
 export interface IncidentDeliveryDeps {
   env: Env
   identity: IdentityService
@@ -86,7 +102,7 @@ export class IncidentDelivery implements IncidentNotifier {
     this.push = deps.pushDispatcher ?? createPushDispatcherFromService(deps.env, deps.identity, deps.shifts)
   }
 
-  async relay(incident: HubIncidentRow, state: IncidentState): Promise<void> {
+  async relay(incident: HubScopedIncidentRow, state: IncidentState): Promise<void> {
     // Parsed through the strict schema: a field added here by mistake throws
     // instead of reaching every member of the hub.
     const content = hubIncidentRelayEventSchema.parse({ incidentId: incident.id, state })
@@ -95,6 +111,7 @@ export class IncidentDelivery implements IncidentNotifier {
 
   async interrupt(incident: HubIncidentRow, state: IncidentState): Promise<void> {
     const category = incident.category as IncidentCategory
+    if (!isHubScoped(incident)) return this.interruptPlatform(incident, category, state)
     const holders = await resolveIncidentHolders(this.deps.identity, this.deps.settings, incident.hubId, category)
     const wake = { hubId: incident.hubId, type: 'incident' as const }
     await Promise.allSettled(
@@ -115,6 +132,29 @@ export class IncidentDelivery implements IncidentNotifier {
               error: r.reason,
             })
           }
+        }
+      }),
+    )
+  }
+
+  /**
+   * A platform incident has no hub, so there is no hub to route a push wake
+   * through (`WakePayload.hubId` is required and clients resolve the wake by
+   * it). Its holders are reached on the Signal alert — whose preference gate
+   * and retries apply — and read the detail from `GET /incidents/platform`.
+   */
+  private async interruptPlatform(incident: HubIncidentRow, category: IncidentCategory, state: IncidentState): Promise<void> {
+    const holders = await resolvePlatformIncidentHolders(this.deps.identity, this.deps.settings)
+    await Promise.allSettled(
+      holders.map(async (holder) => {
+        try {
+          await this.deps.userNotifications.sendAlert(
+            holder.pubkey,
+            { type: 'hub_incident', category, state },
+            holder.uiLanguage,
+          )
+        } catch (err) {
+          log.error('Platform incident notification to a holder failed', { incidentId: incident.id, state, error: err })
         }
       }),
     )

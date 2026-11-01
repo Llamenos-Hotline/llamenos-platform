@@ -174,6 +174,11 @@ const REFERENCED_BY_NAME = new Set([
   // #1641 — `{ reply }` would otherwise mint a second, identical `Reply` type,
   // and a bare `Reply` is one Swift-module name away from a collision.
   'NoteReplyResponse',
+  // #2347 — the platform incident list holds `incidents` items too. Without
+  // this quicktype sees two differently-shaped `incidents` items and prefixes
+  // BOTH, renaming the hub one (`Incident` → `HubIncidentListResponseIncident`)
+  // out from under the mobile incident screens.
+  'PlatformIncident',
 ])
 
 /**
