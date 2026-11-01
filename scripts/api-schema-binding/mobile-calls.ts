@@ -380,7 +380,11 @@ function evalCall(ctx: Ctx, name: string, open: number, close: number): Res {
   const body = text.slice(callee.bodyStart, callee.bodyEnd)
   for (let r = re.exec(body); r; r = re.exec(body)) {
     const start = callee.bodyStart + r.index + 6
-    returns.push(evalRange({ ...bodyCtx, at: start }, start, readExpression(text, start, lang)))
+    const end = readExpression(text, start, lang)
+    // `return nil` / `return null` is a helper declining to build a path (no hub selected):
+    // no request is made, so it is not a path the guard has to resolve.
+    if (/^(?:nil|null)$/.test(text.slice(start, end).trim())) continue
+    returns.push(evalRange({ ...bodyCtx, at: start }, start, end))
   }
   if (returns.length === 0) returns.push(evalRange({ ...bodyCtx, at: callee.bodyEnd }, callee.bodyStart, callee.bodyEnd))
   return union(returns)
@@ -407,7 +411,13 @@ function resolveIdent(ctx: Ctx, name: string, qualified: boolean): Res {
           }
         }
         if (eq < 0) return unres(`\`${name}\` is declared without an initial value`)
-        const end = readExpression(text, eq + 1, lang)
+        let end = readExpression(text, eq + 1, lang)
+        // `guard let path = helper() else { return }` — the `else` block is the exit, not part of the value.
+        // (An `if … else …` expression on the right-hand side owns its own `else`.)
+        const guardElse = lang === 'swift' && !/^\s*if\b/.test(text.slice(eq + 1, end))
+          ? findTopLevel(text, eq + 1, end, 'else', lang).find(i => wordAt(text, i, 'else'))
+          : undefined
+        if (guardElse !== undefined) end = guardElse
         let res = evalRange({ ...ctx, depth: ctx.depth + 1, at: eq + 1 }, eq + 1, end)
         if (!isUnres(res)) {
           // `name += "…"` between the declaration and the use appends to it.

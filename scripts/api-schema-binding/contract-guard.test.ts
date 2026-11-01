@@ -10,7 +10,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { buildRouteIndex, checkCall, type CallSite, type Finding } from './contract-match'
+import { buildRouteIndex, checkCall, segmentsOf, type CallSite, type Finding } from './contract-match'
 import {
   evaluate,
   failed,
@@ -134,9 +134,21 @@ describe('break it: each seeded defect is caught', () => {
   })
 
   test('a route that does not exist at all is unmounted, with the nearest route named', () => {
-    const f = only(kotlin(`suspend fun x(id: String) = apiService.request<R>("POST", "/api/conversations/$id/close")`))
+    // Derived from the live table, never a literal route name: the guard must name the
+    // mounted route the call is closest to, so the fixture needs one whose neighbourhood is
+    // unambiguous. That is an unscoped `/api/<resource>/:param` and the only path under
+    // `/api/<resource>/` (so `<it>/close` cannot be mounted, and no sibling route can
+    // outscore it as the nearest).
+    // Pinning a real resource here broke whenever a PR moved that resource.
+    const resourceOf = (path: string) => segmentsOf(path)[1]
+    const anchor = routes
+      .filter(r => r.method.toUpperCase() !== 'ALL' && /^\/api\/[a-z-]+\/:\w+$/.test(r.path))
+      .filter(r => routes.every(o => o.path === r.path || !o.path.startsWith(`/api/${resourceOf(r.path)}/`)))
+      .sort((a, b) => a.path.localeCompare(b.path))[0]
+    expect(anchor, 'no leaf /api/<resource>/:param route is mounted to anchor the fixture on').toBeDefined()
+    const f = only(kotlin(`suspend fun x(id: String) = apiService.request<R>("POST", "${anchor.path.replace(/:\w+$/, '$id')}/close")`))
     expect(f.category).toBe('unmounted')
-    expect(f.nearest).toContain('/api/conversations/:id')
+    expect(f.nearest).toContain(anchor.path)
   })
 
   test('a correct call produces no finding, and the ALL verb matches any method', () => {
@@ -205,6 +217,26 @@ describe('call-site parsing follows the way the clients build paths', () => {
       private fun hubPath(path: String): String = if (hubId != null) "$path?hubId=$hubId" else path
       suspend fun status(p: String) = apiService.request<R>("GET", hubPath("/api/provider-setup/status/$p"))
     `)).toEqual([])
+  })
+
+  test('swift: a helper that declines with `return nil`, bound by `guard let … else`, is followed to its path', () => {
+    const body = (path: string) => `
+      private func scoped(_ rest: String) -> String? {
+          guard let hubId = loadedHubId else { return nil }
+          return APIService.hubPath(hubId, "${path}\\(rest)")
+      }
+      func load() async throws {
+          guard let path = scoped("/active") else {
+              return
+          }
+          let r: R = try await api.request(method: "GET", path: path)
+      }`
+    // Resolved, so a wrong path behind the helper is still caught rather than reported unresolved or dropped…
+    const f = only(swift(body('/api/calls/nope')))
+    expect(f.category).toBe('unmounted')
+    expect(f.path).toBe('/api/hubs/:param/calls/nope/active')
+    // …and a right one passes.
+    expect(swift(body('/api/calls'))).toEqual([])
   })
 
   test('a comment is not a call', () => {
