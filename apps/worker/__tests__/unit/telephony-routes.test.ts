@@ -69,6 +69,7 @@ function makeServices(): Services {
       getTelephonyProvider: vi.fn().mockResolvedValue(null),
       getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
       getHubByPhone: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
+      isHubChannelEnabled: vi.fn().mockResolvedValue(true),
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] }),
       getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false, rateLimitEnabled: false, maxCallsPerMinute: 5, blockDurationMinutes: 30, overLimitAction: 'message' }),
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
@@ -389,6 +390,70 @@ describe('Telephony routes', () => {
       expect(res.status).toBe(200)
       expect(adapter.rejectCall).toHaveBeenCalled()
       expect(await res.text()).toContain('<Reject')
+    })
+
+    describe('the hub has switched voice off (#2384)', () => {
+      const incomingCall = () => ({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallSid=CA123&From=%2B15551111111&To=%2B15551234567',
+      })
+
+      it('rejects the call before greeting or ringing, and tells the hub through a channel-disabled incident', async () => {
+        services.settings.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
+        const app = await createTestApp(adapter, services)
+
+        const res = await app.request('/api/telephony/incoming', incomingCall())
+
+        expect(await res.text()).toContain('<Reject')
+        expect(adapter.rejectCall).toHaveBeenCalled()
+        expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
+        expect(services.settings.isHubChannelEnabled).toHaveBeenCalledWith('hub-1', 'voice')
+        // The kind is the channel; there is no argument that could carry the caller, the called number or the call sid.
+        expect(services.incidents.signal).toHaveBeenCalledTimes(1)
+        expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'channel-disabled', 'voice')
+      })
+
+      it('the same hub with voice on greets the caller and raises nothing', async () => {
+        const app = await createTestApp(adapter, services)
+
+        const res = await app.request('/api/telephony/incoming', incomingCall())
+
+        expect(await res.text()).toContain('<Gather')
+        expect(adapter.handleLanguageMenu).toHaveBeenCalled()
+        expect(services.incidents.signal).not.toHaveBeenCalled()
+      })
+
+      it('still tracks the provider call log for deletion, since the provider keeps one for a refused call too', async () => {
+        services.settings.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
+        adapter.deleteCallLog = vi.fn()
+        const app = await createTestApp(adapter, services)
+
+        await app.request('/api/telephony/incoming', incomingCall())
+
+        expect(services.providerRecordings.track).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1', kind: 'call-log' }))
+      })
+
+      it('fails open when the switch cannot be read: the call is answered, not turned away', async () => {
+        services.settings.isHubChannelEnabled = vi.fn().mockRejectedValue(new Error('postgres is down'))
+        const app = await createTestApp(adapter, services)
+
+        const res = await app.request('/api/telephony/incoming', incomingCall())
+
+        expect(await res.text()).toContain('<Gather')
+        expect(adapter.rejectCall).not.toHaveBeenCalled()
+      })
+
+      it('is still rejected when the incident cannot be recorded', async () => {
+        services.settings.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
+        services.incidents.signal = vi.fn().mockRejectedValue(new Error('incident store down'))
+        const app = await createTestApp(adapter, services)
+
+        const res = await app.request('/api/telephony/incoming', incomingCall())
+
+        expect(await res.text()).toContain('<Reject')
+        expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
+      })
     })
 
     it('falls back to global adapter when hub not found', async () => {

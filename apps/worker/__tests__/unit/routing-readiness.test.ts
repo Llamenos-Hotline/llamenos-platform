@@ -27,8 +27,10 @@ function makeServices(opts: {
   shifts?: Record<string, Array<{ userPubkeys: string[] }>>
   fallback?: Record<string, string[]>
   getHubsThrows?: boolean
+  /** Hubs that have switched voice off; every other hub takes calls. */
+  voiceOff?: string[]
 }): Services {
-  const { hubs = [], shifts = {}, fallback = {}, getHubsThrows = false } = opts
+  const { hubs = [], shifts = {}, fallback = {}, getHubsThrows = false, voiceOff = [] } = opts
   return {
     settings: {
       getHubs: vi.fn(async () => {
@@ -36,6 +38,7 @@ function makeServices(opts: {
         return { hubs }
       }),
       getFallbackGroup: vi.fn(async (hubId: string) => ({ userPubkeys: fallback[hubId] ?? [] })),
+      isHubChannelEnabled: vi.fn(async (hubId: string) => !voiceOff.includes(hubId)),
     },
     shifts: {
       list: vi.fn(async (hubId: string) => ({ shifts: shifts[hubId] ?? [] })),
@@ -51,6 +54,7 @@ describe('hubRoutingReadiness', () => {
 
     expect(readiness).toEqual({
       hubId: 'hub-1',
+      voiceEnabled: true,
       rosteredVolunteers: 0,
       fallbackVolunteers: 0,
       canEverRing: false,
@@ -118,6 +122,31 @@ describe('warnOnUnroutableHubs', () => {
     expect(errorLog).not.toHaveBeenCalled()
   })
 
+  it('does not call a hub that has switched voice off "unreachable": it takes no calls (#2384)', async () => {
+    const services = makeServices({
+      hubs: [{ id: 'hub-signal-only', status: 'active' }, { id: 'hub-voice', status: 'active' }],
+      voiceOff: ['hub-signal-only'],
+    })
+
+    const unroutable = await warnOnUnroutableHubs(services)
+
+    // Both hubs have no shift and no fallback group; only the one that takes calls is a problem.
+    expect(unroutable.map(h => h.hubId)).toEqual(['hub-voice'])
+    expect(errorLog).toHaveBeenCalledTimes(1)
+    expect(errorLog.mock.calls[0][1]).toEqual({ hubId: 'hub-voice' })
+  })
+
+  it('a hub with voice off and a full roster is still not a ring target', async () => {
+    const services = makeServices({
+      hubs: [{ id: 'hub-1', status: 'active' }],
+      fallback: { 'hub-1': ['pk-a'] },
+      voiceOff: ['hub-1'],
+    })
+
+    expect(await hubRoutingReadiness(services, 'hub-1')).toMatchObject({ voiceEnabled: false, canEverRing: true })
+    expect(await warnOnUnroutableHubs(services)).toEqual([])
+  })
+
   it('ignores hubs that are not active', async () => {
     const services = makeServices({ hubs: [{ id: 'hub-archived', status: 'archived' }] })
 
@@ -154,13 +183,14 @@ function makeUser(overrides: { pubkey: string; active?: boolean; onBreak?: boole
 }
 
 function makeRingServices(opts: {
+  voiceEnabled?: boolean
   scheduledNow?: string[]
   clockedIn?: string[]
   fallback?: string[]
   users?: ReturnType<typeof makeUser>[]
   busy?: string[]
 }): Services {
-  const { scheduledNow = [], clockedIn = [], fallback = [], users = [], busy = [] } = opts
+  const { voiceEnabled = true, scheduledNow = [], clockedIn = [], fallback = [], users = [], busy = [] } = opts
   return {
     shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue(scheduledNow) },
     activeShifts: {
@@ -172,6 +202,7 @@ function makeRingServices(opts: {
     settings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: fallback }),
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+      isHubChannelEnabled: vi.fn().mockResolvedValue(voiceEnabled),
     },
     identity: { getUsers: vi.fn().mockResolvedValue({ users }) },
     calls: { getBusyPubkeys: vi.fn().mockResolvedValue(new Set(busy)) },
@@ -245,6 +276,23 @@ describe('currentRingDecision', () => {
 
     const empty = await currentRingDecision(makeRingServices({}), 'hub-1')
     expect(empty).toMatchObject({ wouldRing: false, scheduledNow: 0, clockedIn: 0, volunteerCount: 0 })
+  })
+
+  it('a hub with voice switched off rings nobody, however well rostered and clocked in (#2384)', async () => {
+    const build = (voiceEnabled: boolean) => makeRingServices({
+      voiceEnabled,
+      scheduledNow: ['pk-a'],
+      clockedIn: ['pk-a'],
+      fallback: ['pk-fb'],
+      users: [makeUser({ pubkey: 'pk-a' }), makeUser({ pubkey: 'pk-fb' })],
+    })
+
+    const off = await currentRingDecision(build(false), 'hub-1')
+    expect(off).toMatchObject({ wouldRing: false, volunteerCount: 0, pubkeys: [] })
+    expect(await resolveRingableVolunteers(build(false), 'hub-1')).toBeNull()
+
+    // The same roster with voice on does ring — the switch is what changed the answer.
+    expect((await currentRingDecision(build(true), 'hub-1')).pubkeys).toEqual(['pk-a'])
   })
 
   it('reports exactly what the ringing resolver resolves, by derivation', async () => {

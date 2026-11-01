@@ -54,7 +54,11 @@ function makeAdapter(): MessagingAdapter {
 function makeServices() {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getMessagingConfig: vi.fn().mockResolvedValue(null) },
+    settings: {
+      getMessagingConfig: vi.fn().mockResolvedValue(null),
+      isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+    },
+    incidents: { signal: vi.fn().mockResolvedValue(undefined) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),

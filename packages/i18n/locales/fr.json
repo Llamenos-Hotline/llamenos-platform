@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "Blocages sur le point d'expirer",
+      "channelDisabled": "Contacts refusés sur un canal désactivé",
       "erasureDeadline": "Demandes d'effacement en retard",
       "providerMedia": "Enregistrements restés chez l'opérateur téléphonique",
       "spam": "Spam et appels indésirables"

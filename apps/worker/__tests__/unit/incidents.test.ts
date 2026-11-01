@@ -95,6 +95,7 @@ describe('incident categories', () => {
     expect(INCIDENT_CATEGORIES['provider-media'].permission).toBe('telephony:manage-providers')
     expect(INCIDENT_CATEGORIES['erasure-deadline'].permission).toBe('erasure:admin')
     expect(INCIDENT_CATEGORIES['ban-expiry'].permission).toBe('system:view-bans')
+    expect(INCIDENT_CATEGORIES['channel-disabled'].permission).toBe('hubs:configure')
   })
 
   it.each(Object.entries(INCIDENT_CATEGORIES))('%s accepts worker_failing as notify, and outlives an incident-checks interval', (category, policy) => {

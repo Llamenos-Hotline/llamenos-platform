@@ -408,6 +408,7 @@ describe('Calls Routes — response conformance', () => {
         },
         settings: {
           getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+          isHubChannelEnabled: vi.fn().mockResolvedValue(true),
           getRoles: vi.fn().mockResolvedValue({
             roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }],
           }),

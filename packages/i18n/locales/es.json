@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "Bloqueos a punto de vencer",
+      "channelDisabled": "Contactos rechazados en un canal desactivado",
       "erasureDeadline": "Solicitudes de borrado vencidas",
       "providerMedia": "Grabaciones pendientes en el proveedor telefónico",
       "spam": "Spam y llamadas no deseadas"

@@ -95,6 +95,26 @@ export const INCIDENT_CATEGORIES = {
       [WORKER_FAILING_KIND]: 'notify',
     },
   },
+  // A webhook for a channel the hub has switched off, refused (#2384). Each
+  // refusal is a person who tried to reach a crisis line and did not, so it is
+  // never silent — but it is expected behaviour (the switch did what it was set
+  // to do), so it is `record`: the panel and banner, no page. The kind names
+  // the channel; nothing else about the contact is kept. Reaches the people who
+  // can flip the switch back (`PUT /hubs/:hubId/onboard/channels`).
+  'channel-disabled': {
+    permission: 'hubs:configure',
+    quietPeriodMs: 30 * MINUTE_MS,
+    updateWindowMs: 60 * MINUTE_MS,
+    kinds: {
+      voice: 'record',
+      sms: 'record',
+      whatsapp: 'record',
+      signal: 'record',
+      telegram: 'record',
+      rcs: 'record',
+      [WORKER_FAILING_KIND]: 'notify',
+    },
+  },
 } as const satisfies Record<IncidentCategory, IncidentCategoryPolicy>
 
 export type IncidentKind<C extends IncidentCategory> = keyof (typeof INCIDENT_CATEGORIES)[C]['kinds'] & string

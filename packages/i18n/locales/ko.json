@@ -4756,6 +4756,7 @@
   "incident": {
     "category": {
       "banExpiry": "곧 만료되는 차단",
+      "channelDisabled": "꺼진 채널에서 거부된 연락",
       "erasureDeadline": "기한이 지난 삭제 요청",
       "providerMedia": "전화 서비스 제공업체에 남은 녹음",
       "spam": "스팸 및 원치 않는 전화"
