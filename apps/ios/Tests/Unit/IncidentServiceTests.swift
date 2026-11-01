@@ -147,8 +147,10 @@ struct IncidentServiceTests {
     }
 
     @Test func anUnknownCategoryIsLabelledWithTheGenericTitle() {
-        #expect(IncidentRowContent.categoryLabel("routing") == NSLocalizedString("incident_title", comment: ""))
+        #expect(IncidentRowContent.categoryLabel("category-appended-after-this-build") == NSLocalizedString("incident_title", comment: ""))
         #expect(IncidentRowContent.categoryLabel("spam") == NSLocalizedString("incident_category_spam", comment: ""))
+        #expect(IncidentRowContent.categoryLabel("routing") == NSLocalizedString("incident_category_routing", comment: ""))
+        #expect(IncidentRowContent.categoryLabel("provider-auth") == NSLocalizedString("incident_category_provider_auth", comment: ""))
     }
 }
 

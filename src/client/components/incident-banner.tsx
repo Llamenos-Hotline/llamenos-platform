@@ -12,6 +12,8 @@ const CATEGORY_LABEL_KEY: Record<IncidentCategory, string> = {
   'erasure-deadline': 'incident.category.erasureDeadline',
   'ban-expiry': 'incident.category.banExpiry',
   'channel-disabled': 'incident.category.channelDisabled',
+  routing: 'incident.category.routing',
+  'provider-auth': 'incident.category.providerAuth',
 }
 
 function categoryLabelKey(category: string): string {

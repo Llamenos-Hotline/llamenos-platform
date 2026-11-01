@@ -75,6 +75,8 @@ struct IncidentRowContent: View {
         case "erasure-deadline": return NSLocalizedString("incident_category_erasure_deadline", comment: "Overdue erasure requests")
         case "ban-expiry": return NSLocalizedString("incident_category_ban_expiry", comment: "Bans about to expire")
         case "channel-disabled": return NSLocalizedString("incident_category_channel_disabled", comment: "Contacts turned away on a switched-off channel")
+        case "routing": return NSLocalizedString("incident_category_routing", comment: "Calls reaching nobody")
+        case "provider-auth": return NSLocalizedString("incident_category_provider_auth", comment: "Phone provider requests being refused")
         default: return NSLocalizedString("incident_title", comment: "Active incidents")
         }
     }

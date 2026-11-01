@@ -163,7 +163,7 @@ describe('IncidentBanner', () => {
   })
 
   it('shows an incident of a category this build does not know under the generic title', async () => {
-    serverIncidents.byHub['hub-A'] = [incident({ category: 'routing' })]
+    serverIncidents.byHub['hub-A'] = [incident({ category: 'category-appended-after-this-build' })]
     renderBanner()
 
     const row = await screen.findByTestId('incident-banner-row')
