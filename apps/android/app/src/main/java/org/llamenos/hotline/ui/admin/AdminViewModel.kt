@@ -1371,7 +1371,7 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingErasure = true, erasureError = null) }
             try {
                 val response = apiService.request<Map<String, Any?>>(
-                    "GET", "/api/erasure/requests",
+                    "GET", apiService.hp("/api/erasure/requests"),
                 )
                 val requests = (response["requests"] as? List<*>)?.mapNotNull { rawEntry ->
                     val entry = rawEntry as? Map<*, *> ?: return@mapNotNull null
@@ -1432,7 +1432,7 @@ class AdminViewModel @Inject constructor(
             try {
                 apiService.requestNoContent(
                     "POST",
-                    "/api/erasure/$userId",
+                    apiService.hp("/api/erasure/$userId"),
                     mapOf("justification" to justification),
                 )
                 _uiState.update {
@@ -1456,7 +1456,7 @@ class AdminViewModel @Inject constructor(
             try {
                 apiService.requestNoContent(
                     "POST",
-                    "/api/erasure/$userId/wipe-device/$devicePubkey",
+                    apiService.hp("/api/erasure/$userId/wipe-device/$devicePubkey"),
                 )
                 loadErasureRequests()
             } catch (e: Exception) {

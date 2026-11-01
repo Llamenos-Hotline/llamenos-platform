@@ -3546,25 +3546,38 @@ DELETE /api/erasure/me
 Permission: erasure:request-self
 Response: { "ok": true }
 
-GET    /api/erasure/requests
-Permission: erasure:admin
+GET    /api/hubs/:hubId/erasure/requests
+Permission: erasure:admin (resolved in :hubId)
 Query: ?status=&limit=&offset=
 Response: { "requests": ErasureRequest[], "total": number }
+Only the requests that CONCERN :hubId: a shred of it, or a person's erasure whose subject belongs to it.
+Another hub's requests are never listed. Without a hub path: 400.
 
-POST   /api/erasure/:userId
+GET    /api/erasure/platform/requests
+Permission: system:manage-instance (global roles; never a hub-resolved set)
+Query: ?status=&limit=&offset=
+Response: { "requests": ErasureRequest[], "total": number }
+Only the requests that concern NO hub that exists (a subject who belongs to none, or a shred of a hub
+that is gone). Never a hub's requests, for any holder. Under a hub path: 400.
+
+POST   /api/hubs/:hubId/erasure/:userId
 Permission: erasure:admin
 Body: { "justification": string }
 Response: { "ok": true, "reEncryptionJobIds": string[] }
+POST   /api/erasure/:userId           (subject belongs to no hub; needs system:manage-instance as well)
+403 unless :userId belongs to :hubId AND the caller holds erasure:admin in EVERY hub :userId belongs to.
 
-POST   /api/erasure/:userId/wipe-device/:devicePubkey
+POST   /api/hubs/:hubId/erasure/:userId/wipe-device/:devicePubkey
 Permission: erasure:admin
 Body: { "reason"?: string }
 Response: { "ok": true }
+Same subject rule as erasure above.
 
-GET    /api/erasure/re-encryption-jobs
+GET    /api/hubs/:hubId/erasure/re-encryption-jobs
 Permission: erasure:admin
 Query: ?userId=
 Response: { "jobs": ReEncryptionJob[] }
+Only :hubId's jobs. Without a hub path: 400.
 ```
 
 ### 4.46 Retention
@@ -4595,23 +4608,25 @@ DELETE /api/erasure/me
        Permission: erasure:request-self
        Response: { "ok": true }
 
-GET    /api/erasure/requests?status=&limit=&offset=
+GET    /api/hubs/:hubId/erasure/requests?status=&limit=&offset=
        Permission: erasure:admin
        Response: { "requests": ErasureRequest[], "total": number }
 
-POST   /api/erasure/:userId
+POST   /api/hubs/:hubId/erasure/:userId
        Permission: erasure:admin
        Body: { "justification": string }
        Response: { "ok": true, "reEncryptionJobIds": string[] }
 
-POST   /api/erasure/:userId/wipe-device/:devicePubkey
+POST   /api/hubs/:hubId/erasure/:userId/wipe-device/:devicePubkey
        Permission: erasure:admin
        Body: { "reason": string }
        Response: { "ok": true }
 
-GET    /api/erasure/re-encryption-jobs?userId=
+GET    /api/hubs/:hubId/erasure/re-encryption-jobs?userId=
        Permission: erasure:admin
        Response: { "jobs": ReEncryptionJob[] }
+
+(Hub-scoped since #2363 — see §4.45 for the scoping rules and the platform-scope `GET /api/erasure/platform/requests`.)
 ```
 
 ### 4.34 Retention

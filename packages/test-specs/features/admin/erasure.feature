@@ -41,7 +41,7 @@ Feature: Account Erasure
   Scenario: Admin can list erasure requests
     Given an admin user
     And 2 pending erasure requests exist
-    When the admin GETs "/erasure/requests"
+    When the admin GETs "/hubs/test-hub/erasure/requests"
     Then the response status should be 200
     And the response should contain a list of requests with total 2
 
@@ -49,7 +49,7 @@ Feature: Account Erasure
   Scenario: Admin executes immediate erasure
     Given an admin user
     And a target volunteer user exists
-    When the admin POSTs to "/erasure/:userId" with a justification
+    When the admin POSTs to "/hubs/test-hub/erasure/:userId" with a justification
     Then the response status should be 200
     And the response body "ok" should be true
     And the response should contain reEncryptionJobIds
@@ -57,14 +57,14 @@ Feature: Account Erasure
   @backend
   Scenario: Admin can view re-encryption jobs
     Given an admin user
-    When the admin GETs "/erasure/re-encryption-jobs"
+    When the admin GETs "/hubs/test-hub/erasure/re-encryption-jobs"
     Then the response status should be 200
     And the response should contain a jobs list
 
   @backend
   Scenario: Non-admin cannot access erasure admin endpoints
     Given a volunteer user
-    When the volunteer GETs "/erasure/requests"
+    When the volunteer GETs "/hubs/test-hub/erasure/requests"
     Then the response status should be 403
 
   # ── Backend: Hub erasure config ─────────────────────────────────────
@@ -116,6 +116,6 @@ Feature: Account Erasure
   Scenario: Admin sends device wipe command
     Given an admin user
     And a target volunteer user with a known device pubkey
-    When the admin POSTs to "/erasure/:userId/wipe-device/:devicePubkey"
+    When the admin POSTs to "/hubs/test-hub/erasure/:userId/wipe-device/:devicePubkey"
     Then the response status should be 200
     And the response body "ok" should be true
