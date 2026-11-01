@@ -138,10 +138,11 @@ describe('recordTelephonyWebhookRejection', () => {
 
   it('counts our account, from the verified provider address, with a bad signature as own_account', async () => {
     const before = await rejected('signature_invalid', 'own_account')
-    await recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.5', accountSid: 'ACown' }), {
+    const req = webhook({ ip: '198.51.100.5', accountSid: 'ACown' })
+    recordTelephonyWebhookRejection(req, {
       reason: 'signature_invalid',
-      adapter: twilio,
       providerAddressVerified: true,
+      namesOwnAccount: await twilio.webhookNamesOwnAccount(req),
     })
     expect(await rejected('signature_invalid', 'own_account')).toBe(before + 1)
   })
@@ -150,13 +151,14 @@ describe('recordTelephonyWebhookRejection', () => {
     ['a foreign account id (an attacker with their own provider account)', { accountSid: 'ACtheirs' }, true],
     ['no account id at all', {}, true],
     ['our account id but no provider-address evidence (a forgery wearing our name)', { accountSid: 'ACown' }, false],
-  ])('counts %s as unattributed', async (_label, req, verified) => {
+  ])('counts %s as unattributed', async (_label, opts, verified) => {
     const own = await rejected('signature_invalid', 'own_account')
     const other = await rejected('signature_invalid', 'unattributed')
-    await recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.9', ...req }), {
+    const req = webhook({ ip: '198.51.100.9', ...opts })
+    recordTelephonyWebhookRejection(req, {
       reason: 'signature_invalid',
-      adapter: twilio,
       providerAddressVerified: verified,
+      namesOwnAccount: await twilio.webhookNamesOwnAccount(req),
     })
     expect(await rejected('signature_invalid', 'own_account')).toBe(own)
     expect(await rejected('signature_invalid', 'unattributed')).toBe(other + 1)
@@ -165,10 +167,11 @@ describe('recordTelephonyWebhookRejection', () => {
   it('classifies SignalWire like Twilio (same AccountSid field)', async () => {
     const signalwire = new SignalWireAdapter('project-id', 'token', '+15550000000', 'space')
     const before = await rejected('signature_invalid', 'own_account')
-    await recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.21', accountSid: 'project-id' }), {
+    const req = webhook({ ip: '198.51.100.21', accountSid: 'project-id' })
+    recordTelephonyWebhookRejection(req, {
       reason: 'signature_invalid',
-      adapter: signalwire,
       providerAddressVerified: true,
+      namesOwnAccount: await signalwire.webhookNamesOwnAccount(req),
     })
     expect(await rejected('signature_invalid', 'own_account')).toBe(before + 1)
   })
@@ -176,49 +179,37 @@ describe('recordTelephonyWebhookRejection', () => {
   it('never attributes a rejection that was not a signature failure', async () => {
     const own = await rejected('signature_invalid', 'own_account')
     const ip = await rejected('ip_not_allowed', 'unattributed')
-    await recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.30', accountSid: 'ACown' }), {
+    recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.30', accountSid: 'ACown' }), {
       reason: 'ip_not_allowed',
-      adapter: twilio,
       providerAddressVerified: true,
+      namesOwnAccount: true,
     })
     expect(await rejected('signature_invalid', 'own_account')).toBe(own)
     expect(await rejected('ip_not_allowed', 'unattributed')).toBe(ip + 1)
   })
 
-  it('does not read an oversized body to classify (unattributed)', async () => {
-    const big = `AccountSid=ACown&pad=${'x'.repeat(20 * 1024)}`
-    const spy = vi.spyOn(Request.prototype, 'clone')
+  it('an account id that was not read is unattributed', async () => {
     const own = await rejected('signature_invalid', 'own_account')
-    await recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.40', body: big }), {
+    const other = await rejected('signature_invalid', 'unattributed')
+    recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.40', accountSid: 'ACown' }), {
       reason: 'signature_invalid',
-      adapter: twilio,
       providerAddressVerified: true,
     })
     expect(await rejected('signature_invalid', 'own_account')).toBe(own)
-    expect(spy).not.toHaveBeenCalled()
-    spy.mockRestore()
-  })
-
-  it('a classifier that throws still counts the rejection, as unattributed', async () => {
-    const broken = { webhookNamesOwnAccount: vi.fn().mockRejectedValue(new Error('boom')) }
-    const other = await rejected('signature_invalid', 'unattributed')
-    await recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.50' }), {
-      reason: 'signature_invalid',
-      adapter: broken,
-      providerAddressVerified: true,
-    })
     expect(await rejected('signature_invalid', 'unattributed')).toBe(other + 1)
   })
 
   it('unattributed noise from the provider\'s own /24 cannot use up the slot an own_account event needs', async () => {
     const ownBefore = await rejected('signature_invalid', 'own_account')
     const noiseBefore = await rejected('signature_invalid', 'unattributed')
-    const send = (accountSid: string) =>
-      recordTelephonyWebhookRejection(webhook({ ip: '198.51.100.77', accountSid }), {
+    const send = async (accountSid: string) => {
+      const req = webhook({ ip: '198.51.100.77', accountSid })
+      recordTelephonyWebhookRejection(req, {
         reason: 'signature_invalid',
-        adapter: twilio,
         providerAddressVerified: true,
+        namesOwnAccount: await twilio.webhookNamesOwnAccount(req),
       })
+    }
     await send('ACattacker') // a customer of the same provider, same egress /24
     await send('ACattacker')
     await send('ACown')
@@ -233,14 +224,14 @@ describe('recordTelephonyWebhookRejection', () => {
       const fire = (ip: string) =>
         recordTelephonyWebhookRejection(webhook({ ip }), { reason: 'no_provider', providerAddressVerified: false })
 
-      for (let i = 1; i <= 500; i++) await fire(`192.0.2.${i % 250}`) // 500 forged webhooks, one /24
+      for (let i = 1; i <= 500; i++) fire(`192.0.2.${i % 250}`) // 500 forged webhooks, one /24
       expect(await rejected('no_provider', 'unattributed')).toBe(base + 1)
 
-      await fire('192.0.3.1') // another /24
+      fire('192.0.3.1') // another /24
       expect(await rejected('no_provider', 'unattributed')).toBe(base + 2)
 
       vi.setSystemTime(1_000_000 + 61_000)
-      await fire('192.0.2.9') // its minute is over
+      fire('192.0.2.9') // its minute is over
       expect(await rejected('no_provider', 'unattributed')).toBe(base + 3)
     } finally {
       vi.useRealTimers()

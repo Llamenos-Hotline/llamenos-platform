@@ -946,3 +946,18 @@ describe('BandwidthAdapter', () => {
     })
   })
 })
+
+describe('BandwidthAdapter.webhookNamesOwnAccount (#2330)', () => {
+  const adapter = new BandwidthAdapter('acc-123', 'token-abc', 'secret-xyz', 'app-456', '+15551234567')
+  const json = (body: string) => new Request('http://localhost/api/telephony/incoming', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  })
+
+  it('reads the provider-populated accountId; a malformed body is not ours', async () => {
+    expect(await adapter.webhookNamesOwnAccount(json(JSON.stringify({ eventType: 'initiate', accountId: 'acc-123' })))).toBe(true)
+    expect(await adapter.webhookNamesOwnAccount(json(JSON.stringify({ eventType: 'initiate', accountId: 'acc-999' })))).toBe(false)
+    expect(await adapter.webhookNamesOwnAccount(json('{not json'))).toBe(false)
+  })
+})

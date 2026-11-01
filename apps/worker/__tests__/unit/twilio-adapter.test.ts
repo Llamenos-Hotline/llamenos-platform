@@ -1167,3 +1167,34 @@ describe('SignalWireAdapter', () => {
     expect(res.body).toContain('<Enqueue')
   })
 })
+
+describe('TwilioAdapter.webhookNamesOwnAccount (#2330)', () => {
+  const adapter = new TwilioAdapter('AC1234567890', 'auth-token-123', '+15551234567')
+  const form = (body: string) => new Request('http://localhost/api/telephony/incoming', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+
+  it('reads the provider-populated AccountSid', async () => {
+    expect(await adapter.webhookNamesOwnAccount(form('CallSid=CA1&AccountSid=AC1234567890'))).toBe(true)
+    expect(await adapter.webhookNamesOwnAccount(form('CallSid=CA1&AccountSid=AC-someone-else'))).toBe(false)
+    expect(await adapter.webhookNamesOwnAccount(form('CallSid=CA1'))).toBe(false)
+  })
+
+  it('a body repeating AccountSid is not one the provider wrote', async () => {
+    expect(await adapter.webhookNamesOwnAccount(form('AccountSid=AC1234567890&AccountSid=AC-other'))).toBe(false)
+    expect(await adapter.webhookNamesOwnAccount(form('AccountSid=AC1234567890&AccountSid=AC1234567890'))).toBe(false)
+  })
+
+  it('SignalWire reads its project id the same way', async () => {
+    const sw = new SignalWireAdapter('project-1', 'token', '+15551234567', 'example.signalwire.com')
+    expect(await sw.webhookNamesOwnAccount(form('AccountSid=project-1'))).toBe(true)
+  })
+
+  it('leaves the body readable for validation and parsing', async () => {
+    const req = form('CallSid=CA1&AccountSid=AC1234567890')
+    await adapter.webhookNamesOwnAccount(req)
+    expect(await req.text()).toBe('CallSid=CA1&AccountSid=AC1234567890')
+  })
+})

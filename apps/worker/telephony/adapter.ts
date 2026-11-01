@@ -140,15 +140,20 @@ export interface TelephonyAdapter {
   webhookReplayKey(request: Request): Promise<string>
 
   /**
-   * Whether a webhook names OUR provider account in the part of the request the
-   * provider itself fills in (e.g. Twilio's `AccountSid`). Used only to
-   * classify a request whose signature already failed (#2330): the identifier
-   * is public, so it is evidence of attribution, never of authenticity.
+   * Does this UNAUTHENTICATED webhook carry, in the field the provider itself
+   * fills in, the identifier of OUR provider account (the same account
+   * `providerAccountId` names)? Used only to CLASSIFY a refused webhook
+   * (#2330), for the hub's `provider-auth` incident and the instance-level
+   * rejection counter alike: our provider, about our account, failing the
+   * signature means the signing secret no longer matches — together with the
+   * provider IP allowlist, never alone. The identifier is public by design, so
+   * this is never authentication and never widens acceptance.
    *
-   * Optional, and absent where the provider puts no account identifier in its
-   * webhooks. A missing method reads as "no": such requests are `unattributed`,
-   * which the alert rules still cover through the inbound-traffic backstop.
-   * Must be cheap and must not read an unbounded body.
+   * Optional: an adapter whose provider puts no account identifier in its
+   * webhooks leaves it out, and its rejections can only escalate through the
+   * traffic discriminators (the hub's `traffic_stopped`, the instance's
+   * inbound-traffic backstop). Called only on a body the route has already
+   * bounded (`bodyWithinLimit`). Must not throw on a malformed body — return false.
    */
   webhookNamesOwnAccount?(request: Request): Promise<boolean>
 

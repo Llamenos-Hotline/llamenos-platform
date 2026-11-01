@@ -4758,7 +4758,9 @@
       "banExpiry": "Bloqueios prestes a expirar",
       "channelDisabled": "Contatos recusados em um canal desativado",
       "erasureDeadline": "Pedidos de exclusão atrasados",
+      "providerAuth": "Solicitações do provedor de telefonia recusadas",
       "providerMedia": "Gravações deixadas no provedor de telefonia",
+      "routing": "Chamadas que não chegam a ninguém",
       "spam": "Spam e chamadas indesejadas"
     },
     "closed": "Encerrado",

@@ -389,6 +389,16 @@ export class BandwidthAdapter implements TelephonyAdapter {
     return `bandwidth:${this.accountId}`
   }
 
+  /** Bandwidth fills `accountId` in every voice callback. */
+  async webhookNamesOwnAccount(request: Request): Promise<boolean> {
+    try {
+      const body = await request.clone().json() as Record<string, unknown>
+      return body.accountId === this.accountId
+    } catch {
+      return false
+    }
+  }
+
   async deleteRecording(recordingSid: string): Promise<void> {
     const ref = parseBandwidthRecordingHandle(recordingSid)
     if (!ref) throw new ProviderRecordingDeleteError('Bandwidth', null, `unrecognised recording handle ${JSON.stringify(recordingSid)}`)

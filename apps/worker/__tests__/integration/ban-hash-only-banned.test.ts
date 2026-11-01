@@ -95,6 +95,41 @@ async function dumpDatabase(): Promise<string> {
   return parts.join('\n')
 }
 
+/**
+ * Whether `digits` is stored as a value of its own in `dump`.
+ *
+ * The last four digits of a number are a probe a database dump answers by chance:
+ * the dump is every row of every table, so it carries the migration ledger's
+ * microsecond timestamps and every generated UUID and hash, and any four-digit
+ * string turns up in them often enough to fail a run in CI (it did, on unrelated
+ * PRs). A last-4 leak is a column or a mask that holds those digits as its own
+ * value (`,0202,` / `***0202`), so a match inside a longer token (a hash, a
+ * timestamp, a UUID group, a fraction of a second) is not one.
+ */
+function holdsAsValue(dump: string, digits: string): boolean {
+  const withoutUuids = dump.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '')
+  return new RegExp(`(?<![0-9A-Za-z.])${digits}(?![0-9A-Za-z])`).test(withoutUuids)
+}
+
+describe('the last-four probe finds a stored value and ignores generated noise', () => {
+  const last4 = BANNED.slice(-4)
+
+  it('finds the digits as a column value, a mask, or a JSON field', () => {
+    expect(holdsAsValue(`(ban,${last4},harassment)`, last4)).toBe(true)
+    expect(holdsAsValue(`(ban,"***${last4}",x)`, last4)).toBe(true)
+    expect(holdsAsValue(`(ban,"{""last4"": ""${last4}""}",x)`, last4)).toBe(true)
+    expect(holdsAsValue(`first\n${last4}`, last4)).toBe(true)
+  })
+
+  it('ignores the digits inside a hash, a timestamp, a fraction of a second or a UUID', () => {
+    expect(holdsAsValue(`(m,6f1ced${last4}a11c21c4,"2026-11-01 10:10:35.58${last4}+00")`, last4)).toBe(false)
+    expect(holdsAsValue(`(m,x,"2026-11-01 10:10:35.${last4}+00")`, last4)).toBe(false)
+    expect(holdsAsValue(`(m,"2026-11-01 10:10:35.${last4}12+00")`, last4)).toBe(false)
+    expect(holdsAsValue(`(3f2a1c9e-${last4}-4b1d-9c3e-5d6f7a8b9c0d,x)`, last4)).toBe(false)
+    expect(holdsAsValue(`(x,${last4}1,y)`, last4)).toBe(false)
+  })
+})
+
 describe('an ordinary caller leaves no hash on the server', () => {
   it('registering the call and checking it against the ban lists stores no hash of the number', async () => {
     const callSid = 'CA-ordinary-1'
@@ -147,7 +182,7 @@ describe('a banned number matches at hub scope and at platform scope', () => {
     expect(JSON.stringify(list)).not.toContain(BANNED.slice(-4))
 
     // The stored row keeps no digits of the number beside the hash.
-    expect(await dumpDatabase()).not.toContain(BANNED.slice(-4))
+    expect(holdsAsValue(await dumpDatabase(), BANNED.slice(-4))).toBe(false)
   })
 
   it('a platform ban matches in every hub, and platform and hub hashes of one number differ', async () => {

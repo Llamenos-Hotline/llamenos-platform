@@ -33,7 +33,7 @@ persisted and is never labelled, so no address is stored anywhere.
 | Value | Meaning |
 |---|---|
 | `signature_invalid` | The request failed the provider's signature check. A rotated or mistyped auth token / signing secret looks exactly like this. |
-| `ip_not_allowed` | `webhook_ip_allowlists.telephony` is set and the sender is not in it. The signature is not examined. |
+| `ip_not_allowed` | `webhook_ip_allowlists.telephony` is set and the sender is not in it. Always refused. The signature is examined only to name the cause for the hub (a valid one raises `provider_allowlist_stale`: the allowlist is out of date), never to accept. |
 | `no_provider` | No telephony provider is configured for the hub the request names. |
 
 ### `attribution`
@@ -48,9 +48,12 @@ cause one. Attribution says how much a refusal can be trusted.
 
 `own_account` is only ever produced when **both** the address allowlist is on
 **and** the provider puts its account identifier in its webhooks. Today that is
-Twilio and SignalWire (`AccountSid`). For every other provider, and for any
-deployment with no allowlist, refusals are `unattributed` and the alerts rely on
-the inbound-traffic check below.
+Twilio and SignalWire (`AccountSid`), Telnyx (`connection_id`) and Bandwidth
+(`accountId`). For Plivo, Vonage and the SIP bridge, and for any deployment with
+no allowlist, refusals are `unattributed` and the alerts rely on the
+inbound-traffic check below. The same reading classifies the hub's
+`provider-auth` incident, so the counter and the incident never disagree about
+whether a refusal was our provider's.
 
 ## The alerts
 
