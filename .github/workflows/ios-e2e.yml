@@ -487,7 +487,7 @@ jobs:
       # Needed on every run: the server crypto library (below) is built here
       # even when the XCFramework comes from cache.
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
