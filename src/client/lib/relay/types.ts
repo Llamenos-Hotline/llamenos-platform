@@ -12,7 +12,6 @@ export interface LlamenosEvent {
 export interface CallRingEvent extends LlamenosEvent {
   type: 'call:ring'
   callId: string
-  callerLast4?: string
   startedAt: string
 }
 

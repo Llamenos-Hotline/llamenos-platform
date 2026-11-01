@@ -135,7 +135,6 @@ async function refuseLiveCall(
       await services.calls.addCall(call.hubId ?? '', {
         callId: call.callSid,
         callerNumberSealed: sealCallerNumber(call.callerNumber, call.callSid, c.env.SERVER_KEK),
-        callerLast4: call.callerNumber.slice(-4),
         status: 'ringing',
       })
       const callSettings = await services.settings.getCallSettings(call.hubId)
@@ -685,12 +684,6 @@ telephony.post('/user-answer',
     callId: parentCallSid,
   }, hubId ?? '')
 
-  const [, activeCallsForAnswer] = await Promise.all([
-    services.identity.getUser(pubkey).catch(() => ({} as { name?: string })),
-    services.calls.getActiveCalls(hubId ?? ''),
-  ])
-  const callRecord = activeCallsForAnswer.find(call => call.callId === parentCallSid)
-
   const origin = new URL(c.req.url).origin
   // #1505: provider-side recording is opt-in per hub and OFF by default. The
   // caller was told in the greeting (/language-selected reads the same setting),
@@ -707,9 +700,7 @@ telephony.post('/user-answer',
   // The audit log is the accountability record: it says a volunteer answered
   // only once the bridge instruction exists, never before it. Anything above
   // that throws leaves the call un-audited instead of audited-but-unbridged.
-  await audit(services.audit, 'callAnswered', pubkey, {
-    callerLast4: callRecord?.callerLast4 || '',
-  }, undefined, hubId || null)
+  await audit(services.audit, 'callAnswered', pubkey, {}, undefined, hubId || null)
 
   return telephonyResponse(response)
 })
@@ -774,7 +765,6 @@ telephony.post('/call-status',
           ? Math.floor((Date.now() - new Date(preCall.startedAt).getTime()) / 1000)
           : undefined
         await audit(services.audit, 'callEnded', pubkey, {
-          callerLast4: preCall?.callerLast4 || '',
           duration,
         }, undefined, hubId ?? null)
       } catch {
@@ -904,9 +894,7 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
       logger.info('Call recording completed', { parentCallSid, endStatus: 200 })
 
       if (pubkey) {
-        await audit(services.audit, 'callEnded', pubkey, {
-          callerLast4: callRecord?.callerLast4 || '',
-        }, undefined, hubId ?? null)
+        await audit(services.audit, 'callEnded', pubkey, {}, undefined, hubId ?? null)
       }
     } catch {
       logger.info('Call recording completed', { parentCallSid, endStatus: 404 })

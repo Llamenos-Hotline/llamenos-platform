@@ -28,7 +28,6 @@ function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {})
     callId: 'call-1',
     hubId: 'hub-1',
     callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
-    callerLast4: '4567',
     answeredBy: null,
     status: 'ringing',
     hasTranscription: false,
@@ -49,7 +48,6 @@ function callRecordRow(overrides: Partial<typeof callRecords.$inferSelect> = {})
   return {
     callId: 'call-1',
     hubId: 'hub-1',
-    callerLast4: '4567',
     startedAt: new Date('2026-09-30T10:00:00.000Z'),
     endedAt: new Date('2026-09-30T10:05:00.000Z'),
     duration: 300,
@@ -227,7 +225,7 @@ describe('Calls Routes', () => {
       const body = JSON.parse(raw)
       expect(body.calls).toHaveLength(1)
       expect(body.calls[0].id).toBe('call-1')
-      expect(body.calls[0].callerLast4).toBe('4567')
+      expect(Object.keys(body.calls[0]).filter((k) => /last4/i.test(k))).toEqual([])
       expect(body.calls[0]).not.toHaveProperty('callerNumber')
       expect(body.calls[0]).not.toHaveProperty('callId')
       expect(callsSvc.getActiveCalls).toHaveBeenCalledWith('hub-1')
@@ -504,7 +502,7 @@ describe('Calls Routes', () => {
 
     it('answers a call, audits it, and cancels the other ringing legs', async () => {
       const callsSvc = makeMockCallsService()
-      const row = activeCallRow({ status: 'in-progress', answeredBy: ME, callerLast4: '1234' })
+      const row = activeCallRow({ status: 'in-progress', answeredBy: ME })
       callsSvc.answerCall.mockResolvedValue(row)
       const { app, services } = answerApp(callsSvc)
 
@@ -769,7 +767,6 @@ describe('Calls Routes', () => {
         callId: 'call-1',
         answeredBy: pubkey,
         callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
-        callerLast4: '4567',
         hubId: 'hub-1',
       })
       callsSvc.endCall.mockResolvedValue(callRecordRow())

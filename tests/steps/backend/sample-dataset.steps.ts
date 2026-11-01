@@ -264,7 +264,10 @@ Then('every sample call record decrypts for the sample admin with the fictional 
     expect(envelope, `admin envelope for ${call.id}`).toBeDefined()
     expect(call.encryptedContent, `encrypted metadata for ${call.id}`).toBeTruthy()
     const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent!, envelope!, LABEL_CALL_META)) as { answeredBy: string | null; callerNumber: string }
-    expect(meta.callerNumber).toBe(`+1555555${call.callerLast4}`)
+    const sample = SAMPLE_CALLS.find(c => `sample-${c.key}` === call.id)
+    expect(sample, `sample call for ${call.id}`).toBeDefined()
+    expect(meta.callerNumber).toBe(sample!.callerNumber)
+    expect(call).not.toHaveProperty('callerLast4')
     expect(meta.callerNumber).toMatch(/^\+155555501\d\d$/)
   }
 })

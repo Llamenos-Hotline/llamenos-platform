@@ -194,7 +194,6 @@ export interface WakePayload {
 export interface FullPushPayload extends WakePayload {
   previewText?: string
   duration?: number
-  callerLast4?: string
   shiftName?: string
   role?: string
 }
@@ -241,7 +240,6 @@ export interface User {
 export interface CallRecord {
   id: string
   callerNumber: string
-  callerLast4?: string
   answeredBy: string | null
   startedAt: string
   endedAt?: string
@@ -326,12 +324,11 @@ export interface AuthPayload {
  * When a call completes, sensitive metadata (answeredBy, full callerNumber)
  * is encrypted into an envelope and stored per-record as `callrecord:${id}`.
  *
- * Plaintext fields: callerLast4, timestamp, duration, status, hasTranscription, hasVoicemail
+ * Plaintext fields: timestamp, duration, status, hasTranscription, hasVoicemail
  * Encrypted fields: answeredBy, callerNumber (original hash), outcome details
  */
 export interface EncryptedCallRecord {
   id: string
-  callerLast4?: string           // For display (not sensitive)
   startedAt: string              // Needed for ordering/pagination
   endedAt?: string               // Needed for duration display
   duration?: number              // Acceptable trade-off (no PII)

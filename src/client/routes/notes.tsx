@@ -426,7 +426,6 @@ function NotesPage() {
                     if (!callInfo) return t('notes.callWith', { number: cId.slice(0, 12) + '...' })
                     const answeredBy = callInfo.answeredBy
                     const volunteerName = answeredBy ? nameMap.get(answeredBy) : null
-                    const phone = callInfo.callerLast4 ? `***${callInfo.callerLast4}` : ''
                     return (
                       <span className="flex flex-wrap items-center gap-1.5">
                         {callInfo.status === 'unanswered' ? (
@@ -439,12 +438,6 @@ function NotesPage() {
                           <span>{volunteerName}</span>
                         ) : (
                           <span>{t('callHistory.answeredBy')}</span>
-                        )}
-                        {phone && (
-                          <>
-                            <span className="text-muted-foreground">&middot;</span>
-                            <code className="text-xs font-mono text-muted-foreground">{phone}</code>
-                          </>
                         )}
                         <span className="text-muted-foreground">&middot;</span>
                         <span className="text-xs text-muted-foreground font-normal">

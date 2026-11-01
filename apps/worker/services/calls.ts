@@ -9,7 +9,7 @@
  * optional `ShiftsService` that production never passed, so presence reported
  * nobody on every deployment. See services/presence.ts.
  */
-import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
+import { eq, and, desc, sql, gte, lte, count, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
 import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
@@ -64,8 +64,8 @@ export class CallsService {
    *
    * The caller's number is opened from the row's KEK-sealed copy and goes only
    * into the admin envelopes; the row, and with it the sealed copy, is deleted
-   * in the same transaction. §2.5 keeps callerLast4, timestamps, duration and
-   * flags in plaintext columns. No hash of the number is kept anywhere.
+   * in the same transaction. §2.5 keeps timestamps, duration and flags in
+   * plaintext columns. No hash of the number, and no fragment of it, is kept anywhere.
    *
    * Loud-but-stored, matching the inbound-message contract in
    * conversations.ts: with no resolvable admin recipient the record is still
@@ -178,7 +178,6 @@ export class CallsService {
           await tx.insert(callRecords).values({
             callId: call.callId,
             hubId: call.hubId,
-            callerLast4: call.callerLast4,
             startedAt: call.startedAt,
             endedAt,
             duration,
@@ -307,7 +306,6 @@ export class CallsService {
       callId: string
       /** The caller's number sealed by `sealCallerNumber` for this call; null when it is not to be held. */
       callerNumberSealed: string | null
-      callerLast4?: string
       status?: string
     },
   ): Promise<ActiveCallRow> {
@@ -317,7 +315,6 @@ export class CallsService {
         callId: data.callId,
         hubId,
         callerNumberSealed: data.callerNumberSealed,
-        callerLast4: data.callerLast4 ?? null,
         status: data.status ?? 'ringing',
       })
       .returning()
@@ -397,7 +394,6 @@ export class CallsService {
         .values({
           callId: call.callId,
           hubId: call.hubId,
-          callerLast4: call.callerLast4,
           startedAt: call.startedAt,
           endedAt,
           duration,
@@ -433,7 +429,6 @@ export class CallsService {
     hubId: string,
     data: {
       callId: string
-      callerLast4: string
       startedAt: Date
       durationSeconds: number
       answeredBy: string | null
@@ -449,7 +444,6 @@ export class CallsService {
       .values({
         callId: data.callId,
         hubId,
-        callerLast4: data.callerLast4,
         startedAt: data.startedAt,
         endedAt,
         duration: data.durationSeconds,
@@ -484,7 +478,7 @@ export class CallsService {
 
   /**
    * List call history with pagination and optional filters.
-   * Supports search by callerLast4 or callId, and date range filtering.
+   * Supports search by callId, and date range filtering.
    */
   async listCallHistory(
     hubId: string,
@@ -509,12 +503,7 @@ export class CallsService {
 
     if (filters?.search) {
       const q = filters.search.toLowerCase()
-      conditions.push(
-        or(
-          sql`LOWER(${callRecords.callerLast4}) LIKE ${'%' + q + '%'}`,
-          sql`LOWER(${callRecords.callId}) LIKE ${'%' + q + '%'}`,
-        )!,
-      )
+      conditions.push(sql`LOWER(${callRecords.callId}) LIKE ${'%' + q + '%'}`)
     }
 
     if (filters?.dateFrom) {
@@ -566,7 +555,6 @@ export class CallsService {
       status: string
       startedAt: Date
       answeredBy: string | null
-      callerLast4: string | null
     }>
   }> {
     const active = await this.db
@@ -575,7 +563,6 @@ export class CallsService {
         status: activeCalls.status,
         startedAt: activeCalls.startedAt,
         answeredBy: activeCalls.answeredBy,
-        callerLast4: activeCalls.callerLast4,
       })
       .from(activeCalls)
       .where(eq(activeCalls.hubId, hubId))

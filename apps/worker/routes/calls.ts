@@ -34,7 +34,6 @@ function toActiveCallResponse(row: ActiveCallRow): CallRecord {
   return callRecordResponseSchema.parse({
     id: row.callId,
     hubId: row.hubId ?? undefined,
-    callerLast4: row.callerLast4 ?? undefined,
     answeredBy: row.answeredBy,
     startedAt: row.startedAt.toISOString(),
     status: callStatusSchema.parse(row.status),
@@ -48,7 +47,6 @@ function toCallRecordResponse(row: CallRecordRow): CallRecord {
   return callRecordResponseSchema.parse({
     id: row.callId,
     hubId: row.hubId ?? undefined,
-    callerLast4: row.callerLast4 ?? undefined,
     answeredBy: row.answeredBy,
     startedAt: row.startedAt.toISOString(),
     endedAt: row.endedAt?.toISOString(),
@@ -443,9 +441,7 @@ calls.post('/:callId/answer',
       return c.json({ error: 'Failed to answer call' }, 500)
     }
 
-    await audit(services.audit, 'callAnswered', pubkey, {
-      callerLast4: result.callerLast4 || '',
-    }, undefined, result.hubId || hubId || null)
+    await audit(services.audit, 'callAnswered', pubkey, {}, undefined, result.hubId || hubId || null)
 
     publishEvent(c.env, KIND_CALL_UPDATE, {
       type: 'call:update',

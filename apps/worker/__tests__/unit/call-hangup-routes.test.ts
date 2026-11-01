@@ -42,7 +42,6 @@ const activeCall = {
   hubId: HUB,
   answeredBy: PUBKEY,
   callerNumberSealed: sealCallerNumber('+15554567890', 'CA-caller-1', TEST_KEK),
-  callerLast4: '4567',
   status: 'in-progress',
   startedAt: STARTED_AT,
 }
@@ -53,7 +52,6 @@ const activeCall = {
 const endedRecord = {
   callId: activeCall.callId,
   hubId: HUB,
-  callerLast4: '4567',
   answeredBy: PUBKEY,
   startedAt: STARTED_AT,
   endedAt: new Date('2026-10-03T12:04:00.000Z'),

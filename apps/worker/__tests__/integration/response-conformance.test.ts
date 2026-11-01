@@ -346,7 +346,6 @@ describe('Calls Routes — response conformance', () => {
       callId: 'call-1',
       hubId: 'hub-1',
       callerNumberSealed: 'f'.repeat(64),
-      callerLast4: '4567',
       answeredBy: null,
       status: 'ringing',
       hasTranscription: false,

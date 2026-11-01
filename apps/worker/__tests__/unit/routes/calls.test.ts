@@ -46,7 +46,7 @@ const CALLER_HASH = 'c0ffee'.repeat(10) + 'beef'
 const RECORDING_SID = 'RE-provider-handle-1'
 
 const ACTIVE_CALL_KEYS = [
-  'answeredBy', 'callerLast4', 'hasRecording', 'hasTranscription', 'hasVoicemail',
+  'answeredBy', 'hasRecording', 'hasTranscription', 'hasVoicemail',
   'hubId', 'id', 'startedAt', 'status',
 ]
 
@@ -55,7 +55,6 @@ function activeRow(overrides: Partial<ActiveCallRow> = {}): ActiveCallRow {
     callId: 'CA-active-1',
     hubId: 'hub-1',
     callerNumberSealed: CALLER_HASH,
-    callerLast4: '4567',
     answeredBy: VOLUNTEER,
     status: 'in-progress',
     hasTranscription: false,
@@ -75,7 +74,6 @@ function historyRow(overrides: Partial<CallRecordRow> = {}): CallRecordRow {
   return {
     callId: 'CA-history-1',
     hubId: 'hub-1',
-    callerLast4: '4567',
     startedAt: new Date('2026-09-30T09:00:00.000Z'),
     endedAt: new Date('2026-09-30T09:05:00.000Z'),
     duration: 300,
@@ -174,7 +172,6 @@ describe('GET /active — projects rows onto the active-call shape', () => {
       expect(body.calls[0]).toMatchObject({
         id: 'CA-active-1',
         hubId: 'hub-1',
-        callerLast4: '4567',
         answeredBy: VOLUNTEER,
         startedAt: '2026-09-30T10:00:00.000Z',
         status: 'in-progress',
@@ -183,17 +180,16 @@ describe('GET /active — projects rows onto the active-call shape', () => {
     })
   }
 
-  it('keeps a ringing call with no answerer and no last four digits', async () => {
+  it('keeps a ringing call with no answerer', async () => {
     const app = createTestApp(['calls:read-active'], {
       getActiveCalls: vi.fn().mockResolvedValue([
-        activeRow({ status: 'ringing', answeredBy: null, answeredAt: null, callerLast4: null }),
+        activeRow({ status: 'ringing', answeredBy: null, answeredAt: null }),
       ]),
     })
 
     const res = await app.request('/active')
     const body = activeCallsResponseSchema.parse(await res.json())
     expect(body.calls[0]).toMatchObject({ id: 'CA-active-1', status: 'ringing', answeredBy: null })
-    expect(body.calls[0].callerLast4).toBeUndefined()
   })
 })
 

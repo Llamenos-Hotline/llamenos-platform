@@ -43,7 +43,6 @@ const simulateCallResponseSchema = z.object({
   ok: z.literal(true),
   callId: z.string(),
   status: z.literal('ringing'),
-  callerLast4: z.string(),
   volunteersNotified: z.number(),
 })
 const hangupBodySchema = z.object({ callId: z.string().min(1) })
@@ -159,14 +158,12 @@ simulatedTelephony.post('/simulate/incoming-call',
 
     await audit(services.audit, 'callSimulated', c.get('pubkey'), {
       callId: result.callId,
-      callerLast4: result.callerLast4,
       volunteersNotified: result.volunteersNotified,
     }, undefined, hubId)
     return c.json({
       ok: true as const,
       callId: result.callId,
       status: 'ringing' as const,
-      callerLast4: result.callerLast4,
       volunteersNotified: result.volunteersNotified,
     })
   },

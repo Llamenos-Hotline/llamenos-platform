@@ -371,7 +371,6 @@ export async function startParallelRinging(
     await services.calls.addCall(hubId, {
       callId: callSid,
       callerNumberSealed: sealCallerNumber(callerNumber, callSid, env.SERVER_KEK),
-      callerLast4: callerNumber.slice(-4),
       status: 'ringing',
     })
 
@@ -413,7 +412,6 @@ export async function startParallelRinging(
     // to no hub sends neither, so its browser/VoIP volunteers were not notified at all.
     const notifiedOutOfBand = hubId === '' ? 0 : browserVoip.length
 
-    const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
       // Publish the ring to the hub that owns the call. Every member of that hub
       // whose relay socket subscribes to it rings — including members whose
@@ -424,7 +422,6 @@ export async function startParallelRinging(
       dispatchVoipPushFromService(
         browserVoip.map(v => v.pubkey),
         callSid,
-        callerLast4,
         hubId,
         env,
         services.identity,
