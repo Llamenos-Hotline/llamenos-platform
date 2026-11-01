@@ -722,6 +722,18 @@
     "phoneHelp": "The main hotline number for this hub. Used for call routing.",
     "slugHelp": "The slug is used in URLs and API references. It is generated from the name."
   },
+  "invitePage": {
+    "title": "ဖိတ်ကြားချက်",
+    "validHeading": "သင့်ကို ဖိတ်ကြားထားသည်",
+    "validBody": "အက်ပ်မရှိသေးလျှင် ဦးစွာ ထည့်သွင်းပြီး ဤဖိတ်ကြားချက်ကို အက်ပ်တွင် ဖွင့်ပါ။",
+    "openInApp": "အက်ပ်တွင် ဖွင့်ရန်",
+    "downloadApp": "အက်ပ် ရယူရန်",
+    "qrLabel": "ဤဖိတ်ကြားချက်ကို သင့်ဖုန်းတွင် ဖွင့်ရန် စကန်ဖတ်ပါ",
+    "invalidHeading": "ဤလင့်ခ်ကို အသုံးမပြုနိုင်ပါ",
+    "invalidBody": "လင့်ခ်မှာ မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။ ပို့ပေးသူထံမှ အသစ်တောင်းပါ။",
+    "rateLimitedHeading": "ကြိုးစားမှု များလွန်းနေသည်",
+    "rateLimitedBody": "ကျေးဇူးပြု၍ တစ်မိနစ်စောင့်ပြီး ထပ်ကြိုးစားပါ။"
+  },
   "ivr": {
     "selfAnnouncement": "မြန်မာဘာသာအတွက် [N] နှိပ်ပါ။",
     "title": "IVR Language Menu",

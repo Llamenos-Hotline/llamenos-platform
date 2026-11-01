@@ -86,6 +86,45 @@ Feature: Invite Lifecycle
     When a client floods invite validation 10 times
     Then at least one response is 429
 
+  # --- The page an https invite link opens in a browser (#2385) ---
+
+  @backend
+  Scenario: A valid invite link opened in a browser renders a page that names nothing
+    # The link goes to someone who has no app yet, and is seen by link-preview
+    # bots and mail providers first. Assert on the BODY — title and meta included.
+    Given I am logged in as an admin
+    And an invite exists for "Browser Visitor" with phone "+15551234600"
+    When the invite link is opened in a browser
+    Then the response status is 200
+    And the page offers to open the app
+    And the page names no organisation, hub, invitee or product
+
+  @backend
+  Scenario: An unusable invite link renders the same neutral page whatever the cause
+    Given I am logged in as an admin
+    And an invite exists for "Used Visitor" with phone "+15551234601"
+    And the invite has been redeemed by a user
+    When the invite link is opened in a browser
+    Then the response status is 404
+    And the page says the link cannot be used
+    And the page names no organisation, hub, invitee or product
+    And a link that was never issued renders exactly the same page
+
+  @backend
+  Scenario: The Open in app link on the page round-trips through redemption
+    Given I am logged in as an admin
+    And an invite exists for "Deep Link" with phone "+15551234602"
+    When the invite link is opened in a browser
+    And the Open in app link on the page is followed
+    Then the browser is sent to the app deep link for the invite
+    When a new user redeems the invite from that deep link
+    Then the response status is 200
+
+  @backend
+  Scenario: The invite page cannot be used to guess invite tokens
+    When a client opens 10 invite links in a browser
+    Then at least one response is 429
+
   @backend
   Scenario: Volunteer cannot create invites
     Given a registered volunteer user

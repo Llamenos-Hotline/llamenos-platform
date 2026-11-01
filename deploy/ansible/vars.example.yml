@@ -379,6 +379,16 @@ ntfy_domain: "push.hotline.example.org" # Public hostname — required when enab
 # accept an operator-chosen token, unlike every other secret in this file).
 ntfy_auth_token: ""
 
+# ─── Invite page download link ───────────────────────────────────
+# Where the invite page (https://<api host>/onboarding?code=...) sends someone
+# who does not have the app yet — a store listing or download page. Optional:
+# leave empty if you distribute the client another way, and the page offers
+# "Open in app" alone. When set it must be an absolute https:// URL (the render
+# and the app both refuse anything else), and it must not name your
+# organisation — the invite page is unbranded so a link preview or a shoulder
+# surfer learns nothing from it.
+app_download_url: ""
+
 # ─── Crash Reporting (Epic 293) ──────────────────────────────────
 # GlitchTip/Sentry-compatible DSN for client-side crash reporting.
 # Leave empty to disable — crash reporting is skipped gracefully.

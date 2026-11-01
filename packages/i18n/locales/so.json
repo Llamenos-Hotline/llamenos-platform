@@ -722,6 +722,18 @@
     "phoneHelp": "Lambarka ugu muhiimsan ee khadka caawimaadda xaruntan. Waxaa loo isticmaalaa hagidda wicitaannada.",
     "slugHelp": "Slug-ga waxaa lagu isticmaalaa URL-yada iyo tixraacyada API. Waxaa laga sameeyaa magaca."
   },
+  "invitePage": {
+    "title": "Casuumaad",
+    "validHeading": "Waa lagu casuumay",
+    "validBody": "Haddii aadan haysan app-ka, marka hore ku rakib, dabadeedna casuumaadda ku fur.",
+    "openInApp": "Ku fur app-ka",
+    "downloadApp": "Hel app-ka",
+    "qrLabel": "Iskaan garee si casuumaaddan ugu furto telefoonkaaga",
+    "invalidHeading": "Linkigan lama isticmaali karo",
+    "invalidBody": "Linku ma saxna ama wuu dhacay. Weydii qofkii kuu soo diray mid cusub.",
+    "rateLimitedHeading": "Isku day aad u badan",
+    "rateLimitedBody": "Fadlan sug hal daqiiqo oo mar kale isku day."
+  },
   "ivr": {
     "selfAnnouncement": "Soomaaliga, taabo [N].",
     "title": "IVR Language Menu",

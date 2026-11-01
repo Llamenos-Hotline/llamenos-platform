@@ -2523,6 +2523,18 @@
   "inviteStatusClaimed": "Claimed",
   "inviteStatusExpired": "Expired",
   "invitesEmpty": "No invites",
+  "invitePage": {
+    "title": "Приглашение",
+    "validHeading": "Вас пригласили",
+    "validBody": "Установите приложение, если его ещё нет, а затем откройте в нём это приглашение.",
+    "openInApp": "Открыть в приложении",
+    "downloadApp": "Скачать приложение",
+    "qrLabel": "Отсканируйте, чтобы открыть это приглашение на телефоне",
+    "invalidHeading": "Эту ссылку нельзя использовать",
+    "invalidBody": "Ссылка недействительна или срок её действия истёк. Попросите отправителя прислать новую.",
+    "rateLimitedHeading": "Слишком много попыток",
+    "rateLimitedBody": "Подождите минуту и повторите попытку."
+  },
   "ivr": {
     "selfAnnouncement": "Для русского языка нажмите [N].",
     "title": "IVR Language Menu",

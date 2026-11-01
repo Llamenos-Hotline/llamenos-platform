@@ -87,6 +87,9 @@ services:
       - "SERVER_SECRET=${SERVER_SECRET:?SERVER_SECRET is required — generate with openssl rand -hex 32}"
       # Optional: GlitchTip/Sentry DSN for client crash reporting (profile: monitoring)
       - GLITCHTIP_DSN=${GLITCHTIP_DSN:-}
+      # Optional: the invite page's "Get the app" link — an absolute https:// URL
+      # (the app refuses to boot on anything else). Empty: no download link.
+      - APP_DOWNLOAD_URL=${APP_DOWNLOAD_URL:-}
       # Signal notification sidecar (profile: signal)
       # Points at the sidecar the `signal` profile starts. Keeping this
       # default is what makes `--profile signal` work without extra operator

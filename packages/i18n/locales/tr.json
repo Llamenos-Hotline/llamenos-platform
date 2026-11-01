@@ -722,6 +722,18 @@
     "phoneHelp": "Bu merkezin ana yardım hattı numarası. Çağrı yönlendirmede kullanılır.",
     "slugHelp": "Kısa ad (slug) URL'lerde ve API başvurularında kullanılır. Addan oluşturulur."
   },
+  "invitePage": {
+    "title": "Davet",
+    "validHeading": "Davet edildiniz",
+    "validBody": "Uygulamaya sahip değilseniz önce yükleyin, ardından bu daveti uygulamada açın.",
+    "openInApp": "Uygulamada aç",
+    "downloadApp": "Uygulamayı edinin",
+    "qrLabel": "Bu daveti telefonunuzda açmak için tarayın",
+    "invalidHeading": "Bu bağlantı kullanılamaz",
+    "invalidBody": "Bağlantı geçerli değil veya süresi dolmuş. Size gönderen kişiden yenisini isteyin.",
+    "rateLimitedHeading": "Çok fazla deneme",
+    "rateLimitedBody": "Lütfen bir dakika bekleyip tekrar deneyin."
+  },
   "ivr": {
     "selfAnnouncement": "Türkçe için [N] tuşuna basın.",
     "title": "IVR Language Menu",

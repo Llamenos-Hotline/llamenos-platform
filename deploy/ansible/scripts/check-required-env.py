@@ -118,6 +118,8 @@ ENV_LOOKUP_RE = re.compile(r"env\['([A-Z_][A-Z0-9_]*)'\]")
 #   METRICS_SCRAPE_TOKEN                 -> apps/worker/routes/metrics.ts (bearer auth for
 #                                            /api/metrics/prometheus; without it the Prometheus
 #                                            `llamenos-app` scrape can never authenticate, #1148)
+#   APP_DOWNLOAD_URL                     -> apps/worker/routes/invite-page.ts (the invite page's
+#                                            download link; absent, the page offers none, #2394)
 #
 # Verified in review round 2 (PR #771): the first four groups already had
 # real consumers AND unit test coverage (push-dispatch.test.ts,
@@ -138,6 +140,7 @@ OPTIONAL_VARS_WITH_CONSUMERS = [
     "GLITCHTIP_DSN",
     "SIGNAL_NOTIFIER_BEARER_TOKEN",
     "METRICS_SCRAPE_TOKEN",
+    "APP_DOWNLOAD_URL",
 ]
 
 

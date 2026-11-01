@@ -283,6 +283,25 @@ SIP_TLS_CA_FILE={{ sip_tls_anchor_container_path | default('/var/lib/llamenos/si
 {% if (glitchtip_dsn | default('')) | length > 0 %}
 GLITCHTIP_DSN={{ glitchtip_dsn }}
 {% endif %}
+{#
+  APP_DOWNLOAD_URL — where the invite page (apps/worker/routes/invite-page.ts,
+  served at /onboarding) sends a person who does not have the app yet: a store
+  listing or a download page. Reachable-optional by design (#2394): the page's
+  job is to confirm an invite link is usable and hand it to the app, and a
+  deployment that distributes the client another way (MDM, direct APK, in
+  person) runs correctly without it — the page then offers "Open in app" alone.
+  It is not given a default: a default URL is a link that points at someone
+  else's listing, or nowhere.
+
+  Set, it must be an absolute https URL. It becomes an href on an
+  unauthenticated page that link-preview bots also fetch, and
+  apps/worker/lib/config.ts refuses to boot on anything else — so the render
+  refuses it first, where the operator can still act on it. It must not name
+  the organisation either: the page is unbranded by construction.
+#}
+{% if (app_download_url | default('')) | trim | length > 0 %}
+APP_DOWNLOAD_URL={{ (app_download_url | trim) if (app_download_url | trim) is match('https://[^/\s]+') and not ((app_download_url | trim) is search('\s')) else undef(hint='app_download_url must be an absolute https:// URL with no whitespace (got: ' ~ (app_download_url | trim) ~ ') — or leave it empty to offer no download link on the invite page') }}
+{% endif %}
 {% if llamenos_signal_enabled | default(false) | bool %}
 SIGNAL_NOTIFIER_BEARER_TOKEN={{ signal_notifier_bearer_token }}
 {% endif %}
