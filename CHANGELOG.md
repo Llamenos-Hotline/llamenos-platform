@@ -404,6 +404,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.1 (2026-11-01)
+
+### Features
+
+- routing + provider-auth incidents — a hotline that rings nobody says so (#2330) [PROTO] (#2372)
+- serve an unbranded invite page at /onboarding (#2385) (#2394)
+- B-INCIDENTS-CLIENTS — the incident banner on desktop, iOS and Android [PROTO] (#2348)
+
+### Fixes
+
+- the erasure admin surface is scoped to the hub it is called in (#2363) (#2378)
+- enforce per-hub channel switches at the webhooks; readiness skips hubs without voice [PROTO] (#2393)
+- serve conversations only inside a hub; empty claimable set means no waiting queue (#2381) (#2397)
+- upgrade Playwright to 1.64.1, unpin ubuntu-24.04 jobs, invert the runner guard (#2324) (#2379)
+- deleteHub deletes provider-held recordings before the credentials go (#2364 part 1) (#2380)
+- generate the UniFFI Kotlin binding from one script and fail CI when the tracked copy drifts (#2325) (#2356)
+- provider call/recording/message ids never reach a log or audit row; a keyed ref stands in (#2333) (#2373)
+
 ## 0.21.0 (2026-10-31)
 
 ### Breaking Changes
