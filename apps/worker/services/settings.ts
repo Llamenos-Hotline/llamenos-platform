@@ -2290,8 +2290,9 @@ export class SettingsService {
    * there when the credentials go is unrecoverable. A recording the provider
    * will not delete — or one with no handle to delete it by (#2322) — refuses the
    * deletion with a 502 before anything is dropped; `deleteHeld` has already
-   * kept the ledger row and raised the `provider-media` incident. `providerMedia`
-   * is required so a caller cannot omit the step (the #1127 / #1566 failure class).
+   * kept the ledger row and raised the `provider-media` incident. A sealed copy
+   * the object store will not delete refuses it first, as `SealedRecordingDeleteError`.
+   * `providerMedia` is required so a caller cannot omit the step (the #1127 / #1566 failure class).
    *
    * `beforeDrop` runs once the provider has confirmed and before any hub row is
    * dropped, for teardown that is also irreversible (object-storage buckets): it
@@ -2310,6 +2311,13 @@ export class SettingsService {
     if (!existing) {
       throw new ServiceError(404, 'Hub not found')
     }
+
+    // The server's own sealed copies first, so a blob the object store will not
+    // delete surfaces as the typed `SealedRecordingDeleteError` (what callers
+    // report on) rather than as an anonymous entry in the provider step's
+    // `failed` list below — `providerMedia` erases those copies too, but folds
+    // a refusal into a 502.
+    await recordings.eraseForHub(id)
 
     const media = await providerMedia.deleteForHub(id)
     if (media.failed.length > 0) {
