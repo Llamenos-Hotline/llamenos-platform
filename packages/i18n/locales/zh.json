@@ -4776,9 +4776,12 @@
       "spam": "垃圾及骚扰电话"
     },
     "closed": "已结束",
+    "inHub": "位于 {{hub}}",
     "ongoing": "自 {{time}} 起 {{count}} 个事件",
     "opened": "正在发生",
+    "otherHub": "位于另一个热线中心",
     "push": "您的热线有需要查看的活动。",
-    "signalAlert": "热线警报 — {{category}}：{{state}}。请打开应用查看详情。"
+    "signalAlert": "热线警报 — {{category}}：{{state}}。请打开应用查看详情。",
+    "title": "进行中的事件"
   }
 }

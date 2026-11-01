@@ -4776,9 +4776,12 @@
       "spam": "Spam y llamadas no deseadas"
     },
     "closed": "Finalizado",
+    "inHub": "En {{hub}}",
     "ongoing": "{{count}} eventos desde {{time}}",
     "opened": "En curso",
+    "otherHub": "En otro centro",
     "push": "Hay actividad en su línea que requiere atención.",
-    "signalAlert": "Alerta de la línea — {{category}}: {{state}}. Abra la aplicación para ver los detalles."
+    "signalAlert": "Alerta de la línea — {{category}}: {{state}}. Abra la aplicación para ver los detalles.",
+    "title": "Incidentes activos"
   }
 }

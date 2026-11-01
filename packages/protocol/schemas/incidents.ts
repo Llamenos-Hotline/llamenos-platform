@@ -46,7 +46,14 @@ export type IncidentState = z.infer<typeof incidentStateSchema>
 export const hubIncidentSchema = z.object({
   id: z.string(),
   hubId: z.string(),
-  category: incidentCategorySchema,
+  /**
+   * An `IncidentCategory` today — but a plain string on the wire, so a client
+   * built before a category was appended (`routing`, `provider-auth`, #2330)
+   * still decodes the list and shows that incident generically. A closed enum
+   * here generates closed Swift/Kotlin enums, and one unknown value would fail
+   * the whole hub's list: every incident in it would vanish (rule V).
+   */
+  category: z.string(),
   severity: incidentSeveritySchema,
   openedAt: z.string(),
   lastSignalAt: z.string(),

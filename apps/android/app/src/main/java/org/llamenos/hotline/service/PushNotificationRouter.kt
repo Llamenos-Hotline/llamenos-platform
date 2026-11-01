@@ -29,7 +29,21 @@ class PushNotificationRouter(
                     linphoneService.storePendingCallHub(callId, hubId)
                 }
             }
+            // The incident wake names its hub for routing only. Opening the incident view
+            // lists every member hub, so nothing is stored and no hub is switched.
+            WAKE_TYPE_INCIDENT -> {}
             else -> {}
         }
+    }
+
+    companion object {
+        /** Wake type of the content-free incident push (B-INCIDENTS): `{hubId, type}` only. */
+        const val WAKE_TYPE_INCIDENT = "incident"
+
+        /**
+         * Whether a decrypted wake payload is the incident push. It is shown whether or not
+         * the app is unlocked — it carries nothing sensitive, and tapping it fetches.
+         */
+        fun isIncidentWake(type: String): Boolean = type == WAKE_TYPE_INCIDENT
     }
 }

@@ -15,8 +15,10 @@ import { signWsChallenge, ed25519Verify, decryptServerEvent } from '../platform'
 import { createRelaySocket } from '../net'
 import { bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { wsServerMessageSchema } from '@protocol/schemas/ws-messages'
+import { hubIncidentRelayEventSchema } from '@protocol/schemas/incidents'
+import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 import type { WsEventMessage, WsServerMessage } from '@protocol/schemas/ws-messages'
-import type { LlamenosEvent, RelayState, RelayEventHandler } from './types'
+import type { HubIncidentChangedEvent, LlamenosEvent, RelayState, RelayEventHandler } from './types'
 import { executeDeviceWipe, isDeviceWipeFrame, verifyDeviceWipe } from './device-wipe'
 
 export interface RelayConnectionOptions {
@@ -323,7 +325,7 @@ export class RelayConnection {
     const decrypted = await decryptServerEvent(msg.payload, msg.epoch)
     if (!decrypted) return
 
-    const content = parseEventContent(decrypted)
+    const content = parseEventContent(decrypted, msg.kind)
     if (!content) return
 
     // Route to matching subscribers
@@ -422,14 +424,27 @@ export class RelayConnection {
   }
 }
 
-function parseEventContent(decrypted: string): LlamenosEvent | null {
+function parseEventContent(decrypted: string, kind: number): LlamenosEvent | null {
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(decrypted)
-    if (typeof parsed === 'object' && parsed !== null && typeof parsed.type === 'string') {
-      return parsed as LlamenosEvent
-    }
+    parsed = JSON.parse(decrypted)
   } catch {
-    // Reported below.
+    parsed = undefined
+  }
+  // The incident doorbell is discriminated by its KIND, not a `type` field: its
+  // payload is exactly `{incidentId, state}` (the relay reaches every member, so
+  // it may say nothing more). Validate it strictly and tag it for subscribers.
+  if (kind === KIND_HUB_INCIDENT) {
+    const doorbell = hubIncidentRelayEventSchema.safeParse(parsed)
+    if (doorbell.success) {
+      const event: HubIncidentChangedEvent = { type: 'hub:incident', ...doorbell.data }
+      return event
+    }
+    console.error('[relay] hub incident event does not match its schema; dropped')
+    return null
+  }
+  if (typeof parsed === 'object' && parsed !== null && 'type' in parsed && typeof parsed.type === 'string') {
+    return parsed as LlamenosEvent
   }
   // A server event that decrypted but is not a typed JSON object is a format
   // disagreement between server and client, never a routine case — #2046 was

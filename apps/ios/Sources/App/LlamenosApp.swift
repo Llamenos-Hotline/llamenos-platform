@@ -280,6 +280,9 @@ struct LlamenosApp: App {
 /// UIKit-based AppDelegate for handling APNs push notification callbacks.
 /// SwiftUI's `@UIApplicationDelegateAdaptor` bridges this into the app lifecycle.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Wake type of the content-free incident push (B-INCIDENTS): `{hubId, type}` only.
+    static let incidentWakeType = "incident"
+
     /// Injected by LlamenosApp on appear so the delegate can forward push tokens.
     var appState: AppState? {
         didSet {
@@ -361,6 +364,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
             // Parse the decrypted payload and post a local notification
             if let data = decryptedJSON.data(using: .utf8),
+               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               payload["type"] as? String == Self.incidentWakeType {
+                // The content-free incident push (B-INCIDENTS): generic text only — no
+                // category, count or hub. Its hubId is NOT copied into userInfo, so the
+                // tap opens the incident view (every member hub) without switching hub.
+                let content = UNMutableNotificationContent()
+                content.title = NSLocalizedString("app_name", comment: "Llamenos")
+                content.body = NSLocalizedString("incident_push", comment: "There is activity on your hotline that needs a look.")
+                content.sound = .default
+                content.userInfo["deepLinkType"] = Self.incidentWakeType
+                UNUserNotificationCenter.current().add(UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil
+                ))
+            } else if let data = decryptedJSON.data(using: .utf8),
                let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 let content = UNMutableNotificationContent()
                 content.title = payload["title"] as? String
@@ -431,6 +450,13 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     /// Routing logic for notification tap responses. Extracted for testability.
     /// Switches the active hub to match the notification's hubId, and handles deep link routing.
     func handleNotificationResponse(userInfo: [AnyHashable: Any]) {
+        // The incident push opens the incident view, which lists every member hub: there
+        // is no hub to switch to, and none is switched.
+        if userInfo["deepLinkType"] as? String == Self.incidentWakeType {
+            // Presenting the view is what fetches (IncidentsView's .task).
+            appState?.incidentService.isIncidentViewPresented = true
+            return
+        }
         if let hubId = userInfo["hubId"] as? String {
             appState?.hubContext.setActiveHub(hubId)
         }

@@ -14,6 +14,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -29,6 +30,8 @@ import org.llamenos.hotline.api.NetworkMonitor
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.service.OfflineQueue
 import org.llamenos.hotline.ui.components.OfflineBanner
+import org.llamenos.hotline.ui.incidents.IncidentBanner
+import org.llamenos.hotline.ui.incidents.IncidentsViewModel
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.ui.conversations.ConversationsScreen
@@ -109,6 +112,7 @@ fun MainScreen(
     onNavigateToHubs: () -> Unit = {},
     onNavigateToEvents: () -> Unit = {},
     onNavigateToTriage: () -> Unit = {},
+    onNavigateToIncidents: () -> Unit = {},
     onNavigateToSecurityDevices: () -> Unit = {},
     onNavigateToSecuritySessions: () -> Unit = {},
     onNavigateToSecurityEvents: () -> Unit = {},
@@ -126,6 +130,10 @@ fun MainScreen(
     val biometricSettingsUiState by biometricSettingsViewModel.uiState.collectAsState()
     // Picks the hub to browse when none is chosen yet (#1340); refreshed by pull-to-refresh.
     val hubSelectionViewModel: HubSelectionViewModel = hiltViewModel()
+    // Open incidents from every member hub (rule V): a banner above every tab.
+    val incidentsViewModel: IncidentsViewModel = hiltViewModel()
+    val incidentRows by incidentsViewModel.rows.collectAsState()
+    LaunchedEffect(incidentsViewModel) { incidentsViewModel.beginSession() }
 
     Scaffold(
         bottomBar = {
@@ -152,6 +160,7 @@ fun MainScreen(
     ) { paddingValues ->
         Column(modifier = Modifier.padding(paddingValues)) {
             OfflineBanner(networkMonitor, offlineQueue)
+            IncidentBanner(rows = incidentRows, onOpen = onNavigateToIncidents)
 
             when (MainTab.entries[selectedTab]) {
                 MainTab.DASHBOARD -> {

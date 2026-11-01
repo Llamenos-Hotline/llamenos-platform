@@ -4774,9 +4774,12 @@
       "spam": "Spam û bangên nexwestî"
     },
     "closed": "Bi dawî bû",
+    "inHub": "Li {{hub}}",
     "ongoing": "Ji {{time}} ve {{count}} bûyer",
     "opened": "Niha diqewime",
+    "otherHub": "Li navendeke din",
     "push": "Li ser xeta we çalakiyek heye ku divê lê were nêrîn.",
-    "signalAlert": "Hişyariya xetê — {{category}}: {{state}}. Ji bo hûrguliyan sepanê vekin."
+    "signalAlert": "Hişyariya xetê — {{category}}: {{state}}. Ji bo hûrguliyan sepanê vekin.",
+    "title": "Bûyerên çalak"
   }
 }

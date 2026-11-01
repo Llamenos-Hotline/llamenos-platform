@@ -4774,9 +4774,12 @@
       "spam": "Spam ve istenmeyen aramalar"
     },
     "closed": "Sona erdi",
+    "inHub": "{{hub}} içinde",
     "ongoing": "{{time}} itibarıyla {{count}} olay",
     "opened": "Şu anda sürüyor",
+    "otherHub": "Başka bir merkezde",
     "push": "Hattınızda göz atılması gereken bir etkinlik var.",
-    "signalAlert": "Hat uyarısı — {{category}}: {{state}}. Ayrıntılar için uygulamayı açın."
+    "signalAlert": "Hat uyarısı — {{category}}: {{state}}. Ayrıntılar için uygulamayı açın.",
+    "title": "Etkin olaylar"
   }
 }

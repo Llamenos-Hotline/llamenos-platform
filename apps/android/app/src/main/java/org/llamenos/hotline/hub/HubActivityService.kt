@@ -63,6 +63,7 @@ class HubActivityService @Inject constructor() {
                 is LlamenosEvent.PresenceSummary,
                 is LlamenosEvent.PresenceDetail,
                 is LlamenosEvent.MessageStatus,
+                is LlamenosEvent.HubIncidentChanged,
                 is LlamenosEvent.Unknown -> s
             }
         }

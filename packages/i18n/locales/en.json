@@ -4774,9 +4774,12 @@
       "spam": "Spam and unwanted calls"
     },
     "closed": "Ended",
+    "inHub": "In {{hub}}",
     "ongoing": "{{count}} events since {{time}}",
     "opened": "Happening now",
+    "otherHub": "In another hub",
     "push": "There is activity on your hotline that needs a look.",
-    "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details."
+    "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details.",
+    "title": "Active incidents"
   }
 }

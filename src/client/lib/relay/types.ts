@@ -137,6 +137,21 @@ export interface ShiftRequestReviewedEvent extends LlamenosEvent {
   status: 'approved' | 'denied'
 }
 
+/**
+ * A hub incident opened, updated or closed (`KIND_HUB_INCIDENT`, B-INCIDENTS).
+ *
+ * A DOORBELL, never content. The wire payload is `{incidentId, state}` and
+ * nothing else — the relay fans it out to every hub member — so it carries no
+ * `type`; the relay connection validates it against the protocol schema and
+ * gives it this client-side discriminator. Nothing may be rendered from it: a
+ * subscriber re-reads the permission-filtered `GET /hubs/:hubId/incidents`.
+ */
+export interface HubIncidentChangedEvent extends LlamenosEvent {
+  type: 'hub:incident'
+  incidentId: string
+  state: 'opened' | 'updated' | 'closed'
+}
+
 /** Relay connection state */
 export type RelayState = 'disconnected' | 'connecting' | 'connected' | 'authenticating'
 
