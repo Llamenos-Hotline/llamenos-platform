@@ -80,6 +80,14 @@ export const hubs = pgTable('hubs', {
    * envelope write from re-installing a key a shred has destroyed.
    */
   hubKeyGeneration: integer('hub_key_generation').notNull().default(0),
+  /**
+   * The hub's optional escrow (recovery) key: an X25519 public key, 64 lowercase
+   * hex, whose secret the hub's admins hold offline. A member of every reader
+   * set of this hub (PROTOCOL §2.4.2, operator decisions D1 and A7). Set and
+   * rotated only by members holding `hubs:manage-keys` in this hub's own role
+   * assignments. Null when the hub has none.
+   */
+  escrowPubkey: text('escrow_pubkey'),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -15,7 +15,7 @@ import { getConnectionManager } from '../lib/ws-manager'
 import { getPrimaryRole, resolveAllRoleIds, resolvePermissions } from '@shared/permissions'
 import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
 import { bytesToHex } from '@shared/encoding'
-import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 
 const auth = new Hono<AppEnv>()
 
@@ -213,7 +213,7 @@ auth.get('/me',
       // signing key made every note written against it undecryptable forever.
       // Absent when the deployment has no env-configured platform admin, which the
       // clients already handle by omitting the admin envelope.
-      adminDecryptionPubkey: adminHpkeRecipient(c.env),
+      adminDecryptionPubkey: transitionalInstanceRecipient(c.env),
       serverEventKeyHex,
       serverEventKeyPrevHex,
       eventKeyEpoch,
