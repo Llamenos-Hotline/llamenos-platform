@@ -21,7 +21,7 @@ import { requirePermission } from '../middleware/permission-guard'
 import { audit } from '../services/audit'
 import { authErrors } from '../openapi/helpers'
 import { isValidE164 } from '../lib/helpers'
-import { isMockTelephonyAllowed } from '../telephony/mock'
+import { isMockTelephonyAllowed, recoverMockRecording } from '../telephony/mock'
 import { simulateIncomingCall, simulateCallerHangup, simulateVoicemail, randomFictionalCallerNumber } from '../services/call-simulation'
 import { ServiceError } from '../services/settings'
 
@@ -58,6 +58,8 @@ const simulateVoicemailBodySchema = z.object({
   /** The handle the (mock) provider holds the recording under. */
   recordingSid: z.string().min(1).max(200),
 })
+const providerRecoversBodySchema = z.object({ recordingSid: z.string().min(1).max(200) })
+const providerRecoversResponseSchema = z.object({ ok: z.literal(true) })
 const simulateVoicemailResponseSchema = z.object({
   ok: z.literal(true),
   callId: z.string(),
@@ -216,6 +218,28 @@ simulatedTelephony.post('/simulate/voicemail',
     if (!result.ok) return c.json({ error: result.code }, result.status)
     await audit(services.audit, 'voicemailReceived', c.get('pubkey'), { callSid: callId }, undefined, hubId)
     return c.json(result)
+  },
+)
+
+simulatedTelephony.post('/simulate/provider-recovers',
+  describeRoute({
+    tags: ['Simulated Telephony'],
+    summary: 'Simulate the provider recovering from refusing to delete a recording',
+    description: 'A "mock-undeletable-" recording is refused for as long as the provider is down. Once it recovers, the hotline\'s next deletion attempt (a retry sweep, or deleting the hub) succeeds. The recording stays tracked until that attempt confirms it.',
+    responses: {
+      200: { description: 'The provider will accept the next deletion', content: { 'application/json': { schema: resolver(providerRecoversResponseSchema) } } },
+      ...authErrors,
+      409: { description: 'Mock telephony is not enabled for this hub' },
+    },
+  }),
+  validator('json', providerRecoversBodySchema),
+  async (c) => {
+    const hubId = c.get('hubId') ?? ''
+    if (!await c.get('services').settings.isHubMockTelephonyEnabled(hubId)) {
+      return c.json({ error: 'mock-not-enabled' }, 409)
+    }
+    recoverMockRecording(c.req.valid('json').recordingSid)
+    return c.json({ ok: true as const })
   },
 )
 

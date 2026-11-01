@@ -8,7 +8,7 @@
  * in the serial backend-bdd-simulated-telephony project alongside simulated-telephony.steps.ts.
  */
 import { expect } from '@playwright/test'
-import { When, Then } from './fixtures'
+import { When, Then, After, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
 import { apiGet, apiPost } from '../../api-helpers'
@@ -73,6 +73,25 @@ async function readPosture(
   return res.data
 }
 
+/** Handles this scenario made the simulated provider refuse — see the After hook below. */
+const REFUSED_HANDLES_KEY = 'providerRecordingRetention.refusedHandles'
+
+/**
+ * Deleting a hub is REFUSED while its provider still holds caller audio (#2364), so a
+ * scenario that leaves a refused recording behind cannot have its hub torn down: the
+ * provider has to come back first, as a real one would. Runs before the `workerHub`
+ * fixture's teardown, which then deletes the hub through the same refusal-honouring path.
+ */
+After(async ({ request, world }) => {
+  const handles = getState<string[] | undefined>(world, REFUSED_HANDLES_KEY) ?? []
+  if (handles.length === 0) return
+  const { hubId } = getScenarioState(world)
+  for (const recordingSid of handles) {
+    const res = await apiPost(request, `/hubs/${hubId}/simulated-telephony/simulate/provider-recovers`, { recordingSid })
+    expect(res.status, `the simulated provider could not be made to recover: ${JSON.stringify(res.data)}`).toBe(200)
+  }
+})
+
 When(
   'the simulated caller leaves a voicemail the provider holds as {string}',
   async ({ request, world }, recordingSid: string) => {
@@ -86,6 +105,9 @@ When(
     )
     state.lastApiResponse = res
     setLastResponse(world, res)
+    if (lastVoicemail(world).recordingDeletion === 'failed') {
+      setState(world, REFUSED_HANDLES_KEY, [...(getState<string[] | undefined>(world, REFUSED_HANDLES_KEY) ?? []), recordingSid])
+    }
   },
 )
 
