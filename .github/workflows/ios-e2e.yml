@@ -1198,16 +1198,60 @@ jobs:
           fi
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
-          # shellcheck disable=SC2046
-          xcodebuild test-without-building \
-            -xctestrun "$XCTESTRUN" \
-            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
-            -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES \
-            -maximum-test-execution-time-allowance 300 \
-            -resultBundlePath "$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult" \
-            $(cat "$RUNNER_TEMP/shard-args.txt") \
-            2>&1 | tee "$RUNNER_TEMP/xcodebuild-test.log"
+
+          # RETRIED ONLY WHEN THE ATTEMPT EXECUTED ZERO TESTS (#2403). On hosted
+          # runners xcodebuild sometimes exits 65 before any test starts
+          # ("xctrunner" unknown to FrontBoard): six merge-queue ejections in a
+          # day, on PRs with no iOS change, while both Mac shards passed. That is
+          # a launch failure reported as a test failure.
+          #
+          # The condition is NOT the exit code. 65 is also what a genuine
+          # failing XCUITest returns, and retrying on it would re-run — and could
+          # hide — a real failure. It is the test log: no `Test Case '-[...'`
+          # line at all, the same evidence `ui-tests.py report` counts from. An
+          # attempt that started even one test is never retried, and keeps
+          # xcodebuild's exit code exactly as before. An attempt that ran no test
+          # has no result to lose, so re-running it cannot mask a failure.
+          #
+          # xcodebuild-test.log is the LAST attempt only, so `report` never sees a
+          # discarded attempt's "TEST EXECUTE FAILED" and fails a run that then
+          # passed. The discarded ones are kept in xcodebuild-zero-test-attempts.log.
+          log="$RUNNER_TEMP/xcodebuild-test.log"
+          discarded="$RUNNER_TEMP/xcodebuild-zero-test-attempts.log"
+          xcresult="$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult"
+          max_attempts=3
+          attempt=1
+          while :; do
+            # xcodebuild refuses to write a result bundle over an existing one.
+            rm -rf "$xcresult"
+            rc=0
+            # shellcheck disable=SC2046
+            xcodebuild test-without-building \
+              -xctestrun "$XCTESTRUN" \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+              -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES \
+              -maximum-test-execution-time-allowance 300 \
+              -resultBundlePath "$xcresult" \
+              $(cat "$RUNNER_TEMP/shard-args.txt") \
+              2>&1 | tee "$log" || rc=$?
+            [ "$rc" -ne 0 ] || exit 0
+            started=$(grep -c "Test Case '-\[" "$log" || true)
+            if [ "${started:-0}" -gt 0 ]; then
+              exit "$rc"
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::ios-e2e/ui FAILED: zero-tests-executed — shard $SHARD on $RUNNER_NAME launched no test in $max_attempts attempts (xcodebuild exit $rc, no 'Test Case' line in its output). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT: the test runner never started on this simulator (infrastructure; #2403). Re-run the job; if it recurs, read xcodebuild-zero-test-attempts.log in the shard's results artifact (same runner: take it out of rotation; every runner: look for a test-selection or config error)."
+              printf '### ios-e2e/ui shard %s: zero tests executed\n\nxcodebuild exited %s and started no test in %s attempts. Infrastructure failure, not this PR.\n' \
+                "$SHARD" "$rc" "$max_attempts" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              exit "$rc"
+            fi
+            backoff=$(( attempt * 20 ))
+            echo "::warning::shard $SHARD attempt $attempt/$max_attempts executed zero tests (xcodebuild exit $rc) — a launch failure, not a test result; retrying in ${backoff}s"
+            { echo "=== attempt $attempt/$max_attempts: exit $rc, zero tests executed ==="; cat "$log"; } >> "$discarded"
+            sleep "$backoff"
+            attempt=$(( attempt + 1 ))
+          done
 
       - name: Stop the app log capture
         if: always() && env.APP_LOG_PID != ''
@@ -1294,6 +1338,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-e2e-shard-${{ matrix.shard }}.xcresult
             ${{ runner.temp }}/xcodebuild-test.log
+            ${{ runner.temp }}/xcodebuild-zero-test-attempts.log
             ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
             ${{ runner.temp }}/llamenos-native-backend/server.log
             ${{ runner.temp }}/llamenos-native-backend/watchdog.log
