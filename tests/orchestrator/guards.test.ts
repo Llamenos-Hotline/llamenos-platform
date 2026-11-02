@@ -4,10 +4,10 @@ import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { checkRunsViolations, orchestratorSources, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
 import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
@@ -4396,5 +4396,127 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?:\n| {4,}.*\n)*)/)?.[0] ?? '\n  pull_request:\n'
     expect(pullRequestBlock).not.toContain('paths:')
     expect(onBlock, 'ci.yml must still trigger on every pull request').toMatch(/\n {2}pull_request:/)
+  })
+})
+
+/**
+ * #2403: an iOS `ui` shard that launched ZERO tests is retried; one that ran any
+ * test is not. Six merge-queue ejections in a day were hosted shards where
+ * xcodebuild exited 65 before a test started (`xctrunner` unknown to FrontBoard)
+ * while both Mac shards passed. 65 is also what a real failing XCUITest returns,
+ * so the retry must key on the test output and never on the exit code — a retry
+ * on 65 alone would re-run, and could hide, a genuine failure.
+ *
+ * This runs the workflow step's actual script against a fake `xcodebuild`, so it
+ * pins behaviour rather than text: editing the condition back to "any non-zero
+ * exit" turns the first scenario red.
+ */
+describe('rail: an iOS ui shard is retried only when it executed zero tests (#2403)', () => {
+  const STEP_NAME = 'Run XCUITests (shard ${{ matrix.shard }})'
+
+  /** The step's `run:` script, de-indented, with its few expressions filled in. */
+  function stepScript(root: string): string {
+    const lines = readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8').split('\n')
+    const at = lines.findIndex((l) => l.trim() === `- name: ${STEP_NAME}`)
+    if (at === -1) throw new Error(`ios-e2e.yml has no step "${STEP_NAME}"`)
+    const run = lines.findIndex((l, i) => i > at && l.trim() === 'run: |')
+    if (run === -1) throw new Error('the XCUITest step has no `run: |` script')
+    const body: string[] = []
+    for (const l of lines.slice(run + 1)) {
+      if (l.trim() !== '' && !l.startsWith(' '.repeat(10))) break
+      body.push(l.slice(10))
+    }
+    const script = body.join('\n')
+      .replaceAll('${{ runner.temp }}', root)
+      .replaceAll('${{ matrix.shard }}', '1')
+      .replaceAll('${{ steps.sim.outputs.udid }}', 'FAKE-UDID')
+    expect(script, 'the step uses an expression this harness does not fill in').not.toContain('${{')
+    return script
+  }
+
+  type Outcome = 'zero' | 'fail' | 'pass'
+
+  /** Runs the step with a fake xcodebuild whose Nth call behaves as outcomes[N-1]. */
+  function runStep(outcomes: Outcome[]) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ios-shard-retry-')))
+    try {
+      const bin = join(root, 'bin')
+      mkdirSync(bin)
+      mkdirSync(join(root, 'llamenos-build', 'Build', 'Products'), { recursive: true })
+      writeFileSync(join(root, 'llamenos-build', 'Build', 'Products', 'x.xctestrun'), '')
+      writeFileSync(join(root, 'shard-args.txt'), '-only-testing:LlamenosUITests/SomeUITests\n')
+      writeFileSync(join(root, 'outcomes'), outcomes.join('\n') + '\n')
+      const tool = (name: string, body: string) => {
+        writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`)
+        chmodSync(join(bin, name), 0o755)
+      }
+      tool('curl', 'exit 0')
+      tool('sleep', `echo "$1" >> "${root}/sleeps"`)
+      tool('xcodebuild', `
+n=$(( $(cat "${root}/calls" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "${root}/calls"
+outcome=$(sed -n "\${n}p" "${root}/outcomes")
+while [ $# -gt 0 ]; do [ "$1" = "-resultBundlePath" ] && bundle="$2"; shift; done
+mkdir "$bundle" || { echo "result bundle already exists"; exit 70; }
+case "$outcome" in
+  zero) echo "xctrunner unknown to FrontBoard"; echo "** TEST EXECUTE FAILED **"; exit 65 ;;
+  fail) echo "Test Case '-[LlamenosUITests.SomeUITests testA]' started."
+        echo "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds)."; exit 65 ;;
+  pass) echo "Test Case '-[LlamenosUITests.SomeUITests testA]' started."
+        echo "Test Case '-[LlamenosUITests.SomeUITests testA]' passed (3.0 seconds)."; exit 0 ;;
+esac
+exit 99`)
+      const r = spawnSync('bash', ['-e', '-c', stepScript(root)], {
+        encoding: 'utf8',
+        env: {
+          PATH: `${bin}:${process.env.PATH ?? ''}`, RUNNER_TEMP: root, NATIVE_BACKEND_PORT: '1', SHARD: '1',
+          RUNNER_NAME: 'hosted-runner', GITHUB_STEP_SUMMARY: join(root, 'summary'),
+        },
+      })
+      const read = (f: string) => (existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8') : '')
+      return {
+        status: r.status, out: `${r.stdout}${r.stderr}`,
+        calls: Number(read('calls').trim() || 0), sleeps: read('sleeps').trim().split('\n').filter(Boolean),
+        log: read('xcodebuild-test.log'), discarded: read('xcodebuild-zero-test-attempts.log'),
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it('does NOT retry exit 65 when a test ran — a real failure keeps its exit code and runs once', () => {
+    const r = runStep(['fail', 'pass'])
+    expect(r.calls, 'a failing test must never be re-run').toBe(1)
+    expect(r.status).toBe(65)
+    expect(r.sleeps).toEqual([])
+    expect(r.out).not.toContain('NOT THIS PR')
+  })
+
+  it('does not retry a shard that passed', () => {
+    const r = runStep(['pass'])
+    expect([r.status, r.calls]).toEqual([0, 1])
+  })
+
+  it('retries a launch failure that executed zero tests, and a pass on the retry passes the shard', () => {
+    const r = runStep(['zero', 'pass'])
+    expect([r.status, r.calls]).toEqual([0, 2])
+    expect(r.sleeps).toHaveLength(1)
+    expect(r.out).toContain('::warning::')
+    // report parses xcodebuild-test.log: it must hold the attempt that ran, not the discarded one.
+    expect(r.log).toContain("Test Case '-[LlamenosUITests.SomeUITests testA]' passed")
+    expect(r.log).not.toContain('TEST EXECUTE FAILED')
+    expect(r.discarded, 'the discarded attempt stays available as evidence').toContain('xctrunner unknown to FrontBoard')
+  })
+
+  it('a retry that then runs a real failing test fails with that test\'s exit code and stops retrying', () => {
+    const r = runStep(['zero', 'fail', 'pass'])
+    expect([r.status, r.calls]).toEqual([65, 2])
+  })
+
+  it('fails loudly after three zero-test attempts, saying it is infrastructure and not the PR', () => {
+    const r = runStep(['zero', 'zero', 'zero', 'pass'])
+    expect([r.status, r.calls]).toEqual([65, 3])
+    expect(r.out).toMatch(/::error::.*zero-tests-executed/)
+    expect(r.out).toContain("THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT")
   })
 })
