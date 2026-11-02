@@ -75,6 +75,7 @@ private final class FailingHubListAPI: HubAPIServiceProtocol {
         throw URLError(.badServerResponse)
     }
     func hp(_ path: String) -> String { path }
+    func activeHubPath(_ path: String) throws -> String { throw APIError.noActiveHub }
     func request<T: Decodable>(method: String, path: String, body: (any Encodable)?) async throws -> T {
         throw URLError(.cannotConnectToHost)
     }

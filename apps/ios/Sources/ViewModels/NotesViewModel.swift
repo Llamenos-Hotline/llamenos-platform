@@ -215,7 +215,7 @@ final class NotesViewModel {
         do {
             let response: NotesListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/notes?page=\(page)&limit=\(pageSize)")
+                path: apiService.activeHubPath("/api/notes?page=\(page)&limit=\(pageSize)")
             )
 
             if replacing {
@@ -231,8 +231,8 @@ final class NotesViewModel {
             // Decrypt all notes
             notes = encryptedNotes.compactMap(decryptNote)
         } catch {
-            if case APIError.noBaseURL = error {
-                // Hub not configured — show empty state, no error
+            if APIError.isNoHub(error) {
+                // No hub to browse — show the empty state, no error
             } else {
                 errorMessage = error.localizedDescription
             }

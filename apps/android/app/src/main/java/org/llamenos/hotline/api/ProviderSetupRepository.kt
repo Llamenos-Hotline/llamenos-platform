@@ -82,6 +82,9 @@ class ProviderSetupRepository @Inject constructor(
     private val activeHubState: ActiveHubState,
 ) {
 
+    /** The hub being configured, or null when none is active. */
+    fun activeHubIdOrNull(): String? = activeHubState.activeHubId.value
+
     private fun hubPath(path: String): String {
         val hubId = activeHubState.activeHubId.value
         return if (hubId != null) {

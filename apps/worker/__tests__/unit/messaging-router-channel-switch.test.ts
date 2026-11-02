@@ -44,6 +44,7 @@ function makeServices(channelEnabled: boolean) {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
     settings: {
+      getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }),
       getMessagingConfig: vi.fn().mockResolvedValue(null),
       isHubChannelEnabled: vi.fn().mockResolvedValue(channelEnabled),
     },
@@ -163,15 +164,15 @@ describe('inbound messaging webhook honours the hub channel switch — #2384', (
     expect(services.incidents.signal).not.toHaveBeenCalled()
   })
 
-  it('a webhook naming no hub is deployment-wide traffic: there is no hub switch to consult', async () => {
+  it('a webhook naming no hub is refused before any hub switch is consulted: it belongs to no hub (#2395)', async () => {
     const services = makeServices(false)
     const app = await createApp(services)
 
     const res = await post(app, '')
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(400)
     expect(services.settings.isHubChannelEnabled).not.toHaveBeenCalled()
-    expect(services.conversations.handleIncoming).toHaveBeenCalledTimes(1)
+    expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
   })
 
   it('fails open when the switch cannot be read: a database blip does not turn a crisis contact away', async () => {

@@ -68,11 +68,11 @@ Feature: API Contract Validation
     Then the response status should be 400
 
   Scenario: Create note rejects missing encryptedContent
-    When an admin sends "POST" to "/api/notes" with empty encrypted content
+    When an admin sends "POST" to "/api/hubs/:hubId/notes" with empty encrypted content
     Then the response status should be 400
 
   Scenario: Create report rejects missing title
-    When an admin sends "POST" to "/api/reports" with missing title
+    When an admin sends "POST" to "/api/hubs/:hubId/reports" with missing title
     Then the response status should be 400
 
   Scenario: Create invite rejects missing name
@@ -119,15 +119,15 @@ Feature: API Contract Validation
   # ─── Integer Bounds ────────────────────────────────────────────────
 
   Scenario: Pagination rejects page 0
-    When an admin sends "GET" to "/api/notes?page=0&limit=50"
+    When an admin sends "GET" to "/api/hubs/:hubId/notes?page=0&limit=50"
     Then the response status should be 400
 
   Scenario: Pagination rejects limit over 200
-    When an admin sends "GET" to "/api/notes?page=1&limit=500"
+    When an admin sends "GET" to "/api/hubs/:hubId/notes?page=1&limit=500"
     Then the response status should be 400
 
   Scenario: Pagination rejects negative limit
-    When an admin sends "GET" to "/api/notes?page=1&limit=-1"
+    When an admin sends "GET" to "/api/hubs/:hubId/notes?page=1&limit=-1"
     Then the response status should be 400
 
   Scenario: Spam settings rejects maxCallsPerMinute over 100
@@ -206,7 +206,7 @@ Feature: API Contract Validation
     Then the response status should be 400
 
   Scenario: Pagination accepts valid bounds
-    When an admin sends "GET" to "/api/notes?page=1&limit=100"
+    When an admin sends "GET" to "/api/hubs/:hubId/notes?page=1&limit=100"
     Then the response status should not be 400
 
   # ─── Ban Audit Log Privacy ──────────────────────────────────────

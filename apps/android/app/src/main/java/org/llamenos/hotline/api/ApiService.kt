@@ -43,6 +43,9 @@ import javax.inject.Singleton
 
 class ApiException(val code: Int, override val message: String) : Exception("HTTP $code: $message")
 
+/** A hub-owned resource was requested with no hub active; see [ApiService.activeHubPath]. */
+class NoActiveHubException : IllegalStateException("No active hub")
+
 /**
  * Request tag for public endpoints that prove identity in their body or not at all
  * (invite validation and redemption). [AuthInterceptor] sends these without a signature,
@@ -364,6 +367,18 @@ class ApiService @Inject constructor(
      * Falls back to the bare path if no hub is currently active.
      */
     fun hp(path: String): String = hubPath(activeHubState.activeHubId.value, path)
+
+    /**
+     * Returns the path prefixed with /hubs/{activeHubId}, for a resource that
+     * belongs to a hub and has NO unscoped route: notes, reports, contacts and
+     * the audit log (#2395). Unlike [hp] it never falls back to the bare path —
+     * the server refuses that path, and a request with no hub in it would be a
+     * request for every hub's rows.
+     *
+     * @throws NoActiveHubException when no hub is active.
+     */
+    fun activeHubPath(path: String): String =
+        hubPath(activeHubState.activeHubId.value ?: throw NoActiveHubException(), path)
 
     /**
      * Returns the path prefixed with /hubs/{hubId} — for acting on a call or

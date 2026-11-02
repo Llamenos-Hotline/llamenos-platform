@@ -19,6 +19,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
@@ -149,7 +150,7 @@ class NotesViewModel @Inject constructor(
             try {
                 val response = apiService.request<NotesListResponse>(
                     "GET",
-                    apiService.hp("/api/notes") + "?page=$page&limit=20",
+                    apiService.activeHubPath("/api/notes") + "?page=$page&limit=20",
                 )
 
                 val decrypted = response.notes.mapNotNull { note ->
@@ -165,6 +166,17 @@ class NotesViewModel @Inject constructor(
                         currentPage = page,
                         totalNotes = response.total.toInt(),
                         hasMorePages = allNotes.size < response.total.toInt(),
+                    )
+                }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405).
+                _uiState.update {
+                    it.copy(
+                        notes = emptyList(),
+                        isLoading = false,
+                        isRefreshing = false,
+                        totalNotes = 0,
+                        hasMorePages = false,
                     )
                 }
             } catch (e: ApiException) {
@@ -339,7 +351,7 @@ class NotesViewModel @Inject constructor(
                 val notesPath = if (callId != null && hubId != null) {
                     apiService.hubPath(hubId, "/api/notes")
                 } else {
-                    apiService.hp("/api/notes")
+                    apiService.activeHubPath("/api/notes")
                 }
                 apiService.request<NoteStoredResponse>("POST", notesPath, request)
 
@@ -477,7 +489,7 @@ class NotesViewModel @Inject constructor(
                     },
                 )
 
-                apiService.request<NoteStoredResponse>("PATCH", apiService.hp("/api/notes/$noteId"), request)
+                apiService.request<NoteStoredResponse>("PATCH", apiService.activeHubPath("/api/notes/$noteId"), request)
 
                 // Update local state with edited content
                 val updatedNote = _uiState.value.selectedNote?.copy(
@@ -515,7 +527,7 @@ class NotesViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingReplies = true) }
             try {
                 val response = apiService.request<NoteRepliesResponse>(
-                    "GET", apiService.hp("/api/notes/$noteId/replies"),
+                    "GET", apiService.activeHubPath("/api/notes/$noteId/replies"),
                 )
                 val decrypted = response.replies.mapNotNull { reply ->
                     decryptReply(reply)
@@ -556,7 +568,7 @@ class NotesViewModel @Inject constructor(
                     readerEnvelopes = readerEnvelopes,
                 )
 
-                apiService.requestNoContent("POST", apiService.hp("/api/notes/$noteId/replies"), request)
+                apiService.requestNoContent("POST", apiService.activeHubPath("/api/notes/$noteId/replies"), request)
 
                 // Increment local reply count
                 val updatedNote = _uiState.value.selectedNote?.copy(

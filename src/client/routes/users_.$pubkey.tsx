@@ -6,6 +6,7 @@ import {
   listUsers,
   listRoles,
   listAuditLog,
+  NoActiveHubError,
   listShifts,
   updateUser,
   type User,
@@ -82,7 +83,8 @@ function UserProfilePage() {
     setAuditLoading(true)
     listAuditLog({ page: auditPage, limit: auditLimit, actorPubkey: pubkey })
       .then(r => { setAuditEntries(r.entries); setAuditTotal(r.total) })
-      .catch(() => toast(t('common.error'), 'error'))
+      // No hub to browse is an empty chain, not a failure to load one (#2405).
+      .catch(err => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
       .finally(() => setAuditLoading(false))
   }, [pubkey, auditPage, t, toast])
 

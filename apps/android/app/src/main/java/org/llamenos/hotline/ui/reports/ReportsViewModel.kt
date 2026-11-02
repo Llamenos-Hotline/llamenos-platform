@@ -15,6 +15,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
@@ -121,7 +122,7 @@ class ReportsViewModel @Inject constructor(
             }
             try {
                 val query = buildString {
-                    append(apiService.hp("/api/reports"))
+                    append(apiService.activeHubPath("/api/reports"))
                     append("?limit=50")
                     val status = _uiState.value.selectedStatus
                     if (status.queryParam != null) {
@@ -141,6 +142,11 @@ class ReportsViewModel @Inject constructor(
                         isRefreshing = false,
                     )
                 }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405).
+                _uiState.update {
+                    it.copy(reports = emptyList(), total = 0, isLoading = false, isRefreshing = false)
+                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -156,7 +162,7 @@ class ReportsViewModel @Inject constructor(
     private fun loadCategories() {
         viewModelScope.launch {
             try {
-                val response = apiService.request<ReportCategoriesResponse>("GET", apiService.hp("/api/reports/categories"))
+                val response = apiService.request<ReportCategoriesResponse>("GET", apiService.activeHubPath("/api/reports/categories"))
                 _uiState.update { it.copy(categories = response.categories) }
             } catch (_: Exception) {
                 // Non-critical — categories are optional
@@ -279,7 +285,7 @@ class ReportsViewModel @Inject constructor(
                     encryptedContent = encrypted.ciphertextHex,
                     readerEnvelopes = envelopes,
                 )
-                apiService.request<Report>("POST", apiService.hp("/api/reports"), request)
+                apiService.request<Report>("POST", apiService.activeHubPath("/api/reports"), request)
                 _uiState.update { it.copy(isCreating = false, createSuccess = true) }
                 refresh()
             } catch (e: Exception) {
@@ -343,7 +349,7 @@ class ReportsViewModel @Inject constructor(
                     encryptedContent = encrypted.ciphertextHex,
                     readerEnvelopes = envelopes,
                 )
-                apiService.request<Report>("POST", apiService.hp("/api/reports"), request)
+                apiService.request<Report>("POST", apiService.activeHubPath("/api/reports"), request)
                 _uiState.update {
                     it.copy(
                         isCreating = false,
@@ -413,7 +419,7 @@ class ReportsViewModel @Inject constructor(
             }
             try {
                 val request = AssignReportRequest(assignedTo = pubkey)
-                val updated = apiService.request<Report>("POST", apiService.hp("/api/reports/$reportId/assign"), request)
+                val updated = apiService.request<Report>("POST", apiService.activeHubPath("/api/reports/$reportId/assign"), request)
                 _uiState.update {
                     it.copy(
                         isClaiming = false,
@@ -442,7 +448,7 @@ class ReportsViewModel @Inject constructor(
             _uiState.update { it.copy(isClosing = true, actionError = null) }
             try {
                 val request = UpdateReportRequest(status = "closed")
-                val updated = apiService.request<Report>("PATCH", apiService.hp("/api/reports/$reportId"), request)
+                val updated = apiService.request<Report>("PATCH", apiService.activeHubPath("/api/reports/$reportId"), request)
                 _uiState.update {
                     it.copy(
                         isClosing = false,

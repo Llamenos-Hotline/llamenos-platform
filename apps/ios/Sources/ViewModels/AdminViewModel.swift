@@ -530,13 +530,16 @@ final class AdminViewModel {
         do {
             let response: AuditListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/audit?page=1&limit=\(auditPageSize)"
+                path: apiService.activeHubPath("/api/audit") + "?page=1&limit=\(auditPageSize)"
             )
             auditEntries = response.entries
             auditTotal = Int(response.total)
             hasMoreAudit = auditEntries.count < Int(response.total)
         } catch {
-            errorMessage = error.localizedDescription
+            // No hub to browse is an empty chain, not a failure
+            if !APIError.isNoHub(error) {
+                errorMessage = error.localizedDescription
+            }
         }
 
         isLoadingAudit = false
@@ -552,7 +555,7 @@ final class AdminViewModel {
         do {
             let response: AuditListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/audit?page=\(nextPage)&limit=\(auditPageSize)"
+                path: apiService.activeHubPath("/api/audit") + "?page=\(nextPage)&limit=\(auditPageSize)"
             )
             auditEntries.append(contentsOf: response.entries)
             auditPage = nextPage

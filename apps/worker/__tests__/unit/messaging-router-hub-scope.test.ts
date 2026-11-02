@@ -33,6 +33,7 @@ vi.mock('@worker/services/webhook-replay', () => ({
 vi.mock('@worker/db', () => ({ getDb: vi.fn().mockReturnValue({}) }))
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 import { getMessagingAdapterFromService } from '@worker/lib/service-factories'
+import { ServiceError } from '@worker/services/settings'
 
 const HUB = '9f2c1b64-0000-4000-8000-0000000000aa'
 
@@ -55,6 +56,7 @@ function makeServices() {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
     settings: {
+      getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }),
       getMessagingConfig: vi.fn().mockResolvedValue(null),
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
     },
@@ -116,7 +118,10 @@ describe('inbound messaging webhook hub scoping — #1140', () => {
     expect(hubArg).toBe(HUB)
   })
 
-  it('passes no hub when the webhook carries no `?hub=` (global deployment)', async () => {
+  // #2395: a hubless conversation is readable through no route (#2381 removed
+  // the unscoped one), is never pushed, and is sealed for admins only. The
+  // sender is deployment-wide, so nothing but the URL can name the hub.
+  it('refuses a webhook that names no hub, and stores nothing', async () => {
     const services = makeServices()
     const app = await createApp(services)
 
@@ -126,8 +131,41 @@ describe('inbound messaging webhook hub scoping — #1140', () => {
       body: JSON.stringify({ id: 'SM-1140-global' }),
     })
 
-    expect(res.status).toBe(200)
-    const [, , , hubArg] = vi.mocked(services.conversations.handleIncoming).mock.calls[0]
-    expect(hubArg).toBeUndefined()
+    expect(res.status).toBe(400)
+    expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
+    expect(services.audit.log).not.toHaveBeenCalled()
+  })
+
+  it('refuses a webhook that names a hub that does not exist, and stores nothing', async () => {
+    const services = makeServices()
+    vi.mocked(services.settings.getHub).mockRejectedValueOnce(new ServiceError(404, 'Hub not found'))
+    const app = await createApp(services)
+
+    const res = await app.request('/api/messaging/sms/webhook?hub=no-such-hub', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'SM-2395-unknown' }),
+    })
+
+    expect(res.status).toBe(404)
+    expect(services.settings.getHub).toHaveBeenCalledWith('no-such-hub')
+    expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
+  })
+
+  it('checks the hub only after the signature, so the route cannot be used to probe hub ids', async () => {
+    const services = makeServices()
+    const adapter = makeAdapter()
+    vi.mocked(adapter.validateWebhook).mockResolvedValueOnce(false)
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapter)
+    const app = await createApp(services)
+
+    const res = await app.request('/api/messaging/sms/webhook?hub=no-such-hub', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'SM-2395-unsigned' }),
+    })
+
+    expect(res.status).toBe(403)
+    expect(services.settings.getHub).not.toHaveBeenCalled()
   })
 })
