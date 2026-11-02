@@ -263,7 +263,7 @@ final class AdminSettingsUITests: BaseUITest {
         file: StaticString = #filePath, line: UInt = #line
     ) throws -> Int {
         try pollServer(timeout: timeout, until: { $0 == expected }) {
-            try callSettingsFromServer(file: file, line: line).queueTimeout
+            try self.callSettingsFromServer(file: file, line: line).queueTimeout
         }
     }
 
@@ -525,7 +525,7 @@ final class AdminSettingsUITests: BaseUITest {
     ) throws -> String? {
         let wanted = Self.describe(expected)
         return try pollServer(timeout: timeout, until: { $0 == wanted }) {
-            Self.describe(try settingsJSON(path, file: file, line: line)[key])
+            Self.describe(try self.settingsJSON(path, file: file, line: line)[key])
         }
     }
 
@@ -559,7 +559,7 @@ final class AdminSettingsUITests: BaseUITest {
         file: StaticString = #filePath, line: UInt = #line
     ) throws -> [String] {
         try pollServer(timeout: timeout, until: { $0 == expected }) {
-            try storedIvrLanguages(file: file, line: line)
+            try self.storedIvrLanguages(file: file, line: line)
         }
     }
 
