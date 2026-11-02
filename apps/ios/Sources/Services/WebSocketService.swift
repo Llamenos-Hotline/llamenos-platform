@@ -4,18 +4,30 @@ import os
 // MARK: - ConnectionState
 
 /// WebSocket connection state.
+///
+/// `.connected` means the relay will deliver a ring to this device: the socket is
+/// authenticated AND the server has acknowledged a subscription on every hub the user is a
+/// member of. `.subscribing` is the window between the server's `authenticated` reply and
+/// the last `subscribed` acknowledgement — the socket is up, but an event published now to a
+/// hub not yet acknowledged would reach nobody on this device (#2428).
 enum ConnectionState: Equatable, Sendable {
     case disconnected
     case connecting
+    case subscribing
     case connected
     case reconnecting(attempt: Int)
 
-    var isConnected: Bool { self == .connected }
+    /// The socket is authenticated, whether or not every hub subscription is acknowledged yet.
+    /// What the offline banner keys on: REST works as soon as the relay is up.
+    var isConnected: Bool { self == .connected || self == .subscribing }
+
+    /// The relay is delivering events from every member hub to this device.
+    var isReceiving: Bool { self == .connected }
 
     var statusColor: String {
         switch self {
         case .connected: return "green"
-        case .connecting, .reconnecting: return "yellow"
+        case .connecting, .subscribing, .reconnecting: return "yellow"
         case .disconnected: return "red"
         }
     }
@@ -26,6 +38,8 @@ enum ConnectionState: Equatable, Sendable {
             return NSLocalizedString("ws_disconnected", comment: "Disconnected")
         case .connecting:
             return NSLocalizedString("ws_connecting", comment: "Connecting...")
+        case .subscribing:
+            return NSLocalizedString("ws_subscribing", comment: "Connecting to hubs...")
         case .connected:
             return NSLocalizedString("ws_connected", comment: "Connected")
         case .reconnecting(let attempt):
@@ -136,6 +150,12 @@ private struct WsChallengeFields: Decodable {
 /// subscribes to each hub the server lists in its `authenticated` reply — the
 /// server-authoritative membership — on every (re)connect.
 ///
+/// Readiness (#2428): `connectionState` is `.connected` only once the server has
+/// acknowledged (`subscribed`) a subscription covering the requested kinds on EVERY member
+/// hub. Between `authenticated` and the last acknowledgement it is `.subscribing`: the
+/// socket is up but a ring published now to an unacknowledged hub reaches nobody on this
+/// device. Readiness is per hub and independent of the hub active in the UI.
+///
 /// Usage:
 /// ```swift
 /// let ws = WebSocketService(cryptoService: cryptoService)
@@ -172,6 +192,26 @@ final class WebSocketService {
     /// reply. Excludes the server's `global` pseudo-hub. Empty until authenticated.
     private(set) var memberHubIds: [String] = []
 
+    /// Kinds the server has acknowledged (`subscribed`) per hub on the current connection.
+    /// Cleared whenever the socket is not authenticated: a subscription belongs to the
+    /// connection, so none survives a reconnect until the server acknowledges it again.
+    private(set) var acknowledgedKinds: [String: Set<Int>] = [:]
+
+    /// Member hubs this device is receiving events from — acknowledged for every kind it
+    /// asked for. A hub missing here but present in `memberHubIds` is one a ring would not reach.
+    var receivingHubIds: Set<String> {
+        Set(memberHubIds.filter(isReceiving(hubId:)))
+    }
+
+    /// Whether an event published to `hubId` now reaches this device.
+    func isReceiving(hubId: String) -> Bool {
+        guard authenticated,
+              let wanted = desiredSubscriptions[hubId],
+              let acknowledged = acknowledgedKinds[hubId]
+        else { return false }
+        return Set(wanted).isSubset(of: acknowledged)
+    }
+
     // MARK: - Dependencies
 
     private let cryptoService: CryptoService
@@ -204,8 +244,9 @@ final class WebSocketService {
     private var reconnectTask: Task<Void, Never>?
     private var authenticated: Bool = false
 
-    /// Hub subscriptions: hubId → kind list. Retained across reconnects.
-    private var subscribedHubs: [String: [Int]] = [:]
+    /// Hub subscriptions this device wants: hubId → kind list. Retained across reconnects.
+    /// Wanted, not held — `acknowledgedKinds` is what the server confirmed.
+    private var desiredSubscriptions: [String: [Int]] = [:]
     /// Subscriptions buffered before auth completes; flushed in handleAuthenticated().
     private var pendingSubscriptions: [(hubId: String, kinds: [Int])] = []
     /// Kinds to subscribe on every member hub after each authentication, or nil when
@@ -320,9 +361,11 @@ final class WebSocketService {
     /// Subscribe to events for a hub. Safe to call before or after authentication —
     /// subscription messages are buffered and flushed after the auth handshake completes.
     func subscribe(hubId: String, kinds: [Int]) {
-        subscribedHubs[hubId] = kinds
+        desiredSubscriptions[hubId] = kinds
         if authenticated {
             sendSubscription(hubId: hubId, kinds: kinds)
+            // A hub (or kind) not yet acknowledged takes the card back out of "receiving".
+            refreshReadiness()
         } else {
             // Remove any stale entry for this hub then re-add
             pendingSubscriptions.removeAll { $0.hubId == hubId }
@@ -335,7 +378,7 @@ final class WebSocketService {
 
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         receiveTask?.cancel()
-        authenticated = false
+        markUnauthenticated()
 
         connectionState = reconnectAttempt > 0
             ? .reconnecting(attempt: reconnectAttempt)
@@ -369,7 +412,7 @@ final class WebSocketService {
         receiveTask?.cancel()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
-        authenticated = false
+        markUnauthenticated()
         connectionState = .disconnected
     }
 
@@ -381,6 +424,9 @@ final class WebSocketService {
         while !Task.isCancelled {
             do {
                 let message = try await task.receive()
+                // A frame that arrives after this loop was cancelled belongs to a superseded
+                // socket; its `authenticated`/`subscribed` must not be read as the new one's.
+                if Task.isCancelled { return }
                 let text: String
                 switch message {
                 case .string(let s): text = s
@@ -435,12 +481,20 @@ final class WebSocketService {
             )
             handleEvent(msg)
 
-        case "subscribed", "unsubscribed", "pong":
+        case "subscribed":
+            guard let hubId = obj["hubId"] as? String else { return }
+            handleSubscribed(hubId: hubId, kinds: obj["kinds"] as? [Int] ?? [])
+
+        case "unsubscribed":
+            guard let hubId = obj["hubId"] as? String else { return }
+            handleUnsubscribed(hubId: hubId, reason: obj["reason"] as? String)
+
+        case "pong":
             break
 
         case "error":
             if (obj["code"] as? String) == "auth_failed" {
-                authenticated = false
+                markUnauthenticated()
             }
 
         default:
@@ -485,20 +539,65 @@ final class WebSocketService {
         authenticated = true
         reconnectAttempt = 0
         eventCount = 0
-        connectionState = .connected
+        // `.subscribing` until the server acknowledges each hub below; `refreshReadiness`
+        // below settles it (straight to `.connected` for a user with no member hub).
+        acknowledgedKinds = [:]
         memberHubIds = serverHubs.filter { $0 != Self.globalPseudoHubId }
 
         if let kinds = memberHubKinds {
             // The server rejects subscriptions to hubs the user is not a member of, so
             // drop any left over from a membership that has since ended.
             let members = Set(memberHubIds)
-            subscribedHubs = subscribedHubs.filter { members.contains($0.key) }
+            desiredSubscriptions = desiredSubscriptions.filter { members.contains($0.key) }
             pendingSubscriptions.removeAll { !members.contains($0.hubId) }
-            for hubId in memberHubIds where subscribedHubs[hubId] == nil {
-                subscribedHubs[hubId] = kinds
+            for hubId in memberHubIds where desiredSubscriptions[hubId] == nil {
+                desiredSubscriptions[hubId] = kinds
             }
         }
+        refreshReadiness()
         flushPendingSubscriptions()
+    }
+
+    // MARK: - Subscription Acknowledgements
+
+    /// The server confirmed a subscription: from here an event published to `hubId` in any of
+    /// `kinds` reaches this device. The server unions kinds per user and hub, so the
+    /// acknowledged set accumulates.
+    private func handleSubscribed(hubId: String, kinds: [Int]) {
+        // A `subscribed` is only meaningful on an authenticated socket; the server sends
+        // it in reply to a `subscribe` it accepted, which it does only after auth.
+        guard authenticated else { return }
+        acknowledgedKinds[hubId, default: []].formUnion(kinds)
+        refreshReadiness()
+    }
+
+    /// The server dropped a subscription. `membership_revoked` also ends the membership
+    /// itself, so the hub stops being one this device is expected to receive from; any other
+    /// reason leaves the hub a member the device is no longer receiving from.
+    private func handleUnsubscribed(hubId: String, reason: String?) {
+        acknowledgedKinds.removeValue(forKey: hubId)
+        if reason == Self.membershipRevokedReason {
+            memberHubIds.removeAll { $0 == hubId }
+            desiredSubscriptions.removeValue(forKey: hubId)
+            pendingSubscriptions.removeAll { $0.hubId == hubId }
+        }
+        refreshReadiness()
+    }
+
+    /// `ConnectionManager.evictMember`'s reason (apps/worker/lib/ws-manager.ts).
+    private static let membershipRevokedReason = "membership_revoked"
+
+    /// Recompute `connectionState` for an authenticated socket: `.connected` only when every
+    /// member hub is acknowledged for the kinds requested, `.subscribing` otherwise.
+    private func refreshReadiness() {
+        guard authenticated else { return }
+        connectionState = memberHubIds.allSatisfy(isReceiving(hubId:)) ? .connected : .subscribing
+    }
+
+    /// The socket is not authenticated: nothing is subscribed on it any more.
+    private func markUnauthenticated() {
+        authenticated = false
+        acknowledgedKinds = [:]
     }
 
     // MARK: - Subscriptions
@@ -511,7 +610,7 @@ final class WebSocketService {
             sendSubscription(hubId: sub.hubId, kinds: sub.kinds)
         }
         // Re-subscribe to all known hubs on reconnect (pending may not have them all)
-        for (hubId, kinds) in subscribedHubs {
+        for (hubId, kinds) in desiredSubscriptions {
             if !pending.contains(where: { $0.hubId == hubId }) {
                 sendSubscription(hubId: hubId, kinds: kinds)
             }
@@ -622,7 +721,7 @@ final class WebSocketService {
             return
         }
 
-        authenticated = false
+        markUnauthenticated()
         reconnectAttempt += 1
 
         connectionState = .reconnecting(attempt: reconnectAttempt)
@@ -644,7 +743,7 @@ final class WebSocketService {
             try? await Task.sleep(for: .seconds(delay + jitter))
             guard !Task.isCancelled, !isIntentionalDisconnect else { return }
             // Re-queue all known subscriptions as pending before reconnect
-            pendingSubscriptions = subscribedHubs.map { (hubId: $0.key, kinds: $0.value) }
+            pendingSubscriptions = desiredSubscriptions.map { (hubId: $0.key, kinds: $0.value) }
             await performConnect()
         }
     }

@@ -233,6 +233,43 @@ describe('ConnectionManager.publishToHub', () => {
   })
 })
 
+describe('ConnectionManager.publishToHub — the window between authentication and subscription (#2428)', () => {
+  it('delivers a ring published after `authenticated` but before `subscribe` to nobody, and never backfills it', () => {
+    // The relay acknowledges `authenticated` before the client has sent `subscribe`, so a
+    // member can be registered (authenticated, hub in `hubs`) and still be on no hub's
+    // channel. A ring published in that window is not delivered, and subscribing afterwards
+    // does not replay it — only an explicit `replay` request does. The client therefore
+    // has to treat the `subscribed` acknowledgement, not `authenticated`, as "a ring
+    // published now will reach this device".
+    const manager = new ConnectionManager(SERVER_KEY)
+    const device = makeConn('pubkey-a', ['hub-1'])
+    manager.register(device)
+
+    manager.publishToHub('hub-1', KIND_CALL_RING, 'ring-in-the-window', 0)
+    expect(eventHubs(device)).toEqual([])
+
+    manager.subscribe(device, 'hub-1', [KIND_CALL_RING])
+    expect(eventHubs(device)).toEqual([])
+
+    manager.publishToHub('hub-1', KIND_CALL_RING, 'ring-after-subscribe', 0)
+    expect(eventHubs(device)).toEqual(['hub-1'])
+  })
+
+  it('is per hub: subscribing to one member hub does not open the others', () => {
+    const manager = new ConnectionManager(SERVER_KEY)
+    const device = makeConn('pubkey-a', ['hub-1', 'hub-2'])
+    manager.register(device)
+    manager.subscribe(device, 'hub-1', [KIND_CALL_RING])
+
+    manager.publishToHub('hub-2', KIND_CALL_RING, 'ring-on-hub-2', 0)
+    expect(eventHubs(device)).toEqual([])
+
+    manager.subscribe(device, 'hub-2', [KIND_CALL_RING])
+    manager.publishToHub('hub-2', KIND_CALL_RING, 'second-ring-on-hub-2', 0)
+    expect(eventHubs(device)).toEqual(['hub-2'])
+  })
+})
+
 describe('ConnectionManager.evictMember', () => {
   let manager: ConnectionManager
 

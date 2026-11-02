@@ -387,7 +387,7 @@ struct DashboardView: View {
     private var connectionDotState: StatusDot.Status {
         switch appState.webSocketService.connectionState {
         case .connected: return .active
-        case .connecting, .reconnecting(_): return .warning
+        case .connecting, .subscribing, .reconnecting(_): return .warning
         case .disconnected: return .inactive
         }
     }

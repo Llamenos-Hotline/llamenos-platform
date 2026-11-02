@@ -4452,7 +4452,8 @@
     "connecting": "በመገናኘት ላይ...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Connecting to hubs..."
   },
   "assignment": {
     "assignBtn": "Assign",
