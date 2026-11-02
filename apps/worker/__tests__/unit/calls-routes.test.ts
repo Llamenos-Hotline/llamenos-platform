@@ -26,6 +26,7 @@ const TEST_BAN_HASH_KEY = 'b'.repeat(64) // gitleaks:allow
 function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {}): typeof activeCalls.$inferSelect {
   return {
     callId: 'call-1',
+    pushRef: 'push-ref-1',
     hubId: 'hub-1',
     callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
     callerLast4: '4567',

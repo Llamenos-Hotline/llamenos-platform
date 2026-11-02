@@ -33,6 +33,7 @@ type CallRecordRow = typeof callRecords.$inferSelect
 function toActiveCallResponse(row: ActiveCallRow): CallRecord {
   return callRecordResponseSchema.parse({
     id: row.callId,
+    pushRef: row.pushRef ?? undefined,
     hubId: row.hubId ?? undefined,
     callerLast4: row.callerLast4 ?? undefined,
     answeredBy: row.answeredBy,
