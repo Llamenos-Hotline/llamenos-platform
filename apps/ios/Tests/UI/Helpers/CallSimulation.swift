@@ -59,8 +59,37 @@ extension BaseUITest {
         return pubkey
     }
 
+    /// How long a call surface may take to follow the server on the slowest host we run on.
+    /// A hosted macOS runner shares its cores between the simulator, the backend and the
+    /// build: there the backend took 7-9s to answer GETs the app made while launching, and a
+    /// first request has taken 30-49s (see `createClassHub`). 60s is that observed ceiling
+    /// plus headroom — a ceiling on a condition that is normally met in well under a second,
+    /// not a delay the tests wait out.
+    static let slowHostTimeout: TimeInterval = 60
+
+    /// Wait until the app's live-updates connection to the relay is up (the dashboard's
+    /// connection card reads `wsConnected`, "Live updates active").
+    ///
+    /// The dashboard learns of a ring ONLY from the relay: it reads `calls/active` once on
+    /// load, and again on a relay event. A ring the server publishes before this app has
+    /// authenticated and subscribed is never delivered and nothing re-reads the list, so the
+    /// card never appears. Fast hosts connect in well under a second, so every test passed
+    /// by winning that race; a loaded host (run 41383568666, hosted shard 1: the app's first
+    /// requests took 9s, the ring was posted at +10s and never arrived) loses it.
+    func waitForRelayConnected(file: StaticString = #filePath, line: UInt = #line) {
+        let connected = app.staticTexts.matching(NSPredicate(format: "label == %@", "Live updates active"))
+        XCTAssertTrue(
+            connected.firstMatch.waitForExistence(timeout: Self.slowHostTimeout),
+            "The app should be connected to the relay before a call rings, or it never hears of the ring",
+            file: file, line: line
+        )
+    }
+
     /// Ring a call on `hubId` and return its id. Fails the test unless the server accepted it.
+    /// Waits for the app's relay connection first (see `waitForRelayConnected`): a ring the
+    /// app is not yet subscribed for is lost, not late.
     func ringCall(callerNumber: String, hubId: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+        waitForRelayConnected(file: file, line: line)
         let call = simulateIncomingCall(callerNumber: callerNumber, hubId: hubId)
         XCTAssertFalse(
             call.callId.isEmpty, "The simulated incoming call should be created (status '\(call.status)')",
@@ -116,7 +145,7 @@ extension BaseUITest {
 
     /// Wait for a dashboard call card — the in-call card by default, or the ring's
     /// `incoming-call-card` — to leave the screen.
-    func waitForCallCardToClear(_ identifier: String = "active-call-card", timeout: TimeInterval = 20) -> Bool {
+    func waitForCallCardToClear(_ identifier: String = "active-call-card", timeout: TimeInterval = BaseUITest.slowHostTimeout) -> Bool {
         let gone = NSPredicate(format: "exists == false")
         let expectation = XCTNSPredicateExpectation(predicate: gone, object: find(identifier))
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed

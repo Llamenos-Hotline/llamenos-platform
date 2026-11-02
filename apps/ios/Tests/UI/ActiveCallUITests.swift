@@ -25,7 +25,7 @@ final class ActiveCallUITests: BaseUITest {
         answerCallAsApp(callerNumber: callerNumber, hubId: callHubId)
     }
 
-    private func tapOnceHittable(_ identifier: String, timeout: TimeInterval = 15) {
+    private func tapOnceHittable(_ identifier: String, timeout: TimeInterval = BaseUITest.slowHostTimeout) {
         let element = find(identifier)
         XCTAssertTrue(element.waitForExistence(timeout: timeout), "\(identifier) should be on the call card")
         XCTAssertTrue(element.isHittable, "\(identifier) should be tappable")
@@ -49,7 +49,7 @@ final class ActiveCallUITests: BaseUITest {
         }
         then("the active call card should be on the dashboard without the caller's number") {
             XCTAssertTrue(
-                find("active-call-card").waitForExistence(timeout: 20),
+                find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout),
                 "The dashboard should show the active call card for call \(callId)"
             )
             XCTAssertFalse(
@@ -71,7 +71,7 @@ final class ActiveCallUITests: BaseUITest {
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
             callId = answerCall(from: "+15551110002")
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I tap hang up") {
             tapOnceHittable("hangup-button")
@@ -96,7 +96,7 @@ final class ActiveCallUITests: BaseUITest {
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
             callId = answerCall(from: number)
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I open ban + hang up, give a reason and confirm") {
             tapOnceHittable("ban-hangup-button")
@@ -126,7 +126,7 @@ final class ActiveCallUITests: BaseUITest {
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
             callId = answerCall(from: number)
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I open ban + hang up and cancel") {
             tapOnceHittable("ban-hangup-button")
@@ -155,19 +155,19 @@ final class ActiveCallUITests: BaseUITest {
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
             callId = answerCall(from: "+15551110007")
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I tap Add Note, write the note and save it") {
             tapOnceHittable("quick-note-button")
             let editor = find("note-text-editor")
             XCTAssertTrue(editor.waitForExistence(timeout: 10), "Add Note should open the note editor")
             XCTAssertTrue(
-                find("note-call-choice-\(callId)").waitForExistence(timeout: 20),
+                find("note-call-choice-\(callId)").waitForExistence(timeout: Self.slowHostTimeout),
                 "The editor should offer this call"
             )
             typeText(noteText, into: editor)
             find("save-note").tap()
-            XCTAssertTrue(editor.waitForNonExistence(timeout: 20), "The editor should close once the note is saved")
+            XCTAssertTrue(editor.waitForNonExistence(timeout: Self.slowHostTimeout), "The editor should close once the note is saved")
         }
         then("the server holds a note filed under this call") {
             XCTAssertFalse(find("note-create-error").exists)
@@ -191,7 +191,7 @@ final class ActiveCallUITests: BaseUITest {
             _ = ringCall(callerNumber: "+15551110008", hubId: callHubId)
         }
         then("the dashboard shows an incoming call, not an active one, and not the caller's digits") {
-            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20), "A ring should render as a ring")
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.slowHostTimeout), "A ring should render as a ring")
             XCTAssertTrue(
                 anyElementExists(["answer-call-button", "answer-on-phone"], timeout: 5),
                 "A ring should offer Answer, or say to answer on the phone"
@@ -213,13 +213,13 @@ final class ActiveCallUITests: BaseUITest {
         given("a call is ringing on my hub and the server is not ringing me") {
             launchOnFreshHub()
             callId = ringCall(callerNumber: "+15551110009", hubId: callHubId)
-            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I tap Answer") {
             tapOnceHittable("answer-call-button")
         }
         then("I am told it did not happen, and nothing was answered") {
-            XCTAssertTrue(find("dashboard-error").waitForExistence(timeout: 20), "A refused answer should be reported")
+            XCTAssertTrue(find("dashboard-error").waitForExistence(timeout: Self.slowHostTimeout), "A refused answer should be reported")
             XCTAssertFalse(find("active-call-card").exists, "A refused answer does not make the ring my call")
             XCTAssertTrue(find("incoming-call-card").exists, "The call is still ringing")
             let held = serverActiveCalls(hubId: callHubId).first { $0.id == callId }
@@ -239,7 +239,7 @@ final class ActiveCallUITests: BaseUITest {
             launchOnFreshHub()
             XCTAssertTrue(find("dashboard-identity").waitForExistence(timeout: 15))
             callId = ringCall(callerNumber: "+15551110010", hubId: callHubId)
-            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("another volunteer answers it") {
             XCTAssertEqual(simulateAnswerCall(callId: callId, pubkey: someoneElse), "in-progress")
@@ -247,7 +247,7 @@ final class ActiveCallUITests: BaseUITest {
         then("the ring leaves my dashboard and no call card replaces it") {
             let gone = NSPredicate(format: "exists == false")
             let ringGone = XCTNSPredicateExpectation(predicate: gone, object: find("incoming-call-card"))
-            XCTAssertEqual(XCTWaiter().wait(for: [ringGone], timeout: 20), .completed, "The ring should clear")
+            XCTAssertEqual(XCTWaiter().wait(for: [ringGone], timeout: Self.slowHostTimeout), .completed, "The ring should clear")
             XCTAssertFalse(find("active-call-card").exists, "Someone else's call is not my call")
             XCTAssertFalse(find("hangup-button").exists)
             XCTAssertEqual(
@@ -267,23 +267,23 @@ final class ActiveCallUITests: BaseUITest {
         given("I am on a call") {
             launchOnFreshHub()
             callId = answerCall(from: "+15551110011")
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("the call ends") {
             XCTAssertEqual(simulateEndCall(callId: callId), "completed")
         }
         then("a Call Ended prompt replaces the call card") {
-            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 20), "The ended call should prompt for a note")
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: Self.slowHostTimeout), "The ended call should prompt for a note")
             XCTAssertTrue(waitForCallCardToClear(), "The in-call card should be gone")
         }
         when("I add a note from the prompt") {
             tapOnceHittable("ended-call-add-note")
             let editor = find("note-text-editor")
             XCTAssertTrue(editor.waitForExistence(timeout: 10))
-            XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: Self.slowHostTimeout))
             typeText(noteText, into: editor)
             find("save-note").tap()
-            XCTAssertTrue(editor.waitForNonExistence(timeout: 20))
+            XCTAssertTrue(editor.waitForNonExistence(timeout: Self.slowHostTimeout))
         }
         then("the note is filed under the call and the prompt is gone") {
             XCTAssertTrue(serverNoteCallIds(hubId: callHubId).contains(callId))
@@ -297,9 +297,9 @@ final class ActiveCallUITests: BaseUITest {
         given("my call has ended and the prompt is showing") {
             launchOnFreshHub()
             callId = answerCall(from: "+15551110012")
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
             XCTAssertEqual(simulateEndCall(callId: callId), "completed")
-            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I dismiss it") {
             tapOnceHittable("ended-call-dismiss")
@@ -318,22 +318,22 @@ final class ActiveCallUITests: BaseUITest {
         given("a call of mine has ended") {
             launchOnFreshHub()
             callId = answerCall(from: "+15551110013")
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
             XCTAssertEqual(simulateEndCall(callId: callId), "completed")
-            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("ended-call-card").waitForExistence(timeout: Self.slowHostTimeout))
             tapOnceHittable("ended-call-dismiss")
         }
         when("I open Call History and tap the call's row") {
             tapOnceHittable("dashboard-call-history-action")
             let row = find("call-history-link-\(callId)")
-            XCTAssertTrue(row.waitForExistence(timeout: 20), "The ended call should be in the history")
+            XCTAssertTrue(row.waitForExistence(timeout: Self.slowHostTimeout), "The ended call should be in the history")
             row.tap()
         }
         then("the detail offers Add Note, which opens the editor on that call") {
             XCTAssertTrue(find("call-detail-view").waitForExistence(timeout: 10))
             tapOnceHittable("call-detail-add-note")
             XCTAssertTrue(find("note-text-editor").waitForExistence(timeout: 10))
-            XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("note-call-choice-\(callId)").waitForExistence(timeout: Self.slowHostTimeout))
         }
     }
 
@@ -350,7 +350,7 @@ final class ActiveCallUITests: BaseUITest {
         given("I am authenticated as admin with API and I am on a call") {
             launchOnFreshHub()
             callId = answerCall(from: "+15551110005")
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: 20))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
         }
         when("I tap report spam") {
             tapOnceHittable("report-spam-button")

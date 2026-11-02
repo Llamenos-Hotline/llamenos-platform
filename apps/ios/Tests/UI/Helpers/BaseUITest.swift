@@ -307,7 +307,10 @@ class BaseUITest: XCTestCase {
         request.httpMethod = "POST"
         request.setValue(testSecret, forHTTPHeaderField: "X-Test-Secret")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
+        // The slow-host ceiling, not a guess: a loaded hosted runner has taken 7-9s to answer
+        // a GET and 30-49s for a first request. The semaphore outlasts the request's own
+        // deadline so URLSession reports the timeout, with its cause, instead of this wait.
+        request.timeoutInterval = Self.slowHostTimeout
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -320,11 +323,14 @@ class BaseUITest: XCTestCase {
         var resultSecond = ""
         let semaphore = DispatchSemaphore(value: 0)
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             defer { semaphore.signal() }
 
+            // A transport failure leaves the server's state unknown (the call may or may not
+            // exist), so it fails the test with its cause rather than handing back an empty
+            // id that surfaces three assertions later as "'' is not equal to 'in-progress'".
             if let error {
-                print("Warning: Simulation request '\(endpoint)' failed: \(error.localizedDescription)")
+                XCTFail("Simulation request '\(endpoint)' failed: \(error.localizedDescription)")
                 return
             }
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -339,11 +345,11 @@ class BaseUITest: XCTestCase {
 
             resultFirst = json[extractKeys.0] as? String ?? ""
             resultSecond = json[extractKeys.1] as? String ?? ""
-        }.resume()
+        }
+        task.resume()
 
-        let timeout = semaphore.wait(timeout: .now() + 20)
-        if timeout == .timedOut {
-            print("Warning: Simulation request '\(endpoint)' timed out")
+        if semaphore.wait(timeout: .now() + Self.slowHostTimeout + 5) == .timedOut {
+            XCTFail("Simulation request '\(endpoint)' got no answer within \(Self.slowHostTimeout)s")
         }
         return (resultFirst, resultSecond)
     }
