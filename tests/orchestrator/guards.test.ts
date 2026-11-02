@@ -4444,7 +4444,7 @@ describe('rail: an iOS ui shard is retried only when it executed zero tests (#24
       mkdirSync(bin)
       mkdirSync(join(root, 'llamenos-build', 'Build', 'Products'), { recursive: true })
       writeFileSync(join(root, 'llamenos-build', 'Build', 'Products', 'x.xctestrun'), '')
-      writeFileSync(join(root, 'shard-args.txt'), '-only-testing:LlamenosUITests/SomeUITests\n')
+      writeFileSync(join(root, 'shard-args.txt'), '-only-testing:LlamenosUITests/SomeUITests -only-testing:LlamenosUITests/OtherUITests\n')
       writeFileSync(join(root, 'outcomes'), outcomes.join('\n') + '\n')
       const tool = (name: string, body: string) => {
         writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`)
@@ -4455,6 +4455,7 @@ describe('rail: an iOS ui shard is retried only when it executed zero tests (#24
       tool('xcodebuild', `
 n=$(( $(cat "${root}/calls" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "${root}/calls"
+printf '%s\\n' "$@" > "${root}/argv-$n"
 outcome=$(sed -n "\${n}p" "${root}/outcomes")
 while [ $# -gt 0 ]; do [ "$1" = "-resultBundlePath" ] && bundle="$2"; shift; done
 mkdir "$bundle" || { echo "result bundle already exists"; exit 70; }
@@ -4478,6 +4479,8 @@ exit 99`)
         status: r.status, out: `${r.stdout}${r.stderr}`,
         calls: Number(read('calls').trim() || 0), sleeps: read('sleeps').trim().split('\n').filter(Boolean),
         log: read('xcodebuild-test.log'), discarded: read('xcodebuild-zero-test-attempts.log'),
+        argv: read('argv-1').split('\n').slice(0, -1),
+        root,
       }
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -4490,6 +4493,30 @@ exit 99`)
     expect(r.status).toBe(65)
     expect(r.sleeps).toEqual([])
     expect(r.out).not.toContain('NOT THIS PR')
+  })
+
+  it('a shard that executes tests behaves exactly as before the retry: same argv, same output, same exit code', () => {
+    const r = runStep(['fail'])
+    // The invocation that existed before #2403 — word-splitting of shard-args.txt included.
+    expect(r.argv).toEqual([
+      'test-without-building',
+      '-xctestrun', `${r.root}/llamenos-build/Build/Products/x.xctestrun`,
+      '-destination', 'platform=iOS Simulator,id=FAKE-UDID',
+      '-parallel-testing-enabled', 'NO',
+      '-test-timeouts-enabled', 'YES',
+      '-maximum-test-execution-time-allowance', '300',
+      '-resultBundlePath', `${r.root}/ios-e2e-shard-1.xcresult`,
+      '-only-testing:LlamenosUITests/SomeUITests',
+      '-only-testing:LlamenosUITests/OtherUITests',
+    ])
+    const expected =
+      "Test Case '-[LlamenosUITests.SomeUITests testA]' started.\n" +
+      "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds).\n"
+    // The hub poll earlier in the same script prints one line; after it, only xcodebuild's own output.
+    expect(r.out.replace(/^hub reachable at .*\n/, ''), 'the step prints xcodebuild output and nothing else').toBe(expected)
+    expect(r.log, 'the log `report` parses is xcodebuild output verbatim').toBe(expected)
+    expect(r.discarded).toBe('')
+    expect(r.status).toBe(65)
   })
 
   it('does not retry a shard that passed', () => {
