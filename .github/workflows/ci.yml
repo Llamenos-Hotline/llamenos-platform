@@ -570,7 +570,7 @@ jobs:
 
       # After the toolchain step: rust-cache keys on the installed rustc.
       - name: Cache cargo registry and target/
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
@@ -909,7 +909,7 @@ jobs:
       # targeting the same paths raced this one's save/restore lifecycle and
       # produced a cache that matched neither key (#901).
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             packages/crypto
@@ -1389,7 +1389,7 @@ jobs:
 
       # After the toolchain step: rust-cache keys on the installed rustc.
       - name: Cache cargo registry and target/
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
@@ -1543,7 +1543,7 @@ jobs:
 
       # After the toolchain step: rust-cache keys on the installed rustc.
       - name: Cache cargo registry and target/
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
@@ -1822,7 +1822,7 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo registry and target/
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: apps/desktop
 
@@ -2326,7 +2326,7 @@ jobs:
 
       - name: Rust cache
         if: steps.crypto-cache.outputs.cache-hit != 'true'
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
@@ -2696,7 +2696,7 @@ jobs:
 
       - name: Rust cache
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
@@ -2864,7 +2864,7 @@ jobs:
 
       - name: Rust cache
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
