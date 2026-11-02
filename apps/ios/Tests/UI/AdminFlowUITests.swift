@@ -18,7 +18,7 @@ final class AdminFlowUITests: BaseUITest {
     func testSettingsHasAdminSection() {
         navigateToSettings()
 
-        let adminLink = scrollToFind("settings-admin-link", maxSwipes: 5, timeout: 10)
+        let adminLink = scrollToFind("settings-admin-link", maxSwipes: 5)
         XCTAssertTrue(adminLink.exists, "Admin panel link should exist in settings for admin users")
     }
 
@@ -52,7 +52,7 @@ final class AdminFlowUITests: BaseUITest {
     /// Open one screen of the admin panel, failing the test if its link is missing.
     private func openAdminScreen(_ linkIdentifier: String) {
         navigateToAdminPanel()
-        let link = scrollToFind(linkIdentifier, maxSwipes: 3, timeout: 5)
+        let link = scrollToFind(linkIdentifier, maxSwipes: 3)
         XCTAssertTrue(link.exists, "Admin panel should offer '\(linkIdentifier)'")
         link.tap()
     }

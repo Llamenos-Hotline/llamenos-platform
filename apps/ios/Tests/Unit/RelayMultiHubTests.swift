@@ -209,10 +209,12 @@ final class RelayMultiHubTests: XCTestCase {
         )
         XCTAssertEqual(vm.callHubIds, ["hub-A", "hub-B"], "Calls are polled on every member hub, active hub first")
 
+        let listenersBefore = ws.attributedListenerCountForTesting
         vm.startEventListener()
         defer { vm.stopEventListener() }
-        // Let the listener register its stream continuation before emitting.
-        try await waitUntil { true }
+        // The listener registers its stream continuation asynchronously; an event emitted
+        // before that is delivered to no one.
+        try await waitUntil { ws.attributedListenerCountForTesting > listenersBefore }
         ws.emitAttributedEvent(hubId: "hub-B", eventType: .callRing)
 
         try await waitUntil { !vm.ringingCalls.isEmpty }
@@ -256,11 +258,7 @@ final class RelayMultiHubTests: XCTestCase {
     }
 
     private func waitUntil(timeout: TimeInterval = 5, _ condition: @MainActor () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            try await Task.sleep(for: .milliseconds(50))
-            if condition() { return }
-        } while Date() < deadline
-        XCTFail("Condition not met within \(timeout)s")
+        let held = await waitForCondition(timeout: timeout, condition)
+        XCTAssertTrue(held, "Condition not met within \(timeout)s")
     }
 }

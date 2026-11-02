@@ -44,7 +44,7 @@ final class APIConnectedUITests: BaseUITest {
             )
 
             navigateToSettings()
-            let adminLink = scrollToFind("settings-admin-link", maxSwipes: 3, timeout: 10)
+            let adminLink = scrollToFind("settings-admin-link", maxSwipes: 3)
             XCTAssertTrue(
                 adminLink.exists,
                 "Admin panel link should be visible for admin users"

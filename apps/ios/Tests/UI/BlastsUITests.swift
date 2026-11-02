@@ -64,7 +64,7 @@ final class BlastsUITests: BaseUITest {
                 find("dashboard-reports-action").waitForExistence(timeout: 10) || scrollToFind("dashboard-reports-action").exists,
                 "The quick actions section should have rendered"
             )
-            let blastsAction = scrollToFind("dashboard-blasts-action", maxSwipes: 3, timeout: 1)
+            let blastsAction = scrollToFind("dashboard-blasts-action", maxSwipes: 3)
             XCTAssertFalse(
                 blastsAction.exists,
                 "Dashboard should not have blasts quick action for volunteer"

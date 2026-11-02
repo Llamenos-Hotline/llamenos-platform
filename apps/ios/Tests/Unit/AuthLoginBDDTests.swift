@@ -364,7 +364,7 @@ final class AuthLoginBDDTests: XCTestCase {
         XCTAssertTrue(viewModel.isLockedOut, "Five failures should lock the user out")
 
         // "And the lockout has expired" — wind the persisted expiry into the past
-        // rather than sleeping through a real 30-second window.
+        // rather than waiting out a real 30-second window.
         keychain.setLockoutUntil(Date().addingTimeInterval(-1))
 
         var unlocked = false

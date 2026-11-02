@@ -48,7 +48,7 @@ final class ShiftAdminUITests: BaseUITest {
     /// Wait until a server-state predicate holds, failing after `timeout`.
     /// UI mutations complete asynchronously, so a single immediate read races
     /// the write. XCTWaiter re-evaluates the predicate while it spins the run
-    /// loop, so the wait ends on the condition rather than on a fixed sleep.
+    /// loop, so the wait ends on the condition rather than on a fixed delay.
     private func waitForServerState(
         timeout: TimeInterval = 15,
         file: StaticString = #filePath,
@@ -109,7 +109,7 @@ final class ShiftAdminUITests: BaseUITest {
             // instantiates rows near the viewport — it does not exist until it
             // is scrolled to.
             XCTAssertTrue(
-                scrollToFind("availability-section", maxSwipes: 8, timeout: 10).exists,
+                scrollToFind("availability-section", maxSwipes: 8).exists,
                 "Volunteers keep the availability self-service section (shifts:set-availability)"
             )
         }
@@ -233,7 +233,7 @@ final class ShiftAdminUITests: BaseUITest {
             navigateToShifts()
             find("shifts-admin-link").tap()
             find("shift-admin-fallback-link").tap()
-            let row = scrollToFind("fallback-user-row-\(appPubkey)", maxSwipes: 8, timeout: 5)
+            let row = scrollToFind("fallback-user-row-\(appPubkey)", maxSwipes: 8)
             XCTAssertTrue(row.exists, "Own user row should exist in the fallback picker")
             row.tap()
         }
@@ -325,7 +325,7 @@ final class ShiftAdminUITests: BaseUITest {
         }
         when("I request to join the shift and approve the request as admin") {
             navigateToShifts()
-            let signUp = scrollToFind("signup-shift-\(shiftId)", maxSwipes: 8, timeout: 10)
+            let signUp = scrollToFind("signup-shift-\(shiftId)", maxSwipes: 8)
             XCTAssertTrue(signUp.exists, "Sign Up button should exist for the shift")
             signUp.tap()
 
@@ -367,7 +367,7 @@ final class ShiftAdminUITests: BaseUITest {
             navigateToShifts()
         }
         when("I mark myself unavailable for today") {
-            let addButton = scrollToFind("availability-add-button", maxSwipes: 8, timeout: 10)
+            let addButton = scrollToFind("availability-add-button", maxSwipes: 8)
             XCTAssertTrue(addButton.exists, "Add Availability Block button should exist")
             addButton.tap()
             // Defaults: today through today, no reason.

@@ -235,6 +235,25 @@ final class AdminSettingsUITests: BaseUITest {
         return AdminCallSettings(queueTimeout: queueTimeout, voicemailMax: voicemailMax)
     }
 
+    /// Read server state until `done` accepts it, returning the last value read.
+    ///
+    /// The server is the one thing here that signals nothing, so the wait is on the condition
+    /// read back, paced by the request itself rather than by a pause between requests. A read
+    /// that throws ends the wait and propagates.
+    private func pollServer<Value>(
+        timeout: TimeInterval, until done: @escaping (Value) -> Bool, read: @escaping () throws -> Value
+    ) throws -> Value {
+        var seen = try read()
+        var failure: Error?
+        _ = awaitCondition(timeout: timeout) {
+            if done(seen) { return true }
+            do { seen = try read() } catch { failure = error; return true }
+            return done(seen)
+        }
+        if let failure { throw failure }
+        return seen
+    }
+
     /// Poll `GET /api/settings/call` until the queue timeout reaches `expected`,
     /// returning whatever it holds when the wait runs out. The Save button
     /// fires its request without awaiting it, so a single read right after the
@@ -243,13 +262,9 @@ final class AdminSettingsUITests: BaseUITest {
         _ expected: Int, timeout: TimeInterval = 15,
         file: StaticString = #filePath, line: UInt = #line
     ) throws -> Int {
-        let deadline = Date().addingTimeInterval(timeout)
-        var seen = try callSettingsFromServer(file: file, line: line).queueTimeout
-        while seen != expected, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.5)
-            seen = try callSettingsFromServer(file: file, line: line).queueTimeout
+        try pollServer(timeout: timeout, until: { $0 == expected }) {
+            try callSettingsFromServer(file: file, line: line).queueTimeout
         }
-        return seen
     }
 
     /// The seconds the screen is showing for one slider, read off its value
@@ -257,7 +272,7 @@ final class AdminSettingsUITests: BaseUITest {
     private func displayedSeconds(
         _ identifier: String, file: StaticString = #filePath, line: UInt = #line
     ) throws -> Int {
-        let label = scrollToFind(identifier, timeout: 10)
+        let label = scrollToFind(identifier)
         guard label.exists, let seconds = Int(label.label.filter(\.isNumber)) else {
             let shown = label.exists ? label.label : "<absent>"
             XCTFail("\(identifier) should show a number of seconds, showed \(shown)", file: file, line: line)
@@ -509,13 +524,9 @@ final class AdminSettingsUITests: BaseUITest {
         timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line
     ) throws -> String? {
         let wanted = Self.describe(expected)
-        let deadline = Date().addingTimeInterval(timeout)
-        var seen = Self.describe(try settingsJSON(path, file: file, line: line)[key])
-        while seen != wanted, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.5)
-            seen = Self.describe(try settingsJSON(path, file: file, line: line)[key])
+        return try pollServer(timeout: timeout, until: { $0 == wanted }) {
+            Self.describe(try settingsJSON(path, file: file, line: line)[key])
         }
-        return seen
     }
 
     /// A stable string for a JSON scalar, bridging `NSNumber` booleans and
@@ -547,13 +558,9 @@ final class AdminSettingsUITests: BaseUITest {
         _ expected: [String], timeout: TimeInterval = 15,
         file: StaticString = #filePath, line: UInt = #line
     ) throws -> [String] {
-        let deadline = Date().addingTimeInterval(timeout)
-        var seen = try storedIvrLanguages(file: file, line: line)
-        while seen != expected, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.5)
-            seen = try storedIvrLanguages(file: file, line: line)
+        try pollServer(timeout: timeout, until: { $0 == expected }) {
+            try storedIvrLanguages(file: file, line: line)
         }
-        return seen
     }
 
     // MARK: - Screen Helpers
@@ -671,11 +678,7 @@ final class AdminSettingsUITests: BaseUITest {
         // whatever is actually there. On the IVR screen that read back as "the
         // switch did not change", indistinguishable from the product defect
         // these tests exist to catch.
-        if direct.waitForExistence(timeout: 2), direct.isHittable { return direct }
-        for _ in 0..<14 {
-            app.swipeUp()
-            if direct.waitForExistence(timeout: 1), direct.isHittable { return direct }
-        }
+        if scroll(to: direct, maxSwipes: 14, hittable: true) { return direct }
         XCTFail("\(identifier) should be a switch on screen and hittable", file: file, line: line)
         return nil
     }
@@ -702,36 +705,7 @@ final class AdminSettingsUITests: BaseUITest {
         file: StaticString = #filePath, line: UInt = #line
     ) {
         guard let toggle = settingSwitch(identifier, file: file, line: line) else { return }
-        let isOn = { (toggle.value as? String) == "1" }
-        // Two taps, in two different places, because the first one does not
-        // work on these rows and the reason is not obvious.
-        //
-        // `.accessibilityIdentifier` on a SwiftUI `Toggle` whose label is a
-        // `VStack` lands on the merged row element, which XCUITest reports as a
-        // `.switch` and whose `value` is the switch's — so reading it works.
-        // But its frame is the whole row, so `tap()` hits the centre, which is
-        // over the label; tapping a `Form` Toggle's label does not toggle it.
-        // Measured: `transcription-enabled-toggle` and `ivr-language-de` both
-        // read back unchanged after `tap()`, on screens that switch correctly
-        // by hand. The trailing-edge coordinate is where the control actually
-        // is.
-        let taps: [() -> Void] = [
-            { toggle.tap() },
-            { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() },
-        ]
-        for tap in taps {
-            if isOn() == wanted { return }
-            tap()
-            let deadline = Date().addingTimeInterval(3)
-            while isOn() != wanted, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.2)
-            }
-        }
-        XCTAssertEqual(
-            isOn(), wanted,
-            "\(identifier) should be \(wanted ? "on" : "off") after being tapped",
-            file: file, line: line
-        )
+        setToggle(toggle, to: wanted, timeout: Self.eventBackstop, file: file, line: line)
     }
 
     private func toggleOn(_ identifier: String) { setSwitch(identifier, to: true) }
