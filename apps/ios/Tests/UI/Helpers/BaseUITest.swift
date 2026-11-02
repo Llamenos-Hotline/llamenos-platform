@@ -100,8 +100,9 @@ class BaseUITest: XCTestCase {
             return ""
         }
         // Setup, not an assertion: the first request on a freshly booted CI runner has
-        // taken 30-49s, and a class without a hub fails every connected test in it.
-        request.timeoutInterval = 60
+        // taken 30-49s, and a class without a hub fails every connected test in it. The
+        // request returns when the server answers; this only bounds one that never does.
+        request.timeoutInterval = Self.eventBackstop
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": hubName])
 
         var hubId = ""
@@ -126,7 +127,7 @@ class BaseUITest: XCTestCase {
                 hubId = id
             }
         }.resume()
-        _ = semaphore.wait(timeout: .now() + 65)
+        _ = semaphore.wait(timeout: .now() + Self.eventBackstop + 5)
         if hubId.isEmpty {
             print("Warning: createClassHub(\(className)) returned empty hub ID — is the backend running?")
         }
@@ -292,10 +293,10 @@ class BaseUITest: XCTestCase {
         request.httpMethod = "POST"
         request.setValue(testSecret, forHTTPHeaderField: "X-Test-Secret")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // The slow-host ceiling, not a guess: a loaded hosted runner has taken 7-9s to answer
-        // a GET and 30-49s for a first request. The semaphore outlasts the request's own
-        // deadline so URLSession reports the timeout, with its cause, instead of this wait.
-        request.timeoutInterval = Self.slowHostTimeout
+        // The request completes when the server answers; this bounds one that never does. The
+        // semaphore outlasts the request's own deadline so URLSession reports the timeout,
+        // with its cause, instead of this wait.
+        request.timeoutInterval = Self.eventBackstop
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -333,8 +334,8 @@ class BaseUITest: XCTestCase {
         }
         task.resume()
 
-        if semaphore.wait(timeout: .now() + Self.slowHostTimeout + 5) == .timedOut {
-            XCTFail("Simulation request '\(endpoint)' got no answer within \(Self.slowHostTimeout)s")
+        if semaphore.wait(timeout: .now() + Self.eventBackstop + 5) == .timedOut {
+            XCTFail("Simulation request '\(endpoint)' got no answer within \(Self.eventBackstop)s")
         }
         return (resultFirst, resultSecond)
     }
@@ -533,16 +534,17 @@ class BaseUITest: XCTestCase {
         return element
     }
 
-    /// Check if any of the given elements exist (returns true if at least one is found).
+    /// Wait until any one of the given elements exists, and say whether one did.
+    ///
+    /// One query over all the identifiers, so the wait ends the moment the first of them
+    /// renders. It used to wait out the whole `timeout` on the first identifier before it
+    /// looked at the second, which made a screen that rendered its second identifier
+    /// (an empty state, say) cost the full timeout and then pass.
     func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier IN %@", identifiers))
+            .firstMatch
+            .waitForExistence(timeout: timeout)
     }
 
     /// Scroll down in the current view to find an element that may be off-screen.

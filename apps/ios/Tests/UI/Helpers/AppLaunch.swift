@@ -34,7 +34,7 @@ extension XCUIApplication {
         launch()
         let screen = identifier.map { descendants(matching: .any)[$0].firstMatch } ?? firstScreen
         XCTAssertTrue(
-            screen.waitForExistence(timeout: 60),
+            screen.waitForExistence(timeout: BaseUITest.eventBackstop),
             identifier.map { "The app should reach '\($0)' after launch" } ?? "The app should render its first screen after launch",
             file: file, line: line
         )

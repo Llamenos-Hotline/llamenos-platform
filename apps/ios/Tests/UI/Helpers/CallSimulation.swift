@@ -48,7 +48,7 @@ extension BaseUITest {
     func appIdentityPubkey(file: StaticString = #filePath, line: UInt = #line) -> String {
         let identity = find("dashboard-identity")
         XCTAssertTrue(
-            identity.waitForExistence(timeout: Self.slowHostTimeout), "The dashboard should expose the signed-in identity",
+            identity.waitForExistence(timeout: Self.eventBackstop), "The dashboard should expose the signed-in identity",
             file: file, line: line
         )
         let pubkey = identity.label
@@ -59,13 +59,18 @@ extension BaseUITest {
         return pubkey
     }
 
-    /// How long a call surface may take to follow the server on the slowest host we run on.
-    /// A hosted macOS runner shares its cores between the simulator, the backend and the
-    /// build: there the backend took 7-9s to answer GETs the app made while launching, and a
-    /// first request has taken 30-49s (see `createClassHub`). 60s is that observed ceiling
-    /// plus headroom — a ceiling on a condition that is normally met in well under a second,
-    /// not a delay the tests wait out.
-    static let slowHostTimeout: TimeInterval = 60
+    /// The backstop on every wait whose condition is observable: an element appearing or
+    /// clearing, the relay connecting, a request answering. Each of those waits returns the
+    /// instant its condition holds, so this number is never spent on a healthy run and is
+    /// not a delay anything waits out — it only bounds how long a genuine fault (a screen
+    /// that never arrives, a server that never answers) takes to be reported.
+    ///
+    /// It is sized to the slowest thing those conditions have been seen to wait on, which is
+    /// the first response of a backend sharing a hosted runner's cores with the simulator: 7-9s
+    /// for a GET during launch, 30-49s for a first request (see `createClassHub`). Never
+    /// reach for it to make a test that fails because the app did not do something pass:
+    /// find the event the app emits for that thing and wait on it.
+    static let eventBackstop: TimeInterval = 60
 
     /// The app's own copy for `key`, from the generated English strings bundled into this test
     /// target (`project.yml`). The app is launched pinned to English (`BaseUITest.setUp`), so this
@@ -91,14 +96,20 @@ extension BaseUITest {
     ///
     /// The dashboard learns of a ring ONLY from the relay: it reads `calls/active` once on
     /// load, and again on a relay event. A ring the server publishes before this app has
-    /// authenticated and subscribed is never delivered and nothing re-reads the list, so the
-    /// card never appears. Fast hosts connect in well under a second, so every test passed
-    /// by winning that race; a loaded host (run 41383568666, hosted shard 1: the app's first
+    /// authenticated is never delivered and nothing re-reads the list, so the card never
+    /// appears (#2424). Fast hosts connect in well under a second, so every test passed by
+    /// winning that race; a loaded host (run 41383568666, hosted shard 1: the app's first
     /// requests took 9s, the ring was posted at +10s and never arrived) loses it.
+    ///
+    /// This is the closest signal the UI gives, not a complete one: the label turns to
+    /// "connected" on the server's `authenticated` reply, and the app's hub subscriptions are
+    /// sent after that. The server's `subscribed` acknowledgement is not surfaced anywhere on
+    /// screen, so there is no event to wait on for "a ring posted now will reach me"; that
+    /// residual window closes only when the app resyncs on (re)authentication (#2424).
     func waitForRelayConnected(file: StaticString = #filePath, line: UInt = #line) {
         let connected = app.staticTexts.matching(NSPredicate(format: "label == %@", appString("ws_connected", file: file, line: line)))
         XCTAssertTrue(
-            connected.firstMatch.waitForExistence(timeout: Self.slowHostTimeout),
+            connected.firstMatch.waitForExistence(timeout: Self.eventBackstop),
             "The app should be connected to the relay before a call rings, or it never hears of the ring",
             file: file, line: line
         )
@@ -164,9 +175,7 @@ extension BaseUITest {
 
     /// Wait for a dashboard call card — the in-call card by default, or the ring's
     /// `incoming-call-card` — to leave the screen.
-    func waitForCallCardToClear(_ identifier: String = "active-call-card", timeout: TimeInterval = BaseUITest.slowHostTimeout) -> Bool {
-        let gone = NSPredicate(format: "exists == false")
-        let expectation = XCTNSPredicateExpectation(predicate: gone, object: find(identifier))
-        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    func waitForCallCardToClear(_ identifier: String = "active-call-card", timeout: TimeInterval = BaseUITest.eventBackstop) -> Bool {
+        find(identifier).waitForNonExistence(timeout: timeout)
     }
 }
