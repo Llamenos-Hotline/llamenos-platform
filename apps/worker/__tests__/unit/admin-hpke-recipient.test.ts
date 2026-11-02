@@ -24,7 +24,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { validateConfig as validateConfigWithFiles } from '@worker/lib/config'
 import { secretFiles } from '../helpers/secret-files'
 import {
-  adminHpkeRecipient,
+  transitionalInstanceRecipient,
   hpkeRecipientPubkey,
   ed25519AuthPubkey,
 } from '@worker/lib/hpke-recipient'
@@ -115,9 +115,9 @@ describe('validateConfig: the admin HPKE recipient', () => {
   })
 })
 
-describe('adminHpkeRecipient', () => {
+describe('transitionalInstanceRecipient', () => {
   it('returns the X25519 key when it is configured', () => {
-    expect(adminHpkeRecipient({
+    expect(transitionalInstanceRecipient({
       ADMIN_PUBKEY: ADMIN.identityPubkey,
       ADMIN_DECRYPTION_PUBKEY: ADMIN.decryptionPubkey,
     })).toBe(ADMIN.decryptionPubkey)
@@ -129,11 +129,11 @@ describe('adminHpkeRecipient', () => {
    * defect was treating it as one.
    */
   it('returns undefined rather than ADMIN_PUBKEY when the X25519 key is absent', () => {
-    expect(adminHpkeRecipient({ ADMIN_PUBKEY: ADMIN.identityPubkey })).toBeUndefined()
+    expect(transitionalInstanceRecipient({ ADMIN_PUBKEY: ADMIN.identityPubkey })).toBeUndefined()
   })
 
   it('rejects a malformed X25519 key instead of passing it through', () => {
-    expect(adminHpkeRecipient({ ADMIN_DECRYPTION_PUBKEY: 'decrypt-pk' })).toBeUndefined()
+    expect(transitionalInstanceRecipient({ ADMIN_DECRYPTION_PUBKEY: 'decrypt-pk' })).toBeUndefined()
   })
 
   /**

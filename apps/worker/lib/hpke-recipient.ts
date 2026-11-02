@@ -30,7 +30,8 @@ declare const ed25519AuthBrand: unique symbol
  * A 64-hex X25519 public key, valid as an HPKE (DHKEM-X25519) recipient.
  *
  * Required by every parameter that ends up at `hpkeSeal`. Obtain one only from
- * `hpkeRecipientPubkey()` or `adminHpkeRecipient()`.
+ * `hpkeRecipientPubkey()`, `transitionalInstanceRecipient()`, or a hub reader
+ * set (`lib/readers.ts`).
  */
 export type HpkeRecipientPubkey = string & { readonly [hpkeRecipientBrand]: 'x25519' }
 
@@ -77,17 +78,28 @@ export interface AdminKeyEnv {
 }
 
 /**
- * The platform admin's HPKE recipient key, or `undefined` when the deployment
- * has not configured one.
+ * The instance-wide `ADMIN_DECRYPTION_PUBKEY` as an HPKE recipient, or
+ * `undefined` when the deployment has not configured one.
  *
- * There is no fallback to `ADMIN_PUBKEY`. `validateConfig()` refuses to start a
- * server whose `ADMIN_PUBKEY` is set without a valid, distinct
- * `ADMIN_DECRYPTION_PUBKEY`, so on a running server this returns `undefined`
- * only when there is no env-configured platform admin at all — the
- * bootstrap-via-desktop path, where no admin recipient key exists yet. Callers
- * then seal to the readers they do have and omit the admin envelope; they must
- * never invent one.
+ * TRANSITIONAL, and NOT a reader. Operator decision D1 (2026-10-24): "the
+ * global `ADMIN_DECRYPTION_PUBKEY` ... [is] removed. A platform-wide decryption
+ * key contradicts zero knowledge." A hub's readers are its admins' devices plus
+ * its own optional escrow key — the hub reader set, `readersFor` in
+ * `lib/readers.ts` (PROTOCOL §2.4.2) — and this key is in no hub's set.
+ *
+ * It survives only because every shipped client still seals admin envelopes
+ * to it and to nothing else (`/auth/me` publishes it as `adminDecryptionPubkey`),
+ * so the write guard must still accept it, and the server-sealed paths still
+ * add it so that a super-admin-bootstrapped deployment keeps a reader until its
+ * hubs' admins register devices. The name says so at every call site. It is
+ * deleted, with every caller, once the clients seal to
+ * `GET /api/hubs/:hubId/readers` — never extend it to a new caller.
+ *
+ * There is no fallback to `ADMIN_PUBKEY` (#1283). `validateConfig()` refuses to
+ * start a server whose `ADMIN_PUBKEY` is set without a valid, distinct
+ * `ADMIN_DECRYPTION_PUBKEY`; callers handle `undefined` by sealing to the
+ * readers they do have, never by inventing one.
  */
-export function adminHpkeRecipient(env: AdminKeyEnv): HpkeRecipientPubkey | undefined {
+export function transitionalInstanceRecipient(env: AdminKeyEnv): HpkeRecipientPubkey | undefined {
   return hpkeRecipientPubkey(env.ADMIN_DECRYPTION_PUBKEY)
 }

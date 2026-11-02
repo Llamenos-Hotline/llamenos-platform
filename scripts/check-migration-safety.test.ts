@@ -20,7 +20,7 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { loadModule } from '@libpg-query/parser'
 import {
   type DrizzleSnapshot,
@@ -38,7 +38,7 @@ import {
   builtSchema,
   parseBackupEntry,
 } from './check-migration-safety'
-import { MigrationGraph } from './lib/migration-graph'
+import { MigrationGraph, prefixOf, TIMESTAMP_PREFIX } from './lib/migration-graph'
 import { listMigrationFiles } from './lib/migration-statements'
 
 const ROOT = join(import.meta.dir, '..')
@@ -482,10 +482,19 @@ function git(cwd: string, ...args: string[]): string {
   return r.stdout.toString().trim()
 }
 
-/** A scratch git repo holding a copy of this repo's drizzle tree, committed: the base. */
+/**
+ * A scratch git repo holding a copy of this repo's drizzle tree up to the
+ * cutover (the numbered line), committed: the base. The scenarios below add
+ * numbered files after it and timestamped ones named as if generated at the
+ * cutover; a timestamped migration main has landed since would be one more
+ * head they do not model, and would sort after them.
+ */
 function scratchRepo(): { root: string; base: string } {
   const root = mkdtempSync(join(tmpdir(), 'migration-safety-'))
-  cpSync(join(ROOT, 'drizzle'), join(root, 'drizzle'), { recursive: true })
+  cpSync(join(ROOT, 'drizzle'), join(root, 'drizzle'), {
+    recursive: true,
+    filter: (src) => !TIMESTAMP_PREFIX.test(prefixOf(basename(src)) ?? ''),
+  })
   git(root, 'init', '-q')
   git(root, 'add', '-A')
   git(root, 'commit', '-q', '-m', 'base')

@@ -20,11 +20,12 @@
  */
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
+import { MigrationGraph } from '../../../../scripts/lib/migration-graph'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 
@@ -132,6 +133,10 @@ function scratchRoot(): string {
 function addMigration(root: string, file: string, sql: string): void {
   writeFileSync(path.join(root, 'drizzle', 'migrations', file), sql)
 }
+
+/** Timestamped prefixes that sort after every real migration, as db:generate's would. */
+const FORGET = '99991231235958'
+const CONTRACT = '99991231235959'
 
 const DROP_TEAM_ID = 'ALTER TABLE "users" DROP COLUMN "team_id";'
 const ALLOW_TEAM_ID =
@@ -243,17 +248,26 @@ describe('migration safety gate --target', () => {
     const root = scratchRoot()
     const migrations = path.join(root, 'drizzle', 'migrations')
     const meta = path.join(migrations, 'meta')
-    const latest = readdirSync(meta).filter((f) => f.endsWith('_snapshot.json')).sort().at(-1) as string
-    const snapshot = JSON.parse(readFileSync(path.join(meta, latest), 'utf-8'))
-    // Its own id, as drizzle-kit gives every snapshot: a copy repeating the
-    // parent's id is a structural error the gate reports (#2391).
-    snapshot.id = randomUUID()
-    delete snapshot.tables['public.users'].columns.team_id
+    // Release N's snapshot, as `bun run db:generate` writes it on this tree:
+    // the schema the tree's snapshot heads build (one head, or the merge of
+    // several once concurrent migrations have landed), its own id, and every
+    // head as a parent. Copying "the last snapshot by filename" instead would
+    // model the wrong tree as soon as main has a timestamped migration or two
+    // heads (#2391).
+    const { heads, schema } = MigrationGraph.load(meta).state()
+    const body = structuredClone(schema) as { tables: Record<string, { columns: Record<string, unknown> }> }
+    delete body.tables['public.users'].columns.team_id
+    const snapshot = { id: randomUUID(), prevId: heads[0].id, prevIds: heads.map((h) => h.id), ...body }
     // Release N forgets users.team_id; release N+1 contracts it. CI judged
     // N+1 against a base that already held N, so its annotation passed there.
-    writeFileSync(path.join(meta, '9990_snapshot.json'), JSON.stringify(snapshot))
-    addMigration(root, '9990_forget_team_id.sql', '-- users.team_id is no longer declared.\n')
-    addMigration(root, '9991_drop_team_id.sql', ALLOW_TEAM_ID + DROP_TEAM_ID)
+    writeFileSync(path.join(meta, `${FORGET}_snapshot.json`), JSON.stringify(snapshot))
+    addMigration(root, `${FORGET}_forget_team_id.sql`, '-- users.team_id is no longer declared.\n')
+    // N+1 declares what N declared: its snapshot is N's, under its own id.
+    writeFileSync(
+      path.join(meta, `${CONTRACT}_snapshot.json`),
+      JSON.stringify({ ...snapshot, id: randomUUID(), prevId: snapshot.id, prevIds: [snapshot.id] }),
+    )
+    addMigration(root, `${CONTRACT}_drop_team_id.sql`, ALLOW_TEAM_ID + DROP_TEAM_ID)
 
     // This database never ran N, so the release it runs still reads team_id.
     const skipped = gate(db, { root })
@@ -262,11 +276,14 @@ describe('migration safety gate --target', () => {
 
     // Deploy N alone, as its own release, and the contract is accepted.
     const nOnly = scratchRoot()
-    cpSync(path.join(meta, '9990_snapshot.json'), path.join(nOnly, 'drizzle', 'migrations', 'meta', '9990_snapshot.json'))
-    addMigration(nOnly, '9990_forget_team_id.sql', '-- users.team_id is no longer declared.\n')
+    cpSync(
+      path.join(meta, `${FORGET}_snapshot.json`),
+      path.join(nOnly, 'drizzle', 'migrations', 'meta', `${FORGET}_snapshot.json`),
+    )
+    addMigration(nOnly, `${FORGET}_forget_team_id.sql`, '-- users.team_id is no longer declared.\n')
     migrate(db, path.join(nOnly, 'drizzle', 'migrations'))
     const contracted = gate(db, { root })
-    expect(contracted.output).toContain('against 9990_snapshot.json')
+    expect(contracted.output).toContain(`against ${FORGET}_snapshot.json`)
     expect(contracted.output).toContain('1 finding(s) allowed by verified annotations')
     expect(contracted.status).toBe(0)
   })

@@ -12,8 +12,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { proveOrders, scratchPostgres, upgradePlans, type Scratch } from './check-migration-order'
+import { prefixOf, TIMESTAMP_PREFIX } from './lib/migration-graph'
 import { listMigrationFiles } from './lib/migration-statements'
 
 const ROOT = join(import.meta.dir, '..')
@@ -54,11 +55,18 @@ describe('proveOrders, in Postgres', () => {
     await scratch?.close()
   }, 120_000)
 
-  /** This repo's migrations plus `extra`, in a scratch directory. */
+  /**
+   * This repo's numbered migrations plus `extra`, in a scratch directory. The
+   * copy stops at the cutover: A and B below are named as if generated then,
+   * so a timestamped migration main has landed since would sort after them
+   * and turn "main" into a deployment they invert against.
+   */
   function tree(extra: Record<string, string>, withReal = true): { dir: string; files: string[] } {
     const dir = mkdtempSync(join(tmpdir(), 'migration-order-test-'))
     dirs.push(dir)
-    if (withReal) cpSync(REAL, dir, { recursive: true })
+    if (withReal) {
+      cpSync(REAL, dir, { recursive: true, filter: (src) => !TIMESTAMP_PREFIX.test(prefixOf(basename(src)) ?? '') })
+    }
     for (const [name, sql] of Object.entries(extra)) writeFileSync(join(dir, name), sql)
     return { dir, files: listMigrationFiles(dir) }
   }

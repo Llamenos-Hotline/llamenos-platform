@@ -31,7 +31,7 @@ import {
 } from '../messaging/signal/failover'
 import type { SignalConfig } from '@shared/types'
 import type { BridgeHealthStatus } from '../messaging/signal/health'
-import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { devSurfacesEnabled, devSurfaceSecretPresented, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 /**
@@ -1013,7 +1013,7 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   const senderHash = messagingContactHash(body.senderNumber, body.hubId, c.env.MESSAGING_HASH_KEY)
 
   const services = c.get('services')
-  const adminDecryptionPubkey = adminHpkeRecipient(c.env)
+  const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
   const result = await services.conversations.handleIncoming({
     channelType: channel,
     externalId: crypto.randomUUID(),

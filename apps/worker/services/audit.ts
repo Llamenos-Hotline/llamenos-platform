@@ -97,6 +97,7 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
     'ivrUpdated', 'customFieldsUpdated', 'spamSettingsUpdated',
     'callSettingsUpdated', 'mockTelephonyToggled',
     'providerRecordingPostureEnforced',
+    'hubEscrowKeySet', 'hubEscrowKeyCleared',
   ],
   shifts: [
     'shiftCreated', 'shiftUpdated', 'shiftDeleted',
