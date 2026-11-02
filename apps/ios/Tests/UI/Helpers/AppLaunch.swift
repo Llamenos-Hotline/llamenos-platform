@@ -20,11 +20,22 @@ extension XCUIApplication {
     /// A cold launch on a busy runner has taken 104s to idle the app (run 36644659179,
     /// a simulator still migrating data), so a test's own short waits must not start
     /// before anything has rendered.
-    func launchToFirstScreen(file: StaticString = #filePath, line: UInt = #line) {
+    ///
+    /// `identifier` names the screen the launch is meant to reach (an authenticated launch
+    /// reaches `main-tab-view`). Wait on it instead of on "any control" whenever it is
+    /// known: that wait is a lookup of one identifier, where `firstScreen` filters every
+    /// element of the window by type, and on a starved hosted runner the second has timed
+    /// out inside XCTest itself ("Failed to get matching snapshots: Timed out while
+    /// evaluating UI query", run 41411275180) — a failure of the query, not of the app.
+    /// Naming the screen also makes a launch that never gets there say so.
+    func launchToFirstScreen(
+        awaiting identifier: String? = nil, file: StaticString = #filePath, line: UInt = #line
+    ) {
         launch()
+        let screen = identifier.map { descendants(matching: .any)[$0].firstMatch } ?? firstScreen
         XCTAssertTrue(
-            firstScreen.waitForExistence(timeout: 60),
-            "The app should render its first screen after launch",
+            screen.waitForExistence(timeout: 60),
+            identifier.map { "The app should reach '\($0)' after launch" } ?? "The app should render its first screen after launch",
             file: file, line: line
         )
     }

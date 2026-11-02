@@ -48,7 +48,7 @@ extension BaseUITest {
     func appIdentityPubkey(file: StaticString = #filePath, line: UInt = #line) -> String {
         let identity = find("dashboard-identity")
         XCTAssertTrue(
-            identity.waitForExistence(timeout: 15), "The dashboard should expose the signed-in identity",
+            identity.waitForExistence(timeout: Self.slowHostTimeout), "The dashboard should expose the signed-in identity",
             file: file, line: line
         )
         let pubkey = identity.label

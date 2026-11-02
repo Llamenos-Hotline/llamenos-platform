@@ -144,21 +144,7 @@ class BaseUITest: XCTestCase {
     /// Launch the app in a pre-authenticated volunteer state (no API connection).
     func launchAuthenticated() {
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launchToFirstScreen()
-        waitForMainScreen()
-    }
-
-    /// An authenticated launch is done when the main tab view is up. A cold first
-    /// launch on a busy CI runner has taken ~50s (run 36352561511), so a test's own
-    /// short waits started before anything had rendered. Failing here also makes a
-    /// launch that never reaches the main screen say so, instead of surfacing as a
-    /// missing element further down.
-    private func waitForMainScreen(file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertTrue(
-            find("main-tab-view").waitForExistence(timeout: 60),
-            "The app should reach its main screen after an authenticated launch",
-            file: file, line: line
-        )
+        app.launchToFirstScreen(awaiting: "main-tab-view")
     }
 
     /// Launch the app against the live backend with a freshly registered device
@@ -184,8 +170,7 @@ class BaseUITest: XCTestCase {
             "--test-hub-id", hubId,
             "--test-register",
         ])
-        app.launchToFirstScreen()
-        waitForMainScreen()
+        app.launchToFirstScreen(awaiting: "main-tab-view")
     }
 
     /// Launch connected to the live backend as a super-admin (hub admin of this
