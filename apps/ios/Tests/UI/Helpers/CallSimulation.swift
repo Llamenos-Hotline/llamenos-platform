@@ -67,8 +67,27 @@ extension BaseUITest {
     /// not a delay the tests wait out.
     static let slowHostTimeout: TimeInterval = 60
 
-    /// Wait until the app's live-updates connection to the relay is up (the dashboard's
-    /// connection card reads `wsConnected`, "Live updates active").
+    /// The app's own copy for `key`, from the generated English strings bundled into this test
+    /// target (`project.yml`). The app is launched pinned to English (`BaseUITest.setUp`), so this
+    /// is exactly what it renders. Fails the test on a key the strings do not define, rather than
+    /// returning the key and letting a wait time out on a label nothing will ever show.
+    func appString(_ key: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+        let missing = "<<missing \(key)>>"
+        guard let path = Bundle(for: BaseUITest.self).path(forResource: "en", ofType: "lproj"),
+              let english = Bundle(path: path)
+        else {
+            XCTFail("The English strings are not bundled into the UI test target", file: file, line: line)
+            return missing
+        }
+        let copy = english.localizedString(forKey: key, value: missing, table: nil)
+        if copy == missing { XCTFail("'\(key)' is not in the generated English strings", file: file, line: line) }
+        return copy
+    }
+
+    /// Wait until the app's live-updates connection to the relay is up: the dashboard's
+    /// connection card renders `WebSocketService.ConnectionState.displayText`, which for
+    /// `.connected` is `ws_connected`. That is the iOS app's own string, not the web client's
+    /// `wsConnected` ("Live updates active"), which no iOS screen shows.
     ///
     /// The dashboard learns of a ring ONLY from the relay: it reads `calls/active` once on
     /// load, and again on a relay event. A ring the server publishes before this app has
@@ -77,7 +96,7 @@ extension BaseUITest {
     /// by winning that race; a loaded host (run 41383568666, hosted shard 1: the app's first
     /// requests took 9s, the ring was posted at +10s and never arrived) loses it.
     func waitForRelayConnected(file: StaticString = #filePath, line: UInt = #line) {
-        let connected = app.staticTexts.matching(NSPredicate(format: "label == %@", "Live updates active"))
+        let connected = app.staticTexts.matching(NSPredicate(format: "label == %@", appString("ws_connected", file: file, line: line)))
         XCTAssertTrue(
             connected.firstMatch.waitForExistence(timeout: Self.slowHostTimeout),
             "The app should be connected to the relay before a call rings, or it never hears of the ring",
