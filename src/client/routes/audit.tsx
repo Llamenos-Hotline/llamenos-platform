@@ -260,7 +260,6 @@ function AuditDetails({ entry }: { entry: AuditLogEntry }) {
   const { t } = useTranslation()
   const details = entry.details || {}
 
-  const callerLast4 = details.callerLast4 as string | undefined
   const duration = details.duration as number | undefined
 
   const isCallEvent = entry.action === 'callAnswered' || entry.action === 'callEnded' || entry.action === 'callMissed'
@@ -269,11 +268,6 @@ function AuditDetails({ entry }: { entry: AuditLogEntry }) {
   if (isCallEvent) {
     return (
       <span className="flex flex-1 items-center gap-2 truncate text-xs text-muted-foreground">
-        {callerLast4 && (
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            ***{callerLast4}
-          </code>
-        )}
         {duration !== undefined && entry.action === 'callEnded' && (
           <span>{Math.floor(duration / 60)}:{String(duration % 60).padStart(2, '0')}</span>
         )}

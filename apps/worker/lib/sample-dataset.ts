@@ -87,7 +87,8 @@ export interface SampleCall {
   key: string
   hoursAgo: number
   durationSeconds: number
-  callerLast4: string
+  /** A fictional 555 number; sealed into the call's admin envelope, never stored in a column. */
+  callerNumber: string
   /** Who answered; null = unanswered (some of these left a voicemail). */
   answeredBy: Volunteer | null
   voicemail?: boolean
@@ -98,47 +99,47 @@ export interface SampleCall {
 /** Twelve calls across the last fortnight, newest first. Eight carry a note. */
 export const SAMPLE_CALLS: ReadonlyArray<SampleCall> = [
   {
-    key: 'call-01', hoursAgo: 3, durationSeconds: 612, callerLast4: '0142', answeredBy: 'james',
+    key: 'call-01', hoursAgo: 3, durationSeconds: 612, callerNumber: '+15555550142', answeredBy: 'james',
     note: 'Caller has felt very isolated since moving to a new city. We talked through a simple evening routine and I shared the hub\'s peer-support group schedule. Caller said they would try the Thursday meetup.',
   },
   {
-    key: 'call-02', hoursAgo: 19, durationSeconds: 348, callerLast4: '0177', answeredBy: 'maria',
+    key: 'call-02', hoursAgo: 19, durationSeconds: 348, callerNumber: '+15555550177', answeredBy: 'maria',
     note: 'Asked where to find emergency food assistance nearby. Read out two community pantry listings from the resource sheet. Offered a follow-up call; caller declined, said this was enough for now.',
   },
   {
-    key: 'call-03', hoursAgo: 41, durationSeconds: 0, callerLast4: '0119', answeredBy: null, voicemail: true,
+    key: 'call-03', hoursAgo: 41, durationSeconds: 0, callerNumber: '+15555550119', answeredBy: null, voicemail: true,
   },
   {
-    key: 'call-04', hoursAgo: 58, durationSeconds: 905, callerLast4: '0163', answeredBy: 'james',
+    key: 'call-04', hoursAgo: 58, durationSeconds: 905, callerNumber: '+15555550163', answeredBy: 'james',
     note: 'Long conversation about work stress and trouble sleeping. Caller was calm and engaged throughout. Walked through a breathing exercise together. Suggested speaking with a doctor about the sleep issue.',
   },
   {
-    key: 'call-05', hoursAgo: 82, durationSeconds: 271, callerLast4: '0108', answeredBy: 'maria',
+    key: 'call-05', hoursAgo: 82, durationSeconds: 271, callerNumber: '+15555550108', answeredBy: 'maria',
     note: 'Caller needed the number for a tenant legal-aid clinic. Provided it along with the clinic\'s opening hours. Call ended positively.',
   },
   {
-    key: 'call-06', hoursAgo: 110, durationSeconds: 0, callerLast4: '0131', answeredBy: null,
+    key: 'call-06', hoursAgo: 110, durationSeconds: 0, callerNumber: '+15555550131', answeredBy: null,
   },
   {
-    key: 'call-07', hoursAgo: 137, durationSeconds: 733, callerLast4: '0186', answeredBy: 'maria',
+    key: 'call-07', hoursAgo: 137, durationSeconds: 733, callerNumber: '+15555550186', answeredBy: 'maria',
     note: 'Caller is caring for a family member and feels burned out. Listened, validated, and shared the caregiver respite line. Agreed a small goal: one hour off this weekend.',
   },
   {
-    key: 'call-08', hoursAgo: 166, durationSeconds: 194, callerLast4: '0125', answeredBy: 'james',
+    key: 'call-08', hoursAgo: 166, durationSeconds: 194, callerNumber: '+15555550125', answeredBy: 'james',
   },
   {
-    key: 'call-09', hoursAgo: 205, durationSeconds: 522, callerLast4: '0152', answeredBy: 'james',
+    key: 'call-09', hoursAgo: 205, durationSeconds: 522, callerNumber: '+15555550152', answeredBy: 'james',
     note: 'Caller wanted to talk after a rough day. No safety concerns raised. Ended the call feeling lighter and thanked the line.',
   },
   {
-    key: 'call-10', hoursAgo: 244, durationSeconds: 388, callerLast4: '0197', answeredBy: 'maria',
+    key: 'call-10', hoursAgo: 244, durationSeconds: 388, callerNumber: '+15555550197', answeredBy: 'maria',
     note: 'Question about translation help for a benefits form. Explained that our Spanish and Portuguese volunteers can support on a scheduled call, and booked a slot with the coordinator.',
   },
   {
-    key: 'call-11', hoursAgo: 290, durationSeconds: 0, callerLast4: '0114', answeredBy: null, voicemail: true,
+    key: 'call-11', hoursAgo: 290, durationSeconds: 0, callerNumber: '+15555550114', answeredBy: null, voicemail: true,
   },
   {
-    key: 'call-12', hoursAgo: 318, durationSeconds: 466, callerLast4: '0139', answeredBy: 'james',
+    key: 'call-12', hoursAgo: 318, durationSeconds: 466, callerNumber: '+15555550139', answeredBy: 'james',
     note: 'First-time caller, unsure what the line is for. Explained how it works and what we can and cannot do. Caller said they would call back if needed.',
   },
 ]

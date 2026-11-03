@@ -50,7 +50,7 @@ async function callWithSealedRecording(hubId: string, callId: string, table: 're
   if (table === 'record') {
     await fresh.db.insert(schema.callRecords).values({ callId, hubId, startedAt: new Date(), status: 'completed', encryptedContent: 'x' })
   } else {
-    await fresh.db.insert(schema.activeCalls).values({ callId, hubId, callerLast4: '1234', startedAt: new Date(), status: 'in-progress' })
+    await fresh.db.insert(schema.activeCalls).values({ callId, hubId, startedAt: new Date(), status: 'in-progress' })
   }
   await fresh.callRecordings.copyFromProvider(provider, { hubId, callId, recordingSid: `RE-${callId}` })
 }

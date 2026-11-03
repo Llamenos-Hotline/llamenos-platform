@@ -280,6 +280,39 @@ describe('a bulk-imported subscriber is matched by their own STOP (#2261)', () =
     expect(after.find((s) => s.id === imported!.id)!.status).toBe('unsubscribed')
   })
 
+  it('after the imported subscriber texts STOP, the next blast does not include them (#2262)', async () => {
+    const hub = '9f2c1b64-0000-4000-8000-0000000000ee'
+    const number = '+15550100911'
+    await services.blasts.importBulk(hub, [{ identifier: number, channel: 'sms' }])
+    // A subscriber whose channel is verified and double opt-in confirmed: the state a
+    // blast targets. Set directly, since the confirmation flow is not what is under test.
+    await fresh.db.update(schema.subscribers)
+      .set({ channels: [{ type: 'sms', verified: true }], doubleOptInConfirmed: true })
+      .where(eq(schema.subscribers.hubId, hub))
+    const subscriberId = (await subscribersOf(hub))[0]!.id
+
+    const expandedFor = async (name: string): Promise<string[]> => {
+      const blast = await services.blasts.createBlast({
+        hubId: hub, name, content: { text: 'hello' }, targetChannels: ['sms'], createdBy: 'test',
+      })
+      // What `send()` does to it; called directly because send()'s daily-limit query
+      // binds a Date that postgres-js under Node refuses (Bun SQL in production does not).
+      await fresh.db.update(schema.blasts).set({ status: 'sending', sentAt: new Date() }).where(eq(schema.blasts.id, blast.id))
+      await services.blasts.expandBlast(blast.id)
+      return (await services.blasts.getDeliveries(blast.id)).deliveries.map((d) => d.subscriberId)
+    }
+
+    // Control: before the STOP the imported subscriber is a recipient, so the
+    // assertion below is not vacuous.
+    expect(await expandedFor('before-stop')).toContain(subscriberId)
+
+    // The STOP goes through the real webhook route, which finds the row by the router's hash.
+    expect((await webhook(hub, 'STOP', number)).status).toBe(200)
+    expect((await subscribersOf(hub))[0]!.status).toBe('unsubscribed')
+
+    expect(await expandedFor('after-stop')).not.toContain(subscriberId)
+  })
+
   it('the same number imported into another hub is a different row, and starts opted out (#2286)', async () => {
     // Before #2286 this row was 'active': the STOP above was kept only as hub B's
     // row status. But every hub messages from the one deployment-wide sender, so the

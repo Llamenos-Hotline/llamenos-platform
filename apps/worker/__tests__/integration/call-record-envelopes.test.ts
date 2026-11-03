@@ -13,7 +13,7 @@
  *  2. The full caller number appears in NO plaintext column. The live call
  *     holds it only sealed under SERVER_KEK (`caller_number_sealed`); it is
  *     opened once, into the admin envelope, and the active row (with the
- *     sealed copy) is gone. callerLast4 stays plaintext per §2.5's list.
+ *     sealed copy) is gone. No fragment of the number (no last four digits) is stored beside it (#2262).
  *  3. The stale-call reaper (`getActiveCalls`) seals metadata the same way.
  *  4. With no admin recipient resolvable, the record is stored WITHOUT
  *     envelopes and the error is loud (loud-but-stored, matching the
@@ -28,6 +28,8 @@ import '../../db/pg-array-patch'
 import '../mocks/llamenos-crypto-ffi'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { hexToBytes } from '@shared/encoding'
@@ -89,17 +91,103 @@ async function readRecord(callId: string) {
 }
 
 function expectNoRawCallerDigits(row: Record<string, unknown>) {
-  // §2.5: callerLast4 stays plaintext by design; the FULL number must not
-  // appear in any plaintext column.
+  // No part of the number appears in any plaintext column: not the full number,
+  // and not its last four digits (#2262).
   const plaintextColumns = { ...row }
   delete plaintextColumns.encryptedContent
   delete plaintextColumns.adminEnvelopes
   expect(JSON.stringify(plaintextColumns)).not.toContain(RAW_CALLER)
   expect(JSON.stringify(plaintextColumns)).not.toContain('1234567')
-  expect(row.callerLast4).toBe('4567')
+  expect(Object.keys(row).filter((k) => /last4/i.test(k))).toEqual([])
 }
 
 describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
+  describe('the scrub_caller_last4 migration keeps no last-four digit (#2262)', () => {
+    const insertLegacy = async () => {
+      await fresh.raw.unsafe(`INSERT INTO active_calls (call_id, hub_id, caller_last4) VALUES ('legacy-active', 'hub-1', '4567')`)
+      await fresh.raw.unsafe(
+        `INSERT INTO call_records (call_id, hub_id, caller_last4, started_at, status, encrypted_content)
+         VALUES ('legacy-record', 'hub-1', '4567', now(), 'completed', '')`,
+      )
+    }
+    const digitsStored = async () => {
+      const rows = await fresh.raw.unsafe(
+        `SELECT (SELECT count(*)::int FROM active_calls WHERE caller_last4 IS NOT NULL)
+              + (SELECT count(*)::int FROM call_records WHERE caller_last4 IS NOT NULL) AS n`,
+      )
+      return rows[0]!.n as number
+    }
+    const cleanup = async () => {
+      await fresh.raw.unsafe(`DELETE FROM active_calls WHERE call_id = 'legacy-active'`)
+      await fresh.raw.unsafe(`DELETE FROM call_records WHERE call_id = 'legacy-record'`)
+    }
+
+    function migrationStatements(): string[] {
+      const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
+      // By name: a timestamped migration's prefix is when it was generated (#2391).
+      const file = readdirSync(dir).find((f) => /^\d+_scrub_caller_last4\.sql$/.test(f))
+      expect(file, 'the scrub_caller_last4 migration is missing').toBeTruthy()
+      return readFileSync(join(dir, file!), 'utf8')
+        .split('--> statement-breakpoint')
+        .map((st) => st.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
+        .filter(Boolean)
+    }
+
+    it('erases every digit the previous release stored', async () => {
+      // Rows as the previous release left them: the trigger is off to plant what it had written.
+      await fresh.raw.unsafe(`ALTER TABLE active_calls DISABLE TRIGGER USER`)
+      await fresh.raw.unsafe(`ALTER TABLE call_records DISABLE TRIGGER USER`)
+      try {
+        await insertLegacy()
+        expect(await digitsStored()).toBe(2)
+        for (const statement of migrationStatements().filter((st) => st.startsWith('UPDATE'))) {
+          await fresh.raw.unsafe(statement)
+        }
+        expect(await digitsStored()).toBe(0)
+      } finally {
+        await fresh.raw.unsafe(`ALTER TABLE active_calls ENABLE TRIGGER USER`)
+        await fresh.raw.unsafe(`ALTER TABLE call_records ENABLE TRIGGER USER`)
+        await cleanup()
+      }
+    })
+
+    it('discards digits a previous-release pod writes during a rollout, without failing its INSERT', async () => {
+      try {
+        await insertLegacy() // would throw if the column rejected the write
+        expect(await digitsStored()).toBe(0)
+        await fresh.raw.unsafe(`UPDATE active_calls SET caller_last4 = '9999' WHERE call_id = 'legacy-active'`)
+        expect(await digitsStored()).toBe(0)
+      } finally {
+        await cleanup()
+      }
+    })
+
+    it('re-runs whole after a boot that died partway through, and still discards every digit', async () => {
+      // The runner records a file only once every statement has succeeded, so a crash
+      // after the CREATEs runs the whole file again on the next boot. Here it already ran.
+      for (const statement of migrationStatements()) {
+        await fresh.raw.unsafe(statement)
+      }
+      const triggers = await fresh.raw.unsafe(
+        `SELECT tgrelid::regclass::text AS tbl FROM pg_trigger
+         WHERE tgname LIKE '%_discard_caller_last4' ORDER BY 1`,
+      )
+      expect(triggers.map((t) => t.tbl)).toEqual(['active_calls', 'call_records'])
+      try {
+        await insertLegacy()
+        expect(await digitsStored()).toBe(0)
+      } finally {
+        await cleanup()
+      }
+    })
+
+    it('is no longer declared by the code: no column on either table definition', () => {
+      for (const table of [schema.activeCalls, schema.callRecords]) {
+        expect(Object.keys(table).filter((k) => /last4/i.test(k))).toEqual([])
+      }
+    })
+  })
+
   it('endCall seals { answeredBy, callerNumber } for admin recipients', async () => {
     const admin = await seedAdmin()
     const calls = wiredCalls(async () => [admin.pubkey])
@@ -108,7 +196,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await calls.addCall('hub-1', {
       callId: 'call-seal-1',
       callerNumberSealed: sealedFor('call-seal-1'),
-      callerLast4: '4567',
     })
     await calls.answerCall('hub-1', 'call-seal-1', volunteer)
     await calls.endCall('hub-1', 'call-seal-1')
@@ -149,7 +236,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await calls.addCall('hub-1', {
       callId: 'call-seal-2',
       callerNumberSealed: sealedFor('call-seal-2'),
-      callerLast4: '4567',
     })
     await calls.endCall('hub-1', 'call-seal-2')
 
@@ -173,7 +259,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
       callId: 'call-stale-1',
       hubId: 'hub-1',
       callerNumberSealed: sealedFor('call-stale-1'),
-      callerLast4: '4567',
       status: 'ringing',
       startedAt: new Date(Date.now() - 10 * 60 * 1000),
     })
@@ -202,7 +287,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await calls.addCall('hub-1', {
       callId: 'call-seal-3',
       callerNumberSealed: sealedFor('call-seal-3'),
-      callerLast4: '4567',
     })
     const row = await calls.endCall('hub-1', 'call-seal-3')
     expect(row.encryptedContent).toBe('')
@@ -232,7 +316,6 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     await services.calls.addCall('hub-1', {
       callId: 'call-seal-4',
       callerNumberSealed: sealedFor('call-seal-4'),
-      callerLast4: '4567',
     })
     await services.calls.endCall('hub-1', 'call-seal-4')
 

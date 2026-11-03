@@ -371,7 +371,6 @@ export async function startParallelRinging(
     const { pushRef } = await services.calls.addCall(hubId, {
       callId: callSid,
       callerNumberSealed: sealCallerNumber(callerNumber, callSid, env.SERVER_KEK),
-      callerLast4: callerNumber.slice(-4),
       status: 'ringing',
     })
 

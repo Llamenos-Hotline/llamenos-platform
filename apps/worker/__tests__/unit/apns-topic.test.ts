@@ -226,6 +226,14 @@ describe('outgoing apns-topic header — VoIP push (voip-push.ts)', () => {
     const headers = init.headers as Headers
     expect(headers.get('apns-topic')).toBe(`${DEFAULT_APNS_BUNDLE_ID}.voip`)
     expect(headers.get('apns-topic')).not.toBe('org.llamenos.mobile.voip')
+
+    // The payload names the call and the hub, and nothing about the caller (#2262).
+    expect(JSON.parse(String(init.body))).toEqual({
+      aps: {},
+      'call-id': 'push-ref-1',
+      'hub-id': 'hub-1',
+      type: 'incoming_call',
+    })
   })
 
   it('honors an APNS_BUNDLE_ID override for the VoIP topic', async () => {

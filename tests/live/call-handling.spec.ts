@@ -65,7 +65,6 @@ interface CallRecord {
    *  conformance test below. */
   callId?: string
   id?: string
-  callerLast4?: string
   callerNumber?: string
   answeredBy?: string | null
   startedAt: string
@@ -1456,11 +1455,11 @@ test.describe('R1 — a real call reaches the admin\'s history', () => {
       'the newest history row predates this call, so the delta came from somewhere else',
     ).toBeGreaterThanOrEqual(placedAfter)
 
-    // Caller identity, which the server must not hand out in the clear. The
-    // last four digits ARE stored unencrypted by design (`callerLast4`, the
-    // lookup key the UI shows); the full number must only exist inside
+    // Caller identity, which the server must not hand out in the clear: not the
+    // number, and not its last four digits (#2262). It exists only inside
     // `encryptedContent`.
     const serialised = JSON.stringify(newest)
+    expect(newest, 'the call history row carries the last four digits of the caller').not.toHaveProperty('callerLast4')
     expect(
       serialised.includes(config.testCallerNumber),
       `the call history row contains the caller's full number in the clear: ${serialised}`,
