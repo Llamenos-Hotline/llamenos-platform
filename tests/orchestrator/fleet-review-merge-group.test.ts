@@ -192,20 +192,27 @@ describe('rail: the merge-queue arm is a step that always runs, never a skip', (
   // without ever touching the JOB's conclusion, which is the whole reason
   // the arm can live inside the same job.
   it('every step that would spend a checkout, an install or a model call stands down on merge_group', () => {
-    const standDown = [
-      'Resolve the base/head SHAs and PR context for this event',
-      'Checkout the PR BASE (trusted)',
-      'Export the PR head as data',
-      'Setup Bun',
-      'Install dependencies (base lockfile, no install scripts)',
-      'Check the base provides the review gate itself',
-      'Decide whether to run the review engine',
+    // Each entry is [step name, exact `if:`]. #1887 split the old "Setup
+    // Bun" step in two — a host-Bun probe plus a `setup-bun` fallback that
+    // now also keys off the probe's output — so the expected condition is
+    // pinned per step rather than one string for all: on merge_group every
+    // one of these still evaluates false, which is the only thing this rail
+    // exists to prove.
+    const standDown: [string, string][] = [
+      ['Resolve the base/head SHAs and PR context for this event', "github.event_name != 'merge_group'"],
+      ['Checkout the PR BASE (trusted)', "github.event_name != 'merge_group'"],
+      ['Export the PR head as data', "github.event_name != 'merge_group'"],
+      ["Use the runner's own Bun when it is the pinned version", "github.event_name != 'merge_group'"],
+      ['Setup Bun', "github.event_name != 'merge_group' && steps.host_bun.outputs.usable == 'false'"],
+      ['Install dependencies (base lockfile, no install scripts)', "github.event_name != 'merge_group'"],
+      ['Check the base provides the review gate itself', "github.event_name != 'merge_group'"],
+      ['Decide whether to run the review engine', "github.event_name != 'merge_group'"],
     ]
     const byName = new Map(reviewSteps().map((s) => [s.name, s]))
-    for (const name of standDown) {
+    for (const [name, expectedIf] of standDown) {
       const step = byName.get(name)
       expect(step, `no "${name}" step found — this rail must not pass vacuously`).toBeDefined()
-      expect(step?.if, `"${name}" must stand down on merge_group`).toBe("github.event_name != 'merge_group'")
+      expect(step?.if, `"${name}" must stand down on merge_group`).toBe(expectedIf)
     }
   })
 
