@@ -53,7 +53,10 @@ vi.mock('@worker/services/webhook-replay', () => ({ checkWebhookReplay: vi.fn().
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 // The router reaches for the process-wide Bun SQL handle only to record webhook replays,
 // which the mocked replay guard above never does; this runs under Node, where Bun SQL is absent.
-vi.mock('@worker/db', () => ({ getDb: vi.fn().mockReturnValue({}) }))
+// It hands back the suite's real database (set in beforeAll) rather than a stand-in: a `{}`
+// here once reached SignalIdentityService and 500'd every single-identifier Signal STOP (#2447).
+vi.mock('@worker/db', () => ({ getDb: vi.fn() }))
+import { getDb } from '@worker/db'
 import { getMessagingAdapterFromService } from '@worker/lib/service-factories'
 
 const fresh = freshHubDb('messaging_thread_hash')
@@ -75,6 +78,7 @@ const IMPORTED_SENDER = '+15550100909'
 let services: Services
 
 beforeAll(() => {
+  vi.mocked(getDb).mockReturnValue(fresh.db)
   services = createServices(fresh.db, {
     hmacSecret: HMAC_SECRET,
     serverKek: SERVER_KEK,
@@ -116,6 +120,10 @@ async function webhook(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: crypto.randomUUID() }),
   })
+  // Every caller here expects the router to accept the message. Most of them never read the
+  // status, so a 500 from the opt-out path used to leave their later assertions passing
+  // vacuously (#2447); fail at the call that was refused instead.
+  expect(res.status, `${overrides.channelType ?? 'sms'} webhook "${body}" from ${sender}: ${await res.clone().text()}`).toBe(200)
   return { status: res.status }
 }
 
