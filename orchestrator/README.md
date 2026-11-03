@@ -101,6 +101,53 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
+| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, files disjoint from the queue and the same pass's picks, iOS-UI-test PRs alone), and never re-queues a PR whose last queue attempt failed on its own diff. Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
+
+### `queue-feed`: the queue had no owner (#2036)
+
+Entering the merge queue consumes a PR's auto-merge request. A PR ejected
+from the queue — because a sibling's shard failed the ALLGREEN group, or a
+flake did — comes out CLEAN with no auto-merge armed, and nothing ever
+re-armed it: the tick arms only PRs the fleet itself just opened, and GitHub
+never re-arms on its own. Measured 2026-10-20: the queue sat empty for 5h17m
+with 13 open PRs CLEAN, ten carrying a `fleet/review` PASS for their head's
+tree. Non-fleet PRs (a human's, a manually dispatched worker's) sat in the
+same state from birth.
+
+The feed runs on its own timer (every 15 minutes, offset from the tick) and
+tops the queue up to the live ruleset's `min_entries_to_merge`, never past
+`max_entries_to_merge`. A PR is queued only if **all** of:
+
+1. A **per-PR** `gh pr view` says `CLEAN` — the list form's
+   `mergeStateStatus` is stale, so the list enumerates numbers and never
+   judges readiness.
+2. The review verdict cache holds a **PASS for this exact head tree and
+   title/body claim** under the current review set, and no FAIL — the honest
+   record, not the check colour. The gate's three no-review-needed greens
+   (knope release PR, all-bot-authored, Tier 0/1) are re-derived with the
+   gate's own rules, and a profile in the review set disables the last two
+   exactly as in the gate.
+3. Its files are **disjoint** from every queued PR and from the pass's other
+   selections — under ALLGREEN one conflict fails the whole group.
+4. An iOS-UI-test PR is queued only **alone**: into an empty queue, as the
+   pass's only selection.
+
+The **not-a-retry guard**: a PR whose latest queue attempt (a `merge_group`
+run whose branch names it) failed on a shard its own diff schedules is a
+defect to fix, not a retry — skipped, with the shard named. Shard failures
+are attributed by the same platform flags that scheduled them
+(`QUEUE_ONLY_JOB_FLAGS`, bound to ci.yml's `revalidate`-gated jobs by a
+test); a failed shard the diff could never schedule is the ejection this
+feed exists to recover from; a shard the map does not know attributes to
+every candidate — the closed direction.
+
+The feed arms through the tick's one existing arming call (`gh pr merge
+--auto --squash`, no bypass flags), so the guards rail — exactly one arming
+site — holds by construction. It respects the halt switches like everything
+else the fleet does, and a prerequisite read that fails (the queue, the
+ruleset, a queued PR's file list) is `CANNOT DECIDE` and exit 2, never a
+quiet pass: a detector that cannot tell ejected from queued must say so.
+
 
 ### `missing-checks`: the blockage no other command can see (#1662)
 
@@ -616,7 +663,9 @@ The rules now:
 
 ## systemd timer
 
-Unit files are at `orchestrator/systemd/llamenos-fleet-tick.{service,timer}`.
+Unit files are at `orchestrator/systemd/llamenos-fleet-tick.{service,timer}`
+and `orchestrator/systemd/llamenos-fleet-queue-feed.{service,timer}` (plus
+the digest pair).
 **They are not installed or enabled by this plan** — that step is left to a
 human. The units are systemd *user* units: `%h` is the owner's home directory,
 and they run `%h/.local/bin/llamenos-fleet` — a symlink into this checkout
@@ -629,12 +678,12 @@ mkdir -p ~/.local/bin ~/.config/systemd/user
 ln -sf "$PWD/orchestrator/bin/llamenos-fleet" ~/.local/bin/llamenos-fleet
 cp orchestrator/systemd/*.service orchestrator/systemd/*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now llamenos-fleet-tick.timer
+systemctl --user enable --now llamenos-fleet-tick.timer llamenos-fleet-queue-feed.timer
 systemctl --user list-timers 'llamenos-fleet-*'
 ```
 
 Expect a real `NEXT` time in the last command's output — never `infinity` or
-a blank column. The timer uses an absolute `OnCalendar` schedule
+a blank column. The timers use absolute `OnCalendar` schedules
 (`*-*-* *:00,30:00`), deliberately not `OnBootSec`/`OnUnitActiveSec`: the
 latter anchors off the last activation or boot, and a machine that has been
 up for days with no recent activation would have nothing to anchor to —
@@ -642,9 +691,12 @@ systemd would then schedule nothing at all while `is-enabled`/`is-active`
 still both say yes. An `OnCalendar` expression always has a next occurrence
 computed from the clock alone, so it cannot enter that state.
 
-The service unit sets `SuccessExitStatus=0` and does not treat a pass that
+The tick service unit sets `SuccessExitStatus=0` and does not treat a pass that
 declined to run (lock held, halted, breaker tripped) as a failure — those
-are `tick()` working as designed, not a fault for systemd to back off on.
+are `tick()` working as designed, not a fault for systemd to back off on. The
+queue-feed service does the same for a halted fleet, an empty queue, or a
+pass with nothing eligible; only an undecidable prerequisite read (exit 2)
+fails that unit.
 
 ## The watchdog — liveness AND outcomes (#1834)
 

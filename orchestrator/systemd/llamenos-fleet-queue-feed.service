@@ -1,0 +1,23 @@
+# orchestrator/systemd/llamenos-fleet-queue-feed.service
+[Unit]
+Description=Llámenos fleet — merge-queue feed (re-arm ejected or never-armed PRs)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# %h is the unit owner's home directory (these are systemd USER units). There is
+# deliberately no WorkingDirectory=: the wrapper installed at
+# %h/.local/bin/llamenos-fleet is a symlink into the repo checkout and cd's there
+# itself (see orchestrator/bin/llamenos-fleet), so the checkout can live anywhere.
+Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.llamenos-fleet/env
+ExecStart=%h/.local/bin/llamenos-fleet queue-feed
+# A halted fleet, an empty queue, a queue at capacity, and a pass with nothing
+# eligible all exit 0 — that is the feed working as designed, not a fault for
+# systemd to back off on. Only an UNDECIDABLE prerequisite read (exit 2) fails
+# the unit, because a feed that could not read the queue cannot tell ejected
+# from queued and must say so loudly.
+SuccessExitStatus=0
+# A pass is a handful of `gh` reads per open PR plus at most a few
+# `gh pr merge --auto` writes; nothing here is long-lived.
+TimeoutStartSec=600

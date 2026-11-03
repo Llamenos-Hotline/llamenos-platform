@@ -1,0 +1,19 @@
+# orchestrator/systemd/llamenos-fleet-queue-feed.timer
+[Unit]
+Description=Llámenos fleet merge-queue feed, every 15 minutes (offset from the tick)
+
+[Timer]
+# ABSOLUTE wall-clock, deliberately — NOT OnBootSec + OnUnitActiveSec, for the
+# same reason llamenos-fleet-tick.timer avoids it: both anchor off an event that
+# may never recur on a long-up machine, so systemd schedules NOTHING while
+# `is-enabled` still says enabled. An OnCalendar expression always has a next
+# occurrence computed from the clock alone.
+# Offset from the tick's *:00,30 so a feed never races a dispatch pass for the
+# same `gh` budget; the queue has no durable owner between ticks (#2036), so
+# fifteen minutes is the worst an ejected CLEAN PR waits for a re-arm.
+OnCalendar=*-*-* *:07,22,37,52:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
