@@ -44,7 +44,7 @@ final class APIConnectedUITests: BaseUITest {
             )
 
             navigateToSettings()
-            let adminLink = scrollToFind("settings-admin-link", maxSwipes: 3, timeout: 10)
+            let adminLink = scrollToFind("settings-admin-link", maxSwipes: 3)
             XCTAssertTrue(
                 adminLink.exists,
                 "Admin panel link should be visible for admin users"
@@ -237,7 +237,7 @@ final class APIConnectedUITests: BaseUITest {
             launchAsVolunteerWithAPI()
             navigateToShifts()
             XCTAssertTrue(
-                find("clock-in-button").waitForExistence(timeout: Self.slowHostTimeout),
+                find("clock-in-button").waitForExistence(timeout: Self.eventBackstop),
                 "An off-shift volunteer should be offered Clock In"
             )
         }
@@ -246,7 +246,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("the server records the clock-in and the app offers Clock Out") {
             XCTAssertTrue(
-                find("clock-out-button").waitForExistence(timeout: Self.slowHostTimeout),
+                find("clock-out-button").waitForExistence(timeout: Self.eventBackstop),
                 "Clocking in should put the volunteer on shift"
             )
             XCTAssertFalse(find("clock-in-button").exists, "An on-shift volunteer has nothing to clock in to")
@@ -270,10 +270,10 @@ final class APIConnectedUITests: BaseUITest {
             launchAsVolunteerWithAPI()
             navigateToShifts()
             let clockIn = find("clock-in-button")
-            XCTAssertTrue(clockIn.waitForExistence(timeout: Self.slowHostTimeout), "An off-shift volunteer should be offered Clock In")
+            XCTAssertTrue(clockIn.waitForExistence(timeout: Self.eventBackstop), "An off-shift volunteer should be offered Clock In")
             clockIn.tap()
             XCTAssertTrue(
-                find("clock-out-button").waitForExistence(timeout: Self.slowHostTimeout),
+                find("clock-out-button").waitForExistence(timeout: Self.eventBackstop),
                 "Clocking in should put the volunteer on shift"
             )
         }
@@ -285,7 +285,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("the server ends the shift and the app is off shift again") {
             XCTAssertTrue(
-                find("clock-in-button").waitForExistence(timeout: Self.slowHostTimeout),
+                find("clock-in-button").waitForExistence(timeout: Self.eventBackstop),
                 "Confirming clock out should put the volunteer off shift"
             )
             XCTAssertFalse(find("clock-out-button").exists, "An off-shift volunteer has nothing to clock out of")
@@ -883,7 +883,7 @@ final class APIConnectedUITests: BaseUITest {
         }
         then("the dashboard shows a ring, not an active call, and does not name the caller") {
             XCTAssertTrue(
-                find("incoming-call-card").waitForExistence(timeout: Self.slowHostTimeout),
+                find("incoming-call-card").waitForExistence(timeout: Self.eventBackstop),
                 "The ring event should put the call on the dashboard as an incoming call"
             )
             XCTAssertFalse(find("active-call-card").exists, "A ringing call is not a call in progress")
@@ -898,7 +898,7 @@ final class APIConnectedUITests: BaseUITest {
             hubId = launchAsAdminOnFreshHub(named: "answer-call") ?? ""
             XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
             callId = ringCall(callerNumber: "+15551110002", hubId: hubId)
-            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.slowHostTimeout))
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.eventBackstop))
         }
         when("the call is answered by my identity") {
             let status = simulateAnswerCall(callId: callId, pubkey: appIdentityPubkey())
@@ -921,7 +921,7 @@ final class APIConnectedUITests: BaseUITest {
             hubId = launchAsAdminOnFreshHub(named: "end-call") ?? ""
             XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
             callId = answerCallAsApp(callerNumber: "+15551110003", hubId: hubId)
-            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.slowHostTimeout))
+            XCTAssertTrue(find("active-call-card").waitForExistence(timeout: Self.eventBackstop))
         }
         when("the call ends") {
             XCTAssertEqual(simulateEndCall(callId: callId), "completed", "Ended call status should be completed")
@@ -940,7 +940,7 @@ final class APIConnectedUITests: BaseUITest {
             hubId = launchAsAdminOnFreshHub(named: "voicemail") ?? ""
             XCTAssertTrue(find("dashboard-title").waitForExistence(timeout: 15))
             callId = ringCall(callerNumber: "+15551110004", hubId: hubId)
-            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.slowHostTimeout))
+            XCTAssertTrue(find("incoming-call-card").waitForExistence(timeout: Self.eventBackstop))
         }
         when("the caller gives up and goes to voicemail") {
             XCTAssertEqual(simulateVoicemail(callId: callId), "unanswered", "Voicemail status should be unanswered")
@@ -1061,7 +1061,7 @@ final class APIConnectedUITests: BaseUITest {
             chooseNoteCall(callId)
 
             find("save-note").tap()
-            XCTAssertTrue(textEditor.waitForNonExistence(timeout: Self.slowHostTimeout), "The create sheet should close once the note is saved")
+            XCTAssertTrue(textEditor.waitForNonExistence(timeout: Self.eventBackstop), "The create sheet should close once the note is saved")
         }
         then("the note is listed with the text I wrote") {
             XCTAssertFalse(find("note-create-error").exists, "Saving the note should not report an error")
@@ -1083,7 +1083,7 @@ final class APIConnectedUITests: BaseUITest {
         _ conversationId: String, file: StaticString = #filePath, line: UInt = #line
     ) {
         XCTAssertTrue(
-            find("conversation-row-\(conversationId)").waitForExistence(timeout: Self.slowHostTimeout),
+            find("conversation-row-\(conversationId)").waitForExistence(timeout: Self.eventBackstop),
             "Conversation \(conversationId) should be listed after its message was simulated",
             file: file, line: line
         )

@@ -4,8 +4,10 @@ import XCTest
 
 // MARK: - CaseListStubURLProtocol
 
-/// Serves canned Cases-API responses, each after its own delay, so a test can choose
-/// the ORDER in which the case-management, entity-types and records requests answer.
+/// Serves canned Cases-API responses, each held until the thing it must follow has happened,
+/// so a test can choose the ORDER in which the case-management, entity-types and records
+/// requests answer without a clock deciding it: a response either answers once another
+/// route's response has been delivered, or stays held until the test releases it.
 ///
 /// A route holds a queue of responses consumed one per request in arrival order; the
 /// last one repeats. That makes "the first call is slow, every later call is fast"
@@ -14,13 +16,25 @@ private final class CaseListStubURLProtocol: URLProtocol {
     struct Response {
         var status = 200
         var body: String
-        var delay: TimeInterval = 0
+        /// The route whose response must have been delivered before this one is.
+        var answersAfter: String?
+        /// Held back until the test calls `release(_:)` for this route.
+        var held = false
+    }
+
+    private struct Pending {
+        let route: String
+        let response: Response
+        let deliver: () -> Void
     }
 
     private static let lock = NSLock()
     private static var routes: [String: [Response]] = [:]
     private static var arrivals: [String: Int] = [:]
     private static var onFirstArrival: ((String) -> Void)?
+    private static var pending: [Pending] = []
+    private static var delivered: Set<String> = []
+    private static var released: Set<String> = []
 
     /// `routes` is keyed by the END of the request path, so the tests do not depend
     /// on whether a hub is active (the API prefixes `/hubs/<id>` when one is).
@@ -29,7 +43,38 @@ private final class CaseListStubURLProtocol: URLProtocol {
         defer { lock.unlock() }
         self.routes = routes
         arrivals = [:]
+        pending = []
+        delivered = []
+        released = []
         self.onFirstArrival = onFirstArrival
+    }
+
+    /// Let the held response on `route` answer.
+    static func release(_ route: String) {
+        lock.lock()
+        released.insert(route)
+        lock.unlock()
+        deliverWhatIsReady()
+    }
+
+    /// Deliver every pending response whose conditions now hold; delivering one can make
+    /// the next ready, so this runs until nothing more is.
+    private static func deliverWhatIsReady() {
+        while true {
+            lock.lock()
+            let index = pending.firstIndex { entry in
+                (entry.response.answersAfter.map { delivered.contains($0) } ?? true)
+                    && (!entry.response.held || released.contains(entry.route))
+            }
+            guard let index else {
+                lock.unlock()
+                return
+            }
+            let entry = pending.remove(at: index)
+            delivered.insert(entry.route)
+            lock.unlock()
+            entry.deliver()
+        }
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -56,7 +101,7 @@ private final class CaseListStubURLProtocol: URLProtocol {
         Self.lock.unlock()
         notify?(suffix ?? path)
 
-        DispatchQueue.global().asyncAfter(deadline: .now() + response.delay) { [self] in
+        let deliver = { [self] in
             stoppedLock.lock()
             let alreadyStopped = stopped
             stoppedLock.unlock()
@@ -71,6 +116,10 @@ private final class CaseListStubURLProtocol: URLProtocol {
             client?.urlProtocol(self, didLoad: Data(response.body.utf8))
             client?.urlProtocolDidFinishLoading(self)
         }
+        Self.lock.lock()
+        Self.pending.append(Pending(route: suffix ?? path, response: response, deliver: deliver))
+        Self.lock.unlock()
+        Self.deliverWhatIsReady()
     }
 
     override func stopLoading() {
@@ -126,15 +175,15 @@ final class CaseManagementViewModelTests: XCTestCase {
     }
 
     func testEmptyHubShowsTheEmptyStateWhicheverRequestAnswersFirst() async throws {
-        let orders: [(label: String, caseManagement: TimeInterval, entityTypes: TimeInterval)] = [
-            ("case management answers first", 0, 0.3),
-            ("entity types answer first", 0.3, 0),
-            ("both answer together", 0.1, 0.1),
+        let orders: [(label: String, caseManagement: String?, entityTypes: String?)] = [
+            ("case management answers first", nil, CaseListRoute.caseManagement),
+            ("entity types answer first", CaseListRoute.entityTypes, nil),
+            ("both answer together", nil, nil),
         ]
         for order in orders {
             Stub.reset([
-                CaseListRoute.caseManagement: [.init(body: Self.enabled, delay: order.caseManagement)],
-                CaseListRoute.entityTypes: [.init(body: Self.oneEntityType, delay: order.entityTypes)],
+                CaseListRoute.caseManagement: [.init(body: Self.enabled, answersAfter: order.caseManagement)],
+                CaseListRoute.entityTypes: [.init(body: Self.oneEntityType, answersAfter: order.entityTypes)],
                 CaseListRoute.records: [.init(body: Self.noRecords)],
             ])
             let viewModel = try makeViewModel()
@@ -214,9 +263,10 @@ final class CaseManagementViewModelTests: XCTestCase {
         staleReachedTheServer.assertForOverFulfill = false
         Stub.reset(
             [
-                // First call: slow, and says the feature is OFF. Every later call: fast, ON.
+                // First call: held until the replacement has settled, and says the feature is
+                // OFF. Every later call: answers at once, ON.
                 CaseListRoute.caseManagement: [
-                    .init(body: Self.disabled, delay: 0.5),
+                    .init(body: Self.disabled, held: true),
                     .init(body: Self.enabled),
                 ],
                 CaseListRoute.entityTypes: [.init(body: Self.oneEntityType)],
@@ -234,6 +284,7 @@ final class CaseManagementViewModelTests: XCTestCase {
         await viewModel.loadInitial()
         XCTAssertEqual(viewModel.screen, .empty(canCreate: true), "The replacement load should settle first")
 
+        Stub.release(CaseListRoute.caseManagement)
         await stale.value
 
         XCTAssertEqual(

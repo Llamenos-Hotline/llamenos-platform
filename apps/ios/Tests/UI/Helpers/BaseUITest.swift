@@ -100,8 +100,9 @@ class BaseUITest: XCTestCase {
             return ""
         }
         // Setup, not an assertion: the first request on a freshly booted CI runner has
-        // taken 30-49s, and a class without a hub fails every connected test in it.
-        request.timeoutInterval = 60
+        // taken 30-49s, and a class without a hub fails every connected test in it. The
+        // request returns when the server answers; this only bounds one that never does.
+        request.timeoutInterval = Self.eventBackstop
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": hubName])
 
         var hubId = ""
@@ -126,7 +127,7 @@ class BaseUITest: XCTestCase {
                 hubId = id
             }
         }.resume()
-        _ = semaphore.wait(timeout: .now() + 65)
+        _ = semaphore.wait(timeout: .now() + Self.eventBackstop + 5)
         if hubId.isEmpty {
             print("Warning: createClassHub(\(className)) returned empty hub ID — is the backend running?")
         }
@@ -144,21 +145,7 @@ class BaseUITest: XCTestCase {
     /// Launch the app in a pre-authenticated volunteer state (no API connection).
     func launchAuthenticated() {
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launchToFirstScreen()
-        waitForMainScreen()
-    }
-
-    /// An authenticated launch is done when the main tab view is up. A cold first
-    /// launch on a busy CI runner has taken ~50s (run 36352561511), so a test's own
-    /// short waits started before anything had rendered. Failing here also makes a
-    /// launch that never reaches the main screen say so, instead of surfacing as a
-    /// missing element further down.
-    private func waitForMainScreen(file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertTrue(
-            find("main-tab-view").waitForExistence(timeout: 60),
-            "The app should reach its main screen after an authenticated launch",
-            file: file, line: line
-        )
+        app.launchToFirstScreen(awaiting: "main-tab-view")
     }
 
     /// Launch the app against the live backend with a freshly registered device
@@ -184,8 +171,7 @@ class BaseUITest: XCTestCase {
             "--test-hub-id", hubId,
             "--test-register",
         ])
-        app.launchToFirstScreen()
-        waitForMainScreen()
+        app.launchToFirstScreen(awaiting: "main-tab-view")
     }
 
     /// Launch connected to the live backend as a super-admin (hub admin of this
@@ -307,10 +293,10 @@ class BaseUITest: XCTestCase {
         request.httpMethod = "POST"
         request.setValue(testSecret, forHTTPHeaderField: "X-Test-Secret")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // The slow-host ceiling, not a guess: a loaded hosted runner has taken 7-9s to answer
-        // a GET and 30-49s for a first request. The semaphore outlasts the request's own
-        // deadline so URLSession reports the timeout, with its cause, instead of this wait.
-        request.timeoutInterval = Self.slowHostTimeout
+        // The request completes when the server answers; this bounds one that never does. The
+        // semaphore outlasts the request's own deadline so URLSession reports the timeout,
+        // with its cause, instead of this wait.
+        request.timeoutInterval = Self.eventBackstop
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -348,8 +334,8 @@ class BaseUITest: XCTestCase {
         }
         task.resume()
 
-        if semaphore.wait(timeout: .now() + Self.slowHostTimeout + 5) == .timedOut {
-            XCTFail("Simulation request '\(endpoint)' got no answer within \(Self.slowHostTimeout)s")
+        if semaphore.wait(timeout: .now() + Self.eventBackstop + 5) == .timedOut {
+            XCTFail("Simulation request '\(endpoint)' got no answer within \(Self.eventBackstop)s")
         }
         return (resultFirst, resultSecond)
     }
@@ -414,12 +400,15 @@ class BaseUITest: XCTestCase {
             return
         }
         more.tap()
+        // More re-opens the overflow tab shown last rather than its list, and that tab carries a
+        // back button named "More". Which of the two landed is read off the screen: tapping
+        // More a second time because the first has not shown up yet would pop the list back
+        // off on a host slow enough that it had.
         let row = app.tables.cells.staticTexts[title]
-        if !row.waitForExistence(timeout: 2) {
-            // More re-opens the overflow tab shown last; tapping it again pops to its list.
-            more.tap()
-        }
-        guard row.waitForExistence(timeout: 5) else {
+        let back = app.navigationBars.buttons["More"]
+        _ = awaitCondition(timeout: Self.eventBackstop) { row.exists || back.exists }
+        if !row.exists, back.exists { back.tap() }
+        guard row.waitForExistence(timeout: Self.eventBackstop) else {
             XCTFail("Tab '\(title)' should be listed under More")
             return
         }
@@ -437,7 +426,7 @@ class BaseUITest: XCTestCase {
     func navigateToAdminPanel() {
         navigateToSettings()
 
-        let adminLink = scrollToFind("settings-admin-link", maxSwipes: 5, timeout: 10)
+        let adminLink = scrollToFind("settings-admin-link", maxSwipes: 5)
         guard adminLink.exists else {
             XCTFail("Admin panel link should exist for admin users")
             return
@@ -548,14 +537,41 @@ class BaseUITest: XCTestCase {
         return element
     }
 
-    /// Check if any of the given elements exist (returns true if at least one is found).
+    /// Wait until any one of the given elements exists, and say whether one did.
+    ///
+    /// One query over all the identifiers, so the wait ends the moment the first of them
+    /// renders. It used to wait out the whole `timeout` on the first identifier before it
+    /// looked at the second, which made a screen that rendered its second identifier
+    /// (an empty state, say) cost the full timeout and then pass.
     func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier IN %@", identifiers))
+            .firstMatch
+            .waitForExistence(timeout: timeout)
+    }
+
+    /// Swipe up until `element` is rendered (and, if `hittable`, on screen), and say whether it
+    /// got there.
+    ///
+    /// A SwiftUI `List` or `Form` only instantiates rows near the viewport, so a row below the
+    /// fold does not *exist* until it is scrolled to — `waitForExistence` alone will never find
+    /// it, however long it waits. The screen has to be up before it can be scrolled, so the first
+    /// look waits for the element or for a scroll container to be on screen. After that the only
+    /// thing between swipes is the swipe: `swipeUp()` returns once the app is idle again, so the
+    /// element is read from a settled screen and a miss is a miss, not a reason to wait a second
+    /// (a fixed second after each swipe was a guess at how long rendering takes).
+    func scroll(to element: XCUIElement, maxSwipes: Int, hittable: Bool) -> Bool {
+        let reached = { element.exists && (!hittable || element.isHittable) }
+        let containers = app.scrollViews.firstMatch
+        let lists = app.tables.firstMatch
+        let grids = app.collectionViews.firstMatch
+        _ = awaitCondition(timeout: Self.eventBackstop) {
+            reached() || containers.exists || lists.exists || grids.exists
+        }
+        if reached() { return true }
+        for _ in 0..<maxSwipes {
+            app.swipeUp()
+            if reached() { return true }
         }
         return false
     }
@@ -563,34 +579,18 @@ class BaseUITest: XCTestCase {
     /// Scroll down in the current view to find an element that may be off-screen.
     /// Swipes up on the app's main scrollable area until the element is found or max attempts reached.
     @discardableResult
-    func scrollToFind(_ identifier: String, maxSwipes: Int = 5, timeout: TimeInterval = 2) -> XCUIElement {
+    func scrollToFind(_ identifier: String, maxSwipes: Int = 5) -> XCUIElement {
         let element = find(identifier)
-        if element.waitForExistence(timeout: timeout) {
-            return element
-        }
-
-        // Try swiping up to scroll down
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) {
-                return element
-            }
-        }
+        _ = scroll(to: element, maxSwipes: maxSwipes, hittable: false)
         return element
     }
 
     /// Scroll until the element matching `predicate` is in the list's rendered
-    /// window, and return it. A SwiftUI `List` only instantiates rows near the
-    /// viewport, so a row below the fold does not *exist* until it is scrolled
-    /// to — `waitForExistence` alone will never find it, however long it waits.
+    /// window, and return it.
     @discardableResult
     func scrollToMatch(_ predicate: NSPredicate, maxSwipes: Int = 8) -> XCUIElement {
         let element = app.descendants(matching: .any).matching(predicate).firstMatch
-        if element.waitForExistence(timeout: 5) { return element }
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) { return element }
-        }
+        _ = scroll(to: element, maxSwipes: maxSwipes, hittable: false)
         return element
     }
 
@@ -600,19 +600,7 @@ class BaseUITest: XCTestCase {
     @discardableResult
     func scrollToVisible(_ identifier: String, maxSwipes: Int = 10) -> XCUIElement {
         let element = find(identifier)
-
-        // Check if already visible
-        if element.waitForExistence(timeout: 2) && element.isHittable {
-            return element
-        }
-
-        // Scroll until visible
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) && element.isHittable {
-                return element
-            }
-        }
+        _ = scroll(to: element, maxSwipes: maxSwipes, hittable: true)
         return element
     }
 
@@ -621,24 +609,8 @@ class BaseUITest: XCTestCase {
     /// hierarchy but are off-screen and can't be tapped.
     func scrollAndTap(_ identifier: String, maxSwipes: Int = 8) {
         let element = find(identifier)
-
-        // Check if already hittable
-        if element.waitForExistence(timeout: 2) && element.isHittable {
-            element.tap()
-            return
-        }
-
-        // Scroll until hittable
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) && element.isHittable {
-                element.tap()
-                return
-            }
-        }
-
-        // Last resort: tap even if not confirmed hittable
-        if element.exists {
+        if scroll(to: element, maxSwipes: maxSwipes, hittable: true) || element.exists {
+            // Last resort when it exists but never became hittable: tap it anyway.
             element.tap()
         } else {
             XCTFail("Element '\(identifier)' not found after \(maxSwipes) swipes")
@@ -652,6 +624,46 @@ class BaseUITest: XCTestCase {
 // types the same way — including AuthFlowUITests, which runs without a hub and therefore
 // does not inherit BaseUITest's per-class hub setup.
 extension XCTestCase {
+    /// Wait until `condition` holds, and say whether it did.
+    ///
+    /// The condition is re-evaluated while the run loop spins (the same mechanism as
+    /// `waitForExistence`), so the wait ends the moment it is true and no clock paces it. A
+    /// sample can be an accessibility snapshot, and on a saturated hosted simulator ONE costs
+    /// ~19s (merge group 41489316840) — more than a whole budget. So the verdict is never the
+    /// stale sample the waiter happened to be holding when its clock ran out: a failed wait is
+    /// settled by one more sample that begins after the deadline.
+    func awaitCondition(timeout: TimeInterval, _ condition: @escaping () -> Bool) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in condition() }, object: nil
+        )
+        if XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed { return true }
+        return condition()
+    }
+
+    /// Drive a Form `Toggle` to `wanted` with ONE tap, then wait on the value it reports.
+    ///
+    /// `.accessibilityIdentifier` on a Form `Toggle` lands on the merged row, whose frame is the
+    /// whole row: `tap()` hits the centre, over the label, and tapping a Form Toggle's label does
+    /// not toggle it (measured on `transcription-enabled-toggle` and `ivr-language-de`). The
+    /// control is at the trailing edge, so that is where the one tap goes. This used to tap the
+    /// centre, poll 3s, then tap the trailing edge — and a switch that flipped later than 3s on a
+    /// hosted simulator was flipped back by the second tap, reading as "the toggle never changed"
+    /// (merge group 41489316840, `testCallSoundsToggleExists`). Tapping a second time because a
+    /// first one has not shown up yet is guessing at the app; the value is the event.
+    func setToggle(
+        _ toggle: XCUIElement, to wanted: Bool, timeout: TimeInterval,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let isOn = { (toggle.value as? String) == "1" }
+        if isOn() == wanted { return }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(
+            awaitCondition(timeout: timeout) { isOn() == wanted },
+            "\(toggle) should be \(wanted ? "on" : "off") after being tapped",
+            file: file, line: line
+        )
+    }
+
     /// Wait until `element` is on screen (hittable), enabled (a tap on a disabled
     /// control is silently dropped) AND has held the same frame for `settle` seconds.
     /// `exists` is true for a SwiftUI `List` row that is mid-push-transition or about
@@ -762,12 +774,11 @@ extension XCTestCase {
         // `hasKeyboardFocus` is not exposed on XCUIElement in Swift; XCTest evaluates it only
         // as a predicate key, which is also how its own typeText checks focus.
         let hasFocus = NSPredicate(format: "hasKeyboardFocus == true")
-        let focused = NSPredicate { _, _ in
+        let isFocused = {
             hasFocus.evaluate(with: field)
                 || field.descendants(matching: .any).matching(hasFocus).firstMatch.exists
         }
-        let expectation = XCTNSPredicateExpectation(predicate: focused, object: field)
-        if XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed { return true }
+        if awaitCondition(timeout: timeout, isFocused) { return true }
 
         let holder = XCUIApplication().descendants(matching: .any).matching(hasFocus).firstMatch
         let elsewhere = holder.exists

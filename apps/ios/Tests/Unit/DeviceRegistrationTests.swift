@@ -132,14 +132,10 @@ final class DeviceRegistrationTests: XCTestCase {
         XCTAssertTrue(crypto.isUnlocked)
     }
 
-    /// Polls a condition with the run loop spinning — no fixed sleeps (a retry's timing
-    /// is not the thing under test).
+    /// Waits on a condition, not a clock (a retry's timing is not the thing under test).
     private func waitUntil(_ description: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() && Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(condition(), "timed out waiting for: \(description)")
+        let held = await waitForCondition(timeout: timeout, condition)
+        XCTAssertTrue(held, "timed out waiting for: \(description)")
     }
 
     // MARK: - Locked
@@ -275,7 +271,7 @@ final class DeviceRegistrationTests: XCTestCase {
         service.cancelRegistration()
         crypto.lock()
         let afterLock = RegistrationStubURLProtocol.requests().count
-        try await Task.sleep(for: .milliseconds(200))
+        await waitUntil("the retry loop has ended") { !service.isRegistering }
 
         XCTAssertFalse(service.isRegistering)
         XCTAssertLessThanOrEqual(

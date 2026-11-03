@@ -404,11 +404,7 @@ final class DashboardCallsTests: XCTestCase {
     // MARK: - Helpers
 
     private func waitUntil(timeout: TimeInterval = 5, _ condition: @MainActor () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        } while Date() < deadline
-        XCTFail("condition not met within \(timeout)s")
+        let held = await waitForCondition(timeout: timeout, condition)
+        XCTAssertTrue(held, "condition not met within \(timeout)s")
     }
 }

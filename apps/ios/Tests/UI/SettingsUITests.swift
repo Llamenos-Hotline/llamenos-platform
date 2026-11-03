@@ -201,26 +201,9 @@ final class SettingsUITests: BaseUITest {
         (element.value as? String) == "1"
     }
 
-    /// Flip a Form `Toggle` and wait for it to hold the opposite value.
-    ///
-    /// The identifier lands on the merged row, whose centre is over the label; tapping a
-    /// Form Toggle's label does not toggle it, so the trailing edge is tried second (see
-    /// `AdminSettingsUITests.setSwitch`, where this was measured).
+    /// Flip a Form `Toggle` and wait for it to hold the opposite value (see `setToggle`).
     private func flip(_ toggle: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
-        let before = isOn(toggle)
-        let taps: [() -> Void] = [
-            { toggle.tap() },
-            { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() },
-        ]
-        for tap in taps {
-            tap()
-            let deadline = Date().addingTimeInterval(3)
-            while isOn(toggle) == before, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.2)
-            }
-            if isOn(toggle) != before { return }
-        }
-        XCTFail("Tapping the toggle should flip it from \(before)", file: file, line: line)
+        setToggle(toggle, to: !isOn(toggle), timeout: Self.eventBackstop, file: file, line: line)
     }
 
     func testCallSoundsToggleExists() {

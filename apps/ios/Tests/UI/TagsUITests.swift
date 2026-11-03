@@ -173,13 +173,13 @@ final class TagsUITests: BaseUITest {
             // Positive control: Settings rendered, so a missing admin entry
             // below means "hidden", not "the screen never loaded".
             XCTAssertTrue(
-                scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 10).exists,
+                scrollToFind("settings-transcription-link", maxSwipes: 5).exists,
                 "The Settings screen should have loaded"
             )
         }
         then("the admin panel, and the tags admin behind it, should not be reachable") {
             XCTAssertFalse(
-                scrollToFind("settings-admin-link", maxSwipes: 5, timeout: 2).exists,
+                scrollToFind("settings-admin-link", maxSwipes: 5).exists,
                 "The admin panel link should be hidden without audit:read"
             )
             XCTAssertFalse(find("admin-tags").exists, "Tags admin should be hidden without tags:view")
