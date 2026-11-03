@@ -1148,6 +1148,15 @@ describe('rail: lane modes are runtime state, not source', () => {
     expect(ios?.model).toBeUndefined()
   })
 
+  it('loadLanes carries the milestone dial onto the lane, unset by default (#1813)', async () => {
+    const file = tempModesFile({ backend: { mode: 'shadow', milestone: 'M1 — single-device pilot' } })
+    const lanes = await loadLanes(process.cwd(), file)
+    expect(lanes.find((l) => l.id === 'backend')?.milestone).toBe('M1 — single-device pilot')
+    // A lane the file does not name has NO milestone — the dial defaults to
+    // off, so shipping the capability cannot silently narrow any lane's scope.
+    expect(lanes.filter((l) => l.id !== 'backend').every((l) => l.milestone === undefined)).toBe(true)
+  })
+
   it('loadLanes fails closed: a rejected override leaves the lane off', async () => {
     const file = tempModesFile({ backend: { mode: 'live', engine: 'wat' } })
     const rejections: string[] = []

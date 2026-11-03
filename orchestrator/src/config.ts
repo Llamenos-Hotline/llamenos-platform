@@ -15,6 +15,14 @@ export interface Lane {
   model?: string
   requireLabel: string
   vetoLabels: string[]
+  /**
+   * Optional milestone the lane's source selects on IN ADDITION to
+   * `requireLabel` (#1813). Unset by default: which milestone a lane scopes
+   * to is a runtime dial (`lanes.json`), not source — the same rail-8
+   * argument as lane modes. Advancing the fleet from M1 to M2 is turning a
+   * dial, and a dial must not sit behind a human-gated PR to `orchestrator/`.
+   */
+  milestone?: string
   /** Filled by loadLanes() from .claude/agents/fragments/<id>-supervisor.md */
   scope: LaneScope
 }
@@ -42,16 +50,18 @@ export const LANE_MODES_FILE = join(FLEET_DIR, 'lanes.json')
  * One lane's operator override, parsed from `lanes.json`. `mode` is always
  * present; `engine`/`model` are only meaningful for lanes that should run on
  * a non-default engine (e.g. `opencode` with a Kimi subscription while the
- * Anthropic account is exhausted).
+ * Anthropic account is exhausted). `milestone` scopes the lane's source to
+ * one GitHub milestone in addition to its require label (#1813).
  */
 export interface LaneOverride {
   mode: LaneMode
   engine?: EngineId
   model?: string
+  milestone?: string
 }
 
 /** Keys a per-lane override object may carry. Anything else is rejected. */
-const OVERRIDE_KEYS: ReadonlySet<string> = new Set(['mode', 'engine', 'model'])
+const OVERRIDE_KEYS: ReadonlySet<string> = new Set(['mode', 'engine', 'model', 'milestone'])
 
 function isLaneMode(v: unknown): v is LaneMode {
   return v === 'off' || v === 'shadow' || v === 'live'
@@ -81,7 +91,7 @@ function parseLaneOverride(id: string, v: unknown): { override: LaneOverride } |
     const obj = v as Record<string, unknown>
     const unknown = Object.keys(obj).filter((k) => !OVERRIDE_KEYS.has(k))
     if (unknown.length > 0) {
-      return { reason: `lane "${id}": unknown override key(s): ${unknown.join(', ')} (allowed: mode, engine, model)` }
+      return { reason: `lane "${id}": unknown override key(s): ${unknown.join(', ')} (allowed: mode, engine, model, milestone)` }
     }
     if (!isLaneMode(obj['mode'])) {
       return { reason: `lane "${id}": invalid mode ${JSON.stringify(obj['mode'])} (expected off|shadow|live)` }
@@ -98,6 +108,12 @@ function parseLaneOverride(id: string, v: unknown): { override: LaneOverride } |
         return { reason: `lane "${id}": invalid model ${JSON.stringify(obj['model'])} (expected a non-empty string)` }
       }
       override.model = obj['model']
+    }
+    if (obj['milestone'] !== undefined) {
+      if (typeof obj['milestone'] !== 'string' || obj['milestone'].length === 0) {
+        return { reason: `lane "${id}": invalid milestone ${JSON.stringify(obj['milestone'])} (expected a non-empty string)` }
+      }
+      override.milestone = obj['milestone']
     }
     return { override }
   }
@@ -199,6 +215,7 @@ export async function loadLanes(
       mode: override?.mode ?? l.mode,
       engine: override?.engine ?? l.engine,
       model: override?.model ?? l.model,
+      milestone: override?.milestone ?? l.milestone,
       scope: scopes[l.id] ?? { owned: [], notOwned: [] },
     }
   })
