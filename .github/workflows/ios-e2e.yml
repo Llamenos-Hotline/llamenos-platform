@@ -523,21 +523,23 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      # Reuse a usable iPhone simulator when the host has one; CREATE one when
-      # it has none. This step used to abort with "no available iPhone
-      # simulator", which made every build depend on a persistent non-CI
-      # device that nothing in the repo creates (#1875): when disk reclamation
-      # removed it, the next merge-group build died here and ejected a healthy
-      # PR from the queue.
+      # Create a DEDICATED simulator per run and delete it at the end. This
+      # step used to REUSE any existing non-ios-e2e-* iPhone on the host, or
+      # persist a fixture named `llamenos-build-fixture` (#1875). Both shapes
+      # leaked: a scan hit adopts an Xcode-default device (the `iPhone 17`
+      # that sat Shutdown for 61 hours with 3.86 GiB — #1861) that no job
+      # owns, no teardown deletes, and the pre-job reclaim then cannot reap,
+      # because nothing proves it is CI's. Reuse also resolved the
+      # destination by NAME on a shared host, which can match a device
+      # another job is driving.
       #
-      # - ios-e2e-* devices are never reused. They are the `ui` shards' own
-      #   transient devices (deleted at the end of their job), so a scan hit on
-      #   one is a race, not a fixture.
-      # - The device is created ONLY when the scan finds nothing. Creating one
-      #   per run would leak a multi-GiB simulator every run and trip the
-      #   12 GiB disk guard on the Mac. The fixture is deliberately NOT named
-      #   ios-e2e-*: the operator sweep reaps those, so this one persists and
-      #   the next run reuses it.
+      # The per-run device is named `ios-e2e-build-*` so it is inside the
+      # ios-e2e-* naming the pre-job reclaim and the ui shards' orphan sweep
+      # already own: a leak from a crashed agent is reaped at the next job's
+      # guard, same as a ui shard's device. A fresh device is tens of MB and
+      # `build-for-testing` writes almost nothing into it — the multi-GiB
+      # cost the #1875 fixture avoided was never the create, it was the leak.
+      #
       # - The device type is found by ITERATING iPhone types (simctl lists
       #   them newest first) until `simctl create` accepts one. A regex +
       #   `head -1` once picked iPhone-18-Pro against the iOS 26.5 runtime
@@ -546,30 +548,10 @@ jobs:
       # - Every refusal is logged, and exhausting the list fails the step with
       #   simctl's own stderr. A create that fails silently would leave the
       #   job dying later with a misleading message.
-      - name: Detect or create simulator
+      - name: Create simulator
         id: sim
         run: |
           set -euo pipefail
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-              if 'iOS' in runtime:
-                  for d in devices:
-                      name = d.get('name', '')
-                      is_iphone = 'iPhone' in d.get('deviceTypeIdentifier', '') or 'iPhone' in name
-                      if d.get('isAvailable') and is_iphone and not name.startswith('ios-e2e-'):
-                          print(name)
-                          sys.exit(0)
-          ")
-
-          if [ -n "$SIM" ]; then
-            echo "device=$SIM" >> "$GITHUB_OUTPUT"
-            echo "Using existing simulator: $SIM (none created)"
-            exit 0
-          fi
-
-          echo "No usable iPhone simulator on this host; creating one"
           RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
           import json, sys
           rs = [r for r in json.load(sys.stdin)['runtimes']
@@ -585,7 +567,7 @@ jobs:
           for t in ts:
               print(t)
           ")
-          NAME="llamenos-build-fixture"
+          NAME="ios-e2e-build-${{ github.run_id }}-${{ matrix.host }}"
           ERR="$RUNNER_TEMP/simctl-create.err"
           UDID=""
           REASON=""
@@ -603,8 +585,8 @@ jobs:
             exit 1
           fi
 
-          echo "device=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $NAME"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: $NAME ($UDID)"
 
       # UITesting configuration: the UI_TESTING launch hooks the suite relies
       # on (--test-authenticated, --test-hub-url, ...) are compiled out of
@@ -616,7 +598,7 @@ jobs:
               -project Llamenos.xcodeproj \
               -scheme Llamenos \
               -configuration UITesting \
-              -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
               -derivedDataPath ${{ runner.temp }}/llamenos-build \
               -parallelizeTargets \
               EAGER_LINKING=YES \
@@ -664,6 +646,16 @@ jobs:
       - name: Remove this build's DerivedData
         if: always()
         run: rm -rf "$RUNNER_TEMP/llamenos-build"
+
+      # The device this run created. `if: always()` still never runs when the
+      # AGENT dies (#1665), so the pre-job reclaim's ios-e2e-* age sweep is
+      # the backstop for exactly this device — which is why it is named into
+      # that sweep rather than persisting as a fixture (#1861).
+      - name: Delete this build's simulator
+        if: always()
+        run: |
+          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
 
   ui:
     name: ui (${{ matrix.shard }})
