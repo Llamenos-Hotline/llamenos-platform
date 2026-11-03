@@ -14,7 +14,6 @@ import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
 import type { SignalWebhookPayload } from './signal/types'
-import { SignalIdentityService } from './signal/identity'
 import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
 import { refuseIfChannelDisabled } from './channel-guard'
@@ -285,7 +284,7 @@ messaging.post('/:channel/webhook',
     if (sourceNumber && sourceUuid) {
       backgroundTask(c,
         services.settings.getMessagingConfig()
-          .then(config => new SignalIdentityService(getDb()).recordIdentity({
+          .then(config => services.signalIdentity.recordIdentity({
             hubId,
             number: sourceNumber,
             uuid: sourceUuid,
@@ -459,7 +458,7 @@ async function subscriberHashesFor(
 ) {
   const identifiers = carriedIdentifiers(incoming)
   if (includeRecorded && incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
-    const known = await new SignalIdentityService(getDb()).getIdentityByUuid(hubId, incoming.senderIdentifier)
+    const known = await services.signalIdentity.getIdentityByUuid(hubId, incoming.senderIdentifier)
     if (known?.number) identifiers.push(known.number)
   }
   return { identifiers, ...subscriberHashes(incoming.channelType, identifiers, hubId, messagingHashKey) }

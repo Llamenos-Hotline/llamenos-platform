@@ -60,6 +60,11 @@ function makeServices() {
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
     },
     messagingSuppression: { clear: vi.fn().mockResolvedValue(true) },
+    // The router takes the identity service from `services` (#2447), so a test supplies its own.
+    signalIdentity: {
+      getIdentityByUuid: vi.fn().mockResolvedValue(null),
+      recordIdentity: vi.fn().mockResolvedValue({ isNew: false, keyChanged: false }),
+    },
     firehose: {},
     conversations: {
       handleIncoming: vi.fn().mockResolvedValue({
@@ -262,14 +267,14 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
   })
 
   it('a Signal STOP whose envelope hides the number uses the number a previous message recorded for the UUID', async () => {
-    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
-    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
     vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
       channelType: 'signal',
       senderIdentifier: UUID,
       body: 'STOP',
     })))
     const services = makeServices()
+    const lookup = vi.mocked(services.signalIdentity.getIdentityByUuid)
+    lookup.mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
 
     await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
 
@@ -277,18 +282,17 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
     expect(stopData(services).lookupHashes).toContain(messagingContactHash(NUMBER, HUB, KEY))
     // The opt-out is recorded against the recorded number too, so a later import of it is opted out.
     expect(stopData(services).identifiers).toEqual([UUID, NUMBER])
-    lookup.mockRestore()
   })
 
   it('a Signal JOIN never widens through the recorded number', async () => {
-    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
-    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
     vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
       channelType: 'signal',
       senderIdentifier: UUID,
       body: 'join',
     })))
     const services = makeServices()
+    const lookup = vi.mocked(services.signalIdentity.getIdentityByUuid)
+    lookup.mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
 
     await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
 
@@ -296,24 +300,22 @@ describe('STOP is looked up by every identifier shape the sender carried', () =>
     expect(stopData(services).lookupHashes).not.toContain(messagingContactHash(NUMBER, HUB, KEY))
     // Nor can it lift an opt-out through a number the message did not carry.
     expect(stopData(services).identifiers).toEqual([UUID])
-    lookup.mockRestore()
   })
 
   it('START lifts the opt-out for the identifiers the message carried, never a recorded number (#2286)', async () => {
-    const { SignalIdentityService } = await import('@worker/messaging/signal/identity')
-    const lookup = vi.spyOn(SignalIdentityService.prototype, 'getIdentityByUuid').mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
     vi.mocked(getMessagingAdapterFromService).mockResolvedValue(adapterReturning(incomingWith({
       channelType: 'signal',
       senderIdentifier: UUID,
       body: ' Start ',
     })))
     const services = makeServices()
+    const lookup = vi.mocked(services.signalIdentity.getIdentityByUuid)
+    lookup.mockResolvedValue({ number: NUMBER, uuid: UUID } as never)
 
     await post(await createApp(services), `/api/messaging/signal/webhook?hub=${HUB}`)
 
     expect(services.messagingSuppression.clear).toHaveBeenCalledWith('signal', [UUID])
     expect(lookup).not.toHaveBeenCalled()
-    lookup.mockRestore()
   })
 
   it('an ordinary message and the hub subscribe keyword lift nothing', async () => {
