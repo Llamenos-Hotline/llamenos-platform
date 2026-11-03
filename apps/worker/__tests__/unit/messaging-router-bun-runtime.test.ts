@@ -50,7 +50,7 @@ function makeAdapter(): MessagingAdapter {
 function makeServices(auditLog: ReturnType<typeof vi.fn>) {
   return {
     audit: { log: auditLog },
-    settings: { getMessagingConfig: vi.fn().mockResolvedValue(null) },
+    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(null) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
@@ -82,7 +82,7 @@ async function createBunShapedApp(services: Services) {
 }
 
 function postWebhook(app: Awaited<ReturnType<typeof createBunShapedApp>>) {
-  return app.request('/api/messaging/sms/webhook', {
+  return app.request('/api/messaging/sms/webhook?hub=hub-test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 'SM-1132' }),
@@ -120,8 +120,8 @@ describe('messaging webhook on a runtime with no ExecutionContext (Bun) — #113
     expect(auditLog).toHaveBeenCalledWith(
       'messageReceived',
       'system',
-      expect.objectContaining({ channel: 'sms', senderHash: messagingContactHash(incoming.senderIdentifier, undefined, 'f'.repeat(64)) }),
-      null,
+      expect.objectContaining({ channel: 'sms', senderHash: messagingContactHash(incoming.senderIdentifier, 'hub-test', 'f'.repeat(64)) }),
+      'hub-test',
     )
   })
 

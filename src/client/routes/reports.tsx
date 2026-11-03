@@ -10,6 +10,7 @@ import {
   assignReport,
   updateReport,
   getReportTypes,
+  NoActiveHubError,
   type Report,
   type ConversationMessage,
 } from '@/lib/api'
@@ -68,7 +69,10 @@ function ReportsPage() {
 
     listReports(params)
       .then(({ conversations }) => setReports(conversations))
-      .catch(() => toast(t('reports.loadError', { defaultValue: 'Failed to load reports' }), 'error'))
+      .catch(err => {
+        // No hub to browse is an empty list, not a failure to load one (#2405).
+        if (!(err instanceof NoActiveHubError)) toast(t('reports.loadError', { defaultValue: 'Failed to load reports' }), 'error')
+      })
       .finally(() => setLoading(false))
   }, [statusFilter, categoryFilter, t, toast])
 
@@ -80,8 +84,8 @@ function ReportsPage() {
       if (categoryFilter !== 'all') params.category = categoryFilter
       listReports(params)
         .then(({ conversations }) => setReports(conversations))
-        .catch(() => {
-          console.error('[reports] Background report refresh failed')
+        .catch(err => {
+          if (!(err instanceof NoActiveHubError)) console.error('[reports] Background report refresh failed')
         })
     }, 30_000)
     return () => clearInterval(interval)

@@ -27,6 +27,7 @@ import {
   createShiftViaApi,
   createBanViaApi,
   createReportViaApi,
+  apiGet,
   createContactByNameViaApi,
   enableCaseManagementViaApi,
   createEntityTypeViaApi,
@@ -140,12 +141,16 @@ test.describe('App Screenshots', () => {
       createBanViaApi(request, { reason: 'Spam calls' }),
     ])
 
-    // Create reports
+    // Create reports — in the hub the admin's UI opens on: reports have no
+    // unscoped route (#2395).
+    const { data: hubList } = await apiGet<{ hubs: Array<{ id: string }> }>(request, '/hubs')
+    const hubId = hubList.hubs[0]?.id
+    if (!hubId) throw new Error('screenshots: the admin belongs to no hub to file reports in')
     await Promise.all([
-      createReportViaApi(request, { title: 'Safety concern — downtown shelter', category: 'safety', status: 'waiting' }),
-      createReportViaApi(request, { title: 'Follow-up needed: caller #4821', category: 'follow-up', status: 'active' }),
-      createReportViaApi(request, { title: 'Resource request: housing support', category: 'resource', status: 'closed' }),
-      createReportViaApi(request, { title: 'Crisis intervention — park location', category: 'crisis', status: 'waiting' }),
+      createReportViaApi(request, { title: 'Safety concern — downtown shelter', category: 'safety', status: 'waiting', hubId }),
+      createReportViaApi(request, { title: 'Follow-up needed: caller #4821', category: 'follow-up', status: 'active', hubId }),
+      createReportViaApi(request, { title: 'Resource request: housing support', category: 'resource', status: 'closed', hubId }),
+      createReportViaApi(request, { title: 'Crisis intervention — park location', category: 'crisis', status: 'waiting', hubId }),
     ])
 
     // Enable CMS and create entity type + contacts + cases

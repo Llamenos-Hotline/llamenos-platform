@@ -4,7 +4,8 @@
  * Notes are E2EE — validates encrypted content, key envelopes, and the
  * callId/conversationId refinement (at least one must be present).
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import type { AppEnv } from '../../types'
 import notesRoutes from '../../routes/notes'
 import {
   createTestApp,
@@ -13,11 +14,17 @@ import {
   VALID_KEY_ENVELOPE,
 } from '../helpers/openapi-validation'
 
+// The notes router is hub-only (#2395): outside a hub it 404s before validating.
+// Inside one, every /:id route first proves the note is in the path hub (#2011).
 function createApp() {
   return createTestApp({
     prefix: '/notes',
     routes: notesRoutes,
     authenticated: true,
+    hubId: 'hub-1',
+    services: {
+      records: { getNote: vi.fn().mockResolvedValue({ id: 'note-1', hubId: 'hub-1' }) },
+    } as unknown as AppEnv['Variables']['services'],
   })
 }
 

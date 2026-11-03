@@ -1,4 +1,4 @@
-import { Hono, type Context } from 'hono'
+import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -6,7 +6,7 @@ import { listNotesQuerySchema, createNoteBodySchema, updateNoteBodySchema, creat
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createLogger } from '../lib/logger'
-import { assertInHub, callerHasHubAccess, resourceInPathHub } from '../lib/hub-scope'
+import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
 import { ServiceError } from '../services/settings'
 import type { Services } from '../services'
@@ -14,6 +14,12 @@ import type { Services } from '../services'
 const logger = createLogger('routes.notes')
 
 const notes = new Hono<AppEnv>()
+// A note belongs to a hub, and so does this router (#2395). Outside
+// /hubs/:hubId the list would carry no hub filter and the caller's GLOBAL
+// permissions, so a global `notes:read-all` holder read every hub's notes.
+// Every hub's admins read its notes through the hub path, which is the only
+// one there is.
+notes.use('*', hubOnly)
 // Require at least notes:read-own to access any notes endpoint
 notes.use('*', requirePermission('notes:read-own'))
 
@@ -28,37 +34,27 @@ const noteInPathHub = resourceInPathHub({
 notes.use('/:id/*', noteInPathHub)
 
 /**
- * Refuse (404) a note filed under a call or conversation the caller cannot see
- * from this request (#2112).
+ * Refuse (404) a note filed under a call or conversation outside the path hub
+ * (#2112).
  *
  * `callId` / `conversationId` were stored verbatim: a note could hang off an
  * invented id, or off a call that rang in ANOTHER hub, and the audit log then
- * recorded `noteCreated {callId}` as if it were real. Inside /hubs/:hubId the
- * target must live in that hub. On the unscoped mount there is no path hub, so
- * the target must exist and sit in a hub the caller holds a role in (a target
- * with no hub is global). A target of another hub and one that does not exist
+ * recorded `noteCreated {callId}` as if it were real. The target must live in
+ * the hub of the URL. A target of another hub and one that does not exist
  * answer identically, so the route cannot be used to probe which ids are real.
  */
 async function assertNoteTargetVisible(
-  c: Context<AppEnv>,
   services: Services,
   target: { callId?: string; conversationId?: string },
-  hubId: string | undefined,
+  hubId: string,
 ): Promise<void> {
-  const visible = (rowHubId: string | null) => !rowHubId || callerHasHubAccess(c, rowHubId)
-
   if (target.callId) {
-    const call = hubId
-      ? (await services.calls.getActiveCallById(hubId, target.callId)) ?? (await services.calls.getCallRecord(hubId, target.callId))
-      : (await services.calls.getActiveCallByCallId(target.callId)) ?? (await services.calls.getCallRecord('', target.callId))
-    if (!call || !visible(call.hubId)) throw new ServiceError(404, 'Call not found')
+    const call = (await services.calls.getActiveCallById(hubId, target.callId)) ?? (await services.calls.getCallRecord(hubId, target.callId))
+    if (!call) throw new ServiceError(404, 'Call not found')
   }
 
   if (target.conversationId) {
-    const conversation = hubId
-      ? await services.conversations.getByIdForHub(target.conversationId, hubId)
-      : await services.conversations.getById(target.conversationId)
-    if (!visible(conversation.hubId)) throw new ServiceError(404, 'Conversation not found')
+    await services.conversations.getByIdForHub(target.conversationId, hubId)
   }
 }
 
@@ -86,9 +82,7 @@ notes.get('/',
     const canReadAll = checkPermission(permissions, 'notes:read-all')
     const query = c.req.valid('query')
 
-    // When accessed via hub-scoped route (/api/hubs/:hubId/notes),
-    // hubId is set by hubContext middleware — scope results to that hub.
-    const hubId = c.get('hubId') as string | undefined
+    const hubId = pathHubId(c)
 
     const result = await services.records.listNotes({
       hubId,
@@ -132,11 +126,9 @@ notes.post('/',
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
 
-    // When accessed via hub-scoped route (/api/hubs/:hubId/notes),
-    // hubId is set by hubContext middleware — scope the note to that hub.
-    const hubId = c.get('hubId') as string | undefined
+    const hubId = pathHubId(c)
 
-    await assertNoteTargetVisible(c, services, body, hubId)
+    await assertNoteTargetVisible(services, body, hubId)
     await assertAdminCanRead(services, c.env, hubId, body.adminEnvelopes, 'A note', { authorPubkey: pubkey })
 
     const note = await services.records.createNote({

@@ -75,7 +75,7 @@ class UserDetailViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingAudit = true) }
             try {
                 val response = apiService.request<AuditLogResponse>(
-                    "GET", apiService.hp("/api/audit") + "?actorPubkey=$pubkey&limit=20",
+                    "GET", apiService.activeHubPath("/api/audit") + "?actorPubkey=$pubkey&limit=20",
                 )
                 _uiState.update {
                     it.copy(auditEntries = response.entries, isLoadingAudit = false)

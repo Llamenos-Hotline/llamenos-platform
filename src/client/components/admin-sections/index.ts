@@ -22,7 +22,7 @@ import { MessagingSmsSection } from './messaging-sms-section'
 import { RcsChannelSection } from './rcs-channel-section'
 import { SignalChannelSection } from './signal-channel-section'
 import { BansSection } from './bans-section'
-import { AuditSection } from './audit-section'
+import { AuditSection, PlatformAuditSection } from './audit-section'
 import { AnalyticsSection } from './analytics-section'
 import { HealthSection } from './health-section'
 import { HubsSection } from './hubs-section'
@@ -69,6 +69,7 @@ const sections: Record<string, ComponentType> = {
   'erasure-config': ErasureConfigSection,
   'retention': RetentionSection,
   'platform-bans': PlatformBansSection,
+  'platform-audit': PlatformAuditSection,
 }
 
 for (const [slug, component] of Object.entries(sections)) {

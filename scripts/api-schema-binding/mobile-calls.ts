@@ -354,6 +354,14 @@ function evalCall(ctx: Ctx, name: string, open: number, close: number): Res {
     const inner = evalRange(sub, ...args[0].range)
     return isUnres(inner) ? inner : { alts: inner.alts.map(a => ({ path: a.path, scoping: a.scoping === 'none' ? 'hp' : a.scoping })) }
   }
+  // `activeHubPath("/api/x")` (Swift and Kotlin): the active hub's scoped path with NO
+  // unscoped fallback — it throws when no hub is active (#2395) — so it always calls
+  // the hub route.
+  if (name === 'activeHubPath') {
+    if (args.length !== 1) return unres('activeHubPath() with an unexpected argument list')
+    const inner = evalRange(sub, ...args[0].range)
+    return isUnres(inner) ? inner : { alts: inner.alts.map(a => ({ path: scopeToHub(a.path), scoping: 'explicit' as HubScoping })) }
+  }
   // `APIService.hubPath(hubId, "/api/x")` (Swift) and `ApiService.hubPath(hubId, "/api/x")`
   // (Kotlin) — the canonical explicit-hub builder. A one-argument `hubPath(path)` is a
   // different, file-private helper and is resolved as an ordinary call below.

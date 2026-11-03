@@ -706,8 +706,8 @@ When('the admin links the record to the non-event record', async ({ request, wor
   setLastResponse(world, { status: result.status, data: result.data })
 })
 
-Given('a report exists', async ({ request, world }) => {
-  const report = await createReportViaApi(request)
+Given('a report exists', async ({ request, world, workerHub }) => {
+  const report = await createReportViaApi(request, { hubId: workerHub })
   getCmsState(world).lastReportId = report.id
 })
 

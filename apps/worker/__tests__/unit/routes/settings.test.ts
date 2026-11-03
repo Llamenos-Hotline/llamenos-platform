@@ -564,8 +564,9 @@ describe('settings route', () => {
 
     describe('POST /messaging/telegram/register-webhook (#2154)', () => {
       const env = { HMAC_SECRET: 'h'.repeat(64), DOMAIN: 'hotline.example' }
-      const register = (app: ReturnType<typeof createTestApp>) =>
-        app.request('/messaging/telegram/register-webhook', { method: 'POST' }, env)
+      const register = (app: ReturnType<typeof createTestApp>, query = '?hubId=hub-1') =>
+        app.request(`/messaging/telegram/register-webhook${query}`, { method: 'POST' }, env)
+      const getHub = () => vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } })
 
       it('requires manage-messaging permission', async () => {
         const res = await register(createTestApp({ permissions: ['settings:read'] }))
@@ -579,6 +580,7 @@ describe('settings route', () => {
           permissions: ['settings:manage-messaging'],
           services: {
             settings: {
+              getHub: getHub(),
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
@@ -592,9 +594,30 @@ describe('settings route', () => {
         const [url, init] = fetchMock.mock.calls[0]
         expect(String(url)).toBe('https://api.telegram.org/bot1:abc/setWebhook')
         expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-          url: 'https://hotline.example/api/messaging/telegram/webhook',
+          url: 'https://hotline.example/api/messaging/telegram/webhook?hub=hub-1',
           secret_token: 'tg-secret',
         })
+        vi.unstubAllGlobals()
+      })
+
+      it('refuses with 400 when no hub is named, without calling Telegram (#2395)', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const app = createTestApp({
+          permissions: ['settings:manage-messaging'],
+          services: {
+            settings: {
+              getHub: getHub(),
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['telegram'],
+                telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
+              }),
+            },
+          },
+        })
+        const res = await register(app, '')
+        expect(res.status).toBe(400)
+        expect(fetchMock).not.toHaveBeenCalled()
         vi.unstubAllGlobals()
       })
 
@@ -605,6 +628,7 @@ describe('settings route', () => {
           permissions: ['settings:manage-messaging'],
           services: {
             settings: {
+              getHub: getHub(),
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc' },
@@ -624,6 +648,7 @@ describe('settings route', () => {
           permissions: ['settings:manage-messaging'],
           services: {
             settings: {
+              getHub: getHub(),
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
