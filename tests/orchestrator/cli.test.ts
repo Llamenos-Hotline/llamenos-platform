@@ -202,6 +202,20 @@ describe('systemd unit files reference real CLI subcommands', () => {
   })
 
   it.each(serviceFiles)('%s: every ExecStart subcommand is implemented by the CLI', (file) => {
+    const text = readFileSync(join(systemdDir, file), 'utf8')
+    const execLine = /^ExecStart=(.+)$/m.exec(text)?.[1]?.trim() ?? ''
+    const binary = execLine.split(/\s+/)[0]?.split('/').pop() ?? ''
+    if (binary !== 'llamenos-fleet') {
+      // Non-CLI units (the watchdog) exec a standalone script from
+      // orchestrator/bin/, not `llamenos-fleet <subcommand>`. The equivalent
+      // rail is that the named script actually exists there — a rename of
+      // either side must break this suite, not the systemd unit at runtime.
+      expect(
+        readdirSync(join(REPO_ROOT, 'orchestrator', 'bin')),
+        `${file} ExecStart names ${binary}, which is not in orchestrator/bin`,
+      ).toContain(binary)
+      return
+    }
     const subs = execStartSubcommands(file)
     expect(subs.length).toBeGreaterThan(0)
     for (const sub of subs) {

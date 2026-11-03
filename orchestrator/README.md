@@ -645,6 +645,60 @@ The service unit sets `SuccessExitStatus=0` and does not treat a pass that
 declined to run (lock held, halted, breaker tripped) as a failure — those
 are `tick()` working as designed, not a fault for systemd to back off on.
 
+## The watchdog — liveness AND outcomes (#1834)
+
+`orchestrator/bin/llamenos-fleet-watchdog` runs hourly from
+`llamenos-fleet-watchdog.timer` and is the only thing watching when nobody is
+looking. On failure it writes a repair brief and dispatches one kimi repair
+agent (2h cooldown, at most one live). No LLM runs while every check passes.
+
+The check set is two halves. The first half is liveness — "is a process
+alive / did a thing run": tick timer active, `llamenos-fleet status` clean,
+`llamenos-fleet doctor` clean, tick service `Result=success`, tick age within
+its timeout, `Runner.Listener` present. The second half is outcome — "is the
+fleet producing anything", each derived at read time from GitHub or the Mac,
+never from a cached label:
+
+1. **Merge drought** — main's head commit older than
+   `WATCHDOG_MERGE_DROUGHT_HOURS` (default 6) while at least one open PR is
+   `CLEAN`/`MERGEABLE`. The qualifier is load-bearing: a quiet repo with
+   nothing mergeable is healthy; a quiet repo with mergeable work is stalled.
+2. **Mergeable but unqueued** — more than `WATCHDOG_UNQUEUED_MAX` (default 2)
+   open, non-draft, base-`main` PRs that are `CLEAN`/`MERGEABLE` with no
+   `autoMergeRequest`, while the merge queue is empty. This is the #1826
+   symptom. Drafts and non-`main` bases are never counted.
+3. **iOS runner headroom** — free space on the Mac's `/System/Volumes/Data`
+   below `WATCHDOG_MAC_WARN_FREE_GIB` (default 16 GiB, the disk guard's warn
+   band; its refusal band 4 GiB lower is what ejects PRs, #1833), read over
+   ssh (`MAC_SSH_HOST`, default `mac`). An unreachable host is a FAIL, not a
+   pass — the Mac runners gate every merge, so silence from them is a red
+   condition, not an unknown one.
+
+Every failure message names the measurement and the threshold. An outcome
+measurement that cannot be read (GitHub error, unparseable value) is itself
+a failure: an unmeasured fleet is not a healthy one. Outcome failures usually
+mean the environment, not the code — the repair brief template
+(`orchestrator/systemd/llamenos-fleet-watchdog-brief.md`, host-overridable at
+`~/.llamenos-fleet/watchdog/brief.md`) tells the repair agent so.
+
+The units live at
+`orchestrator/systemd/llamenos-fleet-watchdog.{service,timer}` and, like the
+tick units, are installed by a human:
+
+```bash
+ln -sf "$PWD/orchestrator/bin/llamenos-fleet-watchdog" ~/.local/bin/llamenos-fleet-watchdog
+cp orchestrator/systemd/llamenos-fleet-watchdog.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now llamenos-fleet-watchdog.timer
+```
+
+The service folds in `KillMode=process` (formerly the `killmode.conf`
+drop-in): with the default control-group kill, systemd reaped the tmux repair
+session the instant the watchdog exited — six 0-byte repair logs measured
+2026-10-11. `tests/orchestrator/watchdog.test.ts` audits every gate by
+breaking it: each check is fired against a stubbed measurement, and each
+negative control (quiet repo, draining queue, healthy disk) must stay `ok`.
+
 ## First shadow pass — result
 
 Run by hand on 2026-09-12, all six lanes in `shadow` mode

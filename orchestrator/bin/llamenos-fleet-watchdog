@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# llamenos-fleet-watchdog — hourly deterministic fleet health check.
+#
+# No LLM runs unless a check fails; then one kimi repair agent is dispatched
+# (at most one live, 2h cooldown).
+#
+# The check set is two halves, and the second half is the one that matters
+# when nobody is looking (issue #1834):
+#
+#   LIVENESS  — "is a process alive / did a thing run":
+#     1. tick timer active
+#     2. `llamenos-fleet status` exit code, and `halted: no` (or a self-healing
+#        quota-degraded line)
+#     3. `llamenos-fleet doctor` exit code, and no FAIL/ERR line
+#     4. tick service Result=success
+#     5. tick age (running < 15000s, or timer triggered < 4500s ago)
+#     6. Runner.Listener process present
+#
+#   OUTCOME  — "is the fleet producing anything", each derived at READ TIME
+#   from GitHub / the Mac host, never from a cached label:
+#     7. merge drought — nothing merged to main for > WATCHDOG_MERGE_DROUGHT_HOURS
+#        (default 6) while at least one open PR is CLEAN/MERGEABLE. The qualifier
+#        matters: a quiet repo with nothing mergeable is healthy; a quiet repo
+#        with mergeable work is stalled. On 2026-11-02 the watchdog logged `ok`
+#        every hour through a six-hour total merge stall because every liveness
+#        check was green.
+#     8. mergeable but unqueued — > WATCHDOG_UNQUEUED_MAX (default 2) open,
+#        non-draft, base-main PRs that are CLEAN/MERGEABLE with NO
+#        autoMergeRequest while the merge queue is empty. This is the #1826
+#        symptom; a sustained non-zero count here went unreported for hours.
+#     9. iOS runner headroom — free space on the Mac host's /System/Volumes/Data
+#        below the disk guard's warn band (WATCHDOG_MAC_WARN_FREE_GIB, default
+#        16 GiB — the same number scripts/ci/mac-runner-disk-guard.sh warns at;
+#        the refusal that ejects PRs is 4 GiB below it). An UNREACHABLE host is
+#        a FAIL, never a pass: the Mac runners gate every merge, so silence from
+#        them is a red condition, not an unknown one
+#        (project_mac_runners_gate_every_merge).
+#
+# Every failure message names the measurement AND the threshold, so the repair
+# brief is actionable without re-deriving anything.
+#
+# Install (a human step, like the tick units — see orchestrator/README.md):
+#   ln -sf "$PWD/orchestrator/bin/llamenos-fleet-watchdog" ~/.local/bin/llamenos-fleet-watchdog
+#   cp orchestrator/systemd/llamenos-fleet-watchdog.{service,timer} ~/.config/systemd/user/
+#
+# Tunables (environment; the systemd unit sources ~/.llamenos-fleet/env):
+#   WATCHDOG_MERGE_DROUGHT_HOURS   merge-drought threshold in hours (default 6)
+#   WATCHDOG_UNQUEUED_MAX          unqueued-mergeable count tolerated (default 2)
+#   WATCHDOG_MAC_WARN_FREE_GIB     Mac disk warn band in GiB (default 16)
+#   WATCHDOG_SSH_CONNECT_TIMEOUT   ssh connect timeout in seconds (default 15)
+#   MAC_SSH_HOST                   ssh host alias for the Mac (default: mac)
+#
+# Test/override hooks (tests/orchestrator/watchdog.test.ts uses these; the
+# systemd unit never sets them):
+#   FLEET_WATCHDOG_REPO     runtime checkout (default: resolved through symlink)
+#   FLEET_WATCHDOG_DIR      state dir (default: ~/.llamenos-fleet/watchdog)
+#   FLEET_WATCHDOG_PATH     replaces the PATH this script exports
+#   FLEET_WATCHDOG_GH_REPO  owner/repo for gh calls (default: origin of REPO)
+#   FLEET_WATCHDOG_DISPATCH repair dispatcher (default: dispatch-one.sh skill)
+
+set -uo pipefail
+
+# systemd starts user units with a minimal PATH; guarantee the baseline. Tests
+# replace the whole thing via FLEET_WATCHDOG_PATH so their stubs win.
+export PATH="${FLEET_WATCHDOG_PATH:-$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin}"
+
+# Resolve the repo through this symlink (same pattern as bin/llamenos-fleet) so
+# the command works from any install location with no path written into units.
+if [[ -n ${FLEET_WATCHDOG_REPO:-} ]]; then
+  REPO="$FLEET_WATCHDOG_REPO"
+else
+  SELF="${BASH_SOURCE[0]}"
+  while [ -L "$SELF" ]; do
+    DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
+    SELF="$(readlink "$SELF")"
+    [[ $SELF != /* ]] && SELF="$DIR/$SELF"
+  done
+  REPO="$(cd -P "$(dirname "$SELF")/../.." && pwd)"
+fi
+
+D="${FLEET_WATCHDOG_DIR:-$HOME/.llamenos-fleet/watchdog}"
+LOG="$D/watchdog.log"; STAMP="$D/last-launch"
+DISPATCH="${FLEET_WATCHDOG_DISPATCH:-$HOME/.claude/skills/supervising-dispatched-sessions/dispatch-one.sh}"
+mkdir -p "$D"
+cd "$REPO" || exit 1
+exec 9>"$D/lock"; flock -n 9 || exit 0
+log(){ echo "$(date -Is) $*" >>"$LOG"; }
+fail=()
+
+MERGE_DROUGHT_HOURS="${WATCHDOG_MERGE_DROUGHT_HOURS:-6}"
+UNQUEUED_MAX="${WATCHDOG_UNQUEUED_MAX:-2}"
+MAC_WARN_FREE_GIB="${WATCHDOG_MAC_WARN_FREE_GIB:-16}"
+SSH_CONNECT_TIMEOUT="${WATCHDOG_SSH_CONNECT_TIMEOUT:-15}"
+MAC_HOST="${MAC_SSH_HOST:-mac}"
+
+# ── Liveness checks (1–6) ────────────────────────────────────────────────────
+
+[[ $(systemctl --user is-active llamenos-fleet-tick.timer) == active ]] || fail+=("tick timer not active")
+st=$(timeout 60 llamenos-fleet status 2>&1) || fail+=("llamenos-fleet status exited non-zero")
+# A quota halt is self-healing — tick() auto-resumes it (issue #817) and status
+# prints "status: degraded — engine quota exhausted until <ISO>" instead of
+# "halted: no". Both shapes are healthy; anything else is not.
+grep -qE '^(halted: no|status: degraded )' <<<"$st" || fail+=("fleet halted or status unreadable")
+doc=$(timeout 180 llamenos-fleet doctor 2>&1) || fail+=("llamenos-fleet doctor exited non-zero")
+grep -qE '^\s*(FAIL|ERR)' <<<"$doc" && fail+=("doctor reports FAIL")
+res=$(systemctl --user show llamenos-fleet-tick.service -p Result --value)
+[[ $res == success ]] || fail+=("tick service Result=$res")
+# A tick runs up to TimeoutStartSec=14400 and the timer does not re-fire while
+# one is active, so judge a running tick by its start time, an idle one by the timer.
+state=$(systemctl --user show llamenos-fleet-tick.service -p ActiveState --value)
+if [[ $state == activating ]]; then
+  since=$(systemctl --user show llamenos-fleet-tick.service -p InactiveExitTimestamp --value)
+  age=$(( $(date +%s) - $(date -d "$since" +%s) ))
+  (( age < 15000 )) || fail+=("tick running for ${age}s, past its 14400s timeout")
+else
+  last=$(systemctl --user show llamenos-fleet-tick.timer -p LastTriggerUSec --value)
+  if [[ -n $last && $last != n/a ]]; then
+    age=$(( $(date +%s) - $(date -d "$last" +%s) ))
+    (( age < 4500 )) || fail+=("no tick triggered for ${age}s")
+  else fail+=("tick timer never triggered"); fi
+fi
+pgrep -f 'actions-runner-llamenos/bin/Runner.Listener' >/dev/null || fail+=("review runner (Runner.Listener) not running")
+
+# ── Outcome checks (7–9): derived from GitHub / the Mac at read time ─────────
+#
+# The repo is resolved at read time from the runtime checkout's single origin
+# remote (asserted unique by `llamenos-fleet doctor`), never cached in a label
+# or a file (feedback_derive_status_never_cache).
+GH_REPO="${FLEET_WATCHDOG_GH_REPO:-}"
+if [[ -z $GH_REPO ]]; then
+  origin=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
+  # git@github.com:owner/repo.git | https://github.com/owner/repo(.git) → owner/repo
+  GH_REPO=$(sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##' <<<"$origin")
+fi
+if [[ -z $GH_REPO || $GH_REPO != */* ]]; then
+  fail+=("outcome checks: could not resolve GitHub repo from $REPO origin")
+else
+  gh_ok=1
+  gh_detail=""
+
+  # One PR read feeds both outcome checks 7 and 8. --jq runs inside gh, so no
+  # jq dependency on the host: two counts, one per line.
+  if pr_counts=$(gh pr list -R "$GH_REPO" --state open --base main --limit 200 \
+      --json number,isDraft,mergeStateStatus,autoMergeRequest \
+      --jq '([.[] | select(.mergeStateStatus == "CLEAN" or .mergeStateStatus == "MERGEABLE")] | length),
+            ([.[] | select((.isDraft | not)
+               and (.mergeStateStatus == "CLEAN" or .mergeStateStatus == "MERGEABLE")
+               and (.autoMergeRequest == null))] | length)' 2>&1); then
+    mapfile -t _pc <<<"$pr_counts"
+    mergeable_open="${_pc[0]:-0}"
+    unqueued="${_pc[1]:-0}"
+  else
+    gh_ok=0; gh_detail="gh pr list failed: ${pr_counts:0:200}"
+  fi
+
+  # 7. Merge drought. main's head committer date is the last time anything
+  # landed on main — for this repo that is a merge-queue landing.
+  last_merge_iso=""
+  if (( gh_ok )); then
+    if last_merge_iso=$(gh api "repos/$GH_REPO/commits/main" --jq '.commit.committer.date' 2>&1); then
+      last_merge_epoch=$(date -d "$last_merge_iso" +%s 2>/dev/null || echo 0)
+      if (( last_merge_epoch == 0 )); then
+        gh_ok=0; gh_detail="unparseable main head date: $last_merge_iso"
+      fi
+    else
+      gh_ok=0; gh_detail="gh api commits/main failed: ${last_merge_iso:0:200}"
+    fi
+  fi
+  if (( gh_ok )); then
+    drought_age_h=$(( ( $(date +%s) - last_merge_epoch ) / 3600 ))
+    if (( mergeable_open > 0 && drought_age_h > MERGE_DROUGHT_HOURS )); then
+      fail+=("merge drought: no merge to main in ${drought_age_h}h (threshold ${MERGE_DROUGHT_HOURS}h) while ${mergeable_open} open PR(s) are CLEAN/MERGEABLE — fleet is alive but producing nothing. Usually environmental (runner disk, runner offline, a required context absent); do not dispatch a code fix without evidence for one")
+    fi
+  fi
+
+  # 8. Mergeable but unqueued, while the queue is empty. A non-empty queue
+  # means the pipeline is draining — unarmed PRs behind it are normal.
+  queue_count=""
+  if (( gh_ok )); then
+    if queue_count=$(gh api graphql \
+        -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){mergeQueue(branch:"main"){entries(first:1){totalCount}}}}' \
+        -f owner="${GH_REPO%%/*}" -f name="${GH_REPO##*/}" \
+        --jq '(.data.repository.mergeQueue.entries.totalCount) // 0' 2>&1); then
+      [[ $queue_count =~ ^[0-9]+$ ]] || { gh_ok=0; gh_detail="unparseable merge queue count: $queue_count"; }
+    else
+      gh_ok=0; gh_detail="gh api graphql mergeQueue failed: ${queue_count:0:200}"
+    fi
+  fi
+  if (( gh_ok )); then
+    if (( queue_count == 0 && unqueued > UNQUEUED_MAX )); then
+      fail+=("mergeable but unqueued: ${unqueued} open non-draft base-main PRs are CLEAN/MERGEABLE with green checks but no autoMergeRequest, and the merge queue is empty (threshold >${UNQUEUED_MAX}) — the #1826 stall shape. Check why arming is not happening (tick outcome, review gate), not the PRs themselves")
+    fi
+  fi
+  if (( ! gh_ok )); then
+    fail+=("outcome checks: could not read GitHub state ($gh_detail) — refusing to call an unmeasured fleet healthy")
+  fi
+fi
+
+# 9. iOS runner headroom. The disk guard on the Mac warns below 16 GiB and
+# refuses below 12; the refusal is what ejects PRs (#1833), so the warn band is
+# the leading indicator. Read the same number the guard reads (df -k, 4th
+# column of the POSIX line) over ssh. An unreachable host is a FAIL — the Mac
+# runners gate every merge, so an unreachable iOS runner means nothing can
+# merge at all.
+mac_df=""
+if mac_df=$(ssh -o BatchMode=yes -o "ConnectTimeout=$SSH_CONNECT_TIMEOUT" "$MAC_HOST" "df -k /System/Volumes/Data" 2>&1); then
+  mac_avail_kib=$(awk 'NR==2 {print $4}' <<<"$mac_df")
+  if [[ ! $mac_avail_kib =~ ^[0-9]+$ ]]; then
+    fail+=("iOS runner disk headroom unreadable on $MAC_HOST (df said: $(head -2 <<<"$mac_df" | tail -1)) — refusing to call an unmeasured gate healthy")
+  else
+    mac_free_gib=$(awk -v k="$mac_avail_kib" 'BEGIN { printf "%.1f", k / 1048576 }')
+    if awk -v f="$mac_free_gib" -v w="$MAC_WARN_FREE_GIB" 'BEGIN { exit !(f < w) }'; then
+      fail+=("iOS runner disk headroom: ${mac_free_gib} GiB free on /System/Volumes/Data, below the ${MAC_WARN_FREE_GIB} GiB warn band (refusal at 12 GiB ejects iOS PRs, #1833). Run scripts/ci/mac-runner-disk-guard.sh reclaim on the Mac before the queue ejects something")
+    fi
+  fi
+else
+  fail+=("iOS runner $MAC_HOST unreachable over ssh: ${mac_df:0:200} — the Mac runners gate every merge, so nothing can merge until this host answers")
+fi
+
+# ── Verdict ───────────────────────────────────────────────────────────────────
+
+if ((${#fail[@]} == 0)); then log "ok"; exit 0; fi
+log "UNHEALTHY: ${fail[*]}"
+
+tmux ls 2>/dev/null | grep -q '^fleet-watchdog' && { log "repair agent already running — skip"; exit 0; }
+if [[ -f $STAMP ]] && (( $(date +%s) - $(stat -c %Y "$STAMP") < 7200 )); then
+  log "cooldown — last repair launched <2h ago, skip"; exit 0; fi
+
+name="fleet-watchdog-$(date +%m%d%H%M)"
+brief=$D/$name.md
+BRIEF_TEMPLATE="$REPO/orchestrator/systemd/llamenos-fleet-watchdog-brief.md"
+[[ -f $D/brief.md ]] && BRIEF_TEMPLATE="$D/brief.md"
+{ cat "$BRIEF_TEMPLATE"
+  printf '\n### Failing checks\n'; printf -- '- %s\n' "${fail[@]}"
+  printf '\n### llamenos-fleet status\n```\n%s\n```\n' "$st"
+  printf '\n### llamenos-fleet doctor\n```\n%s\n```\n' "$doc"
+  printf '\n### Outcome evidence\n```\n'
+  printf 'repo: %s\n' "$GH_REPO"
+  printf 'last merge to main: %s\n' "${last_merge_iso:-unread}"
+  printf 'open CLEAN/MERGEABLE PRs (base main): %s\n' "${mergeable_open:-unread}"
+  printf 'mergeable PRs with no autoMergeRequest: %s\n' "${unqueued:-unread}"
+  printf 'merge queue entries: %s\n' "${queue_count:-unread}"
+  printf 'Mac df (%s):\n%s\n' "$MAC_HOST" "${mac_df:-unread}"
+  printf '```\n'
+  printf '\n### last tick journal\n```\n%s\n```\n' "$(journalctl --user -u llamenos-fleet-tick --since -3h --no-pager | grep -v -E 'rejected before dispatch|exhausted 3' | tail -40)"
+} >"$brief"
+touch "$STAMP"
+if "$DISPATCH" "$name" "$brief" 5400 kimi >>"$LOG" 2>&1 9>&-; then log "dispatched $name"
+else log "DISPATCH FAILED for $name"; fi

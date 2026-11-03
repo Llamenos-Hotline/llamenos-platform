@@ -1,0 +1,28 @@
+[Unit]
+Description=Llámenos fleet watchdog — deterministic health check, kimi repair on failure
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.llamenos-fleet/env
+ExecStart=%h/.local/bin/llamenos-fleet-watchdog
+TimeoutStartSec=900
+
+# The watchdog dispatches a repair agent into a tmux session and then exits.
+#
+# With the default KillMode=control-group, systemd kills every process left in
+# the service's cgroup the moment the main script exits — including the tmux
+# session it just launched. The agent died milliseconds after dispatch while
+# the unit reported success, so `journalctl` showed a healthy hourly watchdog
+# and every repair log was 0 bytes.
+#
+# Measured 2026-10-11: six dispatches (10110000, 10110201, 10110402, 10110602,
+# 10110802, 10111100), all 0 bytes. The repair arm had never once run. The
+# fleet sat halted for 5+ hours on 2026-10-11 with the watchdog correctly
+# detecting it every hour and the repair silently killed each time.
+#
+# KillMode=process signals only the main script, leaving the dispatched agent
+# alive. Same reasoning as llamenos-review-runner.service. (This used to be a
+# drop-in override, killmode.conf; folding it into the unit so the repo copy
+# is the whole story.)
+KillMode=process
