@@ -230,7 +230,7 @@ describe('outgoing apns-topic header — VoIP push (voip-push.ts)', () => {
     // The payload names the call and the hub, and nothing about the caller (#2262).
     expect(JSON.parse(String(init.body))).toEqual({
       aps: {},
-      'call-id': 'call-1',
+      'call-id': 'push-ref-1',
       'hub-id': 'hub-1',
       type: 'incoming_call',
     })
