@@ -114,12 +114,46 @@ function lastTickResult(): TickResult | undefined {
   return undefined
 }
 
+/**
+ * doctor's halt verdict, split out pure so the watchdog-facing behaviour is
+ * unit-tested without a real doctor run. A quota-shaped halt (circuit.ts's
+ * `quotaBreaker`, issue #817) carries its own resume time and tick() clears
+ * it the first pass after that time — status() already reports it as
+ * `degraded`, not `halted: YES`, for exactly this reason. FAILing doctor on
+ * it sends the hourly watchdog (and any operator) to `resume` a halt that
+ * resumes itself, and a watchdog repair dispatch burns the very provider
+ * quota the breaker just tripped on. So: quota halt → WARN naming the
+ * self-resume instant; every other halt (a human's `llamenos-fleet halt`, a
+ * `halt`-labelled issue, the consecutive-failures breaker) → FAIL with the
+ * remedy, unchanged.
+ */
+export type DoctorHaltVerdict =
+  | { readonly kind: 'not-halted' }
+  | { readonly kind: 'quota-warn'; readonly message: string }
+  | { readonly kind: 'halted-fail'; readonly fix: string }
+
+export function doctorHaltVerdict(halted: boolean, haltReason: string | undefined): DoctorHaltVerdict {
+  if (!halted) return { kind: 'not-halted' }
+  if (isQuotaHaltReason(haltReason)) {
+    const resumeAt = haltReason !== undefined ? parseQuotaResumeAt(haltReason) : undefined
+    const until = resumeAt !== undefined ? new Date(resumeAt).toISOString() : 'unknown'
+    return {
+      kind: 'quota-warn',
+      message: `halted (quota): ${haltReason ?? ''} — self-healing (issue #817): tick() resumes the fleet itself on the first pass after ${until}; do not run \`llamenos-fleet resume\` for this`,
+    }
+  }
+  return { kind: 'halted-fail', fix: `halted: ${haltReason ?? 'halt file present'} — clear with: llamenos-fleet resume` }
+}
+
 export async function doctor(): Promise<number> {
   const checks: [string, boolean, string][] = []
   // Declared here (not beside the lane-scope loop below, where it used to
   // live) so the fleet-env WARN case below and the lane-owned-path WARN case
   // further down share one counter and one summary line.
   let warnings = 0
+  // A quota-shaped halt is printed as a WARN after the checks loop rather
+  // than FAILing the `not halted` check inside it — see doctorHaltVerdict.
+  let quotaHaltWarn: string | undefined
   let ghOk = false
   try { execFileSync('gh', ['auth', 'status'], { stdio: 'pipe' }); ghOk = true } catch { /* not authed */ }
   checks.push(['gh authenticated', ghOk, 'run: gh auth login'])
@@ -212,8 +246,14 @@ export async function doctor(): Promise<number> {
   for (const provider of new Set(lanes.filter((l) => l.mode === 'live').map((l) => providerOf(l.engine, l.model)))) {
     if (!coolingProviders.has(provider)) checks.push([`provider ${provider} not in quota cooldown`, true, ''])
   }
-  checks.push(['not halted', !haltedLocally(),
-    existsSync(HALT_REASON_FILE) ? `halted: ${readFileSync(HALT_REASON_FILE, 'utf8').trim()} — clear with: llamenos-fleet resume` : ''])
+  const haltVerdict = doctorHaltVerdict(haltedLocally(),
+    existsSync(HALT_REASON_FILE) ? readFileSync(HALT_REASON_FILE, 'utf8').trim() : undefined)
+  if (haltVerdict.kind === 'quota-warn') {
+    quotaHaltWarn = haltVerdict.message
+  } else {
+    checks.push(['not halted', haltVerdict.kind === 'not-halted',
+      haltVerdict.kind === 'halted-fail' ? haltVerdict.fix : ''])
+  }
   checks.push(['command on PATH', existsSync(`${process.env['HOME']}/.local/bin/llamenos-fleet`),
     `ln -sf ${REPO_ROOT}/orchestrator/bin/llamenos-fleet ~/.local/bin/llamenos-fleet`])
 
@@ -277,6 +317,11 @@ export async function doctor(): Promise<number> {
 
   if (envFile.state === 'absent') {
     process.stdout.write(` WARN  ${envFile.message}\n`)
+  }
+
+  if (quotaHaltWarn !== undefined) {
+    warnings++
+    process.stdout.write(` WARN  ${quotaHaltWarn}\n`)
   }
 
   // F7: a lane's owned list being non-empty (checked above) says nothing
