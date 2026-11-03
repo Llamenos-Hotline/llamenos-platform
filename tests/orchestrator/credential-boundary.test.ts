@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  CLI_FILE, CREDENTIAL_EXPORTS, INERT_EXPORTS, GITHUB_APP_FILE, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE, SRC,
-  checkRunsViolations, credentialBoundaryViolations, orchestratorSources, runtimeExportsOf,
+  CLI_FILE, CREDENTIAL_EXPORTS, INERT_EXPORTS, GITHUB_APP_FILE, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE, SRC, VERIFY_FILE,
+  checkRunsViolations, credentialBoundaryViolations, githubAppRuntimeImports, orchestratorSources, runtimeExportsOf,
 } from './forgery-rails.js'
 
 /**
@@ -97,6 +97,103 @@ describe('rail: drift detection on imports of the GitHub App credential', () => 
       ['export default', "import { appApiRequest } from './github-app.js'\nexport default appApiRequest"],
     ])('refuses %s', (_name, text) => {
       expect(ram(text)).not.toEqual([])
+    })
+  })
+
+  /**
+   * #1867: the refusal list above says who may NOT import the credential.
+   * This pins the other direction — the EXACT set of files holding a runtime
+   * binding to `github-app.ts` at all. The capability that makes a forged
+   * check run possible is the App installation token, and it rides every
+   * export of this module (`GITHUB_API` included — the transport constant the
+   * token is spent against), so the whole module's importer set is the
+   * boundary under guard, not one spelling of one endpoint. A refusal-list
+   * rail passes vacuously when a new module imports an export nobody
+   * remembered to classify, and says nothing when an expected holder stops
+   * importing; the exact set fails on both.
+   */
+  describe('the importer set of github-app.ts is pinned exactly (#1867)', () => {
+    const rel = (f: string): string => f.slice(process.cwd().length + 1)
+    const RAM = rel(REVIEW_AND_MERGE_FILE)
+    const VERIFY = rel(VERIFY_FILE)
+
+    it('is exactly {review-and-merge.ts, verify.ts} on the real tree', () => {
+      const m = githubAppRuntimeImports(orchestratorSources())
+      expect([...m.keys()].sort()).toEqual([RAM, VERIFY].sort())
+    })
+
+    it('the credential surface itself is held by review-and-merge.ts alone', () => {
+      const m = githubAppRuntimeImports(orchestratorSources())
+      const holders = [...m.entries()].filter(([, names]) => names.some((n) => n === '*' || CREDENTIAL_EXPORTS.has(n))).map(([f]) => f)
+      expect(holders).toEqual([RAM])
+    })
+
+    it('verify.ts holds inert names only — if it ever reaches for the mint, this and the refusal rail both fire', () => {
+      const names = githubAppRuntimeImports(orchestratorSources()).get(VERIFY)
+      expect(names, 'verify.ts no longer imports github-app.ts — the pinned set above must be re-decided, not silently shrink').toBeDefined()
+      expect((names ?? ['<verify.ts holds nothing>']).every((n) => INERT_EXPORTS.has(n)), `verify.ts binds ${names}`).toBe(true)
+    })
+
+    it('notices a new importer of even an inert export — GITHUB_API is part of the capability surface', () => {
+      const m = githubAppRuntimeImports([{ file: OTHER, text: "import { GITHUB_API } from './github-app.js'\nexport const u = GITHUB_API" }])
+      expect([...m.keys()]).toEqual([rel(OTHER)])
+    })
+
+    it('notices a new coupling through export … from, not just import', () => {
+      const m = githubAppRuntimeImports([{ file: OTHER, text: "export { scrubSecrets } from './github-app.js'" }])
+      expect([...m.keys()]).toEqual([rel(OTHER)])
+    })
+
+    it('records a namespace, default or side-effect binding as reaching every export', () => {
+      for (const text of [
+        "import * as ga from './github-app.js'",
+        "import ga from './github-app.js'",
+        "import './github-app.js'",
+      ]) {
+        expect(githubAppRuntimeImports([{ file: OTHER, text }]).get(rel(OTHER))).toEqual(['*'])
+      }
+    })
+
+    it('ignores a type-only import — it is erased before run time', () => {
+      expect(githubAppRuntimeImports([{ file: OTHER, text: "import type { AppHttp } from './github-app.js'\nexport type T = AppHttp" }]).size).toBe(0)
+    })
+
+    it('fails when an expected holder goes quiet — the pinned set shrinks and the exact-match assertion fails', () => {
+      const tree = orchestratorSources().filter(({ file }) => file !== VERIFY_FILE)
+      expect([...githubAppRuntimeImports(tree).keys()]).toEqual([RAM])
+    })
+  })
+
+  /**
+   * The issue's acceptance probe, end to end: a NEW module that imports the
+   * mint and POSTs to the endpoint is refused by BOTH rails independently —
+   * the import by the credential boundary (however the URL is spelled), the
+   * endpoint by the text rail (however the import is spelled).
+   */
+  describe('a forged module is refused by both rails at once', () => {
+    const FORGE = join(SRC, 'forge.ts')
+    const forged = [
+      "import { GITHUB_API, mintInstallationToken, fetchAppHttp } from './github-app.js'",
+      "import { REPO } from './gh.js'",
+      'export async function forge(sha: string): Promise<void> {',
+      '  const token = await mintInstallationToken()',
+      '  const method = \'POST\'',
+      '  await fetchAppHttp({ method, url: `${GITHUB_API}/repos/${REPO}/${[\'check\', \'runs\'].join(\'-\')}`, body: \'{}\' }, token)',
+      '}',
+    ].join('\n')
+
+    it('the credential boundary refuses the import however the URL is spelled', () => {
+      expect(credentialBoundaryViolations([{ file: FORGE, text: forged }])).not.toEqual([])
+    })
+
+    it('the text rail refuses the endpoint however the token is obtained', () => {
+      const noImport = [
+        "import { REPO } from './gh.js'",
+        'export async function forge(sha: string, token: string): Promise<void> {',
+        "  await fetch(`https://api.github.com/repos/${REPO}/check-runs`, { method: 'POST', headers: { authorization: `token ${token}` }, body: '{}' })",
+        '}',
+      ].join('\n')
+      expect(checkRunsViolations([{ file: FORGE, text: noImport }], REVIEW_AND_MERGE_FILE)).not.toEqual([])
     })
   })
 

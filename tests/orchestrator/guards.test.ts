@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { checkRunsViolations, orchestratorSources, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
+import { checkRunsViolations, orchestratorSources, statusesViolations, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
 import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
   runReviewCi, decideReviewGate, CI_DIFF_FLAGS, REVIEW_GATE_STANDING, reviewGateFailsClosed,
@@ -569,11 +569,33 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
    * on #1483. `ci.ts`'s own comment above `VERIFY_JOB`/`REVIEW_JOB` rejected
    * a same-named STATUS once already, for the separate reason that it makes
    * fork PRs unmergeable; this is the second, independent reason.
+   *
+   * Scanned at the same depth as the check-runs rail (#1867): raw text AND
+   * the cooked text of every literal. The two rails bound the two ways of
+   * satisfying a required context; the weaker signal's rail being shallower
+   * than the stronger's would be backwards by consequence.
    */
   it('never writes a commit status as an alternative to a check-run', () => {
-    for (const { file, text } of orchestratorSources()) {
-      expect(text, `${file} writes a commit status — see #1483`).not.toMatch(/\/statuses\//)
-    }
+    expect(statusesViolations(orchestratorSources())).toEqual([])
+  })
+
+  describe('the /statuses/ rail refuses what it exists to refuse', () => {
+    const probe = (text: string): string[] =>
+      statusesViolations([{ file: MISSING_CHECKS_FILE, text }])
+
+    it('refuses a plain mention, in code or in a comment', () => {
+      expect(probe('const u = `${API}/repos/${REPO}/statuses/${sha}`')).not.toEqual([])
+      expect(probe('// POST /statuses/{sha} is the shortcut\nexport const x = 1')).not.toEqual([])
+    })
+
+    it('refuses the spelling a raw-text rail cannot see — an escape that cooks to /statuses/', () => {
+      expect(probe('const u = `${API}/repos/${REPO}/statuses\u002f${sha}`')).not.toEqual([])
+    })
+
+    it('admits the response-body field of the combined-status read', () => {
+      expect(probe('interface R { statuses?: { context?: string }[] }')).toEqual([])
+      expect(probe('const n = p.statuses?.length ?? 0')).toEqual([])
+    })
   })
 })
 
