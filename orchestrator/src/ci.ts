@@ -646,7 +646,10 @@ export interface CiVerdict { ok: boolean; summary: string }
  *    fail-open shape of #1584/#1587/#1588. Neither is ever cached: both
  *    carry `verdict: 'UNREADABLE'`, which the cache already excludes.
  *  - `cache-pass` / `cache-fail`: a prior substantive verdict for this exact
- *    diff and review set, restated.
+ *    tree, this exact PR title and description, and this exact review set
+ *    (#2014, #2336), restated. A verdict that faulted the description clears
+ *    by correcting the description and re-requesting — never by perturbing
+ *    the tree to bust a hash (#2332, #1895).
  *  - `scope`: the mechanical pre-check (lane scope, never-write paths)
  *    refused the diff, so no reviewer was asked.
  *  - `review-set-unresolved`, `unknown-lane`, `review-disabled`,
@@ -1636,14 +1639,20 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  *    against a review set it does not actually know, and "we could not work
  *    out what to review" must never become "nothing needed reviewing".
  *  - `cache-hit` — a prior SUBSTANTIVE verdict exists for this exact head
- *    TREE AND this exact review set (`reviewSetTag`). No model call either
+ *    TREE, this exact PR title and description (`claimDigest`, #2336), AND
+ *    this exact review set (`reviewSetTag`). No model call either
  *    way: a cached PASS concludes the job successfully, a cached FAIL
  *    concludes it red with the original verdict restated (#1158 — a rebase
  *    that does not change the tree must not re-spend a review to reach the
  *    same conclusion; 10 and 8 runs on two failing PRs in one 12-hour
  *    window). The TREE, not the diff (#2014): #1975's diff survived a rebase
  *    onto a newer `main` byte-for-byte, and its PASS for the old tree was
- *    re-published as a green check on a tree nobody had judged.
+ *    re-published as a green check on a tree nobody had judged. And the
+ *    DESCRIPTION alongside the tree (#2336): every reviewer is told to FAIL
+ *    a description that misstates the diff, so a verdict is a judgement of
+ *    both — #2332's description-caused FAIL replayed against the corrected
+ *    description for as long as the key held the tree alone, a rejection no
+ *    legitimate edit could clear.
  *    Reached regardless of who the review was requested from, which is what
  *    makes a second review request on an already-reviewed PR cheap and
  *    non-destructive instead of a wasted re-review or (the old bug) a
@@ -2088,10 +2097,15 @@ export function ciContextFromEnv(env: NodeJS.ProcessEnv, repoDir: string): CiCon
 /**
  * `git diff` flags that make the text a function of the two commits ALONE.
  *
- * This text is the review cache's key (`diffHash`, review-cache.ts), so any
- * byte that varies with the machine turns an unchanged diff into a miss —
- * and a miss on a review request is a full model review of a diff that
- * was already judged.
+ * This text WAS the review cache's key when these flags were added (#1170).
+ * It is not any more: since #2014 and #2336 the lookup key is the head's
+ * TREE and the PR's title and description (`ReviewCacheKey.headTree` /
+ * `.claimDigest`, review-cache.ts), and `diffHash` of this text is only
+ * logged and written into the verdict record for continuity — explicitly NOT
+ * part of the lookup. The flags stay because that recorded hash is how a
+ * log line or a verdict record names the diff under judgement: a hash that
+ * varied with the machine would let two records disagree about whether they
+ * judged the same diff, which is the ambiguity #1170 was.
  *
  * `--full-index` is the one that was live. Without it the `index a1b2c3d..`
  * line carries blob ids abbreviated to `core.abbrev=auto`, whose width

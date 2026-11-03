@@ -512,7 +512,9 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
 // artifact names. #2332 was FAILed for a body claiming 36 keys where its diff
 // delivered 35, had ONLY its body corrected, and the re-request replayed the
 // cached FAIL in 23 seconds with no new verdict: the gate's cache was keyed on
-// the tree, and the tree had (correctly) not changed.
+// the tree, and the tree had (correctly) not changed. #1895 is the same
+// deadlock reported from #1182; these three checks are its "check that proves
+// it" — a description-only fix must be re-reviewed, never replayed.
 // ---------------------------------------------------------------------------
 
 describe('#2336: review-gate reuses a verdict only for the identical tree AND description', () => {
