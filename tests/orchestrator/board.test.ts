@@ -3,6 +3,7 @@ import {
   buildBoard, classifyPr, classifyReviewFailure, isBotAuthor,
   normalizeCheckRunState, normalizeStatusContextState, renderBoard, renderBoardPorcelain,
   fetchBoardFactsWith, deriveBranchRuleset, parseCodeOwners, codeOwnersOf,
+  resolveMergeable, staleGreenNote,
   runBoard,
   type BoardFacts, type PrFact, type PrCheckContext, type FleetStateFact, type BoardFetchDeps,
   type BranchGate, type BranchRuleset, type CheckState,
@@ -59,6 +60,7 @@ function pr(overrides: Partial<PrFact> = {}): PrFact {
     headRefName: 'fleet/backend/1',
     baseRefName: 'main',
     mergeStateStatus: 'CLEAN',
+    mergeable: 'MERGEABLE',
     labels: [],
     reviews: [],
     files: ['docs/notes.md'],
@@ -75,7 +77,8 @@ function reviewCheck(overrides: Partial<PrCheckContext> = {}): PrCheckContext {
 
 const classify = (p: PrFact, gate: BranchGate = GATE) => classifyPr(p, gate)
 
-const facts = (prs: PrFact[], fleet: FleetStateFact = FLEET_OK): BoardFacts => ({ fleet, prs, gates: { main: GATE } })
+const facts = (prs: PrFact[], fleet: FleetStateFact = FLEET_OK, baseHeads: Record<string, string | undefined> = {}): BoardFacts =>
+  ({ fleet, prs, gates: { main: GATE }, baseHeads })
 
 /** `gh api repos/:owner/:repo/rules/branches/main` on 2026-09-25, verbatim
  *  (the #961 incident) — the raw body `fetchBranchRules` returns. */
@@ -119,6 +122,7 @@ function gqlPr(number: number, contexts: GqlContextFixture[] = []): GqlPrNodeFix
     headRefName: `fleet/backend/${number}`,
     baseRefName: 'main',
     mergeStateStatus: 'CLEAN',
+    mergeable: 'MERGEABLE',
     labels: { nodes: [] },
     changedFiles: 1,
     files: { nodes: [{ path: 'docs/notes.md' }] },
@@ -336,14 +340,14 @@ describe('buildBoard — LABEL_FOR_REVIEW is capped to one per invocation', () =
 })
 
 describe('buildBoard — totality', () => {
-  it('every PR lands in exactly one row, and every action is one of the eight public actions', () => {
+  it('every PR lands in exactly one row, and every action is a public action', () => {
     const view = buildBoard(facts([
       pr({ number: 1, isDraft: true }),
       pr({ number: 2, checks: cheapPassChecks() }),
       pr({ number: 3, authorLogin: 'a-human', checks: [...cheapPassChecks(), reviewCheck()] }),
     ]))
     expect(view.rows).toHaveLength(3)
-    const publicActions = new Set(['MERGE', 'APPROVE_THEN_MERGE', 'LABEL_FOR_REVIEW', 'RERUN_REVIEW', 'REQUEST_REVIEW', 'NEEDS_FIX', 'WAITING', 'STALE_LABEL', 'OPERATOR'])
+    const publicActions = new Set(['MERGE', 'APPROVE_THEN_MERGE', 'LABEL_FOR_REVIEW', 'RERUN_REVIEW', 'REQUEST_REVIEW', 'REBASE', 'NEEDS_FIX', 'REVIEW_BLOCKED', 'CANNOT_DECIDE', 'WAITING', 'STALE_LABEL', 'OPERATOR'])
     for (const row of view.rows) expect(publicActions.has(row.action)).toBe(true)
   })
 
@@ -394,6 +398,8 @@ describe('fetchBoardFactsWith', () => {
     checkFleetHalt: vi.fn(async () => ({ halted: false })),
     fetchBranchRules: vi.fn(async () => LIVE_MAIN_RULES),
     fetchCodeOwners: vi.fn(async () => null),
+    fetchMergeable: vi.fn(async () => 'MERGEABLE'),
+    fetchBaseHeadDate: vi.fn(async () => undefined),
     ...over,
   })
   const onePr = (node: GqlPrNodeFixture) => async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } })
@@ -666,6 +672,8 @@ describe('fetchBoardFactsWith — ruleset acquisition', () => {
     checkFleetHalt: async () => ({ halted: false }),
     fetchBranchRules: async () => LIVE_MAIN_RULES,
     fetchCodeOwners: async () => `packages/crypto/ @${OWNER}\n`,
+    fetchMergeable: async () => 'MERGEABLE',
+    fetchBaseHeadDate: async () => undefined,
     ...over,
   })
 
@@ -786,8 +794,8 @@ describe('GitHub\'s own mergeStateStatus is the final word on MERGE', () => {
     expect(result.reason).toContain('BLOCKED')
   })
 
-  it('DIRTY is NEEDS_FIX (merge conflict)', () => {
-    expect(classify(pr({ authorLogin: OWNER, mergeStateStatus: 'DIRTY', checks: green() })).action).toBe('NEEDS_FIX')
+  it('DIRTY is REBASE, never NEEDS_FIX — a conflicted PR\'s checks are stale by construction (#1842)', () => {
+    expect(classify(pr({ authorLogin: OWNER, mergeStateStatus: 'DIRTY', checks: green() })).action).toBe('REBASE')
   })
 
   it('UNKNOWN is WAITING (GitHub has not computed mergeability yet)', () => {
@@ -954,6 +962,8 @@ describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)'
     fetchBranchRules: async () => LIVE_MAIN_RULES,
     fetchCodeOwners: async () => null,
     fetchRunJobs: async () => ({ steps: [], runAttempt: 1 }),
+    fetchMergeable: async () => 'MERGEABLE',
+    fetchBaseHeadDate: async () => undefined,
   }
 
   it('maps user logins and team slugs from reviewRequests nodes', async () => {
@@ -976,5 +986,215 @@ describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)'
     const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
     const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
     expect(review?.title).toContain('NO-VERDICT:unreviewed')
+  })
+})
+
+describe('classifyPr — REBASE, the #1842 conflicted bucket', () => {
+  const green = (): PrCheckContext[] => [...cheapPassChecks(), reviewCheck()]
+
+  it('a fully green, review-PASSing PR with mergeable=CONFLICTING is REBASE, never MERGE — the stale-green trap itself', () => {
+    const result = classify(pr({ authorLogin: OWNER, mergeable: 'CONFLICTING', checks: green() }))
+    expect(result.action).toBe('REBASE')
+    expect(result.reason).toContain('mergeable=CONFLICTING')
+    expect(result.reason).toContain('integrate')
+  })
+
+  it('a review request on a conflicted PR can never fire a run, so CONFLICTING beats REQUEST_REVIEW', () => {
+    // fleet/review ABSENT and requested_reviewers empty is the born-dead
+    // state — but on a conflicted PR no review action can clear anything.
+    const result = classify(pr({ mergeable: 'CONFLICTING', checks: cheapPassChecks(), reviewRequests: [] }))
+    expect(result.action).toBe('REBASE')
+  })
+
+  it('CONFLICTING beats NEEDS_FIX — the failing checks are stale too, and the rebase re-runs everything', () => {
+    const result = classify(pr({
+      mergeable: 'CONFLICTING',
+      checks: [{ name: VERIFY_JOB, kind: 'CheckRun', sha: HEAD, state: 'FAIL' }],
+    }))
+    expect(result.action).toBe('REBASE')
+  })
+
+  it('mergeStateStatus=DIRTY is REBASE even when mergeable has not caught up (either signal is decisive)', () => {
+    expect(classify(pr({ mergeStateStatus: 'DIRTY', mergeable: 'UNKNOWN', checks: green() })).action).toBe('REBASE')
+  })
+
+  it('a persistent mergeable=UNKNOWN is unknown, never conflicted and never treated as mergeable evidence', () => {
+    const result = classify(pr({ authorLogin: OWNER, mergeable: 'UNKNOWN', mergeStateStatus: 'CLEAN', checks: green() }))
+    expect(result.action).not.toBe('REBASE')
+    expect(result.action).toBe('MERGE')
+  })
+
+  it('a draft conflicted PR stays OPERATOR — drafts are never auto-actionable', () => {
+    expect(classify(pr({ isDraft: true, mergeable: 'CONFLICTING', checks: green() })).action).toBe('OPERATOR')
+  })
+
+  it('the knope release PR stays OPERATOR even when conflicted — cutting a release is a human decision', () => {
+    expect(classify(pr({ headRefName: 'release', authorLogin: 'app/github-actions', mergeable: 'CONFLICTING', checks: green() })).action)
+      .toBe('OPERATOR')
+  })
+})
+
+describe('staleGreenNote — ageing the evidence (#1842)', () => {
+  const BASE_HEAD = '2026-10-12T08:00:00Z'
+  const greenStarted = (name: string, startedAt: string | undefined): PrCheckContext =>
+    ({ name, kind: 'CheckRun', sha: HEAD, state: 'PASS', startedAt })
+
+  it('names a required green check whose run predates the base head, with both timestamps', () => {
+    const p = pr({ checks: [greenStarted('ci-status', '2026-10-04T10:00:00Z')] })
+    const note = staleGreenNote(p, MAIN_RULES, BASE_HEAD)
+    expect(note).toContain('ci-status')
+    expect(note).toContain('2026-10-04T10:00:00Z')
+    expect(note).toContain(BASE_HEAD)
+  })
+
+  it('stays quiet for a check started after the base head — a freshly-reviewed PR says nothing', () => {
+    const p = pr({ checks: [greenStarted('ci-status', '2026-10-12T09:00:00Z')] })
+    expect(staleGreenNote(p, MAIN_RULES, BASE_HEAD)).toBeUndefined()
+  })
+
+  it('stays quiet when the check carries no startedAt — un-ageable is never "fresh"', () => {
+    const p = pr({ checks: [greenStarted('ci-status', undefined)] })
+    expect(staleGreenNote(p, MAIN_RULES, BASE_HEAD)).toBeUndefined()
+  })
+
+  it('stays quiet when the base head date could not be read', () => {
+    const p = pr({ checks: [greenStarted('ci-status', '2026-10-04T10:00:00Z')] })
+    expect(staleGreenNote(p, MAIN_RULES, undefined)).toBeUndefined()
+  })
+
+  it('stays quiet for a FAILING check — only greens are evidence anyone would trust', () => {
+    const p = pr({ checks: [{ name: 'ci-status', kind: 'CheckRun', sha: HEAD, state: 'FAIL', startedAt: '2026-10-04T10:00:00Z' }] })
+    expect(staleGreenNote(p, MAIN_RULES, BASE_HEAD)).toBeUndefined()
+  })
+
+  it('stays quiet for a stale green that is NOT a required context', () => {
+    const p = pr({ checks: [greenStarted('e2e-linux', '2026-10-04T10:00:00Z')] })
+    expect(staleGreenNote(p, MAIN_RULES, BASE_HEAD)).toBeUndefined()
+  })
+
+  it('stays quiet for a green on a stale SHA — the head-binding rule already discarded it', () => {
+    const p = pr({ checks: [{ name: 'ci-status', kind: 'CheckRun', sha: OTHER_SHA, state: 'PASS', startedAt: '2026-10-04T10:00:00Z' }] })
+    expect(staleGreenNote(p, MAIN_RULES, BASE_HEAD)).toBeUndefined()
+  })
+
+  it('stays quiet when the same-named context\'s CURRENT verdict is red — an older PASS beside a newer FAIL is not a green anyone trusts', () => {
+    const p = pr({
+      checks: [
+        { name: REVIEW_JOB, kind: 'CheckRun', sha: HEAD, state: 'PASS', startedAt: '2026-10-04T10:00:00Z' },
+        { name: REVIEW_JOB, kind: 'CheckRun', sha: HEAD, state: 'FAIL', startedAt: '2026-10-12T09:00:00Z' },
+      ],
+    })
+    expect(staleGreenNote(p, MAIN_RULES, BASE_HEAD)).toBeUndefined()
+  })
+
+  it('buildBoard appends the note to the row reason without changing the action', () => {
+    const staleGreen: PrCheckContext[] = [
+      ...MAIN_RULES.requiredContexts.filter((n) => n !== REVIEW_JOB).map((name) => greenStarted(name, '2026-10-04T10:00:00Z')),
+      reviewCheck({ startedAt: '2026-10-12T09:00:00Z' }),
+    ]
+    const view = buildBoard(facts(
+      [pr({ authorLogin: OWNER, checks: staleGreen })],
+      FLEET_OK,
+      { main: BASE_HEAD },
+    ))
+    const row = view.rows[0]
+    expect(row?.action).toBe('MERGE')
+    expect(row?.reason).toContain('stale green')
+    expect(row?.reason).toContain('ci-status')
+    expect(row?.reason).not.toContain(`${REVIEW_JOB} (started`)
+  })
+
+  it('buildBoard leaves a fully fresh row untouched', () => {
+    const fresh: PrCheckContext[] = [
+      ...MAIN_RULES.requiredContexts.filter((n) => n !== REVIEW_JOB).map((name) => greenStarted(name, '2026-10-12T09:00:00Z')),
+      reviewCheck({ startedAt: '2026-10-12T10:00:00Z' }),
+    ]
+    const view = buildBoard(facts([pr({ authorLogin: OWNER, checks: fresh })], FLEET_OK, { main: BASE_HEAD }))
+    expect(view.rows[0]?.reason).not.toContain('stale green')
+  })
+})
+
+describe('resolveMergeable — one query is not an answer (#1842)', () => {
+  const noSleep = async () => {}
+
+  it('returns a resolved GraphQL verdict immediately, without any REST read', async () => {
+    const fetchMergeable = vi.fn(async () => 'CONFLICTING')
+    await expect(resolveMergeable({ fetchMergeable, sleep: noSleep }, 1373, 'MERGEABLE')).resolves.toBe('MERGEABLE')
+    expect(fetchMergeable).not.toHaveBeenCalled()
+  })
+
+  it('polls an UNKNOWN verdict until GitHub has computed the merge commit', async () => {
+    const fetchMergeable = vi.fn()
+      .mockResolvedValueOnce('UNKNOWN')
+      .mockResolvedValueOnce('CONFLICTING')
+    await expect(resolveMergeable({ fetchMergeable, sleep: noSleep }, 1373, 'UNKNOWN')).resolves.toBe('CONFLICTING')
+    expect(fetchMergeable).toHaveBeenCalledTimes(2)
+    expect(fetchMergeable).toHaveBeenCalledWith(1373)
+  })
+
+  it('a persistent UNKNOWN is returned as UNKNOWN after the attempt budget — never as mergeable', async () => {
+    const fetchMergeable = vi.fn(async () => 'UNKNOWN')
+    await expect(resolveMergeable({ fetchMergeable, sleep: noSleep }, 1373, 'UNKNOWN')).resolves.toBe('UNKNOWN')
+    expect(fetchMergeable).toHaveBeenCalledTimes(4)
+  })
+
+  it('a failed read folds into UNKNOWN and is retried, not mistaken for a verdict', async () => {
+    const fetchMergeable = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce('MERGEABLE')
+    await expect(resolveMergeable({ fetchMergeable, sleep: noSleep }, 1373, 'UNKNOWN')).resolves.toBe('MERGEABLE')
+    expect(fetchMergeable).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('fetchBoardFactsWith — mergeable resolution and evidence ageing (#1842)', () => {
+  const deps = (over: Partial<BoardFetchDeps> = {}): BoardFetchDeps => ({
+    queryOpenPrs: vi.fn(async () => ({ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } })),
+    fetchRunJobs: vi.fn(async () => undefined),
+    checkFleetHalt: vi.fn(async () => ({ halted: false })),
+    fetchBranchRules: vi.fn(async () => LIVE_MAIN_RULES),
+    fetchCodeOwners: vi.fn(async () => null),
+    fetchMergeable: vi.fn(async () => 'MERGEABLE'),
+    fetchBaseHeadDate: vi.fn(async () => undefined),
+    sleep: async () => {},
+    ...over,
+  })
+  const onePr = (node: GqlPrNodeFixture) => async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } })
+
+  it('re-polls a GraphQL UNKNOWN mergeable and classifies off the resolved value', async () => {
+    const node = gqlPr(7)
+    node.mergeable = 'UNKNOWN'
+    const fetchMergeable = vi.fn(async () => 'CONFLICTING')
+    const result = await fetchBoardFactsWith(deps({ fetchMergeable, queryOpenPrs: onePr(node) }))
+    expect(fetchMergeable).toHaveBeenCalledWith(7)
+    expect(result.prs[0]?.mergeable).toBe('CONFLICTING')
+    expect(buildBoard(result).rows[0]?.action).toBe('REBASE')
+  })
+
+  it('does not spend a REST read on a verdict GraphQL already resolved', async () => {
+    const node = gqlPr(7)
+    node.mergeable = 'MERGEABLE'
+    const fetchMergeable = vi.fn(async () => 'CONFLICTING')
+    await fetchBoardFactsWith(deps({ fetchMergeable, queryOpenPrs: onePr(node) }))
+    expect(fetchMergeable).not.toHaveBeenCalled()
+  })
+
+  it('carries a CheckRun startedAt through to the PrCheckContext', async () => {
+    const node = gqlPr(7, [
+      { __typename: 'CheckRun', name: 'ci-status', status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: '2026-10-04T10:00:00Z' },
+    ])
+    const result = await fetchBoardFactsWith(deps({ queryOpenPrs: onePr(node) }))
+    expect(result.prs[0]?.checks.find((c) => c.name === 'ci-status')?.startedAt).toBe('2026-10-04T10:00:00Z')
+  })
+
+  it('reads the base head date once per base branch, not once per PR', async () => {
+    const fetchBaseHeadDate = vi.fn(async () => '2026-10-12T08:00:00Z')
+    const result = await fetchBoardFactsWith(deps({
+      fetchBaseHeadDate,
+      queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [gqlPr(1), gqlPr(2)], pageInfo: { hasNextPage: false, endCursor: null } } } } }),
+    }))
+    expect(fetchBaseHeadDate).toHaveBeenCalledTimes(1)
+    expect(fetchBaseHeadDate).toHaveBeenCalledWith('main')
+    expect(result.baseHeads.main).toBe('2026-10-12T08:00:00Z')
   })
 })

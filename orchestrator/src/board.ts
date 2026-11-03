@@ -83,6 +83,15 @@ export interface PrCheckContext {
    *  `fleet/review` context, so an unrelated context populating it would be
    *  inert, not misleading. */
   reviewFailureKind?: ReviewFailureKind
+  /** CheckRun only: the run's own `startedAt` (ISO-8601). The staleness
+   *  signal #1842 ages evidence with — a PASS whose run STARTED before the
+   *  base branch's current head commit existed is a verdict about an older
+   *  base, not about this PR against the base it claims to pass against
+   *  (see `staleGreenNote`). `undefined` for a `StatusContext` (commit
+   *  statuses carry no start time) and for any CheckRun whose `startedAt`
+   *  the API did not return — both are treated as un-ageable, never as
+   *  fresh. */
+  startedAt?: string
 }
 
 export interface PrFact {
@@ -100,6 +109,16 @@ export interface PrFact {
    *  `UNKNOWN` | `DRAFT`. Read as the final word on MERGE (see
    *  `classifyPr`), never as a substitute for deriving WHY. */
   mergeStateStatus: string
+  /** GitHub's lazily-computed mergeability verdict — `MERGEABLE` |
+   *  `CONFLICTING` | `UNKNOWN`. This is the signal #1842 is about: GitHub
+   *  runs no `pull_request` workflows for a conflicted PR, so its checks
+   *  freeze at whatever they were when the conflict appeared while every
+   *  reader of checks keeps reporting them green. `UNKNOWN` is what the API
+   *  answers until the merge commit has been computed — one query is never
+   *  an answer, so `fetchBoardFactsWith` re-polls it (`resolveMergeable`)
+   *  and a value that stays `UNKNOWN` is treated as UNKNOWN, never as
+   *  mergeable. */
+  mergeable: string
   labels: string[]
   /** `latestOpinionatedReviews(writersOnly: true)` — each writer's latest
    *  APPROVED / CHANGES_REQUESTED / DISMISSED review. Deliberately NOT
@@ -179,6 +198,12 @@ export interface BoardFacts {
   /** Keyed by base branch name, gathered once per invocation (see
    *  `fetchBoardFactsWith`). A PR whose base has no entry is CANNOT_DECIDE. */
   gates: Record<string, BranchGate>
+  /** Keyed by base branch name: the base branch HEAD commit's committer
+   *  date (ISO-8601), `undefined` when it could not be read. This is what
+   *  `staleGreenNote` ages a green check against (#1842). An unreadable
+   *  entry silences the note — never let a failed read masquerade as
+   *  "everything is fresh". */
+  baseHeads: Record<string, string | undefined>
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +231,21 @@ export interface BoardFacts {
  * collapsed into a guess: a decision table that guesses is worse than one
  * that says it cannot decide.
  */
+/**
+ * `REBASE` (#1842): the PR has a merge conflict with its base
+ * (`mergeable: CONFLICTING`, or GitHub's derived `mergeStateStatus: DIRTY`).
+ * GitHub runs no `pull_request` workflows for a conflicted PR — there is no
+ * merge commit to run them against — so every check on it is frozen at
+ * whatever it earned BEFORE the conflict appeared, and no review action can
+ * ever clear the state: a `review_requested` event fires and no workflow
+ * run is created (measured live on #1373, 2026-10-12). The one remedy is
+ * updating the branch from the base — never a re-review, never a rerun.
+ * This bucket is named BEFORE any check or review bucket, exactly because
+ * the checks on such a PR are stale by construction and classifying off
+ * them would report a diff from days ago as ready.
+ */
 export type BoardAction =
-  | 'MERGE' | 'APPROVE_THEN_MERGE' | 'LABEL_FOR_REVIEW' | 'RERUN_REVIEW' | 'REQUEST_REVIEW'
+  | 'MERGE' | 'APPROVE_THEN_MERGE' | 'LABEL_FOR_REVIEW' | 'RERUN_REVIEW' | 'REQUEST_REVIEW' | 'REBASE'
   | 'NEEDS_FIX' | 'REVIEW_BLOCKED' | 'WAITING' | 'STALE_LABEL' | 'OPERATOR' | 'CANNOT_DECIDE'
 
 export interface BoardRow {
@@ -534,6 +572,27 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
     }
   }
 
+  // #1842, named before ANY check or review reading: a conflicted PR's
+  // checks are frozen at whatever they earned before the conflict appeared
+  // (GitHub creates no workflow runs for one — verified live on #1373,
+  // where a review_request emitted the event and no run followed), so no
+  // bucket derived from checks or reviews can ever describe it, and no
+  // review action can clear it. `mergeable` and `mergeStateStatus` are both
+  // consulted: the first is the lazy per-PR verdict this issue is about,
+  // the second is GitHub's derived merge-button state — either one saying
+  // "conflicted" is decisive, and a persistent UNKNOWN on `mergeable` is
+  // unknown, never mergeable (it simply falls through to the normal tree).
+  if (pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY') {
+    const signal = pr.mergeable === 'CONFLICTING' ? 'mergeable=CONFLICTING' : 'mergeStateStatus=DIRTY'
+    return {
+      action: 'REBASE',
+      reason: `merge conflict with ${pr.baseRefName} (${signal}) — GitHub runs no workflows for a conflicted PR, ` +
+        `so every check and verdict on it is stale by construction and a review request can never fire one; ` +
+        `the remedy is updating the branch from ${pr.baseRefName} (llamenos-fleet integrate), never a re-review (#1842)`,
+      failingContexts: [],
+    }
+  }
+
   if (!gate.ruleset.ok) {
     return cannotDecide(`the required set for ${pr.baseRefName} is unknown: ${gate.ruleset.reason}`)
   }
@@ -654,10 +713,10 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
     }
     // Everything the board derives from the ruleset is satisfied. GitHub's
     // own mergeStateStatus is still the last word — it is what `gh pr merge`
-    // obeys, and it sees requirements the board does not model.
-    if (pr.mergeStateStatus === 'DIRTY') {
-      return { action: 'NEEDS_FIX', reason: 'merge conflict with the base branch (mergeStateStatus=DIRTY)', failingContexts: [] }
-    }
+    // obeys, and it sees requirements the board does not model. (DIRTY is
+    // not handled here: it is the REBASE branch at the top of classifyPr,
+    // because a conflicted PR's checks — including the green ones this far
+    // down implies — are stale by construction, #1842.)
     if (pr.mergeStateStatus === 'UNKNOWN') {
       return { action: 'WAITING', reason: 'GitHub has not computed mergeability yet (mergeStateStatus=UNKNOWN)', failingContexts: [] }
     }
@@ -720,9 +779,46 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
 /** Most-actionable first — see `renderBoard`'s own comment for why this
  *  ordering, not alphabetical or PR-number order, is the default grouping. */
 const ACTION_ORDER: readonly BoardAction[] = [
-  'CANNOT_DECIDE', 'MERGE', 'APPROVE_THEN_MERGE', 'RERUN_REVIEW', 'REQUEST_REVIEW', 'NEEDS_FIX',
+  'CANNOT_DECIDE', 'MERGE', 'APPROVE_THEN_MERGE', 'RERUN_REVIEW', 'REQUEST_REVIEW', 'REBASE', 'NEEDS_FIX',
   'REVIEW_BLOCKED', 'LABEL_FOR_REVIEW', 'STALE_LABEL', 'WAITING', 'OPERATOR',
 ]
+
+/**
+ * The #1842 evidence-aging note: a required context that is PASS on the
+ * head but whose run STARTED before the base branch's current head commit
+ * existed is a verdict about an older base — the stale-green shape that let
+ * 36 conflicted PRs read as ready for a week. Returns the note text, or
+ * `undefined` when nothing is stale (or when the base head date or the
+ * check's `startedAt` is missing: un-ageable is quiet, never "fresh").
+ *
+ * Reports, never blocks: this repo's ruleset does not require up-to-date
+ * checks (`strict_required_status_checks_policy: false`), so main moving
+ * after a PR's checks ran is routine — the note is a reader's cue about
+ * what the green is actually worth, and the conflicted case it was built
+ * for is already hard-classified REBASE before this ever runs.
+ */
+export function staleGreenNote(pr: PrFact, rules: BranchRuleset, baseHeadDate: string | undefined): string | undefined {
+  if (baseHeadDate === undefined) return undefined
+  const onHead = checksOnHead(pr)
+  const latestStartByName = new Map<string, string>()
+  for (const name of rules.requiredContexts) {
+    // The same worst-of-same-named resolution classification uses: a
+    // context whose CURRENT verdict is red (a newer FAIL beside an older
+    // PASS) is not a green anyone is trusting, and naming it "stale green"
+    // would contradict the row's own failing-context list.
+    if (requiredContextState(onHead, name) !== 'PASS') continue
+    for (const c of onHead) {
+      if (c.name !== name || c.state !== 'PASS' || c.startedAt === undefined) continue
+      if (c.startedAt >= baseHeadDate) continue
+      const prior = latestStartByName.get(name)
+      if (prior === undefined || c.startedAt > prior) latestStartByName.set(name, c.startedAt)
+    }
+  }
+  if (latestStartByName.size === 0) return undefined
+  const detail = [...latestStartByName.entries()].map(([name, started]) => `${name} (started ${started})`).join(', ')
+  return `stale green: ${detail} — older than ${pr.baseRefName}'s head commit (${baseHeadDate}); ` +
+    'a green that predates the base it claims to pass against is not evidence about the current PR (#1842)'
+}
 
 /**
  * Pure: every fact `buildBoard` needs is already in `facts` — no `gh` call,
@@ -737,7 +833,7 @@ export function buildBoard(facts: BoardFacts): BoardView {
   const classified = facts.prs.map((pr) => {
     const gate: BranchGate = facts.gates[pr.baseRefName]
       ?? { ruleset: { ok: false, reason: `no ruleset was gathered for base branch ${pr.baseRefName}` } }
-    return { pr, result: classifyPr(pr, gate) }
+    return { pr, gate, result: classifyPr(pr, gate) }
   })
 
   const candidates = classified
@@ -745,7 +841,13 @@ export function buildBoard(facts: BoardFacts): BoardView {
     .sort((a, b) => a.pr.number - b.pr.number)
   const chosenNumber = candidates[0]?.pr.number
 
-  const rows: BoardRow[] = classified.map(({ pr, result }) => {
+  const rows: BoardRow[] = classified.map(({ pr, gate, result }) => {
+    // #1842: age the evidence on every row, whatever its action — the note
+    // is what keeps a green earned against a days-older base from reading
+    // as a fresh verdict. Appended to the reason (never a separate verdict)
+    // per staleGreenNote's own report-never-block comment.
+    const stale = gate.ruleset.ok ? staleGreenNote(pr, gate.ruleset.rules, facts.baseHeads[pr.baseRefName]) : undefined
+    const agedReason = stale === undefined ? result.reason : `${result.reason} — ${stale}`
     if (result.action === 'LABEL_FOR_REVIEW_CANDIDATE') {
       const chosen = pr.number === chosenNumber
       return {
@@ -755,8 +857,8 @@ export function buildBoard(facts: BoardFacts): BoardView {
         failingContexts: [],
         action: chosen ? 'LABEL_FOR_REVIEW' : 'WAITING',
         reason: chosen
-          ? result.reason
-          : `${result.reason} — deferred: only one PR gets a review requested per invocation (#${chosenNumber} is older)`,
+          ? agedReason
+          : `${agedReason} — deferred: only one PR gets a review requested per invocation (#${chosenNumber} is older)`,
       }
     }
     return {
@@ -765,7 +867,7 @@ export function buildBoard(facts: BoardFacts): BoardView {
       headRefOid: pr.headRefOid,
       action: result.action,
       failingContexts: result.failingContexts,
-      reason: result.reason,
+      reason: agedReason,
     }
   })
 
@@ -859,6 +961,7 @@ query($owner: String!, $repo: String!, $count: Int!, $after: String) {
         headRefName
         baseRefName
         mergeStateStatus
+        mergeable
         labels(first: 50) { nodes { name } }
         changedFiles
         files(first: 100) { nodes { path } }
@@ -877,6 +980,7 @@ query($owner: String!, $repo: String!, $count: Int!, $after: String) {
                       title
                       status
                       conclusion
+                      startedAt
                       checkSuite { workflowRun { databaseId } }
                     }
                     ... on StatusContext {
@@ -901,6 +1005,7 @@ interface GqlCheckRunNode {
   title?: string | null
   status: string
   conclusion: string | null
+  startedAt?: string | null
   checkSuite?: { workflowRun?: { databaseId: number } | null } | null
 }
 interface GqlStatusContextNode {
@@ -919,6 +1024,7 @@ interface GqlPrNode {
   headRefName: string
   baseRefName: string
   mergeStateStatus: string
+  mergeable: string
   labels: { nodes: { name: string }[] }
   changedFiles: number
   files: { nodes: { path: string }[] } | null
@@ -976,11 +1082,49 @@ export interface BoardFetchDeps {
   fetchBranchRules(branch: string): Promise<unknown>
   /** The base branch's CODEOWNERS text, from the first of `.github/`, the
    *  root, and `docs/` that has one — GitHub's own lookup order. `null` when
-   *  none exists; THROWS when it could not be read. */
+   *   none exists; THROWS when it could not be read. */
   fetchCodeOwners(branch: string): Promise<string | null>
+  /** One PR's live `mergeable` verdict (`gh pr view <n> --json mergeable`),
+   *  called ONLY by `resolveMergeable` when the GraphQL answer was
+   *  `UNKNOWN` — each REST read nudges GitHub to actually compute the merge
+   *  commit. `undefined` on any read failure, which the caller folds back
+   *  into `UNKNOWN` (unknown is never mergeable — see `PrFact.mergeable`). */
+  fetchMergeable(prNumber: number): Promise<string | undefined>
+  /** The base branch HEAD commit's committer date (ISO-8601), once per
+   *  base branch per invocation — the yardstick `staleGreenNote` ages
+   *  checks against (#1842). `undefined` on any read failure. */
+  fetchBaseHeadDate(branch: string): Promise<string | undefined>
+  /** Injectable delay for `resolveMergeable`'s backoff so tests do not wait
+   *  real seconds. Defaults to a real `setTimeout` sleep. */
+  sleep?(ms: number): Promise<void>
 }
 
-function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 'StatusContext'; state: CheckState; workflowRunId?: number; title?: string } {
+/**
+ * Resolving `mergeable` properly (#1842): GitHub computes the merge commit
+ * LAZILY and answers `UNKNOWN` until it has — one query is not an answer,
+ * and the issue's own measurement (`mergeable` is `UNKNOWN` until GitHub is
+ * asked twice) is exactly that. Poll with backoff until the verdict is
+ * `MERGEABLE` or `CONFLICTING`; a verdict still `UNKNOWN` after every
+ * attempt is returned as `UNKNOWN` — unknown, never mergeable.
+ */
+const MERGEABLE_POLL_ATTEMPTS = 4
+const MERGEABLE_POLL_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000]
+
+export async function resolveMergeable(
+  deps: Pick<BoardFetchDeps, 'fetchMergeable' | 'sleep'>,
+  prNumber: number,
+  initial: string,
+): Promise<string> {
+  let value = initial
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms) }))
+  for (let attempt = 0; value === 'UNKNOWN' && attempt < MERGEABLE_POLL_ATTEMPTS; attempt++) {
+    await sleep(MERGEABLE_POLL_BACKOFF_MS[attempt] ?? MERGEABLE_POLL_BACKOFF_MS[MERGEABLE_POLL_BACKOFF_MS.length - 1] ?? 8_000)
+    value = (await deps.fetchMergeable(prNumber)) ?? 'UNKNOWN'
+  }
+  return value
+}
+
+function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 'StatusContext'; state: CheckState; workflowRunId?: number; title?: string; startedAt?: string } {
   if (node.__typename === 'CheckRun') {
     return {
       name: node.name,
@@ -988,6 +1132,7 @@ function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 
       state: normalizeCheckRunState(node.status, node.conclusion),
       workflowRunId: node.checkSuite?.workflowRun?.databaseId ?? undefined,
       title: node.title ?? undefined,
+      startedAt: node.startedAt ?? undefined,
     }
   }
   return { name: node.context, kind: 'StatusContext', state: normalizeStatusContextState(node.state) }
@@ -1095,10 +1240,13 @@ export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFa
     const commit = node.commits.nodes[0]?.commit
     const contextNodes = commit?.statusCheckRollup?.contexts.nodes ?? []
     const sha = commit?.oid ?? node.headRefOid
+    // `mergeable` comes back UNKNOWN whenever GitHub has not computed the
+    // merge commit yet — resolve it before anyone classifies off it (#1842).
+    const mergeable = await resolveMergeable(deps, node.number, node.mergeable)
 
     const checks = await Promise.all(contextNodes.map(async (n): Promise<PrCheckContext> => {
       const base = toCheckState(n)
-      const check: PrCheckContext = { name: base.name, kind: base.kind, sha, state: base.state, title: base.title }
+      const check: PrCheckContext = { name: base.name, kind: base.kind, sha, state: base.state, title: base.title, startedAt: base.startedAt }
 
       // Only a FAILed fleet/review CheckRun ever needs the infra-vs-
       // substantive split — every other context is inert past this point.
@@ -1128,6 +1276,7 @@ export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFa
       headRefName: node.headRefName,
       baseRefName: node.baseRefName,
       mergeStateStatus: node.mergeStateStatus,
+      mergeable,
       labels: node.labels.nodes.map((l) => l.name),
       reviews: (node.latestOpinionatedReviews?.nodes ?? [])
         .map((r) => ({ login: r.author?.login ?? '(unknown)', state: r.state })),
@@ -1153,7 +1302,12 @@ export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFa
   const gates: Record<string, BranchGate> = {}
   for (const branch of bases) gates[branch] = await gatherGate(deps, branch)
 
-  return { fleet, prs, gates }
+  // One base-head read per distinct base branch — the yardstick the
+  // evidence-aging note (#1842) compares every green check against.
+  const baseHeads: Record<string, string | undefined> = {}
+  for (const branch of bases) baseHeads[branch] = await deps.fetchBaseHeadDate(branch)
+
+  return { fleet, prs, gates, baseHeads }
 }
 
 interface ActionsRunJob { name: string; run_attempt: number; steps: { name: string; conclusion: string | null }[] }
@@ -1213,6 +1367,17 @@ function defaultBoardFetchDeps(): BoardFetchDeps {
       const repo = out.data?.repository
       if (repo === undefined || repo === null) throw new Error(`CODEOWNERS query returned no repository${out.errors ? `: ${JSON.stringify(out.errors)}` : ''}`)
       return repo.github?.text ?? repo.root?.text ?? repo.docs?.text ?? null
+    },
+    fetchMergeable: async (prNumber) => {
+      const data = await ghJson<{ mergeable?: string }>(['pr', 'view', String(prNumber), '--json', 'mergeable'], 30_000)
+      return data?.mergeable
+    },
+    fetchBaseHeadDate: async (branch) => {
+      const data = await ghJson<{ commit?: { committer?: { date?: string | null } | null } | null }>(
+        ['api', `repos/${REPO}/commits/${encodeURIComponent(branch)}`],
+        30_000,
+      )
+      return data?.commit?.committer?.date ?? undefined
     },
   }
 }
