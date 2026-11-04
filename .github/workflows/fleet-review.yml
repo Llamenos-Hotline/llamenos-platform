@@ -964,8 +964,71 @@ jobs:
           echo "head_tree=$head_tree" >> "$GITHUB_OUTPUT"
           echo "judging $HEAD_SHA, tree $head_tree"
 
-      - name: Setup Bun
+      # #1887: on the self-hosted review box, Bun is part of the machine
+      # itself (the same BUN_VERSION pinned at the top of this file), and
+      # `setup-bun`'s download step repeatedly hung for the full 30-minute
+      # job timeout fetching a toolchain that was already installed —
+      # occupying the ONE review runner every merge in this repo serialises
+      # through, and publishing NO-VERDICT:setup-failed on every one of
+      # them. So the box's own Bun is used when it is EXACTLY the pinned
+      # version (PATH first, then ~/.bun/bin/bun — a non-pinned PATH Bun
+      # never shadows a pinned one beside it); no pinned Bun among the
+      # installed ones fails LOUDLY (a runner-image drift a
+      # human must fix — never review with an unpinned toolchain, never
+      # silently accept whatever happens to be installed); and `setup-bun`'s
+      # network fetch is paid only when Bun is genuinely absent (the
+      # `synchronize` arm's ubuntu-latest runner).
+      - name: Use the runner's own Bun when it is the pinned version
+        id: host_bun
         if: github.event_name != 'merge_group'
+        run: |
+          set -euo pipefail
+          # Every Bun this runner could use, in preference order: whatever
+          # PATH resolves first, then the installer's default location. A
+          # PATH Bun that is NOT the pin must not shadow a pinned Bun that
+          # is installed beside it: on llamenos-review-box PATH resolves
+          # `bun` to a Volta shim (1.3.11) while ~/.bun/bin/bun is exactly
+          # 1.3.5, and judging only the first candidate failed every run
+          # with bun-version-mismatch (#2437's own gate included).
+          candidates=()
+          path_bun="$(command -v bun || true)"
+          if [ -n "$path_bun" ]; then
+            candidates+=("$path_bun")
+          fi
+          if [ -x "$HOME/.bun/bin/bun" ] && [ "$HOME/.bun/bin/bun" != "$path_bun" ]; then
+            candidates+=("$HOME/.bun/bin/bun")
+          fi
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "no bun on this runner's PATH (nor at ~/.bun/bin/bun); setup-bun installs it below"
+            echo "usable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          seen=""
+          for bun_bin in "${candidates[@]}"; do
+            # A candidate that cannot even report a version (a dangling
+            # shim) is just another non-pinned Bun, not a reason to die
+            # before the next candidate is judged.
+            version="$("$bun_bin" --version 2>/dev/null || echo unknown)"
+            if [ "$version" = "$BUN_VERSION" ]; then
+              dirname "$bun_bin" >> "$GITHUB_PATH"
+              echo "usable=true" >> "$GITHUB_OUTPUT"
+              echo "using the runner's own bun $version at $bun_bin"
+              exit 0
+            fi
+            seen="$seen $bun_bin=$version"
+          done
+          echo "::error::fleet/review FAILED: bun-version-mismatch — this runner has bun but none is the pinned $BUN_VERSION (found:$seen). Fix the runner to ship the pinned Bun; never review with an unpinned toolchain."
+          exit 1
+
+      # The fallback, reached only when the step above found no Bun at all.
+      # Its own short timeout, not the job's: a stalled download used to burn
+      # the whole 30-minute job timeout on the single review runner (#1887).
+      # A fast, loud failure frees the box in minutes and the gate still
+      # reports NO-VERDICT:setup-failed honestly — nothing about correctness
+      # changes, only how long the box is held hostage.
+      - name: Setup Bun
+        if: github.event_name != 'merge_group' && steps.host_bun.outputs.usable == 'false'
+        timeout-minutes: 3
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
