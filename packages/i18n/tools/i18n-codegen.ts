@@ -31,6 +31,7 @@ import {
   syncLocaleDeferrals,
   type DeferralRecord,
 } from './deferral'
+import { readSameAsEn } from './untranslated'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -385,7 +386,12 @@ function main() {
 
     // Validate coverage as a three-state gate (missing / deferred / translated).
     if (locale !== 'en') {
-      const c = classifyLocale(enDotted, flattenKeysDotted(data), record.get(locale) ?? new Set())
+      const c = classifyLocale(
+        enDotted,
+        flattenKeysDotted(data),
+        record.get(locale) ?? new Set(),
+        readSameAsEn(locale, data).keys
+      )
       totals.translated += c.translated.length
       totals.deferred += c.deferred.length
       totals.missing += c.missing.length

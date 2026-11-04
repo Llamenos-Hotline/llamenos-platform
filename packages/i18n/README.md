@@ -47,6 +47,38 @@ a locale (e.g. scaffolding a new locale) — never to silence a failure you have
 not reviewed; the whole point of the record is that deferral is a deliberate,
 visible act.
 
+## The untranslated-value gate (new and changed strings)
+
+The deferral record is a self-service allowlist: recording a new English copy in
+`deferred.json` makes the three-state gate pass. So a second gate, which never
+reads `deferred.json`, stops the backlog widening (#2335):
+
+```bash
+bun run i18n:untranslated                    # vs merge-base(HEAD, origin/main)
+bun run i18n:untranslated -- --base <ref>
+```
+
+- **Blocking** — a (key, locale) pair that this change adds or alters (new key,
+  changed English text, new or changed locale value) whose value is verbatim
+  English. Recording it in `deferred.json` does not excuse it.
+- **Reported, not blocking** — the whole backlog, per locale, plus the
+  caller-facing `voice.*` / `ivr.*` subset. Written to the CI job summary on
+  every run.
+- The baseline is read from git at the merge base. There is no snapshot file,
+  and the gate exits 2 rather than pass when no merge base can be resolved.
+- A brand-new locale has no baseline: it is reported, not blocked.
+
+An identical value is exempt when it has no letters outside `{{placeholders}}`,
+or when the locale file lists its key in a top-level `_same_as_en` array — the
+reviewable statement that the English text is correct in that language (a brand
+name, a protocol term). A marker naming a key that no longer exists, whose value
+was since translated, or that has no letters, fails the gate. `_same_as_en`
+entries also count as translated for the three-state gate.
+
+```json
+{ "_same_as_en": ["brand.signal"], "brand": { "signal": "Signal" } }
+```
+
 ## Structure
 
 ```
@@ -56,6 +88,8 @@ languages.ts      # Language metadata (codes, display labels, Twilio voice IDs)
 tools/
   i18n-codegen.ts          # Generates iOS .strings + Android strings.xml + Kotlin I18n.kt; three-state gate
   deferral.ts              # Shared deferral-record logic (parse, hygiene, classify, sync)
+  untranslated.ts          # Untranslated-value detector (letters rule, _same_as_en, merge-base diff, report)
+  check-untranslated.ts    # `bun run i18n:untranslated` CLI: resolves the merge base, writes the job summary
   validate-strings.ts      # Cross-platform string reference validator
 ```
 
