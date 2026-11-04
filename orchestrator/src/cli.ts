@@ -54,6 +54,7 @@ import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type Lan
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
 import { runBoard } from './board.js'
 import { runMissingChecks } from './missing-checks.js'
+import { defaultQueueSweepDeps, renderSweepInline, runQueueSweep, sweepQueueRuns } from './queue-sweep.js'
 import { notify } from './notify.js'
 import { FLEET_DIR, LOG_FILE, HALT_REASON_FILE, DISPATCH_SCRIPT, FLEET_ENV_FILE } from './paths.js'
 import { REPO, gh, ghJson, readPrCommits } from './gh.js'
@@ -775,6 +776,20 @@ async function runTick(): Promise<number> {
   if (!currency.ok) {
     process.stderr.write(`ERROR: ${currency.reason ?? 'fleet runtime is not current'}\n`)
     return 1
+  }
+
+  // #1868: sweep orphaned merge_group runs BEFORE the pass, on every timer
+  // fire — the sweep's interval IS the tick timer's. Runs even when the
+  // fleet is halted: it only ever cancels runs whose queue entry no longer
+  // exists (work GitHub itself has already discarded), which stops nothing
+  // a halt protects, and cancellation preserves the run's logs. Best-effort
+  // — a hygiene failure is logged, never fatal to the pass.
+  try {
+    const sweep = await sweepQueueRuns(defaultQueueSweepDeps())
+    log(renderSweepInline(sweep))
+    for (const e of sweep.errors) log(`queue-sweep error: ${e}`)
+  } catch (e) {
+    log(`queue-sweep failed: ${errMsg(e)}`)
   }
 
   const lanes = await loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger)
@@ -1951,6 +1966,13 @@ const HANDLERS: Record<string, CommandHandler> = {
   // exits 1 when a head is blocked forever, 2 when a required set could not
   // be read.
   'missing-checks': (rest) => runMissingChecks(rest),
+  // #1868: cancel orphaned merge_group runs — a queue reshuffle (dequeue,
+  // ejection, rebuild) leaves the old entry's run EXECUTING on a Mac mini
+  // whose results can never be used. Also runs automatically at the start
+  // of every `tick` pass; this command is the on-demand form. Cancels only
+  // runs whose (pr, basesha) no longer matches a live queue entry AND that
+  // still have a non-completed job — see queue-sweep.ts's traps.
+  'queue-sweep': (rest) => runQueueSweep(rest),
 }
 
 /** Every subcommand name this CLI actually implements — see `HANDLERS`. */
