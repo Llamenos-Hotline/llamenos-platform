@@ -4715,7 +4715,8 @@
     "connected": "Connected",
     "connecting": "Connecting...",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Ap konekte ak hub yo..."
   },
   "yes": "Yes",
   "yourIdentity": "Your Identity",

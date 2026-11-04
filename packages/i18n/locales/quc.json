@@ -4423,7 +4423,8 @@
     "connecting": "Tajin kak'am...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Tajin kak'am rik'in le hubs..."
   },
   "platformSettings": {
     "transcriptionEnabled": "Rutz'ib'axik Ch'ab'al",

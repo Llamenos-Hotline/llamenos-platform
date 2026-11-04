@@ -4469,7 +4469,8 @@
     "connecting": "Bağlanılıyor...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Merkezlere bağlanılıyor..."
   },
   "authTokenLabel": "Kimlik Doğrulama Jetonu",
   "callActions": {

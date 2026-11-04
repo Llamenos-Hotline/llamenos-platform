@@ -4442,7 +4442,8 @@
     "connecting": "Waa la isku xirayaa...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Waa la isku xirayaa xarumaha..."
   },
   "actionDone": "Waa la dhammeeyay",
   "recovery": {

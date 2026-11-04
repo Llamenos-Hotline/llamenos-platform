@@ -4349,7 +4349,8 @@
     "connecting": "Tê girêdan...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Bi navendan ve tê girêdan..."
   },
   "continueButton": "Bidomîne",
   "providerSetup": {

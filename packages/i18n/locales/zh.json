@@ -4715,7 +4715,8 @@
     "connected": "Connected",
     "connecting": "Connecting...",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "正在连接各个 Hub..."
   },
   "yes": "Yes",
   "yourIdentity": "Your Identity",

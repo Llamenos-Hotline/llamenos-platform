@@ -4517,7 +4517,8 @@
     "connecting": "Kúu conectar...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "Kúu conectar hubs..."
   },
   "accountNameLabel": "Account Name",
   "actionCopy": "Copy",

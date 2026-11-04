@@ -4191,7 +4191,8 @@
     "connecting": "در حال اتصال...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting ({{attempt}})..."
+    "reconnecting": "Reconnecting ({{attempt}})...",
+    "subscribing": "در حال اتصال به هاب‌ها..."
   },
   "actionDone": "انجام شد",
   "status": {
