@@ -3267,6 +3267,10 @@ jobs:
       contents: read
       pull-requests: read # migration:claims' open-PR sweep
     timeout-minutes: 10
+    # A gate that did not execute (exit 2) fails its step, labelled — and says so
+    # here too, so ci-status can report "did not run" instead of "failed" (#2455).
+    outputs:
+      did_not_run: ${{ steps.safety.outputs.did_not_run || steps.claims.outputs.did_not_run || steps.order.outputs.did_not_run }}
     env:
       MIGRATION_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
 
@@ -3292,9 +3296,10 @@ jobs:
       # their SQL, with no database. The same gate runs again before a deploy
       # against the real database (--target); docs/runbooks/migrations.md.
       - name: Check migration safety (diff-only)
+        id: safety
         run: |
           git fetch --no-tags --depth=1 origin "$MIGRATION_BASE"
-          bun run migration:safety --ci --base "$MIGRATION_BASE"
+          scripts/ci-run-gate.sh migration-safety -- bun run migration:safety --ci --base "$MIGRATION_BASE"
 
       # A numbered migration that cannot land as named (a number the base or
       # an older open PR already has, a stale prevId), and a timestamped one
@@ -3303,25 +3308,32 @@ jobs:
       # `gh pr list`, made only when the PR adds a migration, and only on
       # pull_request: in a merge group the queue has already ordered them.
       - name: Check migration claims
+        id: claims
         env:
           GH_TOKEN: ${{ github.token }}
           SWEEP: ${{ github.event_name == 'pull_request' && format('--against-open-prs --pr {0}', github.event.pull_request.number) || '' }}
-        run: bun run migration:claims --base "$MIGRATION_BASE" $SWEEP
+        run: scripts/ci-run-gate.sh migration-claims -- bun run migration:claims --base "$MIGRATION_BASE" $SWEEP
 
       # Every main tip a deployment can sit on (the base, and in a merge group
       # each entry ahead of this one) upgrades to this tree's migrations in
       # an order a fresh install may not use. Prove in Postgres that each
       # builds the same schema; it starts a container only when an order
       # actually differs.
+      #
+      # Whether MIGRATION_BASE is an ancestor of this checkout is a question the
+      # script answers itself, fetching history until git can say (#2455); a
+      # fixed `--deepen=N` here was a guess that failed when the queue was busy.
+      # Exit 1 is drift. Exit 2 means the proof did not run, and the wrapper
+      # labels it "DID NOT RUN" instead of letting it pass for drift.
       - name: Prove migration orders agree
-        run: |
-          git fetch --no-tags --deepen=10 origin "$GITHUB_SHA"
-          bun run migration:order --ci --base "$MIGRATION_BASE"
+        id: order
+        run: scripts/ci-run-gate.sh migration-order -- bun run migration:order --ci --base "$MIGRATION_BASE"
 
       - name: Test the migration gates
         run: >-
           bun test scripts/check-migration-safety.test.ts scripts/check-migration-claims.test.ts
           scripts/check-migration-order.test.ts scripts/db-generate.test.ts scripts/lib/migration-graph.test.ts
+          scripts/lib/git-ancestry.test.ts scripts/ci-run-gate.test.ts
 
   docs-guard:
     needs: changes
@@ -3760,6 +3772,8 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          # Set when a migration gate exited "could not run" (#2455).
+          MIGRATION_DID_NOT_RUN: ${{ needs.migration-drift.outputs.did_not_run }}
         run: |
           FAILED=""
           CANCELLED=""
@@ -3829,6 +3843,13 @@ jobs:
                 echo "**It also has genuine failures — those are NOT infrastructure:**$FAILED"
               fi
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "$MIGRATION_DID_NOT_RUN" ]]; then
+            # Not a finding: the gate never reached a verdict. ci-status stays red
+            # (unverified must not read as passing) but names the cause so nobody
+            # hunts for a migration conflict that does not exist.
+            echo "::error title=migration-drift: $MIGRATION_DID_NOT_RUN DID NOT RUN (not drift)::$MIGRATION_DID_NOT_RUN could not execute, so migration-drift has no verdict. There is no migration conflict to find; read that step's log for why it could not run."
+            echo "migration-drift: $MIGRATION_DID_NOT_RUN DID NOT RUN — not a migration finding; see the step log."
           fi
           if [[ -n "$FAILED" ]]; then
             echo "Failed jobs:$FAILED"

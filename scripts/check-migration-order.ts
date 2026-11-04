@@ -36,11 +36,18 @@
  *
  * Usage: bun run migration:order [--ci] [--base <rev>] [--root <repo>]
  * Exit:  0 every order agrees, 1 two orders differ (or a run failed), 2 could not run.
+ *
+ * 2 is NOT a verdict. It means the question went unanswered (the base is not in
+ * the clone and could not be fetched, no Postgres to prove in), so it can neither
+ * pass the gate nor be read as drift. CI runs this through scripts/ci-run-gate.sh,
+ * which labels a 2 "DID NOT RUN" (#2455). Never make the 2 path exit 0, and never
+ * route a found difference to 2.
  */
 import { SQL } from 'bun'
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ensureAncestor, spawnGit } from './lib/git-ancestry'
 import { listMigrationFiles } from './lib/migration-statements'
 
 const MIGRATIONS = 'drizzle/migrations'
@@ -306,10 +313,20 @@ async function main() {
   // commit up to (not including) HEAD — in a merge group, the entries ahead of
   // this one. A branch not yet rebased has no such commits to offer, and in a
   // shallow clone the walk would silently stop short, so --ci (where the base
-  // is always an ancestor) treats an unreachable base as an error.
-  const ancestor = Bun.spawnSync(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], { cwd: root }).exitCode === 0
+  // is always an ancestor) makes the ancestry answerable by fetching history
+  // until git can say, and treats a base it still cannot place as "could not
+  // run" — never as a verdict (#2455).
+  let ancestor = Bun.spawnSync(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], { cwd: root }).exitCode === 0
   if (!ancestor && process.argv.includes('--ci')) {
-    throw new Error(`${base} is not an ancestor of HEAD in this clone; fetch more history (git fetch --deepen=…)`)
+    const r = ensureAncestor(spawnGit(root), base)
+    console.log(`[migration-order] ${base} was not reachable from the shallow checkout; fetched: ${r.steps.join(' -> ') || 'nothing'}`)
+    if (!r.ancestor) {
+      throw new Error(
+        `${base} is not an ancestor of HEAD even with the full history fetched. No migration was judged; ` +
+          'this is not drift. Check that MIGRATION_BASE names a commit this ref descends from.',
+      )
+    }
+    ancestor = true
   }
   const between = ancestor
     ? git(root, 'rev-list', '--first-parent', '--reverse', `${base}..HEAD`).split('\n').filter(Boolean)
