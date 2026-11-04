@@ -379,12 +379,12 @@ class BaseUITest: XCTestCase {
     /// `index` if one existed and silently do nothing otherwise — so every test that
     /// opened Shifts or Settings on an iPhone was asserting against the dashboard.
     func navigateToTab(index: Int) {
-        guard find("main-tab-view").waitForExistence(timeout: 10) else {
+        guard find("main-tab-view").waitForExistence(timeout: Self.eventBackstop) else {
             XCTFail("Main tab view should be visible")
             return
         }
         let tabBar = app.tabBars.firstMatch
-        guard tabBar.waitForExistence(timeout: 5) else {
+        guard tabBar.waitForExistence(timeout: Self.eventBackstop) else {
             XCTFail("Tab bar should exist")
             return
         }
@@ -437,7 +437,7 @@ class BaseUITest: XCTestCase {
         // "admin-sidebar-list" this used to probe for first, at the cost of a
         // full 10s timeout on every admin navigation — was dead code presented
         // by nothing, and is deleted: #1776.)
-        guard find("admin-tab-view").waitForExistence(timeout: 10) else {
+        guard find("admin-tab-view").waitForExistence(timeout: Self.eventBackstop) else {
             XCTFail("Admin panel should appear after tapping the admin link")
             return
         }
@@ -459,7 +459,7 @@ class BaseUITest: XCTestCase {
         navigateToSettings()
 
         let accountLink = find("settings-account-link")
-        guard accountLink.waitForExistence(timeout: 5) else {
+        guard accountLink.waitForExistence(timeout: Self.eventBackstop) else {
             XCTFail("Account settings link should exist")
             return
         }
@@ -470,7 +470,7 @@ class BaseUITest: XCTestCase {
         navigateToSettings()
 
         let preferencesLink = find("settings-preferences-link")
-        guard preferencesLink.waitForExistence(timeout: 5) else {
+        guard preferencesLink.waitForExistence(timeout: Self.eventBackstop) else {
             XCTFail("Preferences settings link should exist")
             return
         }
@@ -503,7 +503,7 @@ class BaseUITest: XCTestCase {
     func enterPIN(_ pin: String) {
         for char in pin {
             let button = app.buttons["pin-\(char)"]
-            guard button.waitForExistence(timeout: 2) else {
+            guard button.waitForExistence(timeout: Self.eventBackstop) else {
                 XCTFail("PIN pad button `pin-\(char)` never appeared; the entered PIN would be incomplete")
                 return
             }
@@ -528,7 +528,7 @@ class BaseUITest: XCTestCase {
 
     /// Wait for an element by accessibility identifier, asserting it exists.
     @discardableResult
-    func waitForElement(_ identifier: String, timeout: TimeInterval = 5) -> XCUIElement {
+    func waitForElement(_ identifier: String, timeout: TimeInterval = BaseUITest.eventBackstop) -> XCUIElement {
         let element = find(identifier)
         XCTAssertTrue(
             element.waitForExistence(timeout: timeout),
@@ -543,7 +543,7 @@ class BaseUITest: XCTestCase {
     /// renders. It used to wait out the whole `timeout` on the first identifier before it
     /// looked at the second, which made a screen that rendered its second identifier
     /// (an empty state, say) cost the full timeout and then pass.
-    func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
+    func anyElementExists(_ identifiers: [String], timeout: TimeInterval = BaseUITest.eventBackstop) -> Bool {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier IN %@", identifiers))
             .firstMatch
@@ -672,14 +672,24 @@ extension XCTestCase {
     /// `admin-events` while the Mac, which settles in time, never did). Waiting on the
     /// element's state — not a fixed delay — makes the tap land on a stable target.
     ///
-    /// Judging "still" takes at least two samples `settle` apart, and every sample
-    /// pays for fresh accessibility resolves. On hosted `macos-15` one resolve costs
-    /// 0.7–1.8 s (#2092's merge group: `exists`, `isHittable`, `isEnabled` and
-    /// `frame` as four separate resolves made one sample ~5 s, so a 10 s ceiling fit
-    /// fewer than two and failed on a field that had been stable for the whole wait).
-    /// So a sample takes ONE snapshot (existence, enabled, frame together) plus one
-    /// `isHittable`, and the ceiling is sized for a slow host: it is only ever spent
-    /// when the element really never settles, because a settled element returns at once.
+    /// Judging "still" takes at least two samples, and every sample pays for fresh
+    /// accessibility resolves. On hosted `macos-15` one resolve costs 0.7–1.8 s, and on a
+    /// saturated simulator ONE snapshot has cost 19–27 s (merge groups 41754174476 and
+    /// 41808315098: a field that was "hittable and enabled, frame unchanged for 0.0s over 1
+    /// sample(s)" when a 30 s clock ran out, and one reported "not hittable" from a sample
+    /// that started before the next one finished). A wall-clock budget cannot hold across a
+    /// 40x spread in how long a sample takes, so the budget is not what decides the verdict:
+    ///
+    /// - The wait is `awaitCondition`, so a wait that outlasts its ceiling is settled by one
+    ///   more sample that BEGINS after the ceiling, never by the stale sample the waiter held
+    ///   when its clock ran out. The stability window lives in `SettleWatch`, which survives
+    ///   across samples, so that one fresh sample is enough to judge "still" against the
+    ///   frame an earlier sample saw.
+    /// - The ceiling is `BaseUITest.eventBackstop`, the one fault bound every observable
+    ///   condition shares: it bounds a field that really never becomes hittable, and is not
+    ///   spent on a healthy run, where the wait returns the instant the element is still.
+    ///
+    /// A sample takes ONE snapshot (existence, enabled, frame together) plus one `isHittable`.
     private func awaitSettled(
         _ element: XCUIElement, timeout: TimeInterval, settle: TimeInterval = 0.5
     ) -> (settled: Bool, lastSeen: String) {
@@ -710,14 +720,20 @@ extension XCTestCase {
                 + " over \(watch.samples) sample(s)"
             return held >= settle
         }
-        let expectation = XCTNSPredicateExpectation(predicate: settled, object: element)
-        let settledInTime = XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
-        return (settledInTime, watch.observed)
+        let sample = { settled.evaluate(with: element) }
+        // `awaitCondition` already ends a failed wait on one sample that begins after the
+        // ceiling. "Still" needs two, though: an element that only became hittable in that
+        // last sample has been seen once, and a verdict of "not still" on a single sighting
+        // is the stale-sample failure again. So the fresh pair is `awaitCondition`'s sample
+        // plus this one; both begin after the ceiling.
+        let isSettled = awaitCondition(timeout: timeout, sample) || sample()
+        return (isSettled, watch.observed)
     }
 
     /// Tap `element` once it is settled on screen, failing the test if it never is.
     func tapWhenSettled(
-        _ element: XCUIElement, timeout: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line
+        _ element: XCUIElement, timeout: TimeInterval = BaseUITest.eventBackstop,
+        file: StaticString = #filePath, line: UInt = #line
     ) {
         let outcome = awaitSettled(element, timeout: timeout)
         guard outcome.settled else {
@@ -758,9 +774,10 @@ extension XCTestCase {
     /// does not focus is a defect worth seeing, not one to tap past.
     @discardableResult
     func focus(
-        _ field: XCUIElement, timeout: TimeInterval = 20, file: StaticString = #filePath, line: UInt = #line
+        _ field: XCUIElement, timeout: TimeInterval = BaseUITest.eventBackstop,
+        file: StaticString = #filePath, line: UInt = #line
     ) -> Bool {
-        let settled = awaitSettled(field, timeout: 30)
+        let settled = awaitSettled(field, timeout: timeout)
         guard settled.settled else {
             XCTFail(
                 "\(field) should be on screen, enabled and still before it is given keyboard focus"
