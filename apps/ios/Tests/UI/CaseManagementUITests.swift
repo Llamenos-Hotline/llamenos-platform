@@ -18,7 +18,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I look at the tab bar") {
             let tabBar = app.tabBars.firstMatch
-            XCTAssertTrue(tabBar.waitForExistence(timeout: 5), "Tab bar should exist")
+            XCTAssertTrue(tabBar.waitForExistence(timeout: Self.eventBackstop), "Tab bar should exist")
         }
         then("I should see a Cases tab") {
             let tabBar = app.tabBars.firstMatch
@@ -114,7 +114,7 @@ final class CaseManagementUITests: BaseUITest {
                 object: caseTitle
             )
             XCTAssertEqual(
-                XCTWaiter.wait(for: [titleAppears], timeout: 10),
+                XCTWaiter.wait(for: [titleAppears], timeout: Self.eventBackstop),
                 .completed,
                 "Selecting Arrest Case should retain the matching case in the list"
             )
@@ -175,10 +175,10 @@ final class CaseManagementUITests: BaseUITest {
     /// Open the case with this title from the list, failing the test if it cannot be opened.
     private func openCase(titled title: String) {
         let row = caseTitle(title)
-        XCTAssertTrue(row.waitForExistence(timeout: 15), "The case '\(title)' should be in the list")
+        XCTAssertTrue(row.waitForExistence(timeout: Self.eventBackstop), "The case '\(title)' should be in the list")
         row.tap()
         XCTAssertTrue(
-            find("case-detail-header").waitForExistence(timeout: 10),
+            find("case-detail-header").waitForExistence(timeout: Self.eventBackstop),
             "Tapping the case should open its detail"
         )
     }
@@ -194,7 +194,7 @@ final class CaseManagementUITests: BaseUITest {
         app.buttons["case-tab-\(name)"]
     }
 
-    private func waitForSelected(_ button: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+    private func waitForSelected(_ button: XCUIElement, timeout: TimeInterval = BaseUITest.eventBackstop) -> Bool {
         XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "isSelected == true"),
@@ -211,7 +211,7 @@ final class CaseManagementUITests: BaseUITest {
     /// Wait until the Cases screen leaves its loading state and return the identifier of
     /// the state it settled on, or nil if it never settled. One query over all of them,
     /// so no state is given a shorter wait than another.
-    private func waitForCasesScreenToSettle(timeout: TimeInterval = 15) -> String? {
+    private func waitForCasesScreenToSettle(timeout: TimeInterval = BaseUITest.eventBackstop) -> String? {
         let settled = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier IN %@", Self.casesSettledStates)
         ).firstMatch
@@ -232,7 +232,7 @@ final class CaseManagementUITests: BaseUITest {
         case "cms-not-enabled":
             XCTFail("Case management should be on for this hub", file: file, line: line)
         default:
-            XCTFail("Cases screen was still loading after 15s", file: file, line: line)
+            XCTFail("Cases screen was still loading after \(Int(Self.eventBackstop))s", file: file, line: line)
         }
     }
 
@@ -250,20 +250,20 @@ final class CaseManagementUITests: BaseUITest {
         newCase.tap()
 
         let sheet = find("create-case-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "The create-case sheet should open")
+        XCTAssertTrue(sheet.waitForExistence(timeout: Self.eventBackstop), "The create-case sheet should open")
 
         // `case-type-picker` is a SwiftUI Picker row inside the sheet's Form —
         // it only enters the accessibility tree once the sheet has finished
         // presenting, so the query must wait, not tap immediately.
         let picker = find("case-type-picker")
-        XCTAssertTrue(picker.waitForExistence(timeout: 10), "A case type picker should be shown for two entity types")
+        XCTAssertTrue(picker.waitForExistence(timeout: Self.eventBackstop), "A case type picker should be shown for two entity types")
         picker.tap()
         let optionIdentifier = "case-type-option-\(entityTypeName)"
         // A SwiftUI Picker in a Form presents as a UIKit context menu, which is
         // NOT an XCUIElementType.menu — the options are plain Buttons hanging off
         // the application, so querying `app.menus` matches zero elements.
         let option = app.buttons[optionIdentifier]
-        XCTAssertTrue(option.waitForExistence(timeout: 10), "Case type '\(entityTypeName)' should be selectable")
+        XCTAssertTrue(option.waitForExistence(timeout: Self.eventBackstop), "Case type '\(entityTypeName)' should be selectable")
         XCTAssertEqual(
             app.buttons.matching(identifier: optionIdentifier).count,
             1,
@@ -272,7 +272,7 @@ final class CaseManagementUITests: BaseUITest {
         option.tap()
 
         let titleInput = find("case-title-input")
-        XCTAssertTrue(titleInput.waitForExistence(timeout: 5))
+        XCTAssertTrue(titleInput.waitForExistence(timeout: Self.eventBackstop))
         typeText(title, into: titleInput)
         // `typeText` returns once the key events are synthesized, not once the field has
         // consumed them, and a tap on Create reads the field as it is at that instant. A
@@ -285,7 +285,7 @@ final class CaseManagementUITests: BaseUITest {
             object: titleInput
         )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [titleTyped], timeout: 10),
+            XCTWaiter.wait(for: [titleTyped], timeout: Self.eventBackstop),
             .completed,
             "The title field should hold '\(title)' before Create, but holds '\(titleInput.value as? String ?? "nil")'"
         )
@@ -294,7 +294,7 @@ final class CaseManagementUITests: BaseUITest {
         XCTAssertTrue(submit.isEnabled, "Create should be enabled with a type and a title")
         submit.tap()
         XCTAssertTrue(
-            sheet.waitForNonExistence(timeout: 20),
+            sheet.waitForNonExistence(timeout: Self.eventBackstop),
             "The create-case sheet should close once the case is created"
         )
         XCTAssertFalse(find("case-create-error").exists, "Case creation should not report an error")
@@ -311,11 +311,11 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the list should contain a card for that case") {
             XCTAssertTrue(
-                find("case-list").waitForExistence(timeout: 15),
+                find("case-list").waitForExistence(timeout: Self.eventBackstop),
                 "Cases view should show the case list once a case exists"
             )
             XCTAssertTrue(
-                caseTitle(title).waitForExistence(timeout: 15),
+                caseTitle(title).waitForExistence(timeout: Self.eventBackstop),
                 "The case list should show the case titled '\(title)'"
             )
             XCTAssertFalse(find("case-empty-state").exists, "A hub with a case is not empty")
@@ -343,7 +343,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("I should see the empty state with a way to create a case") {
             XCTAssertTrue(
-                find("case-empty-state").waitForExistence(timeout: 15),
+                find("case-empty-state").waitForExistence(timeout: Self.eventBackstop),
                 "A hub with case management on and no cases should show the empty state"
             )
             XCTAssertTrue(
@@ -365,7 +365,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the status filter should offer All and each status of the template") {
             XCTAssertTrue(
-                find("case-status-filter").waitForExistence(timeout: 15),
+                find("case-status-filter").waitForExistence(timeout: Self.eventBackstop),
                 "Status filter should appear when the entity types define statuses"
             )
             XCTAssertTrue(
@@ -395,7 +395,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the case is listed and there is no pagination bar") {
             XCTAssertTrue(
-                caseTitle(title).waitForExistence(timeout: 15),
+                caseTitle(title).waitForExistence(timeout: Self.eventBackstop),
                 "The case '\(title)' should be listed"
             )
             XCTAssertFalse(
@@ -418,7 +418,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the header names that case") {
             let headerTitle = find("case-detail-title")
-            XCTAssertTrue(headerTitle.waitForExistence(timeout: 10), "The header should show the decrypted title")
+            XCTAssertTrue(headerTitle.waitForExistence(timeout: Self.eventBackstop), "The header should show the decrypted title")
             XCTAssertEqual(headerTitle.label, title, "The header should show the title of the case that was tapped")
         }
     }
@@ -434,7 +434,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the status pill shows the type's first status") {
             let statusPill = find("case-status-pill")
-            XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be visible in case detail header")
+            XCTAssertTrue(statusPill.waitForExistence(timeout: Self.eventBackstop), "Status pill should be visible in case detail header")
             XCTAssertTrue(
                 statusPill.label.contains("Reported"),
                 "A new arrest case starts as Reported (jail-support template); the pill reads '\(statusPill.label)'"
@@ -456,7 +456,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("it opens on Details, and Timeline, Contacts and Evidence are offered but not showing") {
             XCTAssertTrue(
-                find("case-details-tab").waitForExistence(timeout: 10),
+                find("case-details-tab").waitForExistence(timeout: Self.eventBackstop),
                 "A case should open on its Details tab"
             )
             for name in ["details", "timeline", "contacts", "evidence"] {
@@ -479,12 +479,12 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the details tab should show the entity type's fields") {
             XCTAssertTrue(
-                find("case-details-tab").waitForExistence(timeout: 10),
+                find("case-details-tab").waitForExistence(timeout: Self.eventBackstop),
                 "Details tab content should be visible"
             )
             // arrest_case defines arrest_datetime as its first field (jail-support template).
             XCTAssertTrue(
-                find("case-field-arrest_datetime").waitForExistence(timeout: 5),
+                find("case-field-arrest_datetime").waitForExistence(timeout: Self.eventBackstop),
                 "Details tab should render a row for each field of the entity type"
             )
         }
@@ -499,14 +499,14 @@ final class CaseManagementUITests: BaseUITest {
         when("I open the case and tap the Timeline tab") {
             openCase(titled: title)
             let timelineTab = find("case-tab-timeline")
-            XCTAssertTrue(timelineTab.waitForExistence(timeout: 5), "Timeline tab should exist")
+            XCTAssertTrue(timelineTab.waitForExistence(timeout: Self.eventBackstop), "Timeline tab should exist")
             timelineTab.tap()
         }
         then("I should see the loaded timeline, not a spinner") {
             // `case-timeline-tab` is the container and is present while loading, so it
             // proves nothing; only the two loaded states count.
             XCTAssertTrue(
-                anyElementExists(["timeline-empty", "case-timeline"], timeout: 10),
+                anyElementExists(["timeline-empty", "case-timeline"], timeout: Self.eventBackstop),
                 "Timeline tab should show interactions or its empty state once loaded"
             )
             XCTAssertFalse(find("timeline-loading").exists, "Timeline should have finished loading")
@@ -522,14 +522,14 @@ final class CaseManagementUITests: BaseUITest {
         when("I open the case and tap the Contacts tab") {
             openCase(titled: title)
             let contactsTab = find("case-tab-contacts")
-            XCTAssertTrue(contactsTab.waitForExistence(timeout: 5), "Contacts tab should exist")
+            XCTAssertTrue(contactsTab.waitForExistence(timeout: Self.eventBackstop), "Contacts tab should exist")
             contactsTab.tap()
         }
         then("I should see the contacts empty state") {
             // `case-contacts-tab` is the container and exists while loading; only the
             // loaded state counts.
             XCTAssertTrue(
-                find("case-contacts-empty").waitForExistence(timeout: 10),
+                find("case-contacts-empty").waitForExistence(timeout: Self.eventBackstop),
                 "A case with no linked contacts should show the contacts empty state"
             )
             XCTAssertFalse(find("case-contact-card").exists, "No contacts are linked to this case")
@@ -546,12 +546,12 @@ final class CaseManagementUITests: BaseUITest {
         when("I open the case and tap the Evidence tab") {
             openCase(titled: title)
             let evidenceTab = find("case-tab-evidence")
-            XCTAssertTrue(evidenceTab.waitForExistence(timeout: 5), "Evidence tab should exist")
+            XCTAssertTrue(evidenceTab.waitForExistence(timeout: Self.eventBackstop), "Evidence tab should exist")
             evidenceTab.tap()
         }
         then("I should see the evidence empty state") {
             XCTAssertTrue(
-                find("case-evidence-empty").waitForExistence(timeout: 10),
+                find("case-evidence-empty").waitForExistence(timeout: Self.eventBackstop),
                 "A case with no evidence should show the evidence empty state"
             )
             XCTAssertFalse(find("case-evidence-loading").exists, "Evidence should have finished loading")
@@ -569,12 +569,12 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I tap the status pill") {
             let statusPill = find("case-status-pill")
-            XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be visible")
+            XCTAssertTrue(statusPill.waitForExistence(timeout: Self.eventBackstop), "Status pill should be visible")
             statusPill.tap()
         }
         then("the sheet offers every status of the case's type") {
             XCTAssertTrue(
-                find("quick-status-sheet").waitForExistence(timeout: 5),
+                find("quick-status-sheet").waitForExistence(timeout: Self.eventBackstop),
                 "QuickStatusSheet should be visible after tapping status pill"
             )
             // arrest_case in the jail-support template.
@@ -598,10 +598,10 @@ final class CaseManagementUITests: BaseUITest {
         when("I choose In Custody in the status sheet") {
             find("case-status-pill").tap()
             let option = app.buttons["status-option-in_custody"]
-            XCTAssertTrue(option.waitForExistence(timeout: 5), "The sheet should offer In Custody")
+            XCTAssertTrue(option.waitForExistence(timeout: Self.eventBackstop), "The sheet should offer In Custody")
             option.tap()
             XCTAssertTrue(
-                find("quick-status-sheet").waitForNonExistence(timeout: 10),
+                find("quick-status-sheet").waitForNonExistence(timeout: Self.eventBackstop),
                 "The sheet should dismiss once a status is chosen"
             )
         }
@@ -610,7 +610,7 @@ final class CaseManagementUITests: BaseUITest {
             let updated = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "label CONTAINS 'In Custody'"), object: pill
             )
-            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 10), .completed,
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: Self.eventBackstop), .completed,
                            "The status pill should now read In Custody (reads '\(pill.label)')")
 
             find("case-detail-close").tap()
@@ -629,22 +629,22 @@ final class CaseManagementUITests: BaseUITest {
             title = launchWithSeededCase()
             openCase(titled: title)
             XCTAssertTrue(
-                find("case-unassign-btn").waitForExistence(timeout: 10),
+                find("case-unassign-btn").waitForExistence(timeout: Self.eventBackstop),
                 "The creator of a case is assigned to it"
             )
         }
         when("I change its status") {
             find("case-status-pill").tap()
             let option = app.buttons["status-option-confirmed"]
-            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            XCTAssertTrue(option.waitForExistence(timeout: Self.eventBackstop))
             option.tap()
-            XCTAssertTrue(find("quick-status-sheet").waitForNonExistence(timeout: 10))
+            XCTAssertTrue(find("quick-status-sheet").waitForNonExistence(timeout: Self.eventBackstop))
         }
         then("I am still assigned") {
             let updated = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "label CONTAINS 'Confirmed'"), object: find("case-status-pill")
             )
-            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 10), .completed, "The status should have changed")
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: Self.eventBackstop), .completed, "The status should have changed")
             XCTAssertTrue(find("case-unassign-btn").exists, "A status change must not clear the assignee (#1643)")
             XCTAssertFalse(find("case-assign-btn").exists)
         }
@@ -662,11 +662,11 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open the comment sheet from the timeline, write a comment and submit") {
             let timelineTab = find("case-tab-timeline")
-            XCTAssertTrue(timelineTab.waitForExistence(timeout: 5))
+            XCTAssertTrue(timelineTab.waitForExistence(timeout: Self.eventBackstop))
             timelineTab.tap()
 
             XCTAssertTrue(
-                find("case-comment-input").waitForExistence(timeout: 10),
+                find("case-comment-input").waitForExistence(timeout: Self.eventBackstop),
                 "The inline comment input should be visible on the timeline tab"
             )
             XCTAssertFalse(
@@ -674,17 +674,17 @@ final class CaseManagementUITests: BaseUITest {
                 "There is nothing to submit while the comment field is empty"
             )
             let expand = find("case-comment-expand")
-            XCTAssertTrue(expand.waitForExistence(timeout: 10), "The timeline should offer the full comment sheet")
+            XCTAssertTrue(expand.waitForExistence(timeout: Self.eventBackstop), "The timeline should offer the full comment sheet")
             expand.tap()
 
-            XCTAssertTrue(find("add-comment-sheet").waitForExistence(timeout: 5), "The comment sheet should open")
+            XCTAssertTrue(find("add-comment-sheet").waitForExistence(timeout: Self.eventBackstop), "The comment sheet should open")
             let sheetInput = find("comment-input")
             // The submit control is a SwiftUI toolbar Button — query the button itself so
             // isEnabled reflects the control, not a label child (a StaticText always
             // reports isEnabled = true, which made an enabled-after-typing check unable to fail).
             let submit = app.buttons["comment-submit"]
-            XCTAssertTrue(sheetInput.waitForExistence(timeout: 5), "Comment sheet should contain a text input")
-            XCTAssertTrue(submit.waitForExistence(timeout: 5), "Comment sheet should contain a submit button")
+            XCTAssertTrue(sheetInput.waitForExistence(timeout: Self.eventBackstop), "Comment sheet should contain a text input")
+            XCTAssertTrue(submit.waitForExistence(timeout: Self.eventBackstop), "Comment sheet should contain a submit button")
             XCTAssertFalse(submit.isEnabled, "Submit should be disabled while the comment is empty")
 
             typeText(comment, into: sheetInput)
@@ -693,14 +693,14 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the comment appears in the case timeline") {
             XCTAssertTrue(
-                find("add-comment-sheet").waitForNonExistence(timeout: 15),
+                find("add-comment-sheet").waitForNonExistence(timeout: Self.eventBackstop),
                 "The sheet should close once the comment is saved"
             )
             let posted = find("case-timeline").staticTexts.matching(
                 NSPredicate(format: "label CONTAINS %@", comment)
             ).firstMatch
             XCTAssertTrue(
-                posted.waitForExistence(timeout: 15),
+                posted.waitForExistence(timeout: Self.eventBackstop),
                 "The saved comment should read back, decrypted, in the timeline"
             )
         }
@@ -716,7 +716,7 @@ final class CaseManagementUITests: BaseUITest {
             title = launchWithSeededCase()
             openCase(titled: title)
             XCTAssertTrue(
-                find("case-unassign-btn").waitForExistence(timeout: 10),
+                find("case-unassign-btn").waitForExistence(timeout: Self.eventBackstop),
                 "The creator of a case is assigned to it"
             )
         }
@@ -725,12 +725,12 @@ final class CaseManagementUITests: BaseUITest {
         }
         then("the case offers Assign to me, and assigning again offers Unassign") {
             let assignButton = find("case-assign-btn")
-            XCTAssertTrue(assignButton.waitForExistence(timeout: 10), "An unassigned case should offer Assign to me")
+            XCTAssertTrue(assignButton.waitForExistence(timeout: Self.eventBackstop), "An unassigned case should offer Assign to me")
             XCTAssertFalse(find("case-unassign-btn").exists)
             XCTAssertTrue(assignButton.isEnabled, "Assign to me should be tappable")
             assignButton.tap()
             XCTAssertTrue(
-                find("case-unassign-btn").waitForExistence(timeout: 10),
+                find("case-unassign-btn").waitForExistence(timeout: Self.eventBackstop),
                 "After assigning, the case should offer Unassign"
             )
             XCTAssertFalse(find("case-assign-btn").exists, "An assigned case no longer offers Assign to me")
@@ -748,15 +748,15 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I tap the close button") {
             let closeButton = find("case-detail-close")
-            XCTAssertTrue(closeButton.waitForExistence(timeout: 5), "The detail should offer a close button")
+            XCTAssertTrue(closeButton.waitForExistence(timeout: Self.eventBackstop), "The detail should offer a close button")
             closeButton.tap()
         }
         then("I am back on the case list, which still shows the case") {
             XCTAssertTrue(
-                find("case-detail-header").waitForNonExistence(timeout: 10),
+                find("case-detail-header").waitForNonExistence(timeout: Self.eventBackstop),
                 "The detail should be gone after closing it"
             )
-            XCTAssertTrue(caseTitle(title).waitForExistence(timeout: 10), "The list should still show '\(title)'")
+            XCTAssertTrue(caseTitle(title).waitForExistence(timeout: Self.eventBackstop), "The list should still show '\(title)'")
         }
     }
 
@@ -780,10 +780,10 @@ final class CaseManagementUITests: BaseUITest {
             ]
             for entry in tabs {
                 let tab = find(entry.tab)
-                XCTAssertTrue(tab.waitForExistence(timeout: 5), "\(entry.name) tab should exist")
+                XCTAssertTrue(tab.waitForExistence(timeout: Self.eventBackstop), "\(entry.name) tab should exist")
                 tab.tap()
                 XCTAssertTrue(
-                    anyElementExists(entry.loaded, timeout: 10),
+                    anyElementExists(entry.loaded, timeout: Self.eventBackstop),
                     "\(entry.name) tab content should render once loaded"
                 )
                 if !entry.loading.isEmpty {
@@ -806,14 +806,14 @@ final class CaseManagementUITests: BaseUITest {
         when("I open the status sheet and cancel") {
             find("case-status-pill").tap()
             let sheet = find("quick-status-sheet")
-            XCTAssertTrue(sheet.waitForExistence(timeout: 5), "The status sheet should open")
+            XCTAssertTrue(sheet.waitForExistence(timeout: Self.eventBackstop), "The status sheet should open")
             let cancelButton = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Cancel'")).firstMatch
-            XCTAssertTrue(cancelButton.waitForExistence(timeout: 3), "The sheet should offer Cancel")
+            XCTAssertTrue(cancelButton.waitForExistence(timeout: Self.eventBackstop), "The sheet should offer Cancel")
             cancelButton.tap()
         }
         then("the sheet is gone and the status is unchanged") {
             XCTAssertTrue(
-                find("quick-status-sheet").waitForNonExistence(timeout: 5),
+                find("quick-status-sheet").waitForNonExistence(timeout: Self.eventBackstop),
                 "QuickStatusSheet should dismiss after tapping Cancel"
             )
             XCTAssertTrue(

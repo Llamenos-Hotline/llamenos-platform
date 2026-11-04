@@ -167,7 +167,7 @@ extension BaseUITest {
     func chooseNoteCall(_ callId: String, file: StaticString = #filePath, line: UInt = #line) {
         let row = scrollToVisible("note-call-choice-\(callId)")
         XCTAssertTrue(
-            row.waitForExistence(timeout: 20) && row.isHittable,
+            row.waitForExistence(timeout: Self.eventBackstop) && row.isHittable,
             "The editor's call picker should offer call \(callId)", file: file, line: line
         )
         row.tap()
