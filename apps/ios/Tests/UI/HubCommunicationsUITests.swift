@@ -53,7 +53,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the view settles on the no-provider state") {
             XCTAssertTrue(
-                find("hub-comms-no-provider").waitForExistence(timeout: 20),
+                find("hub-comms-no-provider").waitForExistence(timeout: Self.eventBackstop),
                 "A hub with no provider should show the no-provider state"
             )
             XCTAssertFalse(find("hub-comms-loading").exists, "Communications should have finished loading")
@@ -70,7 +70,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the view settles on the settings list") {
             XCTAssertTrue(
-                find("hub-comms-settings-list").waitForExistence(timeout: 20),
+                find("hub-comms-settings-list").waitForExistence(timeout: Self.eventBackstop),
                 "A hub with completed setup should show its settings"
             )
             XCTAssertFalse(find("hub-comms-loading").exists, "Communications should have finished loading")
@@ -87,10 +87,10 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the setup button should appear") {
             let noProvider = find("hub-comms-no-provider")
-            XCTAssertTrue(noProvider.waitForExistence(timeout: 20), "A hub with no provider should show the no-provider state")
+            XCTAssertTrue(noProvider.waitForExistence(timeout: Self.eventBackstop), "A hub with no provider should show the no-provider state")
             let setupButton = find("hub-comms-start-setup-btn")
             XCTAssertTrue(
-                setupButton.waitForExistence(timeout: 5),
+                setupButton.waitForExistence(timeout: Self.eventBackstop),
                 "Start Setup button should appear when no provider is configured"
             )
         }
@@ -105,15 +105,15 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I tap the Start Setup button") {
             navigateToCommunications()
             let noProvider = find("hub-comms-no-provider")
-            XCTAssertTrue(noProvider.waitForExistence(timeout: 20), "A hub with no provider should show the no-provider state")
+            XCTAssertTrue(noProvider.waitForExistence(timeout: Self.eventBackstop), "A hub with no provider should show the no-provider state")
             let setupButton = find("hub-comms-start-setup-btn")
-            XCTAssertTrue(setupButton.waitForExistence(timeout: 5), "Start Setup button should exist")
+            XCTAssertTrue(setupButton.waitForExistence(timeout: Self.eventBackstop), "Start Setup button should exist")
             setupButton.tap()
         }
         then("the onboarding sheet should appear") {
             let sheet = find("hub-onboarding-sheet")
             XCTAssertTrue(
-                sheet.waitForExistence(timeout: 5),
+                sheet.waitForExistence(timeout: Self.eventBackstop),
                 "Onboarding sheet should be presented after tapping Start Setup"
             )
         }
@@ -127,7 +127,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the step indicator should be visible") {
             let indicator = find("onboarding-step-indicator")
             XCTAssertTrue(
-                indicator.waitForExistence(timeout: 5),
+                indicator.waitForExistence(timeout: Self.eventBackstop),
                 "Step indicator should be visible in the onboarding sheet"
             )
         }
@@ -141,7 +141,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the cancel button should be visible") {
             let cancelBtn = find("onboarding-cancel-btn")
             XCTAssertTrue(
-                cancelBtn.waitForExistence(timeout: 5),
+                cancelBtn.waitForExistence(timeout: Self.eventBackstop),
                 "Cancel button should be visible in the onboarding sheet toolbar"
             )
         }
@@ -154,7 +154,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         when("I tap Cancel") {
             let cancelBtn = find("onboarding-cancel-btn")
-            guard cancelBtn.waitForExistence(timeout: 5) else {
+            guard cancelBtn.waitForExistence(timeout: Self.eventBackstop) else {
                 XCTFail("Cancel button should exist")
                 return
             }
@@ -163,8 +163,10 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the sheet should be dismissed") {
             let sheet = find("hub-onboarding-sheet")
             // Sheet should no longer exist after dismissal
-            let dismissed = !sheet.waitForExistence(timeout: 3)
-            XCTAssertTrue(dismissed, "Onboarding sheet should be dismissed after tapping Cancel")
+            XCTAssertTrue(
+                sheet.waitForNonExistence(timeout: Self.eventBackstop),
+                "Onboarding sheet should be dismissed after tapping Cancel"
+            )
         }
     }
 
@@ -206,7 +208,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the channel checklist view should exist") {
             let checklist = find("channel-checklist")
             XCTAssertTrue(
-                checklist.waitForExistence(timeout: 5),
+                checklist.waitForExistence(timeout: Self.eventBackstop),
                 "Channel checklist container should be present"
             )
         }
@@ -221,7 +223,7 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I interact with channel toggles") {
             // Try toggling individual channels -- they should be independently tappable
             let voiceToggle = find("channel-toggle-voice")
-            guard voiceToggle.waitForExistence(timeout: 5) else {
+            guard voiceToggle.waitForExistence(timeout: Self.eventBackstop) else {
                 XCTFail("Voice toggle should exist")
                 return
             }
@@ -250,10 +252,14 @@ final class HubCommunicationsUITests: BaseUITest {
             openOnboardingSheet()
         }
         then("the back button should NOT be visible") {
-            let backBtn = find("onboarding-back-btn")
-            let exists = backBtn.waitForExistence(timeout: 3)
+            // An absence has no event to wait for, so wait for the first step to be on
+            // screen and read the back button from that settled screen.
+            XCTAssertTrue(
+                find("onboarding-template-list").waitForExistence(timeout: Self.eventBackstop),
+                "The onboarding sheet opens on the template list"
+            )
             XCTAssertFalse(
-                exists,
+                find("onboarding-back-btn").exists,
                 "Back button should not be visible on the first step"
             )
         }
@@ -268,7 +274,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the next button should be visible") {
             let nextBtn = find("onboarding-next-btn")
             XCTAssertTrue(
-                nextBtn.waitForExistence(timeout: 5),
+                nextBtn.waitForExistence(timeout: Self.eventBackstop),
                 "Next button should appear after the template step"
             )
         }
@@ -283,7 +289,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the back button should be visible") {
             let backBtn = find("onboarding-back-btn")
             XCTAssertTrue(
-                backBtn.waitForExistence(timeout: 5),
+                backBtn.waitForExistence(timeout: Self.eventBackstop),
                 "Back button should appear after advancing past the first step"
             )
         }
@@ -300,7 +306,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the provider step content should be visible") {
             let providerStep = find("onboarding-step-provider")
             XCTAssertTrue(
-                providerStep.waitForExistence(timeout: 5),
+                providerStep.waitForExistence(timeout: Self.eventBackstop),
                 "Provider connection step content should render"
             )
         }
@@ -318,14 +324,14 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the settings list should show key sections") {
             let settingsList = find("hub-comms-settings-list")
             XCTAssertTrue(
-                settingsList.waitForExistence(timeout: 20),
+                settingsList.waitForExistence(timeout: Self.eventBackstop),
                 "A hub with completed setup should show its settings list"
             )
 
             // Provider status section
             let statusRow = find("hub-comms-provider-status")
             XCTAssertTrue(
-                statusRow.waitForExistence(timeout: 5),
+                statusRow.waitForExistence(timeout: Self.eventBackstop),
                 "Provider status row should be visible in settings"
             )
         }
@@ -340,11 +346,11 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the channel settings navigation link should exist") {
             let settingsList = find("hub-comms-settings-list")
-            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
+            XCTAssertTrue(settingsList.waitForExistence(timeout: Self.eventBackstop), "Settings list should be shown")
 
             let channelLink = find("hub-comms-channel-settings-link")
             XCTAssertTrue(
-                channelLink.waitForExistence(timeout: 5),
+                channelLink.waitForExistence(timeout: Self.eventBackstop),
                 "Channel settings link should be visible in the settings panel"
             )
         }
@@ -359,7 +365,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the usage link should exist") {
             let settingsList = find("hub-comms-settings-list")
-            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
+            XCTAssertTrue(settingsList.waitForExistence(timeout: Self.eventBackstop), "Settings list should be shown")
 
             // The server always reports the current month's usage (zeroes if nothing was
             // used), so a configured hub always has usage data to link to.
@@ -375,15 +381,15 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I tap the channel settings link") {
             navigateToCommunications()
             let settingsList = find("hub-comms-settings-list")
-            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
+            XCTAssertTrue(settingsList.waitForExistence(timeout: Self.eventBackstop), "Settings list should be shown")
 
             let channelLink = find("hub-comms-channel-settings-link")
-            XCTAssertTrue(channelLink.waitForExistence(timeout: 5), "Channel settings link should exist")
+            XCTAssertTrue(channelLink.waitForExistence(timeout: Self.eventBackstop), "Channel settings link should exist")
             channelLink.tap()
         }
         then("the channel checklist should appear with a save button") {
             let checklist = find("channel-checklist")
-            XCTAssertTrue(checklist.waitForExistence(timeout: 5), "Channel checklist should open")
+            XCTAssertTrue(checklist.waitForExistence(timeout: Self.eventBackstop), "Channel checklist should open")
 
             // In settings mode (not onboarding), a save button is present
             let saveBtn = scrollToFind("channel-save-btn", maxSwipes: 5)
@@ -401,7 +407,7 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I tap the usage link") {
             navigateToCommunications()
             let settingsList = find("hub-comms-settings-list")
-            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
+            XCTAssertTrue(settingsList.waitForExistence(timeout: Self.eventBackstop), "Settings list should be shown")
 
             let usageLink = scrollToFind("hub-comms-usage-link", maxSwipes: 3)
             XCTAssertTrue(usageLink.exists, "Usage link should exist")
@@ -409,7 +415,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the usage view should appear") {
             let usageView = find("hub-usage-view")
-            XCTAssertTrue(usageView.waitForExistence(timeout: 5), "Usage view should render")
+            XCTAssertTrue(usageView.waitForExistence(timeout: Self.eventBackstop), "Usage view should render")
         }
     }
 
@@ -422,7 +428,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
         then("the phone numbers section should be visible") {
             let settingsList = find("hub-comms-settings-list")
-            XCTAssertTrue(settingsList.waitForExistence(timeout: 20), "Settings list should be shown")
+            XCTAssertTrue(settingsList.waitForExistence(timeout: Self.eventBackstop), "Settings list should be shown")
 
             let phoneNumbers = scrollToFind("hub-comms-phone-numbers", maxSwipes: 5)
             XCTAssertTrue(
@@ -443,7 +449,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the phone number step content should be visible") {
             let phoneStep = find("onboarding-step-phone")
             XCTAssertTrue(
-                phoneStep.waitForExistence(timeout: 5),
+                phoneStep.waitForExistence(timeout: Self.eventBackstop),
                 "Phone number step content should render"
             )
         }
@@ -458,7 +464,7 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the channel setup step content should be visible") {
             let setupStep = find("onboarding-step-channel-setup")
             XCTAssertTrue(
-                setupStep.waitForExistence(timeout: 5),
+                setupStep.waitForExistence(timeout: Self.eventBackstop),
                 "Channel setup step content should render"
             )
         }
@@ -473,14 +479,14 @@ final class HubCommunicationsUITests: BaseUITest {
         then("the summary step content should be visible") {
             let summaryStep = find("onboarding-step-summary")
             XCTAssertTrue(
-                summaryStep.waitForExistence(timeout: 5),
+                summaryStep.waitForExistence(timeout: Self.eventBackstop),
                 "Summary step content should render"
             )
         }
         and("the complete setup button should be visible") {
             let completeBtn = find("onboarding-complete-btn")
             XCTAssertTrue(
-                completeBtn.waitForExistence(timeout: 5),
+                completeBtn.waitForExistence(timeout: Self.eventBackstop),
                 "Complete Setup button should be visible on the summary step"
             )
         }
@@ -517,15 +523,15 @@ final class HubCommunicationsUITests: BaseUITest {
         navigateToCommunications()
 
         XCTAssertTrue(
-            find("hub-comms-no-provider").waitForExistence(timeout: 20),
+            find("hub-comms-no-provider").waitForExistence(timeout: Self.eventBackstop),
             "Onboarding opens from the no-provider state"
         )
         let setupBtn = find("hub-comms-start-setup-btn")
-        XCTAssertTrue(setupBtn.waitForExistence(timeout: 5), "Start Setup button should exist")
+        XCTAssertTrue(setupBtn.waitForExistence(timeout: Self.eventBackstop), "Start Setup button should exist")
         setupBtn.tap()
 
         XCTAssertTrue(
-            find("hub-onboarding-sheet").waitForExistence(timeout: 5),
+            find("hub-onboarding-sheet").waitForExistence(timeout: Self.eventBackstop),
             "Onboarding sheet should be presented after tapping Start Setup"
         )
     }
@@ -534,28 +540,55 @@ final class HubCommunicationsUITests: BaseUITest {
     /// This moves to the channels step.
     private func advanceToChannelStep() {
         XCTAssertTrue(
-            find("onboarding-template-list").waitForExistence(timeout: 10),
+            find("onboarding-template-list").waitForExistence(timeout: Self.eventBackstop),
             "The onboarding sheet opens on the template list"
         )
         let fromScratch = scrollToFind("template-from-scratch", maxSwipes: 5)
         XCTAssertTrue(fromScratch.exists, "Start from Scratch should be offered")
         fromScratch.tap()
 
-        XCTAssertTrue(
-            find("channel-checklist").waitForExistence(timeout: 5),
+        awaitOnboardingStep(
+            "channel-checklist",
             "Choosing a template should move to the channels step"
+        )
+    }
+
+    /// Wait for the wizard to reach `identifier` after an action that sends it to the server.
+    ///
+    /// A step change is gated on server calls — choosing a template takes two in a row
+    /// (`POST /onboard`, then `PUT /onboard/step`) — so how long it takes is the host's
+    /// business, not a number to guess. The app shows `onboarding-in-flight` for exactly as
+    /// long as those calls are outstanding, so the wait ends on one of two events: the step
+    /// rendered, or the calls finished (the indicator came and went) without it. The second
+    /// is a failure reported at once with the real cause — the step never came — instead of
+    /// after a budget runs out. The backstop only bounds a server that never answers.
+    private func awaitOnboardingStep(
+        _ identifier: String, _ message: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        var sawWorkInFlight = false
+        _ = awaitCondition(timeout: Self.eventBackstop) {
+            if self.find(identifier).exists { return true }
+            if self.find("onboarding-in-flight").exists {
+                sawWorkInFlight = true
+                return false
+            }
+            return sawWorkInFlight
+        }
+        XCTAssertTrue(
+            find(identifier).exists,
+            sawWorkInFlight
+                ? "\(message) — the server calls finished and '\(identifier)' did not render"
+                : message,
+            file: file, line: line
         )
     }
 
     /// Tap Next and wait for the step with this identifier.
     private func tapNext(toReach stepIdentifier: String) {
         let nextBtn = find("onboarding-next-btn")
-        XCTAssertTrue(nextBtn.waitForExistence(timeout: 5), "Next button should exist")
+        XCTAssertTrue(nextBtn.waitForExistence(timeout: Self.eventBackstop), "Next button should exist")
         nextBtn.tap()
-        XCTAssertTrue(
-            find(stepIdentifier).waitForExistence(timeout: 5),
-            "Next should reach '\(stepIdentifier)'"
-        )
+        awaitOnboardingStep(stepIdentifier, "Next should reach '\(stepIdentifier)'")
     }
 
     /// Advance to the provider step by going through template + channels.

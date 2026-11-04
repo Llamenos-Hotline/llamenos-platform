@@ -29,6 +29,7 @@ struct HubOnboardingSheet: View {
                 // Navigation buttons
                 bottomBar
             }
+            .overlay { inFlightIndicator }
             .navigationTitle(NSLocalizedString("hub_onboarding_title", comment: "Hub Communications Setup"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -46,6 +47,25 @@ struct HubOnboardingSheet: View {
         .interactiveDismissDisabled(viewModel.isCompletingStep)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hub-onboarding-sheet")
+    }
+
+    // MARK: - In-flight Indicator
+
+    /// Shown while a step transition's server calls are outstanding. Choosing a template
+    /// takes two sequential requests (`POST /onboard`, then `PUT /onboard/step`) before the
+    /// wizard moves on, and the template step has no Next button to show progress on. The
+    /// identifier is the signal UI tests wait on to know "the work finished" instead of
+    /// guessing how long two round trips take; it never intercepts a touch.
+    @ViewBuilder
+    private var inFlightIndicator: some View {
+        if viewModel.isCompletingStep {
+            ProgressView()
+                .controlSize(.large)
+                .padding(20)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("onboarding-in-flight")
+        }
     }
 
     // MARK: - Step Indicator

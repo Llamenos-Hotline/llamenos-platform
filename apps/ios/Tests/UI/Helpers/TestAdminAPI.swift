@@ -61,7 +61,10 @@ enum TestAdminAPI {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 15
+        // The event is the server's answer; the budget is only the bound on a server that never
+        // gives one. A fixed 15s was a guess at how long a request takes, and a hosted runner's
+        // server answered `POST /hubs/:id/onboard` in 11s, and a `POST /api/hubs` was still unanswered after 15s.
+        request.timeoutInterval = BaseUITest.eventBackstop
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
             request.setValue("Bearer \(try authorization(method: method, path: url.path))",
@@ -82,7 +85,7 @@ enum TestAdminAPI {
             status = (response as? HTTPURLResponse)?.statusCode ?? -1
             responseData = data
         }.resume()
-        guard done.wait(timeout: .now() + 20) == .success else {
+        guard done.wait(timeout: .now() + BaseUITest.eventBackstop + 5) == .success else {
             XCTFail("\(method) \(path) timed out", file: file, line: line)
             return nil
         }
@@ -96,8 +99,7 @@ enum TestAdminAPI {
 
     /// `{"pubkey","timestamp","token"}` for the Authorization header.
     /// Internal rather than private: `BaseUITest.createClassHub` signs its own
-    /// request so it can keep a 60s timeout (a first request on a freshly
-    /// booted CI runner has taken 30-49s, where `send` allows 15s). Sharing
+    /// request so it can wait on the response on its own terms. Sharing
     /// the signing keeps one implementation of the token format.
     static func authorization(method: String, path: String) throws -> String {
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hexString: seedHex))
