@@ -143,7 +143,7 @@ function makeServices(overrides: {
       getUsers: vi.fn().mockResolvedValue({ users: allUsers }),
     },
     calls: {
-      addCall: vi.fn().mockResolvedValue({ callId: 'CA-test' }),
+      addCall: vi.fn().mockResolvedValue({ callId: 'CA-test', pushRef: 'push-ref-test' }),
       getBusyPubkeys: vi.fn().mockResolvedValue(new Set(busyPubkeys)),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
     },
@@ -172,7 +172,6 @@ describe('startParallelRinging', () => {
     expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', {
       callId: 'CA-1',
       callerNumberSealed: expect.any(String),
-      callerLast4: '4567',
       status: 'ringing',
     })
     // ...but nobody is rung and no ring event is published
@@ -574,7 +573,6 @@ describe('startParallelRinging', () => {
     expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', {
       callId: 'CA-6',
       callerNumberSealed: expect.any(String),
-      callerLast4: '6543',
       status: 'ringing',
     })
     const { callerNumberSealed } = (services.calls.addCall as ReturnType<typeof vi.fn>).mock.calls[0][1]
@@ -584,7 +582,7 @@ describe('startParallelRinging', () => {
     expect(() => openCallerNumber(callerNumberSealed, 'CA-other', TEST_KEK)).toThrow()
   })
 
-  it('extracts last 4 digits of caller number', async () => {
+  it('keeps no part of the caller\'s number in the call row (#2262)', async () => {
     const services = makeServices({
       onShiftPubkeys: ['pk-1'],
       allUsers: [makeUser({ pubkey: 'pk-1' })],
@@ -593,7 +591,8 @@ describe('startParallelRinging', () => {
     await startParallelRinging('CA-7', '+13035551234', 'http://localhost', makeEnv(), services, 'hub-1')
 
     const addCallArgs = (services.calls.addCall as ReturnType<typeof vi.fn>).mock.calls[0][1]
-    expect(addCallArgs.callerLast4).toBe('1234')
+    expect(JSON.stringify(addCallArgs)).not.toContain('1234')
+    expect(Object.keys(addCallArgs).filter((k) => /last4/i.test(k))).toEqual([])
   })
 
   it('publishes call:ring to the hub that owns the call (#1013)', async () => {
@@ -609,7 +608,7 @@ describe('startParallelRinging', () => {
     expect(publishEvent).toHaveBeenCalledWith(
       expect.anything(),
       KIND_CALL_RING,
-      { type: 'call:ring', callId: 'CA-ring' },
+      { type: 'call:ring', callId: 'CA-ring', pushRef: 'push-ref-test' },
       'hub-1',
     )
   })
@@ -663,7 +662,7 @@ describe('startParallelRinging', () => {
   it('creates the call record before consulting shifts or users', async () => {
     const order: string[] = []
     const services = makeServices({ onShiftPubkeys: [] })
-    ;(services.calls.addCall as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('addCall') })
+    ;(services.calls.addCall as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('addCall'); return { pushRef: 'push-ref-test' } })
     ;(services.shifts.getCurrentVolunteers as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('shifts'); return [] })
 
     await startParallelRinging('CA-order', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')

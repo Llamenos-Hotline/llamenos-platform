@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { listAuditLog, listUsers, type AuditLogEntry, type User } from '@/lib/api'
+import { listAuditLog, listPlatformAuditLog, listUsers, NoActiveHubError, type AuditLogEntry, type User } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { ScrollText, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export const Route = createFileRoute('/audit')({
-  component: AuditPage,
+  component: () => <AuditPage />,
 })
 
 const EVENT_CATEGORIES = [
@@ -40,7 +40,11 @@ function getEventCategoryColor(action: string): string {
   return 'bg-secondary text-secondary-foreground'
 }
 
-export function AuditPage() {
+/**
+ * `hub` is the active hub's chain. `platform` is the deployment-level chain, which
+ * has its own route and permission (`system:view-audit`) — no hub's entries (#2395).
+ */
+export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
   const { t } = useTranslation()
   const { isAdmin } = useAuth()
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
@@ -62,7 +66,8 @@ export function AuditPage() {
 
   const fetchEntries = useCallback(() => {
     setLoading(true)
-    listAuditLog({
+    const list = scope === 'platform' ? listPlatformAuditLog : listAuditLog
+    list({
       page,
       limit,
       eventType: eventType !== 'all' ? eventType : undefined,
@@ -71,9 +76,10 @@ export function AuditPage() {
       search: searchText || undefined,
     })
       .then(r => { setEntries(r.entries); setTotal(r.total) })
-      .catch(() => toast(t('common.error'), 'error'))
+      // No hub to browse is an empty chain, not a failure to load one (#2405).
+      .catch(err => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
       .finally(() => setLoading(false))
-  }, [page, eventType, dateFrom, dateTo, searchText, t, toast])
+  }, [scope, page, eventType, dateFrom, dateTo, searchText, t, toast])
 
   useEffect(() => {
     fetchEntries()
@@ -102,7 +108,7 @@ export function AuditPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-2">
         <ScrollText className="h-6 w-6 text-primary" />
-        <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t('auditLog.title')}</h1>
+        <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t(scope === 'platform' ? 'adminNav.items.platformAudit' : 'auditLog.title')}</h1>
       </div>
 
       {/* Filter bar */}
@@ -260,7 +266,6 @@ function AuditDetails({ entry }: { entry: AuditLogEntry }) {
   const { t } = useTranslation()
   const details = entry.details || {}
 
-  const callerLast4 = details.callerLast4 as string | undefined
   const duration = details.duration as number | undefined
 
   const isCallEvent = entry.action === 'callAnswered' || entry.action === 'callEnded' || entry.action === 'callMissed'
@@ -269,11 +274,6 @@ function AuditDetails({ entry }: { entry: AuditLogEntry }) {
   if (isCallEvent) {
     return (
       <span className="flex flex-1 items-center gap-2 truncate text-xs text-muted-foreground">
-        {callerLast4 && (
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            ***{callerLast4}
-          </code>
-        )}
         {duration !== undefined && entry.action === 'callEnded' && (
           <span>{Math.floor(duration / 60)}:{String(duration % 60).padStart(2, '0')}</span>
         )}

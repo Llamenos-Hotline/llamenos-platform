@@ -273,7 +273,7 @@ describe('AuditService.list', () => {
     // Promise.all: two selects in parallel — rows first, count second
     db.$setSelectResults([entries, [{ total: 2 }]])
 
-    const result = await service.list(undefined)
+    const result = await service.list(null)
     expect(result.entries).toHaveLength(2)
     expect(result.total).toBe(2)
   })

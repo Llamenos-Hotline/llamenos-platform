@@ -191,6 +191,7 @@ private final class LogoutDuringFetchAPI: HubAPIServiceProtocol, @unchecked Send
 
     func getHubKey(_ hubId: String) async throws -> HubKeyEnvelopeResponse { throw URLError(.unsupportedURL) }
     func hp(_ path: String) -> String { path }
+    func activeHubPath(_ path: String) throws -> String { throw APIError.noActiveHub }
 
     func request<T: Decodable>(method: String, path: String, body: (any Encodable)?) async throws -> T {
         await MainActor.run {

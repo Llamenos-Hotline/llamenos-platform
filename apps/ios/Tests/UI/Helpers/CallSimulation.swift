@@ -48,7 +48,7 @@ extension BaseUITest {
     func appIdentityPubkey(file: StaticString = #filePath, line: UInt = #line) -> String {
         let identity = find("dashboard-identity")
         XCTAssertTrue(
-            identity.waitForExistence(timeout: 15), "The dashboard should expose the signed-in identity",
+            identity.waitForExistence(timeout: Self.eventBackstop), "The dashboard should expose the signed-in identity",
             file: file, line: line
         )
         let pubkey = identity.label
@@ -59,8 +59,67 @@ extension BaseUITest {
         return pubkey
     }
 
+    /// The backstop on every wait whose condition is observable: an element appearing or
+    /// clearing, the relay connecting, a request answering. Each of those waits returns the
+    /// instant its condition holds, so this number is never spent on a healthy run and is
+    /// not a delay anything waits out — it only bounds how long a genuine fault (a screen
+    /// that never arrives, a server that never answers) takes to be reported.
+    ///
+    /// It is sized to the slowest thing those conditions have been seen to wait on, which is
+    /// the first response of a backend sharing a hosted runner's cores with the simulator: 7-9s
+    /// for a GET during launch, 30-49s for a first request (see `createClassHub`). Never
+    /// reach for it to make a test that fails because the app did not do something pass:
+    /// find the event the app emits for that thing and wait on it.
+    static let eventBackstop: TimeInterval = 60
+
+    /// The app's own copy for `key`, from the generated English strings bundled into this test
+    /// target (`project.yml`). The app is launched pinned to English (`BaseUITest.setUp`), so this
+    /// is exactly what it renders. Fails the test on a key the strings do not define, rather than
+    /// returning the key and letting a wait time out on a label nothing will ever show.
+    func appString(_ key: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+        let missing = "<<missing \(key)>>"
+        guard let path = Bundle(for: BaseUITest.self).path(forResource: "en", ofType: "lproj"),
+              let english = Bundle(path: path)
+        else {
+            XCTFail("The English strings are not bundled into the UI test target", file: file, line: line)
+            return missing
+        }
+        let copy = english.localizedString(forKey: key, value: missing, table: nil)
+        if copy == missing { XCTFail("'\(key)' is not in the generated English strings", file: file, line: line) }
+        return copy
+    }
+
+    /// Wait until the app's live-updates connection to the relay is up: the dashboard's
+    /// connection card renders `WebSocketService.ConnectionState.displayText`, which for
+    /// `.connected` is `ws_connected`. That is the iOS app's own string, not the web client's
+    /// `wsConnected` ("Live updates active"), which no iOS screen shows.
+    ///
+    /// The dashboard learns of a ring ONLY from the relay: it reads `calls/active` once on
+    /// load, and again on a relay event. A ring the server publishes before this app has
+    /// authenticated is never delivered and nothing re-reads the list, so the card never
+    /// appears (#2424). Fast hosts connect in well under a second, so every test passed by
+    /// winning that race; a loaded host (run 41383568666, hosted shard 1: the app's first
+    /// requests took 9s, the ring was posted at +10s and never arrived) loses it.
+    ///
+    /// This is the closest signal the UI gives, not a complete one: the label turns to
+    /// "connected" on the server's `authenticated` reply, and the app's hub subscriptions are
+    /// sent after that. The server's `subscribed` acknowledgement is not surfaced anywhere on
+    /// screen, so there is no event to wait on for "a ring posted now will reach me"; that
+    /// residual window closes only when the app resyncs on (re)authentication (#2424).
+    func waitForRelayConnected(file: StaticString = #filePath, line: UInt = #line) {
+        let connected = app.staticTexts.matching(NSPredicate(format: "label == %@", appString("ws_connected", file: file, line: line)))
+        XCTAssertTrue(
+            connected.firstMatch.waitForExistence(timeout: Self.eventBackstop),
+            "The app should be connected to the relay before a call rings, or it never hears of the ring",
+            file: file, line: line
+        )
+    }
+
     /// Ring a call on `hubId` and return its id. Fails the test unless the server accepted it.
+    /// Waits for the app's relay connection first (see `waitForRelayConnected`): a ring the
+    /// app is not yet subscribed for is lost, not late.
     func ringCall(callerNumber: String, hubId: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+        waitForRelayConnected(file: file, line: line)
         let call = simulateIncomingCall(callerNumber: callerNumber, hubId: hubId)
         XCTAssertFalse(
             call.callId.isEmpty, "The simulated incoming call should be created (status '\(call.status)')",
@@ -116,9 +175,7 @@ extension BaseUITest {
 
     /// Wait for a dashboard call card — the in-call card by default, or the ring's
     /// `incoming-call-card` — to leave the screen.
-    func waitForCallCardToClear(_ identifier: String = "active-call-card", timeout: TimeInterval = 20) -> Bool {
-        let gone = NSPredicate(format: "exists == false")
-        let expectation = XCTNSPredicateExpectation(predicate: gone, object: find(identifier))
-        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    func waitForCallCardToClear(_ identifier: String = "active-call-card", timeout: TimeInterval = BaseUITest.eventBackstop) -> Bool {
+        find(identifier).waitForNonExistence(timeout: timeout)
     }
 }

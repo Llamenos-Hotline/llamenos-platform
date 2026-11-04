@@ -72,7 +72,7 @@ describe('assertAdminCanRead', () => {
     expect(svc.identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, undefined)
   })
 
-  describe('a deployment with NO resolvable admin recipient', () => {
+  describe('a hub with NO resolvable admin recipient', () => {
     it.each([
       ['empty envelopes', []],
       ['envelopes addressed to someone else', [{ pubkey: OTHER }]],
@@ -84,7 +84,7 @@ describe('assertAdminCanRead', () => {
       expect(logger.error).toHaveBeenCalledTimes(1)
       const [message, context] = logger.error.mock.calls[0]
       expect(message).toMatch(/REFUSED/)
-      expect(message).toMatch(/ADMIN_DECRYPTION_PUBKEY/)
+      expect(message).toMatch(/hub escrow key/)
       expect(context).toMatchObject({ hubId: HUB, authorPubkey: 'pk', envelopeCount: envelopes?.length ?? 0 })
     })
 

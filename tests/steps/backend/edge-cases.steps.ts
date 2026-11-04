@@ -75,9 +75,9 @@ Before({ tags: '@backend' }, async ({ world }) => {
 
 // ─── Pagination ─────────────────────────────────────────────────────
 
-When('an admin lists notes', async ({ request, world }) => {
+When('an admin lists notes', async ({ request, world, workerHub }) => {
   const conversationId = getEdgeState(world).notesConversationId
-  getEdgeState(world).noteListResult = await listNotesViaApi(request, { conversationId })
+  getEdgeState(world).noteListResult = await listNotesViaApi(request, { conversationId, hubId: workerHub })
 })
 
 Then('the notes list should be empty with total {int}', async ({ world }, total: number) => {
@@ -86,17 +86,19 @@ Then('the notes list should be empty with total {int}', async ({ world }, total:
   expect(getEdgeState(world).noteListResult!.total).toBe(total)
 })
 
-Given('{int} notes exist in the system', async ({ request, world }, count: number) => {
+Given('{int} notes exist in the system', async ({ request, world, workerHub }, count: number) => {
   // A note is filed under a conversation that exists (#2112), so the scenario
   // gets a real one; every later list step reads it back from state.
   const { conversationId } = await simulateIncomingMessage(request, {
     senderNumber: uniquePhone(),
     body: 'edge-case pagination conversation',
     channel: 'sms',
+    // In the hub its notes are filed in: a note may only hang off a conversation of its hub.
+    hubId: workerHub,
   })
   getEdgeState(world).notesConversationId = conversationId
   for (let i = 0; i < count; i++) {
-    const { status } = await apiPost(request, '/notes', {
+    const { status } = await apiPost(request, `/hubs/${workerHub}/notes`, {
       ...(await sealedNoteFields(ADMIN_SEED, `edge-note-${i}`)),
       conversationId,
     })
@@ -105,9 +107,9 @@ Given('{int} notes exist in the system', async ({ request, world }, count: numbe
   getEdgeState(world).noteCount = count
 })
 
-When('an admin lists notes with page {int} limit {int}', async ({ request, world }, page: number, limit: number) => {
+When('an admin lists notes with page {int} limit {int}', async ({ request, world, workerHub }, page: number, limit: number) => {
   const conversationId = getEdgeState(world).notesConversationId
-  getEdgeState(world).noteListResult = await listNotesViaApi(request, { page, limit, conversationId })
+  getEdgeState(world).noteListResult = await listNotesViaApi(request, { page, limit, conversationId, hubId: workerHub })
 })
 
 Then('{int} notes should be returned with total {int}', async ({ world }, count: number, total: number) => {
@@ -267,8 +269,8 @@ When('an admin deletes shift {string}', async ({ request, world }, id: string) =
   getSharedState(world).lastResponse = await apiDelete(request, `/shifts/${id}`)
 })
 
-When('an admin requests note replies for {string}', async ({ request, world }, noteId: string) => {
-  getSharedState(world).lastResponse = await apiGet(request, `/notes/${noteId}/replies`)
+When('an admin requests note replies for {string}', async ({ request, world, workerHub }, noteId: string) => {
+  getSharedState(world).lastResponse = await apiGet(request, `/hubs/${workerHub}/notes/${noteId}/replies`)
 })
 
 // ─── CORS ───────────────────────────────────────────────────────────

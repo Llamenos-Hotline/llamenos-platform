@@ -134,7 +134,7 @@ describe('messageReaders', () => {
   })
 
   it('yields the user alone on a deployment with no env-configured admin', () => {
-    // `adminHpkeRecipient` returns undefined during desktop bootstrap; an
+    // `transitionalInstanceRecipient` returns undefined during desktop bootstrap; an
     // absent admin means one fewer reader, never a substituted one (#1283).
     expect(messageReaders(undefined, [deviceA])).toEqual([deviceA])
   })

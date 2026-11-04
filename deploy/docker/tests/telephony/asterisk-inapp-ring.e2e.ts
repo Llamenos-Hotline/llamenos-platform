@@ -71,7 +71,6 @@ interface SipTokenResponse {
 
 interface CallRecord {
   id: string
-  callerLast4?: string
   answeredBy?: string | null
   status?: string
 }
@@ -163,14 +162,15 @@ async function inAppChannels(): Promise<AriChannel[]> {
   return channels.filter((c) => c.name.startsWith('PJSIP/vol_'))
 }
 
-async function activeCall(request: APIRequestContext, hubId: string, callerLast4: string): Promise<CallRecord | undefined> {
+/** Each test provisions its own hub, so the call in it is the one the test placed. */
+async function activeCall(request: APIRequestContext, hubId: string): Promise<CallRecord | undefined> {
   const { data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/active`)
-  return data.calls?.find((c) => c.callerLast4 === callerLast4)
+  return data.calls?.[0]
 }
 
-async function historyCall(request: APIRequestContext, hubId: string, callerLast4: string): Promise<CallRecord | undefined> {
+async function historyCall(request: APIRequestContext, hubId: string): Promise<CallRecord | undefined> {
   const { data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/history`)
-  return data.calls?.find((c) => c.callerLast4 === callerLast4)
+  return data.calls?.[0]
 }
 
 /**
@@ -287,11 +287,10 @@ test('a call INVITEs the volunteer\'s registered app, alongside their phone, and
   const since = new Date().toISOString()
   try {
     const caller = uniqueNumber('+1555779')
-    const callerLast4 = caller.slice(-4)
     placeCall(caller, hotline, 60)
 
     await expect
-      .poll(() => activeCall(request, hubId, callerLast4), { timeout: 30_000, message: 'the call is ringing' })
+      .poll(() => activeCall(request, hubId), { timeout: 30_000, message: 'the call is ringing' })
       .toMatchObject({ status: 'ringing' })
 
     // THE ASSERTION THIS TEST EXISTS FOR: an INVITE arrived at the volunteer's
@@ -300,8 +299,8 @@ test('a call INVITEs the volunteer\'s registered app, alongside their phone, and
     expect(invite, 'the volunteer\'s registered endpoint received an INVITE').not.toBeNull()
     if (!invite) throw new Error('no INVITE')
     expect(invite.uri).toContain(`sip:${aor}`)
-    // The caller's number is not carried into the app: its UI shows the last
-    // four, from the push, and the INVITE does not widen that.
+    // The caller's number is not carried into the app: the push names the call and
+    // the hub only, and the INVITE does not widen that.
     expect(invite.raw).not.toContain(caller)
 
     // The PBX's own SIP trace agrees — the same INVITE, from its side.
@@ -319,7 +318,7 @@ test('a call INVITEs the volunteer\'s registered app, alongside their phone, and
       .poll(async () => (await inAppChannels()).length, { timeout: 20_000, message: 'the declined in-app leg is gone' })
       .toBe(0)
     await expect
-      .poll(() => activeCall(request, hubId, callerLast4), { timeout: 20_000, message: 'the caller is still being rung' })
+      .poll(() => activeCall(request, hubId), { timeout: 20_000, message: 'the caller is still being rung' })
       .toMatchObject({ status: 'ringing' })
   } finally {
     ua.close()
@@ -338,7 +337,7 @@ test('a volunteer who is scheduled but has not clocked in gets no INVITE — and
     const firstCaller = uniqueNumber('+1555780')
     placeCall(firstCaller, hotline, 30)
     await expect
-      .poll(() => activeCall(request, hubId, firstCaller.slice(-4)), { timeout: 30_000, message: 'the call reached the hub' })
+      .poll(() => activeCall(request, hubId), { timeout: 30_000, message: 'the call reached the hub' })
       .toMatchObject({ status: 'ringing' })
 
     expect(
@@ -347,7 +346,7 @@ test('a volunteer who is scheduled but has not clocked in gets no INVITE — and
     ).toBeNull()
     expect(await inAppChannels()).toEqual([])
     await expect
-      .poll(() => historyCall(request, hubId, firstCaller.slice(-4)), { timeout: 60_000, message: 'the call ends unanswered' })
+      .poll(() => historyCall(request, hubId), { timeout: 60_000, message: 'the call ends unanswered' })
       .toMatchObject({ status: 'unanswered' })
 
     // The volunteer's own consent arrives: now the same call rings them.

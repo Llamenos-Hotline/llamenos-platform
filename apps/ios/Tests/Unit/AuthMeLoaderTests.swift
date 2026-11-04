@@ -110,13 +110,10 @@ final class AuthMeLoaderTests: XCTestCase {
         try await super.tearDown()
     }
 
-    /// Polls a condition — no fixed sleeps; a retry's timing is not the thing under test.
+    /// Waits on a condition, not a clock (a retry's timing is not the thing under test).
     private func waitUntil(_ description: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() && Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(condition(), "timed out waiting for: \(description)")
+        let held = await waitForCondition(timeout: timeout, condition)
+        XCTAssertTrue(held, "timed out waiting for: \(description)")
     }
 
     /// The admin the server last described, as the app holds it mid-shift.
@@ -225,7 +222,7 @@ final class AuthMeLoaderTests: XCTestCase {
 
         guard case .cancelled = await refresh.value else { return XCTFail("cancel settles the refresh") }
         let settled = AuthMeStubURLProtocol.requestCount
-        try? await Task.sleep(for: .milliseconds(100))
+        // The refresh task has returned, so the retry loop it ran is over and cannot send again.
         XCTAssertEqual(AuthMeStubURLProtocol.requestCount, settled, "no request after cancel")
         XCTAssertTrue(permissions.isAdmin)
     }

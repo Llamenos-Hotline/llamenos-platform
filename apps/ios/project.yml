@@ -160,6 +160,9 @@ targets:
       # codegen like everywhere else (never a raw "llamenos:" literal).
       - path: ../../packages/protocol/generated/swift/CryptoLabels.swift
         name: Generated
+      # The app's own English copy, so a test waits on what a screen renders
+      # (`appString` in CallSimulation.swift) instead of pasting a second literal.
+      - path: Resources/Localizable/en.lproj/Localizable.strings
     dependencies:
       - target: Llamenos
     settings:

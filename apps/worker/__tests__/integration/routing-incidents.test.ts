@@ -266,7 +266,6 @@ describe('routing/no_answers (#2330)', () => {
   async function finishedCall(hubId: string, answered: boolean, minutesAgo = 5) {
     await services.calls.recordHistoricalCall(hubId, {
       callId: `CA-rt-${++callCounter}`,
-      callerLast4: '0000',
       startedAt: new Date(Date.now() - minutesAgo * 60_000),
       durationSeconds: 30,
       answeredBy: answered ? 'a'.repeat(64) : null,

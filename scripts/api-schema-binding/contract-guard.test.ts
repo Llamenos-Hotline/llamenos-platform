@@ -90,9 +90,9 @@ describe('break it: each seeded defect is caught', () => {
   })
 
   test('PUT where the route is PATCH (Kotlin, hp-wrapped)', () => {
-    const f = only(kotlin(`suspend fun save(id: String) = apiService.request<Note>("PUT", apiService.hp("/api/notes/$id"))`))
+    const f = only(kotlin(`suspend fun save(id: String) = apiService.request<Event>("PUT", apiService.hp("/api/events/$id"))`))
     expect(f.category).toBe('wrong-verb')
-    expect(f.nearest).toContain('PATCH /api/notes/:id')
+    expect(f.nearest).toContain('PATCH /api/events/:id')
   })
 
   test('PUT where the route is PATCH (desktop)', () => {
@@ -130,7 +130,25 @@ describe('break it: each seeded defect is caught', () => {
   })
 
   test('a mounted route with an id in the param position is NOT shadowing', () => {
-    expect(desktop(`import { request, hp } from './client'\nexport const g = (h: string) => request(hp(\`/contacts/\${h}\`))`)).toEqual([])
+    expect(desktop(`import { request, activeHubPath } from './client'\nexport const g = (h: string) => request(activeHubPath(\`/contacts/\${h}\`))`)).toEqual([])
+  })
+
+  // activeHubPath() never falls back to the bare path (#2395): it always calls the hub route.
+  test('activeHubPath() is checked against the hub route only (all three clients)', () => {
+    expect(swift(`func n() async throws { try await api.request(method: "GET", path: apiService.activeHubPath("/api/notes")) }`)).toEqual([])
+    expect(kotlin(`suspend fun n() = apiService.request<R>("GET", apiService.activeHubPath("/api/notes"))`)).toEqual([])
+    expect(desktop(`import { request, activeHubPath } from './client'\nexport const n = () => request(activeHubPath('/notes'))`)).toEqual([])
+  })
+
+  test('hp() on a route mounted only hub-scoped is a mismatch: with no hub it sends the unscoped path', () => {
+    const f = only(desktop(`import { request, hp } from './client'\nexport const n = () => request(hp('/notes'))`))
+    expect(f.category).toBe('hub-scope-mismatch')
+    expect(f.detail).toContain('mounted only hub-scoped')
+  })
+
+  test('activeHubPath() on a route mounted only unscoped is a mismatch', () => {
+    const f = only(desktop(`import { request, activeHubPath } from './client'\nexport const e = () => request(activeHubPath('/recovery-group/enroll'), { method: 'POST' })`))
+    expect(f.category).toBe('hub-scope-mismatch')
   })
 
   test('a route that does not exist at all is unmounted, with the nearest route named', () => {

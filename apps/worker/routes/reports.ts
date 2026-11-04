@@ -13,7 +13,7 @@ import { KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED } from '@shared/event-kind
 import { publishEvent } from '../lib/ws-events'
 import { verifyReportAccess, isReport } from '../lib/report-access'
 import { linkCaseToReportBodySchema } from '@protocol/schemas/report-links'
-import { resourceInPathHub } from '../lib/hub-scope'
+import { hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
 
 /**
@@ -31,6 +31,11 @@ function normalizeMetadata(metadata: unknown): Record<string, unknown> | null {
 }
 
 const reports = new Hono<AppEnv>()
+
+// A report belongs to a hub, and so does this router (#2395). Outside
+// /hubs/:hubId the list and reads carried no hub filter and the caller's GLOBAL
+// permissions, so a global `reports:read-all` holder read every hub's reports.
+reports.use('*', hubOnly)
 
 // A report is a conversation row. Inside /hubs/:hubId every /:id route may only
 // touch a report of that hub (#2011); another hub's report is a 404, the same as
@@ -64,7 +69,7 @@ reports.get('/',
     const pubkey = c.get('pubkey')
     const permissions = c.get('permissions')
     const services = c.get('services')
-    const hubId = c.get('hubId')
+    const hubId = pathHubId(c)
     const query = c.req.valid('query')
 
     const limit = Math.min(query.limit, 100)
@@ -140,7 +145,7 @@ reports.post('/',
   async (c) => {
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const hubId = c.get('hubId')
+    const hubId = pathHubId(c)
     const body = c.req.valid('json')
 
     // Checked before the conversation exists, so a refused report leaves no
@@ -608,7 +613,7 @@ reports.post('/:id/records',
     await audit(services.audit, 'caseLinkedToReport', pubkey, {
       reportId,
       caseId: body.caseId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result, 201)
   },
@@ -644,7 +649,7 @@ reports.delete('/:id/records/:caseId',
     await audit(services.audit, 'caseUnlinkedFromReport', pubkey, {
       reportId,
       caseId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },

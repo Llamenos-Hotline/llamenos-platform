@@ -280,10 +280,10 @@ Given('a user with reporter role', async ({ request, world }) => {
   getNetworkSecState(world).volunteerPubkey = vol.pubkey
 })
 
-When('they attempt to create a call note', async ({ request, world }) => {
+When('they attempt to create a call note', async ({ request, world, workerHub }) => {
   const res = await apiPost(
     request,
-    '/notes',
+    `/hubs/${workerHub}/notes`,
     {
       encryptedContent: 'reporter-note-attempt',
       callId: `test-call-${Date.now()}`,

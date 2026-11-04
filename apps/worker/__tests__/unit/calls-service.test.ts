@@ -127,7 +127,6 @@ describe('CallsService', () => {
       const result = await svc.addCall('hub-1', {
         callId: 'call-123',
         callerNumberSealed: 'sealed-1',
-        callerLast4: '4567',
       })
       expect(result.callId).toBe('call-123')
       expect(result.hubId).toBe('hub-1')
@@ -142,7 +141,7 @@ describe('CallsService', () => {
         callerNumberSealed: null,
       })
       expect(result.status).toBe('ringing')
-      expect(result.callerLast4).toBeNull()
+      expect(Object.keys(result).filter((k) => /last4/i.test(k))).toEqual([])
     })
 
     it('uses custom status when specified', async () => {
@@ -214,7 +213,6 @@ describe('CallsService', () => {
           hubId: 'hub-1',
           status: 'in-progress',
           callerNumberSealed: null,
-          callerLast4: '4567',
           startedAt: new Date(Date.now() - 60000), // Started 1 min ago
           answeredBy: 'pk1',
           answeredAt: new Date(),
@@ -246,7 +244,6 @@ describe('CallsService', () => {
           hubId: 'hub-1',
           status: 'ringing',
           callerNumberSealed: null,
-          callerLast4: '4567',
           startedAt: new Date(Date.now() - 60000),
           answeredBy: null,
           hasTranscription: false,
@@ -276,7 +273,6 @@ describe('CallsService', () => {
           status: 'ringing',
           startedAt: staleTime,
           answeredBy: null,
-          callerLast4: '1234',
           endedAt: null,
           duration: null,
           hasTranscription: false,
@@ -290,7 +286,6 @@ describe('CallsService', () => {
           status: 'ringing',
           startedAt: freshTime,
           answeredBy: null,
-          callerLast4: '5678',
           endedAt: null,
           duration: null,
           hasTranscription: false,
@@ -341,7 +336,6 @@ describe('CallsService', () => {
           status: 'in-progress',
           startedAt: staleTime,
           answeredBy: 'pk1',
-          callerLast4: '1234',
           endedAt: null,
           duration: null,
           hasTranscription: false,
@@ -389,7 +383,6 @@ describe('CallsService', () => {
           status: 'in-progress',
           startedAt: freshTime,
           answeredBy: 'pk1',
-          callerLast4: '1234',
         },
       ]
 
@@ -424,17 +417,17 @@ describe('CallsService', () => {
       const selectResults = [
         {
           callId: 'stale-ring-hubA', hubId: 'hub-A', status: 'ringing', startedAt: staleRingTime,
-          answeredBy: null, callerLast4: '1111', endedAt: null, duration: null,
+          answeredBy: null, endedAt: null, duration: null,
           hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
         },
         {
           callId: 'stale-progress-hubB', hubId: 'hub-B', status: 'in-progress', startedAt: staleProgressTime,
-          answeredBy: 'pk1', callerLast4: '2222', endedAt: null, duration: null,
+          answeredBy: 'pk1', endedAt: null, duration: null,
           hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
         },
         {
           callId: 'fresh-hubC', hubId: 'hub-C', status: 'ringing', startedAt: freshTime,
-          answeredBy: null, callerLast4: '3333', endedAt: null, duration: null,
+          answeredBy: null, endedAt: null, duration: null,
           hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
         },
       ]

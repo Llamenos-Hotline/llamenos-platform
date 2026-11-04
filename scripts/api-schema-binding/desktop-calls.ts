@@ -168,6 +168,12 @@ function evalExpr(ctx: Ctx, expr0: ts.Expression): Res {
       const inner = evalExpr(sub, expr.arguments[0])
       return isUnres(inner) ? inner : { alts: inner.alts.map(a => ({ path: a.path, scoping: a.scoping === 'none' ? ('hp' as const) : a.scoping })) }
     }
+    // `activeHubPath(path)` is the active hub's scoped path with NO unscoped fallback
+    // (it throws when no hub is active, #2395), so it always calls the hub route.
+    if (name === 'activeHubPath' && expr.arguments.length === 1) {
+      const inner = evalExpr(sub, expr.arguments[0])
+      return isUnres(inner) ? inner : { alts: inner.alts.map(a => ({ path: scopeToHub(a.path), scoping: 'explicit' as const })) }
+    }
     if (name === 'hubPath' && expr.arguments.length === 2) {
       const inner = evalExpr(sub, expr.arguments[1])
       // Desktop paths are /api-relative, so scope without the /api prefix.

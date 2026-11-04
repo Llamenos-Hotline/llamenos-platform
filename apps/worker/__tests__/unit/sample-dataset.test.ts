@@ -54,7 +54,7 @@ describe('sample dataset content', () => {
   it('is obviously fictional: reserved 555-01xx numbers, no real-looking identifiers', () => {
     const fictionalPhone = /^\+155555501\d\d$/
     for (const contact of SAMPLE_CONTACTS) expect(contact.phone).toMatch(fictionalPhone)
-    for (const call of SAMPLE_CALLS) expect(call.callerLast4).toMatch(/^01\d\d$/)
+    for (const call of SAMPLE_CALLS) expect(call.callerNumber).toMatch(fictionalPhone)
     for (const conv of Object.values(SAMPLE_CONVERSATIONS)) {
       if (conv.sender.startsWith('+')) expect(conv.sender).toMatch(fictionalPhone)
     }

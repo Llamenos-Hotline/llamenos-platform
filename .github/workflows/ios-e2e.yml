@@ -493,7 +493,7 @@ jobs:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/crypto
 
@@ -523,21 +523,23 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      # Reuse a usable iPhone simulator when the host has one; CREATE one when
-      # it has none. This step used to abort with "no available iPhone
-      # simulator", which made every build depend on a persistent non-CI
-      # device that nothing in the repo creates (#1875): when disk reclamation
-      # removed it, the next merge-group build died here and ejected a healthy
-      # PR from the queue.
+      # Create a DEDICATED simulator per run and delete it at the end. This
+      # step used to REUSE any existing non-ios-e2e-* iPhone on the host, or
+      # persist a fixture named `llamenos-build-fixture` (#1875). Both shapes
+      # leaked: a scan hit adopts an Xcode-default device (the `iPhone 17`
+      # that sat Shutdown for 61 hours with 3.86 GiB — #1861) that no job
+      # owns, no teardown deletes, and the pre-job reclaim then cannot reap,
+      # because nothing proves it is CI's. Reuse also resolved the
+      # destination by NAME on a shared host, which can match a device
+      # another job is driving.
       #
-      # - ios-e2e-* devices are never reused. They are the `ui` shards' own
-      #   transient devices (deleted at the end of their job), so a scan hit on
-      #   one is a race, not a fixture.
-      # - The device is created ONLY when the scan finds nothing. Creating one
-      #   per run would leak a multi-GiB simulator every run and trip the
-      #   12 GiB disk guard on the Mac. The fixture is deliberately NOT named
-      #   ios-e2e-*: the operator sweep reaps those, so this one persists and
-      #   the next run reuses it.
+      # The per-run device is named `ios-e2e-build-*` so it is inside the
+      # ios-e2e-* naming the pre-job reclaim and the ui shards' orphan sweep
+      # already own: a leak from a crashed agent is reaped at the next job's
+      # guard, same as a ui shard's device. A fresh device is tens of MB and
+      # `build-for-testing` writes almost nothing into it — the multi-GiB
+      # cost the #1875 fixture avoided was never the create, it was the leak.
+      #
       # - The device type is found by ITERATING iPhone types (simctl lists
       #   them newest first) until `simctl create` accepts one. A regex +
       #   `head -1` once picked iPhone-18-Pro against the iOS 26.5 runtime
@@ -546,30 +548,10 @@ jobs:
       # - Every refusal is logged, and exhausting the list fails the step with
       #   simctl's own stderr. A create that fails silently would leave the
       #   job dying later with a misleading message.
-      - name: Detect or create simulator
+      - name: Create simulator
         id: sim
         run: |
           set -euo pipefail
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-              if 'iOS' in runtime:
-                  for d in devices:
-                      name = d.get('name', '')
-                      is_iphone = 'iPhone' in d.get('deviceTypeIdentifier', '') or 'iPhone' in name
-                      if d.get('isAvailable') and is_iphone and not name.startswith('ios-e2e-'):
-                          print(name)
-                          sys.exit(0)
-          ")
-
-          if [ -n "$SIM" ]; then
-            echo "device=$SIM" >> "$GITHUB_OUTPUT"
-            echo "Using existing simulator: $SIM (none created)"
-            exit 0
-          fi
-
-          echo "No usable iPhone simulator on this host; creating one"
           RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
           import json, sys
           rs = [r for r in json.load(sys.stdin)['runtimes']
@@ -585,7 +567,7 @@ jobs:
           for t in ts:
               print(t)
           ")
-          NAME="llamenos-build-fixture"
+          NAME="ios-e2e-build-${{ github.run_id }}-${{ matrix.host }}"
           ERR="$RUNNER_TEMP/simctl-create.err"
           UDID=""
           REASON=""
@@ -603,8 +585,8 @@ jobs:
             exit 1
           fi
 
-          echo "device=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $NAME"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: $NAME ($UDID)"
 
       # UITesting configuration: the UI_TESTING launch hooks the suite relies
       # on (--test-authenticated, --test-hub-url, ...) are compiled out of
@@ -616,7 +598,7 @@ jobs:
               -project Llamenos.xcodeproj \
               -scheme Llamenos \
               -configuration UITesting \
-              -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
               -derivedDataPath ${{ runner.temp }}/llamenos-build \
               -parallelizeTargets \
               EAGER_LINKING=YES \
@@ -664,6 +646,16 @@ jobs:
       - name: Remove this build's DerivedData
         if: always()
         run: rm -rf "$RUNNER_TEMP/llamenos-build"
+
+      # The device this run created. `if: always()` still never runs when the
+      # AGENT dies (#1665), so the pre-job reclaim's ios-e2e-* age sweep is
+      # the backstop for exactly this device — which is why it is named into
+      # that sweep rather than persisting as a fixture (#1861).
+      - name: Delete this build's simulator
+        if: always()
+        run: |
+          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
 
   ui:
     name: ui (${{ matrix.shard }})
@@ -870,13 +862,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Download test build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}
           path: ${{ runner.temp }}/llamenos-build/Build/Products/
 
       - name: Download server crypto library
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}
           path: packages/crypto/dist/server/
@@ -1198,16 +1190,60 @@ jobs:
           fi
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
-          # shellcheck disable=SC2046
-          xcodebuild test-without-building \
-            -xctestrun "$XCTESTRUN" \
-            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
-            -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES \
-            -maximum-test-execution-time-allowance 300 \
-            -resultBundlePath "$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult" \
-            $(cat "$RUNNER_TEMP/shard-args.txt") \
-            2>&1 | tee "$RUNNER_TEMP/xcodebuild-test.log"
+
+          # RETRIED ONLY WHEN THE ATTEMPT EXECUTED ZERO TESTS (#2403). On hosted
+          # runners xcodebuild sometimes exits 65 before any test starts
+          # ("xctrunner" unknown to FrontBoard): six merge-queue ejections in a
+          # day, on PRs with no iOS change, while both Mac shards passed. That is
+          # a launch failure reported as a test failure.
+          #
+          # The condition is NOT the exit code. 65 is also what a genuine
+          # failing XCUITest returns, and retrying on it would re-run — and could
+          # hide — a real failure. It is the test log: no `Test Case '-[...'`
+          # line at all, the same evidence `ui-tests.py report` counts from. An
+          # attempt that started even one test is never retried, and keeps
+          # xcodebuild's exit code exactly as before. An attempt that ran no test
+          # has no result to lose, so re-running it cannot mask a failure.
+          #
+          # xcodebuild-test.log is the LAST attempt only, so `report` never sees a
+          # discarded attempt's "TEST EXECUTE FAILED" and fails a run that then
+          # passed. The discarded ones are kept in xcodebuild-zero-test-attempts.log.
+          log="$RUNNER_TEMP/xcodebuild-test.log"
+          discarded="$RUNNER_TEMP/xcodebuild-zero-test-attempts.log"
+          xcresult="$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult"
+          max_attempts=3
+          attempt=1
+          while :; do
+            # xcodebuild refuses to write a result bundle over an existing one.
+            rm -rf "$xcresult"
+            rc=0
+            # shellcheck disable=SC2046
+            xcodebuild test-without-building \
+              -xctestrun "$XCTESTRUN" \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+              -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES \
+              -maximum-test-execution-time-allowance 300 \
+              -resultBundlePath "$xcresult" \
+              $(cat "$RUNNER_TEMP/shard-args.txt") \
+              2>&1 | tee "$log" || rc=$?
+            [ "$rc" -ne 0 ] || exit 0
+            started=$(grep -c "Test Case '-\[" "$log" || true)
+            if [ "${started:-0}" -gt 0 ]; then
+              exit "$rc"
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::ios-e2e/ui FAILED: zero-tests-executed — shard $SHARD on $RUNNER_NAME launched no test in $max_attempts attempts (xcodebuild exit $rc, no 'Test Case' line in its output). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT: the test runner never started on this simulator (infrastructure; #2403). Re-run the job; if it recurs, read xcodebuild-zero-test-attempts.log in the shard's results artifact (same runner: take it out of rotation; every runner: look for a test-selection or config error)."
+              printf '### ios-e2e/ui shard %s: zero tests executed\n\nxcodebuild exited %s and started no test in %s attempts. Infrastructure failure, not this PR.\n' \
+                "$SHARD" "$rc" "$max_attempts" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              exit "$rc"
+            fi
+            backoff=$(( attempt * 20 ))
+            echo "::warning::shard $SHARD attempt $attempt/$max_attempts executed zero tests (xcodebuild exit $rc) — a launch failure, not a test result; retrying in ${backoff}s"
+            { echo "=== attempt $attempt/$max_attempts: exit $rc, zero tests executed ==="; cat "$log"; } >> "$discarded"
+            sleep "$backoff"
+            attempt=$(( attempt + 1 ))
+          done
 
       - name: Stop the app log capture
         if: always() && env.APP_LOG_PID != ''
@@ -1294,6 +1330,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-e2e-shard-${{ matrix.shard }}.xcresult
             ${{ runner.temp }}/xcodebuild-test.log
+            ${{ runner.temp }}/xcodebuild-zero-test-attempts.log
             ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
             ${{ runner.temp }}/llamenos-native-backend/server.log
             ${{ runner.temp }}/llamenos-native-backend/watchdog.log

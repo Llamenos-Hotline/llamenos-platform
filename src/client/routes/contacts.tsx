@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback } from 'react'
-import { listContacts, getContactTimeline, type ContactSummary, type EncryptedNote, type Conversation } from '@/lib/api'
+import { listContacts, NoActiveHubError, getContactTimeline, type ContactSummary, type EncryptedNote, type Conversation } from '@/lib/api'
 import { decryptNote, decryptLegacyNote } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
@@ -43,8 +43,9 @@ function ContactsPage() {
       const res = await listContacts({ page, limit })
       setContacts(res.contacts)
       setTotal(res.total)
-    } catch {
-      toast(t('common.error'), 'error')
+    } catch (err) {
+      // No hub to browse is an empty list, not a failure to load one (#2405).
+      if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error')
     } finally {
       setLoading(false)
     }

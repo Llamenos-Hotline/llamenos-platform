@@ -369,17 +369,16 @@ final class WipeServiceTests: XCTestCase {
         return request
     }
 
-    /// Poll until `condition` holds, or the timeout expires.
+    /// Wait until `condition` holds, or the timeout expires.
     ///
     /// `URLCache.storeCachedResponse(_:for:)` is asynchronous, so a test that seeds the
     /// cache and asserts in the next statement asserts against a cache that may still
     /// be empty. That is how #1658 stayed hidden on fast hardware for so long.
-    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return true }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-        }
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: @escaping () -> Bool) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in condition() }, object: nil
+        )
+        if XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed { return true }
         return condition()
     }
 }

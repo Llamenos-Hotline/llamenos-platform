@@ -126,9 +126,9 @@ final class ShiftFlowUITests: BaseUITest {
             navigateToShifts()
         }
         then("the weekly schedule is shown and lists that shift") {
-            let header = scrollToFind("weekly-schedule-header", maxSwipes: 6, timeout: 20)
+            let header = scrollToFind("weekly-schedule-header", maxSwipes: 6)
             XCTAssertTrue(header.exists, "A hub with a schedule should show the weekly schedule")
-            let card = scrollToFind("shift-card-\(shiftId)", maxSwipes: 6, timeout: 10)
+            let card = scrollToFind("shift-card-\(shiftId)", maxSwipes: 6)
             XCTAssertTrue(card.exists, "The seeded shift should be listed in the schedule")
             XCTAssertFalse(find("shifts-empty-state").exists, "A loaded schedule is not the empty state")
         }
@@ -143,7 +143,7 @@ final class ShiftFlowUITests: BaseUITest {
         }
         then("today's day section carries the Today badge") {
             let today = Calendar.current.component(.weekday, from: Date()) - 1  // 0-indexed
-            let todaySection = scrollToFind("shift-day-\(today)", maxSwipes: 10, timeout: 15)
+            let todaySection = scrollToFind("shift-day-\(today)", maxSwipes: 10)
             XCTAssertTrue(todaySection.exists, "Today's day section should exist in the schedule")
             let badge = app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Today")).firstMatch
             XCTAssertTrue(badge.waitForExistence(timeout: 5), "Today's section should be marked with the Today badge")

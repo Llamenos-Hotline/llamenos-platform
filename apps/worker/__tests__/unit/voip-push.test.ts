@@ -66,8 +66,7 @@ describe('dispatchVoipPushFromService', () => {
 
     await dispatchVoipPushFromService(
       [],
-      'call-1',
-      'Caller',
+      'push-ref-1',
       'hub-1',
       makeEnv(),
       identity,
@@ -81,8 +80,7 @@ describe('dispatchVoipPushFromService', () => {
 
     await dispatchVoipPushFromService(
       ['pk-1'],
-      'call-1',
-      'Caller',
+      'push-ref-1',
       'hub-1',
       { ENVIRONMENT: 'production' } as Env,  // No APNs or ntfy
       identity,
@@ -96,8 +94,7 @@ describe('dispatchVoipPushFromService', () => {
 
     await dispatchVoipPushFromService(
       ['pk-1'],
-      'call-1',
-      'Caller',
+      'push-ref-1',
       'hub-1',
       makeEnv(),
       identity,
@@ -117,8 +114,7 @@ describe('dispatchVoipPushFromService', () => {
     // Should not throw
     await dispatchVoipPushFromService(
       ['pk-1', 'pk-2'],
-      'call-1',
-      'Caller',
+      'push-ref-1',
       'hub-1',
       makeEnv(),
       identity,
@@ -139,8 +135,7 @@ describe('dispatchVoipPushFromService', () => {
     await expect(
       dispatchVoipPushFromService(
         ['pk-1'],
-        'call-1',
-        'Caller',
+        'push-ref-1',
         'hub-1',
         makeEnv(),
         identity,

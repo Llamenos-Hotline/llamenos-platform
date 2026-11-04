@@ -135,7 +135,7 @@ describe('HubShredService.execute', () => {
   it('destroys the call-record content key', async () => {
     const hubId = await createHub()
     const admin = reader()
-    const sealed = encryptCallRecordForStorage({ callerLast4: '5555' }, [admin.pubkey])
+    const sealed = encryptCallRecordForStorage({ callerNumber: '+15555550142' }, [admin.pubkey])
     const [record] = await fresh.db
       .insert(schema.callRecords)
       .values({
@@ -309,7 +309,7 @@ describe('HubShredService.execute', () => {
       }
       const [hub] = await fresh.db.select().from(schema.hubs).where(eq(schema.hubs.id, hubId))
       expect(hub!.status, 'a provider outage must not keep a hub readable under an emergency override').toBe('shredded')
-      const { entries } = await fresh.audit.list(undefined)
+      const { entries } = await fresh.audit.list(null)
       const remaining = entries.find(e => e.action === 'hubShredProviderMediaRemaining' && (e.details as { hubId?: string }).hubId === hubId)
       expect(remaining, 'what is left at the provider must be on the platform chain').toBeDefined()
     })

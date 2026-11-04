@@ -1,4 +1,4 @@
-import { request, hp } from './client'
+import { request, activeHubPath } from './client'
 import type { Conversation, ConversationMessage } from '@protocol/schemas'
 
 /** Narrowing of ConversationMessage conversionStatus enum from conversationResponseSchema */
@@ -17,7 +17,7 @@ export async function listReports(params?: { status?: string; category?: string;
   if (params?.category) qs.set('category', params.category)
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ conversations: Report[]; total: number }>(hp(`/reports?${qs}`))
+  return request<{ conversations: Report[]; total: number }>(activeHubPath(`/reports?${qs}`))
 }
 
 export async function createReport(data: {
@@ -27,21 +27,21 @@ export async function createReport(data: {
   encryptedContent: string
   readerEnvelopes: import('@shared/types').RecipientEnvelope[]
 }) {
-  return request<Report>(hp('/reports'), {
+  return request<Report>(activeHubPath('/reports'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
 export async function getReport(id: string) {
-  return request<Report>(hp(`/reports/${id}`))
+  return request<Report>(activeHubPath(`/reports/${id}`))
 }
 
 export async function getReportMessages(id: string, params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ messages: ConversationMessage[]; total: number }>(hp(`/reports/${id}/messages?${qs}`))
+  return request<{ messages: ConversationMessage[]; total: number }>(activeHubPath(`/reports/${id}/messages?${qs}`))
 }
 
 export async function sendReportMessage(id: string, data: {
@@ -49,34 +49,34 @@ export async function sendReportMessage(id: string, data: {
   readerEnvelopes: import('@shared/types').RecipientEnvelope[]
   attachmentIds?: string[]
 }) {
-  return request<ConversationMessage>(hp(`/reports/${id}/messages`), {
+  return request<ConversationMessage>(activeHubPath(`/reports/${id}/messages`), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
 export async function assignReport(id: string, assignedTo: string) {
-  return request<Report>(hp(`/reports/${id}/assign`), {
+  return request<Report>(activeHubPath(`/reports/${id}/assign`), {
     method: 'POST',
     body: JSON.stringify({ assignedTo }),
   })
 }
 
 export async function updateReport(id: string, data: { status?: string }) {
-  return request<Report>(hp(`/reports/${id}`), {
+  return request<Report>(activeHubPath(`/reports/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
 
 export async function getReportCategories() {
-  return request<{ categories: string[] }>(hp('/reports/categories'))
+  return request<{ categories: string[] }>(activeHubPath('/reports/categories'))
 }
 
 // --- Report Types ---
 
 export async function getReportTypes() {
-  return request<{ reportTypes: import('@shared/types').ReportType[] }>(hp('/reports/types'))
+  return request<{ reportTypes: import('@shared/types').ReportType[] }>(activeHubPath('/reports/types'))
 }
 
 // The admin report-type vocabulary is deployment-wide: it exists only at the
@@ -112,5 +112,5 @@ export async function archiveReportType(id: string) {
 }
 
 export async function getReportFiles(id: string) {
-  return request<{ files: import('@shared/types').FileRecord[] }>(hp(`/reports/${id}/files`))
+  return request<{ files: import('@shared/types').FileRecord[] }>(activeHubPath(`/reports/${id}/files`))
 }

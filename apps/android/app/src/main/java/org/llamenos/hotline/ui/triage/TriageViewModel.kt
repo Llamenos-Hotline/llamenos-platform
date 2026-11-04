@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.CmsReportTypesResponse
 import org.llamenos.hotline.model.ConvertFromReportResponse
@@ -94,7 +95,7 @@ class TriageViewModel @Inject constructor(
         try {
             val filter = _uiState.value.selectedFilter
             val path = buildString {
-                append(apiService.hp("/api/reports"))
+                append(apiService.activeHubPath("/api/reports"))
                 append("?conversionEnabled=true&limit=50")
                 filter.apiValue?.let { append("&conversionStatus=$it") }
             }
@@ -106,6 +107,11 @@ class TriageViewModel @Inject constructor(
                     isLoading = false,
                     isRefreshing = false,
                 )
+            }
+        } catch (_: NoActiveHubException) {
+            // No hub to browse: nothing to load, which is not a failure (#2405).
+            _uiState.update {
+                it.copy(reports = emptyList(), total = 0, isLoading = false, isRefreshing = false)
             }
         } catch (e: Exception) {
             _uiState.update {
@@ -211,7 +217,7 @@ class TriageViewModel @Inject constructor(
             if (_uiState.value.reports.any { it.id == reportId }) return@launch
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val path = apiService.hp("/api/reports/$reportId")
+                val path = apiService.activeHubPath("/api/reports/$reportId")
                 val report = apiService.request<Report>("GET", path)
                 _uiState.update {
                     it.copy(

@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
+import { listNotes, NoActiveHubError, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
@@ -160,8 +160,9 @@ function NotesPage() {
       )
       setNotes(decryptedNotes)
       setTotal(res.total)
-    } catch {
-      toast(t('common.error'), 'error')
+    } catch (err) {
+      // No hub to browse is an empty list, not a failure to load one (#2405).
+      if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error')
     } finally {
       setLoading(false)
     }
@@ -426,7 +427,6 @@ function NotesPage() {
                     if (!callInfo) return t('notes.callWith', { number: cId.slice(0, 12) + '...' })
                     const answeredBy = callInfo.answeredBy
                     const volunteerName = answeredBy ? nameMap.get(answeredBy) : null
-                    const phone = callInfo.callerLast4 ? `***${callInfo.callerLast4}` : ''
                     return (
                       <span className="flex flex-wrap items-center gap-1.5">
                         {callInfo.status === 'unanswered' ? (
@@ -439,12 +439,6 @@ function NotesPage() {
                           <span>{volunteerName}</span>
                         ) : (
                           <span>{t('callHistory.answeredBy')}</span>
-                        )}
-                        {phone && (
-                          <>
-                            <span className="text-muted-foreground">&middot;</span>
-                            <code className="text-xs font-mono text-muted-foreground">{phone}</code>
-                          </>
                         )}
                         <span className="text-muted-foreground">&middot;</span>
                         <span className="text-xs text-muted-foreground font-normal">
