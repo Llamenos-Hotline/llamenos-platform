@@ -9,6 +9,7 @@ import {
   resolveAwaitingHumanWith, settleTargetFor,
   ensureClosesLine, ensureIssueLinkWith, type IssueLinkDeps,
   findOpenPrFor, type OpenPrLookupDeps,
+  doctorHaltVerdict,
 } from '../../orchestrator/src/cli.js'
 import { renderDigest, computeBanner } from '../../orchestrator/src/digest.js'
 import { buildIssueCreateArgs, NEEDS_HUMAN_LABEL, type ProposedIssue } from '../../orchestrator/src/roles/planner.js'
@@ -749,5 +750,57 @@ describe('findOpenPrFor', () => {
     const pr = await findOpenPrFor(testLane, testItem, lookupDeps(findOpenPrOnBranch))
     expect(pr).toBe('860')
     expect(findOpenPrOnBranch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('doctorHaltVerdict', () => {
+  it('reports not-halted when the fleet is not halted', () => {
+    expect(doctorHaltVerdict(false, undefined)).toEqual({ kind: 'not-halted' })
+  })
+
+  // The shape circuit.ts's quotaBreaker writes verbatim — the watchdog must
+  // never see a doctor FAIL for a halt that clears itself (issue #817).
+  it('reports a quota-shaped halt as a WARN naming the self-resume instant', () => {
+    const v = doctorHaltVerdict(true, 'engine quota exhausted (opencode) — retry after 2026-11-03T09:30:30.373Z')
+    expect(v.kind).toBe('quota-warn')
+    if (v.kind !== 'quota-warn') return
+    expect(v.message).toContain('2026-11-03T09:30:30.373Z')
+    expect(v.message).toContain('self-healing')
+  })
+
+  it('still warns (with an unknown instant) when the quota reason carries no parseable resume time', () => {
+    const v = doctorHaltVerdict(true, 'engine quota exhausted (opencode)')
+    expect(v.kind).toBe('quota-warn')
+    if (v.kind !== 'quota-warn') return
+    expect(v.message).toContain('unknown')
+  })
+
+  it('keeps a human-declared halt a FAIL with the resume remedy', () => {
+    const v = doctorHaltVerdict(true, 'operator: database maintenance')
+    expect(v.kind).toBe('halted-fail')
+    if (v.kind !== 'halted-fail') return
+    expect(v.fix).toContain('operator: database maintenance')
+    expect(v.fix).toContain('llamenos-fleet resume')
+  })
+
+  it('keeps the consecutive-failures breaker a FAIL — it never resumes itself', () => {
+    const v = doctorHaltVerdict(true, 'failure breaker tripped: 3 consecutive failures since last success')
+    expect(v.kind).toBe('halted-fail')
+  })
+
+  // MUTATION GUARD: a hand-typed reason that merely STARTS with the quota
+  // prefix but embeds no retry time must not silently read as carrying a
+  // real resume instant — parseQuotaResumeAt returns undefined for it and
+  // the WARN says so, but it is still the self-healing class, not a FAIL.
+  it('treats a quota-prefix reason without "retry after" as quota-warn, not halted-fail', () => {
+    const v = doctorHaltVerdict(true, 'engine quota exhausted, just checking')
+    expect(v.kind).toBe('quota-warn')
+  })
+
+  it('reports a halt with no reason file as halted-fail with the generic remedy', () => {
+    const v = doctorHaltVerdict(true, undefined)
+    expect(v.kind).toBe('halted-fail')
+    if (v.kind !== 'halted-fail') return
+    expect(v.fix).toContain('llamenos-fleet resume')
   })
 })
