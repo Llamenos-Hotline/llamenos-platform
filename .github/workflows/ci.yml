@@ -2509,6 +2509,11 @@ jobs:
           cat > /tmp/run-android-e2e.sh <<'SCRIPT'
           #!/bin/sh
 
+          # First action, before anything can fail: the classifier
+          # (.github/scripts/classify-infra-failure.py, #2446) reads the absence
+          # of this file as "the emulator never came up and no test ran".
+          : > /tmp/android-e2e-script-started
+
           # Forward host port 3000 into emulator so localhost:3000 works inside the app
           adb reverse tcp:3000 tcp:3000
 
@@ -2536,11 +2541,18 @@ jobs:
           LOGCAT_PID=$!
 
           SHARD_FEATURES="$1"
-          cd apps/android && ./gradlew connectedDebugAndroidTest --console=plain \
-            -Pandroid.testInstrumentationRunnerArguments.cucumberFeatures="$SHARD_FEATURES" \
-            -Pandroid.testInstrumentationRunnerArguments.testHubUrl="http://10.0.2.2:3000" \
-            -Pandroid.testInstrumentationRunnerArguments.testSecret="test-reset-secret"
-          EXIT_CODE=$?
+          # Gradle's output is teed to a file so the classifier can read it after
+          # the emulator action returns; `sh` has no pipefail, so its exit code
+          # travels through a file rather than through the pipe.
+          rm -f /tmp/gradle-e2e.exit
+          (
+            cd apps/android && ./gradlew connectedDebugAndroidTest --console=plain \
+              -Pandroid.testInstrumentationRunnerArguments.cucumberFeatures="$SHARD_FEATURES" \
+              -Pandroid.testInstrumentationRunnerArguments.testHubUrl="http://10.0.2.2:3000" \
+              -Pandroid.testInstrumentationRunnerArguments.testSecret="test-reset-secret"
+            echo $? > /tmp/gradle-e2e.exit
+          ) 2>&1 | tee /tmp/gradle-e2e.log
+          EXIT_CODE=$(cat /tmp/gradle-e2e.exit 2>/dev/null || echo 1)
 
           kill $LOGCAT_PID 2>/dev/null || true
           wait $LOGCAT_PID 2>/dev/null || true
@@ -2548,7 +2560,17 @@ jobs:
           SCRIPT
           chmod +x /tmp/run-android-e2e.sh
 
+      # RETRIED ONCE, ONLY ON INFRASTRUCTURE EVIDENCE, AND LOUDLY (#2446).
+      # `continue-on-error` here does NOT make this step green: the very next
+      # step re-fails the job unless the classifier
+      # (.github/scripts/classify-infra-failure.py) proves the runner, not the
+      # code, broke. Seen on hosted runners: `Timeout waiting for emulator to
+      # boot`, `adb: device 'emulator-5554' not found`, and an emulator that
+      # refused to start for lack of disk space — each forfeits a whole merge
+      # group, including the shards that passed.
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }})
+        id: e2e-run
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
         with:
           api-level: 34
@@ -2559,6 +2581,76 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: /tmp/run-android-e2e.sh "${{ steps.shard-features.outputs.features }}"
+
+      # Decide whether attempt 1 failed because of the runner. The job fails here
+      # unless it did: a genuine failure is never retried and never softened.
+      - name: Classify a failed attempt (infrastructure vs genuine)
+        id: e2e-classify
+        if: steps.e2e-run.outcome == 'failure'
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          verdict=$(python3 .github/scripts/classify-infra-failure.py android /tmp/gradle-e2e.log /tmp/android-e2e-script-started "$ANDROID_BUILD_DIR/outputs/androidTest-results")
+          printf '%s\n' "$verdict"
+          kind=$(printf '%s\n' "$verdict" | sed -n 's/^kind=//p')
+          sigs=$(printf '%s\n' "$verdict" | sed -n 's/^signatures=//p')
+          detail=$(printf '%s\n' "$verdict" | sed -n 's/^detail=//p')
+          case "$kind" in
+            script-never-started|infra)
+              echo "retry=true" >> "$GITHUB_OUTPUT"
+              echo "::warning title=INFRASTRUCTURE RETRY::android-e2e shard $SHARD attempt 1 failed with infrastructure signature [$sigs]: $detail. NOT a test result. Retrying ONCE on a clean AVD (attempt 2 of 2, the last)."
+              printf '### android-e2e shard %s: infrastructure retry\n\nSignature "%s" — %s.\nAttempt 1 was NOT a test result; re-running once. Its Gradle log is uploaded as "gradle-e2e-attempt1.log".\n' \
+                "$SHARD" "$sigs" "$detail" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "retry=false" >> "$GITHUB_OUTPUT"
+              echo "::error title=android-e2e FAILED::shard $SHARD failed and it is not an infrastructure signature ($detail). Not retried."
+              exit 1
+              ;;
+          esac
+
+      - name: Prepare the infrastructure retry (clean AVD, free disk)
+        if: steps.e2e-classify.outputs.retry == 'true'
+        run: |
+          df -h / /tmp || true
+          cp /tmp/gradle-e2e.log /tmp/gradle-e2e-attempt1.log 2>/dev/null || true
+          rm -f /tmp/android-e2e-script-started /tmp/gradle-e2e.log /tmp/gradle-e2e.exit
+          adb emu kill >/dev/null 2>&1 || true
+          adb kill-server >/dev/null 2>&1 || true
+          # A half-created AVD would be adopted by `force-avd-creation: false`.
+          rm -rf ~/.android/avd
+          # Preinstalled toolchains this job never uses; the emulator refuses to
+          # start when the runner disk is full.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost || true
+          df -h / || true
+
+      - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }}) — infrastructure retry
+        id: e2e-retry
+        if: steps.e2e-classify.outputs.retry == 'true'
+        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: /tmp/run-android-e2e.sh "${{ steps.shard-features.outputs.features }}"
+
+      - name: Say how the infrastructure retry ended
+        if: always() && steps.e2e-classify.outputs.retry == 'true'
+        env:
+          SHARD: ${{ matrix.shard }}
+          RETRY_OUTCOME: ${{ steps.e2e-retry.outcome }}
+        run: |
+          if [ "$RETRY_OUTCOME" = "success" ]; then
+            echo "::warning title=PASSED AFTER INFRASTRUCTURE RETRY::android-e2e shard $SHARD passed on attempt 2 after attempt 1 hit an infrastructure signature. This shard did NOT pass first time; see gradle-e2e-attempt1.log in the logcat artifact."
+            printf '### android-e2e shard %s: passed after an infrastructure retry\n' "$SHARD" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error title=android-e2e FAILED after infrastructure retry::shard $SHARD failed again on attempt 2 (outcome: $RETRY_OUTCOME). A failure that survives a retry is not a flake."
+            printf '### android-e2e shard %s: FAILED after an infrastructure retry\n' "$SHARD" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Smoke check sidecar health endpoints
         if: always()
@@ -2601,7 +2693,10 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: android-e2e-logcat-shard-${{ matrix.shard }}
-          path: /tmp/logcat.txt
+          path: |
+            /tmp/logcat.txt
+            /tmp/gradle-e2e.log
+            /tmp/gradle-e2e-attempt1.log
           retention-days: 7
 
   ios-build-test:
@@ -3652,16 +3747,34 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Read-only, used ONLY to say which shard of a cancelled matrix job was
+      # lost and whether it ever had a runner. Best-effort: ci-status's verdict
+      # never depends on this call.
+      actions: read
     timeout-minutes: 2
 
     steps:
       - name: Check all required jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           FAILED=""
+          CANCELLED=""
+          # Three outcomes, not two (#2446). `failure` is a verdict: the job ran
+          # and said no. `cancelled` is the absence of one: the runner was lost,
+          # the job hit its timeout, or the run was cancelled — the job never
+          # said anything about the code. Both keep ci-status RED (an unverified
+          # job must never read as passing), but they are reported as different
+          # things so a lost runner is not mistaken for a broken PR.
           check_job() {
-            if [[ "$2" != "success" && "$2" != "skipped" ]]; then
-              FAILED="$FAILED $1($2)"
-            fi
+            case "$2" in
+              success|skipped) ;;
+              cancelled) CANCELLED="$CANCELLED $1" ;;
+              *) FAILED="$FAILED $1($2)" ;;
+            esac
           }
           check_job "no-generated-files-in-git" "${{ needs.no-generated-files-in-git.result }}"
           check_job "verify-updater-config" "${{ needs.verify-updater-config.result }}"
@@ -3694,8 +3807,34 @@ jobs:
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
           check_job "platform-suite-coverage" "${{ needs.platform-suite-coverage.result }}"
 
+          if [[ -n "$CANCELLED" ]]; then
+            # Which jobs inside the cancelled matrices were lost, and did they
+            # ever get a runner? A job with a runner_name was lost mid-flight;
+            # one without never started (capacity). Names come from the Actions
+            # API; if the call fails we say so rather than guess.
+            detail=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" --paginate \
+              --jq '.jobs[] | select(.conclusion == "cancelled") | "  - \(.name): runner=\(.runner_name // "NONE (never assigned)"), cancelled step=\(([.steps[]? | select(.conclusion == "cancelled")] | first | .name) // "none")"' 2>/dev/null) \
+              || detail="  (could not read the job list from the Actions API; open the run page)"
+            echo "::error title=ci-status INFRASTRUCTURE (cancelled - not failed)::${CANCELLED# } CANCELLED — not a test or build result. The job never produced a verdict (lost runner, job timeout, or a cancelled run). ci-status stays RED because nothing verified it, but this is NOT this PR's fault: re-queue unchanged. Lost jobs: ${detail//$'\n'/ ;}"
+            {
+              echo "### ci-status: INFRASTRUCTURE — cancelled, not failed"
+              echo ""
+              echo "These jobs were **cancelled**, which is an environment fault and not a result:${CANCELLED}"
+              echo ""
+              echo "$detail"
+              echo ""
+              echo "ci-status is red because a job that never reported cannot count as passing. Nothing here says the code is wrong; re-queue unchanged."
+              if [[ -n "$FAILED" ]]; then
+                echo ""
+                echo "**It also has genuine failures — those are NOT infrastructure:**$FAILED"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [[ -n "$FAILED" ]]; then
             echo "Failed jobs:$FAILED"
+          fi
+          if [[ -n "$FAILED" || -n "$CANCELLED" ]]; then
+            [[ -z "$CANCELLED" ]] || echo "Cancelled jobs (infrastructure, not failures):$CANCELLED"
             exit 1
           fi
           echo "All checks passed!"

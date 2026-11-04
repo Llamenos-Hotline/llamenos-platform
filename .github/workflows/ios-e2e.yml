@@ -1191,33 +1191,56 @@ jobs:
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
 
-          # RETRIED ONLY WHEN THE ATTEMPT EXECUTED ZERO TESTS (#2403). On hosted
-          # runners xcodebuild sometimes exits 65 before any test starts
-          # ("xctrunner" unknown to FrontBoard): six merge-queue ejections in a
-          # day, on PRs with no iOS change, while both Mac shards passed. That is
-          # a launch failure reported as a test failure.
+          # TWO KINDS OF ATTEMPT ARE RETRIED, BOTH ON INFRASTRUCTURE EVIDENCE
+          # ONLY, BOTH ANNOUNCED (#2403, #2446). The classifier is
+          # .github/scripts/classify-infra-failure.py; read its docstring before
+          # widening either condition.
           #
-          # The condition is NOT the exit code. 65 is also what a genuine
-          # failing XCUITest returns, and retrying on it would re-run — and could
-          # hide — a real failure. It is the test log: no `Test Case '-[...'`
-          # line at all, the same evidence `ui-tests.py report` counts from. An
-          # attempt that started even one test is never retried, and keeps
-          # xcodebuild's exit code exactly as before. An attempt that ran no test
-          # has no result to lose, so re-running it cannot mask a failure.
+          # 1. ZERO TESTS EXECUTED (#2403). On hosted runners xcodebuild
+          #    sometimes exits 65 before any test starts ("xctrunner" unknown to
+          #    FrontBoard): six merge-queue ejections in a day, on PRs with no iOS
+          #    change, while both Mac shards passed. Up to 3 attempts in all.
           #
-          # xcodebuild-test.log is the LAST attempt only, so `report` never sees a
-          # discarded attempt's "TEST EXECUTE FAILED" and fails a run that then
-          # passed. The discarded ones are kept in xcodebuild-zero-test-attempts.log.
+          # 2. EVERY FAILED TEST FAILED ONLY WITH AN INFRASTRUCTURE MESSAGE
+          #    (#2446). Run 41779683568 shard `ui (2)`: 117 cases ran, then four
+          #    in a row failed with `Failed to get launch progress for
+          #    <XCUIApplication…>` — the app could not launch (SpringBoard "Busy").
+          #    By test count the harness looked healthy, so (1) never fired. Only
+          #    the failed tests are re-run, ONCE, so a shard that already spent
+          #    most of its budget is not re-run whole.
+          #
+          # NEITHER condition is the exit code. 65 is also what a genuine failing
+          # XCUITest returns, and retrying on it would re-run — and could hide —
+          # a real failure. A failure is classified infrastructure only if EVERY
+          # failed test recorded at least one issue and every recorded issue
+          # begins with a known infrastructure message. One assertion, one test
+          # with no recorded issue, one timed-out or unfinished test, or a
+          # `Failing tests:` list that disagrees with the Test Case lines, and
+          # the attempt is genuine: no retry, xcodebuild's exit code, exactly as
+          # before.
+          #
+          # xcodebuild-test.log is what `report` parses. After a partial retry it
+          # is attempt 1 with the superseded tests' result lines (and its
+          # TEST EXECUTE FAILED verdict) rewritten so they cannot be read as
+          # results, followed by attempt 2. Nothing is deleted: every attempt's
+          # raw output is kept in the *-attempts.log files in the results artifact.
           log="$RUNNER_TEMP/xcodebuild-test.log"
           discarded="$RUNNER_TEMP/xcodebuild-zero-test-attempts.log"
+          infra_attempts="$RUNNER_TEMP/xcodebuild-infra-retry-attempts.log"
+          attempt1_log="$RUNNER_TEMP/xcodebuild-attempt1.log"
           xcresult="$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult"
+          classifier="${GITHUB_WORKSPACE:-.}/.github/scripts/classify-infra-failure.py"
           max_attempts=3
           attempt=1
+          partial_retry=0   # 1 once the failed-tests-only retry has been spent
+          retest=""
+          cur_args=$(cat "$RUNNER_TEMP/shard-args.txt")
+          kv() { printf '%s\n' "$verdict" | sed -n "s/^$1=//p"; }
           while :; do
             # xcodebuild refuses to write a result bundle over an existing one.
             rm -rf "$xcresult"
             rc=0
-            # shellcheck disable=SC2046
+            # shellcheck disable=SC2086
             xcodebuild test-without-building \
               -xctestrun "$XCTESTRUN" \
               -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
@@ -1225,24 +1248,65 @@ jobs:
               -test-timeouts-enabled YES \
               -maximum-test-execution-time-allowance 300 \
               -resultBundlePath "$xcresult" \
-              $(cat "$RUNNER_TEMP/shard-args.txt") \
+              $cur_args \
               2>&1 | tee "$log" || rc=$?
+
+            if [ "$partial_retry" = "1" ]; then
+              # This was the failed-tests-only retry: fold it into the log
+              # `report` reads, say what happened, and take its exit code.
+              # shellcheck disable=SC2086
+              python3 "$classifier" ios-merge "$attempt1_log" "$log" "$log.merged" $retest
+              mv "$log.merged" "$log"
+              if [ "$rc" -eq 0 ]; then
+                echo "::warning::ios-e2e/ui shard $SHARD: the infrastructure-failed tests passed on their retry — this shard is PASSING AFTER AN INFRASTRUCTURE RETRY, not on its first attempt. Attempt 1 is in xcodebuild-infra-retry-attempts.log in the results artifact."
+                printf '### ios-e2e/ui shard %s: passed after an infrastructure retry\n\nAttempt 1 lost these tests to infrastructure signatures (not assertions) and they passed when re-run: "%s"\n' \
+                  "$SHARD" "$retest" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              else
+                echo "::error::ios-e2e/ui FAILED after an infrastructure retry — shard $SHARD re-ran its infrastructure-failed tests (xcodebuild exit $rc) and they failed again. Read the attempt-2 section of xcodebuild-test.log: a failure that survives a retry is not a flake."
+                printf '### ios-e2e/ui shard %s: FAILED after an infrastructure retry\n\nThe retry of "%s" failed again (xcodebuild exit %s).\n' \
+                  "$SHARD" "$retest" "$rc" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              fi
+              exit "$rc"
+            fi
+
             [ "$rc" -ne 0 ] || exit 0
-            started=$(grep -c "Test Case '-\[" "$log" || true)
-            if [ "${started:-0}" -gt 0 ]; then
-              exit "$rc"
-            fi
-            if [ "$attempt" -ge "$max_attempts" ]; then
-              echo "::error::ios-e2e/ui FAILED: zero-tests-executed — shard $SHARD on $RUNNER_NAME launched no test in $max_attempts attempts (xcodebuild exit $rc, no 'Test Case' line in its output). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT: the test runner never started on this simulator (infrastructure; #2403). Re-run the job; if it recurs, read xcodebuild-zero-test-attempts.log in the shard's results artifact (same runner: take it out of rotation; every runner: look for a test-selection or config error)."
-              printf '### ios-e2e/ui shard %s: zero tests executed\n\nxcodebuild exited %s and started no test in %s attempts. Infrastructure failure, not this PR.\n' \
-                "$SHARD" "$rc" "$max_attempts" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-              exit "$rc"
-            fi
-            backoff=$(( attempt * 20 ))
-            echo "::warning::shard $SHARD attempt $attempt/$max_attempts executed zero tests (xcodebuild exit $rc) — a launch failure, not a test result; retrying in ${backoff}s"
-            { echo "=== attempt $attempt/$max_attempts: exit $rc, zero tests executed ==="; cat "$log"; } >> "$discarded"
-            sleep "$backoff"
-            attempt=$(( attempt + 1 ))
+            verdict=$(python3 "$classifier" ios "$log")
+            kind=$(kv kind)
+
+            case "$kind" in
+              zero-tests)
+                if [ "$attempt" -ge "$max_attempts" ]; then
+                  echo "::error::ios-e2e/ui FAILED: zero-tests-executed — shard $SHARD on $RUNNER_NAME launched no test in $max_attempts attempts (xcodebuild exit $rc, no 'Test Case' line in its output). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT: the test runner never started on this simulator (infrastructure; #2403). Re-run the job; if it recurs, read xcodebuild-zero-test-attempts.log in the shard's results artifact (same runner: take it out of rotation; every runner: look for a test-selection or config error)."
+                  printf '### ios-e2e/ui shard %s: zero tests executed\n\nxcodebuild exited %s and started no test in %s attempts. Infrastructure failure, not this PR.\n' \
+                    "$SHARD" "$rc" "$max_attempts" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                  exit "$rc"
+                fi
+                backoff=$(( attempt * 20 ))
+                echo "::warning::INFRASTRUCTURE RETRY (signature: zero-tests-executed): shard $SHARD attempt $attempt/$max_attempts executed zero tests (xcodebuild exit $rc) — a launch failure, not a test result; retrying in ${backoff}s"
+                { echo "=== attempt $attempt/$max_attempts: exit $rc, zero tests executed ==="; cat "$log"; } >> "$discarded"
+                sleep "$backoff"
+                attempt=$(( attempt + 1 ))
+                ;;
+              infra-partial)
+                retest=$(kv retest)
+                sigs=$(kv signatures)
+                echo "::warning::INFRASTRUCTURE RETRY (signature: $sigs): shard $SHARD attempt $attempt — $(kv detail). xcodebuild exit $rc is NOT being treated as a test result: re-running ONLY those tests, once (attempt $(( attempt + 1 )), the last). Tests: $retest"
+                printf '### ios-e2e/ui shard %s: infrastructure retry\n\nSignature "%s". Re-running once: "%s"\n' \
+                  "$SHARD" "$sigs" "$retest" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                { echo "=== attempt $attempt: exit $rc, infra-partial ($sigs), retrying: $retest ==="; cat "$log"; } >> "$infra_attempts"
+                cp "$log" "$attempt1_log"
+                cur_args=""
+                for t in $retest; do cur_args="$cur_args -only-testing:$t"; done
+                partial_retry=1
+                attempt=$(( attempt + 1 ))
+                sleep 20
+                ;;
+              *)
+                # Genuine (or unclassifiable): exactly the behaviour before #2446.
+                echo "ios-e2e/ui shard $SHARD: failure is not an infrastructure signature ($(kv detail)); not retried."
+                exit "$rc"
+                ;;
+            esac
           done
 
       - name: Stop the app log capture
@@ -1331,6 +1395,8 @@ jobs:
             ${{ runner.temp }}/ios-e2e-shard-${{ matrix.shard }}.xcresult
             ${{ runner.temp }}/xcodebuild-test.log
             ${{ runner.temp }}/xcodebuild-zero-test-attempts.log
+            ${{ runner.temp }}/xcodebuild-infra-retry-attempts.log
+            ${{ runner.temp }}/xcodebuild-attempt1.log
             ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
             ${{ runner.temp }}/llamenos-native-backend/server.log
             ${{ runner.temp }}/llamenos-native-backend/watchdog.log
