@@ -971,7 +971,9 @@ jobs:
       # occupying the ONE review runner every merge in this repo serialises
       # through, and publishing NO-VERDICT:setup-failed on every one of
       # them. So the box's own Bun is used when it is EXACTLY the pinned
-      # version; a different version fails LOUDLY (a runner-image drift a
+      # version (PATH first, then ~/.bun/bin/bun — a non-pinned PATH Bun
+      # never shadows a pinned one beside it); no pinned Bun among the
+      # installed ones fails LOUDLY (a runner-image drift a
       # human must fix — never review with an unpinned toolchain, never
       # silently accept whatever happens to be installed); and `setup-bun`'s
       # network fetch is paid only when Bun is genuinely absent (the
@@ -981,23 +983,42 @@ jobs:
         if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
-          bun_bin="$(command -v bun || true)"
-          if [ -z "$bun_bin" ] && [ -x "$HOME/.bun/bin/bun" ]; then
-            bun_bin="$HOME/.bun/bin/bun"
+          # Every Bun this runner could use, in preference order: whatever
+          # PATH resolves first, then the installer's default location. A
+          # PATH Bun that is NOT the pin must not shadow a pinned Bun that
+          # is installed beside it: on llamenos-review-box PATH resolves
+          # `bun` to a Volta shim (1.3.11) while ~/.bun/bin/bun is exactly
+          # 1.3.5, and judging only the first candidate failed every run
+          # with bun-version-mismatch (#2437's own gate included).
+          candidates=()
+          path_bun="$(command -v bun || true)"
+          if [ -n "$path_bun" ]; then
+            candidates+=("$path_bun")
           fi
-          if [ -z "$bun_bin" ]; then
+          if [ -x "$HOME/.bun/bin/bun" ] && [ "$HOME/.bun/bin/bun" != "$path_bun" ]; then
+            candidates+=("$HOME/.bun/bin/bun")
+          fi
+          if [ "${#candidates[@]}" -eq 0 ]; then
             echo "no bun on this runner's PATH (nor at ~/.bun/bin/bun); setup-bun installs it below"
             echo "usable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          version="$("$bun_bin" --version)"
-          if [ "$version" != "$BUN_VERSION" ]; then
-            echo "::error::fleet/review FAILED: bun-version-mismatch — this runner has bun $version at $bun_bin, but this gate pins $BUN_VERSION. Fix the runner to ship the pinned Bun; never review with an unpinned toolchain."
-            exit 1
-          fi
-          dirname "$bun_bin" >> "$GITHUB_PATH"
-          echo "usable=true" >> "$GITHUB_OUTPUT"
-          echo "using the runner's own bun $version at $bun_bin"
+          seen=""
+          for bun_bin in "${candidates[@]}"; do
+            # A candidate that cannot even report a version (a dangling
+            # shim) is just another non-pinned Bun, not a reason to die
+            # before the next candidate is judged.
+            version="$("$bun_bin" --version 2>/dev/null || echo unknown)"
+            if [ "$version" = "$BUN_VERSION" ]; then
+              dirname "$bun_bin" >> "$GITHUB_PATH"
+              echo "usable=true" >> "$GITHUB_OUTPUT"
+              echo "using the runner's own bun $version at $bun_bin"
+              exit 0
+            fi
+            seen="$seen $bun_bin=$version"
+          done
+          echo "::error::fleet/review FAILED: bun-version-mismatch — this runner has bun but none is the pinned $BUN_VERSION (found:$seen). Fix the runner to ship the pinned Bun; never review with an unpinned toolchain."
+          exit 1
 
       # The fallback, reached only when the step above found no Bun at all.
       # Its own short timeout, not the job's: a stalled download used to burn

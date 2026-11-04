@@ -16,10 +16,14 @@ import { parse as parseYaml } from 'yaml'
  *
  * The fix has three parts, all pinned below:
  *
- *   1. A probe step (`id: host_bun`) resolves `bun` from PATH (falling back
- *      to the installer's default ~/.bun/bin/bun) and uses it when — and
- *      only when — `bun --version` is exactly BUN_VERSION. A different
- *      version fails the job LOUDLY (`bun-version-mismatch`): never review
+ *   1. A probe step (`id: host_bun`) judges every Bun the runner has — the
+ *      one PATH resolves, then the installer's default ~/.bun/bin/bun —
+ *      and uses the first whose `bun --version` is exactly BUN_VERSION.
+ *      A non-pinned PATH Bun must NOT shadow a pinned one installed beside
+ *      it (the review box's PATH `bun` is a Volta shim at 1.3.11 while
+ *      ~/.bun/bin/bun is 1.3.5; judging only the first candidate failed
+ *      every run, #2437's own gate included). When Bun exists but none is
+ *      the pin, the job fails LOUDLY (`bun-version-mismatch`): never review
  *      with an unpinned toolchain, never silently accept whatever is
  *      installed.
  *   2. `setup-bun` runs only when the probe found no Bun at all, so the
@@ -210,13 +214,52 @@ describe('rail: the host-Bun probe and the setup-bun fallback (#1887)', () => {
     expect(ghOutput).not.toContain('usable=true')
   })
 
+  it('a non-pinned PATH bun does not shadow the pinned ~/.bun/bin/bun (the review box: Volta shim 1.3.11 on PATH)', () => {
+    const shimDir = join(scratch, 'volta-bin')
+    plantBun(shimDir, '1.3.11')
+    const home = join(scratch, 'home')
+    const pinnedDir = join(home, '.bun', 'bin')
+    plantBun(pinnedDir, PINNED_BUN)
+    const { status, ghOutput, ghPath } = runProbe({ bunDirs: [shimDir], home })
+    expect(status).toBe(0)
+    expect(ghOutput).toContain('usable=true')
+    // The pinned Bun's directory is what gets prepended — not the shim's.
+    expect(ghPath).toContain(pinnedDir)
+    expect(ghPath).not.toContain(shimDir)
+  })
+
+  it('a PATH bun that cannot report a version is skipped, not fatal, when a pinned bun is installed', () => {
+    const brokenDir = join(scratch, 'broken-bin')
+    mkdirSync(brokenDir, { recursive: true })
+    writeFileSync(join(brokenDir, 'bun'), '#!/bin/sh\nexit 127\n')
+    chmodSync(join(brokenDir, 'bun'), 0o755)
+    const home = join(scratch, 'home')
+    plantBun(join(home, '.bun', 'bin'), PINNED_BUN)
+    const { status, ghOutput } = runProbe({ bunDirs: [brokenDir], home })
+    expect(status).toBe(0)
+    expect(ghOutput).toContain('usable=true')
+  })
+
+  it('every installed bun being non-pinned still fails LOUDLY, naming each one found', () => {
+    const shimDir = join(scratch, 'volta-bin')
+    plantBun(shimDir, '1.3.11')
+    const home = join(scratch, 'home')
+    plantBun(join(home, '.bun', 'bin'), '1.2.0')
+    const { status, output, ghOutput } = runProbe({ bunDirs: [shimDir], home })
+    expect(status).toBe(1)
+    expect(output).toContain(REASON_TOKEN)
+    expect(output).toContain('1.3.11')
+    expect(output).toContain('1.2.0')
+    expect(ghOutput).not.toContain('usable=true')
+  })
+
   // MUTATION GUARD (per "audit gates by breaking them"): reintroduce the
   // exact defect this fix removes — accepting whatever bun is on PATH —
   // and prove the probe goes back to succeeding on a stale toolchain. If
   // this test ever fails to show the mutation passing, the rail above has
   // stopped being a real rail and this file needs to be re-examined.
-  it('MUTATION: without the version check, a stale bun is silently used — the #1887 class of unpinned toolchain', () => {
-    const mutated = probeScript().replace(/if \[ "\$version" != "\$BUN_VERSION" \]; then\n(?:.*\n)*?\s*fi\n/, '')
+  it('MUTATION: with the version check forced true, a stale bun is silently used — the #1887 class of unpinned toolchain', () => {
+    const mutated = probeScript().replace('if [ "$version" = "$BUN_VERSION" ]; then', 'if true; then')
     expect(mutated, 'the version-pin check was not found — this mutation is vacuous').not.toBe(probeScript())
     const scriptPath = join(scratch, 'mutated.sh')
     const outFile = join(scratch, 'github-output')
