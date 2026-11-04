@@ -26,9 +26,13 @@ export const hubIncidents = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    hubId: text('hub_id')
-      .notNull()
-      .references(() => hubs.id, { onDelete: 'cascade' }),
+    /**
+     * The hub the incident belongs to. NULL is the PLATFORM scope: something
+     * that concerns the instance rather than any hub (an erasure whose subject
+     * belongs to no hub — #2347). Only `signalPlatform` / `observePlatform`
+     * write it, and only holders of the platform permission read it.
+     */
+    hubId: text('hub_id').references(() => hubs.id, { onDelete: 'cascade' }),
     /** IncidentCategory — text, not a pg enum, so new categories need no migration. */
     category: text('category').notNull(),
     /** IncidentSeverity: 'notify' | 'record'. Escalates while open, never downgrades. */
@@ -54,8 +58,21 @@ export const hubIncidents = pgTable(
     uniqueIndex('hub_incidents_open_unique')
       .on(table.hubId, table.category)
       .where(sql`${table.closedAt} IS NULL`),
+    // Nulls are distinct in a unique index, so `hub_incidents_open_unique` does not
+    // constrain the platform scope (hub_id NULL). At most one OPEN platform incident
+    // per category is held by IncidentService.apply(), which takes the scope's
+    // advisory lock and checks-then-inserts in one transaction; every writer goes
+    // through it. The backing partial unique index (on `category`, WHERE
+    // closed_at IS NULL AND hub_id IS NULL) ships in the release AFTER the one
+    // that relaxes `hub_id` to nullable — the erasure_failed_platform_incidents
+    // migration expands, a later one contracts (docs/runbooks/migrations.md). That
+    // migration must first close all but the newest open platform incident per
+    // category, or CREATE UNIQUE INDEX fails on a duplicate.
     index('hub_incidents_hub_opened_idx').on(table.hubId, table.openedAt),
   ],
 )
 
 export type HubIncidentRow = typeof hubIncidents.$inferSelect
+
+/** A row in the platform scope (`hubId` NULL). */
+export type PlatformIncidentRow = HubIncidentRow & { hubId: null }

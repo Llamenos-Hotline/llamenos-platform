@@ -17,10 +17,11 @@ import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 import { DEFAULT_ROLES, PERMISSION_CATALOG, type Role } from '@shared/permissions'
 import { incidentCategorySchema, type IncidentCategory } from '@protocol/schemas/incidents'
 import { locales } from '@llamenos/i18n'
-import { IncidentService } from '@worker/services/incidents'
-import { IncidentDelivery, resolveIncidentHolders } from '@worker/services/incidents-delivery'
+import { IncidentService, type HubScopedIncidentRow } from '@worker/services/incidents'
+import { IncidentDelivery, resolveIncidentHolders, resolvePlatformIncidentHolders } from '@worker/services/incidents-delivery'
 import {
   INCIDENT_CATEGORIES,
+  PLATFORM_INCIDENT_PERMISSION,
   WORKER_FAILING_KIND,
   categoriesReachedBy,
   severityOf,
@@ -173,7 +174,7 @@ describe('IncidentDelivery', () => {
 
   it('relays {incidentId, state} and nothing else — no category, counts or severity can be read from it', async () => {
     const { d } = delivery([])
-    await d.relay(incidentRow(), 'opened')
+    await d.relay(incidentRow() as HubScopedIncidentRow, 'opened')
 
     expect(publishEvent).toHaveBeenCalledTimes(1)
     const [, kind, content, hubId] = vi.mocked(publishEvent).mock.calls[0]!
@@ -210,6 +211,45 @@ describe('IncidentDelivery', () => {
     push.sendToVolunteer.mockRejectedValueOnce(new Error('apns down'))
     await d.interrupt(incidentRow(), 'closed')
     expect(userNotifications.sendAlert).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('platform-scope incidents (#2347)', () => {
+  it('are reached by a real permission that no hub role grants by default', () => {
+    expect(Object.keys(PERMISSION_CATALOG)).toContain(PLATFORM_INCIDENT_PERMISSION)
+    for (const role of DEFAULT_ROLES) {
+      const granted: string[] = role.permissions
+      if (granted.includes('*')) continue
+      expect(granted, `${role.slug} must not hold the platform incident permission`).not.toContain(PLATFORM_INCIDENT_PERMISSION)
+    }
+  })
+
+  it('page holders of the platform permission by GLOBAL role — not hub admins, not other holders of a hub role', async () => {
+    const users = [
+      { ...user('operator', []), roles: ['role-super-admin'], hubRoles: [] },
+      { ...user('gone', []), roles: ['role-super-admin'], hubRoles: [], active: false },
+      // Hub roles never grant the platform permission, even a hub role that holds '*'.
+      user('hub-super', ['role-super-admin']),
+      user('vol', ['role-volunteer']),
+    ]
+    const holders = await resolvePlatformIncidentHolders(
+      { getUsers: vi.fn(async () => ({ users })) } as never,
+      { getRoles: vi.fn(async () => ({ roles: ROLES })) } as never,
+    )
+    expect(holders.map((h) => h.pubkey)).toEqual(['operator'])
+  })
+
+  it('interrupt a platform incident on Signal only — there is no hub to route a push wake through', async () => {
+    const { d, push, userNotifications } = delivery([
+      { ...user('operator', []), roles: ['role-super-admin'], hubRoles: [], uiLanguage: 'es' } as unknown as ReturnType<typeof user>,
+    ])
+    await d.interrupt(incidentRow({ hubId: null, category: 'erasure-deadline' }), 'opened')
+    expect(push.sendToVolunteer).not.toHaveBeenCalled()
+    expect(userNotifications.sendAlert).toHaveBeenCalledWith(
+      'operator',
+      { type: 'hub_incident', category: 'erasure-deadline', state: 'opened' },
+      'es',
+    )
   })
 })
 

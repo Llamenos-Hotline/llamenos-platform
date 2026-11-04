@@ -52,6 +52,15 @@ export const erasureRequests = pgTable(
     coApproverPubkey: text('co_approver_pubkey'),
     coApproverSignature: text('co_approver_signature'),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    /**
+     * Set when an erasure admin gave up on a `failed` request (#2347). The
+     * request is then `abandoned`, not `completed`: `executed_at` stays NULL
+     * (nothing was erased) and these three columns say who stopped it, when
+     * and why — on the row itself, not only in the audit chain.
+     */
+    abandonedAt: timestamp('abandoned_at', { withTimezone: true }),
+    abandonedBy: text('abandoned_by'),
+    abandonJustification: text('abandon_justification'),
   },
   (table) => [
     index('erasure_requests_user_id_idx').on(table.userId),

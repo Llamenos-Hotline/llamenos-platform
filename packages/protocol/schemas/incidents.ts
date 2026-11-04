@@ -69,6 +69,20 @@ export const hubIncidentSchema = z.object({
 })
 export type HubIncident = z.infer<typeof hubIncidentSchema>
 
+/**
+ * An incident in the PLATFORM scope: it concerns the instance rather than any
+ * hub (an erasure whose subject belongs to no hub — #2347), so it has no
+ * `hubId`. Same aggregate-only shape otherwise. Read with the platform
+ * permission (`system:manage-instance`), never by hub membership.
+ */
+export const platformIncidentSchema = hubIncidentSchema.omit({ hubId: true })
+export type PlatformIncident = z.infer<typeof platformIncidentSchema>
+
+export const platformIncidentListResponseSchema = z.object({
+  incidents: z.array(platformIncidentSchema),
+})
+export type PlatformIncidentListResponse = z.infer<typeof platformIncidentListResponseSchema>
+
 export const hubIncidentListResponseSchema = z.object({
   incidents: z.array(hubIncidentSchema),
 })

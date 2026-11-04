@@ -33,7 +33,13 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { hubIncidents, type HubIncidentRow } from '../db/schema/incidents'
 import { hubs } from '../db/schema/settings'
-import type { HubIncident, IncidentCategory, IncidentSeverity, IncidentState } from '@protocol/schemas/incidents'
+import type {
+  HubIncident,
+  IncidentCategory,
+  IncidentSeverity,
+  IncidentState,
+  PlatformIncident,
+} from '@protocol/schemas/incidents'
 import type { AuditService } from './audit'
 import {
   INCIDENT_CATEGORIES,
@@ -69,17 +75,42 @@ export interface IncidentCheck {
   /** A name for logs and the L2 failure streak; unique per check. */
   name: string
   check: (hubId: string, now: Date) => Promise<IncidentCheckResult>
+  /**
+   * The same measurement for items that belong to NO hub. Hubs are enumerated
+   * from the `hubs` table, so an item no hub can claim would otherwise be
+   * counted by nobody — the detector would exist and the subject be invisible
+   * to it (#2347). Its result is observed in the platform scope.
+   */
+  platform?: (now: Date) => Promise<IncidentCheckResult>
+}
+
+/**
+ * Where an incident lives: one hub, or `null` for the PLATFORM scope — things
+ * that concern the instance rather than any hub (an erasure whose subject
+ * belongs to no hub, #2347). Only the `*Platform` producers write the platform
+ * scope; `signal`/`observe` take a hub id and refuse anything else, so a
+ * missing hub id can never land an incident on the platform by accident.
+ */
+type IncidentScope = string | null
+
+/** An incident row that belongs to a hub (as opposed to the platform scope). */
+export type HubScopedIncidentRow = HubIncidentRow & { hubId: string }
+
+export function isHubScoped(row: HubIncidentRow): row is HubScopedIncidentRow {
+  return row.hubId !== null
 }
 
 /**
  * Delivery of an announcement. `relay` reaches every hub member with
- * `{incidentId, state}` only; `interrupt` reaches the category's permission
- * holders (push + Signal) and only ever runs for a `notify` incident.
+ * `{incidentId, state}` only and is called for hub-scoped incidents alone (a
+ * platform incident has no hub to fan out to); `interrupt` reaches the
+ * category's permission holders (push + Signal) and only ever runs for a
+ * `notify` incident.
  * Implemented by `IncidentDelivery` (incidents-delivery.ts); a test passes a
  * recorder.
  */
 export interface IncidentNotifier {
-  relay(incident: HubIncidentRow, state: IncidentState): Promise<void>
+  relay(incident: HubScopedIncidentRow, state: IncidentState): Promise<void>
   interrupt(incident: HubIncidentRow, state: IncidentState): Promise<void>
 }
 
@@ -108,11 +139,10 @@ function totalOf(counts: Record<string, number>): number {
   return Object.values(counts).reduce((a, b) => a + b, 0)
 }
 
-export function toHubIncident(row: HubIncidentRow): HubIncident {
+function toPlatformShape(row: HubIncidentRow): PlatformIncident {
   const counts = { ...row.counts }
   return {
     id: row.id,
-    hubId: row.hubId,
     category: row.category as IncidentCategory,
     severity: row.severity as IncidentSeverity,
     openedAt: row.openedAt.toISOString(),
@@ -125,6 +155,15 @@ export function toHubIncident(row: HubIncidentRow): HubIncident {
   }
 }
 
+export function toHubIncident(row: HubScopedIncidentRow): HubIncident {
+  return { ...toPlatformShape(row), hubId: row.hubId }
+}
+
+export function toPlatformIncident(row: HubIncidentRow): PlatformIncident {
+  if (row.hubId !== null) throw new Error('toPlatformIncident() called with a hub-scoped incident')
+  return toPlatformShape(row)
+}
+
 function assertCount(n: number): void {
   if (!Number.isInteger(n) || n < 0) {
     throw new Error(`Incident count must be a non-negative integer, got ${n}`)
@@ -132,8 +171,8 @@ function assertCount(n: number): void {
 }
 
 /** Advisory lock key serialising writers of one (hub, category) open incident. */
-function lockKey(hubId: string, category: IncidentCategory): string {
-  return `hub-incident:${hubId}:${category}`
+function lockKey(scope: IncidentScope, category: IncidentCategory): string {
+  return `hub-incident:${scope ?? 'platform'}:${category}`
 }
 
 type Change =
@@ -174,7 +213,16 @@ export class IncidentService {
     if (n === 0) {
       throw new Error('signal() with n=0 records nothing; a level check reports 0 by not observing')
     }
-    return this.apply(hubId, category, { mode: 'add', kind, n })
+    return toHubIncident(await this.apply(hubId, category, { mode: 'add', kind, n }))
+  }
+
+  /** {@link signal} in the PLATFORM scope (no hub). */
+  async signalPlatform(category: IncidentCategory, kind: string, n = 1): Promise<PlatformIncident> {
+    assertCount(n)
+    if (n === 0) {
+      throw new Error('signalPlatform() with n=0 records nothing; a level check reports 0 by not observing')
+    }
+    return toPlatformIncident(await this.apply(null, category, { mode: 'add', kind, n }))
   }
 
   /**
@@ -186,7 +234,15 @@ export class IncidentService {
     assertCount(result.count)
     if (result.count === 0) throw new Error('observe() requires a non-zero count')
     if (result.oldestAgeSeconds !== null) assertCount(result.oldestAgeSeconds)
-    return this.apply(hubId, category, { mode: 'level', kind, result })
+    return toHubIncident(await this.apply(hubId, category, { mode: 'level', kind, result }))
+  }
+
+  /** {@link observe} in the PLATFORM scope (no hub). */
+  async observePlatform(category: IncidentCategory, kind: string, result: IncidentCheckResult): Promise<PlatformIncident> {
+    assertCount(result.count)
+    if (result.count === 0) throw new Error('observePlatform() requires a non-zero count')
+    if (result.oldestAgeSeconds !== null) assertCount(result.oldestAgeSeconds)
+    return toPlatformIncident(await this.apply(null, category, { mode: 'level', kind, result }))
   }
 
   // ── L1: checks ───────────────────────────────────────────────────────────
@@ -208,9 +264,10 @@ export class IncidentService {
   }
 
   /**
-   * Evaluate every registered check for every hub. Each (check, hub) pair runs
+   * Evaluate every registered check for every hub, and each check's platform
+   * variant once (items no hub can claim). Each (check, scope) pair runs
    * inside `runWorkerTick`, so a check that keeps throwing raises
-   * `worker_failing` for ITS category in THAT hub — a failing check can never
+   * `worker_failing` for ITS category in THAT scope — a failing check can never
    * read as a zero count. One failing pair never stops the others.
    */
   async runChecks(): Promise<{ evaluated: number; failed: number }> {
@@ -233,6 +290,18 @@ export class IncidentService {
           log.error('Incident check failed', { check: check.name, hubId, error: err })
         }
       }
+      if (!check.platform) continue
+      evaluated++
+      try {
+        await this.runWorkerTick(`incident-check:${check.name}`, check.category, async () => {
+          const result = await check.platform!(this.now())
+          assertCount(result.count)
+          if (result.count > 0) await this.observePlatform(check.category, check.kind, result)
+        }, { platform: true })
+      } catch (err) {
+        failed++
+        log.error('Incident platform check failed', { check: check.name, error: err })
+      }
     }
     return { evaluated, failed }
   }
@@ -243,8 +312,9 @@ export class IncidentService {
    * Run one worker tick, counting consecutive throws. From the
    * {@link WORKER_FAILURE_THRESHOLD}th consecutive throw on, every further
    * throw signals `worker_failing` in `category` — for `opts.hubId` when the
-   * tick is hub-scoped, otherwise for every hub (a worker that serves all hubs
-   * failing is every hub's incident). A success resets the streak.
+   * tick is hub-scoped, in the platform scope when `opts.platform` is set,
+   * otherwise for every hub (a worker that serves all hubs failing is every
+   * hub's incident). A success resets the streak.
    *
    * Transparent: the tick's result is returned and its error RETHROWN, so the
    * caller's own error handling and the liveness gauge are unchanged.
@@ -253,9 +323,9 @@ export class IncidentService {
     name: string,
     category: IncidentCategory,
     fn: () => Promise<T>,
-    opts: { hubId?: string } = {},
+    opts: { hubId?: string; platform?: boolean } = {},
   ): Promise<T> {
-    const key = `${name}|${opts.hubId ?? '*'}`
+    const key = `${name}|${opts.platform ? 'platform' : (opts.hubId ?? '*')}`
     try {
       const result = await fn()
       this.failureStreaks.delete(key)
@@ -264,7 +334,7 @@ export class IncidentService {
       const streak = (this.failureStreaks.get(key) ?? 0) + 1
       this.failureStreaks.set(key, streak)
       if (streak >= WORKER_FAILURE_THRESHOLD) {
-        await this.signalWorkerFailing(category, opts.hubId).catch((signalErr) => {
+        await this.signalWorkerFailing(category, opts).catch((signalErr) => {
           log.error('Could not record worker_failing incident', { worker: name, category, error: signalErr })
         })
       }
@@ -272,9 +342,16 @@ export class IncidentService {
     }
   }
 
-  private async signalWorkerFailing(category: IncidentCategory, hubId: string | undefined): Promise<void> {
-    if (hubId) {
-      await this.signal(hubId, category, WORKER_FAILING_KIND)
+  private async signalWorkerFailing(
+    category: IncidentCategory,
+    scope: { hubId?: string; platform?: boolean },
+  ): Promise<void> {
+    if (scope.platform) {
+      await this.signalPlatform(category, WORKER_FAILING_KIND)
+      return
+    }
+    if (scope.hubId) {
+      await this.signal(scope.hubId, category, WORKER_FAILING_KIND)
       return
     }
     const hubRows = await this.db.select({ id: hubs.id }).from(hubs)
@@ -304,7 +381,22 @@ export class IncidentService {
       )
       .orderBy(desc(hubIncidents.openedAt))
       .limit(opts.limit ?? 50)
-    return rows.map(toHubIncident)
+    return rows.filter(isHubScoped).map(toHubIncident)
+  }
+
+  /**
+   * PLATFORM-scope incidents. The caller must have verified the platform
+   * permission (`PLATFORM_INCIDENT_PERMISSION`); this method does not look at
+   * who is asking.
+   */
+  async listPlatform(opts: { openOnly: boolean; limit?: number }): Promise<PlatformIncident[]> {
+    const rows = await this.db
+      .select()
+      .from(hubIncidents)
+      .where(and(isNull(hubIncidents.hubId), opts.openOnly ? isNull(hubIncidents.closedAt) : undefined))
+      .orderBy(desc(hubIncidents.openedAt))
+      .limit(opts.limit ?? 50)
+    return rows.map(toPlatformIncident)
   }
 
   // ── Closer ───────────────────────────────────────────────────────────────
@@ -385,21 +477,23 @@ export class IncidentService {
 
   // ── Internals ────────────────────────────────────────────────────────────
 
-  private async apply(hubId: string, category: IncidentCategory, change: Change): Promise<HubIncident> {
-    if (!hubId) throw new Error('An incident needs a hub')
+  private async apply(hubId: string, category: IncidentCategory, change: Change): Promise<HubScopedIncidentRow>
+  private async apply(hubId: null, category: IncidentCategory, change: Change): Promise<HubIncidentRow>
+  private async apply(scope: IncidentScope, category: IncidentCategory, change: Change): Promise<HubIncidentRow> {
+    if (scope === '') throw new Error('An incident needs a hub')
     const policy = INCIDENT_CATEGORIES[category]
     if (!policy) throw new Error(`Unknown incident category "${category}"`)
     const kindSeverity = severityOf(category, change.kind)
     const n = change.mode === 'add' ? change.n : change.result.count
 
     const outcome = await this.db.transaction(async (tx): Promise<{ incident: HubIncidentRow; announcement: Announcement | null }> => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey(hubId, category)}))`)
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey(scope, category)}))`)
       const now = this.now()
       const minute = floorMinute(now)
       const [open] = await tx
         .select()
         .from(hubIncidents)
-        .where(and(eq(hubIncidents.hubId, hubId), eq(hubIncidents.category, category), isNull(hubIncidents.closedAt)))
+        .where(and(scope === null ? isNull(hubIncidents.hubId) : eq(hubIncidents.hubId, scope), eq(hubIncidents.category, category), isNull(hubIncidents.closedAt)))
         .limit(1)
 
       if (!open) {
@@ -407,7 +501,7 @@ export class IncidentService {
         const [row] = await tx
           .insert(hubIncidents)
           .values({
-            hubId,
+            hubId: scope,
             category,
             severity: kindSeverity,
             openedAt: now,
@@ -470,7 +564,7 @@ export class IncidentService {
       await this.auditTransition('incidentOpened', outcome.incident)
     }
     if (outcome.announcement) await this.deliver(outcome.announcement)
-    return toHubIncident(outcome.incident)
+    return outcome.incident
   }
 
   private async auditTransition(action: 'incidentOpened' | 'incidentClosed', row: HubIncidentRow): Promise<void> {
@@ -502,10 +596,14 @@ export class IncidentService {
       })
       return
     }
-    try {
-      await notifier.relay(a.incident, a.relayState)
-    } catch (err) {
-      log.error('Incident relay failed', { incidentId: a.incident.id, state: a.relayState, error: err })
+    // The relay fans out to a hub's members; the platform scope has no hub, so
+    // its holders learn through `interrupt` and the platform GET alone.
+    if (isHubScoped(a.incident)) {
+      try {
+        await notifier.relay(a.incident, a.relayState)
+      } catch (err) {
+        log.error('Incident relay failed', { incidentId: a.incident.id, state: a.relayState, error: err })
+      }
     }
     if (!a.interruptState) return
     try {
