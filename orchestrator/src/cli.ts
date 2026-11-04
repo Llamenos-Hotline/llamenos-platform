@@ -55,6 +55,7 @@ import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from '
 import { runBoard } from './board.js'
 import { runMissingChecks } from './missing-checks.js'
 import { defaultQueueSweepDeps, renderSweepInline, runQueueSweep, sweepQueueRuns } from './queue-sweep.js'
+import { runQueueFeedWith, renderQueueFeed, defaultQueueFeedDeps } from './queue-feed.js'
 import { notify } from './notify.js'
 import { FLEET_DIR, LOG_FILE, HALT_REASON_FILE, DISPATCH_SCRIPT, FLEET_ENV_FILE } from './paths.js'
 import { REPO, gh, ghJson, readPrCommits } from './gh.js'
@@ -2043,6 +2044,17 @@ const HANDLERS: Record<string, CommandHandler> = {
   // runs whose (pr, basesha) no longer matches a live queue entry AND that
   // still have a non-completed job — see queue-sweep.ts's traps.
   'queue-sweep': (rest) => runQueueSweep(rest),
+  // #2036: the merge queue has no durable owner — an ejected or never-armed
+  // PR sits CLEAN forever because nothing re-arms it. This pass re-arms
+  // auto-merge on PRs that pass the feed's four conditions (fresh CLEAN,
+  // a PASS verdict for the head tree, disjoint files, iOS-only-when-alone),
+  // using the same enableAutoMerge the tick uses. Exit 2 when a prerequisite
+  // read was undecidable.
+  'queue-feed': async () => {
+    const result = await runQueueFeedWith(defaultQueueFeedDeps(REPO_ROOT, enableAutoMerge, log))
+    process.stdout.write(`${renderQueueFeed(result)}\n`)
+    return result.undecidable.length > 0 ? 2 : 0
+  },
 }
 
 /** Every subcommand name this CLI actually implements — see `HANDLERS`. */

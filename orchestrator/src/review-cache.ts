@@ -178,6 +178,49 @@ export function reviewSetTag(profiles: readonly string[]): string | undefined {
   return `set-${createHash('sha256').update(sorted.join('\n')).digest('hex').slice(0, 12)}`
 }
 
+/**
+ * `findArtifact` collapsed three outcomes into one `undefined` — a genuine
+ * miss, a forged-or-expired record, and a lookup that could not be answered
+ * — because its one caller (the review gate) treats them identically: run
+ * the engine. The merge-queue feed (queue-feed.ts, #2036) is not that
+ * caller: it never runs the engine, so "could not look" must stay distinct
+ * from "looked, nothing there" — a feed that cannot tell them apart either
+ * re-queues a PR whose FAIL it failed to read, or (the other direction)
+ * never queues anything during an API outage and reads as "nothing ready".
+ *
+ * This is the same read with the three outcomes kept apart. The producing-
+ * workflow rule is unchanged: an artifact's EXISTENCE is the verdict, so
+ * only `CACHE_WRITER_WORKFLOW` may be believed.
+ */
+export type VerdictArtifactState = 'present' | 'absent' | 'unreadable'
+
+export async function verdictArtifactState(
+  name: string, log: (msg: string) => void,
+): Promise<VerdictArtifactState> {
+  const data = await ghJson<ArtifactListResponse>(
+    ['api', `repos/${REPO}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=5`],
+    30_000,
+    (detail) => log(`artifact lookup failed for ${name}: ${detail}`),
+  )
+  if (data === undefined || !Array.isArray(data.artifacts)) return 'unreadable'
+  for (const candidate of data.artifacts) {
+    const runId = candidate.workflow_run?.id
+    if (candidate.expired || runId === undefined) continue
+    const run = await ghJson<{ path?: string }>(
+      ['api', `repos/${REPO}/actions/runs/${runId}`],
+      30_000,
+      (detail) => log(`could not read run ${runId} behind artifact ${name}: ${detail}`),
+    )
+    if (run === undefined) return 'unreadable'
+    if (run.path !== CACHE_WRITER_WORKFLOW) {
+      log(`ignoring artifact ${name}: run ${runId} came from ${run.path ?? '(unreadable)'}, not ${CACHE_WRITER_WORKFLOW}`)
+      continue
+    }
+    return 'present'
+  }
+  return 'absent'
+}
+
 interface ArtifactListResponse {
   artifacts: { id: number; expired: boolean; workflow_run?: { id: number } | null }[]
 }
