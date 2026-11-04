@@ -3704,7 +3704,9 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       const block = jobBlock(ciYaml(), 'ci-status')
       // Without this, every push to main would fail ci-status and block
       // docker-canary — the suppression above depends on it entirely.
-      expect(block).toContain('"$2" != "skipped"')
+      // (#2446 turned the if/else into a case; the behaviour is also run, not just read, in
+      // "rail: ci-status reports a cancelled job as infrastructure" below.)
+      expect(block).toContain('success|skipped) ;;')
       for (const job of HEAVY) expect(block, `ci-status must still NEED "${job}"`).toContain(`check_job "${job}"`)
     })
 
@@ -4434,10 +4436,10 @@ describe('rail: an iOS ui shard is retried only when it executed zero tests (#24
     return script
   }
 
-  type Outcome = 'zero' | 'fail' | 'pass'
+  type Outcome = 'zero' | 'fail' | 'pass' | 'assert' | 'infra' | 'snapshot' | 'mixed' | 'passA'
 
   /** Runs the step with a fake xcodebuild whose Nth call behaves as outcomes[N-1]. */
-  function runStep(outcomes: Outcome[]) {
+  function runStep(outcomes: Outcome[], opts: { keepLog?: boolean } = {}) {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'ios-shard-retry-')))
     try {
       const bin = join(root, 'bin')
@@ -4465,13 +4467,38 @@ case "$outcome" in
         echo "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds)."; exit 65 ;;
   pass) echo "Test Case '-[LlamenosUITests.SomeUITests testA]' started."
         echo "Test Case '-[LlamenosUITests.SomeUITests testA]' passed (3.0 seconds)."; exit 0 ;;
+  passA) echo "Test Case '-[LlamenosUITests.SomeUITests testA]' started."
+        echo "Test Case '-[LlamenosUITests.SomeUITests testA]' passed (4.0 seconds)."; exit 0 ;;
+  assert) echo "Test Case '-[LlamenosUITests.SomeUITests testA]' started."
+        echo "/src/SomeUITests.swift:42: error: -[LlamenosUITests.SomeUITests testA] : XCTAssertTrue failed - expected the banner"
+        echo "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds)."
+        printf 'Failing tests:\\n\\tSomeUITests.testA()\\n\\n** TEST EXECUTE FAILED **\\n'; exit 65 ;;
+  infra|snapshot|mixed)
+        echo "Test Case '-[LlamenosUITests.SomeUITests testB]' started."
+        echo "Test Case '-[LlamenosUITests.SomeUITests testB]' passed (1.0 seconds)."
+        echo "Test Case '-[LlamenosUITests.SomeUITests testA]' started."
+        if [ "$outcome" = snapshot ]; then
+          echo "<unknown>:0: error: -[LlamenosUITests.SomeUITests testA] : Failed to get matching snapshots: Timed out while evaluating UI query."
+        else
+          echo "<unknown>:0: error: -[LlamenosUITests.SomeUITests testA] : Failed to get launch progress for <XCUIApplicationImpl: 0x1 org.llamenos.hotline>: Simulator device failed to launch"
+        fi
+        echo "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds)."
+        if [ "$outcome" = mixed ]; then
+          echo "Test Case '-[LlamenosUITests.SomeUITests testC]' started."
+          echo "/src/SomeUITests.swift:77: error: -[LlamenosUITests.SomeUITests testC] : XCTAssertEqual failed: (\\"a\\") is not equal to (\\"b\\")"
+          echo "Test Case '-[LlamenosUITests.SomeUITests testC]' failed (2.0 seconds)."
+          printf 'Failing tests:\\n\\tSomeUITests.testA()\\n\\tSomeUITests.testC()\\n\\n** TEST EXECUTE FAILED **\\n'
+        else
+          printf 'Failing tests:\\n\\tSomeUITests.testA()\\n\\n** TEST EXECUTE FAILED **\\n'
+        fi
+        exit 65 ;;
 esac
 exit 99`)
       const r = spawnSync('bash', ['-e', '-c', stepScript(root)], {
         encoding: 'utf8',
         env: {
           PATH: `${bin}:${process.env.PATH ?? ''}`, RUNNER_TEMP: root, NATIVE_BACKEND_PORT: '1', SHARD: '1',
-          RUNNER_NAME: 'hosted-runner', GITHUB_STEP_SUMMARY: join(root, 'summary'),
+          RUNNER_NAME: 'hosted-runner', GITHUB_STEP_SUMMARY: join(root, 'summary'), GITHUB_WORKSPACE: process.cwd(),
         },
       })
       const read = (f: string) => (existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8') : '')
@@ -4480,6 +4507,9 @@ exit 99`)
         calls: Number(read('calls').trim() || 0), sleeps: read('sleeps').trim().split('\n').filter(Boolean),
         log: read('xcodebuild-test.log'), discarded: read('xcodebuild-zero-test-attempts.log'),
         argv: read('argv-1').split('\n').slice(0, -1),
+        argv2: read('argv-2').split('\n').slice(0, -1),
+        report: opts.keepLog ? spawnSync('python3', ['apps/ios/scripts/ui-tests.py', 'report', join(root, 'xcodebuild-test.log')], { encoding: 'utf8' }) : undefined,
+        summary: read('summary'), attempts1: read('xcodebuild-attempt1.log'), infraAttempts: read('xcodebuild-infra-retry-attempts.log'),
         root,
       }
     } finally {
@@ -4513,7 +4543,9 @@ exit 99`)
       "Test Case '-[LlamenosUITests.SomeUITests testA]' started.\n" +
       "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds).\n"
     // The hub poll earlier in the same script prints one line; after it, only xcodebuild's own output.
-    expect(r.out.replace(/^hub reachable at .*\n/, ''), 'the step prints xcodebuild output and nothing else').toBe(expected)
+    // (A failure with no recorded issue message is classified genuine, and says so on one line.)
+    const stripped = r.out.replace(/^hub reachable at .*\n/, '').replace(/^ios-e2e\/ui shard 1: failure is not an infrastructure signature.*\n/m, '')
+    expect(stripped, 'the step prints xcodebuild output and nothing else').toBe(expected)
     expect(r.log, 'the log `report` parses is xcodebuild output verbatim').toBe(expected)
     expect(r.discarded).toBe('')
     expect(r.status).toBe(65)
@@ -4545,5 +4577,223 @@ exit 99`)
     expect([r.status, r.calls]).toEqual([65, 3])
     expect(r.out).toMatch(/::error::.*zero-tests-executed/)
     expect(r.out).toContain("THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT")
+  })
+
+  // ---- #2446: a shard that DID run tests, then lost some of them to the runner ----
+
+  it('#2446: tests that failed ONLY with "Failed to get launch progress" are re-run alone, once, and a pass on the retry passes the shard', () => {
+    const r = runStep(['infra', 'passA'])
+    expect([r.status, r.calls]).toEqual([0, 2])
+    expect(r.argv2.filter((a) => a.startsWith('-only-testing:'))).toEqual(['-only-testing:LlamenosUITests/SomeUITests/testA'])
+    expect(r.out).toMatch(/::warning::INFRASTRUCTURE RETRY \(signature: launch-progress\): shard 1 attempt 1/)
+    expect(r.out).toContain('PASSING AFTER AN INFRASTRUCTURE RETRY')
+    expect(r.summary).toContain('infrastructure retry')
+    expect(r.infraAttempts, 'attempt 1 stays on disk as evidence').toContain('Failed to get launch progress')
+  })
+
+  it('#2446: the log `ui-tests.py report` parses reflects the FINAL results — attempt 1 passes + the retried test, no leftover failure', () => {
+    const r = runStep(['infra', 'passA'], { keepLog: true })
+    const report = r.report
+    if (!report) throw new Error('runStep did not run the report')
+    expect(report.status, `report said:\n${report.stdout}${report.stderr}`).toBe(0)
+    expect(report.stdout).toContain('2 test cases')
+    expect(report.stdout).not.toMatch(/failed: \*\*1/)
+  })
+
+  it('#2446: the "Failed to get matching snapshots: Timed out" signature is retried too', () => {
+    const r = runStep(['snapshot', 'passA'])
+    expect([r.status, r.calls]).toEqual([0, 2])
+    expect(r.out).toContain('signature: ui-snapshot-timeout')
+  })
+
+  it('#2446 BREAK-IT: a genuine assertion failure is NEVER retried and keeps its exit code', () => {
+    const r = runStep(['assert', 'passA'])
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.out).not.toContain('INFRASTRUCTURE RETRY')
+  })
+
+  it('#2446 BREAK-IT: one infra-failed test next to one assertion failure is NOT retried — a mixed shard stays red', () => {
+    const r = runStep(['mixed', 'passA'])
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.out).not.toContain('INFRASTRUCTURE RETRY')
+  })
+
+  it('#2446: the partial retry is bounded — infra, infra again, never a third run — and the failure is announced', () => {
+    const r = runStep(['infra', 'infra', 'passA'])
+    expect([r.status, r.calls]).toEqual([65, 2])
+    expect(r.out).toMatch(/::error::ios-e2e\/ui FAILED after an infrastructure retry/)
+  })
+
+  it('#2446: a retry that then fails an assertion fails the shard with that exit code', () => {
+    const r = runStep(['infra', 'assert'])
+    expect([r.status, r.calls]).toEqual([65, 2])
+  })
+})
+
+/**
+ * #2446: the classifier itself. It is the only thing standing between a retry and
+ * a masked regression, so each infrastructure signature is shown to fire and each
+ * lookalike that is NOT infrastructure is shown not to.
+ */
+describe('rail: classify-infra-failure.py retries infrastructure signatures and nothing else (#2446)', () => {
+  const SCRIPT = join(process.cwd(), '.github', 'scripts', 'classify-infra-failure.py')
+  const T = (name: string) => `Test Case '-[LlamenosUITests.SomeUITests ${name}]'`
+  const fail = (name: string, msg: string | null) => [
+    `${T(name)} started.`,
+    ...(msg === null ? [] : [`/src/SomeUITests.swift:42: error: -[LlamenosUITests.SomeUITests ${name}] : ${msg}`]),
+    `${T(name)} failed (3.0 seconds).`,
+  ]
+  const ok = (name: string) => [`${T(name)} started.`, `${T(name)} passed (1.0 seconds).`]
+  const LAUNCH = 'Failed to get launch progress for <XCUIApplicationImpl: 0x1 org.llamenos.hotline>: Simulator device failed to launch'
+  const SNAP = 'Failed to get matching snapshots: Timed out while evaluating UI query.'
+
+  function run(args: string[]) {
+    const r = spawnSync('python3', [SCRIPT, ...args], { encoding: 'utf8' })
+    expect(r.status, r.stderr).toBe(0)
+    return Object.fromEntries(r.stdout.split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])) as Record<string, string>
+  }
+  function ios(lines: string[]) {
+    const dir = mkdtempSync(join(tmpdir(), 'classify-ios-'))
+    try {
+      writeFileSync(join(dir, 'x.log'), lines.join('\n') + '\n')
+      return run(['ios', join(dir, 'x.log')])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const failing = (...names: string[]) => ['Failing tests:', ...names.map((n) => `\tSomeUITests.${n}()`), '', '** TEST EXECUTE FAILED **']
+
+  it.each([
+    ['launch progress', LAUNCH, 'launch-progress'],
+    ['snapshot timeout', SNAP, 'ui-snapshot-timeout'],
+  ])('iOS: a contiguous block of tests failing only with "%s" is infrastructure', (_n, msg, sig) => {
+    const v = ios([...ok('testOk'), ...fail('testA', msg), ...fail('testB', msg), ...failing('testA', 'testB')])
+    expect(v).toMatchObject({ kind: 'infra-partial', signatures: sig })
+    expect(v.retest).toBe('LlamenosUITests/SomeUITests/testA LlamenosUITests/SomeUITests/testB')
+  })
+
+  it('iOS: a log with no Test Case line at all is the zero-tests case', () => {
+    expect(ios(['xctrunner unknown to FrontBoard', '** TEST EXECUTE FAILED **']).kind).toBe('zero-tests')
+  })
+
+  it.each([
+    ['an assertion', fail('testA', 'XCTAssertTrue failed - expected the banner'), failing('testA')],
+    ['an infra test AND an assertion', [...fail('testA', LAUNCH), ...fail('testB', 'XCTAssertEqual failed: ("a") is not equal to ("b")')], failing('testA', 'testB')],
+    ['one test with an infra message AND an assertion message', [`${T('testA')} started.`,
+      `<unknown>:0: error: -[LlamenosUITests.SomeUITests testA] : ${LAUNCH}`,
+      '/src/S.swift:9: error: -[LlamenosUITests.SomeUITests testA] : XCTAssertTrue failed', `${T('testA')} failed (1.0 seconds).`], failing('testA')],
+    ['a failure with no recorded issue', fail('testA', null), failing('testA')],
+    ['the signature quoted INSIDE an assertion message', fail('testA', `XCTAssertTrue failed - saw "${LAUNCH}"`), failing('testA')],
+    ['a test killed by the execution time allowance', [`${T('testA')} started.`, `${T('testA')} exceeded execution time allowance in test run`, `<unknown>:0: error: -[LlamenosUITests.SomeUITests testA] : ${LAUNCH}`, `${T('testA')} failed (300.0 seconds).`], failing('testA')],
+    ['a test that started and never finished (crash)', [`${T('testA')} started.`], ['** TEST EXECUTE FAILED **']],
+    ['a Failing tests list naming a test we did not see fail', fail('testA', LAUNCH), failing('testA', 'testGhost')],
+    ['a non-zero exit with no failed test', ok('testOk'), ['** TEST EXECUTE FAILED **']],
+  ])('iOS BREAK-IT: %s is NOT infrastructure — no retry', (_n, body, trailer) => {
+    const v = ios([...body, ...trailer])
+    expect(v.kind, v.detail).toBe('genuine')
+    expect(v.retest).toBe('')
+  })
+
+  describe('Android', () => {
+    function android(opts: { marker: boolean; log?: string; xml?: string }) {
+      const dir = mkdtempSync(join(tmpdir(), 'classify-and-'))
+      try {
+        const results = join(dir, 'androidTest-results')
+        mkdirSync(results)
+        if (opts.xml !== undefined) writeFileSync(join(results, 'TEST-x.xml'), opts.xml)
+        const marker = join(dir, 'started')
+        if (opts.marker) writeFileSync(marker, '')
+        const log = join(dir, 'gradle.log')
+        if (opts.log !== undefined) writeFileSync(log, opts.log)
+        return run(['android', opts.log === undefined ? '-' : log, marker, results])
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+    const GENUINE_FAILURE = 'CmsCaseManagement > create a case[Pixel_5(AVD) - 14] FAILED\n  java.lang.AssertionError: expected 1 was 0\nThere were failing tests. See the results at: file:///x\n'
+
+    it('the test script never starting (emulator did not boot) is infrastructure', () => {
+      expect(android({ marker: false })).toMatchObject({ kind: 'script-never-started', signatures: 'emulator-did-not-boot' })
+    })
+
+    it.each([
+      ["adb: device 'emulator-5554' not found", 'adb-device-not-found'],
+      ['Timeout waiting for emulator to boot.', 'emulator-boot-timeout'],
+      ['FATAL        | Your device does not have enough disk space to run avd: `test`.', 'emulator-no-disk-space'],
+    ])('a started run whose Gradle output carries %s and no failing test is infrastructure', (line, sig) => {
+      const v = android({ marker: true, log: `> Task :app:connectedDebugAndroidTest FAILED\n${line}\n` })
+      expect(v).toMatchObject({ kind: 'infra' })
+      expect(v.signatures).toContain(sig)
+    })
+
+    it.each([
+      ['a failing scenario in the Gradle output, even alongside an adb line', { marker: true, log: `${GENUINE_FAILURE}adb: device 'emulator-5554' not found\n` }],
+      ['a failing testcase in the JUnit XML, even with an infra line', { marker: true, log: "adb: device 'emulator-5554' not found\n", xml: '<testsuite><testcase name="a"><failure message="boom"/></testcase></testsuite>' }],
+      ['a failure with no infrastructure signature at all', { marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nExecution failed for task\n' }],
+    ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
+      const v = android(opts)
+      expect(v.kind, v.detail).toBe('genuine')
+    })
+  })
+})
+
+/**
+ * #2446: ci-status separates "a job said no" from "a job never said anything".
+ * Both stay red; only the first is a verdict about the PR.
+ */
+describe('rail: ci-status reports a cancelled job as infrastructure, never as a failure and never as green (#2446)', () => {
+  function ciStatus(results: Record<string, string>) {
+    const lines = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8').split('\n')
+    const job = lines.findIndex((l) => l === '  ci-status:')
+    const at = lines.findIndex((l, i) => i > job && l.trim() === '- name: Check all required jobs')
+    const run = lines.findIndex((l, i) => i > at && l.trim() === 'run: |')
+    const body: string[] = []
+    for (const l of lines.slice(run + 1)) {
+      if (l.trim() !== '' && !l.startsWith(' '.repeat(10))) break
+      body.push(l.slice(10))
+    }
+    const script = body.join('\n').replace(/\$\{\{ needs\.([\w-]+)\.result \}\}/g, (_m, name: string) => results[name] ?? 'success')
+    expect(script, 'ci-status uses an expression this harness does not fill in').not.toContain('${{')
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ci-status-')))
+    try {
+      mkdirSync(join(root, 'bin'))
+      writeFileSync(join(root, 'bin', 'gh'), `#!/bin/bash\necho "  - android-e2e (2): runner=GitHub Actions 7, cancelled step=Run Cucumber"\n`)
+      chmodSync(join(root, 'bin', 'gh'), 0o755)
+      const r = spawnSync('bash', ['-e', '-c', script], {
+        encoding: 'utf8',
+        env: { PATH: `${join(root, 'bin')}:${process.env.PATH ?? ''}`, GITHUB_STEP_SUMMARY: join(root, 'summary'), REPO: 'o/r', RUN_ID: '1', RUN_ATTEMPT: '1', GH_TOKEN: 't' },
+      })
+      return { status: r.status, out: `${r.stdout}${r.stderr}`, summary: existsSync(join(root, 'summary')) ? readFileSync(join(root, 'summary'), 'utf8') : '' }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it('all green passes; skipped counts as passing', () => {
+    expect(ciStatus({ 'ios-e2e': 'skipped' })).toMatchObject({ status: 0 })
+  })
+
+  it('a failed job fails ci-status and is NOT called infrastructure', () => {
+    const r = ciStatus({ 'android-e2e': 'failure' })
+    expect(r.status).toBe(1)
+    expect(r.out).toContain('Failed jobs: android-e2e(failure)')
+    expect(r.out).not.toContain('INFRASTRUCTURE')
+  })
+
+  it('a cancelled job keeps ci-status RED but says it is infrastructure, names the lost shard, and writes the run summary', () => {
+    const r = ciStatus({ 'android-e2e': 'cancelled' })
+    expect(r.status, 'a job that never reported must not read as passing').toBe(1)
+    expect(r.out).toContain('INFRASTRUCTURE (cancelled - not failed)')
+    expect(r.out).toContain('android-e2e CANCELLED')
+    expect(r.out).toContain('android-e2e (2): runner=GitHub Actions 7')
+    expect(r.out).not.toContain('Failed jobs:')
+    expect(r.summary).toContain('cancelled, not failed')
+  })
+
+  it('cancelled AND failed: both are reported, the failure is flagged as genuine, and it is red', () => {
+    const r = ciStatus({ 'android-e2e': 'cancelled', lint: 'failure' })
+    expect(r.status).toBe(1)
+    expect(r.out).toContain('Failed jobs: lint(failure)')
+    expect(r.summary).toContain('genuine failures')
   })
 })
