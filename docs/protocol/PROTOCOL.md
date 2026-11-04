@@ -4941,7 +4941,7 @@ Delivery:
 **Platform incidents.** Something that concerns the instance rather than any hub — an erasure whose subject belongs to no hub — opens an incident with no hub:
 
 ```
-GET /api/incidents/platform?open=true
+GET /api/admin/incidents?open=true
 Permission: system:manage-instance   // from the caller's GLOBAL roles; hub roles never grant it
 Response: { "incidents": PlatformIncident[] }   // HubIncident without "hubId"
 ```

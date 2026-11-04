@@ -206,7 +206,7 @@ function appFor(caller: Caller) {
     await next()
   })
   app.route('/api/erasure', erasureRoutes)
-  app.route('/api/incidents/platform', platformIncidentsRoutes)
+  app.route('/api/admin/incidents', platformIncidentsRoutes)
   const hubScoped = new Hono<AppEnv>()
   hubScoped.use('*', hubContext)
   hubScoped.route('/incidents', incidentsRoutes)
@@ -224,7 +224,7 @@ async function hubIncidentsAs(caller: Caller, hubId: string) {
 }
 
 async function platformIncidentsAs(caller: Caller) {
-  const res = await appFor(caller).request('/api/incidents/platform?open=true', {}, ENV)
+  const res = await appFor(caller).request('/api/admin/incidents?open=true', {}, ENV)
   return { status: res.status, body: (await res.json()) as IncidentBody & { error?: string } }
 }
 

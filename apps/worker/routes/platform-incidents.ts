@@ -1,5 +1,5 @@
 /**
- * GET /incidents/platform — incidents that belong to no hub (#2347).
+ * GET /admin/incidents — incidents that belong to no hub (#2347).
  *
  * An erasure whose subject belongs to no hub has nowhere to open a hub
  * incident, so it opens one here. Read ONLY with the platform permission

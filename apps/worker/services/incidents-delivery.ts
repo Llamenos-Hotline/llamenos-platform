@@ -141,7 +141,7 @@ export class IncidentDelivery implements IncidentNotifier {
    * A platform incident has no hub, so there is no hub to route a push wake
    * through (`WakePayload.hubId` is required and clients resolve the wake by
    * it). Its holders are reached on the Signal alert — whose preference gate
-   * and retries apply — and read the detail from `GET /incidents/platform`.
+   * and retries apply — and read the detail from `GET /admin/incidents`.
    */
   private async interruptPlatform(incident: HubIncidentRow, category: IncidentCategory, state: IncidentState): Promise<void> {
     const holders = await resolvePlatformIncidentHolders(this.deps.identity, this.deps.settings)

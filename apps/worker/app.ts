@@ -301,7 +301,9 @@ authenticated.route('/signal-notification', signalNotificationRoutes)
 authenticated.route('/provider-setup', providerSetupRoutes)
 authenticated.route('/provider-templates', providerTemplatesRoutes)
 authenticated.route('/erasure', erasureRoutes)
-authenticated.route('/incidents/platform', platformIncidentsRoutes)
+// Incidents that belong to no hub. Under /admin, not /incidents: a hub's incidents are only
+// under /hubs/:hubId/incidents, and an unscoped /incidents/* mount is the #2395 shape.
+authenticated.route('/admin/incidents', platformIncidentsRoutes)
 authenticated.route('/bans/platform', platformBansRoutes)
 authenticated.route('/retention', retentionRoutes)
 authenticated.route('/settings/platform', platformSettingsRoutes)
