@@ -7,17 +7,23 @@ import { ciDiff, type CiContext } from '../../orchestrator/src/ci.js'
 import { diffHash } from '../../orchestrator/src/review-cache.js'
 
 /**
- * `ciDiff`'s text is the review cache's key, so it must be a function of the
- * two commits alone — never of the clone it was computed in.
+ * `ciDiff`'s text must be a function of the two commits alone — never of the
+ * clone it was computed in.
  *
  * THE BUG. A bare `git diff` abbreviates the blob ids on its `index` line to
  * `core.abbrev=auto`, whose width grows with the clone's object count (8 hex
  * digits below 65,536 objects, 9 above). #1170's PASS was recorded by the
  * review box's clone (61,899 objects) under the 8-digit text; the same two
  * commits in a 101k-object clone hashed to another key and missed. A cache
- * miss on a review request is a full model review, so this is a
+ * miss on a review request is a full model review, so this was a
  * cost defect as well as a correctness one — and the box was ~3,600 objects
  * from invalidating every cached verdict at once.
+ *
+ * The text WAS the review cache's key then. Since #2014 and #2336 the lookup
+ * key is the head's tree and the PR's title and description, and this text's
+ * `diffHash` is only logged and written into the verdict record — but that
+ * recorded hash is still how a record names the diff it judged, so it must
+ * not wobble with the clone that produced it.
  *
  * Injected, not assumed: `core.abbrev` is exactly the knob the object count
  * turns, and the rest is config a runner's own `HOME` may carry.
@@ -69,7 +75,7 @@ async function diffUnder(config: Record<string, string>): Promise<string> {
   }
 }
 
-describe('rail: ciDiff is a function of the two commits alone (review-cache key)', () => {
+describe('rail: ciDiff is a function of the two commits alone (recorded diff hash)', () => {
   it('carries full blob ids, so the object count cannot change the text', async () => {
     const text = await diffUnder({})
     const index = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(text)
