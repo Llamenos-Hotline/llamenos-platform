@@ -344,8 +344,8 @@ export async function doctor(): Promise<number> {
     }
   }
 
-  const modes = lanes.map((l) => `${l.id}=${l.mode}/${l.engine}${l.model !== undefined ? `/${l.model}` : ''}`).join(' ')
-  process.stdout.write(`\nlanes (mode/engine/model): ${modes}\n`)
+  const modes = lanes.map((l) => `${l.id}=${l.mode}/${l.engine}${l.model !== undefined ? `/${l.model}` : ''}${l.milestone !== undefined ? ` milestone:"${l.milestone}"` : ''}`).join(' ')
+  process.stdout.write(`\nlanes (mode/engine/model[/milestone]): ${modes}\n`)
   process.stdout.write(`lane modes file: ${LANE_MODES_FILE}${existsSync(LANE_MODES_FILE) ? '' : ' (absent — all lanes off)'}\n`)
   if (warnings > 0) {
     process.stdout.write(`\n${warnings} warning(s) above — non-fatal, see WARN lines\n`)
@@ -848,7 +848,7 @@ async function runTick(): Promise<number> {
     resumeFleet: resume,
     readLedger: readAll,
     resumedAt: readResumedAt,
-    listItems: (lane) => new GitHubSource(lane.requireLabel).list(),
+    listItems: (lane) => new GitHubSource(lane.requireLabel, lane.milestone).list(),
     readLabels: (id) => new GitHubSource('').labels(id),
     findOpenPr,
     dispatch: realDispatch,
@@ -1302,7 +1302,7 @@ async function invokePlannerModel(prompt: string): Promise<string> {
 async function listOpenBacklog(): Promise<WorkItem[]> {
   const raw = await ghJson<RawIssue[]>([
     'issue', 'list', '--state', 'open', '--limit', '200',
-    '--json', 'number,title,body,url,state,labels',
+    '--json', 'number,title,body,url,state,labels,createdAt',
   ])
   return raw === undefined ? [] : raw.map(toWorkItem)
 }

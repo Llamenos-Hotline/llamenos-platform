@@ -328,6 +328,21 @@ describe('readLaneModes', () => {
     expect(onReject.mock.calls[0]?.[1]).toMatch(/invalid model/i)
   })
 
+  it('parses the milestone dial (#1813)', () => {
+    const file = modesFile({ backend: { mode: 'live', milestone: 'M1 — single-device pilot' } })
+    expect(readLaneModes(file)).toEqual({
+      backend: { mode: 'live', milestone: 'M1 — single-device pilot' },
+    })
+  })
+
+  it('rejects a non-string or empty milestone: lane stays off and the reason is reported', () => {
+    const onReject = vi.fn()
+    expect(readLaneModes(modesFile({ backend: { mode: 'live', milestone: 3 } }), onReject)).toEqual({})
+    expect(onReject.mock.calls[0]?.[1]).toMatch(/invalid milestone/i)
+    expect(readLaneModes(modesFile({ backend: { mode: 'live', milestone: '' } }), onReject)).toEqual({})
+    expect(onReject.mock.calls[1]?.[1]).toMatch(/invalid milestone/i)
+  })
+
   it('rejects unrecognized entry shapes (numbers, arrays, null)', () => {
     const onReject = vi.fn()
     const file = modesFile({ backend: 1, ios: ['live'], android: null })

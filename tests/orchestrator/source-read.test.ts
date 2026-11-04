@@ -20,10 +20,15 @@ const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
 
 beforeEach(() => { mockExecFile.mockReset() })
 
-async function listWith(behaviour: () => Promise<{ stdout: string; stderr: string }>) {
+async function listWith(behaviour: () => Promise<{ stdout: string; stderr: string }>, milestone?: string) {
   mockExecFile.mockImplementation(behaviour)
   const { GitHubSource } = await import('../../orchestrator/src/source.js')
-  return new GitHubSource('agent-dispatchable').list()
+  return new GitHubSource('agent-dispatchable', milestone).list()
+}
+
+function lastArgs(): string[] {
+  const call = mockExecFile.mock.calls[mockExecFile.mock.calls.length - 1]
+  return (call?.[1] as string[] | undefined) ?? []
 }
 
 describe('GitHubSource.list — a failed read carries its reason', () => {
@@ -72,5 +77,58 @@ describe('GitHubSource.list — a failed read carries its reason', () => {
     const r = await listWith(async () => ({ stdout: '[]', stderr: '' }))
     expect(r.ok).toBe(true)
     expect(r.ok && r.items).toEqual([])
+  })
+})
+
+describe('GitHubSource.list — explicit fetch order and milestone selection (#1813)', () => {
+  function rawIssue(number: number, createdAt: string, labels: string[] = []) {
+    return {
+      number, title: `t${number}`, body: 'b', url: 'u', state: 'OPEN',
+      labels: labels.map((name) => ({ name })), createdAt,
+    }
+  }
+
+  // gh's default is created-DESCENDING; left implicit, the queue ran
+  // newest-first and a fresh filing outranked a six-week-old M1 blocker.
+  it('always fetches oldest-first rather than taking gh\'s newest-first default', async () => {
+    await listWith(async () => ({ stdout: '[]', stderr: '' }))
+    const args = lastArgs()
+    const at = args.indexOf('--search')
+    expect(at).toBeGreaterThan(-1)
+    expect(args[at + 1]).toBe('sort:created-asc')
+  })
+
+  it('requests createdAt — the field the queue order sorts on', async () => {
+    await listWith(async () => ({ stdout: '[]', stderr: '' }))
+    const args = lastArgs()
+    const fields = args[args.indexOf('--json') + 1]
+    expect(fields?.split(',')).toContain('createdAt')
+  })
+
+  it('passes --milestone when the lane is scoped to one', async () => {
+    await listWith(async () => ({ stdout: '[]', stderr: '' }), 'M1 — single-device pilot')
+    const args = lastArgs()
+    const at = args.indexOf('--milestone')
+    expect(at).toBeGreaterThan(-1)
+    expect(args[at + 1]).toBe('M1 — single-device pilot')
+  })
+
+  it('passes NO --milestone when the lane has none — behaviour unchanged', async () => {
+    await listWith(async () => ({ stdout: '[]', stderr: '' }))
+    expect(lastArgs()).not.toContain('--milestone')
+  })
+
+  // The issue's acceptance check, against the seam itself: whatever order gh
+  // returns the page in, the queue the lane sees is phase-first, then age —
+  // so a deliberately-filed new non-M1 issue cannot displace an older M1 item.
+  it('returns the queue phase-first then oldest-first, regardless of fetch order', async () => {
+    const raw = [
+      rawIssue(10, '2026-10-20T00:00:00Z'),                              // new, unphased
+      rawIssue(11, '2026-10-19T00:00:00Z', ['m1-phase:4-real-signals']),
+      rawIssue(12, '2026-09-01T00:00:00Z', ['m1-phase:1-data-loss']),
+    ]
+    const r = await listWith(async () => ({ stdout: JSON.stringify(raw), stderr: '' }))
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.items.map((i) => i.id)).toEqual(['12', '11', '10'])
   })
 })

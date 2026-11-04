@@ -600,7 +600,7 @@ account's quota is exhausted:
 {"backend": {"mode": "live", "engine": "opencode", "model": "kimi-code-plan-global/k3-256k"}}
 ```
 
-Allowed keys are exactly `mode`, `engine`, `model`; `engine` is `"claude"`
+Allowed keys are exactly `mode`, `engine`, `model`, `milestone`; `engine` is `"claude"`
 (the default) or `"opencode"`. A raw opencode provider/model id is mapped to
 the dispatcher's token form (`kimi-code-plan-global/k3-256k` → `kimi`, as is
 the retired `kimi-for-coding/k3-256k` id a lane file on disk may still carry,
@@ -615,6 +615,29 @@ model id does not resolve** — doctor enumerates `opencode models` and
 compares, because a provider id that was renamed or removed fails at dispatch
 time with a generic server error that reads like an outage, not a config
 error (#1738).
+
+A lane entry may also carry `milestone` (#1813), which scopes that lane's
+work source to one GitHub milestone IN ADDITION to its require label — the
+two are ANDed by `gh issue list`:
+
+```json
+{"backend": {"mode": "live", "milestone": "M1 — single-device pilot"}}
+```
+
+This is a runtime dial for the same reason `mode` is: advancing the fleet
+from M1 to M2 must not require a human-gated PR to `orchestrator/`. It
+defaults to unset — no lane is milestone-scoped out of the box, so enabling
+it is always an explicit operator act. `llamenos-fleet doctor` prints the
+configured milestone next to each lane's mode/engine/model.
+
+Whatever a lane's scope, its dispatch queue is EXPLICITLY ordered — phase
+first (`m1-phase:1-data-loss` before `m1-phase:4-real-signals`; unphased
+items last), then age (oldest first) — never `gh`'s newest-first default.
+Before #1813 the queue took that default, so a freshly filed issue always
+outranked a six-week-old M1 blocker. The ordering lives in
+`orchestrator/src/source.ts` (`compareQueueOrder`), and the fetch itself
+also asks for `sort:created-asc` so the oldest items are the ones inside
+the 200-item page.
 
 ## Where state lives
 
