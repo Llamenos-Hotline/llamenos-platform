@@ -9,7 +9,6 @@ import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
   apiGet,
-  apiPatch,
   createVolunteerViaApi,
   createReportViaApi,
   assignReportViaApi,
@@ -20,6 +19,7 @@ import {
   createEntityTypeViaApi,
   updateReportStatusViaApi,
   uniqueName,
+  ADMIN_SEED,
 } from '../../api-helpers'
 import { assertIsObject } from '../../integrity-helpers'
 
@@ -76,14 +76,14 @@ async function ensureEntityType(
 
 Given(
   'a reporter submits a report with title {string}',
-  async ({ request, world }, title: string) => {
-    const report = await createReportViaApi(request, { title })
+  async ({ request, world, workerHub }, title: string) => {
+    const report = await createReportViaApi(request, { title, hubId: workerHub })
     getLifecycleState(world).reportId = report.id
     getLifecycleState(world).reportTitle = title
   },
 )
 
-Given('a volunteer is assigned to the report', async ({ request, world }) => {
+Given('a volunteer is assigned to the report', async ({ request, world, workerHub }) => {
   expect(getLifecycleState(world).reportId).toBeTruthy()
   const vol = await createVolunteerViaApi(request, {
     name: `Lifecycle Vol ${Date.now()}`,
@@ -91,10 +91,10 @@ Given('a volunteer is assigned to the report', async ({ request, world }) => {
   getLifecycleState(world).volunteerPubkey = vol.pubkey
   getLifecycleState(world).volunteerSeedHex = vol.seedHex
 
-  await assignReportViaApi(request, getLifecycleState(world).reportId!, vol.pubkey)
+  await assignReportViaApi(request, getLifecycleState(world).reportId!, vol.pubkey, workerHub)
 })
 
-When('the admin converts the report to a case', async ({ request, world }) => {
+When('the admin converts the report to a case', async ({ request, world, workerHub }) => {
   expect(getLifecycleState(world).reportId).toBeTruthy()
   const entityTypeId = await ensureEntityType(request, world)
 
@@ -102,6 +102,8 @@ When('the admin converts the report to a case', async ({ request, world }) => {
     request,
     getLifecycleState(world).reportId!,
     entityTypeId,
+    ADMIN_SEED,
+    workerHub,
   )
   getLifecycleState(world).caseRecordId = result.recordId
   getLifecycleState(world).caseLinkId = result.linkId
@@ -118,14 +120,14 @@ Then('the case should be linked to the original report', async ({ world }) => {
   expect(getLifecycleState(world).caseLinkId).toBeTruthy()
 })
 
-Then('listing the report should show the linked case ID', async ({ request, world }) => {
+Then('listing the report should show the linked case ID', async ({ request, world, workerHub }) => {
   expect(getLifecycleState(world).reportId).toBeTruthy()
   expect(getLifecycleState(world).caseRecordId).toBeTruthy()
 
   // Fetch the report's linked records
   const res = await apiGet<{ records: Array<{ caseId: string }> }>(
     request,
-    `/reports/${getLifecycleState(world).reportId}/records`,
+    `/hubs/${workerHub}/reports/${getLifecycleState(world).reportId}/records`,
   )
   // The report should have a linked case
   if (res.status === 200 && res.data.records) {
@@ -148,16 +150,18 @@ Then('listing the case should show the linked report ID', async ({ request, worl
 
 Given(
   'reporter {string} creates a report with title {string}',
-  async ({ request, world }, reporterName: string, title: string) => {
-    // Create a volunteer with reporter role
+  async ({ request, world, workerHub }, reporterName: string, title: string) => {
+    // A reporter who is a member of the scenario's hub — reports exist only in a hub (#2395)
     const vol = await createVolunteerViaApi(request, {
       name: `Reporter ${reporterName} ${Date.now()}`,
+      hubId: workerHub,
+      roleIds: ['role-reporter'],
     })
-    await apiPatch(request, `/users/${vol.pubkey}`, { roles: ['role-reporter'] })
 
     // Create the report authenticated as the reporter so the server records their pubkey
     // as the contact/author — required for the reporter-isolation filter in GET /reports
     const report = await createReportViaApi(request, {
+      hubId: workerHub,
       title,
       seedHex: vol.seedHex,
     })
@@ -175,14 +179,14 @@ Given(
   },
 )
 
-When('{string} lists their own reports', async ({ request, world }, reporterName: string) => {
+When('{string} lists their own reports', async ({ request, world, workerHub }, reporterName: string) => {
   const reporter = getLifecycleState(world).reporters.get(reporterName)
   expect(reporter).toBeTruthy()
 
   // List reports as the reporter
   const { data } = await apiGet<{ conversations: Array<{ id: string; metadata?: { reportTitle?: string } }> }>(
     request,
-    '/reports',
+    `/hubs/${workerHub}/reports`,
     reporter!.seedHex,
   )
   // Store for assertion
@@ -233,8 +237,8 @@ Then('{string} should not see {string}', async ({ world }, reporterName: string,
 
 Given(
   'a report exists with metadata category {string} and title {string}',
-  async ({ request, world }, category: string, title: string) => {
-    const report = await createReportViaApi(request, { title, category })
+  async ({ request, world, workerHub }, category: string, title: string) => {
+    const report = await createReportViaApi(request, { title, category, hubId: workerHub })
     getLifecycleState(world).reportId = report.id
     getLifecycleState(world).reportCategory = category
     getLifecycleState(world).reportTitle = title
@@ -243,32 +247,32 @@ Given(
 
 When(
   'the admin updates the lifecycle report status to {string}',
-  async ({ request, world }, newStatus: string) => {
+  async ({ request, world, workerHub }, newStatus: string) => {
     expect(getLifecycleState(world).reportId).toBeTruthy()
     if (newStatus === 'active') {
       // Need to assign first
       const vol = await createVolunteerViaApi(request, {
         name: `Metadata Vol ${Date.now()}`,
       })
-      await assignReportViaApi(request, getLifecycleState(world).reportId!, vol.pubkey)
+      await assignReportViaApi(request, getLifecycleState(world).reportId!, vol.pubkey, workerHub)
     } else {
-      await updateReportStatusViaApi(request, getLifecycleState(world).reportId!, newStatus)
+      await updateReportStatusViaApi(request, getLifecycleState(world).reportId!, newStatus, workerHub)
     }
   },
 )
 
-When('the report is fetched again', async ({ request, world }) => {
+When('the report is fetched again', async ({ request, world, workerHub }) => {
   expect(getLifecycleState(world).reportId).toBeTruthy()
   const { status, data } = await apiGet<Record<string, unknown>>(
     request,
-    `/reports/${getLifecycleState(world).reportId}`,
+    `/hubs/${workerHub}/reports/${getLifecycleState(world).reportId}`,
   )
   // If individual report GET is not available, list and find
   if (status === 200) {
     getLifecycleState(world).lastFetchedReport = data
   } else {
     // Fallback: list reports and find by ID
-    const list = await listReportsViaApi(request)
+    const list = await listReportsViaApi(request, { hubId: workerHub })
     const found = list.conversations.find(c => c.id === getLifecycleState(world).reportId)
     getLifecycleState(world).lastFetchedReport = found as unknown as Record<string, unknown>
   }

@@ -62,9 +62,17 @@ describe('MigrationGraph', () => {
   test("this repo's legacy snapshots read as one line ending at the newest", () => {
     const g = MigrationGraph.load(META)
     expect(g.problems).toEqual([])
-    expect(g.heads().map((h) => h.file)).toEqual([g.nodes.at(-1)?.file as string])
+    // Only the legacy snapshots are a line. Timestamped ones are concurrent by design (#2391): two
+    // migration PRs generated off the same head both land, and the next one generated joins them.
+    const legacy = g.nodes.filter((n) => n.kind === 'legacy')
+    const legacyTip = legacy.at(-1)?.file as string
+    expect(g.heads(new Set(legacy.map((n) => n.file))).map((h) => h.file)).toEqual([legacyTip])
     // 0032 and 0043 record prevIds that no snapshot has; read as a line, they are fine.
-    expect(g.nodes.every((n, i) => i === 0 || n.parents[0] === g.nodes[i - 1].file)).toBe(true)
+    expect(legacy.every((n, i) => i === 0 || n.parents[0] === legacy[i - 1].file)).toBe(true)
+    // …and every timestamped snapshot, whatever else it is concurrent with, grows from that line.
+    for (const n of g.nodes.filter((x) => x.kind === 'timestamped')) {
+      expect(g.ancestorsOf(n.file).has(legacyTip)).toBe(true)
+    }
   })
 
   test('two branches off one parent are two concurrent heads, merged', () => {

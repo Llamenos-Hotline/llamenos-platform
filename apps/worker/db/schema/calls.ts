@@ -22,12 +22,19 @@ export const activeCalls = pgTable(
   'active_calls',
   {
     callId: text('call_id').primaryKey(),
+    // Our own name for this call outside our systems (#2374). `call_id` is the telephony
+    // provider's identifier — a key into the provider's CDR, which holds the caller's number —
+    // so it must never reach APNs or ntfy. This is random, unrelated to `call_id`, and
+    // meaningless anywhere but here: the VoIP push carries it, and an authenticated client
+    // resolves it back to the call through the calls API.
+    // Nullable so the previous release, which inserts no ref, runs against this schema
+    // (expand/contract); a call it created has no push ref and simply cannot be matched to a push.
+    pushRef: text('push_ref').unique(),
     hubId: text('hub_id'),
     // The caller's number, sealed with SERVER_KEK and bound to `call_id`, held only so
     // the answering volunteer can ban a live caller without ever seeing the digits.
     // No hash of the number is kept. NULL once the call has ended or been archived.
     callerNumberSealed: text('caller_number_sealed'),
-    callerLast4: text('caller_last4'),
     answeredBy: text('answered_by'),
     status: text('status').notNull().default('ringing'),
     hasTranscription: boolean('has_transcription').default(false),
@@ -57,7 +64,6 @@ export const callRecords = pgTable(
   {
     callId: text('call_id').primaryKey(),
     hubId: text('hub_id'),
-    callerLast4: text('caller_last4'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
     endedAt: timestamp('ended_at', { withTimezone: true }),
     duration: integer('duration'),

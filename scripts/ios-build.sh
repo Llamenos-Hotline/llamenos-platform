@@ -11,7 +11,9 @@
 #   ./scripts/ios-build.sh all         # xcframework + build + test + uitest
 #
 # Environment:
-#   IOS_SIMULATOR   Simulator device name (default: auto-detected)
+#   IOS_SIMULATOR   Name of the dedicated simulator to create-or-reuse
+#                   (default: llamenos-dev-ios). Never pass an Xcode default
+#                   name here — see the note on find_simulator_udid.
 #   MAC_SSH_HOST    SSH host alias for the Mac when running from Linux (default: mac)
 #   MAC_PROJECT     Project root on the Mac (default: ~/projects/llamenos)
 
@@ -47,24 +49,69 @@ warn() { echo -e "${YELLOW}[ios]${NC} $*"; }
 err()  { echo -e "${RED}[ios]${NC} $*" >&2; }
 info() { echo -e "${BLUE}[ios]${NC} $*"; }
 
-# ─── Simulator detection ─────────────────────────────────────
+# ─── Simulator selection ─────────────────────────────────────
+#
+# Never a default-named device. Selecting by NAME ("the first available
+# iPhone", falling back to `iPhone 17`) makes xcodebuild adopt — or create —
+# an Xcode-default device that nothing owns and nothing reaps: on the CI Mac
+# one such device sat Shutdown for 61 hours holding 3.86 GiB and pushed the
+# host into its own disk floor (#1861). This script create-or-reuses ONE
+# dedicated device (default name `llamenos-dev-ios`), resolves it to a UDID,
+# and every destination below is `id=`-pinned to that UDID. The Mac's disk
+# guard reaps the device once it sits Shutdown past MAC_SIM_STALE_MAX_AGE_HOURS
+# (default 24h); the next run just creates it again.
 
-find_simulator() {
-  if [ -n "${IOS_SIMULATOR:-}" ]; then
-    echo "$IOS_SIMULATOR"
+DEV_SIM_NAME="${IOS_SIMULATOR:-llamenos-dev-ios}"
+
+find_simulator_udid() {
+  local udid runtime types type err
+  udid=$(xcrun simctl list devices available -j 2>/dev/null | python3 -c "
+import json, sys
+name = sys.argv[1]
+data = json.load(sys.stdin)
+for runtime, devices in data.get('devices', {}).items():
+    if 'iOS' not in runtime:
+        continue
+    for d in devices:
+        if d.get('isAvailable') and d.get('name') == name:
+            print(d['udid'])
+            sys.exit(0)
+" "$DEV_SIM_NAME") || true
+  if [ -n "$udid" ]; then
+    echo "$udid"
     return
   fi
-  xcrun simctl list devices available -j 2>/dev/null | python3 -c "
+
+  log "Creating dedicated simulator: $DEV_SIM_NAME"
+  runtime=$(xcrun simctl list runtimes -j | python3 -c "
 import json, sys
-data = json.load(sys.stdin)
-for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-    if 'iOS' in runtime:
-        for d in devices:
-            if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-                print(d['name'])
-                sys.exit(0)
-print('iPhone 17')
-" 2>/dev/null || echo "iPhone 17"
+rs = [r for r in json.load(sys.stdin)['runtimes']
+      if r.get('isAvailable') and r.get('platform') == 'iOS']
+if not rs: sys.exit('no available iOS runtime')
+print(sorted(rs, key=lambda r: r['version'], reverse=True)[0]['identifier'])
+")
+  # Iterate iPhone types newest-first until simctl accepts one: a hardcoded
+  # type newer than the installed runtime is listed but refused
+  # ("Incompatible device").
+  types=$(xcrun simctl list devicetypes -j | python3 -c "
+import json, sys
+ts = [t['identifier'] for t in json.load(sys.stdin)['devicetypes']
+      if t.get('name', '').startswith('iPhone')]
+if not ts: sys.exit('simctl lists no iPhone device types')
+for t in ts:
+    print(t)
+")
+  err="${TMPDIR:-/tmp}/ios-build-simctl-create.err"
+  for type in $types; do
+    if udid=$(xcrun simctl create "$DEV_SIM_NAME" "$type" "$runtime" 2>"$err"); then
+      log "Created simulator: $DEV_SIM_NAME ($udid)"
+      echo "$udid"
+      return
+    fi
+    warn "simctl refused $type on $runtime: $(tr '\n' ' ' < "$err")"
+  done
+  err "could not create an iPhone simulator on $runtime; simctl refused every iPhone device type"
+  return 1
 }
 
 # ─── Helpers ──────────────────────────────────────────────────
@@ -113,7 +160,7 @@ cmd_status() {
   xcrun simctl list devices available | grep -E "iPhone" | head -10
   echo ""
   echo "=== Selected Simulator ==="
-  echo "  $(find_simulator)"
+  echo "  $DEV_SIM_NAME ($(find_simulator_udid))"
 }
 
 cmd_setup() {
@@ -164,15 +211,15 @@ cmd_build() {
   log "Building iOS app..."
   ensure_xcodeproj
 
-  local sim_device
-  sim_device=$(find_simulator)
-  log "Using simulator: $sim_device"
+  local sim_udid
+  sim_udid=$(find_simulator_udid)
+  log "Using simulator: $DEV_SIM_NAME ($sim_udid)"
 
   cd "$IOS_DIR"
   xcodebuild build \
     -project Llamenos.xcodeproj \
     -scheme "$XCODE_SCHEME" \
-    -destination "platform=iOS Simulator,name=$sim_device" \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
     -quiet \
     2>&1
 
@@ -183,16 +230,16 @@ cmd_test() {
   log "Running iOS unit tests..."
   ensure_xcodeproj
 
-  local sim_device
-  sim_device=$(find_simulator)
-  log "Using simulator: $sim_device"
+  local sim_udid
+  sim_udid=$(find_simulator_udid)
+  log "Using simulator: $DEV_SIM_NAME ($sim_udid)"
 
   cd "$IOS_DIR"
   xcodebuild test \
     -project Llamenos.xcodeproj \
     -scheme "$XCODE_SCHEME" \
     -only-testing:LlamenosTests \
-    -destination "platform=iOS Simulator,name=$sim_device" \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
     2>&1 | filter_xcodebuild
 
   log "Unit tests complete."
@@ -202,9 +249,9 @@ cmd_uitest() {
   log "Running XCUITests on simulator (parallel, 4 workers)..."
   ensure_xcodeproj
 
-  local sim_device
-  sim_device=$(find_simulator)
-  log "Using simulator: $sim_device"
+  local sim_udid
+  sim_udid=$(find_simulator_udid)
+  log "Using simulator: $DEV_SIM_NAME ($sim_udid)"
 
   # Worker count: default 4 (Mac M4 has 4 performance + 4 efficiency cores).
   # Override with IOS_TEST_WORKERS env var.
@@ -258,7 +305,7 @@ cmd_uitest() {
     -scheme "$XCODE_SCHEME" \
     -configuration UITesting \
     -only-testing:LlamenosUITests \
-    -destination "platform=iOS Simulator,name=$sim_device" \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
     -parallel-testing-enabled YES \
     -parallel-testing-worker-count "$workers" \
     -resultBundlePath /tmp/llamenos-uitest.xcresult \
@@ -305,7 +352,7 @@ cmd_help() {
   echo "  all          xcframework + build + test + uitest"
   echo ""
   echo "Environment variables:"
-  echo "  IOS_SIMULATOR  Override simulator device name (default: auto-detected)"
+  echo "  IOS_SIMULATOR  Name of the dedicated simulator to create-or-reuse (default: llamenos-dev-ios)"
 }
 
 # ─── Main ─────────────────────────────────────────────────────

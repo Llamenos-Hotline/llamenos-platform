@@ -84,7 +84,7 @@ final class TriageViewModel {
 
     private func fetchReports() async {
         do {
-            var path = apiService.hp("/api/reports") + "?conversionEnabled=true&limit=50"
+            var path = try apiService.activeHubPath("/api/reports") + "?conversionEnabled=true&limit=50"
             if selectedFilter != .all {
                 path += "&conversionStatus=\(selectedFilter.rawValue)"
             }
@@ -95,7 +95,8 @@ final class TriageViewModel {
             reports = response.conversations
             total = Int(response.total)
         } catch {
-            if reports.isEmpty {
+            // No hub to browse is an empty queue, not a failure
+            if reports.isEmpty && !APIError.isNoHub(error) {
                 errorMessage = error.localizedDescription
             }
         }

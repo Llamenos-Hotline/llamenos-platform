@@ -23,6 +23,7 @@ import { CryptoKeysService } from './crypto-keys'
 import { FirehoseService } from './firehose'
 import { FirehoseAgentService } from './firehose-agent'
 import { SignalContactsService } from './signal-contacts'
+import { SignalIdentityService } from '../messaging/signal/identity'
 import { SecurityPrefsService } from './security-prefs'
 import { UserNotificationsService } from './user-notifications'
 import { DigestCronService } from './digest-cron'
@@ -69,6 +70,8 @@ export interface Services {
   firehose: FirehoseService
   firehoseAgent?: FirehoseAgentService
   signalContacts: SignalContactsService
+  /** Signal identity-trust records; built here so every consumer shares the one verified db (#2447). */
+  signalIdentity: SignalIdentityService
   securityPrefs: SecurityPrefsService
   userNotifications: UserNotificationsService
   digestCron: DigestCronService
@@ -185,6 +188,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     cryptoKeys: new CryptoKeysService(db),
     firehose,
     signalContacts,
+    signalIdentity: new SignalIdentityService(db),
     securityPrefs,
     userNotifications,
     digestCron,

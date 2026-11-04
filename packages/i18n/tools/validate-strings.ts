@@ -22,6 +22,7 @@ import {
   classifyLocale,
   loadDeferralRecord,
 } from './deferral'
+import { readSameAsEn } from './untranslated'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -424,9 +425,12 @@ function validateLocaleCompleteness(): number {
   }
 
   const localeFlats = new Map<string, Record<string, string>>()
+  const sameAsEn = new Map<string, ReadonlySet<string>>()
   for (const file of localeFiles) {
     const locale = file.replace(/\.json$/, '')
-    localeFlats.set(locale, flattenKeysDotted(JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))))
+    const data = JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf-8'))
+    localeFlats.set(locale, flattenKeysDotted(data))
+    sameAsEn.set(locale, readSameAsEn(locale, data).keys)
   }
 
   const hygieneErrors = checkRecordHygiene(
@@ -442,7 +446,7 @@ function validateLocaleCompleteness(): number {
   let totalUnrecorded = 0
   let totalStale = 0
   for (const [locale, flat] of [...localeFlats.entries()].sort()) {
-    const c = classifyLocale(enFlat, flat, parsedRecord.record.get(locale) ?? new Set())
+    const c = classifyLocale(enFlat, flat, parsedRecord.record.get(locale) ?? new Set(), sameAsEn.get(locale))
     totalMissing += c.missing.length
     totalUnrecorded += c.unrecordedEnglish.length
     totalStale += c.staleDeferral.length

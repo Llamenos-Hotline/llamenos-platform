@@ -209,6 +209,12 @@ final class AppState {
             try? authService.setHubURL(hubURL)
         }
 
+        // A registering launch is not usable until the server knows this device, so it
+        // stays locked (login / PIN screen) and `finishTestRegistration` unlocks it when
+        // the registration lands. Unlocking here would put the main tab view on screen —
+        // the signal a test waits on — before the identity or the active hub exist.
+        let registering = args.contains("--test-register")
+
         if args.contains("--test-authenticated") {
             if args.contains("--test-volunteer-identity") {
                 // Use a separate volunteer keypair (NOT the admin key)
@@ -217,33 +223,48 @@ final class AppState {
                 // Default: a fresh device key per launch; --test-register makes it an admin.
                 cryptoService.setMockIdentity()
             }
-            isLocked = false
+            isLocked = registering
         }
 
         if args.contains("--test-admin") {
             userRole = .admin
         }
 
-        // Register identity with server (must come after keypair + hub URL)
-        if args.contains("--test-register") && cryptoService.isUnlocked {
+        // Register identity with server (must come after keypair + hub URL). Asynchronous:
+        // this runs inside AppState.init on the main actor, so the requests must suspend
+        // rather than block — see `registerTestIdentity`.
+        if registering && cryptoService.isUnlocked {
             let hubId = args.firstIndex(of: "--test-hub-id")
                 .flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
                 .flatMap { $0.isEmpty ? nil : $0 }
-            registerTestIdentity(asAdmin: !args.contains("--test-volunteer-identity"), hubId: hubId)
-            // --test-no-active-hub undoes the harness's setActiveHub so a test can
-            // prove the SESSION loads membership: with #1720's loader removed the
-            // active hub stays nil and hub-scoped actions refuse to run.
-            if args.contains("--test-no-active-hub") {
-                hubContext.clearActiveHub()
+            let asAdmin = !args.contains("--test-volunteer-identity")
+            let keepNoActiveHub = args.contains("--test-no-active-hub")
+            Task { [weak self] in
+                await self?.registerTestIdentity(asAdmin: asAdmin, hubId: hubId)
+                self?.finishTestRegistration(keepNoActiveHub: keepNoActiveHub)
             }
-            // After successful registration, connect WebSocket and fetch role
-            // so the dashboard shows "Connected" and the correct user role.
-            connectWebSocketIfConfigured()
-            fetchUserRole()
-            // The harness stands in for unlock: the session is usable from this
-            // point, so membership loads here exactly as it does in didUnlock.
-            loadMemberHubs()
         }
+    }
+
+    /// The registration landed: the session is usable from this point, so unlock it and
+    /// start the session work exactly as `didUnlock` does. Unlocking is what puts the main
+    /// tab view on screen, so it is the readiness signal a UI test waits on.
+    private func finishTestRegistration(keepNoActiveHub: Bool) {
+        // --test-no-active-hub undoes the harness's setActiveHub so a test can
+        // prove the SESSION loads membership: with #1720's loader removed the
+        // active hub stays nil and hub-scoped actions refuse to run.
+        if keepNoActiveHub {
+            hubContext.clearActiveHub()
+        }
+        isLocked = false
+        resolveAuthStatus()
+        // After successful registration, connect WebSocket and fetch role
+        // so the dashboard shows "Connected" and the correct user role.
+        connectWebSocketIfConfigured()
+        fetchUserRole()
+        // The harness stands in for unlock: the session is usable from this
+        // point, so membership loads here exactly as it does in didUnlock.
+        loadMemberHubs()
     }
 
     /// Register this launch's device identity with the test server the way an admin
@@ -262,7 +283,12 @@ final class AppState {
     ///
     /// A registration failure is fatal: an unregistered app would turn every
     /// assertion after it into an assertion about a 401 error state.
-    private func registerTestIdentity(asAdmin: Bool, hubId: String?) {
+    ///
+    /// `async` so a slow server (a cold first launch on a hosted shard has taken 36s to
+    /// answer) leaves the main thread free. It used to wait on a semaphore from
+    /// `AppState.init`, which froze the process before it could draw — XCUITest's launch
+    /// then timed out snapshotting an app that never became idle.
+    private func registerTestIdentity(asAdmin: Bool, hubId: String?) async {
         guard let baseURL = apiService.baseURL else {
             fatalError("UI_TESTING: --test-register requires --test-hub-url")
         }
@@ -274,7 +300,7 @@ final class AppState {
             fatalError("UI_TESTING: --test-register requires XCTEST_ADMIN_SECRET in the launch environment")
         }
 
-        sendAsTestAdmin(
+        await sendAsTestAdmin(
             baseURL: baseURL,
             adminSecretHex: adminSecretHex,
             path: "/api/users",
@@ -287,7 +313,7 @@ final class AppState {
         )
 
         if let hubId {
-            sendAsTestAdmin(
+            await sendAsTestAdmin(
                 baseURL: baseURL,
                 adminSecretHex: adminSecretHex,
                 path: "/api/hubs/\(hubId)/members",
@@ -300,12 +326,12 @@ final class AppState {
         }
     }
 
-    /// POST `body` to `path`, signed as the test admin. Blocks (max 60s, the budget
-    /// BaseUITest gives class-hub creation) — test setup only, before any view exists.
+    /// POST `body` to `path`, signed as the test admin. Suspends (max 60s, the budget
+    /// BaseUITest gives class-hub creation) — test setup only.
     /// On a shard's first, cold launch the request has taken 36s to reach the server
     /// (run 36364790578: sent 01:22:50, timed out client-side at 30s, logged by the
     /// server at 01:23:26 and answered in 2.7s). Any non-2xx outcome is fatal (see above).
-    private func sendAsTestAdmin(baseURL: URL, adminSecretHex: String, path: String, body: [String: Any]) {
+    private func sendAsTestAdmin(baseURL: URL, adminSecretHex: String, path: String, body: [String: Any]) async {
         let token: AuthToken
         do {
             token = try CryptoService.createAuthTokenStatic(secretHex: adminSecretHex, method: "POST", path: path)
@@ -327,19 +353,19 @@ final class AppState {
         request.setValue("Bearer \(String(decoding: authJSON, as: UTF8.self))", forHTTPHeaderField: "Authorization")
         request.httpBody = bodyJSON
 
-        var outcome = "timed out after 60s"
-        let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            defer { sem.signal() }
-            if let error {
-                outcome = error.localizedDescription
+        let outcome: String
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                outcome = "ok"
             } else if let http = response as? HTTPURLResponse {
-                outcome = (200...299).contains(http.statusCode)
-                    ? "ok"
-                    : "HTTP \(http.statusCode) \(String(decoding: data ?? Data(), as: UTF8.self))"
+                outcome = "HTTP \(http.statusCode) \(String(decoding: data, as: UTF8.self))"
+            } else {
+                outcome = "no HTTP response"
             }
-        }.resume()
-        _ = sem.wait(timeout: .now() + 62)
+        } catch {
+            outcome = error.localizedDescription
+        }
         if outcome != "ok" {
             fatalError("UI_TESTING: registering the test identity failed at POST \(path): \(outcome)")
         }

@@ -381,7 +381,6 @@ Server nsec (secp256k1) — SERVER IDENTITY ONLY
    ▼
 2. Server extracts minimal info:
    • callId (generated)
-   • callerLast4 (masked)
    • timestamp
    │
    ▼
@@ -389,7 +388,7 @@ Server nsec (secp256k1) — SERVER IDENTITY ONLY
    Event {
      kind: 20001,  // Ephemeral — relay forwards, never stores
      tags: [["d", hubId], ["t", "llamenos:event"]],  // Generic tag
-     content: XChaCha20(hubKey, {type: "call:ring", callId, callerLast4}),
+     content: XChaCha20(hubKey, {type: "call:ring", callId}),
      pubkey: serverPubkey  // Server signs with its own nsec
    }
    │

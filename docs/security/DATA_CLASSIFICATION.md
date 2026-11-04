@@ -71,7 +71,7 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 | `duration` | Plaintext | Indefinite | Call duration in seconds |
 | `answeredBy` | Plaintext | Indefinite | User pubkey who answered |
 | `callerHash` | Hashed (HMAC-SHA256) | Indefinite | Caller phone hash (irreversible) |
-| `callerLast4` | Plaintext | Indefinite | Last 4 digits of caller number |
+| _(no fragment of the caller's number)_ | — | — | No last-four digits, no prefix, no hash is stored beside a call record (#2262, D2). Migration `scrub_caller_last4` erased every stored value and the code no longer declares `caller_last4`; the empty columns are dropped by the contract migration one release later (expand/contract), and until then a trigger discards anything a previous-release pod writes there. |
 | `hasTranscription` | Plaintext | Indefinite | Boolean flag |
 | `hasVoicemail` | Plaintext | Indefinite | Boolean flag |
 | `notes[].encryptedContent` | **E2EE** | Indefinite | AES-256-GCM ciphertext (via HPKE) |
@@ -91,7 +91,7 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 |-------|---------------|-----------|-------|
 | `encryptedMetadata` | **E2EE** | Indefinite | AES-256-GCM ciphertext (answeredBy, callerNumber) |
 | `metadataEnvelopes[]` | **E2EE** | Indefinite | HPKE-wrapped metadata key (label: `LABEL_CALL_META`) |
-| `callerLast4`, `startedAt`, etc. | Plaintext | Indefinite | Routing-required fields |
+| `startedAt`, `endedAt`, `duration`, etc. | Plaintext | Indefinite | Routing-required fields. Never any part of the caller's number. |
 
 #### Shift Schedules
 
@@ -492,11 +492,10 @@ flowchart LR
     subgraph ServerSteps[" " ]
         direction TB
         S1["1. Webhook received (full phone in body)"]
-        S2["2. Extract last 4 digits: callerLast4 = '1234'"]
-        S3["3. Hash full number: HMAC-SHA256(secret, 'llamenos:phone:' + fullPhone)"]
-        S4["4. Check ban list (hash comparison)"]
-        S5["5. Store: hash + last4 | Discard: full number"]
-        S6["6. WebSocket event: callerLast4 only (hub-key encrypted)"]
+        S2["2. Check ban list (keyed per-hub hash comparison)"]
+        S3["3. Seal full number under SERVER_KEK, bound to the call | Keep no hash and no digits"]
+        S4["4. WebSocket event: callId only (hub-key encrypted); VoIP push: call id + hub id"]
+        S5["5. Call ends: number moves into the admin envelope; sealed copy deleted"]
     end
 
     Server --> ServerSteps

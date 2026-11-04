@@ -192,10 +192,10 @@ Given('a test invite exists', async ({ request, world, workerHub }) => {
     ?? (d?.invite as Record<string, unknown>)?.code as string
 })
 
-Given('a test note exists', async ({ request, world }) => {
+Given('a test note exists', async ({ request, world, workerHub }) => {
   if (!getPermMatrixState(world).testNoteId) {
     // Create a note as admin (super-admin has notes:* via wildcard)
-    const { data, status } = await apiPost<{ note?: { id?: string } }>(request, '/notes', await validNoteBody(request))
+    const { data, status } = await apiPost<{ note?: { id?: string } }>(request, `/hubs/${workerHub}/notes`, await validNoteBody(request, ADMIN_SEED, { hubId: workerHub }))
     if (status === 200 || status === 201) {
       getPermMatrixState(world).testNoteId = data.note?.id
     }
@@ -315,24 +315,24 @@ When('the {string} user sends {string} to the test ban endpoint', async ({ reque
   )
 })
 
-When('the {string} user sends {string} to {string} with valid note body', async ({ request, world }, role: string, _method: string, _path: string) => {
+When('the {string} user sends {string} to {string} with valid note body', async ({ request, world, workerHub }, role: string, _method: string, _path: string) => {
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
   getSharedState(world).lastResponse = await apiPost(
     request,
-    '/notes',
-    await validNoteBody(request, user.deviceKey),
+    `/hubs/${workerHub}/notes`,
+    await validNoteBody(request, user.deviceKey, { hubId: workerHub }),
     user.deviceKey,
   )
 })
 
-When('the {string} user sends {string} to the test note reply endpoint with reply body', async ({ request, world }, role: string, _method: string) => {
+When('the {string} user sends {string} to the test note reply endpoint with reply body', async ({ request, world, workerHub }, role: string, _method: string) => {
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
   const { encryptedContent, envelopes } = await encryptForTest('pm-test-reply', [user.deviceKey, ADMIN_SEED])
-  getSharedState(world).lastResponse = await apiPost(request, `/notes/${getPermMatrixState(world).testNoteId}/replies`, {
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${workerHub}/notes/${getPermMatrixState(world).testNoteId}/replies`, {
     encryptedContent,
     readerEnvelopes: envelopes,
   }, user.deviceKey)
@@ -483,13 +483,13 @@ When('the {string} user sends {string} to {string} with valid hub body', async (
   }, user.deviceKey)
 })
 
-When('the {string} user sends {string} to {string} with valid report body', async ({ request, world }, role: string, _method: string, _path: string) => {
+When('the {string} user sends {string} to {string} with valid report body', async ({ request, world, workerHub }, role: string, _method: string, _path: string) => {
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
   // Sealed to the reporter AND the admin, as the real report form does (#2113).
   const { encryptedContent, envelopes } = await encryptForTest('pm-test-report', [user.deviceKey, ADMIN_SEED])
-  getSharedState(world).lastResponse = await apiPost(request, '/reports', {
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${workerHub}/reports`, {
     title: uniqueName('PM Report'),
     category: 'general',
     encryptedContent,

@@ -24,6 +24,7 @@ export const auditEntryResponseSchema = z.object({
 })
 
 export type AuditLogEntry = z.infer<typeof auditEntryResponseSchema>
+export type ListAuditQuery = z.input<typeof listAuditQuerySchema>
 
 // --- List response schema ---
 

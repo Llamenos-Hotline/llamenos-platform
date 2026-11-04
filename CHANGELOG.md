@@ -404,6 +404,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.2 (2026-11-03)
+
+### Features
+
+- hub reader sets — readersFor(hub, purpose) + per-hub escrow key; global admin key leaves the reader set (M1-D1 step 1) (#2307)
+
+### Fixes
+
+- the VoIP push names a call by an opaque reference, never the provider's call id (#2374) (#2382)
+
 ## 0.21.1 (2026-11-01)
 
 ### Features

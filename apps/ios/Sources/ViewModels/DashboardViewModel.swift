@@ -504,7 +504,7 @@ final class DashboardViewModel {
         do {
             let response: NotesListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/notes") + "?page=1&limit=3"
+                path: apiService.activeHubPath("/api/notes") + "?page=1&limit=3"
             )
 
             recentNoteCount = response.total
@@ -512,10 +512,8 @@ final class DashboardViewModel {
             // Decrypt the recent notes for preview using HPKE envelopes
             recentNotes = response.notes.prefix(3).compactMap(decryptRecentNote)
         } catch {
-            if case APIError.noBaseURL = error {
-                // Expected when hub isn't configured yet
-            }
-            // Don't overwrite shift error
+            // Expected with no hub to browse (`APIError.isNoHub`); otherwise
+            // don't overwrite the shift error either
         }
     }
 

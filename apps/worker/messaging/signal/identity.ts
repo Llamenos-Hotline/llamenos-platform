@@ -20,6 +20,7 @@ import { signalIdentities } from '../../db/schema'
 import type { SignalConfig, SignalTrustMode } from '@shared/types'
 import { createLogger } from '../../lib/logger'
 import { safeFetch } from '../../lib/safe-fetch'
+import { assertDatabase } from '../../lib/assert-database'
 
 const logger = createLogger('signal-identity')
 
@@ -48,9 +49,13 @@ export interface IdentityKeyChangeEvent {
 }
 
 export class SignalIdentityService {
-  constructor(
-    private readonly db: Database,
-  ) {}
+  private readonly db: Database
+
+  constructor(db: Database) {
+    // An opt-out reads this service (router.subscriberHashesFor): a stand-in
+    // db must fail here, not as a TypeError inside a subscriber's STOP (#2447).
+    this.db = assertDatabase(db, 'SignalIdentityService')
+  }
 
   /**
    * Record or update an identity from a Signal webhook.

@@ -37,11 +37,19 @@
 # This host is also somebody's development machine. Everything removed here is
 # created by CI and identifiable as CI's by name:
 #
-#   * simulator devices named `ios-e2e-*` (this workflow's own naming scheme)
-#     older than MAC_SIM_MAX_AGE_MIN,
+#   * simulator devices named `ios-e2e-*` or `ios-build-test-*` (the naming
+#     schemes of the two CI jobs that create devices) older than
+#     MAC_SIM_MAX_AGE_MIN,
 #   * runner agent `_diag` logs older than MAC_DIAG_MAX_AGE_DAYS,
 #   * CoreSimulator caches and machine-generated CoreSimulator logs,
-#   * simulator devices the installed Xcode reports as unavailable.
+#   * simulator devices the installed Xcode reports as unavailable,
+#   * ANY simulator device that has been Shutdown and untouched for longer
+#     than MAC_SIM_STALE_MAX_AGE_HOURS (default 24), whatever its name
+#     (#1861). A device idle for a day on a dedicated CI host is a leftover,
+#     not a fixture: the one that triggered #1861 was Xcode's default
+#     `iPhone 17`, 61 hours idle and 3.86 GiB, created by a destination
+#     selected by NAME and owned by nothing. Booted devices are still never
+#     touched — a booted device is a live process tree somebody is using.
 #
 # Deliberately NOT touched, each for a measured reason:
 #
@@ -51,10 +59,10 @@
 #     WorkspacePath. Only entries whose workspace is gone and whose directory
 #     has been idle for at least 60 minutes are reclaimed; live, recent, and
 #     uninspectable entries are retained and reported.
-#   * simulator devices NOT named `ios-e2e-*` — see the device report this
-#     script prints. Some are Xcode's defaults, one is hand-made for a specific
-#     PR. `report` surfaces the fat ones and what reclaiming them would cost;
-#     the decision is the operator's, not this script's.
+#   * simulator devices not covered by the rules above — a booted device, or
+#     a Shutdown one younger than MAC_SIM_STALE_MAX_AGE_HOURS. `report`
+#     surfaces the fat ones and what reclaiming them would cost; the decision
+#     for those is the operator's, not this script's.
 #   * anything under the operator's home directories (see DENY below).
 #   * swap. 8 GiB of `/System/Volumes/VM/swapfile*` lives on the same volume
 #     and grew by 3 GiB during the incident. macOS allocates those on demand
@@ -134,6 +142,13 @@ WARN_FREE_GIB="${MAC_DISK_WARN_FREE_GIB:-16}"
 # using it; 120 minutes is ~1.8x that cap. (The teardown step this backs up
 # used 360, which left a leak sitting on the volume for six hours.)
 SIM_MAX_AGE_MIN="${MAC_SIM_MAX_AGE_MIN:-120}"
+# The catch-all for devices NOTHING in CI owns (#1861): any device — an Xcode
+# default like `iPhone 17`, a hand-made fixture, anything — that has been
+# Shutdown and untouched for this long is a leftover, never a fixture worth
+# keeping, and reclaim deletes it. The fast path above still reaps CI-named
+# devices at 120 minutes; this longer window is only for names the script
+# cannot prove are CI's. Booted devices are exempt whatever their age.
+STALE_SIM_MAX_AGE_HOURS="${MAC_SIM_STALE_MAX_AGE_HOURS:-24}"
 # Measured on this host: 594 agent logs, none older than 7 days, 517 MiB
 # across the two serving runners and nothing prunes them. The forensic window
 # matters here more than the bytes — #1665 was diagnosed FROM _diag, because
@@ -272,7 +287,7 @@ prune() {
   local rc=0
   rm_ci_path "$1" || rc=$?
   case "$rc" in
-    0) log "  $2" ;;
+    0) log "  $2"; deleted_any=1 ;;
     2) : ;;
     *) exit 1 ;;
   esac
@@ -356,15 +371,16 @@ report() {
 # ── reclaim ─────────────────────────────────────────────────────────────────
 
 reclaim() {
-  local before after freed
+  local before after freed deleted_any=0
   before="$(free_kib)"
 
   log "── reclaim ──"
 
-  # 1. Simulator devices this workflow created and never deleted, because the
-  #    job that owned them was cancelled or its agent crashed. Named by this
-  #    workflow (`ios-e2e-<run>-<attempt>-shard<n>`) AND older than any job
-  #    cap, so a live shard's device can never match.
+  # 1. Simulator devices CI created and never deleted, because the job that
+  #    owned them was cancelled or its agent crashed. Named by a CI job
+  #    (`ios-e2e-<run>-<attempt>-shard<n>` from the ui shards, or
+  #    `ios-build-test-<run>-<attempt>` from ios-build-test) AND older than
+  #    any job cap, so a live job's device can never match.
   if [ -d "$SIM_DEVICES" ]; then
     local dir udid name
     while IFS= read -r dir; do
@@ -372,7 +388,7 @@ reclaim() {
       udid="$(basename "$dir")"
       name="$(/usr/libexec/PlistBuddy -c 'Print :name' "$dir/device.plist" 2>/dev/null || echo '')"
       case "$name" in
-        ios-e2e-*)
+        ios-e2e-*|ios-build-test-*)
           # Shut down first: a device leaked by a crashed agent is still a
           # running launchd_sim tree holding RAM on a 16 GiB host, and the swap
           # that costs lives on the volume we are trying to free. `delete`
@@ -382,12 +398,54 @@ reclaim() {
           # removal is the fallback for a device simctl no longer knows about.
           if xcrun simctl delete "$udid" >/dev/null 2>&1; then
             log "  shut down and deleted leaked CI simulator: $name ($udid)"
+            deleted_any=1
           else
             prune "$dir" "removed orphaned CI simulator directory: $name ($udid)"
+            deleted_any=1
           fi
           ;;
       esac
     done < <(find "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+${SIM_MAX_AGE_MIN}" \
+               -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)
+  fi
+
+  # 1b. The #1861 gap: devices NOTHING in CI owns. A destination selected by
+  #     name (`-destination 'platform=iOS Simulator,name=iPhone 17'`) uses or
+  #     creates an Xcode-default device that no job names, no teardown
+  #     deletes, and the pass above cannot match — the one that triggered
+  #     #1861 sat Shutdown for 61 hours holding 3.86 GiB while this script
+  #     reported "nothing CI-owned left to reclaim". Any device Shutdown and
+  #     untouched past MAC_SIM_STALE_MAX_AGE_HOURS is a leftover regardless of
+  #     name. Booted devices are exempt at any age: booted means a live
+  #     launchd_sim tree somebody is using right now.
+  if [ -d "$SIM_DEVICES" ]; then
+    local dir udid name booted_list stale_min
+    stale_min=$(( STALE_SIM_MAX_AGE_HOURS * 60 ))
+    booted_list="$(xcrun simctl list devices booted 2>/dev/null || true)"
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      udid="$(basename "$dir")"
+      name="$(/usr/libexec/PlistBuddy -c 'Print :name' "$dir/device.plist" 2>/dev/null || echo '')"
+      case "$name" in
+        # Handled by the faster pass above; whatever survived it is younger
+        # than the stale window by construction.
+        ios-e2e-*|ios-build-test-*) continue ;;
+      esac
+      case "$booted_list" in
+        *"$udid"*)
+          log "  retained stale simulator (BOOTED — in use, never reclaimed): $name ($udid)"
+          continue
+          ;;
+      esac
+      if xcrun simctl delete "$udid" >/dev/null 2>&1; then
+        log "  deleted stale Shutdown simulator: $name ($udid, idle > ${STALE_SIM_MAX_AGE_HOURS}h)"
+        deleted_any=1
+      else
+        # simctl no longer knows the device; the directory is an orphan.
+        prune "$dir" "removed orphaned stale simulator directory: $name ($udid)"
+        deleted_any=1
+      fi
+    done < <(find "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+${stale_min}" \
                -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)
   fi
 
@@ -423,15 +481,30 @@ reclaim() {
   #    parent, so the name pattern and age bound are the proof instead.
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    rm -f "$p" && log "  pruned stale runner log: ${p#"$HOME"/}"
+    rm -f "$p" && { log "  pruned stale runner log: ${p#"$HOME"/}"; deleted_any=1; }
   done < <(find "$HOME"/actions-runner-*/_diag -maxdepth 1 -type f \
              \( -name '*.log' -o -name '*.log.*' \) -mtime "+${DIAG_MAX_AGE_DAYS}" \
              -print 2>/dev/null || true)
+
+  # APFS reclaims asynchronously (#1861): `df` read immediately after
+  # `simctl delete` still reports the OLD figure, so a reclaim that measures
+  # itself straight away concludes it freed nothing — and `guard`'s gate then
+  # refuses on the stale number even though GiBs were just deleted. Give the
+  # filesystem a moment to catch up before either consumer reads free space.
+  if [ "$deleted_any" -gt 0 ]; then
+    sleep "${MAC_DISK_RECLAIM_SETTLE_SEC:-10}"
+  fi
 
   after="$(free_kib)"
   freed=$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')
   if awk -v f="$freed" 'BEGIN { exit !(f > 0) }'; then
     log "  reclaimed ${freed} GiB (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
+  elif [ "$deleted_any" -gt 0 ]; then
+    # Deletions DID happen; the flat delta is the APFS lag above (or other
+    # activity on this shared host consumed the space as fast as we freed
+    # it). Saying "nothing left to reclaim" here is how #1861's report read
+    # while a 3.86 GiB device sat deleted-but-unmeasured.
+    log "  deletions issued; df shows no delta yet — APFS reclaims asynchronously, the space appears on a later read (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
   else
     # Free space is a live number on a shared host; a non-positive delta means
     # there was nothing of CI's left to take, not that reclaim failed.
@@ -482,6 +555,7 @@ reclaim_derived_data() {
       0)
         after="$(df_available_kib "$data_root")"
         freed="$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')"
+        deleted_any=1
         log "  removed orphaned DerivedData $(basename "$dir") (WorkspacePath missing; ${age_min} min old); df available: $(awk -v k="$before" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after" 'BEGIN{printf "%.2f", k/1048576}') GiB (delta ${freed} GiB)"
         ;;
       2) : ;;
@@ -503,9 +577,11 @@ The reclaim above already removed everything this script can prove is CI's.
 What is left needs a human, because it is not CI's to delete. In rough order
 of size on this host, and read the script header before touching any of them:
 
-  * simulator devices not named ios-e2e-* (the report above lists them with
-    sizes). 'xcrun simctl erase <udid>' reclaims a device's data without
-    deleting the device, which is usually what you want for an Xcode default.
+  * simulator devices that are booted, or Shutdown but younger than
+    ${STALE_SIM_MAX_AGE_HOURS}h (the report above lists every device with
+    sizes; the stale ones are already reclaimed by the pass above).
+    'xcrun simctl erase <udid>' reclaims a device's data without deleting
+    the device, which is usually what you want for an Xcode default.
   * ~/Library/Developer/Xcode/DerivedData — the operator's incremental build
     state, NOT CI's. Reclaim removes only entries whose info.plist names a
     WorkspacePath that no longer exists and whose directory is at least 60

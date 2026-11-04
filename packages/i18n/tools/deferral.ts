@@ -140,17 +140,25 @@ export interface LocaleClassification {
   staleDeferral: string[]
 }
 
-/** Classify every en key for one locale. All key sets are dotted en.json paths. */
+/**
+ * Classify every en key for one locale. All key sets are dotted en.json paths.
+ * `sameAsEn` is the locale's `_same_as_en` marker (see untranslated.ts): an
+ * English-identical value it lists is a verified-correct translation, so it
+ * counts as translated and needs no deferral entry.
+ */
 export function classifyLocale(
   enFlat: Record<string, string>,
   localeFlat: Record<string, string>,
-  deferredKeys: ReadonlySet<string>
+  deferredKeys: ReadonlySet<string>,
+  sameAsEn: ReadonlySet<string> = new Set()
 ): LocaleClassification {
   const c: LocaleClassification = { missing: [], translated: [], deferred: [], unrecordedEnglish: [], staleDeferral: [] }
   for (const [key, enValue] of Object.entries(enFlat)) {
     const value = localeFlat[key]
     if (value === undefined) {
       c.missing.push(key)
+    } else if (value === enValue && sameAsEn.has(key)) {
+      c.translated.push(key)
     } else if (value === enValue) {
       if (deferredKeys.has(key)) c.deferred.push(key)
       else c.unrecordedEnglish.push(key)

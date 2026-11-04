@@ -410,7 +410,8 @@ final class ScreenshotAuditTests: BaseUITest {
         let link = scrollToVisible("admin-bans", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
-        sleep(2)
+        // Wait for the destination to settle; a timeout still photographs it (nothing is asserted here).
+        _ = anyElementExists(["ban-list", "bans-empty-state"], timeout: Self.eventBackstop)
         screenshot("15d-admin-ban-list")
     }
 
@@ -420,7 +421,8 @@ final class ScreenshotAuditTests: BaseUITest {
         let link = scrollToVisible("admin-audit-log", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
-        sleep(2)
+        // Wait for the destination to settle; a timeout still photographs it (nothing is asserted here).
+        _ = anyElementExists(["audit-log-list", "audit-empty-state"], timeout: Self.eventBackstop)
         screenshot("15e-admin-audit-log")
     }
 
@@ -430,7 +432,8 @@ final class ScreenshotAuditTests: BaseUITest {
         let link = scrollToVisible("admin-invites", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
-        sleep(2)
+        // Wait for the destination to settle; a timeout still photographs it (nothing is asserted here).
+        _ = anyElementExists(["invites-list", "invites-empty-state"], timeout: Self.eventBackstop)
         screenshot("15f-admin-invites")
     }
 
@@ -450,7 +453,8 @@ final class ScreenshotAuditTests: BaseUITest {
         let link = scrollToVisible("admin-schema-browser", maxSwipes: 3)
         guard link.exists && link.isHittable else { return }
         link.tap()
-        sleep(2)
+        // Wait for the destination to settle; a timeout still photographs it (nothing is asserted here).
+        _ = anyElementExists(["schema-browser-list", "schema-browser-empty"], timeout: Self.eventBackstop)
         screenshot("15h-admin-schema-browser")
     }
 
@@ -500,7 +504,8 @@ final class ScreenshotAuditTests: BaseUITest {
         let link = scrollToVisible("admin-report-categories", maxSwipes: 5)
         guard link.exists && link.isHittable else { return }
         link.tap()
-        sleep(2)
+        // Wait for the destination to settle; a timeout still photographs it (nothing is asserted here).
+        _ = anyElementExists(["report-categories-list", "categories-empty-state"], timeout: Self.eventBackstop)
         screenshot("15m-admin-report-categories")
     }
 

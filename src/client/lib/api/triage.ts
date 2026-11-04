@@ -1,4 +1,4 @@
-import { request, hp } from './client'
+import { request, activeHubPath } from './client'
 import type { ConversionStatus, Report } from './reports'
 import { createRecord } from './records'
 import type { CreateRecordBody } from '@protocol/schemas/records'
@@ -10,18 +10,18 @@ export async function listTriageQueue(params?: { conversionStatus?: ConversionSt
   if (params?.conversionStatus) qs.set('conversionStatus', params.conversionStatus)
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ conversations: Report[]; total: number }>(hp(`/reports?${qs}`))
+  return request<{ conversations: Report[]; total: number }>(activeHubPath(`/reports?${qs}`))
 }
 
 export async function updateReportConversionStatus(reportId: string, conversionStatus: ConversionStatus) {
-  return request<Report>(hp(`/reports/${reportId}`), {
+  return request<Report>(activeHubPath(`/reports/${reportId}`), {
     method: 'PATCH',
     body: JSON.stringify({ conversionStatus }),
   })
 }
 
 export async function getLinkedCasesForReport(reportId: string) {
-  return request<{ records: Array<{ reportId: string; caseId: string; linkedAt: string; linkedBy: string }>; total: number }>(hp(`/reports/${reportId}/records`))
+  return request<{ records: Array<{ reportId: string; caseId: string; linkedAt: string; linkedBy: string }>; total: number }>(activeHubPath(`/reports/${reportId}/records`))
 }
 
 export async function createCaseFromReport(
@@ -30,7 +30,7 @@ export async function createCaseFromReport(
 ) {
   const record = await createRecord(recordBody)
   // Link the newly-created case to the report
-  await request(hp(`/reports/${reportId}/records`), {
+  await request(activeHubPath(`/reports/${reportId}/records`), {
     method: 'POST',
     body: JSON.stringify({ caseId: record.id }),
   })

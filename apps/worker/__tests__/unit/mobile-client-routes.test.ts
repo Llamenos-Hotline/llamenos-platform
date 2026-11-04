@@ -125,16 +125,24 @@ function sourceFiles(dir: string, extension: string): string[] {
 
 /**
  * iOS: `APIService.request(method: "PATCH", path: "/api/settings/spam", ...)`,
- * with the path optionally wrapped in `hp(...)` for the hub-scoped form.
+ * with the path optionally wrapped in `hp(...)`, or in `activeHubPath(...)` for
+ * a hub-owned resource that has no unscoped route (#2395).
  */
-const SWIFT_CALL = /method:\s*"([A-Z]+)"\s*,\s*path:\s*(?:hp\()?"([^"]*)"/g
+const SWIFT_CALL = /method:\s*"([A-Z]+)"\s*,\s*path:\s*(?:hp\(|(?:apiService\.)?(activeHubPath)\()?"([^"]*)"/g
 
 /**
  * Android: `apiService.request<T>("PATCH", "/api/settings/spam", body)` and
  * `requestNoContent("POST", hubPath("/api/shifts"), body)`.
  */
 const KOTLIN_CALL =
-  /request(?:NoContent)?(?:<[^>]*>)?\(\s*"([A-Z]+)"\s*,\s*(?:apiService\.)?(?:hubPath|hp)?\(?"([^"]*)"/g
+  /request(?:NoContent)?(?:<[^>]*>)?\(\s*"([A-Z]+)"\s*,\s*(?:apiService\.)?(?:hubPath|hp|(activeHubPath))?\(?"([^"]*)"/g
+
+/**
+ * `activeHubPath(...)` never falls back to the bare path: it always calls the
+ * hub-scoped route, so that is the route checked. (`hp(...)` falls back to the
+ * bare path with no hub, so its literal is checked as written.)
+ */
+const toHubPath = (path: string) => path.replace(/^\/api\//, `/api/hubs/${PARAM}/`)
 
 /**
  * Normalise a client path literal: strip any query string, and replace each
@@ -167,13 +175,13 @@ function scan(dir: string, extension: string, pattern: RegExp) {
   for (const file of sourceFiles(dir, extension)) {
     const source = readFileSync(file, 'utf8')
     for (const match of source.matchAll(new RegExp(pattern.source, 'g'))) {
-      const [, method, raw] = match
+      const [, method, wrapper, raw] = match
       const path = normalise(raw)
       if (path === null) {
         skipped++
         continue
       }
-      resolvable.push({ method, path, file: relative(REPO_ROOT, file) })
+      resolvable.push({ method, path: wrapper === 'activeHubPath' ? toHubPath(path) : path, file: relative(REPO_ROOT, file) })
     }
   }
   return { resolvable, skipped }
@@ -247,6 +255,18 @@ describe('#1728 every literal route the mobile clients call is one the worker mo
     // Interpolated paths are skipped rather than mis-resolved; there are always
     // some, and a zero here would mean the regex stopped seeing them.
     expect(scanned[platform].skipped).toBeGreaterThan(0)
+  })
+
+  it.each(PLATFORMS)('%s calls hub-owned resources only under a hub (#2395)', platform => {
+    const sites = scanned[platform].resolvable
+    const hubOwned = /^\/api\/(notes|reports|contacts|audit)(\/|$)/
+    expect(
+      sites.filter(s => hubOwned.test(s.path)).map(s => `${s.method} ${readable(s.path)} (${s.file})`),
+      'notes, reports, contacts and the audit log have no unscoped route: use activeHubPath(...)',
+    ).toEqual([])
+    // ...and the scanner sees the activeHubPath calls, so the assertion above is not vacuous.
+    const scoped = new RegExp(`^/api/hubs/${PARAM}/(notes|reports|contacts|audit)(/|$)`)
+    expect(sites.filter(s => scoped.test(s.path)).length).toBeGreaterThan(2)
   })
 
   it.each(PLATFORMS)('%s calls only routes the worker mounts', platform => {

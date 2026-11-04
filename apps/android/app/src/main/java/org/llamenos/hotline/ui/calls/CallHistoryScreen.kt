@@ -321,10 +321,10 @@ private fun CallHistoryRecordCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        // Prefer decrypted caller number, fall back to masked last-4
+                        // The number only when the admin envelope opened; the server sends no
+                        // part of it, so every other row is titled by what it is: a call.
                         val callerDisplay = decryptedCall.decryptedCallerNumber
-                            ?: call.callerLast4?.let { "***$it" }
-                            ?: stringResource(R.string.calls_unknown_caller)
+                            ?: stringResource(R.string.badge_call)
                         Text(
                             text = callerDisplay,
                             style = MaterialTheme.typography.bodyLarge,

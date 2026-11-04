@@ -44,7 +44,7 @@ final class ContactsViewModel {
         errorMessage = nil
 
         do {
-            var path = apiService.hp("/api/contacts") + "?page=1&limit=50"
+            var path = try apiService.activeHubPath("/api/contacts") + "?page=1&limit=50"
             if let contactType = selectedContactType {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
@@ -57,7 +57,8 @@ final class ContactsViewModel {
             total = Int(response.total)
             currentPage = 1
         } catch {
-            if contacts.isEmpty {
+            // No hub to browse is an empty list, not a failure
+            if contacts.isEmpty && !APIError.isNoHub(error) {
                 errorMessage = error.localizedDescription
             }
         }
@@ -73,7 +74,7 @@ final class ContactsViewModel {
 
         let nextPage = currentPage + 1
         do {
-            var path = apiService.hp("/api/contacts") + "?page=\(nextPage)&limit=50"
+            var path = try apiService.activeHubPath("/api/contacts") + "?page=\(nextPage)&limit=50"
             if let contactType = selectedContactType {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
@@ -112,7 +113,8 @@ final class ContactsViewModel {
             total = matched.count
             currentPage = 1
         } catch {
-            if contacts.isEmpty {
+            // No hub to browse is an empty list, not a failure
+            if contacts.isEmpty && !APIError.isNoHub(error) {
                 errorMessage = error.localizedDescription
             }
         }
@@ -130,7 +132,7 @@ final class ContactsViewModel {
         var seen = Set<String>()
         var page = 1
         while true {
-            var path = apiService.hp("/api/contacts") + "?page=\(page)&limit=\(pageSize)"
+            var path = try apiService.activeHubPath("/api/contacts") + "?page=\(page)&limit=\(pageSize)"
             if let contactType = selectedContactType {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
@@ -209,7 +211,7 @@ final class ContactDetailViewModel {
         do {
             let activity: ContactTimelineDetailResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/contacts/\(contactHash)")
+                path: apiService.activeHubPath("/api/contacts/\(contactHash)")
             )
             contact = ContactDetail(summary: summary, activity: activity)
         } catch {
@@ -283,7 +285,7 @@ final class ContactTimelineViewModel {
         do {
             let response: ContactTimelineResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/contacts/\(contactHash)")
+                path: apiService.activeHubPath("/api/contacts/\(contactHash)")
             )
             events = response.events
             total = Int(response.total)

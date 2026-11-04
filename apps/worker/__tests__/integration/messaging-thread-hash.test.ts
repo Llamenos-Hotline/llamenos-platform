@@ -53,7 +53,10 @@ vi.mock('@worker/services/webhook-replay', () => ({ checkWebhookReplay: vi.fn().
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 // The router reaches for the process-wide Bun SQL handle only to record webhook replays,
 // which the mocked replay guard above never does; this runs under Node, where Bun SQL is absent.
-vi.mock('@worker/db', () => ({ getDb: vi.fn().mockReturnValue({}) }))
+// It hands back the suite's real database (set in beforeAll) rather than a stand-in: a `{}`
+// here once reached SignalIdentityService and 500'd every single-identifier Signal STOP (#2447).
+vi.mock('@worker/db', () => ({ getDb: vi.fn() }))
+import { getDb } from '@worker/db'
 import { getMessagingAdapterFromService } from '@worker/lib/service-factories'
 
 const fresh = freshHubDb('messaging_thread_hash')
@@ -75,6 +78,7 @@ const IMPORTED_SENDER = '+15550100909'
 let services: Services
 
 beforeAll(() => {
+  vi.mocked(getDb).mockReturnValue(fresh.db)
   services = createServices(fresh.db, {
     hmacSecret: HMAC_SECRET,
     serverKek: SERVER_KEK,
@@ -93,6 +97,8 @@ async function webhook(
   sender: string = SENDER,
   overrides: Partial<IncomingMessage> = {},
 ): Promise<{ status: number }> {
+  // The hub the URL names exists: the webhook refuses one that names no hub (#2395).
+  await fresh.db.insert(schema.hubs).values({ id: hubId, name: hubId, slug: hubId, createdBy: 'a'.repeat(64) }).onConflictDoNothing()
   vi.mocked(getMessagingAdapterFromService).mockResolvedValue({
     validateWebhook: vi.fn().mockResolvedValue(true),
     parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body, sender, overrides)),
@@ -116,6 +122,10 @@ async function webhook(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: crypto.randomUUID() }),
   })
+  // Every caller here expects the router to accept the message. Most of them never read the
+  // status, so a 500 from the opt-out path used to leave their later assertions passing
+  // vacuously (#2447); fail at the call that was refused instead.
+  expect(res.status, `${overrides.channelType ?? 'sms'} webhook "${body}" from ${sender}: ${await res.clone().text()}`).toBe(200)
   return { status: res.status }
 }
 
@@ -278,6 +288,39 @@ describe('a bulk-imported subscriber is matched by their own STOP (#2261)', () =
     const after = await subscribersOf(HUB_B)
     expect(after).toHaveLength(before)
     expect(after.find((s) => s.id === imported!.id)!.status).toBe('unsubscribed')
+  })
+
+  it('after the imported subscriber texts STOP, the next blast does not include them (#2262)', async () => {
+    const hub = '9f2c1b64-0000-4000-8000-0000000000ee'
+    const number = '+15550100911'
+    await services.blasts.importBulk(hub, [{ identifier: number, channel: 'sms' }])
+    // A subscriber whose channel is verified and double opt-in confirmed: the state a
+    // blast targets. Set directly, since the confirmation flow is not what is under test.
+    await fresh.db.update(schema.subscribers)
+      .set({ channels: [{ type: 'sms', verified: true }], doubleOptInConfirmed: true })
+      .where(eq(schema.subscribers.hubId, hub))
+    const subscriberId = (await subscribersOf(hub))[0]!.id
+
+    const expandedFor = async (name: string): Promise<string[]> => {
+      const blast = await services.blasts.createBlast({
+        hubId: hub, name, content: { text: 'hello' }, targetChannels: ['sms'], createdBy: 'test',
+      })
+      // What `send()` does to it; called directly because send()'s daily-limit query
+      // binds a Date that postgres-js under Node refuses (Bun SQL in production does not).
+      await fresh.db.update(schema.blasts).set({ status: 'sending', sentAt: new Date() }).where(eq(schema.blasts.id, blast.id))
+      await services.blasts.expandBlast(blast.id)
+      return (await services.blasts.getDeliveries(blast.id)).deliveries.map((d) => d.subscriberId)
+    }
+
+    // Control: before the STOP the imported subscriber is a recipient, so the
+    // assertion below is not vacuous.
+    expect(await expandedFor('before-stop')).toContain(subscriberId)
+
+    // The STOP goes through the real webhook route, which finds the row by the router's hash.
+    expect((await webhook(hub, 'STOP', number)).status).toBe(200)
+    expect((await subscribersOf(hub))[0]!.status).toBe('unsubscribed')
+
+    expect(await expandedFor('after-stop')).not.toContain(subscriberId)
   })
 
   it('the same number imported into another hub is a different row, and starts opted out (#2286)', async () => {
