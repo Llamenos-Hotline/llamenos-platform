@@ -4716,7 +4716,7 @@
     "connecting": "Connecting...",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "हब से कनेक्ट हो रहा है..."
   },
   "yes": "Yes",
   "yourIdentity": "Your Identity",

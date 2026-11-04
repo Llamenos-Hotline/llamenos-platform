@@ -4322,7 +4322,7 @@
     "connected": "Connected",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "Підключення до хабів..."
   },
   "inviteCreate": "Створити запрошення",
   "inviteNameLabel": "Volunteer name",

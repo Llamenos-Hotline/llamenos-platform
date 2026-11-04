@@ -4716,7 +4716,7 @@
     "connecting": "Connecting...",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "허브에 연결하는 중..."
   },
   "yes": "Yes",
   "yourIdentity": "Your Identity",

@@ -4387,7 +4387,7 @@
     "connected": "Connected",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "ဟပ်များသို့ ချိတ်ဆက်နေသည်..."
   },
   "methodSms": "SMS",
   "verificationCodeLabel": "စစ်ဆေးကုဒ်",

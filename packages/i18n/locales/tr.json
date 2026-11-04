@@ -4470,7 +4470,7 @@
     "connected": "Connected",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "Merkezlere bağlanılıyor..."
   },
   "authTokenLabel": "Kimlik Doğrulama Jetonu",
   "callActions": {

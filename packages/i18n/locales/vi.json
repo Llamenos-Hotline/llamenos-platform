@@ -4716,7 +4716,7 @@
     "connecting": "Connecting...",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "Đang kết nối với các hub..."
   },
   "yes": "Yes",
   "yourIdentity": "Your Identity",

@@ -4192,7 +4192,7 @@
     "connected": "Connected",
     "disconnected": "Disconnected",
     "reconnecting": "Reconnecting ({{attempt}})...",
-    "subscribing": "Connecting to hubs..."
+    "subscribing": "در حال اتصال به هاب‌ها..."
   },
   "actionDone": "انجام شد",
   "status": {
