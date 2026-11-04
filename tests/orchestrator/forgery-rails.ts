@@ -25,9 +25,17 @@ import ts from 'typescript'
  *    import of the minting surface outside `review-and-merge.ts` is worth
  *    flagging in review. That is the whole claim: drift detection, not
  *    prevention.
+ *  - `githubAppRuntimeImports` reports the exact set of files holding a
+ *    runtime import (or re-export) of `github-app.ts`, so a test can pin
+ *    that set (#1867): the refusal direction above says who may NOT import
+ *    the credential, but only an exact-set assertion notices a NEW module
+ *    coupling itself to the capability at all — or a holder going quiet.
  *  - `checkRunsViolations` confines every mention of `check-runs` outside
  *    `review-and-merge.ts` to one read whose path is pinned to a validated
  *    commit SHA.
+ *  - `statusesViolations` bans `/statuses/` outright, at the same scanning
+ *    depth as `checkRunsViolations` (raw text AND cooked literal text), so
+ *    the weaker signal's rail is never deeper than the stronger's (#1867).
  */
 
 export const SRC = join(process.cwd(), 'orchestrator', 'src')
@@ -67,6 +75,7 @@ function sameFile(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 
 export const CLI_FILE = join(SRC, 'cli.ts')
+export const VERIFY_FILE = join(SRC, 'verify.ts')
 
 /**
  * Every runtime export of `github-app.ts` that reaches the key, the JWT or the
@@ -285,6 +294,57 @@ export function credentialBoundaryViolations(sources: { file: string; text: stri
 }
 
 // ---------------------------------------------------------------------------
+// The exact importer set of github-app.ts (#1867)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every file holding a RUNTIME binding to `github-app.ts`, mapped to the
+ * export names it binds. `credentialBoundaryViolations` answers "may this
+ * file import that name?"; this answers the exact-set question #1867 asks —
+ * WHO imports the capability-carrying module at all — so a test can pin the
+ * set to exactly `{review-and-merge.ts, verify.ts}`. A refusal-list rail
+ * passes vacuously when a new module imports an export nobody remembered to
+ * classify, and says nothing when an expected holder stops importing; the
+ * exact set fails on both.
+ *
+ * Counted: static `import` (named, default, namespace, side-effect) and
+ * `export … from` — every spelling that creates a runtime dependency on the
+ * module. Skipped: type-only imports and exports, which are erased before
+ * run time. A default, namespace or side-effect binding is recorded as `*`,
+ * since it reaches every export at once. The dynamic forms (`import()`,
+ * `require`, `import.meta.require`) need no handling here:
+ * `credentialBoundaryViolations` already refuses every one of them aimed at
+ * a bounded module, in every file.
+ */
+export function githubAppRuntimeImports(sources: { file: string; text: string }[]): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const { file, text } of sources) {
+    const names = new Set<string>()
+    for (const st of parse(file, text).statements) {
+      if (ts.isImportDeclaration(st)) {
+        if (st.importClause?.isTypeOnly || !ts.isStringLiteralLike(st.moduleSpecifier)) continue
+        const r = resolveSpecifier(file, st.moduleSpecifier.text)
+        if (!r.ok || !r.bound || !sameFile(r.bound.module, GITHUB_APP_FILE)) continue
+        const clause = st.importClause
+        if (!clause || clause.name) names.add('*')
+        const nb = clause?.namedBindings
+        if (nb && ts.isNamespaceImport(nb)) names.add('*')
+        else if (nb) for (const el of nb.elements) if (!el.isTypeOnly) names.add((el.propertyName ?? el.name).text)
+      } else if (ts.isExportDeclaration(st)) {
+        if (st.isTypeOnly || !st.moduleSpecifier || !ts.isStringLiteralLike(st.moduleSpecifier)) continue
+        const r = resolveSpecifier(file, st.moduleSpecifier.text)
+        if (!r.ok || !r.bound || !sameFile(r.bound.module, GITHUB_APP_FILE)) continue
+        const c = st.exportClause
+        if (!c || ts.isNamespaceExport(c)) names.add('*')
+        else for (const el of c.elements) if (!el.isTypeOnly) names.add((el.propertyName ?? el.name).text)
+      }
+    }
+    if (names.size > 0) out.set(rel(file), [...names].sort())
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // The check-runs text rail, pinned
 // ---------------------------------------------------------------------------
 
@@ -402,4 +462,33 @@ export function checkRunsViolations(
     }
   }
   return [...new Set(out)]
+}
+
+/**
+ * The `/statuses/` ban, at the same scanning depth as `checkRunsViolations`
+ * (#1867): the endpoint is refused in the raw text AND in the cooked text of
+ * any literal (`/statuses\u002f`), in every orchestrator source file, with no
+ * admitted file at all. `POST /statuses/<sha>` accepts a PAT and satisfies a
+ * required context, which is why the write path must not exist here (#1483)
+ * — and a rail that reads only raw text would miss the one spelling that
+ * still reaches the API. This keeps the weaker signal's rail no shallower
+ * than the check-runs rail it is the rejected shortcut for.
+ */
+export function statusesViolations(sources: { file: string; text: string }[]): string[] {
+  const out: string[] = []
+  for (const { file, text } of sources) {
+    if (/\/statuses\//.test(text)) {
+      out.push(`${rel(file)}: names /statuses/ — a commit status accepts a PAT and satisfies a required context (#1483)`)
+      continue
+    }
+    const sf = parse(file, text)
+    let cooked = false
+    const scan = (n: ts.Node): void => {
+      if (isLiteralToken(n) && n.text.includes('/statuses/')) cooked = true
+      if (!cooked) ts.forEachChild(n, scan)
+    }
+    scan(sf)
+    if (cooked) out.push(`${rel(file)}: a literal cooks to /statuses/ — a commit status accepts a PAT and satisfies a required context (#1483)`)
+  }
+  return out
 }
