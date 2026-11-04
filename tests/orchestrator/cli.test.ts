@@ -318,6 +318,7 @@ function integrateDeps(over: Partial<IntegrateDeps> = {}): IntegrateDeps {
     findWorktreeForBranch: async () => '/tmp/worktree',
     updateBranch: vi.fn(async () => ({ updated: true, pushed: true, needsHuman: false, reason: 'ok' })),
     commentOnPr: vi.fn(async () => {}),
+    requestReview: vi.fn(async () => {}),
     log: () => {},
     ...over,
   }
@@ -355,6 +356,38 @@ describe('runIntegrateWith', () => {
       commentOnPr,
     }))
     expect(commentOnPr).toHaveBeenCalledWith('1', expect.stringContaining('conflicts'))
+  })
+
+  // #1842: a conflicted PR's prior green checks were stale by construction;
+  // once the branch is updated and pushed the head moved, and only a
+  // `review_requested` event starts a fresh fleet/review (#1760).
+  it('re-requests the review after a successful update+push, so the new head gets a fresh verdict', async () => {
+    const requestReview = vi.fn(async () => {})
+    await runIntegrateWith(integrateDeps({
+      listDirtyFleetPrs: async () => [fleetPr('1')],
+      requestReview,
+    }))
+    expect(requestReview).toHaveBeenCalledWith('1', 'fleet/backend/1')
+  })
+
+  it('does NOT re-request the review when the update did not push — the head did not move', async () => {
+    const requestReview = vi.fn(async () => {})
+    await runIntegrateWith(integrateDeps({
+      listDirtyFleetPrs: async () => [fleetPr('1')],
+      updateBranch: async () => ({ updated: false, pushed: false, needsHuman: true, reason: 'conflict', conflictingPaths: ['x.ts'] }),
+      requestReview,
+    }))
+    expect(requestReview).not.toHaveBeenCalled()
+  })
+
+  it('a throwing review re-request is logged, never propagated — the update itself already landed', async () => {
+    const lines: string[] = []
+    await expect(runIntegrateWith(integrateDeps({
+      listDirtyFleetPrs: async () => [fleetPr('1')],
+      requestReview: async () => { throw new Error('HTTP 422') },
+      log: (m) => lines.push(m),
+    }))).resolves.toBe(0)
+    expect(lines.some((l) => l.includes('422'))).toBe(true)
   })
 })
 

@@ -1336,24 +1336,37 @@ function isFleetDispatchedBranch(branch: string): boolean {
 export interface DirtyFleetPr { pr: string; branch: string }
 
 export interface IntegrateDeps {
-  /** Every OPEN pull request whose merge state is `DIRTY` and whose branch
-   *  the fleet itself dispatched (`isFleetDispatchedBranch`) — a human's
-   *  own dirty PR is never in this list, purely so `integrate` doesn't
-   *  touch a PR it didn't open. */
+  /** Every OPEN pull request whose merge state is conflicted — GitHub's
+   *  derived `mergeStateStatus: DIRTY` or the lazy `mergeable: CONFLICTING`
+   *  (#1842: either one is decisive) — and whose branch the fleet itself
+   *  dispatched (`isFleetDispatchedBranch`) — a human's own dirty PR is
+   *  never in this list, purely so `integrate` doesn't touch a PR it
+   *  didn't open. */
   listDirtyFleetPrs(): Promise<DirtyFleetPr[]>
   findWorktreeForBranch(branch: string): Promise<string | undefined>
   updateBranch(input: UpdateBranchInput): Promise<UpdateBranchResult>
   commentOnPr(pr: string, body: string): Promise<void>
+  /** Re-request the non-author review after a successful update push
+   *  (#1842): the push moved the head, so the prior `fleet/review` verdict
+   *  — however legitimate when it was earned — no longer describes the
+   *  current diff, and a push never starts a review on its own (#1760).
+   *  Best-effort: a throw is logged, never propagated. */
+  requestReview(pr: string, branch: string): Promise<void>
   log(msg: string): void
 }
 
 /**
- * Sweeps every DIRTY PR the fleet itself dispatched and brings it up to
- * date with `main` via `updateBranchFromMain` (integrator.ts) — a merge
+ * Sweeps every conflicted PR the fleet itself dispatched and brings it up
+ * to date with `main` via `updateBranchFromMain` (integrator.ts) — a merge
  * plus an ordinary, non-force push, never a rebase. A branch with no
  * worktree left (already cleaned up by `settle`) is skipped rather than
  * guessed at; a merge conflict is commented on the PR naming the
  * conflicting paths, never resolved automatically.
+ *
+ * After a successful update+push the review is re-requested (#1842): the
+ * conflicted PR's old green checks were stale by construction, and the new
+ * head needs a fresh `fleet/review` verdict, which only a
+ * `review_requested` event can start.
  */
 export async function runIntegrateWith(deps: IntegrateDeps): Promise<number> {
   const dirty = await deps.listDirtyFleetPrs()
@@ -1370,6 +1383,12 @@ export async function runIntegrateWith(deps: IntegrateDeps): Promise<number> {
     if (result.pushed) {
       updated++
       deps.log(`integrate: updated and re-pushed "${branch}" (pr ${pr})`)
+      try {
+        await deps.requestReview(pr, branch)
+        deps.log(`integrate: re-requested the review on "${branch}" (pr ${pr}) — the push moved the head, so the prior verdict no longer applies`)
+      } catch (e) {
+        deps.log(`integrate: review re-request on "${branch}" (pr ${pr}) failed: ${e instanceof Error ? e.message : String(e)} — board's REQUEST_REVIEW row is the backstop`)
+      }
     } else {
       needsHuman++
       await deps.commentOnPr(pr, `Integrator: ${result.reason}`)
@@ -1382,13 +1401,13 @@ export async function runIntegrateWith(deps: IntegrateDeps): Promise<number> {
 }
 
 async function defaultListDirtyFleetPrs(): Promise<DirtyFleetPr[]> {
-  const prs = await ghJson<{ number: number; headRefName: string; mergeStateStatus: string }[]>([
+  const prs = await ghJson<{ number: number; headRefName: string; mergeStateStatus: string; mergeable: string }[]>([
     'pr', 'list', '--state', 'open', '--limit', '100',
-    '--json', 'number,headRefName,mergeStateStatus',
+    '--json', 'number,headRefName,mergeStateStatus,mergeable',
   ])
   if (prs === undefined) return []
   return prs
-    .filter((p) => p.mergeStateStatus === 'DIRTY' && isFleetDispatchedBranch(p.headRefName))
+    .filter((p) => (p.mergeStateStatus === 'DIRTY' || p.mergeable === 'CONFLICTING') && isFleetDispatchedBranch(p.headRefName))
     .map((p) => ({ pr: String(p.number), branch: p.headRefName }))
 }
 
@@ -1398,6 +1417,12 @@ function defaultIntegrateDeps(): IntegrateDeps {
     findWorktreeForBranch: (branch) => findWorktreeForBranch(REPO_ROOT, branch),
     updateBranch: updateBranchFromMain,
     commentOnPr: async (pr, body) => { await gh(['pr', 'comment', pr, '--body', body]) },
+    requestReview: async (pr, branch) => {
+      await requestReviewAtOpen(
+        { pr, headRefName: branch, branchMismatch: undefined },
+        defaultReviewRequestAtOpenDeps(log),
+      )
+    },
     log,
   }
 }
