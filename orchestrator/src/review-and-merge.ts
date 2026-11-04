@@ -8,8 +8,8 @@ import {
   type AppHttp, type RecorderReadiness,
 } from './github-app.js'
 import {
-  composeReviewSet, decideReviewSet, reviewTriggerLogins, GENERAL_REVIEWER, REVIEW_JOB,
-  REVIEW_REQUEST_LOGIN, type ReviewSetDecision,
+  composeReviewSet, decideReviewSet, reviewTriggerLogins, laneIdFromBranch, GENERAL_REVIEWER, REVIEW_JOB,
+  REVIEW_REQUEST_LOGIN, QUEUE_CLEARED_LABEL, type ReviewSetDecision,
 } from './ci.js'
 import {
   buildProfileReviewPrompt, resolveReviewerLabel, AGENT_REGISTRY_DIR,
@@ -637,6 +637,19 @@ export interface ReviewAndMergeDeps {
   /** #1158 — the reviews this PR needs, so the command can refuse rather
    *  than post a `fleet/review` for a set it does not actually run. */
   reviewSet(pr: string, changedFiles: readonly string[]): Promise<ReviewSetDecision>
+  /** #1894 — the merge-queue guard (fleet-verify.yml's queue-guard step)
+   *  admits a fleet-dispatched PR only when the supervisor signalled the
+   *  landing: an armed auto-merge, or the `queue-cleared` label. This
+   *  command merges WITHOUT arming auto-merge, so it applies the label
+   *  itself immediately before merging a fleet-branch PR. Throws on failure
+   *  — a fleet PR that cannot be labelled is one the guard will eject, and
+   *  merging anyway would move the refusal one step later and record it as
+   *  the PR's fault. */
+  clearForQueue(pr: string): Promise<void>
+  /** Best-effort inverse of `clearForQueue`, called when the merge itself
+   *  fails so a stale queue-admission signal never outlives the act it
+   *  cleared. Never throws. */
+  unclearForQueue(pr: string): Promise<void>
   merge(pr: string): Promise<void>
   log(msg: string): void
 }
@@ -822,7 +835,33 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
     return { kind: 'needs-codeowner', pr, headSha: facts.headSha, authorLogin: facts.authorLogin }
   }
 
-  await deps.merge(pr)
+  // #1894: this command's merge enqueues a fleet-dispatched PR WITHOUT an
+  // armed auto-merge, so it applies the supervisor's queue-admission label
+  // first — without it the queue guard rejects the entry as a worker's own
+  // enqueue. A merge that still fails hands the clearance back, best-effort:
+  // the label must never outlive the act it cleared.
+  const fleetDispatched = laneIdFromBranch(facts.headBranch) !== undefined
+  if (fleetDispatched) {
+    try {
+      await deps.clearForQueue(pr)
+    } catch (e) {
+      return {
+        kind: 'not-mergeable', pr,
+        reason: `could not apply the ${QUEUE_CLEARED_LABEL} label to PR ${pr} — the merge-queue guard ` +
+          `(#1894) would eject a fleet PR's entry without it: ${e instanceof Error ? e.message : String(e)}`,
+      }
+    }
+  }
+
+  try {
+    await deps.merge(pr)
+  } catch (e) {
+    if (fleetDispatched) {
+      await deps.unclearForQueue(pr).catch((rm) =>
+        deps.log(`review-and-merge: merge failed AND the ${QUEUE_CLEARED_LABEL} label could not be removed from PR ${pr}: ${rm}`))
+    }
+    throw e
+  }
   deps.log(`review-and-merge: merged PR ${pr} at head ${facts.headSha}`)
   return { kind: 'merged', pr, headSha: facts.headSha }
 }
@@ -868,6 +907,17 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     // never merges anything itself.
     // No `--delete-branch` here either — see enableAutoMerge in cli.ts (#1804).
     merge: async (pr) => { await gh(['pr', 'merge', pr, '--squash']) },
+    // #1894 — see the deps interface. `--add-label` fails when the label
+    // does not exist on the repository, which is the loud refusal the
+    // interface promises (create it once: `gh label create queue-cleared`).
+    clearForQueue: async (pr) => { await gh(['pr', 'edit', pr, '--add-label', QUEUE_CLEARED_LABEL]) },
+    unclearForQueue: async (pr) => {
+      try {
+        await gh(['pr', 'edit', pr, '--remove-label', QUEUE_CLEARED_LABEL])
+      } catch (e) {
+        log(`review-and-merge: could not remove ${QUEUE_CLEARED_LABEL} from PR ${pr}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    },
     log,
   }
 }

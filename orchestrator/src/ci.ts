@@ -1112,6 +1112,20 @@ async function resolveLane(deps: CiDeps): Promise<Lane | undefined> {
 export const SCOPE_GRANT_PREFIX = 'scope:'
 
 /**
+ * The supervisor's explicit queue-admission signal (#1894). The queue guard
+ * step in `.github/workflows/fleet-verify.yml` rejects a merge_group entry
+ * for any fleet-dispatched PR (`fleet/<lane>/<item>` branch) that carries
+ * neither an armed auto-merge NOR this label — the two ways the supervisor,
+ * and only the supervisor, sends a fleet PR to the queue
+ * (`enableAutoMerge` in cli.ts; `review-and-merge`'s merge step). The label
+ * string is duplicated byte-for-byte in that workflow step's bash, and
+ * tests/orchestrator/queue-guard-merge-group.test.ts pins the two to agree:
+ * a rename here without a rename there would make review-and-merge's
+ * clearance invisible to the guard and eject the operator's own merges.
+ */
+export const QUEUE_CLEARED_LABEL = 'queue-cleared'
+
+/**
  * The lanes a PR has been granted beyond its own, read from its
  * `scope:<lane>` labels.
  *

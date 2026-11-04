@@ -38,6 +38,16 @@ describe('buildBrief', () => {
     const b = renderBrief(buildBrief(item, lane, 'auto/backend-x')).toLowerCase()
     expect(b).toMatch(/never merge/); expect(b).toMatch(/never deploy/)
   })
+  // #1894 — the prohibition that holds is the one the worker can CHECK. The
+  // brief must name the merge queue ban AND the verifiable self-check
+  // command, not just ask nicely: "a command to run beats a rule to
+  // remember".
+  it('forbids enqueueing and hands the worker the command that proves it did not', () => {
+    const b = renderBrief(buildBrief(item, lane, 'auto/backend-x'))
+    expect(b).toMatch(/never add it to the merge queue/i)
+    expect(b).toContain('gh pr view')
+    expect(b).toContain('mergeStateStatus')
+  })
   it('states the output contract', () => {
     const b = renderBrief(buildBrief(item, lane, 'auto/backend-x'))
     expect(b).toContain('DONE'); expect(b).toContain('BLOCKED')

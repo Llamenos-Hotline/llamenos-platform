@@ -510,6 +510,58 @@ owner first: **772 of 4165 tracked files currently have none** (most of
 in #1115; `NEVER_WRITE_PATHS` and CODEOWNERS are the defences that do bind
 universally in the meantime.
 
+## The merge-queue guard: only the supervisor queues a fleet PR (#1894)
+
+A worker's brief has always forbidden enqueueing its own PR, and on
+2026-10-16 a worker did it anyway (#1182) — a prohibition line is advisory,
+and the fleet's own measured property is that advisory lines get ignored
+while checks hold. So the ban is now a check: on every `merge_group` event,
+a step in the `fleet/verify` job (`Reject a queue entry no supervisor
+signalled`) admits a queue entry for a fleet-dispatched PR — branch grammar
+`fleet/<lane>/<item>` — only when the supervisor signalled the landing, in
+one of two ways:
+
+1. **Auto-merge is armed on the PR** (`enableAutoMerge` in cli.ts —
+   requested at PR open and re-armed after the fleet's own verify+review
+   pass). GitHub then enqueues it itself once every required check is
+   green; the PR's `auto_merge` is non-null.
+2. **The PR carries the `queue-cleared` label**, applied by
+   `review-and-merge` immediately before its explicit merge (and removed
+   again, best-effort, if that merge fails — a clearance never outlives the
+   act it cleared).
+
+A fleet PR in the queue with neither is a worker that ran `gh pr merge`
+itself. The guard fails the required `fleet/verify` context on the queue
+ref in seconds — before any checkout or install — so the entry is ejected
+immediately instead of after a full macOS `ios-e2e` cycle, whose ejection
+record used to read as the PR's fault when it was not. Human branches
+(`release`, dependabot, a person's own feature branch) are not gated at
+all. A PR that cannot be read fails closed: an entry whose provenance
+cannot be established is not admitted on a guess.
+
+The guard is a bash step in the workflow, not a CLI subcommand, on purpose:
+fleet-verify runs its gates from the PR's BASE checkout, so a subcommand
+introduced by a PR would not exist on any base that predates it — and a
+queue guard cannot take the verify-ci bootstrap escape (its own introducing
+PR enters the very queue it guards). The step's script comes from the merge
+head's own workflow, so the guard is live on its own PR. The behavioural
+rail is `tests/orchestrator/queue-guard-merge-group.test.ts`, which
+extracts the step's literal `run:` block and executes it against a stubbed
+`gh` — the same pattern as the fleet/review merge-queue arm (#1187).
+
+**Known residual, stated so it is never mistaken for covered:** workers and
+the supervisor share one GitHub identity, so a worker that deliberately
+arms auto-merge *itself* (`gh pr merge --auto`) satisfies signal 1. That is
+a two-step deliberate defeat, auditable on the PR timeline — not the
+absentminded single command this guard exists to reject. Splitting the
+write identity, or a ruleset condition on the queue actor, is an operator
+decision outside the repo.
+
+The worker brief (`brief.ts`) now carries the same rule as a verifiable
+instruction rather than a bare prohibition: the worker self-checks with
+`gh pr view <N> --json mergeStateStatus,autoMergeRequest` before writing
+its status file, and reports a violation explicitly.
+
 ## Changing a lane's mode
 
 Lane modes are **runtime state, never source** (rail 8). Never edit

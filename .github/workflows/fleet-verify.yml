@@ -159,6 +159,84 @@ jobs:
             echo "pr=$pr"
           } >> "$GITHUB_OUTPUT"
 
+      # #1894 — reject a queue entry no supervisor signalled, BEFORE any
+      # checkout or install. A dispatched worker's brief forbids enqueueing
+      # its own PR, and one did it anyway (#1182 added to the queue while
+      # ios-e2e was broken repo-wide): a prohibition line is advisory, and
+      # advisories get ignored — what holds in this fleet is what is checked.
+      # This step is the check.
+      #
+      # The ONLY legitimate ways a fleet-dispatched PR (branch grammar
+      # `fleet/<lane>/<item>` — FLEET_BRANCH_RE in orchestrator/src/ci.ts)
+      # enters the merge queue:
+      #   1. The supervisor armed standard auto-merge on it
+      #      (`enableAutoMerge` in cli.ts — `gh pr merge --auto --squash`,
+      #      requested at PR open and re-armed after the fleet's own
+      #      verify+review pass). GitHub then enqueues it itself once every
+      #      required check is green; `auto_merge` on the PR is non-null.
+      #   2. `review-and-merge` applied the supervisor's `queue-cleared`
+      #      label immediately before its own explicit merge.
+      # A fleet PR in the queue with NEITHER is a worker that ran
+      # `gh pr merge` itself, and the entry is rejected HERE — seconds on an
+      # ubuntu runner — instead of after a full macOS ios-e2e cycle, whose
+      # ejection record reads as the PR's fault when it was not.
+      #
+      # Human branches (and `release`, dependabot, salvage branches) are not
+      # gated: nothing about how a person queues their own PR changes.
+      #
+      # Fails CLOSED: the PR read failing (API outage, narrowed permission)
+      # exits non-zero under `set -e` — an entry whose provenance cannot be
+      # established is not admitted on a guess. Known residual, stated so it
+      # is never mistaken for covered: workers and the supervisor share one
+      # GitHub identity, so a worker that deliberately arms auto-merge ITSELF
+      # (`gh pr merge --auto`) satisfies signal 1. That is a two-step
+      # deliberate defeat, auditable on the PR timeline — not the
+      # absentminded single command this guard exists to reject, and
+      # splitting the write identity is an operator decision, not a workflow
+      # one (see the issue).
+      - name: Reject a queue entry no supervisor signalled (#1894)
+        id: queue-guard
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.ctx.outputs.pr }}
+          BRANCH: ${{ steps.ctx.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BRANCH" =~ ^fleet/[^/]+/[^/]+$ ]]; then
+            echo "queue-guard: $BRANCH is not a fleet dispatch branch — queue admission is not gated for it"
+            exit 0
+          fi
+          # ONE live read of the queue-relevant facts, never the event
+          # payload: a label or an auto-merge arm applied after this entry
+          # formed still counts. Guarded capture (`if !`), for the same
+          # reason the fleet/review queue arm's reads are: under `-e` a bare
+          # assignment dies on the first API hiccup with nothing but gh's raw
+          # stderr, and this step must fail CLOSED with the reason printed.
+          if ! pr_facts="$(gh api "repos/$REPO/pulls/$PR" \
+            --jq '[(.auto_merge != null), ([.labels[].name] | join(" "))] | @tsv' 2>&1)"; then
+            echo "::error::queue-guard FAILED: queue-pr-lookup — could not read PR #$PR to establish this entry's provenance; refusing to admit on a guess:"
+            printf '%s\n' "$pr_facts"
+            exit 1
+          fi
+          armed="$(printf '%s' "$pr_facts" | cut -f1)"
+          labels=" $(printf '%s' "$pr_facts" | cut -f2- ) "
+          if [[ "$armed" == "true" ]]; then
+            echo "queue-guard: auto-merge is armed on PR #$PR — the supervisor requested this landing; admitted"
+            exit 0
+          fi
+          # Space-padded whole-word match: a label merely CONTAINING the
+          # clearance string (queue-clearedx, xqueue-cleared) is not it.
+          if [[ "$labels" == *" queue-cleared "* ]]; then
+            echo "queue-guard: PR #$PR carries the supervisor's queue-cleared label; admitted"
+            exit 0
+          fi
+          echo "::error::queue-guard FAILED: queue-entry-unsignalled — fleet-dispatched PR #$PR ($BRANCH) entered the merge queue with no armed auto-merge and no queue-cleared label."
+          echo "::error::Only the supervisor queues a fleet PR (#1894) — a worker that ran 'gh pr merge' itself caused this entry, and its brief forbids exactly that."
+          echo "::error::Rejecting the entry now so it is ejected in seconds, not after a full ios-e2e cycle."
+          exit 1
+
       # The BASE commit, not the head. Everything the gate decides is computed
       # from this tree: its git history, its orchestrator code, its lockfile,
       # its node_modules. The commit under judgement never becomes code here.

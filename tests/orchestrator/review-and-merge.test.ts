@@ -164,6 +164,8 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     })),
     invokeProfileReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'PASS', text: 'VERDICT: PASS' })),
     merge: vi.fn(async () => {}),
+    clearForQueue: vi.fn(async () => {}),
+    unclearForQueue: vi.fn(async () => {}),
     log: vi.fn(),
     ...over,
   }
@@ -796,5 +798,64 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
     expect(outcome.kind).toBe('review-set-unrunnable')
     expect(deps.recorderReady).not.toHaveBeenCalled()
     expect(deps.postCheckRun).not.toHaveBeenCalled()
+  })
+})
+
+// #1894 — the merge-queue guard in fleet-verify.yml ejects a fleet-dispatched
+// PR's queue entry unless the supervisor signalled the landing. This command
+// merges WITHOUT arming auto-merge, so the `queue-cleared` label it applies
+// first is what keeps its own merge from reading to the guard as a worker's
+// forbidden enqueue.
+describe('runReviewAndMerge — queue clearance (#1894)', () => {
+  it('applies the clearance label before merging a fleet-branch PR, and never removes it on success', async () => {
+    const deps = baseDeps()
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('merged')
+    expect(deps.clearForQueue).toHaveBeenCalledWith('9')
+    expect(deps.unclearForQueue).not.toHaveBeenCalled()
+    // Order matters: the label must exist BEFORE the merge enqueues, or the
+    // guard can judge the entry first.
+    const clearOrder = (deps.clearForQueue as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]
+    const mergeOrder = (deps.merge as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]
+    expect(clearOrder).toBeLessThan(mergeOrder)
+  })
+
+  it('does not label a PR whose branch is not fleet-dispatched — the guard does not gate it', async () => {
+    const deps = baseDeps({ readPr: vi.fn(async () => facts({ headBranch: 'some-human-branch' })) })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('merged')
+    expect(deps.clearForQueue).not.toHaveBeenCalled()
+    expect(deps.merge).toHaveBeenCalledWith('9')
+  })
+
+  it('refuses to merge a fleet PR it cannot label — the guard would eject the entry as unsignalled', async () => {
+    const deps = baseDeps({
+      clearForQueue: vi.fn(async () => { throw new Error('label does not exist') }),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('queue-cleared')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('label does not exist')
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  it('hands the clearance back when the merge itself fails — the label never outlives the act it cleared', async () => {
+    const mergeError = new Error('queue declined the entry')
+    const deps = baseDeps({
+      merge: vi.fn(async () => { throw mergeError }),
+    })
+    await expect(runReviewAndMerge('9', deps)).rejects.toBe(mergeError)
+    expect(deps.clearForQueue).toHaveBeenCalledWith('9')
+    expect(deps.unclearForQueue).toHaveBeenCalledWith('9')
+  })
+
+  it('a failed clearance removal on a failed merge is logged, never thrown over the real error', async () => {
+    const mergeError = new Error('queue declined the entry')
+    const deps = baseDeps({
+      merge: vi.fn(async () => { throw mergeError }),
+      unclearForQueue: vi.fn(async () => { throw new Error('api hiccup') }),
+    })
+    await expect(runReviewAndMerge('9', deps)).rejects.toBe(mergeError)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('queue-cleared'))
   })
 })

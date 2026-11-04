@@ -78,7 +78,14 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
     {
       heading: 'What you must NOT do',
       body:
-        `- Never merge your own pull request. Open exactly one PR and stop.\n` +
+        `- Never merge your own pull request, and never add it to the merge queue. Open exactly one PR ` +
+        `and stop — only the supervisor queues a fleet PR. This is enforced, not advisory (#1894): a ` +
+        `guard in the merge queue rejects any fleet PR that enters it without the supervisor's own ` +
+        `signal, so a worker-enqueued entry fails the PR's required checks, is ejected, and the ejection ` +
+        `record reads as your PR's fault. Self-check before writing your status file: run ` +
+        `\`gh pr view <N> --json mergeStateStatus,autoMergeRequest\`. If you ever ran \`gh pr merge\` in ` +
+        `any form, or that output shows the PR in a merge queue, you have violated the dispatch contract ` +
+        `— say so explicitly in your status \`notes:\` so the supervisor can dequeue it.\n` +
         `- Your PR description MUST contain the line \`Closes #${item.id}\` on its own line. ` +
         `That is what closes issue #${item.id} when the PR merges; without it the issue stays ` +
         `open after the work has landed.\n` +
