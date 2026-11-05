@@ -53,11 +53,26 @@
  *      and the annotation is VERIFIED: the snapshot of the release being
  *      replaced must no longer declare the object, so N-1 no longer reads it.
  *
+ *      Tightening a column N-1 still uses (SET NOT NULL, ADD CONSTRAINT —
+ *      UNIQUE, PRIMARY KEY, FOREIGN KEY, CHECK — or a unique index) cannot be
+ *      verified that way: the column stays declared, by design. It is admitted
+ *      only by a different, reviewed annotation in the statement itself:
+ *
+ *        -- migration-safety: constrain column public.t.c because <why N-1 never writes a violating row>
+ *
+ *      which licenses only the tightening findings on that object in that
+ *      statement, requires a reason a reviewer can read, and must agree with
+ *      the newest snapshot (the release being deployed still declares the
+ *      object, and declares it NOT NULL when that is what the statement sets).
+ *      The gate prints every admitted one with its reason (#2468).
+ *
  *   3. Schema contract. Every column the replaced release's snapshot declares
  *      keeps its type and nullability in the newest snapshot (widening only:
  *      varchar(n) → text, NOT NULL → nullable), enums keep their values, and
  *      every NOT NULL column a known table gained has a default, so N-1's
- *      INSERTs, which do not name it, still succeed. An object may be
+ *      INSERTs, which do not name it, still succeed. A column becoming NOT
+ *      NULL is accepted only where part 2 admitted a `constrain` annotation on
+ *      that column's SET NOT NULL. An object may be
  *      "forgotten" (absent from the newest snapshot) but not dropped: see
  *      compareSchemas.
  *
@@ -877,15 +892,27 @@ function lintDoBlock(stmt: DoStmt, ctx: LintContext, out: Finding[]): void {
 // ── Annotations ──────────────────────────────────────────────────────────────
 
 /**
- * `-- migration-safety: allow <object> because <reason>`, where `<object>` is
+ * `-- migration-safety: <verb> <object> because <reason>`, where `<object>` is
  * a finding's object exactly as the gate prints it (`column public.users.team_id`).
- * It allows findings on that object in the statement (the chunk between
- * breakpoints) that carries it, and nowhere else.
+ * It covers findings on that object in the statement (the chunk between
+ * breakpoints) that carries it, and nowhere else: there is no file-wide,
+ * repo-wide, environment or command-line form.
+ *
+ *   allow       a contraction (drop, rename, …). Verified: the release being
+ *               replaced must no longer declare the object.
+ *   constrain   a tightening of an object the previous release still uses
+ *               (TIGHTENING_RULES). It cannot be verified against the replaced
+ *               release, which by design still declares it, so it is a
+ *               reviewed assertion: the reason must say why N-1 never writes a
+ *               row the constraint rejects, and the gate prints it.
  */
 const ANNOTATION_MARK = /^\s*--\s*migration-safety:/
-const ANNOTATION = /^\s*--\s*migration-safety:\s*allow\s+(\S+\s+\S+)\s+because\s+(\S.*)$/
+const ANNOTATION = /^\s*--\s*migration-safety:\s*(allow|constrain)\s+(\S+\s+\S+)\s+because\s+(\S.*)$/
+
+export type AnnotationVerb = 'allow' | 'constrain'
 
 export interface Annotation {
+  verb: AnnotationVerb
   object: string
   reason: string
 }
@@ -897,10 +924,58 @@ export function parseAnnotations(statement: string): { annotations: Annotation[]
   for (const line of statement.split('\n')) {
     if (!ANNOTATION_MARK.test(line)) continue
     const m = ANNOTATION.exec(line)
-    if (m) annotations.push({ object: m[1], reason: m[2].trim() })
+    if (m) annotations.push({ verb: m[1] as AnnotationVerb, object: m[2], reason: m[3].trim() })
     else malformed.push(line.trim())
   }
   return { annotations, malformed }
+}
+
+/**
+ * The findings a `constrain` annotation can admit: each makes the database
+ * reject a write to a column the previous release still writes. Nothing that
+ * drops, renames, retypes or deletes is here; those are contractions, and
+ * only a verified `allow` covers them.
+ */
+export const TIGHTENING_RULES: ReadonlySet<Rule> = new Set<Rule>(['set-not-null', 'add-constraint-existing', 'unique-index-existing'])
+
+/**
+ * A `constrain` reason is read by a reviewer as the argument that the
+ * previous release never writes a row the constraint rejects. A word or two
+ * ("because ok", "because reviewed") is a token that silences the check, not
+ * that argument.
+ */
+export const MIN_CONSTRAIN_REASON_WORDS = 5
+
+/**
+ * Why a `constrain` annotation on `finding` cannot be admitted, or undefined
+ * when it can. It must agree with the newest snapshot: a constraint on an
+ * object the release being deployed no longer declares is not a tightening,
+ * and a SET NOT NULL the drizzle schema does not declare leaves the code and
+ * the database disagreeing about the column.
+ */
+function constrainProblem(finding: Finding, reason: string, next: SchemaView): string | undefined {
+  const words = reason.split(/\s+/).filter(Boolean).length
+  if (words < MIN_CONSTRAIN_REASON_WORDS) {
+    return (
+      `its reason "${reason}" is ${words} word(s). Say, in at least ${MIN_CONSTRAIN_REASON_WORDS} words, why ` +
+      'the previous release never writes a row the constraint rejects (name the change that guarantees it)'
+    )
+  }
+  const object = finding.object as ObjectRef
+  if (!next.declares(object)) {
+    return 'the release being deployed does not declare it, so this is not a tightening of something it still uses'
+  }
+  if (finding.rule === 'set-not-null' && object.kind === 'column' && next.column(object.schema, object.table, object.column)?.notNull !== true) {
+    return (
+      'the release being deployed declares it nullable. Declare it NOT NULL in the drizzle schema and regenerate ' +
+      '(bun run db:generate), so the code and the database agree'
+    )
+  }
+  return undefined
+}
+
+function objectKey(ref: ObjectRef): string | undefined {
+  return ref.kind === 'column' ? `${ref.schema}.${ref.table}.${ref.column}` : undefined
 }
 
 // ── The gate ─────────────────────────────────────────────────────────────────
@@ -932,7 +1007,17 @@ export interface SafetyReport {
   /** Pending files allowed to sort before settled ones because they are concurrent with them. */
   outOfOrder: string[]
   allowed: number
+  /** Findings admitted by a `constrain` annotation, with the reason a reviewer reads. */
+  constrained: Constrained[]
   violations: Violation[]
+}
+
+export interface Constrained {
+  file: string
+  statementIndex: number
+  /** The finding as the gate would have refused it, e.g. `set-not-null column public.t.c`. */
+  finding: string
+  reason: string
 }
 
 interface Located extends Finding {
@@ -978,9 +1063,18 @@ function filledByDatabase(c: SnapshotColumn): boolean {
  *
  * What may not happen to an object the replaced release declares and the
  * newest snapshot still has: a type change other than a listed widening, a
- * nullable column becoming NOT NULL, an enum losing a value.
+ * nullable column becoming NOT NULL (unless `constrainedNotNull` names it), an
+ * enum losing a value.
  */
-export function compareSchemas(previous: DrizzleSnapshot, next: DrizzleSnapshot): string[] {
+export function compareSchemas(
+  previous: DrizzleSnapshot,
+  next: DrizzleSnapshot,
+  /**
+   * `schema.table.column` keys whose SET NOT NULL part 2 admitted with a
+   * `constrain` annotation. Only these may become NOT NULL.
+   */
+  constrainedNotNull: ReadonlySet<string> = new Set(),
+): string[] {
   const problems: string[] = []
   for (const [key, table] of Object.entries(previous.tables)) {
     const cur = next.tables[key]
@@ -1002,7 +1096,7 @@ export function compareSchemas(previous: DrizzleSnapshot, next: DrizzleSnapshot)
       if (c.type !== col.type && !WIDENINGS.some((w) => w(col.type, c.type))) {
         problems.push(`column ${key}.${name} changed type ${col.type} → ${c.type}`)
       }
-      if (!col.notNull && c.notNull) {
+      if (!col.notNull && c.notNull && !constrainedNotNull.has(`${key}.${name}`)) {
         problems.push(`column ${key}.${name} became NOT NULL`)
       }
     }
@@ -1075,6 +1169,9 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
 
   // ── 2. Destructive-DDL lint, with verified annotations ─────────────────────
   let allowed = 0
+  const constrained: Constrained[] = []
+  /** Columns whose SET NOT NULL a `constrain` annotation admitted; part 3 accepts only these becoming NOT NULL. */
+  const constrainedNotNull = new Set<string>()
   for (const file of input.pending) {
     const statements = splitMigrationStatements(readFileSync(join(migrationsDir, file), 'utf-8'))
     statements.forEach((sql, statementIndex) => {
@@ -1089,6 +1186,7 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
         })
       }
       const allowedHere = new Set<Located>()
+      const constrainedHere = new Map<Located, string>()
       for (const a of annotations) {
         const matches = findings.filter((f) => f.object && describeObject(f.object) === a.object)
         if (matches.length === 0) {
@@ -1099,14 +1197,46 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
           })
           continue
         }
+        if (a.verb === 'constrain') {
+          // Only the tightening findings on the object; a drop or retype of
+          // the same object in the same statement is still refused.
+          const tightening = matches.filter((m) => TIGHTENING_RULES.has(m.rule))
+          if (tightening.length === 0) {
+            violations.push({
+              file,
+              statementIndex,
+              message:
+                `${at}: the constrain annotation for ${a.object} is rejected: constrain admits only ` +
+                `${[...TIGHTENING_RULES].join(', ')}, and this statement's findings on it are ` +
+                `${[...new Set(matches.map((m) => m.rule))].join(', ')}.`,
+            })
+            continue
+          }
+          const problem = tightening.map((m) => constrainProblem(m, a.reason, ctx.next)).find((x) => x !== undefined)
+          if (problem !== undefined) {
+            violations.push({
+              file,
+              statementIndex,
+              message: `${at}: the constrain annotation for ${a.object} is rejected: ${problem}.`,
+            })
+            continue
+          }
+          for (const m of tightening) constrainedHere.set(m, a.reason)
+          continue
+        }
         if (previous.declares(matches[0].object as ObjectRef)) {
+          const tightens = matches.some((m) => TIGHTENING_RULES.has(m.rule))
           violations.push({
             file,
             statementIndex,
             message:
               `${at}: the annotation for ${a.object} is rejected: the release being replaced ` +
               `(${previousSnapshot}) still declares it, so it still reads it. Stop declaring it in one ` +
-              'release and contract it in a later one.',
+              'release and contract it in a later one.' +
+              (tightens
+                ? ' To tighten a column the previous release still uses, annotate ' +
+                  `\`-- migration-safety: constrain ${a.object} because <why it never writes a violating row>\` (${RUNBOOK}).`
+                : ''),
           })
           continue
         }
@@ -1114,6 +1244,13 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
       }
       allowed += allowedHere.size
       for (const f of findings) {
+        const reason = constrainedHere.get(f)
+        if (reason !== undefined) {
+          constrained.push({ file, statementIndex, finding: `${f.rule} ${describeObject(f.object as ObjectRef)}`, reason })
+          const key = f.rule === 'set-not-null' ? objectKey(f.object as ObjectRef) : undefined
+          if (key !== undefined) constrainedNotNull.add(key)
+          continue
+        }
         if (!allowedHere.has(f)) violations.push({ file, statementIndex, message: findingMessage(f) })
       }
     })
@@ -1121,12 +1258,12 @@ export async function judge(input: GateInput): Promise<SafetyReport> {
 
   // ── 3. Schema contract ─────────────────────────────────────────────────────
   if (input.pending.length > 0) {
-    for (const message of compareSchemas(previous.snapshot, next)) {
+    for (const message of compareSchemas(previous.snapshot, next, constrainedNotNull)) {
       violations.push({ message: `schema contract vs ${previousSnapshot ?? 'an empty schema'}: ${message}` })
     }
   }
 
-  return { previousSnapshot, judgedFiles: input.pending, outOfOrder, allowed, violations }
+  return { previousSnapshot, judgedFiles: input.pending, outOfOrder, allowed, constrained, violations }
 }
 
 // ── --ci: the branch's diff ──────────────────────────────────────────────────
@@ -1374,8 +1511,16 @@ if (import.meta.main) {
     `[migration-safety] judged ${report.judgedFiles.length} pending migration file(s) against ` +
       `${report.previousSnapshot ?? 'no previous snapshot'}` +
       `${report.judgedFiles.length ? `: ${report.judgedFiles.join(', ')}` : ''}` +
-      (report.allowed ? `; ${report.allowed} finding(s) allowed by verified annotations` : ''),
+      (report.allowed ? `; ${report.allowed} finding(s) allowed by verified annotations` : '') +
+      (report.constrained.length ? `; ${report.constrained.length} tightening(s) admitted by constrain annotations` : ''),
   )
+  // Every admitted tightening is printed with its reason, and surfaced as a
+  // check annotation on the file in CI, so the reviewer reads the claim.
+  for (const c of report.constrained) {
+    const message = `${c.file} statement ${c.statementIndex}: ${c.finding} admitted by constrain annotation: because ${c.reason}`
+    if (ci && process.env.GITHUB_ACTIONS === 'true') console.log(`::notice file=drizzle/migrations/${c.file}::${message}`)
+    else console.log(`[migration-safety] ${message}`)
+  }
   for (const o of report.outOfOrder) {
     console.log(
       `[migration-safety] ${o}: concurrent migrations, written without knowledge of each other; ` +
