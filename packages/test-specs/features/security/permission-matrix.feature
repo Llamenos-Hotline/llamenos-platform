@@ -171,7 +171,7 @@ Feature: Permission Matrix
 
   Scenario Outline: <role> <expected> access to create a ban
     # MED-W2: bans:create (admin-only) replaces bans:report — volunteers can no longer ban numbers directly
-    When the "<role>" user sends "POST" to "/api/bans" with valid ban body
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/bans" with valid ban body
     Then the response status should be <status>
 
     Examples:
@@ -183,7 +183,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to list bans
-    When the "<role>" user sends "GET" to "/api/bans"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/bans"
     Then the response status should be <status>
 
     Examples:
@@ -195,7 +195,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to bulk create bans
-    When the "<role>" user sends "POST" to "/api/bans/bulk" with valid bulk ban body
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/bans/bulk" with valid bulk ban body
     Then the response status should be <status>
 
     Examples:
@@ -218,6 +218,20 @@ Feature: Permission Matrix
       | reviewer     | denied    | 403    |
       | volunteer    | denied    | 403    |
       | reporter     | denied    | 403    |
+
+  # #2463: a hub's ban list has no unscoped route. Before, `/api/bans` with no hub
+  # addressed the PLATFORM list behind the hub permissions (bans:create), so a
+  # missing hub silently meant "every hub". The platform list is /api/admin/bans.
+  Scenario Outline: <role> finds no ban list outside a hub
+    When the "<role>" user sends "<method>" to "/api/bans"
+    Then the response status should be 404
+
+    Examples:
+      | role        | method |
+      | super-admin | GET    |
+      | super-admin | POST   |
+      | hub-admin   | GET    |
+      | hub-admin   | POST   |
 
   # ─── Notes Domain ─────────────────────────────────────────────────
 

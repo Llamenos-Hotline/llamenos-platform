@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
 import { banHash, sealCallerNumber } from '@worker/lib/crypto'
+import { hubScope } from '@shared/owner-scope'
 import type { AppEnv } from '@worker/types'
 import type { activeCalls, callRecords } from '@worker/db/schema'
 import { ServiceError } from '@worker/services/settings'
@@ -836,12 +837,45 @@ describe('Calls Routes', () => {
       // The ban is stored as the hub-keyed hash of the number opened from the call's
       // sealed copy, with no digits of it beside the hash.
       expect(recordsSvc.addBan).toHaveBeenCalledWith({
-        phoneHash: banHash('+15551234567', 'hub-1', TEST_BAN_HASH_KEY),
+        scope: hubScope('hub-1'),
+        phoneHash: banHash('+15551234567', hubScope('hub-1'), TEST_BAN_HASH_KEY),
         reason: 'Harassment',
         bannedBy: pubkey,
-        hubId: 'hub-1',
       })
       expect(callsSvc.endCall).toHaveBeenCalledWith('hub-1', 'call-1')
+    })
+
+    it('never bans the caller of a call with no hub onto the platform list (#2463)', async () => {
+      // A call to a number no hub owns (#2460) is stored in hub ''. Before #2463 its ban
+      // fell through to the platform list, so `bans:report` banned deployment-wide.
+      const callsSvc = makeMockCallsService()
+      const recordsSvc = makeMockRecordsService()
+      const pubkey = 'a'.repeat(64)
+
+      callsSvc.getActiveCallById.mockResolvedValue({
+        callId: 'call-1',
+        answeredBy: pubkey,
+        callerNumberSealed: sealCallerNumber('+15551234567', 'call-1', TEST_KEK),
+        hubId: '',
+      })
+      callsSvc.endCall.mockResolvedValue(callRecordRow())
+
+      const services = makeServices({ calls: callsSvc, records: recordsSvc })
+      const { app } = createTestApp({
+        permissions: ['bans:report'],
+        pubkey,
+        services,
+        env: { SERVER_KEK: TEST_KEK, BAN_HASH_KEY: TEST_BAN_HASH_KEY } as AppEnv['Bindings'],
+      })
+
+      const res = await app.request('/call-1/ban', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Harassment' }),
+      })
+      expect(res.status).toBe(200)
+      expect((await res.json()).banned).toBe(false)
+      expect(recordsSvc.addBan).not.toHaveBeenCalled()
     })
 
     it('uses default reason when body reason is empty', async () => {

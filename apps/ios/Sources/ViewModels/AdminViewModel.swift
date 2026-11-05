@@ -449,7 +449,7 @@ final class AdminViewModel {
         do {
             let response: BanListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/bans"
+                path: apiService.activeHubPath("/api/bans")
             )
             bans = response.bans.sorted { lhs, rhs in
                 (lhs.bannedDate ?? Date.distantPast) > (rhs.bannedDate ?? Date.distantPast)
@@ -480,7 +480,7 @@ final class AdminViewModel {
             )
             try await apiService.request(
                 method: "POST",
-                path: "/api/bans",
+                path: apiService.activeHubPath("/api/bans"),
                 body: request
             )
 
@@ -505,7 +505,7 @@ final class AdminViewModel {
         do {
             try await apiService.request(
                 method: "DELETE",
-                path: "/api/bans/\(id)"
+                path: apiService.activeHubPath("/api/bans/\(id)")
             )
 
             let generator = UINotificationFeedbackGenerator()
@@ -1326,7 +1326,7 @@ final class AdminViewModel {
         do {
             let response: PlatformBanListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/bans/platform"
+                path: "/api/admin/bans"
             )
             platformBans = response.bans.sorted {
                 ($0.bannedDate ?? Date.distantPast) > ($1.bannedDate ?? Date.distantPast)
@@ -1357,7 +1357,7 @@ final class AdminViewModel {
             )
             try await apiService.request(
                 method: "POST",
-                path: "/api/bans/platform",
+                path: "/api/admin/bans",
                 body: request
             )
 
@@ -1382,7 +1382,7 @@ final class AdminViewModel {
         do {
             try await apiService.request(
                 method: "DELETE",
-                path: "/api/bans/platform/\(id)"
+                path: "/api/admin/bans/\(id)"
             )
 
             let generator = UINotificationFeedbackGenerator()
@@ -1405,7 +1405,7 @@ final class AdminViewModel {
         do {
             let response: SearchBansResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/bans/platform/search?q=\(query)"
+                path: "/api/admin/bans/search?q=\(query)"
             )
             platformBanSearchResults = response.bans
         } catch {
@@ -1415,12 +1415,12 @@ final class AdminViewModel {
 
     /// Promote a hub-scoped ban to platform scope.
     ///
-    /// `POST /api/bans/platform/promote` needs the number again: a hub's ban hash is
+    /// `POST /api/admin/bans/promote` needs the number again: a hub's ban hash is
     /// keyed to that hub (`apps/worker/lib/crypto.ts` `banHash`), so the server cannot
     /// re-key it to the platform list on its own. It checks the number against the
     /// hub ban before adding the platform ban. Body is the generated `PromoteBanBody`.
     ///
-    /// `GET /api/bans` does not return a ban `id`, so the id comes from a platform
+    /// `GET /api/hubs/{id}/bans` does not return a ban `id`, so the id comes from a platform
     /// search result for the number the caller just typed (`SearchBansResponseBan`),
     /// and the same number is passed here. Covered by `AdminViewModelPromoteBanTests`.
     func promoteBanToPlatform(banId: String, phone: String) async {
@@ -1430,7 +1430,7 @@ final class AdminViewModel {
         do {
             try await apiService.request(
                 method: "POST",
-                path: "/api/bans/platform/promote",
+                path: "/api/admin/bans/promote",
                 wireBody: PromoteBanBody(banID: banId, phone: phone)
             )
 

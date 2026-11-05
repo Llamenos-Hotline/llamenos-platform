@@ -9,7 +9,7 @@ import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
 import { holdMusicEntry } from '../telephony/hold-music'
 import { resolveCallerLanguage } from '../telephony/ivr-menu'
-import { banHashes, callerRateLimitDigest, getClientIp, sealCallerNumber } from '../lib/crypto'
+import { callBanLookup, callerRateLimitDigest, getClientIp, sealCallerNumber } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
@@ -472,7 +472,7 @@ telephony.post('/incoming',
     return telephonyResponse(adapter.rejectCall())
   }
 
-  const banned = await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)
+  const banned = await services.records.checkBan(callBanLookup(callerNumber, hubId, c.env.BAN_HASH_KEY))
   if (banned) {
     await signalSpam(services, hubId, 'ban_match')
     return telephonyResponse(adapter.rejectCall())
@@ -515,7 +515,7 @@ telephony.post('/language-selected',
   // Bans are enforced when the call is answered (/incoming), but a ban can be added
   // while the caller is still in the language menu. Re-check before greeting or
   // queueing so a newly banned caller never reaches a volunteer.
-  if (await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)) {
+  if (await services.records.checkBan(callBanLookup(callerNumber, hubId, c.env.BAN_HASH_KEY))) {
     await signalSpam(services, hubId, 'ban_match')
     return telephonyResponse(adapter.rejectCall())
   }
@@ -628,7 +628,7 @@ telephony.post('/captcha',
   const callerLang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
 
   // A ban added while the caller was in the menu / CAPTCHA must still take effect.
-  if (await services.records.checkBan(banHashes(callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)) {
+  if (await services.records.checkBan(callBanLookup(callerNumber, hubId, c.env.BAN_HASH_KEY))) {
     await signalSpam(services, hubId, 'ban_match')
     return telephonyResponse(adapter.rejectCall())
   }

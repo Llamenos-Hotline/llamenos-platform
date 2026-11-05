@@ -96,11 +96,11 @@ export async function listPlatformBans(params?: { page?: number; limit?: number 
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   const query = qs.toString()
-  return request<{ bans: PlatformBan[]; total: number }>(`/bans/platform${query ? `?${query}` : ''}`)
+  return request<{ bans: PlatformBan[]; total: number }>(`/admin/bans${query ? `?${query}` : ''}`)
 }
 
 export async function createPlatformBan(data: { phoneHash: string; reason: string }) {
-  return request<{ ban: PlatformBan }>('/bans/platform', {
+  return request<{ ban: PlatformBan }>('/admin/bans', {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -109,11 +109,11 @@ export async function createPlatformBan(data: { phoneHash: string; reason: strin
 /** Lift a platform ban. Requires the admin's confirmation of exactly this ban (#2575). */
 export async function deletePlatformBan(id: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'platformBan', id)
-  return request<{ ok: true }>(`/bans/platform/${id}`, { method: 'DELETE' })
+  return request<{ ok: true }>(`/admin/bans/${id}`, { method: 'DELETE' })
 }
 
 export async function bulkImportPlatformBans(data: { phoneHashes: string[]; reason: string }) {
-  return request<{ count: number }>('/bans/platform/bulk', {
+  return request<{ count: number }>('/admin/bans/bulk', {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -121,13 +121,13 @@ export async function bulkImportPlatformBans(data: { phoneHashes: string[]; reas
 
 export async function searchPlatformBans(phoneHash: string) {
   return request<{ bans: (PlatformBan & { scope: 'hub' | 'platform' })[] }>(
-    `/bans/platform/search?phoneHash=${encodeURIComponent(phoneHash)}`
+    `/admin/bans/search?phoneHash=${encodeURIComponent(phoneHash)}`
   )
 }
 
 /** Promote a hub ban to platform scope. The number is re-entered: a hub's ban hash cannot be re-keyed without it. */
 export async function promoteHubBan(banId: string, phone: string) {
-  return request<{ ok: true }>('/bans/platform/promote', {
+  return request<{ ok: true }>('/admin/bans/promote', {
     method: 'POST',
     body: JSON.stringify({ banId, phone }),
   })

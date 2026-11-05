@@ -10,6 +10,7 @@ import {
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, HMAC_BAN_PREFIX, LABEL_BAN_KEY_DERIVE, LABEL_CALLER_NUMBER_SEAL, LABEL_CALL_RECORDING_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
+import { assertNeverScope, hubScope, PLATFORM_SCOPE, type OwnerScope } from '@shared/owner-scope'
 
 // getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
 // needs to stay importable from contexts (like the rate-limit middleware)
@@ -37,8 +38,22 @@ export function hashPhone(phone: string, secret: string): string {
   return bytesToHex(hmacSha256(key, input))
 }
 
-/** Ban scope of the platform-wide list; a hub's scope is its hub id. */
-export const PLATFORM_BAN_SCOPE = 'platform'
+/**
+ * The HKDF info suffix of a scope's ban key. A hub's suffix is its hub id and the
+ * platform's is the literal `platform`; both are unchanged from before the scope
+ * was named (#2463), so every stored hash still matches. M2's organization scope
+ * needs a suffix no hub id can equal (e.g. `org:<id>`), and must be added here.
+ */
+function banKeyScope(scope: OwnerScope): string {
+  switch (scope.kind) {
+    case 'hub':
+      return scope.hubId
+    case 'platform':
+      return 'platform'
+    default:
+      return assertNeverScope(scope)
+  }
+}
 
 /**
  * Hash of a BANNED number under one scope's key: HMAC(HKDF(BAN_HASH_KEY, scope), number).
@@ -51,22 +66,31 @@ export const PLATFORM_BAN_SCOPE = 'platform'
  * other hash of the same number. BAN_HASH_KEY is a file-only secret (never in
  * the DB, `.env` or a config backup), so a database dump alone confirms nothing.
  */
-export function banHash(phone: string, scope: string, banHashKey: string): string {
-  const scopeKey = hkdfSha256(hexToBytes(banHashKey), new Uint8Array(0), utf8ToBytes(`${LABEL_BAN_KEY_DERIVE}:${scope}`), 32)
+export function banHash(phone: string, scope: OwnerScope, banHashKey: string): string {
+  const scopeKey = hkdfSha256(hexToBytes(banHashKey), new Uint8Array(0), utf8ToBytes(`${LABEL_BAN_KEY_DERIVE}:${banKeyScope(scope)}`), 32)
   return bytesToHex(hmacSha256(scopeKey, utf8ToBytes(`${HMAC_BAN_PREFIX}${phone}`)))
 }
 
-/** The hashes a call must be compared against: its hub's list (when it has a hub) and the platform's. */
-export interface BanHashes {
-  hub?: string
-  platform: string
+/** One ban-list lookup: a number hashed under one scope's key, matched only against that scope's rows. */
+export interface ScopedBanHash {
+  scope: OwnerScope
+  phoneHash: string
 }
 
-export function banHashes(phone: string, hubId: string | undefined, banHashKey: string): BanHashes {
-  return {
-    hub: hubId ? banHash(phone, hubId, banHashKey) : undefined,
-    platform: banHash(phone, PLATFORM_BAN_SCOPE, banHashKey),
-  }
+/** The lookups for one number across the given scopes, each under its own scope's key. */
+export function banLookup(phone: string, scopes: readonly OwnerScope[], banHashKey: string): ScopedBanHash[] {
+  return scopes.map((scope) => ({ scope, phoneHash: banHash(phone, scope, banHashKey) }))
+}
+
+/**
+ * The ban lists an inbound call is checked against: the platform's, and its hub's.
+ *
+ * `hubId` is optional only because the hubless call path still exists (#2460):
+ * a call to a number no hub owns. That call is checked against the platform list
+ * alone. Once #2460 refuses such a call, `hubId` becomes required.
+ */
+export function callBanLookup(phone: string, hubId: string | undefined, banHashKey: string): ScopedBanHash[] {
+  return banLookup(phone, hubId ? [hubScope(hubId), PLATFORM_SCOPE] : [PLATFORM_SCOPE], banHashKey)
 }
 
 const CALLER_RATE_KEY_EPOCH_MS = 60_000

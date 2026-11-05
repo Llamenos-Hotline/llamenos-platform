@@ -295,7 +295,7 @@ When('the {string} user sends {string} to {string} with valid ban body', async (
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  getSharedState(world).lastResponse = await apiPost(request, '/bans', {
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/bans`, {
     phone: uniquePhone(),
     reason: 'PM test ban',
   }, user.deviceKey)
@@ -305,7 +305,7 @@ When('the {string} user sends {string} to {string} with valid bulk ban body', as
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  getSharedState(world).lastResponse = await apiPost(request, '/bans/bulk', {
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/bans/bulk`, {
     phones: [uniquePhone()],
     reason: 'PM bulk test',
   }, user.deviceKey)

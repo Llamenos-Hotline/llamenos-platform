@@ -169,7 +169,8 @@ Then('{int} bans should be returned', async ({ world }, count: number) => {
 // ─── Duplicate Prevention ───────────────────────────────────────────
 
 When('an admin bans phone {string} again', async ({ request, world }, phone: string) => {
-  getSharedState(world).lastResponse = await apiPost(request, '/bans', { phone, reason: 'duplicate test' })
+  // The same hub as the first ban: a duplicate is only a duplicate within one list (#2463).
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/bans`, { phone, reason: 'duplicate test' })
 })
 
 Then('the ban list should contain exactly {int} entry for {string}', async ({request, world}, count: number, phone: string) => {
@@ -236,7 +237,7 @@ Then('the volunteer should be created successfully', async ({ world }) => {
 // 'the volunteer list should contain {string}' is defined in crud.steps.ts
 
 When('an admin creates a ban with reason {string}', async ({ request, world }, reason: string) => {
-  const response = await apiPost(request, '/bans', {
+  const response = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/bans`, {
     phone: uniquePhone(),
     reason,
   })

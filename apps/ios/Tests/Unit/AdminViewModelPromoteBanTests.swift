@@ -10,9 +10,9 @@ import XCTest
 /// These tests make its absence a build failure of the test target, and pin the
 /// endpoint and wire body so a regression to the wrong route fails loudly:
 /// an earlier implementation posted `{identifierHash, reason}` to
-/// `POST /api/bans/platform`, whose validator is `createPlatformBanBodySchema`
+/// `POST /api/admin/bans`, whose validator is `createPlatformBanBodySchema`
 /// (`{phone: <E.164>, reason?}`) — every call would have 400'd. The real route
-/// is `POST /api/bans/platform/promote` with `promoteBanBodySchema` (`{banId, phone}`).
+/// is `POST /api/admin/bans/promote` with `promoteBanBodySchema` (`{banId, phone}`).
 @MainActor
 final class AdminViewModelPromoteBanTests: XCTestCase {
 
@@ -31,7 +31,7 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
 
         MockURLProtocol.requestHandler = { request in
             // The follow-up platform-ban reload must not fail the promote path.
-            if request.url?.path == "/api/bans/platform" {
+            if request.url?.path == "/api/admin/bans" {
                 return (200, Data(#"{"bans":[],"total":0}"#.utf8))
             }
             return (200, Data(#"{"ok":true}"#.utf8))
@@ -41,7 +41,7 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
         await viewModel.promoteBanToPlatform(banId: "ban-42", phone: "+15550100042")
 
         let promoteRequests = MockURLProtocol.capturedRequests.filter {
-            $0.url?.path == "/api/bans/platform/promote"
+            $0.url?.path == "/api/admin/bans/promote"
         }
         XCTAssertEqual(promoteRequests.count, 1, "expected exactly one promote call")
         XCTAssertEqual(promoteRequests.first?.httpMethod, "POST")

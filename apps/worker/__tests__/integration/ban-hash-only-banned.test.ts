@@ -26,7 +26,8 @@ import { eq } from 'drizzle-orm'
 import * as schema from '../../db/schema'
 import { createServices, type Services } from '../../services'
 import { startParallelRinging } from '../../services/ringing'
-import { banHash, banHashes, hashPhone, PLATFORM_BAN_SCOPE } from '../../lib/crypto'
+import { banHash, callBanLookup, hashPhone } from '../../lib/crypto'
+import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 import bansRoutes from '../../routes/bans'
 import platformBansRoutes from '../../routes/platform-bans'
 import callsRoutes from '../../routes/calls'
@@ -134,7 +135,7 @@ describe('an ordinary caller leaves no hash on the server', () => {
   it('registering the call and checking it against the ban lists stores no hash of the number', async () => {
     const callSid = 'CA-ordinary-1'
     // The webhook path: ban check, then the call is registered and rung.
-    expect(await services.records.checkBan(banHashes(ORDINARY, 'hub-a', BAN_HASH_KEY), 'hub-a')).toBe(false)
+    expect(await services.records.checkBan(callBanLookup(ORDINARY, 'hub-a', BAN_HASH_KEY))).toBe(false)
     const ringing = await startParallelRinging(callSid, ORDINARY, 'https://example.test', ENV, services, 'hub-a')
     expect(ringing.ringing).toBe(false) // nobody on shift: the call is registered, then reported unroutable
 
@@ -146,8 +147,8 @@ describe('an ordinary caller leaves no hash on the server', () => {
     const needles = [
       ORDINARY,
       ORDINARY.slice(1),
-      banHash(ORDINARY, 'hub-a', BAN_HASH_KEY),
-      banHash(ORDINARY, PLATFORM_BAN_SCOPE, BAN_HASH_KEY),
+      banHash(ORDINARY, hubScope('hub-a'), BAN_HASH_KEY),
+      banHash(ORDINARY, PLATFORM_SCOPE, BAN_HASH_KEY),
       hashPhone(ORDINARY, HMAC_SECRET),
     ]
     for (const needle of needles) expect(dump).not.toContain(needle)
@@ -159,7 +160,7 @@ describe('an ordinary caller leaves no hash on the server', () => {
     await services.settings.checkRateLimit({ key: `phone:hub-a:${callerRateLimitDigest(ORDINARY)}`, maxPerMinute: 5 })
     const dump = await dumpDatabase()
     expect(dump).not.toContain(hashPhone(ORDINARY, HMAC_SECRET).slice(0, 32))
-    expect(dump).not.toContain(banHash(ORDINARY, 'hub-a', BAN_HASH_KEY).slice(0, 32))
+    expect(dump).not.toContain(banHash(ORDINARY, hubScope('hub-a'), BAN_HASH_KEY).slice(0, 32))
   })
 })
 
@@ -172,9 +173,9 @@ describe('a banned number matches at hub scope and at platform scope', () => {
     expect(Object.keys(created.ban).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
     expect(JSON.stringify(created)).not.toContain(BANNED.slice(-4))
 
-    expect(await services.records.checkBan(banHashes(BANNED, 'hub-a', BAN_HASH_KEY), 'hub-a')).toBe(true)
-    expect(await services.records.checkBan(banHashes(BANNED, 'hub-b', BAN_HASH_KEY), 'hub-b')).toBe(false)
-    expect(await services.records.checkBan(banHashes(OTHER, 'hub-a', BAN_HASH_KEY), 'hub-a')).toBe(false)
+    expect(await services.records.checkBan(callBanLookup(BANNED, 'hub-a', BAN_HASH_KEY))).toBe(true)
+    expect(await services.records.checkBan(callBanLookup(BANNED, 'hub-b', BAN_HASH_KEY))).toBe(false)
+    expect(await services.records.checkBan(callBanLookup(OTHER, 'hub-a', BAN_HASH_KEY))).toBe(false)
 
     const list = await (await hubA.request('/bans')).json() as { bans: Array<Record<string, unknown>> }
     expect(list.bans).toHaveLength(1)
@@ -186,24 +187,24 @@ describe('a banned number matches at hub scope and at platform scope', () => {
   })
 
   it('a platform ban matches in every hub, and platform and hub hashes of one number differ', async () => {
-    const platform = appFor(platformBansRoutes, '/bans/platform')
-    const res = await post(platform, '/bans/platform', { phone: OTHER, reason: 'known abuser' })
+    const platform = appFor(platformBansRoutes, '/admin/bans')
+    const res = await post(platform, '/admin/bans', { phone: OTHER, reason: 'known abuser' })
     expect(res.status).toBe(200)
 
     for (const hubId of ['hub-a', 'hub-b', 'hub-c']) {
-      expect(await services.records.checkBan(banHashes(OTHER, hubId, BAN_HASH_KEY), hubId)).toBe(true)
+      expect(await services.records.checkBan(callBanLookup(OTHER, hubId, BAN_HASH_KEY))).toBe(true)
     }
-    expect(banHash(OTHER, 'hub-a', BAN_HASH_KEY)).not.toBe(banHash(OTHER, PLATFORM_BAN_SCOPE, BAN_HASH_KEY))
-    expect(await services.records.checkBan(banHashes(ORDINARY, 'hub-a', BAN_HASH_KEY), 'hub-a')).toBe(false)
+    expect(banHash(OTHER, hubScope('hub-a'), BAN_HASH_KEY)).not.toBe(banHash(OTHER, PLATFORM_SCOPE, BAN_HASH_KEY))
+    expect(await services.records.checkBan(callBanLookup(ORDINARY, 'hub-a', BAN_HASH_KEY))).toBe(false)
   })
 
   it('platform search finds the number in every scope that banned it', async () => {
-    const platform = appFor(platformBansRoutes, '/bans/platform')
+    const platform = appFor(platformBansRoutes, '/admin/bans')
     // hub-a banned BANNED above; the hubs table is what the search walks.
     for (const id of ['hub-a', 'hub-b']) {
       await fresh.db.insert(schema.hubs).values({ id, name: id, slug: id, createdBy: ADMIN }).onConflictDoNothing()
     }
-    const res = await platform.request(`/bans/platform/search?phone=${encodeURIComponent(BANNED)}`)
+    const res = await platform.request(`/admin/bans/search?phone=${encodeURIComponent(BANNED)}`)
     expect(res.status).toBe(200)
     const { bans } = await res.json() as { bans: Array<{ hubId: string | null }> }
     expect(bans.map(b => b.hubId)).toEqual(['hub-a'])
@@ -213,12 +214,12 @@ describe('a banned number matches at hub scope and at platform scope', () => {
     const hubA = appFor(bansRoutes, '/bans', 'hub-a')
     const raw = await hubA.request(`/bans/${encodeURIComponent(BANNED)}`, { method: 'DELETE' })
     expect(raw.status).toBe(400)
-    expect(await services.records.checkBan(banHashes(BANNED, 'hub-a', BAN_HASH_KEY), 'hub-a')).toBe(true)
+    expect(await services.records.checkBan(callBanLookup(BANNED, 'hub-a', BAN_HASH_KEY))).toBe(true)
 
     const { bans } = await (await hubA.request('/bans')).json() as { bans: Array<{ phoneHash: string }> }
     const del = await hubA.request(`/bans/${bans[0]!.phoneHash}`, { method: 'DELETE' })
     expect(del.status).toBe(200)
-    expect(await services.records.checkBan(banHashes(BANNED, 'hub-a', BAN_HASH_KEY), 'hub-a')).toBe(false)
+    expect(await services.records.checkBan(callBanLookup(BANNED, 'hub-a', BAN_HASH_KEY))).toBe(false)
   })
 })
 
@@ -229,17 +230,17 @@ describe('promoting a hub ban to the platform requires the number again', () => 
     const [source] = await fresh.db.select().from(schema.bans).where(eq(schema.bans.hubId, 'hub-a'))
     expect(source).toBeTruthy()
 
-    const platform = appFor(platformBansRoutes, '/bans/platform')
-    expect((await post(platform, '/bans/platform/promote', { banId: source!.id })).status).toBe(400)
-    expect((await post(platform, '/bans/platform/promote', { banId: source!.id, phone: ORDINARY })).status).toBe(400)
-    expect(await services.records.checkBan(banHashes(BANNED, 'hub-b', BAN_HASH_KEY), 'hub-b')).toBe(false)
+    const platform = appFor(platformBansRoutes, '/admin/bans')
+    expect((await post(platform, '/admin/bans/promote', { banId: source!.id })).status).toBe(400)
+    expect((await post(platform, '/admin/bans/promote', { banId: source!.id, phone: ORDINARY })).status).toBe(400)
+    expect(await services.records.checkBan(callBanLookup(BANNED, 'hub-b', BAN_HASH_KEY))).toBe(false)
 
-    expect((await post(platform, '/bans/platform/promote', { banId: source!.id, phone: BANNED })).status).toBe(200)
+    expect((await post(platform, '/admin/bans/promote', { banId: source!.id, phone: BANNED })).status).toBe(200)
     for (const hubId of ['hub-b', 'hub-c']) {
-      expect(await services.records.checkBan(banHashes(BANNED, hubId, BAN_HASH_KEY), hubId)).toBe(true)
+      expect(await services.records.checkBan(callBanLookup(BANNED, hubId, BAN_HASH_KEY))).toBe(true)
     }
     // The platform row is keyed to the platform, not copied from the hub's hash.
-    const platformRows = await fresh.db.select().from(schema.bans).where(eq(schema.bans.phone, banHash(BANNED, PLATFORM_BAN_SCOPE, BAN_HASH_KEY)))
+    const platformRows = await fresh.db.select().from(schema.bans).where(eq(schema.bans.phone, banHash(BANNED, PLATFORM_SCOPE, BAN_HASH_KEY)))
     expect(platformRows).toHaveLength(1)
     expect(platformRows[0]!.hubId).toBeNull()
   })
@@ -257,8 +258,8 @@ describe('banning a live caller', () => {
     expect(res.status).toBe(200)
     expect((await res.json() as { banned: boolean }).banned).toBe(true)
 
-    expect(await services.records.checkBan(banHashes(live, 'hub-live', BAN_HASH_KEY), 'hub-live')).toBe(true)
-    expect(await services.records.checkBan(banHashes(live, 'hub-other', BAN_HASH_KEY), 'hub-other')).toBe(false)
+    expect(await services.records.checkBan(callBanLookup(live, 'hub-live', BAN_HASH_KEY))).toBe(true)
+    expect(await services.records.checkBan(callBanLookup(live, 'hub-other', BAN_HASH_KEY))).toBe(false)
 
     // The ban hangs up and ends the call: its row, and the sealed number on it, are gone.
     const remaining = await fresh.db.select().from(schema.activeCalls).where(eq(schema.activeCalls.callId, callSid))

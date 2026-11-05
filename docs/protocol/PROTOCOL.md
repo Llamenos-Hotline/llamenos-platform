@@ -3846,31 +3846,31 @@ Hub-scoped: `/api/hubs/:hubId/retention/*`
 Platform-scoped bans (cross-hub). Requires `bans:*-platform` permissions.
 
 ```
-GET    /api/bans/platform
+GET    /api/admin/bans
 Permission: bans:read-platform
 Query: ?limit=&offset=
 Response: { "bans": PlatformBan[], "total": number }
 
-POST   /api/bans/platform
+POST   /api/admin/bans
 Permission: bans:create-platform
 Body: { "phone": string (E.164), "reason": string }
 Response: { "ok": true }
 
-POST   /api/bans/platform/bulk
+POST   /api/admin/bans/bulk
 Permission: bans:create-platform
 Body: { "phones": string[], "reason": string }
 Response: { "ok": true, "count": number }
 
-DELETE /api/bans/platform/:id
+DELETE /api/admin/bans/:id
 Permission: bans:delete-platform
 Response: { "ok": true }
 
-GET    /api/bans/platform/search
+GET    /api/admin/bans/search
 Permission: bans:read-platform
 Query: ?phone=<E.164>
 Response: { "bans": PlatformBan[] }
 
-POST   /api/bans/platform/promote
+POST   /api/admin/bans/promote
 Permission: bans:create-platform
 Body: { "banId": string, "phone": string (E.164) }
 Response: { "ok": true }
@@ -4461,8 +4461,8 @@ GET  /api/provider-templates
 ```
 GET  /api/settings/platform
 PATCH /api/settings/platform
-GET  /api/bans/platform
-POST /api/bans/platform
+GET  /api/admin/bans
+POST /api/admin/bans
 ```
 
 #### System & Analytics
@@ -4996,7 +4996,7 @@ The following endpoints are also implemented. See `apps/worker/routes/` for full
 - **`/api/provider-setup/*`** — Telephony/messaging provider configuration
 - **`/api/provider-templates/*`** — Provider template management
 - **`/api/hubs/:hubId/ring-groups/*`** — Call ring group management
-- **`/api/bans/platform/*`** — Platform-level ban management
+- **`/api/admin/bans/*`** — Platform-level ban management
 - **`/api/settings/platform/*`** — Platform-level settings
 - **`/api/signal-notification/*`** — Signal notifier integration
 - **`/api/hubs/:hubId/onboard/*`** — Hub onboarding flows

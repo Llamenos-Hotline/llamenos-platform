@@ -125,8 +125,6 @@ const LEDGER: Record<string, string> = {
     'Alias of /users, same router and guard.',
   '/identity':
     'WIDENS (#2404): /identity/members with no hub lists every user to a global `users:read` holder.',
-  '/bans':
-    'Unscoped = the platform ban list (`hub_id IS NULL`), a deployment-wide list by design.',
   '/blasts':
     'WIDENS (#2404): listSubscribers / listBlasts / getSubscriberStats drop the hub filter with no hub.',
   '/directory':
