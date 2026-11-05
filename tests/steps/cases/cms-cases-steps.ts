@@ -229,7 +229,7 @@ Given('no cases have been created', async ({ backendRequest: request, workerHub 
     const result = await listRecordsViaApi(request, { page, limit: 100, hubId: workerHub }).catch(() => ({ records: [], total: 0, hasMore: false }))
     for (const rec of result.records) {
       const id = (rec as { id: string }).id
-      await apiDelete(request, `/records/${id}`).catch(() => {})
+      await apiDelete(request, `/hubs/${workerHub}/records/${id}`).catch(() => {})
     }
     hasMore = result.records.length === 100
     page++

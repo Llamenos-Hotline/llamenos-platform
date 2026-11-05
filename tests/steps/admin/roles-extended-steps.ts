@@ -38,12 +38,15 @@ Given('I am logged in as a volunteer', async ({ page, request, rolesWorld, worke
   await loginAsVolunteer(page, vol.nsec)
 })
 
-Given('I am logged in as a reporter', async ({ page, request, rolesWorld }) => {
-  // Create a volunteer with reporter role
+Given('I am logged in as a reporter', async ({ page, request, rolesWorld, workerHub }) => {
+  // Create a volunteer with reporter role, a reporter IN workerHub: a role grants
+  // nothing in a hub its holder is not a member of, so a refusal there would be
+  // for the membership, not the role (#2461).
   const vol = await createVolunteerViaApi(request, {
     name: `Reporter ${Date.now()}`,
     roleIds: ['role-reporter'],
   })
+  await addHubMemberViaApi(request, workerHub, vol.pubkey, ['role-reporter'])
   rolesWorld.reporterNsec = vol.nsec
   await loginAsVolunteer(page, vol.nsec)
 })
@@ -54,10 +57,10 @@ When('I attempt to access an admin endpoint', async ({ request, rolesWorld }) =>
   ;(globalThis as Record<string, unknown>).__test_endpoint_status = status
 })
 
-When('I attempt to access call-related endpoints', async ({ request, rolesWorld }) => {
-  // Use the reporter's nsec — reporters can't access calls
+When('I attempt to access call-related endpoints', async ({ request, rolesWorld, workerHub }) => {
+  // Use the reporter's nsec — reporters can't access calls. Calls are hub-only (#2461).
   const nsec = rolesWorld.reporterNsec || rolesWorld.volunteerNsec
-  const status = await testEndpointAccess(request, 'GET', '/calls/history', nsec)
+  const status = await testEndpointAccess(request, 'GET', `/hubs/${workerHub}/calls/history`, nsec)
   ;(globalThis as Record<string, unknown>).__test_endpoint_status = status
 })
 
@@ -119,9 +122,9 @@ Given('a volunteer has only a custom {string} role', async ({ request, rolesWorl
   rolesWorld.volunteerNsec = vol.nsec
 })
 
-Then('they should only see endpoints allowed by that role', async ({ request, rolesWorld }) => {
+Then('they should only see endpoints allowed by that role', async ({ request, rolesWorld, workerHub }) => {
   // Verify the volunteer can access calls but not admin endpoints
-  const _callsStatus = await testEndpointAccess(request, 'GET', '/calls/history', rolesWorld.volunteerNsec)
+  const _callsStatus = await testEndpointAccess(request, 'GET', `/hubs/${workerHub}/calls/history`, rolesWorld.volunteerNsec)
   // Calls read should work (200 or similar)
   // Admin endpoints should be denied
   const volunteersStatus = await testEndpointAccess(request, 'GET', '/users', rolesWorld.volunteerNsec)

@@ -203,7 +203,7 @@ Then(
     expect(state.callId).toBeDefined()
     const { status, data } = await apiGet<{ status: string }>(
       request,
-      `/calls/${state.callId}`,
+      `/hubs/${state.hubId}/calls/${state.callId}`,
     )
     expect(status).toBe(200)
     expect(data.status).toBe(expectedStatus)
@@ -227,7 +227,7 @@ Then('the SIP call status should be {string}', async ({ request, world }, expect
   expect(state.callId).toBeDefined()
   const { status, data } = await apiGet<{ status: string }>(
     request,
-    `/calls/${state.callId}`,
+    `/hubs/${state.hubId}/calls/${state.callId}`,
   )
   expect(status).toBe(200)
   expect(data.status).toBe(expectedStatus)
@@ -240,7 +240,7 @@ Then(
     expect(state.callId).toBeDefined()
     const { data } = await apiGet<{ answeredBy?: string }>(
       request,
-      `/calls/${state.callId}`,
+      `/hubs/${state.hubId}/calls/${state.callId}`,
     )
     expect(data.answeredBy).toBeDefined()
   },
@@ -267,7 +267,7 @@ Then('the call metadata should include recording info', async ({ request, world 
   expect(state.callId).toBeDefined()
   const { data } = await apiGet<{ recordingUrl?: string; metadata?: Record<string, unknown> }>(
     request,
-    `/calls/${state.callId}`,
+    `/hubs/${state.hubId}/calls/${state.callId}`,
   )
   // Recording URL may be on the call or in metadata; accept either
   const hasRecording =

@@ -208,11 +208,13 @@ export async function hangUp(sid: string) {
  * LIVE suite is for. See #1423.
  */
 export async function callCount(request: APIRequestContext): Promise<number> {
-  const res = await request.get('/api/calls/today-count')
-  if (!res.ok()) {
-    throw new Error(`GET /api/calls/today-count failed: ${res.status()} ${await res.text()}`)
-  }
-  return (await res.json()).count as number
+  // Calls are served only under `/api/hubs/:hubId` (#2461).
+  const hubId = await resolveHubId(request)
+  const { status, data } = await apiGet<{ count: number }>(
+    request, `/hubs/${hubId}/calls/today-count`, requireAdminSeed(),
+  )
+  if (status !== 200) throw new Error(`GET /api/hubs/${hubId}/calls/today-count failed: ${status}`)
+  return data.count
 }
 
 /**

@@ -424,7 +424,7 @@ When('the admin removes the first volunteer from the shift', async ({ request, w
   if (getScenarioState(world).shiftIds.length > 0 && getScenarioState(world).volunteers.length > 1) {
     // Update shift to only include second volunteer
     const secondVol = getScenarioState(world).volunteers[1]
-    await apiPatch(request, `/shifts/${getScenarioState(world).shiftIds[0]}`, {
+    await apiPatch(request, `/hubs/${getScenarioState(world).hubId}/shifts/${getScenarioState(world).shiftIds[0]}`, {
       userPubkeys: [secondVol.pubkey],
     })
   }

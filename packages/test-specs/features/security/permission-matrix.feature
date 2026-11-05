@@ -88,7 +88,7 @@ Feature: Permission Matrix
   # status may now be 200, and the roster must still be empty of other
   # people. `reporter` holds neither permission and is still refused outright.
   Scenario Outline: <role> <expected> access to list shifts
-    When the "<role>" user sends "GET" to "/api/shifts"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/shifts"
     Then the response status should be <status>
 
     Examples:
@@ -106,7 +106,7 @@ Feature: Permission Matrix
     And the schedule shows that shift with only the volunteer on its roster
 
   Scenario Outline: <role> <expected> access to create shift
-    When the "<role>" user sends "POST" to "/api/shifts" with valid shift body
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/shifts" with valid shift body
     Then the response status should be <status>
 
     Examples:
@@ -261,7 +261,7 @@ Feature: Permission Matrix
   # ─── Calls Domain ─────────────────────────────────────────────────
 
   Scenario Outline: <role> <expected> access to active calls
-    When the "<role>" user sends "GET" to "/api/calls/active"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/calls/active"
     Then the response status should be <status>
 
     Examples:
@@ -273,7 +273,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to today call count
-    When the "<role>" user sends "GET" to "/api/calls/today-count"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/calls/today-count"
     Then the response status should be <status>
 
     Examples:
@@ -285,7 +285,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to call history
-    When the "<role>" user sends "GET" to "/api/calls/history"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/calls/history"
     Then the response status should be <status>
 
     Examples:
@@ -297,7 +297,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to volunteer presence
-    When the "<role>" user sends "GET" to "/api/calls/presence"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/calls/presence"
     Then the response status should be <status>
 
     Examples:
