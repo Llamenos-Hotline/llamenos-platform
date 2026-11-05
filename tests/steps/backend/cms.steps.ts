@@ -12,6 +12,8 @@ import { setLastResponse, getSharedState } from './shared-state'
 import { getScenarioState } from './common.steps'
 import type { TemplateSummary } from '../../api-helpers'
 import {
+  ADMIN_SEED,
+  addHubMemberViaApi,
   createEntityTypeViaApi,
   listEntityTypesViaApi,
   listTemplatesViaApi,
@@ -166,7 +168,7 @@ async function resolveEventEntityTypeId(
 // ============================================================
 
 When('the admin lists available templates', async ({ request, world }) => {
-  getCmsState(world).templateCatalog = await listTemplatesViaApi(request)
+  getCmsState(world).templateCatalog = await listTemplatesViaApi(request, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('the template catalog should have at least {int} templates', async ({ world }, count: number) => {
@@ -182,7 +184,7 @@ Then('each template should have an id, name, and description', async ({ world })
 })
 
 When('the admin gets details for template {string}', async ({ request, world }, templateId: string) => {
-  getCmsState(world).templateDetails = await getTemplateViaApi(request, templateId)
+  getCmsState(world).templateDetails = await getTemplateViaApi(request, templateId, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('the template should have entity types', async ({ world }) => {
@@ -328,7 +330,9 @@ When('the admin deletes the contact', async ({ request, world }) => {
 })
 
 Then('the contact should no longer exist', async ({ request, world }) => {
-  const { status } = await apiGet(request, `/directory/${getCmsState(world).lastContact!.id}`)
+  // Asked in the contact's own hub. The unscoped /directory/:id never held this
+  // contact, so it answered 404 whether or not the delete had worked (#2465).
+  const { status } = await apiGet(request, `/hubs/${getScenarioState(world).hubId}/directory/${getCmsState(world).lastContact!.id}`)
   expect(status).toBe(404)
 })
 
@@ -343,17 +347,21 @@ Given('a volunteer exists with only contacts:view permission', async ({ request,
     name: `vol-viewer-${Date.now()}`,
     roleIds: [role.id],
   })
+  // A member of the scenario hub holding only this role there: contacts live in
+  // a hub, so the list and the refused create must both be asked of that hub.
+  await addHubMemberViaApi(request, getScenarioState(world).hubId, vol.pubkey, [role.id])
   getCmsState(world).volunteerDeviceKey = vol.deviceKey
   getCmsState(world).volunteerPubkey = vol.pubkey
 })
 
 When('the volunteer lists contacts', async ({ request, world }) => {
-  try {
-    getCmsState(world).contactListResult = await listContactsViaApi(request, {}, getCmsState(world).volunteerDeviceKey!)
-  } catch {
-    // If it fails with an error, capture the status
-    setLastResponse(world, { status: 403, data: null })
-  }
+  // listContactsViaApi throws on any non-2xx. This used to catch EVERY error
+  // and record it as a 403 — a refusal that was never observed (#2465).
+  getCmsState(world).contactListResult = await listContactsViaApi(
+    request,
+    { hubId: getScenarioState(world).hubId },
+    getCmsState(world).volunteerDeviceKey!,
+  )
 })
 
 Then('the contact list request should succeed', async ({ world }) => {
@@ -362,7 +370,7 @@ Then('the contact list request should succeed', async ({ world }) => {
 
 When('the volunteer tries to create a contact', async ({ request, world }) => {
   try {
-    await createContactViaApi(request, {}, getCmsState(world).volunteerDeviceKey!)
+    await createContactViaApi(request, { hubId: getScenarioState(world).hubId }, getCmsState(world).volunteerDeviceKey!)
     setLastResponse(world, { status: 201, data: null })
   } catch (e: unknown) {
     const msg = (e as Error).message
@@ -437,16 +445,18 @@ When('the admin links the contact to the record with role {string}', async ({ re
     getCmsState(world).lastRecord!.id as string,
     getCmsState(world).lastContact!.id as string,
     role,
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
 Then('the record should have {int} linked contact', async ({ request, world }, count: number) => {
-  const result = await listRecordContactsViaApi(request, getCmsState(world).lastRecord!.id as string)
+  const result = await listRecordContactsViaApi(request, getCmsState(world).lastRecord!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
   expect(result.contacts.length).toBe(count)
 })
 
 Then('the linked contact should have role {string}', async ({ request, world }, role: string) => {
-  const result = await listRecordContactsViaApi(request, getCmsState(world).lastRecord!.id as string)
+  const result = await listRecordContactsViaApi(request, getCmsState(world).lastRecord!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
   expect(result.contacts.some(c => c.role === role)).toBe(true)
 })
 
@@ -502,7 +512,7 @@ Given('a volunteer exists for assignment', async ({ request, world }) => {
 })
 
 When('the admin assigns the volunteer to the record', async ({ request, world }) => {
-  await assignRecordViaApi(request, getCmsState(world).lastRecord!.id as string, [getCmsState(world).volunteerPubkey!])
+  await assignRecordViaApi(request, getCmsState(world).lastRecord!.id as string, [getCmsState(world).volunteerPubkey!], ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('the record should include the volunteer in assignedTo', async ({ request, world }) => {
@@ -599,7 +609,7 @@ Given('an event entity type {string} exists', async ({request, world}, name: str
 
 When('the admin creates an event of type {string}', async ({ request, world }, typeName: string) => {
   const entityTypeId = await resolveEventEntityTypeId(world, request, typeName)
-  getCmsState(world).lastEvent = await createEventViaApi(request, entityTypeId)
+  getCmsState(world).lastEvent = await createEventViaApi(request, entityTypeId, { hubId: getScenarioState(world).hubId })
 })
 
 Then('the event should have a generated UUID id', async ({ world }) => {
@@ -614,7 +624,7 @@ Then('the event should have a start date', async ({ world }) => {
 
 Given('an event of type {string} exists', async ({ request, world }, typeName: string) => {
   const entityTypeId = await resolveEventEntityTypeId(world, request, typeName)
-  getCmsState(world).lastEvent = await createEventViaApi(request, entityTypeId)
+  getCmsState(world).lastEvent = await createEventViaApi(request, entityTypeId, { hubId: getScenarioState(world).hubId })
 })
 
 When('the admin links the record to the event', async ({ request, world }) => {
@@ -622,11 +632,13 @@ When('the admin links the record to the event', async ({ request, world }) => {
     request,
     getCmsState(world).lastEvent!.id as string,
     getCmsState(world).lastRecord!.id as string,
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
 Then('the event should have {int} linked record', async ({ request, world }, count: number) => {
-  const result = await listEventRecordsViaApi(request, getCmsState(world).lastEvent!.id as string)
+  const result = await listEventRecordsViaApi(request, getCmsState(world).lastEvent!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
   expect(result.links.length).toBe(count)
 })
 
@@ -716,11 +728,13 @@ When('the admin links the report to the event', async ({ request, world }) => {
     request,
     getCmsState(world).lastEvent!.id as string,
     getCmsState(world).lastReportId!,
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
 Then('the event should have {int} linked report', async ({ request, world }, count: number) => {
-  const result = await listEventReportsViaApi(request, getCmsState(world).lastEvent!.id as string)
+  const result = await listEventReportsViaApi(request, getCmsState(world).lastEvent!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
   expect(result.links.length).toBe(count)
 })
 
@@ -729,13 +743,13 @@ Given('{int} records of type {string} are linked to the event', async ({ request
   const hubId = getScenarioState(world).hubId
   for (let i = 0; i < count; i++) {
     const record = await createRecordViaApi(request, entityTypeId, { hubId })
-    await linkRecordToEventViaApi(request, getCmsState(world).lastEvent!.id as string, record.id as string)
+    await linkRecordToEventViaApi(request, getCmsState(world).lastEvent!.id as string, record.id as string, ADMIN_SEED, hubId)
     getCmsState(world).records.push(record)
   }
 })
 
 When('the admin lists records linked to the event', async ({ request, world }) => {
-  getCmsState(world).eventRecordLinks = await listEventRecordsViaApi(request, getCmsState(world).lastEvent!.id as string)
+  getCmsState(world).eventRecordLinks = await listEventRecordsViaApi(request, getCmsState(world).lastEvent!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('{int} record links should be returned', async ({ world }, count: number) => {
@@ -754,6 +768,7 @@ When('the admin creates a comment interaction on the record', async ({ request, 
       interactionType: 'comment',
       encryptedContent: 'dGVzdCBjb21tZW50',
       interactionTypeHash: 'comment_hash',
+      hubId: getScenarioState(world).hubId,
     },
   )
 })
@@ -780,11 +795,12 @@ When('the admin updates the record status with change metadata', async ({ reques
         enc: 'a'.repeat(64),
       }],
     },
+    getScenarioState(world).hubId,
   )
 })
 
 Then('the record interactions should include a {string} entry', async ({ request, world }, interactionType: string) => {
-  const result = await listInteractionsViaApi(request, getCmsState(world).lastRecord!.id as string)
+  const result = await listInteractionsViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: getScenarioState(world).hubId })
   const hasType = result.interactions.some(i => i.interactionType === interactionType)
   expect(hasType).toBe(true)
 })
@@ -798,13 +814,14 @@ Given('{int} comment interactions exist on the record', async ({ request, world 
         interactionType: 'comment',
         encryptedContent: `dGVzdCBjb21tZW50 ${i}`,
         interactionTypeHash: 'comment_hash',
+        hubId: getScenarioState(world).hubId,
       },
     )
   }
 })
 
 When('the admin lists interactions for the record', async ({ request, world }) => {
-  getCmsState(world).interactionListResult = await listInteractionsViaApi(request, getCmsState(world).lastRecord!.id as string)
+  getCmsState(world).interactionListResult = await listInteractionsViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: getScenarioState(world).hubId })
 })
 
 Then('{int} interactions should be returned', async ({ world }, count: number) => {
@@ -825,7 +842,7 @@ Then('the interactions should be in chronological order', async ({ world }) => {
 // ============================================================
 
 When('the admin uploads evidence to the record', async ({ request, world }) => {
-  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string)
+  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: getScenarioState(world).hubId })
 })
 
 Then('the evidence should have a generated UUID id', async ({ world }) => {
@@ -843,11 +860,11 @@ Then('the evidence should have an integrity hash', async ({ world }) => {
 })
 
 Given('evidence exists on the record', async ({ request, world }) => {
-  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string)
+  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: getScenarioState(world).hubId })
 })
 
 When('the admin gets the custody chain for the evidence', async ({ request, world }) => {
-  getCmsState(world).custodyChain = await getEvidenceCustodyViaApi(request, getCmsState(world).lastEvidence!.id as string)
+  getCmsState(world).custodyChain = await getEvidenceCustodyViaApi(request, getCmsState(world).lastEvidence!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('the custody chain should have at least {int} entry', async ({ world }, count: number) => {
@@ -864,6 +881,8 @@ When('the admin verifies evidence integrity with the correct hash', async ({ req
     request,
     getCmsState(world).lastEvidence!.id as string,
     originalHash,
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
@@ -876,6 +895,8 @@ When('the admin verifies evidence integrity with a wrong hash', async ({ request
     request,
     getCmsState(world).lastEvidence!.id as string,
     'f'.repeat(64),
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
@@ -894,7 +915,7 @@ Then('the verification should return valid false', async ({ world }) => {
 
 When('the admin views the evidence metadata', async ({ request, world }) => {
   const evidenceId = getCmsState(world).lastEvidence!.id as string
-  const { status } = await apiGet(request, `/evidence/${evidenceId}`)
+  const { status } = await apiGet(request, `/hubs/${getScenarioState(world).hubId}/evidence/${evidenceId}`)
   expect(status).toBe(200)
 })
 
@@ -909,7 +930,7 @@ When('the admin reads the evidence access log', async ({ request, world }) => {
   const evidenceId = getCmsState(world).lastEvidence!.id as string
   const { status, data } = await apiGet<{ entries: Record<string, unknown>[]; total: number }>(
     request,
-    `/evidence/${evidenceId}/access-log`,
+    `/hubs/${getScenarioState(world).hubId}/evidence/${evidenceId}/access-log`,
   )
   expect(status).toBe(200)
   getCmsState(world).accessLogResult = data
@@ -937,13 +958,16 @@ Given('a volunteer without evidence permissions exists', async ({ request, world
     name: `vol-noevidence-${Date.now()}`,
     roleIds: [role.id],
   })
+  // A member of the evidence's hub holding only this role there, so the refusal is
+  // for the missing permission — and audited — not for being outside the hub (#2461).
+  await addHubMemberViaApi(request, getScenarioState(world).hubId, vol.pubkey, [role.id])
   getCmsState(world).volunteerDeviceKey = vol.deviceKey
   getCmsState(world).volunteerPubkey = vol.pubkey
 })
 
 When('the volunteer tries to view the evidence', async ({ request, world }) => {
   const evidenceId = getCmsState(world).lastEvidence!.id as string
-  const res = await apiGet(request, `/evidence/${evidenceId}`, getCmsState(world).volunteerDeviceKey!)
+  const res = await apiGet(request, `/hubs/${getScenarioState(world).hubId}/evidence/${evidenceId}`, getCmsState(world).volunteerDeviceKey!)
   setLastResponse(world, res)
 })
 
@@ -958,12 +982,13 @@ Given('a volunteer without audit:read permission exists', async ({ request, worl
     name: `vol-evidenceonly-${Date.now()}`,
     roleIds: [role.id],
   })
+  await addHubMemberViaApi(request, getScenarioState(world).hubId, vol.pubkey, [role.id])
   getCmsState(world).volunteerDeviceKey = vol.deviceKey
   getCmsState(world).volunteerPubkey = vol.pubkey
 })
 
 When('the volunteer tries to read the evidence access log', async ({ request, world }) => {
   const evidenceId = getCmsState(world).lastEvidence!.id as string
-  const res = await apiGet(request, `/evidence/${evidenceId}/access-log`, getCmsState(world).volunteerDeviceKey!)
+  const res = await apiGet(request, `/hubs/${getScenarioState(world).hubId}/evidence/${evidenceId}/access-log`, getCmsState(world).volunteerDeviceKey!)
   setLastResponse(world, res)
 })

@@ -776,6 +776,7 @@ When('I bulk ban phones [{string}, {string}]', async ({ request, world }, phone1
 
 Then('the ban list carries no phone number', async ({ request, world }) => {
   const s = getS(world)
+  if (!s.currentHubId) throw new Error('no current hub: the ban list has no subject')
   const bans = await listBansViaApi(request, s.currentHubId)
   expect(bans.length).toBeGreaterThan(0)
   for (const ban of bans) {

@@ -184,19 +184,15 @@ Given('a shift is currently active with {int} volunteers', async ({ request, wor
 })
 
 Given('no shift is active and no fallback is configured', async ({ request, world }) => {
+  // Calls, shifts and fallback groups all belong to a hub (#2460): there is no
+  // instance-wide fallback group to clear, only this scenario's hub's.
   const hubId = getScenarioState(world).hubId
-  // Clear fallback group
-  try {
-    const path = hubId ? `/hubs/${hubId}/shifts/fallback` : '/shifts/fallback'
-    await apiPut(request, path, { userPubkeys: [] })
-  } catch {
-    // ignore
-  }
+  if (!hubId) throw new Error('no shift is active: the scenario has no hub')
+  const { status } = await apiPut(request, `/hubs/${hubId}/shifts/fallback`, { userPubkeys: [] })
+  expect(status, 'clear the hub fallback group').toBe(200)
   // Delete all existing shifts — prior scenarios in this worker may have left active shifts
-  // Note: hubId may be undefined (legacy test fixture behavior), so list without hub context
-  const existingShifts = await listShiftsViaApi(request, hubId)
-  for (const shift of existingShifts) {
-    await deleteShiftViaApi(request, shift.id).catch(() => {})
+  for (const shift of await listShiftsViaApi(request, hubId)) {
+    await deleteShiftViaApi(request, shift.id, hubId)
   }
 })
 

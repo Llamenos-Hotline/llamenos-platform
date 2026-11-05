@@ -81,13 +81,13 @@ When('the reporter submits a report for conversion', async ({ request, world, wo
 
 // ── Report-to-case conversion ────────────────────────────────────
 
-When('the admin converts the submitted report to a case', async ({ request, world }) => {
+When('the admin converts the submitted report to a case', async ({ request, world, workerHub }) => {
   expect(getTransitionState(world).reportId).toBeDefined()
 
   // Ensure an entity type exists for case records
   if (!getTransitionState(world).entityTypeId) {
-    await enableCaseManagementViaApi(request, true)
     const hubId = getScenarioState(world).hubId
+    await enableCaseManagementViaApi(request, true, ADMIN_SEED, hubId)
     const et = await createEntityTypeViaApi(request, {
       name: uniqueName('case_type', '_'),
       hubId,
@@ -99,7 +99,7 @@ When('the admin converts the submitted report to a case', async ({ request, worl
   const kp = generateTestKeypair()
   const { data, status } = await apiPost<{ id?: string; record?: { id: string } }>(
     request,
-    '/records',
+    `/hubs/${workerHub}/records`,
     {
       entityTypeId: getTransitionState(world).entityTypeId,
       statusHash: 'open',
@@ -114,7 +114,7 @@ When('the admin converts the submitted report to a case', async ({ request, worl
 
     // Link report to case
     if (caseId && getTransitionState(world).reportId) {
-      await apiPost(request, `/records/${caseId}/reports`, {
+      await apiPost(request, `/hubs/${workerHub}/records/${caseId}/reports`, {
         reportId: getTransitionState(world).reportId,
       })
       getTransitionState(world).caseRecordId = caseId
@@ -123,12 +123,12 @@ When('the admin converts the submitted report to a case', async ({ request, worl
   getTransitionState(world).convertCount++
 })
 
-When('the admin converts the submitted report to a case again', async ({ request, world }) => {
+When('the admin converts the submitted report to a case again', async ({ request, world, workerHub }) => {
   expect(getTransitionState(world).reportId).toBeDefined()
   expect(getTransitionState(world).caseRecordId).toBeDefined()
 
   // Attempt to link the same report to the same case again — should be idempotent
-  const { status } = await apiPost(request, `/records/${getTransitionState(world).caseRecordId}/reports`, {
+  const { status } = await apiPost(request, `/hubs/${workerHub}/records/${getTransitionState(world).caseRecordId}/reports`, {
     reportId: getTransitionState(world).reportId,
   })
   // Either succeeds silently (idempotent) or returns conflict — both acceptable

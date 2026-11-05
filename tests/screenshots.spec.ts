@@ -33,6 +33,7 @@ import {
   createEntityTypeViaApi,
   createRecordViaApi,
   uniquePhone,
+  ADMIN_SEED,
 } from './api-helpers'
 import {
   simulateIncomingCall,
@@ -109,6 +110,12 @@ test.describe('App Screenshots', () => {
       createUserViaApi(request, { name: 'Tomás Reyes', phone: uniquePhone() }),
     ])
 
+    // Everything below lives in the hub the admin's UI opens on: shifts, reports
+    // and records have no unscoped route (#2395, #2461).
+    const { data: hubList } = await apiGet<{ hubs: Array<{ id: string }> }>(request, '/hubs')
+    const hubId = hubList.hubs[0]?.id
+    if (!hubId) throw new Error('screenshots: the admin belongs to no hub to file shifts, reports and records in')
+
     // Create shifts
     await Promise.all([
       createShiftViaApi(request, {
@@ -117,6 +124,7 @@ test.describe('App Screenshots', () => {
         endTime: '14:00',
         days: [1, 2, 3, 4, 5],
         userPubkeys: [volunteers[0].pubkey, volunteers[1].pubkey],
+        hubId,
       }),
       createShiftViaApi(request, {
         name: 'Evening Shift',
@@ -124,6 +132,7 @@ test.describe('App Screenshots', () => {
         endTime: '20:00',
         days: [1, 2, 3, 4, 5, 6],
         userPubkeys: [volunteers[2].pubkey, volunteers[3].pubkey],
+        hubId,
       }),
       createShiftViaApi(request, {
         name: 'Weekend Night',
@@ -131,21 +140,18 @@ test.describe('App Screenshots', () => {
         endTime: '02:00',
         days: [0, 6],
         userPubkeys: [volunteers[0].pubkey, volunteers[3].pubkey],
+        hubId,
       }),
     ])
 
     // Add bans
     await Promise.all([
-      createBanViaApi(request, { reason: 'Repeated harassment' }),
-      createBanViaApi(request, { reason: 'Threatening language' }),
-      createBanViaApi(request, { reason: 'Spam calls' }),
+      createBanViaApi(request, { reason: 'Repeated harassment', hubId }),
+      createBanViaApi(request, { reason: 'Threatening language', hubId }),
+      createBanViaApi(request, { reason: 'Spam calls', hubId }),
     ])
 
-    // Create reports — in the hub the admin's UI opens on: reports have no
-    // unscoped route (#2395).
-    const { data: hubList } = await apiGet<{ hubs: Array<{ id: string }> }>(request, '/hubs')
-    const hubId = hubList.hubs[0]?.id
-    if (!hubId) throw new Error('screenshots: the admin belongs to no hub to file reports in')
+    // Create reports — in the hub the admin's UI opens on (see above).
     await Promise.all([
       createReportViaApi(request, { title: 'Safety concern — downtown shelter', category: 'safety', status: 'waiting', hubId }),
       createReportViaApi(request, { title: 'Follow-up needed: caller #4821', category: 'follow-up', status: 'active', hubId }),
@@ -154,7 +160,7 @@ test.describe('App Screenshots', () => {
     ])
 
     // Enable CMS and create entity type + contacts + cases
-    await enableCaseManagementViaApi(request, true)
+    await enableCaseManagementViaApi(request, true, ADMIN_SEED, hubId)
 
     const entityType = await createEntityTypeViaApi(request, {
       name: 'support_case',
@@ -162,6 +168,7 @@ test.describe('App Screenshots', () => {
       category: 'case',
       color: '#6366f1',
       numberPrefix: 'SC',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'in_progress', label: 'In Progress', order: 1 },
@@ -178,19 +185,19 @@ test.describe('App Screenshots', () => {
       const entityTypeId = (entityType as Record<string, unknown>).id as string
       if (entityTypeId) {
         await Promise.all([
-          createRecordViaApi(request, entityTypeId, { statusHash: 'open', assignedTo: [volunteers[0].pubkey] }),
-          createRecordViaApi(request, entityTypeId, { statusHash: 'in_progress', assignedTo: [volunteers[1].pubkey] }),
-          createRecordViaApi(request, entityTypeId, { statusHash: 'resolved' }),
+          createRecordViaApi(request, entityTypeId, { statusHash: 'open', assignedTo: [volunteers[0].pubkey], hubId }),
+          createRecordViaApi(request, entityTypeId, { statusHash: 'in_progress', assignedTo: [volunteers[1].pubkey], hubId }),
+          createRecordViaApi(request, entityTypeId, { statusHash: 'resolved', hubId }),
         ])
       }
     }
 
     // Create contacts
     await Promise.all([
-      createContactByNameViaApi(request, 'Jordan Chen'),
-      createContactByNameViaApi(request, 'Sam Okonkwo'),
-      createContactByNameViaApi(request, 'Riya Patel'),
-      createContactByNameViaApi(request, 'Alex Torres'),
+      createContactByNameViaApi(request, 'Jordan Chen', { hubId }),
+      createContactByNameViaApi(request, 'Sam Okonkwo', { hubId }),
+      createContactByNameViaApi(request, 'Riya Patel', { hubId }),
+      createContactByNameViaApi(request, 'Alex Torres', { hubId }),
     ])
   })
 

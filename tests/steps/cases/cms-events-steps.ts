@@ -44,7 +44,7 @@ import type { APIRequestContext } from '@playwright/test'
 async function ensureEventEntityType(
   request: APIRequestContext,
   casesWorld: { eventEntityTypeId?: string },
-  workerHub?: string,
+  workerHub: string,
 ): Promise<string> {
   if (casesWorld.eventEntityTypeId) return casesWorld.eventEntityTypeId
 
@@ -84,7 +84,7 @@ async function ensureEventEntityType(
 }
 
 /** The jail-support template's arrest case type — the Background applies the template, so it must exist. */
-async function arrestCaseTypeId(request: APIRequestContext, workerHub?: string): Promise<string> {
+async function arrestCaseTypeId(request: APIRequestContext, workerHub: string): Promise<string> {
   const entityTypes = await listEntityTypesViaApi(request, workerHub)
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   expect(arrestType, 'jail-support template should define the arrest_case entity type').toBeDefined()

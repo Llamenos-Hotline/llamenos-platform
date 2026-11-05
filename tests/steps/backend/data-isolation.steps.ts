@@ -85,14 +85,19 @@ Before({ tags: '@security or @permissions' }, async ({ world }) => {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
+/**
+ * The scenario hub's case entity type, created once. Case management is
+ * enabled IN that hub — not globally — because a record exists only in a hub,
+ * and the global toggle is a platform default other scenarios share.
+ */
 async function ensureEntityType(
   request: import('@playwright/test').APIRequestContext,
   world: Record<string, unknown>,
 ): Promise<string> {
   const isoState = getIsolationState(world)
   if (isoState.entityTypeId) return isoState.entityTypeId
-  await enableCaseManagementViaApi(request, true)
   const hubId = getScenarioState(world).hubId
+  await enableCaseManagementViaApi(request, true, ADMIN_SEED, hubId)
   const et = await createEntityTypeViaApi(request, {
     name: uniqueName('isolation_case', '_'),
     hubId,
@@ -140,21 +145,24 @@ Given(
         },
         vol.deviceKey,
       )
-      if (noteRes.status === 200 || noteRes.status === 201) {
-        const noteId = noteRes.data.note?.id ?? noteRes.data.id
-        if (noteId) user.noteIds.push(noteId)
-      }
+      // The note is this scenario's subject. If it could not be created the
+      // isolation assertions below would iterate an empty list and pass, so a
+      // failure here fails the scenario (#2465).
+      expect(noteRes.status, `${name} could not create a note: ${JSON.stringify(noteRes.data)}`).toBe(201)
+      const noteId = noteRes.data.note?.id ?? noteRes.data.id
+      expect(noteId, `${name}'s note create returned no id`).toBeTruthy()
+      user.noteIds.push(noteId!)
 
-      // Create a record (if CMS enabled)
-      try {
-        const etId = await ensureEntityType(request, world)
-        const rec = await createRecordViaApi(request, etId, {}, vol.deviceKey)
-        if ((rec as { id?: string }).id) {
-          user.recordIds.push((rec as { id: string }).id)
-        }
-      } catch {
-        // CMS may not be enabled — skip
-      }
+      // The record, in the scenario's hub. This used to be created unscoped,
+      // where the volunteer (a member of workerHub only) held no permission:
+      // the 403 was caught as "CMS may not be enabled", no record existed, and
+      // the "record" example asserted nothing (#2465). createRecordViaApi
+      // throws on any non-2xx, and nothing here catches it.
+      const etId = await ensureEntityType(request, world)
+      const rec = await createRecordViaApi(request, etId, { hubId: workerHub }, vol.deviceKey)
+      const recordId = (rec as { id?: string }).id
+      expect(recordId, `${name}'s record create returned no id: ${JSON.stringify(rec)}`).toBeTruthy()
+      user.recordIds.push(recordId!)
     }
 
     if (role === 'reporter') {
@@ -184,7 +192,10 @@ When('{string} lists their {word}', async ({ request, world, workerHub }, name: 
       `/hubs/${workerHub}/notes`,
       user!.deviceKey,
     )
-    results.notes = status === 200 ? data.notes.map(n => n.id) : []
+    // A refused list is not an empty one: "could not tell" must not read as
+    // "saw nothing of Bob's".
+    expect(status, `${name} could not list notes`).toBe(200)
+    results.notes = data.notes.map(n => n.id)
   }
 
   if (resource === 'report' || resource === 'reports') {
@@ -193,16 +204,14 @@ When('{string} lists their {word}', async ({ request, world, workerHub }, name: 
       `/hubs/${workerHub}/reports`,
       user!.deviceKey,
     )
-    results.reports = status === 200 ? data.conversations.map(r => r.id) : []
+    expect(status, `${name} could not list reports`).toBe(200)
+    results.reports = data.conversations.map(r => r.id)
   }
 
   if (resource === 'record' || resource === 'records') {
-    try {
-      const data = await listRecordsViaApi(request, {}, user!.deviceKey)
-      results.records = data.records.map(r => (r as { id: string }).id)
-    } catch {
-      results.records = []
-    }
+    // Throws on any non-2xx; a failed list must fail the scenario, not read as empty.
+    const data = await listRecordsViaApi(request, { hubId: workerHub }, user!.deviceKey)
+    results.records = data.records.map(r => (r as { id: string }).id)
   }
 
   getIsolationState(world).listResults.set(name, results)
@@ -214,21 +223,18 @@ Then('{string} should only see resources they created', async ({ world }, name: 
   const results = getIsolationState(world).listResults.get(name)
   expect(results).toBeTruthy()
 
-  // Every returned ID should belong to the user
-  if (results!.notes) {
-    for (const noteId of results!.notes) {
-      expect(user!.noteIds).toContain(noteId)
-    }
-  }
-  if (results!.reports) {
-    for (const reportId of results!.reports) {
-      expect(user!.reportIds).toContain(reportId)
-    }
-  }
-  if (results!.records && results!.records.length > 0) {
-    for (const recordId of results!.records) {
-      expect(user!.recordIds).toContain(recordId)
-    }
+  // Exactly one resource kind was listed. Its list must contain what the user
+  // created (otherwise an endpoint that returns nothing — or a fixture that
+  // created nothing — passes every "only own" and "not Bob's" check), and every
+  // id in it must be the user's own.
+  const listed = (['notes', 'reports', 'records'] as const).filter(k => results![k] !== undefined)
+  expect(listed, 'the When step listed no resource').toHaveLength(1)
+  const kind = listed[0]
+  const own = kind === 'notes' ? user!.noteIds : kind === 'reports' ? user!.reportIds : user!.recordIds
+  expect(own.length, `${name} owns no ${kind}: the scenario has no subject`).toBeGreaterThan(0)
+  expect(results![kind]).toEqual(expect.arrayContaining(own))
+  for (const id of results![kind]!) {
+    expect(own).toContain(id)
   }
 })
 
@@ -239,6 +245,14 @@ Then(
     expect(other).toBeTruthy()
     const results = getIsolationState(world).listResults.get(viewerName)
     expect(results).toBeTruthy()
+
+    const otherIds = resource.startsWith('note') ? other!.noteIds
+      : resource.startsWith('report') ? other!.reportIds
+      : resource.startsWith('record') ? other!.recordIds
+      : undefined
+    expect(otherIds, `unknown resource '${resource}'`).toBeDefined()
+    // Bob must actually own something, or "not visible" is true of nothing.
+    expect(otherIds!.length, `${otherName} owns no ${resource}: the scenario has no subject`).toBeGreaterThan(0)
 
     if (resource === 'note' || resource === 'notes') {
       for (const noteId of other!.noteIds) {
@@ -454,12 +468,12 @@ Then(
 
 Then(
   'the volunteer should receive {int} when listing shifts',
-  async ({ request, world }, expectedStatus: number) => {
+  async ({ request, world, workerHub }, expectedStatus: number) => {
     expect(getIsolationState(world).deactivatedVol).toBeTruthy()
     const status = await testEndpointAccess(
       request,
       'GET',
-      '/shifts',
+      `/hubs/${workerHub}/shifts`,
       getIsolationState(world).deactivatedVol!.deviceKey,
     )
     expect(status).toBe(expectedStatus)

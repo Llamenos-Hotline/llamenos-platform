@@ -112,7 +112,10 @@ const extraHubIds: string[] = []
 After({ tags: '@simulated-telephony' }, async ({ request }) => {
   if (instanceFallbackDirty) {
     instanceFallbackDirty = false
-    await setFallbackGroupViaApi(request, [])
+    // The instance-level route, named explicitly: setFallbackGroupViaApi takes a
+    // hub and never falls back to the unscoped path (#2465).
+    const { status } = await apiPut(request, '/shifts/fallback', { userPubkeys: [] })
+    expect(status, 'restore the instance-wide fallback group').toBe(200)
   }
   for (const hubId of extraHubIds.splice(0)) await deleteHubViaApiIfPresent(request, hubId)
 })
@@ -123,8 +126,11 @@ Given('a volunteer is in the instance-wide fallback group', async ({ request, wo
   // A member of the called hub, so the only thing keeping them from ringing is WHICH group is read
   await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
   instanceFallbackDirty = true
-  // No hubId: the un-hubbed route edits the instance-level group, not this hub's.
-  await setFallbackGroupViaApi(request, [vol.pubkey])
+  // The un-hubbed route, named explicitly: it edits the instance-level group,
+  // not this hub's. This is the only deliberate unscoped write in the suite and
+  // it goes away with the instance group itself (#2460).
+  const { status } = await apiPut(request, '/shifts/fallback', { userPubkeys: [vol.pubkey] })
+  expect(status, 'write the instance-wide fallback group').toBe(200)
   state.volunteers.push(vol)
 })
 

@@ -13,6 +13,7 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
+  ADMIN_SEED,
   createContactViaApi,
   createRecordViaApi,
   createEntityTypeViaApi,
@@ -89,7 +90,7 @@ Given('{int} open records are linked to the contact', async ({ request, world },
       statusHash: 'status_open',
       hubId,
     })
-    await linkContactToRecordViaApi(request, record.id as string, contactId, 'subject')
+    await linkContactToRecordViaApi(request, record.id as string, contactId, 'subject', ADMIN_SEED, hubId)
   }
 })
 
@@ -103,7 +104,7 @@ Given('{int} closed record is linked to the contact', async ({ request, world },
       statusHash: 'status_closed',
       hubId,
     })
-    await linkContactToRecordViaApi(request, record.id as string, contactId, 'subject')
+    await linkContactToRecordViaApi(request, record.id as string, contactId, 'subject', ADMIN_SEED, hubId)
     // Close the record by setting closedAt
     await updateRecordViaApi(request, record.id as string, {
       closedAt: new Date().toISOString(),

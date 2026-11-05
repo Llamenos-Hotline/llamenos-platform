@@ -61,8 +61,8 @@ async function ensureEntityType(
   world: Record<string, unknown>,
 ): Promise<string> {
   if (getLifecycleState(world).entityTypeId) return getLifecycleState(world).entityTypeId!
-  await enableCaseManagementViaApi(request, true)
   const hubId = getScenarioState(world).hubId
+  await enableCaseManagementViaApi(request, true, ADMIN_SEED, hubId)
   const et = await createEntityTypeViaApi(request, {
     name: uniqueName('lifecycle_case', '_'),
     hubId,
@@ -140,7 +140,7 @@ Then('listing the case should show the linked report ID', async ({ request, worl
   expect(getLifecycleState(world).caseRecordId).toBeTruthy()
 
   // Get the case record — it should reference the report
-  const record = await getRecordViaApi(request, getLifecycleState(world).caseRecordId!)
+  const record = await getRecordViaApi(request, getLifecycleState(world).caseRecordId!, getScenarioState(world).hubId)
   // The record was linked via the report-records endpoint,
   // so the link exists in the join table
   expect(record).toBeTruthy()

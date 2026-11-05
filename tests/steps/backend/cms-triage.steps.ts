@@ -146,28 +146,30 @@ Given('a report of the conversion-enabled type exists with conversionStatus {str
 
 When('the admin lists reports with conversionEnabled true', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
-  const prefix = hubId ? `/hubs/${hubId}` : ''
-  const { data } = await apiGet<{ conversations?: Array<Record<string, unknown>>; reports?: Array<Record<string, unknown>> }>(
+  const prefix = `/hubs/${hubId}`
+  const { status, data } = await apiGet<{ conversations?: Array<Record<string, unknown>>; reports?: Array<Record<string, unknown>> }>(
     request,
     `${prefix}/reports?conversionEnabled=true`,
   )
-  const reports = (data as Record<string, unknown>)?.conversations as Array<Record<string, unknown>>
-    ?? (data as Record<string, unknown>)?.reports as Array<Record<string, unknown>>
-    ?? []
-  getTriageState(world).triageQueue = reports
+  // A refused or malformed list is not an empty queue (#2465).
+  expect(status, 'list the triage queue').toBe(200)
+  const reports = data.conversations ?? data.reports
+  expect(reports, 'the triage list carried no report array').toBeDefined()
+  getTriageState(world).triageQueue = reports!
 })
 
 When('the admin lists reports with conversionEnabled true and conversionStatus {string}', async ({ request, world }, conversionStatus: string) => {
   const hubId = getScenarioState(world).hubId
-  const prefix = hubId ? `/hubs/${hubId}` : ''
-  const { data } = await apiGet<{ conversations?: Array<Record<string, unknown>>; reports?: Array<Record<string, unknown>> }>(
+  const prefix = `/hubs/${hubId}`
+  const { status, data } = await apiGet<{ conversations?: Array<Record<string, unknown>>; reports?: Array<Record<string, unknown>> }>(
     request,
     `${prefix}/reports?conversionEnabled=true&conversionStatus=${conversionStatus}`,
   )
-  const reports = (data as Record<string, unknown>)?.conversations as Array<Record<string, unknown>>
-    ?? (data as Record<string, unknown>)?.reports as Array<Record<string, unknown>>
-    ?? []
-  getTriageState(world).triageQueue = reports
+  // A refused or malformed list is not an empty queue (#2465).
+  expect(status, 'list the triage queue').toBe(200)
+  const reports = data.conversations ?? data.reports
+  expect(reports, 'the triage list carried no report array').toBeDefined()
+  getTriageState(world).triageQueue = reports!
 })
 
 Then('only reports of the conversion-enabled type should be returned', async ({ world }) => {
@@ -230,11 +232,11 @@ Then('the report metadata should include conversionStatus {string}', async ({ re
 
 When('the admin fetches the report', async ({ request, world, workerHub }) => {
   expect(getTriageState(world).reportId).toBeDefined()
-  const { data } = await apiGet<Record<string, unknown>>(
+  // Record the status the server returned, not an assumed 200.
+  setLastResponse(world, await apiGet<Record<string, unknown>>(
     request,
     `/hubs/${workerHub}/reports/${getTriageState(world).reportId}`,
-  )
-  setLastResponse(world, { status: 200, data })
+  ))
 })
 
 // ── Case Creation from Report Steps ──────────────────────────────
@@ -254,9 +256,10 @@ When('the admin creates a case record from the report', async ({ request, world 
 
   // Step 1: Create the case record with all required fields
   const kp = generateTestKeypair()
+  const hubId = getScenarioState(world).hubId
   const { data, status } = await apiPost<{ id?: string; record?: { id: string } }>(
     request,
-    '/records',
+    `/hubs/${hubId}/records`,
     {
       entityTypeId: getTriageState(world).entityTypeId,
       statusHash: 'open',
@@ -264,32 +267,35 @@ When('the admin creates a case record from the report', async ({ request, world 
       summaryEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
     },
   )
-  if (status < 300) {
-    getTriageState(world).caseRecordId = (data as Record<string, unknown>)?.id as string
-      ?? ((data as Record<string, unknown>)?.record as Record<string, unknown>)?.id as string
-  }
+  // Both writes are this scenario's subject. They used to be guarded by
+  // `if (status < 300)` and an unchecked link, so a refused create or link left
+  // the Then step to pass on whatever it could still find (#2465).
+  expect(status, `create the case record: ${JSON.stringify(data)}`).toBe(201)
+  const caseRecordId = (data as Record<string, unknown>)?.id as string
+    ?? ((data as Record<string, unknown>)?.record as Record<string, unknown>)?.id as string
+  expect(caseRecordId, 'the case create returned no id').toBeTruthy()
+  getTriageState(world).caseRecordId = caseRecordId
 
   // Step 2: Link the report to the case
-  if (getTriageState(world).caseRecordId && getTriageState(world).reportId) {
-    await apiPost(request, `/records/${getTriageState(world).caseRecordId}/reports`, {
-      reportId: getTriageState(world).reportId,
-    })
-  }
+  const link = await apiPost(request, `/hubs/${hubId}/records/${caseRecordId}/reports`, {
+    reportId: getTriageState(world).reportId,
+  })
+  expect(link.status, `link the report to the case: ${JSON.stringify(link.data)}`).toBeLessThan(300)
 })
 
 Then('the report should have {int} linked case record', async ({ request, world, workerHub }, count: number) => {
   expect(getTriageState(world).reportId).toBeDefined()
-  const { data } = await apiGet<Record<string, unknown>>(
+  // Ask the link table itself. This read `linkedRecords` off the report, a field
+  // the report has never carried, and so always fell through to "a case id was
+  // recorded" — it never checked a link at all (#2465).
+  const { status, data } = await apiGet<{ records: Array<{ reportId: string; caseId: string }>; total: number }>(
     request,
-    `/hubs/${workerHub}/reports/${getTriageState(world).reportId}`,
+    `/hubs/${workerHub}/reports/${getTriageState(world).reportId}/records`,
   )
-  const linked = (data as Record<string, unknown>)?.linkedRecords as unknown[]
-    ?? (data as Record<string, unknown>)?.linkedCaseRecords as unknown[]
-  if (linked) {
-    expect(linked.length).toBe(count)
-  } else {
-    // If the API doesn't return linked records inline, verify the case was created
-    expect(getTriageState(world).caseRecordId).toBeTruthy()
+  expect(status, 'list the cases linked to the report').toBe(200)
+  expect(data.records).toHaveLength(count)
+  if (count > 0) {
+    expect(data.records.map(r => r.caseId)).toContain(getTriageState(world).caseRecordId)
   }
 })
 
@@ -297,7 +303,9 @@ Then('the report should have {int} linked case record', async ({ request, world,
 
 Given('a volunteer exists with cases:create permission only', async ({ request, world }) => {
   const { createUserViaApi } = await import('../../api-helpers')
-  const vol = await createUserViaApi(request, { name: uniqueName('Triage Limited Vol') })
+  // A member of the scenario hub, so the refusal is for the missing permission and
+  // not for being outside the hub the report lives in (#2461).
+  const vol = await createUserViaApi(request, { name: uniqueName('Triage Limited Vol'), hubId: getScenarioState(world).hubId })
   getTriageState(world).volunteerNsec = vol.seedHex
 })
 
@@ -336,10 +344,7 @@ When('the admin converts the report to an entity using the atomic endpoint', asy
     if (et) state.entityTypeId = et.id as string
   }
 
-  const hubId = getScenarioState(world).hubId
-  const path = hubId
-    ? `/hubs/${hubId}/records/convert-from-report`
-    : '/records/convert-from-report'
+  const path = `/hubs/${getScenarioState(world).hubId}/records/convert-from-report`
   const res = await apiPost<Record<string, unknown>>(
     request,
     path,
@@ -361,7 +366,7 @@ When('the volunteer converts the report using the atomic endpoint', async ({ req
 
   const res = await apiPost<Record<string, unknown>>(
     request,
-    '/records/convert-from-report',
+    `/hubs/${getScenarioState(world).hubId}/records/convert-from-report`,
     {
       reportId: state.reportId,
       entityTypeId: state.entityTypeId ?? 'fake-entity-type-id',
@@ -415,14 +420,14 @@ Given('an entity type {string} with autoAssign enabled exists', async ({ request
   const label = name.replace(/_/g, ' ')
   const { data, status } = await apiPost<Record<string, unknown>>(
     request,
-    hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types',
+    `/hubs/${hubId}/settings/cms/entity-types`,
     {
       name,
       label,
       labelPlural: `${label}s`,
       description: `Auto-assign test entity type ${name}`,
       category: 'case',
-      hubId: hubId ?? '',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'closed', label: 'Closed', order: 1 },
@@ -434,7 +439,8 @@ Given('an entity type {string} with autoAssign enabled exists', async ({ request
       autoAssignThreshold: 30,
     },
   )
-  if (status < 300) getTriageState(world).entityTypeId = (data as Record<string, unknown>).id as string
+  expect(status, `create entity type: ${JSON.stringify(data)}`).toBe(201)
+  getTriageState(world).entityTypeId = (data as Record<string, unknown>).id as string
 })
 
 Given('an entity type {string} with autoAssign disabled exists', async ({ request, world }, name: string) => {
@@ -442,14 +448,14 @@ Given('an entity type {string} with autoAssign disabled exists', async ({ reques
   const label = name.replace(/_/g, ' ')
   const { data, status } = await apiPost<Record<string, unknown>>(
     request,
-    hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types',
+    `/hubs/${hubId}/settings/cms/entity-types`,
     {
       name,
       label,
       labelPlural: `${label}s`,
       description: `No-auto-assign test entity type ${name}`,
       category: 'case',
-      hubId: hubId ?? '',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'closed', label: 'Closed', order: 1 },
@@ -460,7 +466,8 @@ Given('an entity type {string} with autoAssign disabled exists', async ({ reques
       autoAssign: false,
     },
   )
-  if (status < 300) getTriageState(world).entityTypeId = (data as Record<string, unknown>).id as string
+  expect(status, `create entity type: ${JSON.stringify(data)}`).toBe(201)
+  getTriageState(world).entityTypeId = (data as Record<string, unknown>).id as string
 })
 
 Given('an on-shift volunteer with capacity exists', async ({ request, workerHub }) => {

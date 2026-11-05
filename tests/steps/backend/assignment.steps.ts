@@ -53,14 +53,14 @@ Given('an entity type with autoAssign enabled and threshold {int} exists', async
   const label = 'Auto Assign Scoring'
   const { data, status } = await apiPost<Record<string, unknown>>(
     request,
-    hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types',
+    `/hubs/${hubId}/settings/cms/entity-types`,
     {
       name,
       label,
       labelPlural: `${label}s`,
       description: 'Entity type for autoAssign threshold testing',
       category: 'case',
-      hubId: hubId ?? '',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'closed', label: 'Closed', order: 1 },
@@ -72,9 +72,10 @@ Given('an entity type with autoAssign enabled and threshold {int} exists', async
       autoAssignThreshold: threshold,
     },
   )
-  if (status < 300) {
-    getAssignmentState(world).entityTypeId = (data as Record<string, unknown>).id as string
-  }
+  // The entity type is this scenario's subject: a refused create must fail here,
+  // not leave a later step to assert against nothing (#2465).
+  expect(status, `create entity type: ${JSON.stringify(data)}`).toBe(201)
+  getAssignmentState(world).entityTypeId = (data as Record<string, unknown>).id as string
 })
 
 When('I fetch the entity type', async ({ request, world }) => {
@@ -164,14 +165,14 @@ Given('an arrest case linked to an entity type requiring specialization {string}
   const label = 'Specialization Required Type'
   const { data: etData, status: etStatus } = await apiPost<Record<string, unknown>>(
     request,
-    hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types',
+    `/hubs/${hubId}/settings/cms/entity-types`,
     {
       name,
       label,
       labelPlural: `${label}s`,
       description: `Entity type requiring ${spec}`,
       category: 'case',
-      hubId: hubId ?? '',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'closed', label: 'Closed', order: 1 },
@@ -182,8 +183,10 @@ Given('an arrest case linked to an entity type requiring specialization {string}
       requiredSpecializations: [spec],
     },
   )
-  const entityTypeId = etStatus < 300 ? (etData as Record<string, unknown>).id as string : undefined
-  if (!entityTypeId) return
+  // This Given used to `return` silently when the create failed, so the
+  // scenario ran on with no record and no entity type (#2465).
+  expect(etStatus, `create entity type: ${JSON.stringify(etData)}`).toBe(201)
+  const entityTypeId = (etData as Record<string, unknown>).id as string
 
   const record = await createRecordViaApi(request, entityTypeId, { statusHash: 'open', hubId })
   getAssignmentState(world).recordId = (record as Record<string, unknown>).id as string
@@ -206,7 +209,7 @@ When('I fetch suggest-assignees for the case', async ({ request, world }) => {
   const state = getAssignmentState(world)
   const recordId = state.recordId ?? (getScenarioState(world).lastApiResponse?.data as string | undefined)
   if (!recordId) return
-  const res = await apiGet<Record<string, unknown>>(request, `/records/${recordId}/suggest-assignees`)
+  const res = await apiGet<Record<string, unknown>>(request, `/hubs/${getScenarioState(world).hubId}/records/${recordId}/suggest-assignees`)
   setLastResponse(world, res)
   state.suggestions = ((res.data as Record<string, unknown>)?.suggestions ?? []) as Array<Record<string, unknown>>
 })

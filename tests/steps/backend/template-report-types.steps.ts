@@ -10,6 +10,7 @@ import { When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
 import {
+  ADMIN_SEED,
   listCmsReportTypesViaApi,
   getCmsReportTypeViaApi,
   createCmsReportTypeViaApi,
@@ -44,7 +45,7 @@ Before({ tags: '@cms' }, async ({ world }) => {
 async function findCmsReportTypeByName(
   request: import('@playwright/test').APIRequestContext,
   name: string,
-  hubId?: string,
+  hubId: string,
 ): Promise<Record<string, unknown> | undefined> {
   const types = await listCmsReportTypesViaApi(request, hubId)
   return types.find(t => t.name === name)
@@ -85,7 +86,7 @@ When('the admin gets CMS report type {string}', async ({ request, world }, name:
   const hubId = getScenarioState(world).hubId
   const rt = await findCmsReportTypeByName(request, name, hubId)
   expect(rt).toBeTruthy()
-  getReportTypeState(world).lastReportType = await getCmsReportTypeViaApi(request, rt!.id as string)
+  getReportTypeState(world).lastReportType = await getCmsReportTypeViaApi(request, rt!.id as string, ADMIN_SEED, hubId)
   getReportTypeState(world).lastReportTypeId = rt!.id as string
 })
 
@@ -120,7 +121,7 @@ When('the admin creates a custom CMS report type {string}', async ({ request, wo
 })
 
 Then('the CMS report type should be retrievable', async ({ request, world }) => {
-  const rt = await getCmsReportTypeViaApi(request, getReportTypeState(world).lastReportTypeId!)
+  const rt = await getCmsReportTypeViaApi(request, getReportTypeState(world).lastReportTypeId!, ADMIN_SEED, getScenarioState(world).hubId)
   expect(rt).toBeTruthy()
   expect(rt.id).toBe(getReportTypeState(world).lastReportTypeId)
 })
@@ -130,6 +131,8 @@ When('the admin updates the CMS report type label to {string}', async ({ request
     request,
     getReportTypeState(world).lastReportTypeId!,
     { label },
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
@@ -138,11 +141,11 @@ Then('the CMS report type label should be {string}', async ({ world }, label: st
 })
 
 When('the admin archives the CMS report type', async ({ request, world }) => {
-  await deleteCmsReportTypeViaApi(request, getReportTypeState(world).lastReportTypeId!)
+  await deleteCmsReportTypeViaApi(request, getReportTypeState(world).lastReportTypeId!, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('the CMS report type should be marked as archived', async ({ request, world }) => {
-  const rt = await getCmsReportTypeViaApi(request, getReportTypeState(world).lastReportTypeId!)
+  const rt = await getCmsReportTypeViaApi(request, getReportTypeState(world).lastReportTypeId!, ADMIN_SEED, getScenarioState(world).hubId)
   expect(rt.isArchived).toBe(true)
 })
 

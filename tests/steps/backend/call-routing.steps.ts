@@ -247,7 +247,7 @@ Then('volunteer {int} no longer receives a ring', async ({ world }, _index: numb
 
 Then('the call history contains {int} entry/entries', async ({request, world}, count: number) => {
   const { hubId } = getScenarioState(world)
-  const path = hubId ? `/hubs/${hubId}/calls/history` : '/calls/history'
+  const path = `/hubs/${hubId}/calls/history`
   const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
@@ -259,7 +259,7 @@ Then('the call history contains {int} entry/entries', async ({request, world}, c
 
 Then('the most recent call shows status {string}', async ({request, world}, expectedStatus: string) => {
   const { hubId } = getScenarioState(world)
-  const path = hubId ? `/hubs/${hubId}/calls/history?limit=1` : '/calls/history?limit=1'
+  const path = `/hubs/${hubId}/calls/history?limit=1`
   const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request,
     path,
@@ -271,7 +271,7 @@ Then('the most recent call shows status {string}', async ({request, world}, expe
 
 Then('the most recent call shows caller {string}', async ({request, world}, _expectedCaller: string) => {
   const { hubId } = getScenarioState(world)
-  const path = hubId ? `/hubs/${hubId}/calls/history?limit=1` : '/calls/history?limit=1'
+  const path = `/hubs/${hubId}/calls/history?limit=1`
   const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request,
     path,
@@ -287,7 +287,7 @@ Then('the most recent call shows caller {string}', async ({request, world}, _exp
 
 When('the call history is filtered by status {string}', async ({ request, world }, filterStatus: string) => {
   const { hubId } = getScenarioState(world)
-  const path = hubId ? `/hubs/${hubId}/calls/history?status=${filterStatus}` : `/calls/history?status=${filterStatus}`
+  const path = `/hubs/${hubId}/calls/history?status=${filterStatus}`
   const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
@@ -299,9 +299,7 @@ When('the call history is filtered by status {string}', async ({ request, world 
 When('the call history is filtered to today\'s date', async ({ request, world }) => {
   const today = new Date().toISOString().split('T')[0]
   const { hubId } = getScenarioState(world)
-  const path = hubId
-    ? `/hubs/${hubId}/calls/history?dateFrom=${today}&dateTo=${today}`
-    : `/calls/history?dateFrom=${today}&dateTo=${today}`
+  const path = `/hubs/${hubId}/calls/history?dateFrom=${today}&dateTo=${today}`
   const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
