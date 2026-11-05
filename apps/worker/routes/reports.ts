@@ -183,12 +183,12 @@ reports.post('/',
       type: 'report:new',
       conversationId: conversation.id,
       category: body.category,
-    }, conversation.hubId ?? '')
+    }, conversation.hubId)
 
     await audit(services.audit, 'reportCreated', pubkey, {
       conversationId: conversation.id,
       category: body.category,
-    }, undefined, conversation.hubId ?? null)
+    }, undefined, conversation.hubId)
 
     return c.json(conversation, 201)
   },
@@ -392,7 +392,7 @@ reports.post('/:id/messages',
     }
 
     const body = c.req.valid('json')
-    await assertAdminCanRead(services, c.env, report.hubId ?? undefined, body.readerEnvelopes, 'A report message', { reportId: id, authorPubkey: pubkey })
+    await assertAdminCanRead(services, c.env, report.hubId, body.readerEnvelopes, 'A report message', { reportId: id, authorPubkey: pubkey })
 
     const isReporter = report.contactIdentifierHash === pubkey
     const direction = isReporter ? 'inbound' as const : 'outbound' as const
@@ -411,7 +411,7 @@ reports.post('/:id/messages',
     publishEvent(c.env, KIND_MESSAGE_NEW, {
       type: 'message:new',
       conversationId: id,
-    }, report.hubId ?? '')
+    }, report.hubId)
 
     return c.json(msg)
   },
@@ -448,14 +448,14 @@ reports.post('/:id/assign',
       status: 'active',
     })
 
-    await audit(services.audit, 'reportAssigned', pubkey, { reportId: id, assignedTo: body.assignedTo }, undefined, updated.hubId ?? null)
+    await audit(services.audit, 'reportAssigned', pubkey, { reportId: id, assignedTo: body.assignedTo }, undefined, updated.hubId)
 
     // Publish assignment event to the report's hub — clients subscribe per hub
     publishEvent(c.env, KIND_CONVERSATION_ASSIGNED, {
       type: 'conversation:assigned',
       conversationId: id,
       assignedTo: body.assignedTo,
-    }, updated.hubId ?? '')
+    }, updated.hubId)
 
     return c.json(updated)
   },
@@ -496,7 +496,7 @@ reports.patch('/:id',
 
     const updated = await services.conversations.update(id, patchBody)
 
-    await audit(services.audit, 'reportUpdated', pubkey, { reportId: id, ...body }, undefined, updated.hubId ?? null)
+    await audit(services.audit, 'reportUpdated', pubkey, { reportId: id, ...body }, undefined, updated.hubId)
     return c.json(updated)
   },
 )

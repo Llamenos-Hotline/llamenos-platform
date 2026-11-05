@@ -100,7 +100,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResults([[], [{ total: 0 }]])
 
-      const result = await service.listNotes()
+      const result = await service.listNotes({ hubId: 'hub-1' })
       expect(result.notes).toEqual([])
       expect(result.total).toBe(0)
     })
@@ -314,7 +314,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([{ contactHash: 'hash1', noteCount: 5 }])
 
-      const result = await service.getContactMeta('hash1')
+      const result = await service.getContactMeta('hash1', 'hub-1')
       expect(result?.noteCount).toBe(5)
     })
 
@@ -322,7 +322,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([])
 
-      const result = await service.getContactMeta('hash1')
+      const result = await service.getContactMeta('hash1', 'hub-1')
       expect(result).toBeNull()
     })
   })

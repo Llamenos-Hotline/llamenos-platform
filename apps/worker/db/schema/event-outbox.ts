@@ -17,6 +17,7 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { hubs } from './settings'
 
 export const eventOutbox = pgTable(
   'event_outbox',
@@ -24,8 +25,13 @@ export const eventOutbox = pgTable(
     id: serial('id').primaryKey(),
     /** Fully-signed, encrypted event payload (ready for fan-out) */
     eventJson: jsonb('event_json').notNull(),
-    /** Hub ID for targeted fan-out (null = global) */
-    hubId: text('hub_id'),
+    /**
+     * The hub whose members receive the event. Every event has one (#2459):
+     * `publishEvent` drops an event with no hub, since it has no audience.
+     */
+    hubId: text('hub_id')
+      .notNull()
+      .references(() => hubs.id, { onDelete: 'cascade' }),
     /** Event kind (for filtering during drain) */
     kind: integer('kind').notNull(),
     /** Epoch at publish time */

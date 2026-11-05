@@ -23,7 +23,8 @@ const FAILED_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 const DRAIN_BATCH_SIZE = 50
 
 export interface OutboxEvent {
-  hubId: string | null
+  /** The hub whose members receive it — `event_outbox.hub_id`, NOT NULL with an FK to `hubs`. */
+  hubId: string
   kind: number
   epoch: number
   payload: string
@@ -88,15 +89,17 @@ export class EventOutbox {
    */
   async drainBatch(): Promise<OutboxRow[]> {
     const rows = await this.db.execute(sql`
-      SELECT id, event_json
+      SELECT id, hub_id, event_json
       FROM event_outbox
       WHERE status = 'pending' AND next_retry_at <= now()
       ORDER BY created_at ASC
       LIMIT ${DRAIN_BATCH_SIZE}
       FOR UPDATE SKIP LOCKED
     `)
-    return (rows as unknown as Array<{ id: number; event_json: OutboxEvent }>).map(
-      (r) => ({ id: r.id, event: r.event_json }),
+    // The audience is the row's hub column, which the schema guarantees names a
+    // hub — not whatever the stored JSON says.
+    return (rows as unknown as Array<{ id: number; hub_id: string; event_json: OutboxEvent }>).map(
+      (r) => ({ id: r.id, event: { ...r.event_json, hubId: r.hub_id } }),
     )
   }
 

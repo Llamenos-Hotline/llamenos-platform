@@ -215,9 +215,6 @@ export async function drainOutbox(): Promise<number> {
 
   for (const { id, event } of batch) {
     try {
-      if (!event.hubId) {
-        throw new Error('outbox event has no hubId — no legitimate audience')
-      }
       const wasDelivered = manager.publishToHub(
         event.hubId,
         event.kind,

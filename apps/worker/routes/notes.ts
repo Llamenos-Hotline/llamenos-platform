@@ -142,7 +142,7 @@ notes.post('/',
       adminEnvelopes: body.adminEnvelopes,
     })
 
-    await audit(services.audit, 'noteCreated', pubkey, { callId: body.callId, conversationId: body.conversationId }, undefined, note.hubId ?? null)
+    await audit(services.audit, 'noteCreated', pubkey, { callId: body.callId, conversationId: body.conversationId }, undefined, note.hubId)
 
     // Auto-create interaction linking note to case (Epic 323)
     const { caseId, interactionTypeHash } = body
@@ -209,7 +209,7 @@ notes.patch('/:id',
     // checked too, since it can drop the admin.
     if (body.encryptedContent !== undefined || body.adminEnvelopes !== undefined) {
       const existing = await services.records.getNoteAuthoredBy(id, pubkey)
-      await assertAdminCanRead(services, c.env, existing.hubId ?? undefined, body.adminEnvelopes, 'A note', { noteId: id, authorPubkey: pubkey })
+      await assertAdminCanRead(services, c.env, existing.hubId, body.adminEnvelopes, 'A note', { noteId: id, authorPubkey: pubkey })
     }
 
     const updated = await services.records.updateNote(id, {
@@ -220,7 +220,7 @@ notes.patch('/:id',
       expectedUpdatedAt,
     })
 
-    await audit(services.audit, 'noteEdited', pubkey, { noteId: id }, undefined, updated.hubId ?? null)
+    await audit(services.audit, 'noteEdited', pubkey, { noteId: id }, undefined, updated.hubId)
     return c.json({ note: updated })
   },
 )
@@ -278,14 +278,14 @@ notes.post('/:id/replies',
     const body = c.req.valid('json')
 
     const parentNote = await services.records.getNote(id)
-    await assertAdminCanRead(services, c.env, parentNote.hubId ?? undefined, body.readerEnvelopes, 'A note reply', { noteId: id, authorPubkey: pubkey })
+    await assertAdminCanRead(services, c.env, parentNote.hubId, body.readerEnvelopes, 'A note reply', { noteId: id, authorPubkey: pubkey })
 
     const reply = await services.records.createReply(id, {
       ...body,
       authorPubkey: pubkey,
     })
 
-    await audit(services.audit, 'noteReplyCreated', pubkey, { noteId: id }, undefined, parentNote.hubId ?? null)
+    await audit(services.audit, 'noteReplyCreated', pubkey, { noteId: id }, undefined, parentNote.hubId)
     return c.json({ reply }, 201)
   },
 )

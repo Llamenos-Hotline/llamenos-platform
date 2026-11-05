@@ -25,6 +25,7 @@ import type { Env } from '../types'
 import type { Services } from '../services'
 import type { TelephonyAdapter } from '../telephony/adapter'
 import { encryptMessageForStorage } from '../lib/crypto'
+import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.voicemail')
@@ -84,12 +85,13 @@ async function transcribeVoicemail(params: {
   const { globalEnabled } = await services.settings.getTranscriptionSettings()
   if (!globalEnabled) return
 
-  // Voicemails: envelope encryption for admin only. With no admin HPKE
-  // recipient configured there is no reader at all, and storing a ciphertext
-  // nobody can open is worse than not transcribing (#1283).
-  const readerPubkeys = await services.identity.buildReaderPubkeys(env.ADMIN_DECRYPTION_PUBKEY, [])
+  // Voicemails: envelope encryption for the admins of the call's hub only — the
+  // note is filed in that hub (#2459). With no admin HPKE recipient resolvable
+  // there is no reader at all, and storing a ciphertext nobody can open is
+  // worse than not transcribing (#1283).
+  const readerPubkeys = await services.identity.listAdminEnvelopeRecipients(transitionalInstanceRecipient(env), hubId)
   if (readerPubkeys.length === 0) {
-    logger.warn('Voicemail transcription skipped: no ADMIN_DECRYPTION_PUBKEY, so no reader could open it', { callSid })
+    logger.warn('Voicemail transcription skipped: the hub has no admin HPKE recipient, so no reader could open it', { callSid, hubId })
     return
   }
 
@@ -103,6 +105,7 @@ async function transcribeVoicemail(params: {
 
   const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
   await services.records.createNote({
+    hubId,
     callId: callSid,
     authorPubkey: 'system:voicemail',
     encryptedContent,

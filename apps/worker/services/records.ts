@@ -21,7 +21,7 @@ import type { BanHashes } from '../lib/crypto'
 // ---------------------------------------------------------------------------
 
 export interface NoteFilters {
-  hubId?: string
+  hubId: string
   authorPubkey?: string
   callId?: string
   conversationId?: string
@@ -31,7 +31,7 @@ export interface NoteFilters {
 }
 
 export interface CreateNoteInput {
-  hubId?: string
+  hubId: string
   authorPubkey: string
   callId?: string
   conversationId?: string
@@ -101,7 +101,7 @@ export class RecordsService {
     const [note] = await this.db
       .insert(notes)
       .values({
-        hubId: input.hubId ?? null,
+        hubId: input.hubId,
         authorPubkey: input.authorPubkey,
         callId: input.callId ?? null,
         conversationId: input.conversationId ?? null,
@@ -118,11 +118,7 @@ export class RecordsService {
 
     // Maintain contact metadata secondary index
     if (input.contactHash) {
-      await this.upsertContactMeta(
-        input.contactHash,
-        input.hubId ?? null,
-        note.createdAt,
-      )
+      await this.upsertContactMeta(input.contactHash, input.hubId, note.createdAt)
     }
 
     return note
@@ -139,18 +135,17 @@ export class RecordsService {
   }
 
   async listNotes(
-    filters: NoteFilters = {},
+    filters: NoteFilters,
   ): Promise<{ notes: NoteRow[]; total: number }> {
     const { hubId, authorPubkey, callId, conversationId, contactHash, limit = 50, offset = 0 } = filters
 
-    const conditions = []
-    if (hubId) conditions.push(eq(notes.hubId, hubId))
+    const conditions = [eq(notes.hubId, hubId)]
     if (authorPubkey) conditions.push(eq(notes.authorPubkey, authorPubkey))
     if (callId) conditions.push(eq(notes.callId, callId))
     if (conversationId) conditions.push(eq(notes.conversationId, conversationId))
     if (contactHash) conditions.push(eq(notes.contactHash, contactHash))
 
-    const where = conditions.length > 0 ? and(...conditions) : undefined
+    const where = and(...conditions)
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -425,31 +420,22 @@ export class RecordsService {
 
   async getContactMeta(
     contactHash: string,
-    hubId?: string,
+    hubId: string,
   ): Promise<ContactMetaRow | null> {
-    const conditions = [eq(contactMetadata.contactHash, contactHash)]
-    if (hubId) {
-      conditions.push(eq(contactMetadata.hubId, hubId))
-    } else {
-      conditions.push(sql`${contactMetadata.hubId} IS NULL`)
-    }
-
     const [row] = await this.db
       .select()
       .from(contactMetadata)
-      .where(and(...conditions))
+      .where(and(eq(contactMetadata.contactHash, contactHash), eq(contactMetadata.hubId, hubId)))
 
     return row ?? null
   }
 
   async listContacts(
-    hubId?: string,
+    hubId: string,
     limit = 50,
     offset = 0,
   ): Promise<{ contacts: ContactMetaRow[]; total: number }> {
-    const condition = hubId
-      ? eq(contactMetadata.hubId, hubId)
-      : undefined
+    const condition = eq(contactMetadata.hubId, hubId)
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -474,7 +460,7 @@ export class RecordsService {
    */
   private async upsertContactMeta(
     contactHash: string,
-    hubId: string | null,
+    hubId: string,
     noteCreatedAt: Date,
   ): Promise<void> {
     await this.db

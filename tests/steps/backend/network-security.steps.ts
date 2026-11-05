@@ -479,11 +479,12 @@ When('it is presented to an API endpoint', async ({ request, world }) => {
 
 // ── Contact Encryption Steps ─────────────────────────────────────
 
-Given('a new conversation with phone {string}', async ({ request, world }, phone: string) => {
+Given('a new conversation with phone {string}', async ({ request, world, workerHub }, phone: string) => {
   const result = await simulateIncomingMessage(request, {
     senderNumber: phone,
     body: 'Encryption test message',
     channel: 'sms',
+    hubId: workerHub,
   })
   getNetworkSecState(world).conversationId = result.conversationId
 })

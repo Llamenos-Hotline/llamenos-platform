@@ -35,7 +35,7 @@ const logger = createLogger('services.conversations')
 // ---------------------------------------------------------------------------
 
 export interface ConversationFilters {
-  hubId?: string
+  hubId: string
   status?: ConversationStatus
   assignedTo?: string
   channelType?: MessagingChannelType | 'web'
@@ -47,7 +47,7 @@ export interface ConversationFilters {
 }
 
 export interface CreateConversationInput {
-  hubId?: string
+  hubId: string
   channelType?: MessagingChannelType | 'web'
   contactIdentifierHash?: string
   assignedTo?: string
@@ -211,12 +211,9 @@ export class ConversationsService {
     return row
   }
 
-  async list(filters: ConversationFilters = {}): Promise<{ conversations: ConversationRow[]; total: number }> {
-    const conditions = []
+  async list(filters: ConversationFilters): Promise<{ conversations: ConversationRow[]; total: number }> {
+    const conditions = [eq(conversations.hubId, filters.hubId)]
 
-    if (filters.hubId) {
-      conditions.push(eq(conversations.hubId, filters.hubId))
-    }
     if (filters.status) {
       conditions.push(eq(conversations.status, filters.status))
     }
@@ -388,7 +385,7 @@ export class ConversationsService {
    */
   private async loadAssigneeRecipients(
     assignedTo: string,
-    hubId: string | null,
+    hubId: string,
   ): Promise<AssigneeRecipientState[]> {
     const rows = await this.db
       .select({
@@ -401,7 +398,7 @@ export class ConversationsService {
       .where(and(eq(devices.pubkey, assignedTo), isNotNull(devices.x25519Pubkey)))
     if (rows.length === 0) return []
 
-    const verifiers = new Set<string>([assignedTo, ...(hubId ? await listAdminPubkeys(this.db, hubId) : [])])
+    const verifiers = new Set<string>([assignedTo, ...await listAdminPubkeys(this.db, hubId)])
     const verifications = await this.db
       .select({
         targetDeviceId: deviceVerifications.targetDeviceId,
@@ -464,7 +461,7 @@ export class ConversationsService {
     const conv = await this.getById(conversationId)
     if (!conv.assignedTo) return { assignedTo: null, recipients: [], messages: [] }
 
-    const recipients = await this.loadAssigneeRecipients(conv.assignedTo, conv.hubId ?? null)
+    const recipients = await this.loadAssigneeRecipients(conv.assignedTo, conv.hubId)
     if (recipients.length === 0) return { assignedTo: conv.assignedTo, recipients, messages: [] }
 
     const rows = await this.db
@@ -765,7 +762,8 @@ export class ConversationsService {
      * — cannot be supplied by mistake (#1283).
      */
     adminDecryptionPubkey: HpkeRecipientPubkey | undefined,
-    hubId?: string,
+    /** The hub the webhook URL named; the router refuses a message that names none (#2395). */
+    hubId: string,
   ): Promise<{
     conversationId: string
     messageId: string
@@ -776,18 +774,13 @@ export class ConversationsService {
       throw new ServiceError(500, 'Server KEK not configured')
     }
 
-    // Find existing conversation from this sender on this channel.
-    // hubId scoping prevents cross-worker bleed in parallel test execution.
+    // Find this sender's existing conversation on this channel, in this hub.
     const whereConditions = [
+      eq(conversations.hubId, hubId),
       eq(conversations.channelType, incoming.channelType),
       eq(conversations.contactIdentifierHash, contactHash),
       sql`${conversations.status} IN ('active', 'waiting', 'closed')`,
     ]
-    if (hubId) {
-      whereConditions.push(eq(conversations.hubId, hubId))
-    } else {
-      whereConditions.push(sql`${conversations.hubId} IS NULL`)
-    }
 
     const [existingConv] = await this.db
       .select()
@@ -815,7 +808,7 @@ export class ConversationsService {
       const [created] = await this.db
         .insert(conversations)
         .values({
-          hubId: hubId ?? null,
+          hubId,
           channelType: incoming.channelType,
           contactIdentifierHash: contactHash,
           status: 'waiting',
@@ -1168,13 +1161,11 @@ export class ConversationsService {
 
   // --- Contacts ---
 
-  async getContactSummaries(hubId?: string): Promise<ContactSummary[]> {
+  async getContactSummaries(hubId: string): Promise<ContactSummary[]> {
     const conditions = [
+      eq(conversations.hubId, hubId),
       ne(conversations.contactIdentifierHash, ''),
     ]
-    if (hubId) {
-      conditions.push(eq(conversations.hubId, hubId))
-    }
 
     const rows = await this.db
       .select({
@@ -1199,19 +1190,16 @@ export class ConversationsService {
   }
 
   /**
-   * Every conversation with `contactHash`, within `hubId` — or across all hubs
-   * when `hubId` is undefined (the unscoped mount, which has no hub to bound
-   * to). Required rather than optional so a hub-scoped caller cannot omit it:
-   * the hash is a blind index, equal across hubs for the same caller, and an
-   * unbounded lookup would stitch one caller's contact history together across
-   * hubs that must not know of each other.
+   * Every conversation with `contactHash`, within `hubId`. The hash is a blind
+   * index, equal across hubs for the same caller, so an unbounded lookup would
+   * stitch one caller's contact history together across hubs that must not know
+   * of each other — there is no hubless form (#2395, #2459).
    */
-  async getContactConversations(contactHash: string, hubId: string | undefined): Promise<ConversationRow[]> {
-    const byContact = eq(conversations.contactIdentifierHash, contactHash)
+  async getContactConversations(contactHash: string, hubId: string): Promise<ConversationRow[]> {
     return this.db
       .select()
       .from(conversations)
-      .where(hubId ? and(byContact, eq(conversations.hubId, hubId)) : byContact)
+      .where(and(eq(conversations.contactIdentifierHash, contactHash), eq(conversations.hubId, hubId)))
       .orderBy(desc(conversations.lastMessageAt))
   }
 

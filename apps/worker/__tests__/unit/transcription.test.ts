@@ -35,6 +35,12 @@ describe('transcription', () => {
           ...(adminKey ? [adminKey] : []),
           ...users.map((u: string) => `x25519-of-${u}`),
         ]),
+        // The hub's admin reader set: the transitional instance key plus the
+        // hub's own admin device keys (IdentityService.listAdminEnvelopeRecipients).
+        listAdminEnvelopeRecipients: vi.fn(async (instanceKey: string | undefined, hubId: string) => [
+          ...(instanceKey ? [instanceKey] : []),
+          `x25519-of-admin-of-${hubId}`,
+        ]),
       },
       records: {
         createNote: vi.fn().mockResolvedValue({}),
@@ -60,14 +66,17 @@ describe('transcription', () => {
 
       const userPubkey = 'b'.repeat(64)
       await run(userPubkey)
-      expect(services.records.createNote).toHaveBeenCalled()
+      // #2459: the note is filed in the call's hub — never a hubless note.
+      expect(services.records.createNote).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1', callId: 'call-1' }))
       // #2309: the flag lands on the call's own hub, not the hub-less '' row.
       expect(services.calls.updateMetadata).toHaveBeenCalledWith('hub-1', 'call-1', { hasTranscription: true })
 
-      // #1021/#1283: the readers are the admin's X25519 key and the volunteer's
-      // resolved device key — never the Ed25519 auth pubkey, never ADMIN_PUBKEY.
+      // #1021/#1283/#2459: the readers are that hub's admin reader set and the
+      // volunteer's resolved device key — never the Ed25519 auth pubkey, never
+      // ADMIN_PUBKEY, and never the instance key alone.
+      expect(services.identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(env.ADMIN_DECRYPTION_PUBKEY, 'hub-1')
       const readers = vi.mocked(encryptMessageForStorage).mock.calls[0][1]
-      expect(readers).toEqual([env.ADMIN_DECRYPTION_PUBKEY, `x25519-of-${userPubkey}`])
+      expect(readers).toEqual([env.ADMIN_DECRYPTION_PUBKEY, 'x25519-of-admin-of-hub-1', `x25519-of-${userPubkey}`])
       expect(readers).not.toContain(userPubkey)
       expect(readers).not.toContain(env.ADMIN_PUBKEY)
     })

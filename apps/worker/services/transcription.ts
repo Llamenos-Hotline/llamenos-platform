@@ -1,6 +1,7 @@
 import type { Env } from '../types'
 import type { Services } from '../services'
 import { encryptMessageForStorage } from '../lib/crypto'
+import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { ServiceError } from './settings'
 
 /**
@@ -39,19 +40,23 @@ export async function maybeTranscribe(params: {
   })
   if (!result.text) return
 
-  // Envelope encryption: single ciphertext, wrapped key for user + admin.
+  // Envelope encryption: single ciphertext, wrapped key for the volunteer and
+  // the admins of the call's hub. The note is filed in that hub (#2459), so its
+  // admin reader set — not only the instance key — must be able to open it.
   // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
   // key, not an HPKE recipient. #1021: `userPubkey` is the answering
   // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
   // is resolved to their devices' X25519 encryption keys rather than
   // sealed to directly.
-  const readerPubkeys = await services.identity.buildReaderPubkeys(
-    env.ADMIN_DECRYPTION_PUBKEY,
-    [userPubkey],
-  )
+  const [adminReaders, volunteerReaders] = await Promise.all([
+    services.identity.listAdminEnvelopeRecipients(transitionalInstanceRecipient(env), hubId),
+    services.identity.buildReaderPubkeys(undefined, [userPubkey]),
+  ])
+  const readerPubkeys = [...new Set([...adminReaders, ...volunteerReaders])]
 
   const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
   await services.records.createNote({
+    hubId,
     callId,
     authorPubkey: 'system:transcription',
     encryptedContent,
