@@ -493,18 +493,116 @@ describe('Telephony routes', () => {
       })
     })
 
-    it('falls back to global adapter when hub not found', async () => {
-      services.settings.getHubByPhone = vi.fn().mockRejectedValue(new Error('No hub'))
+    describe('a call to a number no active hub owns is refused (#2460)', () => {
+      /** The value of one `llamenos_*` counter series in the Prometheus scrape. */
+      async function counter(series: string): Promise<number> {
+        const res = await metricsRoutes.request(
+          '/prometheus',
+          { headers: { Authorization: 'Bearer t' } },
+          { METRICS_SCRAPE_TOKEN: 't' },
+        )
+        const line = (await res.text()).split('\n').find(l => l.startsWith(`${series} `))
+        return line ? Number(line.slice(series.length + 1)) : 0
+      }
+      const incoming = (app: Awaited<ReturnType<typeof createTestApp>>) =>
+        app.request('/api/telephony/incoming', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'CallSid=CA123&From=%2B15551111111&To=%2B15551234567',
+        })
+
+      beforeEach(() => {
+        ;(services.incidents as unknown as { signalPlatform: unknown }).signalPlatform = vi.fn().mockResolvedValue(undefined)
+      })
+
+      it('rejects the call unanswered, records nothing, and makes the refusal visible', async () => {
+        services.settings.getHubByPhone = vi.fn().mockRejectedValue(new ServiceError(404, 'No hub for this number'))
+        const series = 'llamenos_call_unrouted_total{called_number="unmatched"}'
+        const before = await counter(series)
+        const app = await createTestApp(adapter, services)
+
+        const res = await incoming(app)
+
+        expect(res.status).toBe(200)
+        expect(await res.text()).toContain('<Reject')
+        // Nothing the call would do in a hub happens with no hub.
+        expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
+        expect(services.calls.addCall).not.toHaveBeenCalled()
+        expect(services.providerRecordings.track).not.toHaveBeenCalled()
+        expect(services.records.checkBan).not.toHaveBeenCalled()
+        // Visible (rule V): the platform incident and the counter.
+        expect(services.incidents.signalPlatform).toHaveBeenCalledWith('routing', 'unrouted_number')
+        expect(services.incidents.signal).not.toHaveBeenCalled()
+        expect(await counter(series)).toBe(before + 1)
+      })
+
+      it('refuses a call whose webhook carries no called number', async () => {
+        adapter.parseIncomingWebhook = vi.fn().mockResolvedValue({ callSid: 'CA-nonum', callerNumber: '+15551111111', calledNumber: '' })
+        const series = 'llamenos_call_unrouted_total{called_number="absent"}'
+        const before = await counter(series)
+        const app = await createTestApp(adapter, services)
+
+        const res = await incoming(app)
+
+        expect(await res.text()).toContain('<Reject')
+        expect(services.settings.getHubByPhone).not.toHaveBeenCalled()
+        expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
+        expect(services.incidents.signalPlatform).toHaveBeenCalledWith('routing', 'unrouted_number')
+        expect(await counter(series)).toBe(before + 1)
+      })
+
+      it('still refuses the call when the incident cannot be recorded', async () => {
+        services.settings.getHubByPhone = vi.fn().mockRejectedValue(new ServiceError(404, 'No hub for this number'))
+        services.incidents.signalPlatform = vi.fn().mockRejectedValue(new Error('db down'))
+        const app = await createTestApp(adapter, services)
+
+        const res = await incoming(app)
+
+        expect(res.status).toBe(200)
+        expect(await res.text()).toContain('<Reject')
+        expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
+      })
+
+      it('does not mistake a failed hub lookup for an unrouted number', async () => {
+        // A database error is not "no hub owns this number": the call is
+        // neither refused as unrouted nor served without a hub.
+        services.settings.getHubByPhone = vi.fn().mockRejectedValue(new Error('connection reset'))
+        const app = await createTestApp(adapter, services)
+
+        const res = await incoming(app)
+
+        expect(res.status).toBe(500)
+        expect(services.incidents.signalPlatform).not.toHaveBeenCalled()
+        expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
+      })
+    })
+  })
+
+  describe('a mid-call webhook that names no hub is refused (#2460)', () => {
+    it.each([
+      '/language-selected',
+      '/captcha?callSid=CA-x',
+      '/wait-music',
+      '/queue-exit?callSid=CA-x',
+      '/voicemail-complete',
+      '/voicemail-recording?callSid=CA-x',
+    ])('%s without ?hub= hangs the leg up and serves nothing', async (path) => {
       const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/incoming', {
+      const res = await app.request(`/api/telephony${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'CallSid=CA123&From=%2B15551111111&To=%2B15551234567',
+        body: 'CallSid=CA-x&From=%2B15551111111&Digits=1',
       })
       expect(res.status).toBe(200)
-      expect(adapter.handleLanguageMenu).toHaveBeenCalledWith(
-        expect.objectContaining({ hubId: undefined }),
-      )
+      expect(await res.text()).toContain('<Hangup')
+      expect(adapter.handleIncomingCall).not.toHaveBeenCalled()
+      expect(adapter.handleVoicemail).not.toHaveBeenCalled()
+      expect(adapter.handleWaitMusic).not.toHaveBeenCalled()
+      expect(services.calls.addCall).not.toHaveBeenCalled()
+      expect(services.calls.endCall).not.toHaveBeenCalled()
+      expect(services.calls.markVoicemail).not.toHaveBeenCalled()
+      expect(services.providerRecordings.track).not.toHaveBeenCalled()
+      expect(services.settings.submitCaptcha).not.toHaveBeenCalled()
     })
   })
 

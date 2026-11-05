@@ -613,33 +613,23 @@ describe('startParallelRinging', () => {
     )
   })
 
-  it('does not publish call:ring when the call resolved to no hub (#1013)', async () => {
+  it('never rings a fallback-group user who holds no permission in the call\'s hub (#2460)', async () => {
+    // A call that resolved to no hub used to skip this check entirely, so the
+    // instance-wide fallback group rang whoever it named. Every call belongs to
+    // a hub now, and membership is checked for every ring target.
     const { publishEvent } = await import('../../lib/ws-events')
     const services = makeServices({
-      onShiftPubkeys: ['pk-1'],
-      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'browser' })],
+      onShiftPubkeys: [],
+      fallbackPubkeys: ['pk-nohub'],
+      allUsers: [makeUser({ pubkey: 'pk-nohub', callPreference: 'both', roles: [], hubRoles: [] })],
     })
 
-    await startParallelRinging('CA-nohub', '+15551234567', 'http://localhost', makeEnv(), services, '')
+    const result = await startParallelRinging('CA-nohub', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
+    expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
+    expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
     expect(publishEvent).not.toHaveBeenCalled()
-  })
-
-  it('skips VoIP push for global-scope calls (empty hubId)', async () => {
-    const { dispatchVoipPushFromService } = await import('../../lib/voip-push')
-
-    const services = makeServices({
-      onShiftPubkeys: ['pk-1'],
-      // No hub to be a member of — global-scope authority is the global roles
-      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })],
-    })
-
-    const result = await startParallelRinging('CA-8', '+15551234567', 'http://localhost', makeEnv(), services, '')
-
-    // The volunteer IS rung (so the assertion below is not vacuous) ...
-    expect(result.ringing).toBe(true)
-    // ... but VoIP push should NOT be dispatched for empty hubId
-    expect(dispatchVoipPushFromService).not.toHaveBeenCalled()
+    expect(services.calls.createCallToken).not.toHaveBeenCalled()
   })
 
   it('does not throw on errors (catches internally)', async () => {
@@ -794,25 +784,6 @@ describe('startParallelRinging — total telephony provider outage (#1136)', () 
 
     expect(result).toEqual({ ringing: true, reason: 'error', volunteersNotified: 1 })
     expect(incCounter).not.toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
-  })
-
-  it.each([
-    ['a non-outage ring error', () => new Error('bridge request failed: 500'), 'error'],
-    ['a total provider outage', () => new AllDialsFailedError(1), 'telephony-failure'],
-  ] as const)('reports nobody reached on %s for a global call, where no relay event or VoIP push goes out', async (_label, makeErr, reason) => {
-    mockAdapter.ringVolunteers.mockRejectedValue(makeErr())
-    const services = makeServices({
-      onShiftPubkeys: ['pk-both'],
-      // No hub to be a member of — global-scope authority is the global roles.
-      allUsers: [makeUser({ pubkey: 'pk-both', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })],
-    })
-
-    const promise = startParallelRinging('CA-global-fail', '+15551234567', 'http://localhost', makeEnv(), services, '')
-    await vi.runAllTimersAsync()
-    const result = await promise
-
-    // The browser preference does not count: with no hub there was no relay/push to carry it.
-    expect(result).toEqual({ ringing: false, reason, volunteersNotified: 0 })
   })
 
   it('reports nobody reached when a non-outage ring error hits a phone-only call', async () => {

@@ -933,9 +933,8 @@ dev.post('/test-simulate/answer-call', async (c) => {
   const call = await services.calls.getActiveCallByCallId(body.callId)
   // Every call is created in a hub (#2460); a row without one is not a call.
   if (!call?.hubId) return c.json({ error: 'Call not found' }, 404)
-  let answered
   try {
-    answered = await services.calls.answerCall(call.hubId, body.callId, body.pubkey)
+    await services.calls.answerCall(call.hubId, body.callId, body.pubkey)
   } catch (err) {
     if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
       return c.json({ error: err.message }, err.status)
