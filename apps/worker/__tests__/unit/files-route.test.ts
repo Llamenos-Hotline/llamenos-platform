@@ -44,8 +44,11 @@ function makeApp(opts: {
   fileRecord?: FileRecordLike
   /** The path hub hubContext would set; `null` = an unscoped mount. */
   hubId?: string | null
+  /** X25519 keys the caller's devices registered. */
+  deviceKeys?: string[]
 } = {}) {
   const {
+    deviceKeys = [],
     hubId = HUB,
     permissions = [],
     pubkey = 'my-pubkey',
@@ -73,6 +76,7 @@ function makeApp(opts: {
     c.set('services', {
       audit: mockAudit,
       conversations: mockConversations,
+      identity: { getHpkeRecipients: vi.fn().mockResolvedValue(deviceKeys) },
     } as unknown as AppEnv['Variables']['services'])
     await next()
   })
@@ -101,6 +105,18 @@ describe('files route — hub scoping (#2462)', () => {
     const { request, mockConversations } = makeApp({ permissions: ['files:download-all'] })
     await request('/file-1/envelopes')
     expect(mockConversations.getFileInHub).toHaveBeenCalledWith('file-1', HUB)
+  })
+})
+
+describe('files route — envelope addressing', () => {
+  it('finds the caller\'s envelope by a device X25519 key, not only the identity key', async () => {
+    // Envelopes are sealed to device keys (#1021): matching the identity key
+    // alone hid a recipient's own envelope from them.
+    const { request } = makeApp({ pubkey: 'identity-pub', deviceKeys: ['recipient-pub'] })
+    const res = await request('/file-1/envelopes')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { envelopes: Array<{ pubkey: string }> }
+    expect(body.envelopes.map(e => e.pubkey)).toEqual(['recipient-pub'])
   })
 })
 

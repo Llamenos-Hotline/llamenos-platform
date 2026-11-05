@@ -23,6 +23,7 @@ Feature: Files belong to a hub
     When the volunteer uploads an entity field file to the hub
     Then requesting the file through the other hub answers 404
 
+  @evidence
   Scenario: An upload cannot name a case record of another hub
     Given case management is enabled
     And an entity type "hub_files_case_type" exists
@@ -35,6 +36,7 @@ Feature: Files belong to a hub
     When the admin starts an upload on the unscoped route
     Then the upload is refused with 404
 
+  @evidence
   Scenario: Evidence must name a file uploaded to its record
     Given case management is enabled
     And an entity type "hub_files_case_type" exists

@@ -17,6 +17,7 @@ import {
   downloadFileViaApi,
   generateTestKeypair,
   redeemInviteViaApi,
+  registerDeviceKeyViaApi,
   uploadFileViaApi,
   type UploadedTestFile,
 } from '../../api-helpers'
@@ -60,6 +61,8 @@ async function memberByInvite(
   const member = generateTestKeypair()
   const redeemed = await redeemInviteViaApi(request, invite.data!.invite!.code, member.seedHex)
   expect(redeemed.status).toBe(200)
+  // A real client registers its device key, which is what envelopes address.
+  await registerDeviceKeyViaApi(request, member.seedHex)
   return member.seedHex
 }
 
